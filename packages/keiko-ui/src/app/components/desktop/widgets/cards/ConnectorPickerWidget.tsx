@@ -52,7 +52,9 @@ function lifecycleLabel(state: CapsuleListEntry["lifecycleState"]): string {
 }
 
 function formatLoadError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
+  // uiux-fix F018 C124: lead with the human message; the machine code follows as a
+  // parenthesised detail instead of a bold "INTERNAL:" prefix.
+  if (error instanceof ApiError) return `${error.message} (${error.code})`;
   if (error instanceof Error) return error.message;
   return "Failed to load connectors.";
 }
@@ -67,10 +69,19 @@ function LoadingState(): ReactNode {
   );
 }
 
-function ErrorState({ message }: { readonly message: string }): ReactNode {
+function ErrorState({
+  message,
+  onRetry,
+}: {
+  readonly message: string;
+  readonly onRetry: () => void;
+}): ReactNode {
   return (
     <div className="connector-picker-error" role="alert">
-      {message}
+      <p>{message}</p>
+      <button type="button" className="connector-picker-retry" onClick={onRetry}>
+        Try again
+      </button>
     </div>
   );
 }
@@ -138,12 +149,18 @@ export function ConnectorPickerWidget({
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // C263 — a failed capsule-set fetch must not be swallowed silently: surface it
+  // as a non-blocking notice while the capsule picker keeps working.
+  const [setsFailed, setSetsFailed] = useState(false);
+  // C263 — bumping this token re-runs the load effect ("Try again" in ErrorState).
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     async function load(): Promise<void> {
       setLoading(true);
       setError(null);
+      setSetsFailed(false);
       try {
         const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
           fetchCapsules(),
@@ -157,6 +174,8 @@ export function ConnectorPickerWidget({
         }
         if (capsuleSetResult.status === "fulfilled") {
           setCapsuleSets(capsuleSetResult.value.capsuleSets);
+        } else {
+          setSetsFailed(true);
         }
       } catch (caught) {
         if (!cancelled) setError(formatLoadError(caught));
@@ -168,10 +187,19 @@ export function ConnectorPickerWidget({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   if (loading) return <LoadingState />;
-  if (error !== null) return <ErrorState message={error} />;
+  if (error !== null) {
+    return (
+      <ErrorState
+        message={error}
+        onRetry={() => {
+          setReloadToken((t) => t + 1);
+        }}
+      />
+    );
+  }
 
   const hasCapsules = capsules.length > 0;
   const hasSets = capsuleSets.length > 0;
@@ -211,7 +239,6 @@ export function ConnectorPickerWidget({
         onChange={(e) => {
           handleChange(e.target.value);
         }}
-        aria-label="Select a Local Knowledge connector"
       >
         <option value="" disabled>
           — choose a connector —
@@ -235,6 +262,12 @@ export function ConnectorPickerWidget({
           </optgroup>
         )}
       </select>
+
+      {setsFailed ? (
+        <p className="connector-picker-notice" role="status">
+          Capsule sets could not be loaded.
+        </p>
+      ) : null}
 
       <div className="connector-picker-footer">
         <a href="/local-knowledge" className="connector-picker-create-link">

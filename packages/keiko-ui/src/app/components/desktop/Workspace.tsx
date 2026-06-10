@@ -1,13 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import { Icons } from "./Icons";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
-import { canConnect } from "./windows/connectionUtils";
-import type { AppWindow, ConnState } from "./windows/types";
+import { WIN_TYPES } from "./windows/WindowsRegistry";
+import { canConnect, relLabel } from "./windows/connectionUtils";
+import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
+import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
 
 interface WorkspaceProps {
@@ -23,8 +25,18 @@ function isInteractive(target: EventTarget | null): boolean {
     target.closest(".window") !== null ||
     target.closest(".ws-zoom") !== null ||
     target.closest(".ws-fab") !== null ||
+    target.closest(".ws-empty-btn") !== null ||
     target.closest(".conn-badge") !== null
   );
+}
+
+// Step the view zoom by ±0.2, snapping onto 100% when a step would jump across
+// it — after hitting the 30% floor the ±0.2 ladder is offset (30→50→70→90→110)
+// and 100% would otherwise only be reachable via reset (audit C361).
+function stepViewZoom(current: number, delta: number): number {
+  const next = current + delta;
+  if ((current < 1 && next > 1) || (current > 1 && next < 1)) return 1;
+  return next;
 }
 
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
@@ -62,6 +74,53 @@ function windowIdFromEventTarget(target: EventTarget | null): string | undefined
   if (!(target instanceof Element)) return undefined;
   const windowElement = target.closest<HTMLElement>(".window[data-window-id]");
   return windowElement?.dataset.windowId;
+}
+
+interface ConnectAnnouncerProps {
+  readonly wins: readonly AppWindow[] | null;
+  readonly connecting: ConnectingState | null;
+  readonly conns: readonly Connection[];
+}
+
+// The click-to-connect state machine is otherwise purely visual (crosshair
+// cursor, rubber-band path, valid/invalid window rings). This visually-hidden
+// live region announces start, completion and cancellation of a connect flow
+// for screen-reader users (audit C298/C004).
+function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): ReactNode {
+  const [message, setMessage] = useState("");
+  const prevConnecting = useRef<ConnectingState | null>(null);
+  const prevConnsLen = useRef(conns.length);
+
+  useEffect(() => {
+    const was = prevConnecting.current;
+    prevConnecting.current = connecting;
+    const wasLen = prevConnsLen.current;
+    prevConnsLen.current = conns.length;
+    if (was === null && connecting !== null) {
+      const from = wins?.find((w) => w.id === connecting.from);
+      const title = from !== undefined ? WIN_TYPES[from.type].title : "window";
+      setMessage(`Connecting from ${title} — select a highlighted window, press Escape to cancel`);
+      return;
+    }
+    if (was !== null && connecting === null) {
+      if (conns.length > wasLen) {
+        const added = conns[conns.length - 1];
+        const a = added !== undefined ? wins?.find((w) => w.id === added.a) : undefined;
+        const b = added !== undefined ? wins?.find((w) => w.id === added.b) : undefined;
+        setMessage(
+          a !== undefined && b !== undefined ? `Connected: ${relLabel(a, b)}` : "Connected",
+        );
+      } else {
+        setMessage("Connection cancelled");
+      }
+    }
+  }, [connecting, conns, wins]);
+
+  return (
+    <div className="sr-only" aria-live="polite">
+      {message}
+    </div>
+  );
 }
 
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
@@ -136,6 +195,16 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
+      <ConnectAnnouncer wins={wins} connecting={connecting} conns={conns} />
+      {connecting !== null ? (
+        // Visible counterpart to ConnectAnnouncer for sighted users — connect
+        // mode otherwise only signals via cursor/dimming, leaving the exits
+        // (Escape, background click) undiscoverable (audit F052/C411).
+        // aria-hidden: the live region above already announces this.
+        <div className="ws-connect-hint" aria-hidden="true">
+          Click a highlighted window to connect — Esc to cancel
+        </div>
+      ) : null}
       {empty ? (
         <div className="ws-empty">
           {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}
@@ -177,7 +246,8 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
         <button
           type="button"
           className="ws-zoom-btn"
-          onClick={() => api.zoomTo(view.zoom - 0.2)}
+          onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
+          disabled={view.zoom <= MIN_ZOOM}
           aria-label="Zoom out"
           title="Zoom out"
         >
@@ -187,15 +257,16 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
           type="button"
           className="ws-zoom-pct mono"
           onClick={api.resetView}
-          aria-label="Reset view"
-          title="Reset view"
+          aria-label={`${String(Math.round(view.zoom * 100))}% — reset view`}
+          title="Reset view to 100%"
         >
           {Math.round(view.zoom * 100)}%
         </button>
         <button
           type="button"
           className="ws-zoom-btn"
-          onClick={() => api.zoomTo(view.zoom + 0.2)}
+          onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
+          disabled={view.zoom >= MAX_ZOOM}
           aria-label="Zoom in"
           title="Zoom in"
         >

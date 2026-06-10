@@ -10,7 +10,14 @@ import type { ReactNode } from "react";
 import type { QualityIntelligenceUiRunSummary } from "@oscharko-dev/keiko-contracts";
 import { fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";
-import { StatusBadge, LoadingSkeleton, ErrorState, formatError, formatDate } from "./qiShared";
+import {
+  StatusBadge,
+  LoadingSkeleton,
+  ErrorState,
+  formatError,
+  formatDate,
+  runStatusLabel,
+} from "./qiShared";
 
 export interface QiHubPanelProps {
   /** Opens a Workspace window — wired to the render context so the hub can spawn run cards. */
@@ -38,6 +45,7 @@ function RunRow({
   readonly run: QualityIntelligenceUiRunSummary;
   readonly onOpen: (id: string) => void;
 }): ReactNode {
+  const cases = run.totals.candidates;
   return (
     <li>
       <button
@@ -46,14 +54,24 @@ function RunRow({
         onClick={() => {
           onOpen(run.id);
         }}
-        aria-label={`Open run ${run.id}`}
+        // uiux-fix F030 C270: aria-label REPLACES the computed name from content — a bare
+        // "Open run <id>" hid status, date and case count from screen-reader users. Compose
+        // the full label so failed and succeeded runs are distinguishable while list-navigating.
+        // "test case(s)" — the suite-wide object name (uiux-fix F047 C388: the hub said "cases",
+        // the export preview "candidates", launcher/card "test cases").
+        aria-label={`Open run ${run.id} — ${runStatusLabel(run.status)}, ${formatDate(run.requestedAt)}, ${cases.toString()} test case${cases !== 1 ? "s" : ""}`}
         title={`Open run ${run.id}`}
       >
-        <span className="qi-run-id">{run.id.slice(0, 16)}</span>
+        {/* uiux-fix F038 C145: the wire summary carries no source label, so the opaque UUID
+            prefix had zero recognition value as the primary line. Until the contract grows a
+            sourceLabel, the human-meaningful signal is the request date — promote it to the
+            primary line and demote the id to truncated meta WITH an ellipsis (the bare 16-char
+            slice looked like a complete id). Full id stays in title + aria-label. */}
+        <span className="qi-run-title">{formatDate(run.requestedAt)}</span>
         <StatusBadge status={run.status} />
-        <span className="qi-run-meta">{formatDate(run.requestedAt)}</span>
+        <span className="qi-run-id">{run.id.slice(0, 16)}…</span>
         <span className="qi-run-totals">
-          {run.totals.candidates.toString()} case{run.totals.candidates !== 1 ? "s" : ""}
+          {run.totals.candidates.toString()} test case{run.totals.candidates !== 1 ? "s" : ""}
         </span>
       </button>
     </li>
@@ -71,6 +89,11 @@ export function QiHubPanel({
   fetchRunsImpl = fetchQiRuns,
 }: QiHubPanelProps): ReactNode {
   const [runs, setRuns] = useState<readonly QualityIntelligenceUiRunSummary[]>([]);
+  // uiux-fix F030 C277: the wire contract reports limit/totalRunIds/truncated explicitly so the
+  // UI can render a "more available" indicator; the hub previously discarded them and silently
+  // showed an incomplete list with a too-small count once the store exceeded the route limit.
+  const [totalRunIds, setTotalRunIds] = useState(0);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,7 +101,10 @@ export function QiHubPanel({
     setLoading(true);
     setError(null);
     try {
-      setRuns(await fetchRunsImpl());
+      const res = await fetchRunsImpl();
+      setRuns(res.runs);
+      setTotalRunIds(res.totalRunIds);
+      setTruncated(res.truncated);
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -113,10 +139,20 @@ export function QiHubPanel({
         <header className="qi-col-header">
           <h2 className="qi-col-title">Runs</h2>
           {!loading && error === null ? (
-            <span className="qi-col-count">{runs.length.toString()}</span>
+            <span className="qi-col-count">{totalRunIds.toString()}</span>
           ) : null}
         </header>
-        <div className="qi-col-body" aria-live="polite" aria-busy={loading}>
+        {/* uiux-fix F030 C111: the live region is a small persistent sr-only status line — NOT
+            the column body. aria-live on the body announced the entire interactive run list on
+            every refresh. Load errors announce via ErrorState's own role="alert". */}
+        <p className="sr-only" role="status" aria-live="polite">
+          {loading
+            ? "Loading runs…"
+            : error === null
+              ? `Run list loaded: ${runs.length.toString()} run${runs.length === 1 ? "" : "s"}${truncated ? ` of ${totalRunIds.toString()}` : ""}.`
+              : ""}
+        </p>
+        <div className="qi-col-body" aria-busy={loading}>
           {loading ? (
             <LoadingSkeleton />
           ) : error !== null ? (
@@ -134,11 +170,18 @@ export function QiHubPanel({
               </p>
             </div>
           ) : (
-            <ul className="qi-run-list" aria-label="Run list">
-              {runs.map((run) => (
-                <RunRow key={run.id} run={run} onOpen={openRun} />
-              ))}
-            </ul>
+            <>
+              <ul className="qi-run-list" aria-label="Run list">
+                {runs.map((run) => (
+                  <RunRow key={run.id} run={run} onOpen={openRun} />
+                ))}
+              </ul>
+              {truncated ? (
+                <p className="qi-runs-truncated" data-testid="qi-runs-truncated">
+                  {`Showing ${runs.length.toString()} of ${totalRunIds.toString()} runs.`}
+                </p>
+              ) : null}
+            </>
           )}
         </div>
       </section>

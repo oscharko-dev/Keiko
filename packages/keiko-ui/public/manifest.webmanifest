@@ -1,7 +1,7 @@
 {
   "name": "Keiko",
   "short_name": "Keiko",
-  "description": "Keiko local developer-assist workspace.",
+  "description": "Keiko — a governed agentic workspace for knowledge work.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -9,7 +9,7 @@
   "background_color": "#1B1E23",
   "lang": "en",
   "dir": "ltr",
-  "categories": ["developer-tools", "productivity"],
+  "categories": ["business", "productivity", "developer-tools"],
   "icons": [
     {
       "src": "/icon-192.png",

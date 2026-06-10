@@ -164,6 +164,37 @@ describe("useKeyboardShortcuts — substrate contract", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("dispatches an alt-letter chord when macOS Option-composition transforms event.key (C125)", () => {
+    // On macOS, Option+S produces event.key "ß" while event.code stays "KeyS".
+    // The chord { key: "s", mod: ["alt"] } (focus-status) must still match.
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("focus-status", "s", ["alt"])],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    const event = new KeyboardEvent("keydown", { key: "ß", code: "KeyS", altKey: true });
+    window.dispatchEvent(event);
+    expect(dispatch).toHaveBeenCalledWith("focus-status");
+  });
+
+  it("does NOT match an alt-letter chord against a different physical key", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("focus-status", "s", ["alt"])],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    // Option+D → "∂" on macOS; code KeyD must not match the "s" chord.
+    const event = new KeyboardEvent("keydown", { key: "∂", code: "KeyD", altKey: true });
+    window.dispatchEvent(event);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("does NOT dispatch when the keydown originates from an editable field", () => {
     const dispatch = vi.fn();
     renderHook(() =>

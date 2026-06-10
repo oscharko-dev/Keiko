@@ -1,10 +1,15 @@
-// Renders a grounded repository-aware assistant answer (Issue #185). Pure presentation:
-// content + a citation row + uncertainty markers + omitted count. The component is wire-shape
+"use client";
+
+// Renders a grounded repository-aware assistant answer (Issue #185). Mostly presentation:
+// content + a citation row + uncertainty markers + omitted count, plus a local disclosure
+// state for long citation lists (uiux-fix F012 C091). The component is wire-shape
 // agnostic — it consumes `GroundedAnswer` from @oscharko-dev/keiko-contracts/bff-wire via the
 // UI's lib/types re-export. Citations are static evidence references until a future change wires
 // them to the Files-window preview at the cited line range.
 
+import { useState } from "react";
 import type { ReactNode } from "react";
+import { formatBytes, formatMs } from "@/lib/format";
 import type {
   GroundedAnswer,
   GroundedAnswerContextPackSummary,
@@ -26,6 +31,27 @@ function formatCap(value: number): string {
   return Number.isFinite(value) ? String(value) : "—";
 }
 
+// Same "—" sentinel, but with a human-readable presenter (formatBytes/formatMs) for finite
+// caps — the metric rows must not show raw byte/millisecond values (uiux-fix F012 C162;
+// the CoverageNotice next to them already speaks in "2 MB").
+function formatCapWith(value: number, format: (n: number) => string): string {
+  return Number.isFinite(value) ? format(value) : "—";
+}
+
+// Thousands-separated counts for the token rows — five-/six-digit raw values like
+// "32000" are hard to parse in the 11px mono column (uiux-fix F051 C318). Fixed
+// en-US grouping keeps the output deterministic across runtimes.
+function formatCount(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+// Internal enum tokens (e.g. "no-evidence", "natural-language", "capsule-set") are
+// hyphen-joined pipeline vocabulary; render them as plain words for knowledge workers
+// (uiux-fix F012 C160 — same humanizer the omission reasons already used).
+function humanizeToken(value: string): string {
+  return value.replaceAll("-", " ");
+}
+
 function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
   if (summary.scopeKind === "workspace-root") {
     return "workspace root";
@@ -35,7 +61,7 @@ function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
   // never carries the file count (Copilot PR #264 finding: "files (3 files)" double-prints
   // when the headline also prepends the count); the headline owns the count display.
   const idTail = summary.scopeId.slice(-8);
-  return `${summary.scopeKind} (${idTail})`;
+  return `${humanizeToken(summary.scopeKind)} (${idTail})`;
 }
 
 function MetricRow({
@@ -75,7 +101,7 @@ function ContextPackSummary({
       <dl className="grounded-context-pack-dl">
         <MetricRow
           label="Searched"
-          value={`${String(usage.searchCalls)}× / ${formatCap(budget.searchCallsMax)}`}
+          value={`${String(usage.searchCalls)} / ${formatCap(budget.searchCallsMax)} searches`}
         />
         <MetricRow
           label="Read"
@@ -83,15 +109,15 @@ function ContextPackSummary({
         />
         <MetricRow
           label="Bytes"
-          value={`${String(usage.excerptBytes)} / ${formatCap(budget.excerptBytesMax)} B`}
+          value={`${formatBytes(usage.excerptBytes)} / ${formatCapWith(budget.excerptBytesMax, formatBytes)}`}
         />
         <MetricRow
           label="Input"
-          value={`${String(usage.modelInputTokens)} / ${formatCap(budget.modelInputTokensMax)} tokens`}
+          value={`${formatCount(usage.modelInputTokens)} / ${formatCapWith(budget.modelInputTokensMax, formatCount)} tokens`}
         />
         <MetricRow
           label="Output"
-          value={`${String(usage.modelOutputTokens)} / ${formatCap(budget.modelOutputTokensMax)} tokens`}
+          value={`${formatCount(usage.modelOutputTokens)} / ${formatCapWith(budget.modelOutputTokensMax, formatCount)} tokens`}
         />
         <MetricRow
           label="Rerank"
@@ -99,9 +125,9 @@ function ContextPackSummary({
         />
         <MetricRow
           label="Time"
-          value={`${String(contextPack.elapsedMs)} / ${formatCap(budget.elapsedMsMax)} ms`}
+          value={`${formatMs(contextPack.elapsedMs)} / ${formatCapWith(budget.elapsedMsMax, formatMs)}`}
         />
-        <MetricRow label="Query" value={contextPack.queryKind} />
+        <MetricRow label="Query" value={humanizeToken(contextPack.queryKind)} />
       </dl>
     </section>
   );
@@ -115,10 +141,25 @@ function formatRange(citation: GroundedEvidenceCitation): string {
 }
 
 function citationTitle(citation: GroundedEvidenceCitation): string {
+  // uiux-fix F051 C306 — the tooltip must explain the trailing decimal on the chip
+  // (a retrieval relevance score), not just the source location.
+  const relevance = `relevance ${citation.score.toFixed(2)}`;
   if (citation.lineRange === undefined) {
-    return `Evidence citation in ${citation.scopePath}`;
+    return `Evidence citation in ${citation.scopePath} — ${relevance}`;
   }
-  return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
+  return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)} — ${relevance}`;
+}
+
+// uiux-fix F051 C306 — the score was a naked decimal ("0.87") with no visual or accessible
+// label. The sr-only prefix gives screen readers "relevance 0.87" instead of a bare number;
+// sighted users get the explanation via the chip tooltip (citationTitle above / the LK title).
+function CitationScore({ score }: { readonly score: number }): ReactNode {
+  return (
+    <span className="grounded-citation-score">
+      <span className="sr-only">relevance </span>
+      {score.toFixed(2)}
+    </span>
+  );
 }
 
 function CitationReference({
@@ -129,8 +170,35 @@ function CitationReference({
   return (
     <span className="grounded-citation" title={citationTitle(citation)}>
       <span>{formatRange(citation)}</span>
-      <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
+      <CitationScore score={citation.score} />
     </span>
+  );
+}
+
+// uiux-fix F012 C091 — a live 80-candidate run rendered an 80-chip "evidence wall" for a
+// one-sentence answer. Cap the default view at the top-scored chips and put the rest behind
+// an explicit disclosure so the actually-cited sources stay findable.
+const CITATION_DISPLAY_CAP = 8;
+
+function CitationDisclosureButton({
+  total,
+  expanded,
+  onToggle,
+}: {
+  readonly total: number;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}): ReactNode {
+  if (total <= CITATION_DISPLAY_CAP) return null;
+  return (
+    <button
+      type="button"
+      className="grounded-citations-more"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      {expanded ? "Show fewer sources" : `Show all ${String(total)} sources`}
+    </button>
   );
 }
 
@@ -139,7 +207,12 @@ function CitationList({
 }: {
   readonly citations: readonly GroundedEvidenceCitation[];
 }): ReactNode {
+  const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
+  // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
+  // must never hide a stronger source behind a weaker one.
+  const sorted = [...citations].sort((a, b) => b.score - a.score);
+  const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
   // which is invalid (only listitem children allowed). Lift the label OUT of the list and
   // use real <ul>/<li> elements.
@@ -147,12 +220,19 @@ function CitationList({
     <div className="grounded-citations-wrap">
       <span className="grounded-citations-label">Evidence</span>
       <ul className="grounded-citations" aria-label="Evidence citations">
-        {citations.map((citation) => (
+        {visible.map((citation) => (
           <li key={citation.stableId} className="grounded-citations-item">
             <CitationReference citation={citation} />
           </li>
         ))}
       </ul>
+      <CitationDisclosureButton
+        total={sorted.length}
+        expanded={expanded}
+        onToggle={() => {
+          setExpanded((value) => !value);
+        }}
+      />
     </div>
   );
 }
@@ -162,28 +242,45 @@ function LocalKnowledgeCitationList({
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
 }): ReactNode {
+  const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
   function labelForCitation(citation: LocalKnowledgeEvidenceCitation): string {
     return citation.source === undefined
       ? `${citation.marker} ${citation.label}`
       : `${citation.marker} ${citation.source} · ${citation.label}`;
   }
+  // uiux-fix F012 C091 — same cap + disclosure as CitationList above.
+  const sorted = [...citations].sort((a, b) => b.score - a.score);
+  const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   return (
     <div className="grounded-citations-wrap">
       <span className="grounded-citations-label">Knowledge citations</span>
       <ul className="grounded-citations" aria-label="Knowledge citations">
-        {citations.map((citation) => (
+        {visible.map((citation) => (
           <li key={citation.stableId} className="grounded-citations-item">
             <span
               className="grounded-citation"
-              title={citation.source === undefined ? citation.label : `${citation.source} · ${citation.label}`}
+              title={
+                // uiux-fix F051 C306 — explain the trailing decimal (relevance score)
+                // in the tooltip, mirroring citationTitle above.
+                citation.source === undefined
+                  ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
+                  : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`
+              }
             >
               <span>{labelForCitation(citation)}</span>
-              <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
+              <CitationScore score={citation.score} />
             </span>
           </li>
         ))}
       </ul>
+      <CitationDisclosureButton
+        total={sorted.length}
+        expanded={expanded}
+        onToggle={() => {
+          setExpanded((value) => !value);
+        }}
+      />
     </div>
   );
 }
@@ -194,21 +291,21 @@ function UncertaintyLine({
   readonly markers: readonly GroundedUncertainty[];
 }): ReactNode {
   if (markers.length === 0) return null;
-  const kinds = Array.from(new Set(markers.map((m) => m.kind))).join(", ");
+  // uiux-fix F012 C160 — marker kinds are internal enums ("no-evidence"); humanize them
+  // like the omission reasons below.
+  const kinds = Array.from(new Set(markers.map((m) => humanizeToken(m.kind)))).join(", ");
   return (
     <div className="grounded-uncertainty" role="note">
       <div>{`Uncertainty (${String(markers.length)} markers — ${kinds})`}</div>
       <ul className="grounded-uncertainty-list">
         {markers.map((marker, index) => (
-          <li key={`${marker.kind}-${String(index)}`}>{`${marker.kind}: ${marker.claim}`}</li>
+          <li
+            key={`${marker.kind}-${String(index)}`}
+          >{`${humanizeToken(marker.kind)}: ${marker.claim}`}</li>
         ))}
       </ul>
     </div>
   );
-}
-
-function formatOmissionReason(reason: string): string {
-  return reason.replaceAll("-", " ");
 }
 
 function OmittedLine({
@@ -222,11 +319,16 @@ function OmittedLine({
   const reasonSummary = Object.entries(omittedCounts)
     .filter(([, count]) => count > 0)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([reason, count]) => `${formatOmissionReason(reason)}: ${String(count)}`)
+    .map(([reason, count]) => `${humanizeToken(reason)}: ${String(count)}`)
     .join(", ");
   const suffix = reasonSummary.length > 0 ? ` (${reasonSummary})` : "";
+  // uiux-fix F012 C161 — "evidence atoms" is pipeline vocabulary; knowledge workers read
+  // "excerpts". The CoverageNotice above speaks about whole files; this line is the
+  // excerpt-level account (it additionally counts relevance filtering).
   return (
-    <div className="grounded-meta">{`Omitted: ${String(omittedCount)} evidence atoms${suffix}`}</div>
+    <div className="grounded-meta">
+      {`Not used: ${String(omittedCount)} excerpt${omittedCount === 1 ? "" : "s"}${suffix}`}
+    </div>
   );
 }
 
@@ -271,9 +373,17 @@ function CoverageNotice({
 
 function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): ReactNode {
   if (runId === undefined) return null;
+  // uiux-fix F012 C136/C164 — the endpoint returns a raw JSON manifest; same-tab navigation
+  // replaced the whole workspace (windows, scroll position, live streams) with a JSON dump.
+  // Open in a new tab and style with the app link pattern instead of UA defaults.
   return (
     <div className="grounded-meta">
-      <a href={`/api/evidence/${encodeURIComponent(runId)}`}>
+      <a
+        className="sm-link"
+        href={`/api/evidence/${encodeURIComponent(runId)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
         View connected-context audit evidence
       </a>
     </div>
@@ -289,7 +399,7 @@ function LocalKnowledgeContextPackSummary({
     <section className="grounded-context-pack" aria-label="Knowledge scope summary">
       <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
       <dl className="grounded-context-pack-dl">
-        <MetricRow label="Mode" value={contextPack.scopeKind} />
+        <MetricRow label="Mode" value={humanizeToken(contextPack.scopeKind)} />
         <MetricRow label="Capsules" value={String(contextPack.capsuleCount)} />
         <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
         <MetricRow label="Citations" value={String(contextPack.citationCount)} />
@@ -321,14 +431,15 @@ function HybridContextPackSummary({
 
 export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
+    // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
+    // repository is involved; keep the loading text source-neutral.
     return busy ? (
-      <div className="grounded-meta">Exploring repository context and asking Keiko…</div>
+      <div className="grounded-meta">Searching connected sources and asking Keiko…</div>
     ) : null;
   }
   if (answer.groundingKind === "local-knowledge") {
     return (
       <div className="grounded-answer">
-        <div className="grounded-answer-body">{answer.content}</div>
         <LocalKnowledgeCitationList citations={answer.citations} />
         <UncertaintyLine markers={answer.uncertainty} />
         <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
@@ -339,7 +450,6 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
   if (answer.groundingKind === "hybrid") {
     return (
       <div className="grounded-answer">
-        <div className="grounded-answer-body">{answer.content}</div>
         <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
         {/* Folder evidence (source-tagged) */}
         <CitationList citations={answer.citations} />
@@ -357,7 +467,6 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
   }
   return (
     <div className="grounded-answer">
-      <div className="grounded-answer-body">{answer.content}</div>
       <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />
       <CitationList citations={answer.citations} />
       <UncertaintyLine markers={answer.uncertainty} />

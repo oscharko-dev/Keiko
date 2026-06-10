@@ -9,6 +9,8 @@ export interface Command {
   readonly label: string;
   readonly group?: string;
   readonly icon: IconName;
+  // Optional keyboard chord rendered as a .kbd chip in the row (shortcut discoverability).
+  readonly shortcut?: string;
   readonly run: () => void;
 }
 
@@ -49,6 +51,14 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
   useEffect(() => {
     setSel(0);
   }, [q]);
+
+  // Keep the active option visible while navigating: focus stays on the input
+  // (aria-activedescendant pattern), so the browser never scrolls the .cmdk-list
+  // (max-height 50vh) natively — the selection would wander below the fold
+  // (audit C019). Optional chaining: jsdom lacks scrollIntoView.
+  useEffect(() => {
+    document.getElementById(`cmdk-row-${String(sel)}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [sel, filtered]);
 
   const run = (c: Command | undefined): void => {
     if (c === undefined) return;
@@ -106,6 +116,10 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
         aria-modal="true"
         aria-labelledby="cmdk-title"
         aria-describedby="cmdk-desc"
+        // tabIndex -1: clicking a non-focusable area (header text, list padding)
+        // keeps focus inside the dialog, so the Escape/Tab handlers on this
+        // element stay reachable (audit C007).
+        tabIndex={-1}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >
@@ -130,6 +144,14 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
           />
           <span className="kbd">esc</span>
         </div>
+        {/* Live filter feedback for screen readers — without it the 0-results
+            state is silent (aria-activedescendant just becomes undefined) and
+            Enter no-ops without explanation (audit C188). */}
+        <div className="sr-only" role="status">
+          {filtered.length === 0
+            ? "No matching commands"
+            : `${String(filtered.length)} command${filtered.length === 1 ? "" : "s"}`}
+        </div>
         <div id="cmdk-list" role="listbox" className="cmdk-list">
           {filtered.length === 0 && <div className="cmdk-empty">No matching commands</div>}
           {filtered.map((c, i) => (
@@ -148,6 +170,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
               <span className="cmdk-ico">{iconNode(c.icon)}</span>
               <span className="cmdk-label">{c.label}</span>
               <span className="spacer" />
+              {c.shortcut !== undefined && <span className="kbd">{c.shortcut}</span>}
               {c.group !== undefined && <span className="cmdk-group mono">{c.group}</span>}
             </div>
           ))}

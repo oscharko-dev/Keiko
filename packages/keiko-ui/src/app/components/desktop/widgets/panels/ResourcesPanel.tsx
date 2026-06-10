@@ -10,7 +10,7 @@ export function ResourcesPanel(): ReactNode {
         <span className="rb-ph-label mono">resources</span>
       </div>
       <div className="rb-foot mono" style={{ marginTop: 14 }}>
-        grows with the product
+        Shared assets &amp; references — coming soon.
       </div>
     </div>
   );

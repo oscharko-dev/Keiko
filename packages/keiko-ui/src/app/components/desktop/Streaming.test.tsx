@@ -189,7 +189,7 @@ function assistantMessage(id: string, content: string): ChatMessage {
 // ─── ChatWindow UI tests — lifecycle indicator + Cancel button (AC#1, AC#3) ────
 
 describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
-  it("does not render the role=status indicator while sendStatus is idle", () => {
+  it("keeps the lifecycle role=status region mounted but empty while sendStatus is idle", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -198,10 +198,13 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: false,
       }),
     );
+    // uiux-fix F041 (C170, WCAG 4.1.3) — the live region must stay permanently in
+    // the DOM (regions inserted together with their first message are unreliably
+    // announced by VoiceOver/Safari and NVDA); while idle it says nothing.
     // The bootstrap loading status is gated on session.loading=false, so the
-    // only role="status" left in the tree comes from the lifecycle indicator,
-    // which must be hidden when idle.
-    expect(screen.queryByRole("status")).toBeNull();
+    // only role="status" in the tree is the lifecycle indicator.
+    const status = screen.getByRole("status");
+    expect(status).toBeEmptyDOMElement();
   });
 
   it("renders the role=status lifecycle indicator with assistive text during contacting (AC#1)", () => {

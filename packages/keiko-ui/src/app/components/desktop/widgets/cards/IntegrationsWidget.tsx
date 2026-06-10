@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Icons } from "../../Icons";
 
 interface App {
   readonly name: string;
@@ -17,34 +16,25 @@ const APPS: readonly App[] = [
   { name: "Sentry", desc: "Error tracking", glyph: "◎" },
 ];
 
-interface IntegrationsWidgetProps {
-  provider?: string;
-}
-
-export function IntegrationsWidget({ provider = "GitHub" }: IntegrationsWidgetProps): ReactNode {
+/**
+ * Honest, non-interactive integrations overview (uiux-fix F023 C054/C380).
+ * No real integration backend exists yet, so the rows are plain list items —
+ * no buttons, no aria-pressed, no fabricated "connected" state — with an
+ * explicit "Not connected" status so nothing suggests a clickable action.
+ */
+export function IntegrationsWidget(): ReactNode {
   return (
-    <div className="integ">
-      {APPS.map((a) => {
-        const on = a.name === provider;
-        return (
-          <button key={a.name} type="button" className="integ-row" data-on={on} aria-pressed={on}>
-            <span className="integ-glyph mono">{a.glyph}</span>
-            <span className="integ-text">
-              <span className="integ-name">{a.name}</span>
-              <span className="integ-desc">{a.desc}</span>
-            </span>
-            {on ? (
-              <span className="integ-on">
-                <Icons.check size={13} />
-              </span>
-            ) : (
-              <span className="integ-add">
-                <Icons.plus size={14} />
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
+    <ul className="integ" aria-label="Integrations">
+      {APPS.map((a) => (
+        <li key={a.name} className="integ-row">
+          <span className="integ-glyph mono">{a.glyph}</span>
+          <span className="integ-text">
+            <span className="integ-name">{a.name}</span>
+            <span className="integ-desc">{a.desc}</span>
+          </span>
+          <span className="integ-status">Not connected — coming soon</span>
+        </li>
+      ))}
+    </ul>
   );
 }

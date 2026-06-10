@@ -1,5 +1,6 @@
 // Issue #184 / Epic #532 — unit tests for the chat-header connected-scope pills (1+N).
 
+import { useState, type ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -153,6 +154,54 @@ describe("ConnectedScopePill", () => {
     expect(onDisconnect).toHaveBeenCalledWith(updated);
   });
 
+  // uiux-fix F010 (C174): same-basename folders produced indistinguishable pills; the
+  // full path must stay reachable via title on the label and the disconnect button.
+  it("exposes the full connected root via title on label and disconnect button", () => {
+    const chat = makeChat({
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 1,
+        root: "/Users/me/kunde-a/docs",
+      },
+    });
+    render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
+    expect(screen.getByRole("status")).toHaveAttribute("title", "/Users/me/kunde-a/docs");
+    expect(
+      screen.getByRole("button", { name: "Disconnect Folder: docs from chat" }),
+    ).toHaveAttribute("title", "Disconnect Folder: docs from chat (/Users/me/kunde-a/docs)");
+  });
+
+  // uiux-fix F010 (C169, WCAG 2.4.3): the focused × unmounts with its pill on success —
+  // focus must land on the next remaining disconnect button instead of dropping to <body>.
+  it("moves keyboard focus to the next remaining pill after a disconnect", async () => {
+    const scopes: ChatConnectedScope[] = [
+      { kind: "workspace-root", relativePaths: [], connectedAtMs: 1, root: "/data/alpha" },
+      { kind: "workspace-root", relativePaths: [], connectedAtMs: 2, root: "/data/beta" },
+    ];
+    const initial = makeChat({ connectedScopes: scopes, connectedScope: scopes[0] });
+    const updated: Chat = { ...initial, connectedScopes: [scopes[1]!], connectedScope: scopes[1] };
+    const updateScopes = vi.fn().mockResolvedValue({ chat: updated } satisfies ChatResponse);
+
+    function Harness(): ReactNode {
+      const [chat, setChat] = useState(initial);
+      return (
+        <div className="chat-scope-header">
+          <ConnectedScopePill chat={chat} updateScopes={updateScopes} onDisconnect={setChat} />
+        </div>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Disconnect Folder: alpha from chat" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Disconnect Folder: beta from chat" }),
+      ).toHaveFocus();
+    });
+  });
+
   it("clears the binding (null) when the last source is removed", async () => {
     const chat = makeChat({
       connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
@@ -192,11 +241,7 @@ describe("ConnectedScopePill", () => {
       contextPack({ usage: { ...contextPack().usage, filesRead: 5 } }),
     );
     render(
-      <ConnectedScopePill
-        chat={chat}
-        updateScopes={vi.fn()}
-        lastGroundedBudgetStatus={status}
-      />,
+      <ConnectedScopePill chat={chat} updateScopes={vi.fn()} lastGroundedBudgetStatus={status} />,
     );
     expect(screen.getByText("Moderate")).toBeInTheDocument();
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");

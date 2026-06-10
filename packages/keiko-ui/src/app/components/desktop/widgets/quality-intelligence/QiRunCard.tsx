@@ -11,13 +11,8 @@ import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  editQiCandidate,
-  fetchQiRunDetail,
-  reviewQiRun,
-  type QiReviewAction,
-} from "@/lib/quality-intelligence-api";
-import { CandidatesPane } from "./CandidatesPane";
+import { editQiCandidate, fetchQiRunDetail, reviewQiRun } from "@/lib/quality-intelligence-api";
+import { CandidatesPane, type QiPendingReview, type QiReviewAction } from "./CandidatesPane";
 import { DriftPanel } from "./DriftPanel";
 import type { DriftPanelProps } from "./DriftPanel";
 import { ExportBar } from "./ExportBar";
@@ -29,6 +24,7 @@ import {
   ErrorState,
   formatError,
   formatDate,
+  REVIEW_LABEL,
 } from "./qiShared";
 
 const REVIEWER_LABEL_STORAGE_KEY = "keiko.qi.reviewerLabel";
@@ -88,7 +84,7 @@ function SummaryStrip({ detail }: { readonly detail: QualityIntelligenceUiRunDet
       </div>
       <div className="qi-run-summary-item">
         <dt>Review</dt>
-        <dd className="qi-run-summary-review">{detail.reviewState}</dd>
+        <dd className="qi-run-summary-review">{REVIEW_LABEL[detail.reviewState]}</dd>
       </div>
       <div className="qi-run-summary-item">
         <dt>Requested</dt>
@@ -104,6 +100,20 @@ function SummaryStrip({ detail }: { readonly detail: QualityIntelligenceUiRunDet
   );
 }
 
+// Human labels for the contract's finding-kind tokens (uiux-fix F030 C273) — the raw machine
+// tokens ("logic-defect") used to render via CSS capitalize as "Logic-Defect". Unknown kinds
+// fall back to the raw value.
+const KIND_LABEL: Readonly<Record<string, string>> = {
+  "logic-defect": "Logic defect",
+  "faithfulness-defect": "Faithfulness defect",
+  "semantic-defect": "Semantic defect",
+  "mutation-defect": "Mutation defect",
+  "policy-violation": "Policy violation",
+  "manual-rejection": "Manual rejection",
+  "coverage-gap": "Coverage gap",
+  "test-quality": "Test quality",
+};
+
 function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
   if (detail.findingRefs.length === 0) return null;
   return (
@@ -116,7 +126,7 @@ function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDet
         {detail.findingRefs.map((f) => (
           <li key={f.id} className="qi-finding-item">
             <div className="qi-finding-header">
-              <span className="qi-finding-kind">{f.kind}</span>
+              <span className="qi-finding-kind">{KIND_LABEL[f.kind] ?? f.kind}</span>
               <SeverityBadge severity={f.severity} />
             </div>
             <p className="qi-finding-summary">{f.summaryRedacted}</p>
@@ -214,6 +224,12 @@ export function QiRunCard({
   const [detail, setDetail] = useState<QualityIntelligenceUiRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // A failed review action must NOT replace the whole card with an ErrorState (uiux-fix F030
+  // C113): it is shown as a dismissible alert above the still-rendered content instead.
+  const [actionError, setActionError] = useState<string | null>(null);
+  // The review request currently in flight (uiux-fix F029 C275): locks the review controls, labels
+  // the clicked button "Saving…", and guards against duplicate submits from an impatient double-click.
+  const [pendingReview, setPendingReview] = useState<QiPendingReview | null>(null);
   const [reviewerLabel, setReviewerLabel] = useState("");
   const [reviewerLabelLoaded, setReviewerLabelLoaded] = useState(false);
   const reviewerHelpId = useId();
@@ -260,17 +276,21 @@ export function QiRunCard({
 
   const handleReview = useCallback(
     (candidateId: string, action: QiReviewAction): void => {
-      if (!governanceEnabled) return;
+      if (!governanceEnabled || pendingReview !== null) return;
+      setPendingReview({ candidateId, action });
       void (async (): Promise<void> => {
+        setActionError(null);
         try {
           await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
           await loadDetail();
         } catch (err) {
-          setError(formatError(err));
+          setActionError(formatError(err));
+        } finally {
+          setPendingReview(null);
         }
       })();
     },
-    [governanceEnabled, reviewImpl, runId, trimmedReviewerLabel, loadDetail],
+    [governanceEnabled, pendingReview, reviewImpl, runId, trimmedReviewerLabel, loadDetail],
   );
 
   const handleEdit = useCallback(
@@ -294,7 +314,18 @@ export function QiRunCard({
           {runId}
         </span>
       </header>
-      <div className="qi-run-card-body" role="status" aria-live="polite" aria-busy={loading}>
+      {/* uiux-fix F030 C111: the live region is a small persistent sr-only status line — NOT the
+          whole card body. role="status" on the body (implicit aria-atomic) re-announced every
+          candidate after each review/edit reload, and interactive controls inside a live region
+          are an anti-pattern. Load errors announce via ErrorState's own role="alert". */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {loading
+          ? "Loading run…"
+          : error === null && detail !== null
+            ? `Run loaded: ${detail.totals.candidates.toString()} test case${detail.totals.candidates === 1 ? "" : "s"}.`
+            : ""}
+      </p>
+      <div className="qi-run-card-body" aria-busy={loading}>
         {loading && detail === null ? (
           <LoadingSkeleton />
         ) : error !== null ? (
@@ -305,6 +336,20 @@ export function QiRunCard({
           </div>
         ) : (
           <>
+            {actionError !== null ? (
+              <div className="lk-alert qi-action-error" role="alert" data-testid="qi-action-error">
+                {actionError}
+                <button
+                  type="button"
+                  className="lk-alert-retry"
+                  onClick={() => {
+                    setActionError(null);
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
             <section className="qi-run-governance" aria-label="Review governance">
               <label className="qi-field" htmlFor={`qi-reviewer-label-${runId}`}>
                 <span className="qi-field-label">Reviewer label</span>
@@ -354,6 +399,7 @@ export function QiRunCard({
               <CandidatesPane
                 candidates={detail.candidates}
                 onReview={handleReview}
+                pendingReview={pendingReview}
                 onEdit={handleEdit}
                 actionsDisabled={!governanceEnabled}
                 actionsDisabledReason={GOVERNANCE_REQUIRED_MESSAGE}

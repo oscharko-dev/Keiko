@@ -155,7 +155,7 @@ export function RelationshipImpactCard({
       style={{
         marginTop: 8,
         padding: "8px 10px",
-        border: "1px solid var(--border)",
+        border: "1px solid var(--line)",
         borderRadius: 8,
         background: "var(--inset)",
       }}
