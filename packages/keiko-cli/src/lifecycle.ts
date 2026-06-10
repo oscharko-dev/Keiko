@@ -287,6 +287,7 @@ function spawnUiProcess(
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
   const fd = openSync(logPath, "a", 0o600);
+  const uiEnv = childEnv({ ...env, KEIKO_STATE_DIR: options.stateDir });
   try {
     return {
       child: deps.spawnFn(
@@ -295,7 +296,7 @@ function spawnUiProcess(
         {
           cwd,
           detached: true,
-          env: childEnv(env),
+          env: uiEnv,
           stdio: ["ignore", fd, fd],
         },
       ),

@@ -145,6 +145,61 @@ describe("runUiCli", () => {
     expect(out.join("")).toContain("http://127.0.0.1:4399");
   });
 
+  it("defaults UI and memory state to the workspace-local .keiko runtime root", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-"));
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.uiDbPath).toBe(join(cwd, ".keiko", "ui", "keiko-ui.db"));
+      expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
+      expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(cwd, ".keiko", "memory"));
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves explicit state overrides while defaulting missing runtime paths", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-override-"));
+    const stateDir = join(cwd, "state");
+    const uiDbPath = join(cwd, ".keiko", "ui", "custom-ui.db");
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--ui-db", uiDbPath], io, { KEIKO_STATE_DIR: stateDir }, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.uiDbPath).toBe(uiDbPath);
+      expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(stateDir);
+      expect(captured[0]?.env.KEIKO_UI_DATA_DIR).toBeUndefined();
+      expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(stateDir, "memory"));
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("loads KEIKO_* values from local .env and ignores unrelated keys", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
@@ -182,6 +237,8 @@ describe("runUiCli", () => {
       expect(captured[0]?.configPresent).toBe(true);
       expect(captured[0]?.config?.providers[0]?.modelId).toBe("example-chat-model");
       expect(captured[0]?.env.NPM_TOKEN).toBeUndefined();
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
