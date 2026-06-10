@@ -1,0 +1,28 @@
+name: Main Promotion
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  only-dev-may-merge-to-main:
+    name: Only dev may merge to main
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Confirm promotion source
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" = "dev" ] && [ "$HEAD_REPO" = "$BASE_REPO" ]; then
+            echo "Protected main promotion gate satisfied: only the repository dev branch may promote to main."
+            exit 0
+          fi
+          echo "Main only accepts promotion PRs from the repository dev branch."
+          echo "base_ref=$BASE_REF head_ref=$HEAD_REF base_repo=$BASE_REPO head_repo=$HEAD_REPO"
+          exit 1
