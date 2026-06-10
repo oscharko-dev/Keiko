@@ -2,7 +2,7 @@
 // Uses vitest + React Testing Library (jsdom) matching the existing test pattern.
 // jest-axe WCAG check at the end per GroundedAnswer.a11y.test.tsx pattern.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,8 +74,9 @@ describe("ConnectorGraph — empty state", () => {
     });
     expect(ctaButton).toBeInTheDocument();
 
-    // Secondary future affordance is visible but disabled until the BFF connection flow exists.
-    expect(screen.getByRole("button", { name: /connect to an existing capsule/i })).toBeDisabled();
+    // The permanently-disabled "Connect to existing capsule" placeholder was
+    // removed until the feature exists (uiux-fix F032, C149/C227).
+    expect(screen.queryByRole("button", { name: /connect to an existing capsule/i })).toBeNull();
 
     // Header button still present
     expect(
@@ -168,9 +169,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
     const user = userEvent.setup();
 
-    render(
-      <ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />,
-    );
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
 
     await waitFor(() => {
       expect(
@@ -214,6 +213,46 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
   });
 
+  it("shows busy feedback on the triggered row button while the action is in flight (uiux-fix F048, C233)", async () => {
+    const id = makeCapsuleId("43");
+    const capsule = makeCapsule({ id, displayName: "Slow Cap", lifecycleState: "draft" });
+    let resolveAction: (value: CapsuleActionResponse) => void = () => undefined;
+    const startIndexingImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<CapsuleActionResponse>((resolve) => {
+          resolveAction = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([capsule])}
+        startIndexingImpl={startIndexingImpl}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Slow Cap")).toBeInTheDocument();
+    });
+
+    const indexBtn = screen.getByRole("button", { name: /start indexing capsule slow cap/i });
+    await user.click(indexBtn);
+
+    // In flight: the triggered button swaps its label and announces aria-busy
+    // (matching the detail page's "Indexing…" pattern).
+    expect(indexBtn).toHaveTextContent("Indexing…");
+    expect(indexBtn).toHaveAttribute("aria-busy", "true");
+    expect(indexBtn).toBeDisabled();
+
+    resolveAction({ ok: true, capsuleId: id });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /start indexing capsule slow cap/i }),
+      ).toHaveTextContent(/^Index$/);
+    });
+  });
+
   it("calls cancelIndexing with the right capsule ID when Cancel is clicked", async () => {
     const id = makeCapsuleId("99");
     const capsule = makeCapsule({ id, displayName: "Running Cap", lifecycleState: "indexing" });
@@ -241,7 +280,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
   });
 
-  it("calls disconnectCapsule when Disconnect is clicked", async () => {
+  it("asks for confirmation before calling disconnectCapsule (destructive, no undo)", async () => {
     const id = makeCapsuleId("55");
     const capsule = makeCapsule({ id, displayName: "Ready Cap", lifecycleState: "ready" });
     const disconnectCapsuleImpl = vi.fn().mockImplementation(() => okAction(id));
@@ -263,12 +302,45 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
     await user.click(disconnectBtn);
 
+    // Row click opens the confirm dialog — nothing is deleted yet (uiux-fix F033, C064).
+    expect(disconnectCapsuleImpl).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    expect(dialog.textContent).toContain("Ready Cap");
+
+    await user.click(within(dialog).getByRole("button", { name: /^disconnect$/i }));
+
     await waitFor(() => {
       expect(disconnectCapsuleImpl).toHaveBeenCalledWith(id);
     });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("navigates to the capsule health view when Health is clicked", async () => {
+  it("does NOT call disconnectCapsule when the confirmation is cancelled", async () => {
+    const id = makeCapsuleId("56");
+    const capsule = makeCapsule({ id, displayName: "Keep Cap", lifecycleState: "ready" });
+    const disconnectCapsuleImpl = vi.fn().mockImplementation(() => okAction(id));
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([capsule])}
+        disconnectCapsuleImpl={disconnectCapsuleImpl}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Keep Cap")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /disconnect capsule keep cap/i }));
+    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(disconnectCapsuleImpl).not.toHaveBeenCalled();
+  });
+
+  it("navigates to the capsule detail view when Details is clicked", async () => {
     const id = makeCapsuleId("77");
     const capsule = makeCapsule({ id, displayName: "Health Cap", lifecycleState: "ready" });
     const user = userEvent.setup();
@@ -279,9 +351,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Health Cap")).toBeInTheDocument();
     });
 
-    await user.click(
-      screen.getByRole("button", { name: /open health view for capsule health cap/i }),
-    );
+    await user.click(screen.getByRole("button", { name: /open details for capsule health cap/i }));
 
     expect(pushMock).toHaveBeenCalledWith("/local-knowledge/capsule?capsuleId=cap-77");
   });
@@ -306,12 +376,12 @@ describe("ConnectorGraph — status badges", () => {
         expect(screen.getByText(`Cap-${state}`)).toBeInTheDocument();
       });
 
-      // The status badge with role="status" should contain the expected label
-      const badge = screen.getByRole("status", {
-        name: new RegExp(`Status: ${expectedLabel}`, "i"),
-      });
-      expect(badge).toBeInTheDocument();
-      expect(badge.textContent).toBe(expectedLabel);
+      // Static badge text — no per-row live region: every aria-live badge made
+      // screen readers re-announce the whole list on reload (uiux-fix F032, C226).
+      const row = screen.getByRole("article", { name: `Capsule: Cap-${state}` });
+      const badge = within(row).getByText(expectedLabel);
+      expect(badge).toHaveClass("lk-badge");
+      expect(badge).not.toHaveAttribute("aria-live");
     });
   }
 });

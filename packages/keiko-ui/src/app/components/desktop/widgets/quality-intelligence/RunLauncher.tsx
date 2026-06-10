@@ -5,7 +5,7 @@
 // completion notify the panel to refresh + select the new run. Accessible: labelled inputs,
 // aria-live progress region, focus-visible controls, 24×24 min targets.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceRunStreamMessage,
@@ -13,7 +13,7 @@ import type {
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { startQiRun } from "@/lib/quality-intelligence-api";
-import { ApiError } from "@/lib/api";
+import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
 
@@ -44,12 +44,6 @@ const INITIAL_PROGRESS: Progress = {
   droppedSourceCount: 0,
   skippedSources: [],
 };
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
 
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
   if (msg.type === "accepted") {
@@ -193,19 +187,25 @@ export function RunLauncher({
         : Number.NaN;
   const seedValid =
     parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  // Generate stays focusable when blocked (aria-disabled, not native disabled) so keyboard and
+  // screen-reader users can reach it and hear WHY it is inactive via aria-describedby — the same
+  // governance pattern as GovernedActionButton in CandidatesPane (Epic #712).
+  const generateBlocked = !ready || !seedValid;
+  const generateHintId = useId();
+  const seedErrorId = useId();
+  const labelHintId = useId();
+  const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
-    if (msg.type === "error") setError(`${msg.code}: ${msg.message}`);
+    if (msg.type === "error") setError(formatCodedError(msg.code, msg.message));
     setProgress((prev) => reduceProgress(prev, msg));
   }, []);
 
   const handleStart = useCallback(async (): Promise<void> => {
-    if (!ready || running) return;
-    if (!seedValid) {
-      setError("Seed must be a non-negative integer.");
-      return;
-    }
+    // Defensive guard — the Generate button already no-ops while blocked (aria-disabled pattern),
+    // and an invalid seed surfaces as an inline field error next to the input.
+    if (!ready || running || !seedValid) return;
     setRunning(true);
     setError(null);
     setProgress(INITIAL_PROGRESS);
@@ -255,6 +255,21 @@ export function RunLauncher({
     abortRef.current?.abort();
   }, []);
 
+  // Coverage-notice sentences are built once and shared by the visible notice AND the persistent
+  // sr-only live region (uiux-fix F047 C155: the notice was a role="status" element inserted
+  // together with its content, which screen readers often skip).
+  const droppedNotice =
+    progress.droppedSourceCount > 0
+      ? `${progress.droppedSourceCount.toString()} source${progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit ${progress.droppedSourceCount !== 1 ? "were" : "was"} not included.`
+      : null;
+  const skippedNotice =
+    progress.skippedSources.length > 0
+      ? `${progress.skippedSources.length.toString()} connected source${progress.skippedSources.length !== 1 ? "s" : ""} could not be read and ${progress.skippedSources.length !== 1 ? "were" : "was"} skipped: ${progress.skippedSources.map((s) => s.label).join(", ")}.`
+      : null;
+  const coverageAnnouncement = [droppedNotice, skippedNotice]
+    .filter((line): line is string => line !== null)
+    .join(" ");
+
   return (
     <section className="qi-launcher" aria-label="Start a Quality Intelligence run">
       <header className="qi-col-header">
@@ -273,7 +288,9 @@ export function RunLauncher({
               {sourceValue(connectedSources[0])}
             </span>
             <span className="qi-connected-hint">
-              Generate uses the connected {sourceKindLabel(connectedSources[0]).toLowerCase()}.
+              {manualReady
+                ? "Manual input below overrides the connected source for this run."
+                : `Generate uses the connected ${sourceKindLabel(connectedSources[0]).toLowerCase()}.`}
             </span>
           </div>
         ) : connectedSources.length > 1 ? (
@@ -291,7 +308,11 @@ export function RunLauncher({
                 </li>
               ))}
             </ul>
-            <span className="qi-connected-hint">Generate uses all connected sources.</span>
+            <span className="qi-connected-hint">
+              {manualReady
+                ? "Manual input below overrides the connected sources for this run."
+                : "Generate uses all connected sources."}
+            </span>
           </div>
         ) : null}
         <div className="qi-launcher-row">
@@ -303,10 +324,16 @@ export function RunLauncher({
               value={label}
               placeholder="e.g. Funds Transfer — acceptance criteria"
               disabled={running}
+              aria-describedby={hasConnected && !manualReady ? labelHintId : undefined}
               onChange={(e) => {
                 setLabel(e.target.value);
               }}
             />
+            {hasConnected && !manualReady ? (
+              <span className="qi-field-hint" id={labelHintId}>
+                Applies to manual input only — connected sources use their own labels.
+              </span>
+            ) : null}
           </label>
           <label className="qi-field qi-field-kind">
             <span className="qi-field-label">Source type</span>
@@ -381,28 +408,43 @@ export function RunLauncher({
               value={seed}
               placeholder="e.g. 42"
               disabled={running}
+              aria-invalid={seedValid ? undefined : true}
+              aria-describedby={seedValid ? undefined : seedErrorId}
               onChange={(e) => {
                 setSeed(e.target.value);
                 setError(null);
               }}
             />
+            {!seedValid ? (
+              <span className="qi-field-error" id={seedErrorId}>
+                Seed must be a non-negative integer.
+              </span>
+            ) : null}
           </label>
-          {running ? (
-            <button type="button" className="qi-btn qi-btn-secondary" onClick={handleCancel}>
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="qi-btn qi-btn-primary"
-              disabled={!ready || !seedValid}
-              onClick={() => {
-                void handleStart();
-              }}
-            >
-              Generate test cases
-            </button>
-          )}
+          {/* ONE persistent button that swaps label/handler between Generate and Cancel: two
+              conditionally-rendered buttons would unmount the focused element on every state
+              change and drop keyboard focus onto <body> (WCAG 2.4.3, audit C031). */}
+          <button
+            type="button"
+            className={running ? "qi-btn qi-btn-secondary" : "qi-btn qi-btn-primary"}
+            aria-disabled={(!running && generateBlocked) || undefined}
+            aria-describedby={running ? undefined : generateDescribedBy}
+            onClick={() => {
+              if (running) {
+                handleCancel();
+                return;
+              }
+              if (generateBlocked) return;
+              void handleStart();
+            }}
+          >
+            {running ? "Cancel" : "Generate test cases"}
+          </button>
+          {!running && !ready ? (
+            <span className="qi-generate-hint" id={generateHintId}>
+              Add requirements text, a folder path, or connect a source to generate.
+            </span>
+          ) : null}
         </div>
         {running ? (
           <div
@@ -416,32 +458,23 @@ export function RunLauncher({
             <span className="qi-progress-text">
               {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
               {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
-              {progress.findings > 0 ? ` · ${progress.findings.toString()} findings` : ""}
+              {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count
+                  two tokens earlier (uiux-fix F047 C276). */}
+              {progress.findings > 0
+                ? ` · ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
+                : ""}
             </span>
           </div>
         ) : null}
-        {progress.droppedSourceCount > 0 || progress.skippedSources.length > 0 ? (
-          <div
-            className="qi-coverage-notice"
-            role="status"
-            aria-live="polite"
-            data-testid="qi-coverage-notice"
-          >
-            {progress.droppedSourceCount > 0 ? (
-              <p className="qi-coverage-line">
-                {progress.droppedSourceCount.toString()} source
-                {progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit{" "}
-                {progress.droppedSourceCount !== 1 ? "were" : "was"} not included.
-              </p>
-            ) : null}
-            {progress.skippedSources.length > 0 ? (
-              <p className="qi-coverage-line">
-                {progress.skippedSources.length.toString()} connected source
-                {progress.skippedSources.length !== 1 ? "s" : ""} could not be read and{" "}
-                {progress.skippedSources.length !== 1 ? "were" : "was"} skipped:{" "}
-                {progress.skippedSources.map((s) => s.label).join(", ")}.
-              </p>
-            ) : null}
+        {/* Persistent live region for the coverage notice (uiux-fix F047 C155) — mounted from the
+            first render; the visible notice below stays conditional and carries no live role. */}
+        <p className="sr-only" role="status" aria-live="polite">
+          {coverageAnnouncement}
+        </p>
+        {droppedNotice !== null || skippedNotice !== null ? (
+          <div className="qi-coverage-notice" data-testid="qi-coverage-notice">
+            {droppedNotice !== null ? <p className="qi-coverage-line">{droppedNotice}</p> : null}
+            {skippedNotice !== null ? <p className="qi-coverage-line">{skippedNotice}</p> : null}
           </div>
         ) : null}
         {error !== null ? (

@@ -112,10 +112,12 @@ describe("Gate 1 — manifest reachable and conformant (ADR-0024 D4)", () => {
     expect(body[field]).toBe(expected);
   });
 
-  it("categories is exactly ['developer-tools', 'productivity']", async () => {
+  // uiux-fix F038 C376: "business" leads — the install surface follows the official
+  // knowledge-work positioning (README), not the historical developer-tools framing.
+  it("categories is exactly ['business', 'productivity', 'developer-tools']", async () => {
     const res = await fetch(url("/manifest.webmanifest"));
     const body = (await res.json()) as { categories: unknown };
-    expect(body.categories).toEqual(["developer-tools", "productivity"]);
+    expect(body.categories).toEqual(["business", "productivity", "developer-tools"]);
   });
 
   it("icons array contains exactly four entries (192/512 standard + 192/512 maskable)", async () => {
