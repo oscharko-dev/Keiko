@@ -50,6 +50,13 @@ function makeDetail(
     coveragePercentage,
     coverageByAtom,
     qualityScore,
+    drift: {
+      status: "unavailable",
+      sourceFingerprintCount: 0,
+      atomFingerprintCount: 0,
+      reCheckSupported: false,
+      regenerateStaleSupported: false,
+    },
   };
 }
 
@@ -325,6 +332,24 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-d2" fetchDetailImpl={fetchOk(detail)} />);
     await screen.findByText("A test");
     expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
+  });
+
+  it("shows disabled drift guidance when fingerprints exist but no source handle is available", async () => {
+    const detail: QualityIntelligenceUiRunDetail = {
+      ...makeDetail("qi-run-d4", [makeCandidate("tc-1", "A test")]),
+      drift: {
+        status: "not-checked",
+        sourceFingerprintCount: 1,
+        atomFingerprintCount: 1,
+        reCheckSupported: true,
+        regenerateStaleSupported: true,
+      },
+    };
+    render(<QiRunCard runId="qi-run-d4" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByTestId("qi-drift-unavailable")).toHaveTextContent(
+      /no current source handle/i,
+    );
+    expect(screen.getByTestId("qi-drift-recheck-unavailable")).toBeDisabled();
   });
 
   it("hides the drift panel when connected sources is an empty array", async () => {

@@ -201,6 +201,33 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
   );
 }
 
+function DriftUnavailablePanel({
+  detail,
+}: {
+  readonly detail: QualityIntelligenceUiRunDetail;
+}): ReactNode {
+  if (!detail.drift.reCheckSupported) return null;
+  return (
+    <section className="qi-drift-panel" aria-label="Drift detection">
+      <div className="qi-drift-head">
+        <h3 className="qi-col-subtitle">Living tests</h3>
+        <button
+          type="button"
+          className="qi-btn qi-btn-secondary"
+          disabled
+          data-testid="qi-drift-recheck-unavailable"
+        >
+          Re-check drift
+        </button>
+      </div>
+      <p className="qi-drift-note" data-testid="qi-drift-unavailable">
+        Drift fingerprints are recorded for this run, but this card has no current source handle.
+        Reopen it from the connected source or start a new run from the current source.
+      </p>
+    </section>
+  );
+}
+
 export function QiRunCard({
   runId,
   connectedSources,
@@ -342,7 +369,9 @@ export function QiRunCard({
                 reCheckImpl={reCheckImpl}
                 regenerateImpl={regenerateImpl}
               />
-            ) : null}
+            ) : (
+              <DriftUnavailablePanel detail={detail} />
+            )}
             <section className="qi-run-cases" aria-label="Generated test cases">
               <div className="qi-run-cases-head">
                 <h3 className="qi-col-subtitle">

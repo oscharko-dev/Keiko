@@ -9,7 +9,8 @@
 //   - startImpl called with correct request shape for workspace source.
 //   - Run lifecycle: button shows "Cancel" during run; progress region visible.
 //   - Cancel: AbortSignal becomes aborted when Cancel is clicked.
-//   - onRunCompleted: called with the accepted runId after run finishes.
+//   - onRunCompleted: called with the accepted runId and recheckable source handles after run
+//     finishes.
 //   - Error path: startImpl rejection surfaces in qi-launch-error.
 //
 // Design note: startImpl is typed as the real function but replaced with a
@@ -382,7 +383,7 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     });
   });
 
-  it("delivers candidate:proposed and accepted events and calls onRunCompleted with the accepted runId", async () => {
+  it("delivers candidate:proposed and accepted events and omits pasted requirements from completion handles", async () => {
     const user = userEvent.setup();
     const acceptedRunId = "run-abc-123";
     const { startImpl, done } = makeStreamingFake([
@@ -408,7 +409,37 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     await done;
 
     await waitFor(() => {
-      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId);
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, []);
+    });
+  });
+
+  it("passes the launched workspace source to onRunCompleted so the run card can re-check drift", async () => {
+    const user = userEvent.setup();
+    const acceptedRunId = "run-workspace-123";
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: acceptedRunId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 2,
+      },
+      DONE_FRAME,
+    ]);
+    const onRunCompleted = vi.fn();
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
+    await user.type(screen.getByLabelText(/source label/i), "Drift fixture");
+    await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/tmp/drift-fixture");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await done;
+
+    await waitFor(() => {
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [
+        { kind: "workspace", label: "Drift fixture", path: "/tmp/drift-fixture" },
+      ]);
     });
   });
 

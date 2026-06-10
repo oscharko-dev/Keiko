@@ -119,8 +119,12 @@ registerWindowRender("settings", () => <SettingsPanel />);
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
 registerWindowRender("quality", (_cfg, ctx) => (
   <QiHubPanel
-    openRun={(runId) => {
-      ctx.openWindow("qiRun", { runId, ...connectedSourcesCfgFromCtx(ctx) });
+    openRun={(runId, recheckableSources) => {
+      const sourceCfg =
+        recheckableSources !== undefined && recheckableSources.length > 0
+          ? { connectedSourcesJson: JSON.stringify(recheckableSources) }
+          : connectedSourcesCfgFromCtx(ctx);
+      ctx.openWindow("qiRun", { runId, ...sourceCfg });
     }}
     connectedRoot={ctx.linkedRoot}
     connectedFilePath={ctx.linkedFilePath ?? null}

@@ -13,6 +13,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 // `vi.mock` so the doMock factory below is the one consulted at handler call time.
 const listMock = vi.fn();
 const loadMock = vi.fn();
+const loadCandidatesMock = vi.fn();
 
 vi.mock("@oscharko-dev/keiko-evidence", async () => {
   const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-evidence")>(
@@ -22,6 +23,12 @@ vi.mock("@oscharko-dev/keiko-evidence", async () => {
     ...actual,
     listQualityIntelligenceRuns: (...args: unknown[]): unknown => listMock(...args),
     loadQualityIntelligenceRun: (...args: unknown[]): unknown => loadMock(...args),
+    loadQualityIntelligenceCandidates: (...args: unknown[]): unknown =>
+      loadCandidatesMock.getMockImplementation() === undefined
+        ? actual.loadQualityIntelligenceCandidates(
+            ...(args as Parameters<typeof actual.loadQualityIntelligenceCandidates>),
+          )
+        : loadCandidatesMock(...args),
   };
 });
 
@@ -66,6 +73,10 @@ function deps(): UiHandlerDeps {
   };
 }
 
+function depsWithEvidenceDir(evidenceDir: string): UiHandlerDeps {
+  return { ...deps(), evidenceDir };
+}
+
 // A schema-shaped manifest stub. Only the fields projection touches must be present;
 // we still satisfy enough of the contract for the projection helpers to succeed.
 function manifest(runId: string): unknown {
@@ -99,6 +110,7 @@ const SECRET_FS_PATH = "/private/var/folders/secret-evidence-dir/run-x.json";
 beforeEach(() => {
   listMock.mockReset();
   loadMock.mockReset();
+  loadCandidatesMock.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -304,6 +316,60 @@ describe("handleGetQiRun", () => {
     const row2 = body.coverageByAtom.find((r) => r.atomId === "atom-2");
     expect(row2).toBeDefined();
     expect(row2?.requirementExcerptRedacted).toBeUndefined();
+  });
+
+  it("projects drift metadata without exposing raw source fingerprints", () => {
+    const withDrift = {
+      ...(manifest("run-drift") as Record<string, unknown>),
+      sourceFingerprints: [{ envelopeId: "env-1", integrityHashSha256Hex: "a".repeat(64) }],
+      atomFingerprints: [
+        { atomId: "atom-1", envelopeId: "env-1", canonicalHashSha256Hex: "b".repeat(64) },
+      ],
+    };
+    loadMock.mockReturnValue(withDrift);
+    loadCandidatesMock.mockReturnValue({
+      candidates: [
+        {
+          id: "cand-1",
+          title: "Candidate",
+          preconditions: [],
+          steps: [],
+          expectedResults: [],
+          priority: "P2",
+          riskClass: "regression",
+          tags: [],
+          status: "proposed",
+          derivedFromAtomIds: ["atom-1"],
+        },
+      ],
+      editedRevisions: [],
+    });
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-drift", { id: "run-drift" }),
+        depsWithEvidenceDir("/tmp/qi-evidence"),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      drift: {
+        status: string;
+        sourceFingerprintCount: number;
+        atomFingerprintCount: number;
+        reCheckSupported: boolean;
+        regenerateStaleSupported: boolean;
+      };
+    };
+    expect(body.drift).toEqual({
+      status: "not-checked",
+      sourceFingerprintCount: 1,
+      atomFingerprintCount: 1,
+      reCheckSupported: true,
+      regenerateStaleSupported: true,
+    });
+    expect(JSON.stringify(result.body)).not.toContain("a".repeat(64));
+    expect(JSON.stringify(result.body)).not.toContain("b".repeat(64));
   });
 
   it("returns 400 BAD_REQUEST for an empty id", () => {

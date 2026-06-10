@@ -8,6 +8,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
+  QualityIntelligenceInlineSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
@@ -71,7 +72,9 @@ function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage
 }
 
 export interface RunLauncherProps {
-  readonly onRunCompleted?: ((runId: string) => void) | undefined;
+  readonly onRunCompleted?:
+    | ((runId: string, recheckableSources: readonly QualityIntelligenceInlineSource[]) => void)
+    | undefined;
   readonly startImpl?: typeof startQiRun;
   /**
    * Folder bound via a Workspace relationship edge to a Files window (Epic #270 Slice 1). When
@@ -144,6 +147,12 @@ function sourceValue(source: ConnectedRunSource): string {
 // Stable React key / dedupe key for a connected source (kind + path or id).
 function sourceItemKey(source: ConnectedRunSource): string {
   return `${source.kind}:${sourceValue(source)}`;
+}
+
+function recheckableSourcesForWindow(
+  sources: QualityIntelligenceStartRunRequest["sources"],
+): readonly QualityIntelligenceInlineSource[] {
+  return sources.filter((source) => source.kind !== "requirements");
 }
 
 export function RunLauncher({
@@ -228,7 +237,7 @@ export function RunLauncher({
     try {
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
-      if (runId !== null) onRunCompleted?.(runId);
+      if (runId !== null) onRunCompleted?.(runId, recheckableSourcesForWindow(sources));
     } catch (err) {
       if (!controller.signal.aborted) setError(formatError(err));
     } finally {
