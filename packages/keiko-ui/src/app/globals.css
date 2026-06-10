@@ -8810,6 +8810,38 @@ select.dlg-input {
   margin: 0;
 }
 
+.figma-snapshot-error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, hsl(6 80% 52%) 55%, transparent);
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, hsl(6 80% 52%) 12%, transparent);
+}
+
+.figma-snapshot-error-title,
+.figma-snapshot-error-detail,
+.figma-snapshot-error-status,
+.figma-snapshot-error-remediation {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.figma-snapshot-error-title {
+  color: hsl(6 82% 58%);
+  font-weight: 700;
+}
+
+.figma-snapshot-error-detail {
+  color: hsl(6 80% 62%);
+}
+
+.figma-snapshot-error-status,
+.figma-snapshot-error-remediation {
+  color: var(--fg-muted);
+}
+
 /* ── Stored-snapshot notice ───────────────────────────────────────────────── */
 
 .figma-snapshot-stored-notice {

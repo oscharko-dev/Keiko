@@ -54,10 +54,47 @@ function isValidFigmaLink(raw: string): boolean {
   }
 }
 
+interface SnapshotErrorNotice {
+  readonly title: string;
+  readonly detail: string;
+  readonly status?: string | undefined;
+  readonly remediation?: string | undefined;
+}
+
+const FIGMA_EXTERNAL_DEPENDENCY_ERRORS: ReadonlySet<string> = new Set([
+  "FIGMA_PROXY_EGRESS_FAILED",
+  "FIGMA_PROXY_UNREACHABLE",
+  "FIGMA_TLS_CA_FAILURE",
+  "FIGMA_UPSTREAM_UNAVAILABLE",
+]);
+
+function formatSnapshotError(err: unknown): SnapshotErrorNotice {
+  if (err instanceof ApiError) {
+    const detail = `${err.code}: ${err.message}`;
+    if (FIGMA_EXTERNAL_DEPENDENCY_ERRORS.has(err.code)) {
+      return {
+        title: "Figma snapshot blocked by outbound egress",
+        detail,
+        status: `HTTP ${err.status.toString()}`,
+        remediation:
+          "Check the configured proxy, NO_PROXY rules, and CA bundle, then retry. No snapshot was stored.",
+      };
+    }
+    return {
+      title: "Figma snapshot failed",
+      detail,
+      status: `HTTP ${err.status.toString()}`,
+    };
+  }
+  if (err instanceof Error) {
+    return { title: "Figma snapshot failed", detail: err.message };
+  }
+  return { title: "Figma snapshot failed", detail: "An unexpected error occurred." };
+}
+
 function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
+  const notice = formatSnapshotError(err);
+  return notice.status === undefined ? notice.detail : `${notice.detail} (${notice.status})`;
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -134,7 +171,7 @@ export function FigmaSnapshotWindow({
   const [boardLink, setBoardLink] = useState("");
   const [buildState, setBuildState] = useState<BuildState>("idle");
   const [summary, setSummary] = useState<FigmaSnapshotSummary | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorNotice, setErrorNotice] = useState<SnapshotErrorNotice | null>(null);
   // Explicit read-only-scope acknowledgement (#760) — recorded server-side before the first build.
   const [consentChecked, setConsentChecked] = useState(false);
   // Design-to-code (#755) state — a reviewable artifact generated from the stored snapshot.
@@ -148,7 +185,7 @@ export function FigmaSnapshotWindow({
   const runBuild = useCallback(
     async (link: string, isResnapshot: boolean): Promise<void> => {
       setBuildState("building");
-      setErrorMsg(null);
+      setErrorNotice(null);
       setCodeState("idle");
       setCode(null);
       try {
@@ -160,7 +197,7 @@ export function FigmaSnapshotWindow({
         updateCfg({ snapshotRunId: result.runId });
         setBuildState("done");
       } catch (err) {
-        setErrorMsg(formatError(err));
+        setErrorNotice(formatSnapshotError(err));
         setBuildState("error");
       }
     },
@@ -209,14 +246,14 @@ export function FigmaSnapshotWindow({
   const handleLoadStored = useCallback((): void => {
     if (snapshotRunId === undefined || snapshotRunId.length === 0) return;
     setBuildState("building");
-    setErrorMsg(null);
+    setErrorNotice(null);
     loadImpl(snapshotRunId)
       .then((result) => {
         setSummary(result);
         setBuildState("done");
       })
       .catch((err: unknown) => {
-        setErrorMsg(formatError(err));
+        setErrorNotice(formatSnapshotError(err));
         setBuildState("error");
       });
   }, [loadImpl, snapshotRunId]);
@@ -283,22 +320,29 @@ export function FigmaSnapshotWindow({
       </form>
 
       {/* ── Status / progress ─────────────────────────────────────────────── */}
-      <div
-        id={statusId}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="figma-snapshot-status"
-      >
+      <div id={statusId} aria-live="polite" aria-atomic="true" className="figma-snapshot-status">
         {isBuilding && (
           <p className="figma-snapshot-progress">
             Building snapshot — fetching screens from Figma…
           </p>
         )}
-        {buildState === "error" && errorMsg !== null && (
-          <p className="figma-snapshot-error" role="alert">
-            {errorMsg}
-          </p>
+        {buildState === "error" && errorNotice !== null && (
+          <div
+            className="figma-snapshot-error-card"
+            role="alert"
+            aria-labelledby={`${statusId}-error-title`}
+          >
+            <p id={`${statusId}-error-title`} className="figma-snapshot-error-title">
+              {errorNotice.title}
+            </p>
+            <p className="figma-snapshot-error-detail">{errorNotice.detail}</p>
+            {errorNotice.status !== undefined && (
+              <p className="figma-snapshot-error-status">{errorNotice.status}</p>
+            )}
+            {errorNotice.remediation !== undefined && (
+              <p className="figma-snapshot-error-remediation">{errorNotice.remediation}</p>
+            )}
+          </div>
         )}
       </div>
 

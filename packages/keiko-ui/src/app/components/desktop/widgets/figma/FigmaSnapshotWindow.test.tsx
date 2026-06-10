@@ -21,6 +21,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
+import { ApiError } from "@/lib/api";
 import type { FigmaSnapshotWindowProps } from "./FigmaSnapshotWindow";
 import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
@@ -91,6 +92,13 @@ function rejectingTrigger(code: string, message: string): TriggerMock {
   const err = Object.assign(new Error(message), { code });
   const fn = vi.fn(async (_link: string): Promise<FigmaSnapshotSummary> => {
     throw err;
+  });
+  return fn as unknown as TriggerMock;
+}
+
+function rejectingApiError(code: string, message: string, status: number): TriggerMock {
+  const fn = vi.fn(async (_link: string): Promise<FigmaSnapshotSummary> => {
+    throw new ApiError(code, message, status);
   });
   return fn as unknown as TriggerMock;
 }
@@ -253,6 +261,28 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await typeAndSubmit(user);
       await waitFor(() => expect(screen.getByText(/node not found/iu)).toBeInTheDocument());
+      expect(updateCfg).not.toHaveBeenCalled();
+    });
+
+    it("renders proxy egress 502 failures as actionable external-dependency errors", async () => {
+      const trigger = rejectingApiError(
+        "FIGMA_PROXY_EGRESS_FAILED",
+        "The forward proxy rejected the Figma egress request. Check proxy configuration.",
+        502,
+      );
+      const { updateCfg } = renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("checkbox", { name: /read-only and least-privilege/iu }));
+      await typeAndSubmit(user);
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Figma snapshot blocked by outbound egress");
+      expect(alert).toHaveTextContent(
+        "FIGMA_PROXY_EGRESS_FAILED: The forward proxy rejected the Figma egress request. Check proxy configuration.",
+      );
+      expect(alert).toHaveTextContent("HTTP 502");
+      expect(alert).toHaveTextContent(/NO_PROXY/iu);
+      expect(alert).toHaveTextContent(/No snapshot was stored/iu);
       expect(updateCfg).not.toHaveBeenCalled();
     });
   });
