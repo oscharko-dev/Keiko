@@ -449,7 +449,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
 
     // Answerer invoked exactly once
     expect(answererSeen.count).toBe(1);
-    expect(auditKindsFor(capId).sort()).toEqual([
+    expect([...auditKindsFor(capId)].sort()).toEqual([
       "answer-context-assembled",
       "model-context-sent",
       "retrieval-performed",

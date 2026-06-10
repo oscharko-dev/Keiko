@@ -95,6 +95,9 @@ describe("jsonParser", () => {
     const first = result.units[0];
     const second = result.units[1];
     if (first === undefined || second === undefined) throw new Error("expected two JSON leaves");
+    if (first.kind !== "json-path" || second.kind !== "json-path") {
+      throw new Error("expected JSON path units");
+    }
     expect(first.characterStart).toBe(0);
     expect(first.characterEnd).toBe('/a: "first"\n'.length);
     expect(second.characterStart).toBe(first.characterEnd);
