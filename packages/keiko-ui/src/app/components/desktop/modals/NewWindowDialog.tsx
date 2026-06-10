@@ -921,6 +921,7 @@ export function NewWindowDialog({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [directoryField, setDirectoryField] = useState<string | null>(null);
   const firstFieldRef = useRef<HTMLElement | null>(null);
+  const dlgRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -934,10 +935,26 @@ export function NewWindowDialog({
   useEffect(() => {
     const r = requestAnimationFrame(() => {
       setShown(true);
-      firstFieldRef.current?.focus();
+      // uiux-fix F008 C053 — config-less types (connector, figma) have no first field, so focus
+      // used to stay on the trigger OUTSIDE this aria-modal dialog: Escape and the Tab trap
+      // (both bound to the dialog div) never fired. Fall back to the dialog container itself.
+      (firstFieldRef.current ?? dlgRef.current)?.focus();
     });
     return () => cancelAnimationFrame(r);
   }, []);
+
+  // uiux-fix F008 C053 — window-level Escape covers the residual cases where focus sits outside
+  // the dialog (the div's own onKeyDown only fires while focus is inside). Scoped to the dialog's
+  // lifetime via the effect cleanup so it never eats Escape meant for other overlays.
+  useEffect(() => {
+    const onWindowKeyDown = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onWindowKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onWindowKeyDown);
+    };
+  }, [onClose]);
 
   // ADR-0018 — no shell prefetch: the terminal tool is a permitted-command picker now. The
   // window only needs a projectPath and an optional cwd, both supplied via the form below.
@@ -998,11 +1015,13 @@ export function NewWindowDialog({
     <div className={"dlg-overlay" + (shown ? " in" : "")} onPointerDown={onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Esc/Tab/⌘Enter key handling */}
       <div
+        ref={dlgRef}
         className="dlg"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-window-title"
         aria-describedby="new-window-desc"
+        tabIndex={-1}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >

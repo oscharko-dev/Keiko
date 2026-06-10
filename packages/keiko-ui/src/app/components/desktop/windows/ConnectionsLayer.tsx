@@ -264,7 +264,7 @@ export function ConnectionsLayer({
             data-intensity={active ? intensity : undefined}
             style={{ left: it.mid.x, top: it.mid.y }}
             onClick={() => api.removeConn(it.c.id)}
-            title="Remove connection"
+            title={`Remove connection: ${it.label}`}
             aria-label={
               active
                 ? `${it.label} — ${intensity} data exchange in progress. Activate to remove connection.`

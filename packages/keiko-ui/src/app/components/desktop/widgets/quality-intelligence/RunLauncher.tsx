@@ -5,7 +5,7 @@
 // completion notify the panel to refresh + select the new run. Accessible: labelled inputs,
 // aria-live progress region, focus-visible controls, 24×24 min targets.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceRunStreamMessage,
@@ -193,6 +193,14 @@ export function RunLauncher({
         : Number.NaN;
   const seedValid =
     parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  // Generate stays focusable when blocked (aria-disabled, not native disabled) so keyboard and
+  // screen-reader users can reach it and hear WHY it is inactive via aria-describedby — the same
+  // governance pattern as GovernedActionButton in CandidatesPane (Epic #712).
+  const generateBlocked = !ready || !seedValid;
+  const generateHintId = useId();
+  const seedErrorId = useId();
+  const labelHintId = useId();
+  const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
@@ -201,11 +209,9 @@ export function RunLauncher({
   }, []);
 
   const handleStart = useCallback(async (): Promise<void> => {
-    if (!ready || running) return;
-    if (!seedValid) {
-      setError("Seed must be a non-negative integer.");
-      return;
-    }
+    // Defensive guard — the Generate button already no-ops while blocked (aria-disabled pattern),
+    // and an invalid seed surfaces as an inline field error next to the input.
+    if (!ready || running || !seedValid) return;
     setRunning(true);
     setError(null);
     setProgress(INITIAL_PROGRESS);
@@ -273,7 +279,9 @@ export function RunLauncher({
               {sourceValue(connectedSources[0])}
             </span>
             <span className="qi-connected-hint">
-              Generate uses the connected {sourceKindLabel(connectedSources[0]).toLowerCase()}.
+              {manualReady
+                ? "Manual input below overrides the connected source for this run."
+                : `Generate uses the connected ${sourceKindLabel(connectedSources[0]).toLowerCase()}.`}
             </span>
           </div>
         ) : connectedSources.length > 1 ? (
@@ -291,7 +299,11 @@ export function RunLauncher({
                 </li>
               ))}
             </ul>
-            <span className="qi-connected-hint">Generate uses all connected sources.</span>
+            <span className="qi-connected-hint">
+              {manualReady
+                ? "Manual input below overrides the connected sources for this run."
+                : "Generate uses all connected sources."}
+            </span>
           </div>
         ) : null}
         <div className="qi-launcher-row">
@@ -303,10 +315,16 @@ export function RunLauncher({
               value={label}
               placeholder="e.g. Funds Transfer — acceptance criteria"
               disabled={running}
+              aria-describedby={hasConnected && !manualReady ? labelHintId : undefined}
               onChange={(e) => {
                 setLabel(e.target.value);
               }}
             />
+            {hasConnected && !manualReady ? (
+              <span className="qi-field-hint" id={labelHintId}>
+                Applies to manual input only — connected sources use their own labels.
+              </span>
+            ) : null}
           </label>
           <label className="qi-field qi-field-kind">
             <span className="qi-field-label">Source type</span>
@@ -381,11 +399,18 @@ export function RunLauncher({
               value={seed}
               placeholder="e.g. 42"
               disabled={running}
+              aria-invalid={seedValid ? undefined : true}
+              aria-describedby={seedValid ? undefined : seedErrorId}
               onChange={(e) => {
                 setSeed(e.target.value);
                 setError(null);
               }}
             />
+            {!seedValid ? (
+              <span className="qi-field-error" id={seedErrorId}>
+                Seed must be a non-negative integer.
+              </span>
+            ) : null}
           </label>
           {running ? (
             <button type="button" className="qi-btn qi-btn-secondary" onClick={handleCancel}>
@@ -395,14 +420,21 @@ export function RunLauncher({
             <button
               type="button"
               className="qi-btn qi-btn-primary"
-              disabled={!ready || !seedValid}
+              aria-disabled={generateBlocked || undefined}
+              aria-describedby={generateDescribedBy}
               onClick={() => {
+                if (generateBlocked) return;
                 void handleStart();
               }}
             >
               Generate test cases
             </button>
           )}
+          {!running && !ready ? (
+            <span className="qi-generate-hint" id={generateHintId}>
+              Add requirements text, a folder path, or connect a source to generate.
+            </span>
+          ) : null}
         </div>
         {running ? (
           <div

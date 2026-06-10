@@ -6,7 +6,7 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Footer } from "./Footer";
-import { Header } from "./Header";
+import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
@@ -84,12 +84,32 @@ function shellStatusLabel(args: {
   return "Ready";
 }
 
+// uiux-fix F008 C043/C118 — derive the header status pill from the real session state instead of
+// a hardcoded "connected" literal. Exported for unit tests.
+export function headerStatus(args: {
+  readonly loading: boolean;
+  readonly error: string | undefined;
+  readonly hasProject: boolean;
+  readonly projectAvailable: boolean;
+  readonly noEligibleModels: boolean;
+}): { readonly label: string; readonly tone: HeaderStatusTone } {
+  if (args.loading) return { label: "Connecting", tone: "warn" };
+  if (args.error !== undefined || (args.hasProject && !args.projectAvailable)) {
+    return { label: "Disconnected", tone: "danger" };
+  }
+  if (!args.hasProject || args.noEligibleModels) return { label: "Setup required", tone: "warn" };
+  return { label: "Connected", tone: "ok" };
+}
+
 function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
   const reviewWindows = (wins ?? []).filter((win) => win.type === "review");
-  if (reviewWindows.length === 0) return "Open review";
+  // uiux-fix F008 C060 — the idle label was the imperative "Open review", which reads like a
+  // control but renders as static text in the footer status strip. Descriptive labels instead,
+  // consistent with "No branch selected" / "No model selected".
+  if (reviewWindows.length === 0) return "No review open";
   return reviewWindows.some((win) => typeof win.cfg.runId === "string" && win.cfg.runId.length > 0)
     ? "Evidence ready"
-    : "Review open";
+    : "Review window open";
 }
 
 const CARD_TYPES: readonly WindowType[] = [
@@ -109,6 +129,12 @@ const CARD_TYPES: readonly WindowType[] = [
   "integ",
 ];
 const TOOL_TYPES: readonly WindowType[] = [
+  // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
+  // with LeftRail buttons but were missing here, so the command palette could not open them
+  // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
+  // the WindowsRegistry declaration.
+  "keiko",
+  "settings",
   "project",
   "search",
   "plugins",
@@ -118,6 +144,8 @@ const TOOL_TYPES: readonly WindowType[] = [
   "activity",
   "notifications",
   "resources",
+  "quality",
+  "relationships",
 ];
 
 export function buildAppShellCommands(
@@ -185,6 +213,7 @@ export function buildAppShellCommands(
         : "Undo (window and panel changes only)",
     group: "Edit",
     icon: "back",
+    shortcut: "⌘Z",
     run: undoStack.undo,
   });
   out.push({
@@ -195,6 +224,7 @@ export function buildAppShellCommands(
         : "Redo (window and panel changes only)",
     group: "Edit",
     icon: "fwd",
+    shortcut: "⇧⌘Z",
     run: undoStack.redo,
   });
   return out;
@@ -230,7 +260,10 @@ function AppShellInner(): ReactNode {
           // graph. Best-effort: never blocks or breaks the grounding scope bind above.
           recordReadsContextRelationship(chat.id, filesRoot);
         })
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          // uiux-fix F008 C074 — a failed bind silently left the edge visible but ungrounded.
+          console.warn("[keiko] connected-scope bind failed", error);
+        });
     },
     [session, groundingLimits.maxConnectedSources],
   );
@@ -243,7 +276,10 @@ function AppShellInner(): ReactNode {
         .then((res) => {
           session.replaceChat(res.chat);
         })
-        .catch(() => undefined);
+        .catch((error: unknown) => {
+          // uiux-fix F008 C074 — a failed unbind silently left the chat grounded after edge removal.
+          console.warn("[keiko] connected-scope unbind failed", error);
+        });
     },
     [session],
   );
@@ -306,23 +342,44 @@ function AppShellInner(): ReactNode {
   }, []);
   const confirmNew = useCallback(
     (cfg: Cfg): void => {
-      setPending((current) => {
-        if (current !== null) {
-          const { __connectFilesId, ...windowCfg } = cfg;
-          const createdId = ws.api.add(current, windowCfg);
-          if (
-            current === "agents" &&
-            createdId !== null &&
-            typeof __connectFilesId === "string" &&
-            __connectFilesId.length > 0
-          ) {
-            ws.api.connect(createdId, __connectFilesId);
-          }
-        }
-        return null;
-      });
+      // Side effects live outside the setPending updater: StrictMode double-invokes updater
+      // functions in dev, which would duplicate every window (and chat) created in here. The
+      // dialog only renders while `pending` is non-null, so reading it from the closure is safe.
+      const current = pending;
+      setPending(null);
+      if (current === null) return;
+      const { __connectFilesId, ...windowCfg } = cfg;
+      const createdId = ws.api.add(current, windowCfg);
+      if (
+        current === "agents" &&
+        createdId !== null &&
+        typeof __connectFilesId === "string" &&
+        __connectFilesId.length > 0
+      ) {
+        ws.api.connect(createdId, __connectFilesId);
+      }
+      // uiux-fix F008 C051 — "New chat" must start a fresh conversation instead of mirroring the
+      // active one into a second window. The dialog's title field becomes the conversation title.
+      // The ws.api.add call above stays untouched (window-opening mechanics unchanged).
+      if (current === "chat") {
+        const title = windowCfg.title;
+        void session.openNewChat(undefined, typeof title === "string" ? title : undefined);
+      }
+      // uiux-fix F008 C053 — focus handoff: once the dialog unmounts, move focus into the freshly
+      // created window (chat composer / first focusable control) instead of stranding it on
+      // <body>. The dialog's unmount cleanup restores the trigger synchronously before this rAF
+      // runs, so the handoff wins.
+      if (createdId !== null) {
+        requestAnimationFrame(() => {
+          const el = document.querySelector<HTMLElement>(`[data-window-id="${createdId}"]`);
+          if (el === null) return;
+          const target =
+            el.querySelector<HTMLElement>("textarea, input, select, button, [tabindex]") ?? el;
+          target.focus();
+        });
+      }
     },
-    [ws.api],
+    [pending, ws.api, session],
   );
   const closeDialog = useCallback((): void => setPending(null), []);
   const closeCmdk = useCallback((): void => setCmdkOpen(false), []);
@@ -357,6 +414,20 @@ function AppShellInner(): ReactNode {
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
+
+  // uiux-fix F008 C220 — /relationships used to be a full page until #532 turned it into a
+  // workspace window; the SPA fallback now serves old bookmarks an empty desktop with no hint.
+  // Once the workspace is hydrated, open the Relationships window via the existing tool seam
+  // (idempotent: only when not already open) and normalize the URL back to "/".
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current || ws.wins === null) return;
+    deepLinkHandled.current = true;
+    const path = window.location.pathname.replace(/\/+$/u, "");
+    if (path !== "/relationships") return;
+    if (!ws.wins.some((w) => w.type === "relationships")) onTool("relationships");
+    window.history.replaceState(null, "", "/");
+  }, [ws.wins, onTool]);
 
   // Epic #518 / ADR-0028 — undo (Cmd/Ctrl+Z) and redo (Cmd/Ctrl+Shift+Z)
   // routed through useKeyboardShortcuts. The existing Cmd+K palette
@@ -397,6 +468,15 @@ function AppShellInner(): ReactNode {
     projectAvailable,
     noEligibleModels: session.noEligibleModels,
   });
+  // uiux-fix F008 C043/C118 — the header pill mirrors the same session state as the footer
+  // (it used to be a hardcoded green "connected" that contradicted the footer during outages).
+  const headerStatusValue = headerStatus({
+    loading: session.loading,
+    error: session.error,
+    hasProject,
+    projectAvailable,
+    noEligibleModels: session.noEligibleModels,
+  });
   const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
   const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
 
@@ -413,6 +493,8 @@ function AppShellInner(): ReactNode {
           <Header
             mode={twin.mode}
             projectName={projectName}
+            statusLabel={headerStatusValue.label}
+            statusTone={headerStatusValue.tone}
             onModeChange={twin.setMode}
             openPalette={openPalette}
             onTileAll={ws.api.tileAll}

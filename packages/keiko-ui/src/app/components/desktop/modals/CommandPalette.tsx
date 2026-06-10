@@ -9,6 +9,8 @@ export interface Command {
   readonly label: string;
   readonly group?: string;
   readonly icon: IconName;
+  // Optional keyboard chord rendered as a .kbd chip in the row (shortcut discoverability).
+  readonly shortcut?: string;
   readonly run: () => void;
 }
 
@@ -148,6 +150,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
               <span className="cmdk-ico">{iconNode(c.icon)}</span>
               <span className="cmdk-label">{c.label}</span>
               <span className="spacer" />
+              {c.shortcut !== undefined && <span className="kbd">{c.shortcut}</span>}
               {c.group !== undefined && <span className="cmdk-group mono">{c.group}</span>}
             </div>
           ))}

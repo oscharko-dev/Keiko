@@ -364,13 +364,13 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Open health view for capsule ${displayName}`}
+        aria-label={`Open details for capsule ${displayName}`}
         onClick={() => {
           onHealth(id);
         }}
         className="lk-btn lk-btn-ghost"
       >
-        Health
+        Details
       </button>
       <button
         type="button"

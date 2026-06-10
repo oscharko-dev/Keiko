@@ -416,6 +416,18 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
   // aria-describedby from dangling at a BudgetIndicator that renders nothing.
   const budgetExceeded = isBudgetExceeded(budget);
 
+  // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
+  // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
+  // collapses the textarea back to its rows={2} minimum. The mini composer
+  // (MiniChat) has its own textarea without this effect and stays height:100%.
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const ta = taRef.current;
+    if (ta === null) return;
+    ta.style.height = "auto";
+    ta.style.height = `${String(Math.min(ta.scrollHeight, 220))}px`;
+  }, [draft]);
+
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
   const [rejectionMime, setRejectionMime] = useState<string | undefined>();
@@ -453,13 +465,18 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
       <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
       <textarea
         className="cmp-input"
+        ref={taRef}
         rows={2}
         value={draft}
         aria-label="Chat message"
         placeholder={placeholder}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={onComposerKeyDown(sendMessage)}
-        disabled={loading || sending}
+        // uiux-fix F009 C077 — readOnly instead of disabled while a send is in
+        // flight: disabling the focused textarea threw keyboard focus to <body>
+        // on every send (WCAG 2.4.3). Re-submit is already a no-op via the
+        // isInFlight guard in useChatSession.
+        readOnly={loading || sending}
       />
       {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
       <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
@@ -609,7 +626,8 @@ function MiniChat({
           placeholder={loading ? "Loading..." : "Ask Keiko..."}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onComposerKeyDown(sendMessage)}
-          disabled={loading || sending}
+          // uiux-fix F009 C077 — see ComposerCore: readOnly keeps focus while sending.
+          readOnly={loading || sending}
         />
         {/* ST-F1 — match ComposerBar: while a send is in flight the primary
             action flips to "Cancel response" (#152 AC#3) so the mini composer
@@ -1222,10 +1240,20 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           : undefined,
   );
 
+  // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
+  // streaming content growth (lastContent dependency), but only while the
+  // reader is near the bottom; never yank someone who scrolled up into the
+  // history. Starting an own send (sending false→true) always jumps down.
+  const stickRef = useRef(true);
+  const prevSendingRef = useRef(false);
+  const lastVisible = visible.length > 0 ? visible[visible.length - 1] : undefined;
+  const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   useEffect(() => {
+    if (sending && !prevSendingRef.current) stickRef.current = true;
+    prevSendingRef.current = sending;
     const el = scrollRef.current;
-    if (el !== null) el.scrollTop = el.scrollHeight;
-  }, [visible.length, sending]);
+    if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [visible.length, sending, lastContent]);
 
   if (mini) {
     return (
@@ -1240,6 +1268,14 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
         ) : null}
         {noEligibleModels ? <NoModelAlert /> : null}
         <MiniChat session={session} ready={ready} />
+        {/* uiux-fix F009 C079 — the mini branch previously rendered no error
+            path at all: a failed send removed the optimistic message and the
+            user saw nothing. Same role="alert" block as the full composer. */}
+        {error !== undefined ? (
+          <div role="alert" className="cmp-err">
+            {error}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1277,7 +1313,22 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           <LoadingStatus />
         </div>
       ) : null}
-      <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
+      {/* uiux-fix F009 C078 — the log is a scrollable region with (often) no
+          focusable children: tabIndex makes it keyboard-scrollable (axe
+          scrollable-region-focusable); role="log" keeps the implicit polite
+          live-region semantics the previous aria-live="polite" provided.
+          C090 — onScroll tracks whether the reader is near the bottom. */}
+      <div
+        className="chatw-scroll"
+        ref={scrollRef}
+        role="log"
+        aria-label="Conversation"
+        tabIndex={0}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+        }}
+      >
         {visible.length === 0 ? (
           activeChat !== undefined ? (
             <EmptyComposerState session={session} noEligibleModels={noEligibleModels} />

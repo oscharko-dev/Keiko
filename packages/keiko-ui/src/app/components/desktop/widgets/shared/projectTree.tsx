@@ -200,8 +200,10 @@ export function TreeNodeComponent({ node, depth, path, active, onPick }: TreeNod
     return (
       <div>
         <button
+          type="button"
           className="tr-row"
           style={{ paddingLeft: pad }}
+          aria-expanded={open}
           onClick={() => {
             setOpen((o) => !o);
           }}
@@ -242,8 +244,10 @@ export function TreeNodeComponent({ node, depth, path, active, onPick }: TreeNod
 
   return (
     <button
+      type="button"
       className="tr-row tr-file"
       data-active={active === myPath}
+      aria-pressed={active === myPath}
       style={{ paddingLeft: pad + 14 }}
       onClick={() => {
         onPick(myPath);

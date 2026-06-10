@@ -50,7 +50,9 @@ function TooSmall({ icon, label }: TooSmallProps): ReactNode {
         <Icon size={28} />
       </div>
       <div className="ts-title">Too small to show {label}</div>
-      <div className="ts-sub">Enlarge the window or zoom out</div>
+      {/* Tiny mode depends on window size and *content* zoom only — point at the
+          content-zoom control, not the workspace "Zoom out" button (audit C300). */}
+      <div className="ts-sub">Enlarge the window or zoom its content out</div>
       <div className="ts-arrow" aria-hidden="true">
         <svg
           width="22"
@@ -384,12 +386,40 @@ export function WindowFrame({
   const onPortKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>): void => {
       if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+      // Keyboard completion of click-to-connect (WCAG 2.1.1, audit C004):
+      // when this window is a valid target of an in-flight connect, Enter or
+      // Space on its port confirms the link — mirroring the pointer path —
+      // instead of starting a new flow from this window. confirmConnect only
+      // reads preventDefault/stopPropagation off the event, so the same
+      // adapter cast used by startPortConnect is safe here.
+      if (connState === "valid") {
+        api.confirmConnect(win.id, {
+          preventDefault: () => e.preventDefault(),
+          stopPropagation: () => e.stopPropagation(),
+        } as ReactPointerEvent<Element>);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       startPortConnect(e.currentTarget, e);
     },
-    [startPortConnect],
+    [startPortConnect, connState, api, win.id],
   );
+
+  // Audit C148 — closing a window removed the focused Close button from the DOM
+  // and dropped keyboard focus to <body>; the user had to re-tab from the top of
+  // the document. Move focus deterministically to the next top window (focusable
+  // via tabIndex={-1} on the section) or the New-window FAB once React committed
+  // the close. preventScroll guards against any residual scroll-on-focus.
+  const closeWithFocusRestore = useCallback((): void => {
+    api.close(win.id);
+    requestAnimationFrame(() => {
+      const next =
+        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
+        document.querySelector<HTMLElement>(".ws-fab");
+      next?.focus({ preventScroll: true });
+    });
+  }, [api, win.id]);
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
@@ -409,9 +439,18 @@ export function WindowFrame({
       data-conn={connState ?? undefined}
       data-window-id={win.id}
       style={sectionStyle}
+      tabIndex={-1}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
         api.focus(win.id);
+      }}
+      // Audit C061 / WCAG 2.4.11 — tabbing into a lower, overlapped window must
+      // raise it, or the focused control (and its focus ring) stays fully hidden
+      // behind the top window; Cmd/Alt+Arrows also only act on the topZ window.
+      // The !top guard matters: makeFocus bumps z unconditionally, so without it
+      // every Tab step inside the top window would trigger a state update.
+      onFocusCapture={() => {
+        if (!top) api.focus(win.id);
       }}
     >
       {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
@@ -436,6 +475,7 @@ export function WindowFrame({
             className="win-zbtn"
             title="Zoom content out"
             aria-label="Zoom content out"
+            disabled={zoom <= CONTENT_MIN_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setZoom(zoom - 0.1)}
           >
@@ -444,8 +484,8 @@ export function WindowFrame({
           <button
             type="button"
             className="win-zpct"
-            title="Reset zoom"
-            aria-label="Reset content zoom"
+            title="Reset content zoom to 100%"
+            aria-label={`${String(Math.round(zoom * 100))}% — reset content zoom`}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => api.update(win.id, { zoom: 1 })}
           >
@@ -456,6 +496,7 @@ export function WindowFrame({
             className="win-zbtn"
             title="Zoom content in"
             aria-label="Zoom content in"
+            disabled={zoom >= CONTENT_MAX_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setZoom(zoom + 0.1)}
           >
@@ -478,7 +519,7 @@ export function WindowFrame({
           title="Close"
           aria-label="Close window"
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => api.close(win.id)}
+          onClick={closeWithFocusRestore}
         >
           <Icons.close size={14} />
         </button>
@@ -496,7 +537,7 @@ export function WindowFrame({
             <div
               key={`p${d}`}
               className={`win-port wp-${d}`}
-              title="Click to connect to another card"
+              title="Click to connect to another window"
               aria-label={`Connect from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
               role="button"
               tabIndex={0}

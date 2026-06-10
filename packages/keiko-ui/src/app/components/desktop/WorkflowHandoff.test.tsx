@@ -287,6 +287,22 @@ describe("WorkflowHandoff — picker requires an explicit click (AC#1)", () => {
     expect(screen.getByRole("button", { name: /generate unit tests/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /investigate bug/i })).toBeInTheDocument();
   });
+
+  it("portals the picker dialog to document.body (transformed .ws-scene ancestor breaks position: fixed)", async () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        activeProject: makeProject(),
+        models: [workflowEligibleModel("wf-model")],
+        selectedModel: "wf-model",
+        messages: [userMessage("hi")],
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /launch workflow/i }));
+    const dialog = screen.getByRole("dialog", { name: /launch workflow/i });
+    expect(dialog.parentElement).toBe(document.body);
+  });
 });
 
 // ─── 3. Selecting a workflow + input calls the launch action ─────────────────
@@ -575,7 +591,10 @@ describe("useChatSession.launchGroundedWorkflowHandoff", () => {
   it("POSTs the grounded handoff request and returns the runId", async () => {
     const start = vi.spyOn(api, "startGroundedWorkflowHandoff").mockResolvedValue({
       run: { runId: "run-77", fingerprint: "fp" },
-      messages: [userMessage("Requested grounded unit-test generation."), systemRunSummaryMessage()],
+      messages: [
+        userMessage("Requested grounded unit-test generation."),
+        systemRunSummaryMessage(),
+      ],
     });
     const { result } = renderHook(() => useChatSession());
     await waitFor(() => expect(result.current.loading).toBe(false));

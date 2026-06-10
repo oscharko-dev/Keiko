@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { Icons } from "../Icons";
 import { type WIN_TYPES as WinTypes, type WindowType } from "../windows/WindowsRegistry";
 
@@ -22,32 +22,42 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
     const first = ref.current?.querySelector<HTMLButtonElement>(".pal-card");
     first?.focus();
     return () => {
-      triggerRef.current?.focus?.();
+      // Restore focus to the trigger only when closing would otherwise drop it
+      // (Escape / close button — focus was inside the palette and falls back to
+      // <body> on unmount). When the user already moved focus elsewhere (click
+      // or Tab outside), leave it where they put it.
+      const active = document.activeElement;
+      if (active === null || active === document.body) triggerRef.current?.focus?.();
     };
   }, []);
+
+  // The palette is an anchored popover next to the FAB and the workspace
+  // behind it stays fully interactive — so it must not claim aria-modal or
+  // hard-trap Tab (audit C187). Non-modal dismissal instead: pointerdown
+  // outside closes (parity with CommandPalette/NewWindowDialog), and focus
+  // leaving the palette closes it without stealing focus back.
+  useEffect(() => {
+    const onDocPointerDown = (e: PointerEvent): void => {
+      if (ref.current !== null && e.target instanceof Node && !ref.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", onDocPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onDocPointerDown);
+    };
+  }, [onClose]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();
-      return;
     }
-    if (e.key === "Tab") {
-      const focusables = Array.from(
-        ref.current?.querySelectorAll<HTMLElement>(
-          "button:not([disabled]),[tabindex]:not([tabindex='-1'])",
-        ) ?? [],
-      );
-      if (focusables.length === 0) return;
-      const first = focusables[0] as HTMLElement;
-      const last = focusables[focusables.length - 1] as HTMLElement;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
+  };
+
+  const onBlur = (e: FocusEvent<HTMLDivElement>): void => {
+    if (e.relatedTarget instanceof Node && ref.current?.contains(e.relatedTarget) !== true) {
+      onClose();
     }
   };
 
@@ -60,11 +70,11 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
       ref={ref}
       className="palette"
       role="dialog"
-      aria-modal="true"
       aria-labelledby="palette-title"
       aria-describedby="palette-desc"
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
+      onBlur={onBlur}
     >
       <div className="palette-head">
         <span className="palette-badge">
@@ -72,7 +82,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
         </span>
         <div className="palette-htext">
           <span id="palette-title" className="palette-title">
-            New Window
+            New window
           </span>
           <span id="palette-desc" className="palette-sub">
             Pick a card to add to your workspace

@@ -191,8 +191,10 @@ describe("ReviewQueue — populated state", () => {
       throw new Error("Expected both review queue accept buttons to be rendered.");
     }
     await user.click(firstAcceptButton);
-    expect(firstAcceptButton).toBeDisabled();
-    expect(secondAcceptButton).toBeEnabled();
+    // aria-disabled (not native disabled) keeps the busy button focusable so
+    // keyboard focus is not thrown to <body> mid-action (uiux-fix F005).
+    expect(firstAcceptButton).toHaveAttribute("aria-disabled", "true");
+    expect(secondAcceptButton).toHaveAttribute("aria-disabled", "false");
 
     resolveAccept?.();
     await waitFor(() => {

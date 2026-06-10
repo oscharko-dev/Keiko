@@ -40,6 +40,7 @@ import {
   patchRelationship,
   deleteRelationship,
   RelationshipApiError,
+  BACKEND_UNREACHABLE_MESSAGE,
 } from "../../../../relationships/api";
 import type {
   ApiRelationship,
@@ -549,7 +550,7 @@ function DenialSection({
           <div key={code} style={{ marginBottom: i < codes.length - 1 ? 8 : 0 }}>
             <div
               style={{
-                fontFamily: "var(--mono)",
+                fontFamily: "var(--font-mono)",
                 fontSize: 11,
                 color: "var(--fg-muted)",
                 marginBottom: 2,
@@ -795,10 +796,7 @@ export function RelationshipInspectorPanel({
       if (fetchGeneration.current !== generation) {
         return;
       }
-      const msg =
-        err instanceof RelationshipApiError
-          ? err.message
-          : "Unable to reach the local backend. Check that `keiko serve` is running.";
+      const msg = err instanceof RelationshipApiError ? err.message : BACKEND_UNREACHABLE_MESSAGE;
       setError(msg);
     } finally {
       if (skeletonTimer.current === timer) {

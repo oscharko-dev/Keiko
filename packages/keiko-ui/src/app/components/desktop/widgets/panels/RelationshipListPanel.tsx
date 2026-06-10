@@ -31,7 +31,11 @@ import {
   RELATIONSHIP_TYPES,
   RELATIONSHIP_OBJECT_KINDS,
 } from "@oscharko-dev/keiko-contracts";
-import { listRelationships, RelationshipApiError } from "../../../../relationships/api";
+import {
+  listRelationships,
+  RelationshipApiError,
+  BACKEND_UNREACHABLE_MESSAGE,
+} from "../../../../relationships/api";
 import type { ApiRelationship } from "../../../../relationships/api";
 import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 
@@ -307,10 +311,7 @@ export function RelationshipListPanel({
       setTruncated(result.truncated);
       setTotalHint(result.truncated ? result.entries.length + 1 : result.entries.length);
     } catch (err) {
-      const msg =
-        err instanceof RelationshipApiError
-          ? err.message
-          : "Unable to reach the local backend. Check that `keiko serve` is running.";
+      const msg = err instanceof RelationshipApiError ? err.message : BACKEND_UNREACHABLE_MESSAGE;
       setError(msg);
     } finally {
       setLoading(false);
@@ -478,9 +479,10 @@ export function RelationshipListPanel({
           style={{
             width: "100%",
             background: "var(--inset)",
-            border: "1px solid var(--border)",
+            border: "1px solid var(--line)",
             borderRadius: 4,
             padding: "4px 8px",
+            minHeight: 24,
             color: "var(--fg)",
             fontSize: 12,
           }}

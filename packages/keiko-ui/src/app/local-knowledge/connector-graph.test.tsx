@@ -268,7 +268,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
   });
 
-  it("navigates to the capsule health view when Health is clicked", async () => {
+  it("navigates to the capsule detail view when Details is clicked", async () => {
     const id = makeCapsuleId("77");
     const capsule = makeCapsule({ id, displayName: "Health Cap", lifecycleState: "ready" });
     const user = userEvent.setup();
@@ -280,7 +280,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
 
     await user.click(
-      screen.getByRole("button", { name: /open health view for capsule health cap/i }),
+      screen.getByRole("button", { name: /open details for capsule health cap/i }),
     );
 
     expect(pushMock).toHaveBeenCalledWith("/local-knowledge/capsule?capsuleId=cap-77");

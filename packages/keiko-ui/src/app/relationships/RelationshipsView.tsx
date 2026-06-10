@@ -161,7 +161,7 @@ export function RelationshipsView(): ReactNode {
             alignItems: "center",
             gap: 8,
             padding: "6px 12px",
-            borderBottom: "1px solid var(--border)",
+            borderBottom: "1px solid var(--line)",
             flexShrink: 0,
           }}
         >
@@ -193,7 +193,7 @@ export function RelationshipsView(): ReactNode {
           <div
             style={{
               flex: "0 0 280px",
-              borderRight: "1px solid var(--border)",
+              borderRight: "1px solid var(--line)",
               overflowY: "auto",
             }}
           >

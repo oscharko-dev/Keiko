@@ -6,9 +6,15 @@ import { EditorMenu } from "./EditorMenu";
 import { ModeSwitch } from "./ModeSwitch";
 import type { TwinMode } from "./hooks/useTwinMode";
 
+export type HeaderStatusTone = "ok" | "warn" | "danger";
+
 interface HeaderProps {
   readonly mode: TwinMode;
   readonly projectName: string;
+  // Real shell connection state for the status pill — previously a hardcoded
+  // "connected" literal that contradicted the footer during outages.
+  readonly statusLabel: string;
+  readonly statusTone: HeaderStatusTone;
   readonly onModeChange: (next: TwinMode) => void;
   readonly openPalette: () => void;
   readonly onTileAll: () => void;
@@ -19,6 +25,8 @@ interface HeaderProps {
 export function Header({
   mode,
   projectName,
+  statusLabel,
+  statusTone,
   onModeChange,
   openPalette,
   onTileAll,
@@ -50,7 +58,7 @@ export function Header({
           type="button"
           className="hd-tool hd-tool-cta"
           onClick={openPalette}
-          title="New window"
+          title="New window — press Ctrl/⌘K for all commands"
         >
           <Icons.add size={16} />
           <span>New</span>
@@ -89,8 +97,8 @@ export function Header({
 
       <span className="hd-div" />
       <ModeSwitch mode={mode} onChange={onModeChange} />
-      <div className="tb-status mono">
-        <span className="dot" style={{ background: "var(--ok)" }} /> connected
+      <div className="tb-status mono" role="status">
+        <span className="dot" data-tone={statusTone} /> {statusLabel}
       </div>
       <button type="button" className="tb-btn" aria-label="Expand window">
         <Icons.expand size={15} />

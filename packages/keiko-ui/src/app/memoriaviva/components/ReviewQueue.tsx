@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
@@ -15,13 +16,8 @@ import {
   rejectMemoryProposal,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
-import { ApiError } from "@/lib/api";
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
+import { formatError } from "./format-error";
+import { SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
@@ -47,15 +43,11 @@ function ReviewRow({
             {record.body}
           </p>
           <div className="mc-row-meta">
-            <span className="mc-row-type">{record.type}</span>
-            <span className="mc-row-scope">{record.scope.kind}</span>
-            <span
-              role="status"
-              aria-label={`Status: ${record.status}`}
-              className={`mc-badge mc-badge-${record.status}`}
-            >
-              {record.status}
-            </span>
+            <span className="mc-row-type">{TYPE_LABELS[record.type]}</span>
+            <span className="mc-row-scope">{SCOPE_LABELS[record.scope.kind]}</span>
+            {/* static metadata label — role="status" would create one live
+                region per row (uiux-fix F005) */}
+            <span className={`mc-badge mc-badge-${record.status}`}>{record.status}</span>
           </div>
           {rowError !== null ? (
             <p role="alert" className="mc-action-error">
@@ -63,15 +55,19 @@ function ReviewRow({
             </p>
           ) : null}
         </div>
+        {/* aria-disabled + click guard instead of native disabled: disabling the
+            focused button would throw keyboard focus to <body> (uiux-fix F005,
+            pattern from PR #823). */}
         <div className="mc-review-actions" role="group" aria-labelledby={labelId}>
           {record.status === "proposed" ? (
             <>
               <button
                 type="button"
                 className="lk-btn lk-btn-primary"
-                disabled={busyAction !== null}
+                aria-disabled={busyAction !== null}
                 aria-busy={busyAction === "accept"}
                 onClick={() => {
+                  if (busyAction !== null) return;
                   onAccept(record);
                 }}
               >
@@ -80,9 +76,10 @@ function ReviewRow({
               <button
                 type="button"
                 className="lk-btn lk-btn-ghost"
-                disabled={busyAction !== null}
+                aria-disabled={busyAction !== null}
                 aria-busy={busyAction === "reject"}
                 onClick={() => {
+                  if (busyAction !== null) return;
                   onReject(record);
                 }}
               >
@@ -93,9 +90,10 @@ function ReviewRow({
             <button
               type="button"
               className="lk-btn lk-btn-ghost"
-              disabled={busyAction !== null}
+              aria-disabled={busyAction !== null}
               aria-busy={busyAction === "reject"}
               onClick={() => {
+                if (busyAction !== null) return;
                 onReject(record);
               }}
             >
@@ -202,7 +200,7 @@ export function ReviewQueue({
   return (
     <>
       <header className="lk-header">
-        <h1 className="lk-title">Review Queue</h1>
+        <h1 className="lk-title">Review queue</h1>
         <span
           role="status"
           aria-live="polite"
@@ -211,6 +209,9 @@ export function ReviewQueue({
         >
           {records.length}
         </span>
+        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
+          Back to MemoriaViva
+        </Link>
       </header>
 
       <section

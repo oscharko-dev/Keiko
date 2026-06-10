@@ -25,7 +25,7 @@ function renderFooter(patch: Partial<ComponentProps<typeof Footer>> = {}): Retur
       projectName="Keiko"
       branchLabel="main"
       shellStatusLabel="Ready"
-      evidenceStatusLabel="Open review"
+      evidenceStatusLabel="No review open"
       {...patch}
     />,
   );

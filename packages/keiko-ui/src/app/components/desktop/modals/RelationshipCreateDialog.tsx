@@ -15,6 +15,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode, KeyboardEvent } from "react";
 import type { RelationshipObjectKind, RelationshipType } from "@oscharko-dev/keiko-contracts";
 import {
@@ -28,6 +29,7 @@ import {
   createRelationship,
   validateRelationshipProposal,
   RelationshipApiError,
+  BACKEND_UNREACHABLE_MESSAGE,
 } from "../../../relationships/api";
 import type { ApiRelationship } from "../../../relationships/api";
 
@@ -63,9 +65,7 @@ const SECURITY_DENIAL_CODES = new Set([
   "denied/payload-content-not-permitted",
 ]);
 
-function isSecurityDenial(
-  denial: { codes: readonly string[] } | null,
-): boolean {
+function isSecurityDenial(denial: { codes: readonly string[] } | null): boolean {
   return denial?.codes.some((code) => SECURITY_DENIAL_CODES.has(code)) === true;
 }
 
@@ -201,10 +201,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           summary: form.summary.length > 0 ? form.summary : undefined,
         });
         if (previewRequestId !== latestPreviewRequestId.current) return;
-        setServerDenial((current) => {
-          if (current?.source === "submit") return current;
-          return isSecurityDenial(current) ? current : null;
-        });
+        // A green preview clears any non-security denial (including stale submit
+        // denials) so the dialog cannot dead-end. Security denials persist until
+        // explicit dismissal (error-and-denial-ux.md §"Forbidden patterns").
+        setServerDenial((current) => (isSecurityDenial(current) ? current : null));
       } catch (err) {
         if (previewRequestId !== latestPreviewRequestId.current) return;
         if (err instanceof RelationshipApiError && err.reasons.length > 0) {
@@ -228,10 +228,31 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
     };
   }, [form, clientHints]);
 
+  // Non-security submit denials are stale once the user edits the form — clear
+  // them so the Create button cannot dead-end on an outdated rejection.
+  // Security denials persist until explicit dismissal
+  // (error-and-denial-ux.md §"Forbidden patterns").
+  useEffect(() => {
+    setServerDenial((current) =>
+      current?.source === "submit" && !isSecurityDenial(current) ? null : current,
+    );
+  }, [form]);
+
+  // ─── Derived state ────────────────────────────────────────────────────────
+
+  const canSubmit =
+    form.sourceId.trim().length > 0 &&
+    form.targetId.trim().length > 0 &&
+    clientHints.length === 0 &&
+    serverDenial === null &&
+    !submitting;
+
   // ─── Submit ───────────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback(async () => {
-    if (submitting) return;
+    // Same gate as the Create button — keyboard submit (Ctrl/Cmd+Enter) must not
+    // bypass client hints, open denials, or empty required fields.
+    if (!canSubmit) return;
     setSubmitting(true);
     setServerDenial(null);
     try {
@@ -266,13 +287,13 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
         setServerDenial({
           source: "submit",
           codes: ["relationship/network-error"],
-          messages: ["Unable to reach the local backend. Check that `keiko serve` is running."],
+          messages: [BACKEND_UNREACHABLE_MESSAGE],
         });
       }
     } finally {
       setSubmitting(false);
     }
-  }, [form, onClose, submitting]);
+  }, [canSubmit, form, onClose]);
 
   const onDialogKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -283,20 +304,19 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
     [handleSubmit],
   );
 
-  // ─── Derived state ────────────────────────────────────────────────────────
-
   const def = RELATIONSHIP_TYPE_DEFINITIONS[form.type];
-  const canSubmit =
-    form.sourceId.trim().length > 0 &&
-    form.targetId.trim().length > 0 &&
-    clientHints.length === 0 &&
-    serverDenial === null &&
-    !submitting;
 
   // Security-class denials must not be auto-dismissed (error-and-denial-ux.md §"Forbidden patterns")
   const hasSecurityDenial = isSecurityDenial(serverDenial);
 
-  return (
+  // While blocked, the Create button stays focusable (aria-disabled) and points
+  // at the visible blockers so screen-reader users can discover why.
+  const submitBlockerIds = [
+    clientHints.length > 0 ? "rel-create-client-hints" : null,
+    serverDenial !== null ? "rel-create-server-denial" : null,
+  ].filter((id): id is string => id !== null);
+
+  const dialogTree = (
     <div
       className="cmdk-overlay"
       onPointerDown={() => onClose(null)}
@@ -316,7 +336,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
         data-testid="rel-create-dialog"
       >
         {/* Title */}
-        <div className="cmdk-input" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="cmdk-input" style={{ borderBottom: "1px solid var(--line)" }}>
           <span id={titleId} style={{ fontWeight: 600, fontSize: 14, color: "var(--fg)" }}>
             Create relationship
           </span>
@@ -351,9 +371,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               style={{
                 width: "100%",
                 background: "var(--inset)",
-                border: "1px solid var(--border)",
+                border: "1px solid var(--line)",
                 borderRadius: 4,
                 padding: "4px 8px",
+                minHeight: 24,
                 color: "var(--fg)",
                 fontSize: 13,
               }}
@@ -393,9 +414,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 style={{
                   width: "100%",
                   background: "var(--inset)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid var(--line)",
                   borderRadius: 4,
                   padding: "4px 8px",
+                  minHeight: 24,
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
@@ -429,9 +451,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 style={{
                   width: "100%",
                   background: "var(--inset)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid var(--line)",
                   borderRadius: 4,
                   padding: "4px 8px",
+                  minHeight: 24,
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
@@ -464,9 +487,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 style={{
                   width: "100%",
                   background: "var(--inset)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid var(--line)",
                   borderRadius: 4,
                   padding: "4px 8px",
+                  minHeight: 24,
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
@@ -500,9 +524,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 style={{
                   width: "100%",
                   background: "var(--inset)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid var(--line)",
                   borderRadius: 4,
                   padding: "4px 8px",
+                  minHeight: 24,
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
@@ -529,9 +554,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               style={{
                 width: "100%",
                 background: "var(--inset)",
-                border: "1px solid var(--border)",
+                border: "1px solid var(--line)",
                 borderRadius: 4,
                 padding: "4px 8px",
+                minHeight: 24,
                 color: "var(--fg)",
                 fontSize: 12,
                 resize: "vertical",
@@ -543,6 +569,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           {/* Client-side instant validation hints */}
           {clientHints.length > 0 && (
             <div
+              id="rel-create-client-hints"
               className="lk-alert"
               role="status"
               aria-live="polite"
@@ -566,6 +593,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           {/* Server denial banner — verbatim codes + messages (error-and-denial-ux.md) */}
           {serverDenial !== null && (
             <div
+              id="rel-create-server-denial"
               className="lk-alert"
               // assertive during creation (error-and-denial-ux.md §"Three-layer error model")
               role="alert"
@@ -576,7 +604,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 <div key={code} style={{ marginBottom: i < serverDenial.codes.length - 1 ? 6 : 0 }}>
                   <div
                     style={{
-                      fontFamily: "var(--mono)",
+                      fontFamily: "var(--font-mono)",
                       fontSize: 11,
                       color: "var(--fg-muted)",
                       marginBottom: 2,
@@ -618,7 +646,9 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               type="button"
               className={`arun-btn${canSubmit ? " primary" : ""}`}
               aria-disabled={!canSubmit}
-              disabled={!canSubmit}
+              aria-describedby={
+                submitBlockerIds.length > 0 ? submitBlockerIds.join(" ") : undefined
+              }
               onClick={() => void handleSubmit()}
               aria-busy={submitting}
               style={{ minWidth: 24, minHeight: 24 }}
@@ -630,4 +660,11 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
       </div>
     </div>
   );
+
+  // Render to document.body — inside the transformed workspace canvas (.ws-scene)
+  // `position: fixed` resolves against the scene's 0x0 box and the overlay
+  // collapses; the portal restores viewport-relative positioning
+  // (pattern: GatewaySetupDialog).
+  if (typeof document === "undefined") return dialogTree;
+  return createPortal(dialogTree, document.body);
 }

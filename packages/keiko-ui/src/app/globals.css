@@ -24,7 +24,11 @@
   /* text */
   --fg: oklch(0.97 0.003 160);
   --fg-muted: oklch(0.74 0.004 160);
-  --fg-dim: oklch(0.58 0.004 160);
+  /* WCAG 1.4.3 — 0.58 measured 3.88:1 on --card / 4.17:1 on --surface (FAIL for
+     11-12px text: settings tabs, zoom %, tb-status, QI counts). 0.66 measures
+     5.36:1 on --card, 4.92:1 on --card-2, 5.76:1 on --surface; stays below
+     --fg-muted (0.74) so the hierarchy remains monotonic. */
+  --fg-dim: oklch(0.66 0.004 160);
   --fg-faint: oklch(0.46 0.004 160);
 
   /* dark text token for use on light/accent backgrounds (Issue #184) */
@@ -187,20 +191,26 @@ button {
 
   --fg: oklch(0.26 0.012 160);
   --fg-muted: oklch(0.42 0.011 160);
-  --fg-dim: oklch(0.54 0.01 160);
+  /* WCAG 1.4.3 — 0.54 measured 4.28:1 on --inset chips (.kbd, .modesw-opt; FAIL).
+     0.48 measures 5.55:1 on --inset, 6.50:1 on white; stays darker than --fg-faint. */
+  --fg-dim: oklch(0.48 0.01 160);
   --fg-faint: oklch(0.66 0.008 160);
 
   /* WCAG 1.4.3 text-tone overrides — all ≥4.5:1 on white (--card: oklch(1 0 0)).
-     --accent #4eba87 = 2.41:1 FAIL; oklch(0.5 0.13 160) ≈ 5.51:1 PASS.
+     --accent #4eba87 = 2.41:1 FAIL; oklch(0.48 0.13 160) ≈ 5.9:1 PASS on white and
+     ≥4.8:1 on the 18% --accent-dim tint (0.5 measured only 4.48:1 there — accent
+     text frequently sits on accent-dim chips: .rail-avatar, .set-onprem, .chat-ctx).
      --danger oklch(0.68 0.16 25) = 3.11:1 FAIL; oklch(0.50 0.18 25) ≈ 5.46:1 PASS.
      --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS.
      --info oklch(0.74 0.1 240) = 1.96:1 FAIL; oklch(0.45 0.15 240) ≈ 5.08:1 PASS on the 20%
      info tint (info-blue severity/badge text — .qi-sev-medium, .qi-badge-running, .arun-gate,
      lkd diag info). Measured from rendered pixels over the badge's own info-tint background. */
-  --accent-text: oklch(0.5 0.13 160);
+  --accent-text: oklch(0.48 0.13 160);
   --danger: oklch(0.5 0.18 25);
   --warn: oklch(0.43 0.14 75);
   --info: oklch(0.45 0.15 240);
+  /* --ok #4eba87 = 2.12:1 FAIL on light --bg; matches --accent-text light (uiux-fix F005) */
+  --ok: oklch(0.5 0.13 160);
 
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
@@ -364,7 +374,7 @@ button {
 }
 .proj-empty {
   font-size: 12.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   padding: 5px 9px 5px 31px;
 }
 
@@ -399,7 +409,7 @@ button {
 }
 .chat-time {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   font-family: var(--font-mono);
 }
 .chat-meta {
@@ -528,7 +538,9 @@ button {
   align-items: center;
   gap: 6px;
   font-size: 11.5px;
-  color: var(--fg-dim);
+  /* WCAG 1.4.3 — --fg-dim measured 4.19:1 on --surface (dark) for this 11.5px text (FAIL).
+     --fg-muted = 7.77:1 dark / ~7.9:1 light; same fix as the footer (#518). */
+  color: var(--fg-muted);
   padding: 5px 10px;
   border: 1px solid var(--line-soft);
   border-radius: 999px;
@@ -726,7 +738,7 @@ button {
 }
 .edm-head {
   font-size: 10.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   padding: 6px 8px 8px;
 }
 .edm-item {
@@ -855,7 +867,12 @@ button {
   position: relative;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  /* clip, not hidden (audit C061): the +/-10000px .conn-svg makes an overflow:hidden
+     container programmatically scrollable - keyboard focus on an offscreen port
+     auto-scrolled the workspace and desynchronized all window geometry (drag/snap/
+     maximize math reads getBoundingClientRect without scroll compensation). A clip
+     box is not a scroll container per spec, so focus can never scroll it. */
+  overflow: clip;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: var(--bg);
@@ -896,12 +913,16 @@ button {
   display: grid;
   place-items: center;
   border-radius: 10px;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid var(--accent-line);
   background: var(--accent-dim);
 }
 .rail-new:hover {
-  filter: brightness(1.12);
+  /* token-based hover instead of filter: brightness(1.12) — the brightness lift
+     was invisible on the light theme's near-white accent-dim tint and washed out
+     the icon (uiux-fix F011 C073); glow=26% vs dim=18% works in both themes. */
+  background: var(--accent-glow);
+  border-color: var(--accent);
 }
 .rail-div {
   width: 22px;
@@ -930,7 +951,7 @@ button {
 }
 .rail-btn[data-active="true"] {
   background: var(--card);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .rail-btn[data-active="true"]::before {
   content: "";
@@ -954,7 +975,7 @@ button {
   margin-top: 5px;
   border-radius: 50%;
   background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--accent-text);
   display: grid;
   place-items: center;
   font-size: 11px;
@@ -1063,7 +1084,7 @@ button {
 }
 .srch-meta {
   font-size: 10px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   font-weight: 400;
   text-transform: none;
   letter-spacing: 0;
@@ -1146,7 +1167,7 @@ button {
 }
 .plg-sec-c {
   font-size: 10px;
-  color: var(--accent);
+  color: var(--accent-text);
   margin-left: auto;
 }
 .plg-row {
@@ -1202,7 +1223,7 @@ button {
 }
 .plg-desc {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
 }
 .plg-dot {
   width: 8px;
@@ -1238,7 +1259,7 @@ button {
 }
 .auto-when {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
 }
 .auto-toggle {
   width: 30px;
@@ -1289,7 +1310,7 @@ button {
 }
 .mob-sub {
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   margin-top: 4px;
   line-height: 1.4;
 }
@@ -1314,7 +1335,7 @@ button {
 }
 .nt-time {
   font-size: 10.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
 }
 
 /* ---------- COMPOSER ---------- */
@@ -1569,7 +1590,7 @@ button {
   gap: 8px;
   align-items: center;
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--fg-muted); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
 .chat-memory-budget {
@@ -1577,7 +1598,7 @@ button {
   gap: 8px;
   align-items: center;
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--fg-muted); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
 .chat-memory-budget input {
@@ -1598,7 +1619,7 @@ button {
 .chat-memory-summary {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--fg-muted); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
 .chat-memory-item,
@@ -1723,7 +1744,7 @@ button {
 }
 .win-sub {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   background: var(--inset);
   padding: 2px 7px;
   border-radius: 6px;
@@ -1839,7 +1860,8 @@ button {
   border-radius: 999px;
   background: var(--card);
   border: 1px solid var(--accent-line);
-  color: var(--accent);
+  /* --accent-text: equals --accent in dark; darkened ≥4.5:1 green on white in light (raw --accent = 2.41:1 FAIL) */
+  color: var(--accent-text);
   font-size: 11px;
   font-family: var(--font-mono);
   box-shadow: var(--shadow-card);
@@ -1894,7 +1916,7 @@ button {
 }
 .conn-badge[data-active="true"] {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
   background: color-mix(in oklch, var(--accent) 16%, var(--card));
 }
 .conn-flow-tag {
@@ -1989,12 +2011,12 @@ button {
   padding: 6px 10px;
   border-radius: 8px;
   font-size: 12px;
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
 }
 .chat-ctx .mono {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .ag-dir {
   display: inline-flex;
@@ -2070,7 +2092,7 @@ button {
 }
 .arun-mk {
   font-size: 10px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -2111,7 +2133,7 @@ button {
   padding: 3px 7px;
 }
 .arun-perm[data-on="true"] {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: var(--accent-line);
   background: var(--accent-dim);
 }
@@ -2149,7 +2171,7 @@ button {
 }
 .arun-btn {
   padding: 7px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 12.5px;
   font-weight: 550;
   border: 1px solid var(--line);
@@ -2237,7 +2259,7 @@ button {
 }
 .arun-log-t {
   font-size: 10px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   flex: none;
 }
 .arun-controls {
@@ -2512,7 +2534,7 @@ button {
   gap: 6px;
   font-size: 10px;
   font-family: var(--font-mono);
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
   border-radius: 999px;
@@ -2721,6 +2743,7 @@ button {
 }
 .set-input:focus {
   border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .set-selwrap {
   position: relative;
@@ -2798,7 +2821,7 @@ select.set-input {
 }
 .gpref-val {
   font-size: 12px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-variant-numeric: tabular-nums;
 }
 .gpref-slider {
@@ -2902,8 +2925,7 @@ select.set-input {
   flex: none;
   text-align: right;
   padding-right: 16px;
-  color: var(--fg-faint);
-  opacity: 0.6;
+  color: var(--fg-dim);
   user-select: none;
 }
 .fpv-src {
@@ -3020,7 +3042,7 @@ select.set-input {
 }
 .modesw[data-mode="autonomous"] .modesw-opt[data-on="true"] {
   background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--accent-text);
   box-shadow: 0 0 0 1px var(--accent-line);
 }
 .modesw-av {
@@ -3028,7 +3050,10 @@ select.set-input {
   height: 18px;
   border-radius: 50%;
   background: var(--info);
-  color: #fff;
+  /* dark --info is a light blue — #fff on it was 2.27:1 (WCAG 1.4.3 FAIL); dark ink
+     measures ≈8.3:1. Light theme restores #fff via override at the end of this file
+     (light --info is dark blue, #fff ≈5.08:1). (uiux-fix F011 C128) */
+  color: var(--ink-inverse);
   font-size: 10px;
   font-weight: 700;
   display: grid;
@@ -3068,7 +3093,8 @@ select.set-input {
   height: 15px;
   border-radius: 50%;
   background: var(--info);
-  color: #fff;
+  /* see .modesw-av — same theme-aware ink pairing (uiux-fix F011 C128) */
+  color: var(--ink-inverse);
   font-size: 9px;
   font-weight: 700;
   display: grid;
@@ -3165,7 +3191,7 @@ select.set-input {
 }
 .perm-opt[data-on="true"] {
   border-color: var(--accent-line);
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-dim);
 }
 .perm-note {
@@ -3191,14 +3217,14 @@ select.set-input {
   gap: 7px;
   border: 1px solid var(--accent-line);
   background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--accent-text);
   border-radius: 9px;
   padding: 8px 10px;
   font-size: 12px;
   text-align: left;
 }
 .dlg-current-file .mono {
-  color: var(--accent);
+  color: var(--accent-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3255,7 +3281,7 @@ select.set-input {
   padding: 3px 9px;
 }
 .twin-mode.on {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: var(--accent-line);
   background: var(--accent-dim);
 }
@@ -3347,7 +3373,7 @@ select.set-input {
   color: var(--danger);
 }
 .evl-score.ok {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .evl-row {
   display: flex;
@@ -3402,6 +3428,7 @@ select.set-input {
 }
 .mem-add input:focus {
   border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .mem-add button {
   width: 36px;
@@ -3586,7 +3613,7 @@ select.set-input {
 }
 .ts-sub {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .ts-arrow {
   color: var(--accent);
@@ -3741,7 +3768,7 @@ select.set-input {
 }
 .ws-empty-sub {
   font-size: 13px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .ws-empty-btn {
   margin-top: 14px;
@@ -4134,9 +4161,11 @@ select.dlg-input {
 .rail-avatar {
   position: relative;
 }
-.rail-btn::after,
-.rail-new::after,
-.rail-avatar::after {
+/* [data-tip] guard (uiux-fix F014 C016): without it, a missing attribute resolved
+   attr(data-tip) to "" and hover rendered an empty styled pill next to the button. */
+.rail-btn[data-tip]::after,
+.rail-new[data-tip]::after,
+.rail-avatar[data-tip]::after {
   content: attr(data-tip);
   position: absolute;
   top: 50%;
@@ -4230,7 +4259,7 @@ select.dlg-input {
 }
 .ag-model {
   font-size: 10.5px;
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
   padding: 2px 7px;
@@ -4302,7 +4331,7 @@ select.dlg-input {
 }
 .ed-num {
   width: 26px;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   text-align: right;
   padding-right: 14px;
   user-select: none;
@@ -4389,12 +4418,12 @@ select.dlg-input {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   margin-bottom: 5px;
 }
 .chat-msg-time {
   font-size: 10px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   margin-top: 6px;
   font-family: var(--font-mono);
 }
@@ -4436,7 +4465,11 @@ select.dlg-input {
   text-overflow: ellipsis;
 }
 .cmp-model-select option {
-  color: #111;
+  /* Pair color with an explicit background: under color-scheme:dark Chromium
+     (Win/Linux) renders the option popup dark and honors option CSS — a bare
+     hard-coded #111 measured ~1.2:1 there. Tokens follow both themes. */
+  color: var(--fg);
+  background: var(--surface);
 }
 .cmp-err {
   margin-top: 10px;
@@ -4532,6 +4565,9 @@ select.dlg-input {
   cursor: pointer;
   background: none;
   outline: none;
+  /* Minimum 24×24 touch target (WCAG 2.5.8) for the interactive variant */
+  min-height: 24px;
+  min-width: 24px;
 }
 .rb-edge-badge-btn:focus-visible {
   outline: 2px solid var(--accent);
@@ -4682,7 +4718,7 @@ select.dlg-input {
 }
 .rb-count {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   background: var(--inset);
   padding: 2px 8px;
   border-radius: 999px;
@@ -4731,7 +4767,10 @@ select.dlg-input {
   color: var(--fg-muted);
 }
 .rb-row-v {
-  color: var(--fg-faint);
+  /* uiux-fix F012: .rb-row-v also carries real values outside the governance scope
+     (RelationshipInspectorPanel/RelationshipHealthPanel) — extend the #527 fix below
+     to the base rule; --fg-faint was 2.52:1 dark / 2.91:1 light. */
+  color: var(--fg-muted);
 }
 /* Issue #527 — WCAG 2.2 AA contrast fix (scoped to governance surface only).
    --fg-faint yields 2.52:1 dark / 2.91:1 light, both below the 4.5:1 minimum.
@@ -4787,7 +4826,7 @@ select.dlg-input {
   align-items: center;
   gap: 4px;
   padding: 2px 30px 6px 2px; /* right pad clears the absolute refresh button */
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line-soft);
   margin-bottom: 4px;
 }
 .files-root-up {
@@ -4959,8 +4998,8 @@ select.dlg-input {
 }
 .bw-btn {
   background: var(--inset);
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   padding: 5px 10px;
   font-size: 12px;
   color: var(--fg);
@@ -5065,7 +5104,7 @@ select.dlg-input {
   border-radius: 5px;
 }
 .rv-stat.add {
-  color: var(--ok);
+  color: var(--accent-text);
   background: var(--accent-dim);
 }
 .rv-stat.del {
@@ -5094,7 +5133,7 @@ select.dlg-input {
   color: var(--fg-faint);
 }
 .rv-add .rv-gutter {
-  color: var(--ok);
+  color: var(--accent-text);
 }
 .rv-del .rv-gutter {
   color: var(--danger);
@@ -5181,7 +5220,7 @@ select.dlg-input {
 /* evidence link — enabled */
 .rv-evidence-link {
   font-size: 11.5px;
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
   padding: 3px 8px;
   border-radius: 6px;
@@ -5308,7 +5347,7 @@ select.dlg-input {
   border-top: 1px solid var(--line-soft);
 }
 .rv-truncated a {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .rv-truncated a:focus-visible {
   outline: 2px solid var(--accent);
@@ -5378,9 +5417,10 @@ select.dlg-input {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* focus rings for nav rail icon buttons (WCAG 2.4.7) */
+/* focus rings for nav rail icon buttons (WCAG 2.4.7) — .rail-avatar added (uiux-fix F014 C016) */
 .rail-btn:focus-visible,
-.rail-new:focus-visible {
+.rail-new:focus-visible,
+.rail-avatar:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -5396,7 +5436,7 @@ select.dlg-input {
 }
 /* syntax token classes from syntaxHighlight.ts */
 .hl-com {
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   font-style: italic;
 }
 .hl-str {
@@ -5422,7 +5462,7 @@ select.dlg-input {
   color: var(--fg);
 }
 .hl-punct {
-  color: var(--fg-faint);
+  color: var(--fg-dim);
 }
 .hl-head {
   color: var(--fg);
@@ -5610,7 +5650,7 @@ select.dlg-input {
 .tm-badge-ok {
   background: color-mix(in oklch, var(--ok) 18%, var(--inset));
   border-color: var(--accent-line);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .tm-badge-fail {
   background: color-mix(in oklch, var(--danger) 18%, var(--inset));
@@ -5766,7 +5806,7 @@ select.dlg-input {
 }
 .integ-row[data-on="true"] .integ-glyph {
   background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .integ-text {
   flex: 1;
@@ -5782,10 +5822,10 @@ select.dlg-input {
 }
 .integ-desc {
   font-size: 11.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
 }
 .integ-on {
-  color: var(--accent);
+  color: var(--accent-text);
   display: grid;
   place-items: center;
   width: 24px;
@@ -5922,7 +5962,7 @@ select.dlg-input {
   border-color: color-mix(in oklch, var(--danger) 48%, transparent);
 }
 .gw-success {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-dim);
   border-color: var(--accent-line);
 }
@@ -6102,18 +6142,13 @@ select.dlg-input {
   padding-bottom: 4px;
 }
 
-/* Issue #185 — grounded repository-aware Q&A answer rendering. Lives inside an assistant
-   chat bubble (see .chat-msg-bubble); the wrapper just stacks content + citations + meta. */
+/* Issue #185 — grounded repository-aware Q&A evidence rendering. Lives in the .chatw-grounded
+   panel below the chat log; stacks citations + uncertainty + meta. The answer text itself is
+   rendered only by the persisted assistant bubble (uiux-fix F009 C025 removed the duplicate). */
 .grounded-answer {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-.grounded-answer-body {
-  font-size: 14px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 .grounded-citations-wrap {
   display: flex;
@@ -6138,7 +6173,10 @@ select.dlg-input {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  /* uiux-fix F012: --fg-faint = 2.34:1 dark / 3.10:1 light on --card — the same
+     WCAG 1.4.3 fail fixed for score/uncertainty/meta below; weight + uppercase
+     keep the hierarchy. */
+  color: var(--fg-muted);
 }
 .grounded-citation {
   display: inline-flex;
@@ -6209,7 +6247,7 @@ select.dlg-input {
 .grounded-context-pack {
   margin-top: 8px;
   padding: 8px 10px;
-  border-top: 1px solid var(--border-subtle, color-mix(in oklab, var(--fg) 12%, transparent));
+  border-top: 1px solid var(--line-soft);
   font-size: 11px;
   font-family: var(--font-mono);
 }
@@ -6372,7 +6410,9 @@ select.dlg-input {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 0;
+  /* WCAG 2.5.8 — standalone action, keep the hit target ≥24px */
+  min-height: 24px;
+  padding: 2px 6px;
 }
 
 /* Pipeline diagram */
@@ -6421,13 +6461,14 @@ select.dlg-input {
   margin-top: 2px;
 }
 
-/* Capsule section heading */
+/* Capsule section heading — --fg-muted: --fg-faint was 2.5–2.9:1 in both
+   themes, WCAG 1.4.3 fail on 12px headings (uiux-fix F005) */
 .lk-section-head {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   margin: 0 0 10px;
 }
 
@@ -6595,10 +6636,11 @@ select.dlg-input {
   margin: 0;
 }
 
-/* Loading status */
+/* Loading status — --fg-muted: --fg-dim was 4.42–4.47:1 on --bg, just under AA
+   (uiux-fix F005) */
 .lk-loading {
   font-size: 13px;
-  color: var(--fg-dim);
+  color: var(--fg-muted);
   margin: 0;
 }
 
@@ -6781,7 +6823,7 @@ select.dlg-input {
 .lkd-diag-page {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--fg-faint);
+  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   flex: none;
 }
 
@@ -6879,12 +6921,13 @@ select.dlg-input {
   flex-wrap: wrap;
 }
 
+/* --fg-muted: --fg-faint was 2.7:1 on --bg, WCAG 1.4.3 fail (uiux-fix F005) */
 .mc-filter-label {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   min-width: 72px;
   flex-shrink: 0;
 }
@@ -6947,10 +6990,12 @@ select.dlg-input {
   white-space: nowrap;
 }
 
-/* proposed — warm amber, 4.6:1 on its background */
+/* proposed — warm amber. Dark: --warn (L 0.78) on the dark 22% tint ≈ 7:1;
+   light theme keeps the dark amber ink via override below (uiux-fix F005 —
+   the previous hard-coded dark ink was 1.24–1.47:1 in the dark theme). */
 .mc-badge-proposed {
   background: color-mix(in oklch, var(--warn) 22%, transparent);
-  color: oklch(0.26 0.012 75);
+  color: var(--warn);
   border-color: color-mix(in oklch, var(--warn) 55%, transparent);
 }
 
@@ -6961,20 +7006,22 @@ select.dlg-input {
   border-color: var(--accent-line);
 }
 
-/* conflicted — danger red */
+/* conflicted — danger red. Text uses --fg on the danger tint: --danger on 18%
+   danger-over---card computes to ~4.17:1 (< 4.5:1 AA) in dark; --fg ≥7:1. */
 .mc-badge-conflicted {
   background: color-mix(in oklch, var(--danger) 18%, transparent);
-  color: var(--danger);
+  color: var(--fg);
   border-color: color-mix(in oklch, var(--danger) 45%, transparent);
 }
 
-/* rejected / forgotten / superseded / expired — muted */
+/* rejected / forgotten / superseded / expired — muted.
+   --fg-muted: --fg-dim was 4.29:1 on --inset in light theme (uiux-fix F005) */
 .mc-badge-rejected,
 .mc-badge-forgotten,
 .mc-badge-superseded,
 .mc-badge-expired {
   background: var(--inset);
-  color: var(--fg-dim);
+  color: var(--fg-muted);
   border-color: var(--line-soft);
 }
 
@@ -6993,7 +7040,7 @@ select.dlg-input {
 
 .mc-badge-default {
   background: var(--inset);
-  color: var(--fg-dim);
+  color: var(--fg-muted);
   border-color: var(--line-soft);
 }
 
@@ -7073,10 +7120,16 @@ select.dlg-input {
 }
 
 /* ── Detail view ─────────────────────────────────────────── */
+/* flex/min-height/overflow (uiux-fix F005): html,body clip overflow globally —
+   without an own scroll container the Actions section below the fold is
+   unreachable (same pattern as .lkd-content). */
 .mc-detail {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .mc-detail-header {
@@ -7180,7 +7233,8 @@ select.dlg-input {
   width: 100%;
 }
 
-/* --ok (#4eba87) on default background (--bg #2c3842) = 5.82:1 (WCAG AA) */
+/* --ok on --bg: dark 7.91:1; light theme overrides --ok to oklch(0.5 0.13 160)
+   ≈ 5.5:1 (uiux-fix F005 — raw #4eba87 was 2.12:1 on the light bg) */
 .mc-action-notice {
   font-size: 12px;
   color: var(--ok);
@@ -7279,9 +7333,10 @@ select.dlg-input {
   color: var(--fg-muted);
 }
 
+/* --fg-muted: --fg-faint was 2.5–2.9:1 on --surface (uiux-fix F005) */
 .mc-dialog-hint {
   font-weight: 400;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .mc-dialog-textarea,
@@ -7698,8 +7753,12 @@ select.dlg-input {
 }
 
 .qi-badge-default {
-  background: var(--card);
+  /* --card-2 + hairline so the pill stays visible on --card surfaces
+     (summary strip, window body); inset shadow avoids a layout shift
+     vs the borderless sibling badges. */
+  background: var(--card-2);
   color: var(--fg-muted);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 
 /* Severity badges — inline indicators */
@@ -7954,9 +8013,11 @@ select.dlg-input {
   line-height: 1.5;
 }
 
-/* Skeleton loading animation — respects prefers-reduced-motion */
+/* Skeleton loading animation — respects prefers-reduced-motion.
+   --card-2 (not --card) so the blocks stay visible on the --card window
+   body even when the shimmer is disabled (reduced motion). */
 .qi-skeleton {
-  background: var(--card);
+  background: var(--card-2);
   border-radius: 4px;
   position: relative;
   overflow: hidden;
@@ -8148,7 +8209,9 @@ select.dlg-input {
   padding: 8px 10px;
   border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
   border-radius: var(--radius-sm, 6px);
-  background: color-mix(in oklch, var(--accent) 12%, var(--card));
+  /* oklab: light --card is oklch(1 0 0) with hue 0 — oklch interpolation would rotate the
+     accent hue 160 toward red/pink. oklab interpolates without a hue axis. */
+  background: color-mix(in oklab, var(--accent) 12%, var(--card));
 }
 .qi-connected-kind {
   font-size: 10px;
@@ -8513,21 +8576,23 @@ select.dlg-input {
   letter-spacing: 0.03em;
 }
 /* Review badges: opaque tinted backgrounds + primary --fg text so contrast holds in BOTH themes
-   (the tint differentiates state; --fg on a mostly-card background is high-contrast either way). */
+   (the tint differentiates state; --fg on a mostly-card background is high-contrast either way).
+   Mixed in oklab, not oklch: light --card oklch(1 0 0) has hue 0, and oklch interpolation
+   rotates the tint hues (approved turned tan, ~identical to changes) — oklab keeps them apart. */
 .qi-review-open {
-  background: color-mix(in oklch, var(--fg-muted) 26%, var(--card));
+  background: color-mix(in oklab, var(--fg-muted) 26%, var(--card));
   color: var(--fg);
 }
 .qi-review-approved {
-  background: color-mix(in oklch, var(--accent) 32%, var(--card));
+  background: color-mix(in oklab, var(--accent) 32%, var(--card));
   color: var(--fg);
 }
 .qi-review-changes {
-  background: color-mix(in oklch, #d8a657 38%, var(--card));
+  background: color-mix(in oklab, #d8a657 38%, var(--card));
   color: var(--fg);
 }
 .qi-review-rejected {
-  background: color-mix(in oklch, #d9534f 38%, var(--card));
+  background: color-mix(in oklab, #d9534f 38%, var(--card));
   color: var(--fg);
 }
 .qi-review-withdrawn {
@@ -8704,13 +8769,14 @@ select.dlg-input {
   gap: 6px;
   padding: 12px 14px;
   border-radius: var(--radius-sm, 6px);
-  background: var(--card);
+  /* --inset so the loading row reads as a distinct well on --card */
+  background: var(--inset);
 }
 
 /* ── Figma Snapshot window (Epic #750, Issue #756) ─────────────────────────────
    Mirror the qi-launcher / connector-picker design language.
    Token contract: --bg, --card, --card-2, --fg, --fg-muted, --fg-dim,
-                   --accent, --accent-text, --border, --radius-sm, --radius-md
+                   --accent, --accent-text, --line, --radius-sm
    ─────────────────────────────────────────────────────────────────────────── */
 
 .figma-snapshot-window {
@@ -8749,7 +8815,7 @@ select.dlg-input {
   flex: 1;
   padding: 7px 10px;
   border-radius: var(--radius-sm, 6px);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   background: var(--card);
   color: var(--fg);
   font-size: 0.8125rem;
@@ -8760,7 +8826,7 @@ select.dlg-input {
   outline: 2px solid var(--accent);
 }
 .figma-snapshot-input[aria-invalid="true"] {
-  border-color: hsl(6 80% 52%);
+  border-color: var(--danger);
 }
 .figma-snapshot-input:disabled {
   opacity: 0.6;
@@ -8770,7 +8836,8 @@ select.dlg-input {
   padding: 7px 14px;
   border-radius: var(--radius-sm, 6px);
   background: var(--accent);
-  color: var(--accent-text);
+  /* --ink-inverse on --accent = 6.94:1 both themes (--accent-text equals --accent in dark → 1:1 invisible) */
+  color: var(--ink-inverse);
   font-size: 0.8125rem;
   font-weight: 600;
   white-space: nowrap;
@@ -8806,7 +8873,7 @@ select.dlg-input {
 
 .figma-snapshot-error {
   font-size: 0.8125rem;
-  color: hsl(6 80% 52%);
+  color: var(--danger);
   margin: 0;
 }
 
@@ -8819,7 +8886,7 @@ select.dlg-input {
   padding: 8px 12px;
   border-radius: var(--radius-sm, 6px);
   background: var(--card-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
 }
 
 .figma-snapshot-stored-text {
@@ -8834,7 +8901,7 @@ select.dlg-input {
   border-radius: var(--radius-sm, 6px);
   background: var(--card);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   font-size: 0.8125rem;
   cursor: pointer;
   outline-offset: 2px;
@@ -8855,7 +8922,7 @@ select.dlg-input {
   padding: 8px 12px;
   border-radius: var(--radius-sm, 6px);
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
 }
 
 .figma-snapshot-reduction-hint {
@@ -8877,7 +8944,7 @@ select.dlg-input {
   border-radius: var(--radius-sm, 6px);
   background: var(--card);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   font-size: 0.8125rem;
   cursor: pointer;
   outline-offset: 2px;
@@ -8923,7 +8990,8 @@ select.dlg-input {
   padding: 5px 14px;
   border-radius: var(--radius-sm, 6px);
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  /* --ink-inverse on --accent = 6.94:1 (--accent-fg is defined nowhere → #fff fallback = 2.41:1 FAIL) */
+  color: var(--ink-inverse);
   border: 1px solid var(--accent);
   font-size: 0.8125rem;
   cursor: pointer;
@@ -8964,7 +9032,7 @@ select.dlg-input {
   max-height: 260px;
   overflow: auto;
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm, 6px);
   font-family: var(--font-mono, monospace);
   font-size: 0.6875rem;
@@ -9021,7 +9089,7 @@ select.dlg-input {
   padding: 10px 12px;
   border-radius: var(--radius-sm, 6px);
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   align-items: flex-start;
 }
 
@@ -9071,4 +9139,614 @@ select.dlg-input {
   font-size: 0.6875rem;
   color: var(--fg-dim);
   margin: 0;
+}
+
+/* ==== uiux-fix F008: header status pill tones (C043/C118) ==== */
+/* The header pill dot now conveys the real shell state (ok/warn/danger) instead of a
+   hardcoded green. Tokens, not raw colors: --accent-text aliases --accent in dark
+   (pixel-identical to the previous var(--ok)) and is the >=3:1 light-theme green;
+   --warn/--danger already carry light-theme AA overrides. */
+.tb-status .dot[data-tone="ok"] {
+  background: var(--accent-text);
+}
+.tb-status .dot[data-tone="warn"] {
+  background: var(--warn);
+}
+.tb-status .dot[data-tone="danger"] {
+  background: var(--danger);
+}
+
+/* ==== uiux-fix F008: conn-badge label truncation (C074) ==== */
+/* Defensive cap: a long folder basename must not grow the destructive remove-badge into a
+   giant click target across the canvas. Full context stays in the badge title/aria-label. */
+.conn-badge > span {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==== uiux-fix F001: workflow handoff dialogs + run summary card (#153) ==== */
+/* The wf-dialog-* and run-summary-card-* classes had zero rules: the
+   aria-modal dialogs rendered in-flow inside the composer flex row and the run
+   card rendered as a bare text block. Dialog chrome is modeled on the
+   .dlg-overlay/.dlg pattern — deliberately WITHOUT the opacity-0 entry state,
+   because the TSX has no `.in` toggle (the dialog must be visible on mount).
+   The dialogs portal to document.body (transformed .ws-scene ancestor), so
+   position: fixed resolves against the viewport. */
+.wf-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: oklch(0.1 0.004 160 / 0.55);
+  backdrop-filter: blur(2px);
+}
+[data-theme="light"] .wf-dialog-overlay {
+  background: oklch(0.3 0.01 160 / 0.34);
+}
+.wf-dialog {
+  position: relative;
+  width: 460px;
+  max-width: 100%;
+  max-height: calc(100% - 48px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  padding: 16px 18px;
+}
+.wf-dialog-title {
+  margin: 0 24px 12px 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.wf-dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--fg-muted);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.wf-dialog-close:hover {
+  background: var(--card-2);
+  color: var(--fg);
+}
+.wf-dialog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wf-dialog-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--card);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.wf-dialog-choice:hover {
+  background: var(--card-2);
+  border-color: var(--accent-line);
+}
+.wf-dialog-choice-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.wf-dialog-choice-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.wf-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wf-dialog-form-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.wf-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.wf-dialog-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 12.5px;
+  resize: vertical;
+}
+.wf-dialog-input:focus {
+  border-color: var(--accent-line);
+}
+.wf-dialog-error {
+  font-size: 12.5px;
+  color: var(--danger);
+  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
+  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+.wf-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.wf-dialog-cancel,
+.wf-dialog-launch {
+  padding: 7px 14px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg);
+  transition:
+    background 0.15s ease,
+    filter 0.15s ease;
+}
+.wf-dialog-cancel:hover {
+  background: var(--card-2);
+}
+.wf-dialog-launch {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ink-inverse);
+}
+.wf-dialog-launch:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.wf-dialog-launch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.wf-dialog-choice:focus-visible,
+.wf-dialog-cancel:focus-visible,
+.wf-dialog-launch:focus-visible,
+.wf-dialog-close:focus-visible,
+.wf-dialog-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Run summary card — chat-log card for workflow run system messages.
+   Chrome and rhythm mirror .chat-msg-bubble / .chat-msg (14px gap); status
+   pill colors mirror .lkd-job-status[data-status]. */
+.run-summary-card {
+  max-width: min(640px, 84%);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  padding: 10px 13px;
+  margin-bottom: 14px;
+  background: var(--card);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.run-summary-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.run-summary-card-workflow {
+  font-size: 12px;
+  color: var(--fg);
+}
+.run-summary-card-status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  color: var(--fg-dim);
+}
+.run-summary-card-status[data-status="succeeded"] {
+  color: var(--ok);
+  border-color: color-mix(in oklch, var(--ok) 40%, transparent);
+}
+/* --ok #4eba87 on white fails 4.5:1 — reuse the AA accent-text green. */
+[data-theme="light"] .run-summary-card-status[data-status="succeeded"] {
+  color: var(--accent-text);
+}
+.run-summary-card-status[data-status="failed"] {
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
+}
+.run-summary-card-status[data-status="running"] {
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
+}
+.run-summary-card-body p {
+  margin: 0 0 4px;
+}
+.run-summary-card-body p:last-child {
+  margin-bottom: 0;
+}
+.run-summary-card-line {
+  color: var(--fg);
+}
+.run-summary-card-result {
+  color: var(--fg-muted);
+}
+.run-summary-card-meta {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  margin-top: 6px;
+}
+
+/* ==== uiux-fix F007: overlay light parity, focus rings, hover states ==== */
+
+/* C129 — light-theme scrim parity: .cmdk-overlay (also reused by
+   RelationshipCreateDialog) and .gw-setup-backdrop kept the hardcoded dark
+   scrim while .dlg-overlay has a light override (see line ~208). Same values
+   as the .dlg-overlay light override; gw-setup keeps its accent radial. */
+[data-theme="light"] .cmdk-overlay {
+  background: oklch(0.3 0.01 160 / 0.34);
+}
+[data-theme="light"] .gw-setup-backdrop {
+  background:
+    radial-gradient(
+      circle at 50% 12%,
+      color-mix(in oklch, var(--accent) 20%, transparent),
+      transparent 34%
+    ),
+    oklch(0.3 0.01 160 / 0.34);
+}
+
+/* C181 — command-palette search field had no focus style at all (outline:none
+   on the input). Ring on the container row, mirroring .dlg-input:focus. */
+.cmdk-input:focus-within {
+  border-bottom-color: var(--accent-line);
+  box-shadow: 0 1px 0 0 var(--accent-glow);
+}
+
+/* C153 — ops-window action buttons: variant-appropriate hover feedback.
+   .bw-btn-primary's border is already accent, so the shared accent-line
+   hover was invisible; .bw-btn-danger's hover turned a destructive button
+   brand-green. Mirrors .tm-action[data-primary]:hover / .arun-btn.danger. */
+.bw-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  border-color: var(--accent);
+}
+.bw-btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 28%, var(--inset));
+}
+
+/* C153 — align Browser/Agent buttons with the .tm-action hover transition
+   (same 0.12s, reduced-motion-gated; see line ~5600). */
+@media (prefers-reduced-motion: no-preference) {
+  .bw-btn,
+  .arun-btn {
+    transition:
+      background 0.12s,
+      color 0.12s,
+      border-color 0.12s,
+      filter 0.12s;
+  }
+}
+
+/* C183 — Figma snapshot buttons had no :hover at all. Accent buttons follow
+   .install-banner-btn-install:hover; card buttons follow .tm-action:hover. */
+.figma-snapshot-trigger-btn:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+.figma-snapshot-codegen-btn:hover:not(:disabled) {
+  background: var(--accent-bright);
+  border-color: var(--accent-bright);
+}
+.figma-snapshot-load-btn:hover:not(:disabled),
+.figma-snapshot-resnapshot-btn:hover:not(:disabled) {
+  background: var(--card-2);
+  border-color: var(--line-strong);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .figma-snapshot-trigger-btn,
+  .figma-snapshot-codegen-btn,
+  .figma-snapshot-load-btn,
+  .figma-snapshot-resnapshot-btn {
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+}
+
+/* C184 — .qi-btn:hover (0,3,0) overrode .qi-btn-primary's accent border with
+   grey --line-strong. Primary gets its own hover (install-banner pattern);
+   later-in-file at equal specificity wins. */
+.qi-btn-primary:hover:not(:disabled) {
+  background: var(--accent-bright);
+  border-color: var(--accent-bright);
+}
+
+/* ==== uiux-fix F003: lk-alert-retry focus ring ==== */
+/* C305 — Retry/Dismiss in lk-alert banners had only the UA default ring; align
+   with the accent focus-ring language used by .qi-btn and the other controls. */
+.lk-alert-retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ==== uiux-fix F006: light focus rings, chrome focus, win-close hover, code gutters ==== */
+
+/* C009/C082 — every custom focus ring is `outline: 2px solid var(--accent)`; in the light
+   theme --accent #4eba87 is only ~2.4:1 on white/near-white surfaces (documented at the light
+   token block, line ~194) — below the 3:1 of WCAG 1.4.11. --accent-text is the AA-tuned alias
+   (= --accent in dark, oklch(0.5 0.13 160) ≈ 5.5:1 in light), so dark is unchanged. Blanket
+   override at equal specificity (0,2,0) wins by source order over the per-component rules. */
+[data-theme="light"] :focus-visible {
+  outline-color: var(--accent-text);
+}
+/* .rv-truncated a:focus-visible is (0,2,1) and would beat the blanket override. */
+[data-theme="light"] .rv-truncated a:focus-visible {
+  outline-color: var(--accent-text);
+}
+
+/* C009 — workspace chrome had no :focus-visible style at all (UA default ring only):
+   window header buttons, zoom controls, FAB, empty-state CTA, connection badge.
+   App convention (2px ring, 2px offset); accent-text = accent in dark, AA in light. */
+.win-btn:focus-visible,
+.win-zbtn:focus-visible,
+.win-zpct:focus-visible,
+.ws-zoom-btn:focus-visible,
+.ws-zoom-pct:focus-visible,
+.ws-fab:focus-visible,
+.ws-empty-btn:focus-visible,
+.conn-badge:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+/* C067 — terminal form fields had outline: none with only a 26%-alpha glow as focus
+   indicator (~1.2-1.6:1, near-invisible in light). Visible ring like .bw-input:focus-visible;
+   the :focus glow stays as an extra. */
+.tm-field input:focus-visible,
+.tm-field select:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+}
+
+/* C027 — light theme: the white close-icon on a 24% danger tint composits to ~1.6:1 over the
+   light titlebar; solid light --danger (oklch(0.5 0.18 25)) carries #fff at ~5.4:1. Same for
+   the danger approval button hover (70% mix over white = 3.78:1 for 12.5px text). Dark keeps
+   the subtler tint. */
+[data-theme="light"] .win-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+[data-theme="light"] .arun-btn.danger:hover {
+  background: var(--danger);
+}
+
+/* C032 — light theme: --fg-dim lands at ~4.3:1 on the light code/gutter wells; lift line
+   numbers and comment tokens to --fg-muted (>=7:1). Dark stays --fg-dim (4.57:1 measured). */
+[data-theme="light"] .fpv-num,
+[data-theme="light"] .ed-num,
+[data-theme="light"] .hl-com {
+  color: var(--fg-muted);
+}
+
+/* ==== uiux-fix F002: zoom-button disabled states at clamp limits ==== */
+/* C132/C361 — the workspace (30–250%) and content (50–200%) zoom buttons clamp
+   internally; at the limits they are now disabled and need a visible limit
+   state so clicks no longer die silently. Hover overrides neutralize the
+   existing :hover rules (disabled buttons still match :hover). */
+.ws-zoom-btn:disabled,
+.win-zbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ws-zoom-btn:disabled:hover {
+  background: transparent;
+  color: var(--fg-dim);
+}
+.win-zbtn:disabled:hover {
+  background: transparent;
+  color: var(--fg-faint);
+}
+
+/* ==== uiux-fix F004: QI RunLauncher form states + connection badge focus ==== */
+/* C140: fields locked while a run is in progress need visible disabled feedback (parity with .qi-btn:disabled). */
+.qi-input:disabled,
+.qi-textarea:disabled,
+.qi-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* C140: UA-default placeholder grey is 3.6:1 on --card in dark — use --fg-muted (pattern .cmp-input::placeholder). */
+.qi-input::placeholder,
+.qi-textarea::placeholder {
+  color: var(--fg-muted);
+}
+/* C218: Generate uses aria-disabled (stays focusable, reason via aria-describedby) instead of native disabled. */
+.qi-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Keep the blocked primary button visually inert on hover (overrides the enabled hover affordance). */
+.qi-btn-primary[aria-disabled="true"]:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* C131: inline field-validation message (seed) — same pattern as .qi-edit-error. */
+.qi-field-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+/* C218/C278: muted helper microcopy in the launcher. */
+.qi-field-hint,
+.qi-generate-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.qi-generate-hint {
+  flex-basis: 100%;
+}
+/* C299: the connection layer sits under the windows (z-index 0); when the remove-connection badge
+   receives keyboard focus, lift the layer above the window plane so the focused control and its
+   focus ring are visible (WCAG 2.4.11). pointer-events stays none on the layer itself, so only the
+   badge intercepts input while raised. */
+.conn-layer:focus-within {
+  z-index: 9000;
+}
+.conn-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ==== uiux-fix F005: MemoriaViva scroll, badges, aria-disabled buttons ==== */
+/* Light theme keeps the proven dark amber ink on the proposed badge (10.8:1);
+   the dark theme uses var(--warn) in the base rule above. */
+[data-theme="light"] .mc-badge-proposed {
+  color: oklch(0.26 0.012 75);
+}
+/* aria-disabled pendant to .lk-btn:disabled — busy buttons stay focusable so
+   keyboard focus is not thrown to <body> mid-action (pattern: PR #823). */
+.lk-btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.lk-btn[aria-disabled="true"]:hover {
+  filter: none;
+}
+/* Scroll container for /memoriaviva/consolidation — html,body clip overflow
+   globally; result cards below the fold were unreachable (same pattern as
+   .lkd-content / .mc-detail). */
+.mc-consolidation-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ==== uiux-fix F009: chat window — scroll-log focus, composer growth, grounded panel ==== */
+/* C078: the message log is a scrollable region; with text-only bubbles it has no
+   focusable children, so it needs an explicit tab stop (axe scrollable-region-focusable).
+   Ring pattern follows .rv-filerow:focus-visible. */
+.chatw-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* C089: the full composer auto-grows with its content (JS sets height up to 220px ≈ 8-9
+   lines, then scrolls). The :not(.cmp-box-fill) guard is required — the mini composer
+   textarea uses height:100% and must not be capped. */
+.cmp-box:not(.cmp-box-fill) > .cmp-input {
+  max-height: 220px;
+  overflow-y: auto;
+}
+/* C138: wrapper for the grounded evidence panel rendered directly in .chatw-log —
+   mirrors .chat-msg-bubble chrome + the 14px .chat-msg rhythm so the panel reads
+   as part of the assistant turn instead of a naked full-width block. */
+.chatw-grounded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(640px, 84%);
+  margin-bottom: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  padding: 10px 13px;
+  background: var(--card);
+}
+
+/* ==== uiux-fix F012: grounded answer evidence + meta (C091/C137/C165) ==== */
+/* C091 — citation lists cap at 8 chips by default; the remainder sits behind a
+   disclosure button (aria-expanded) so an 80-candidate run no longer renders an
+   evidence wall. Pill styling follows the chip row it sits under. */
+.grounded-citations-more {
+  align-self: flex-start;
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.grounded-citations-more:hover {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+.grounded-citations-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* C137 — a single over-long path/label chip (deep repo paths, long capsule labels)
+   must not force a horizontal scrollbar on the whole chat log (.chatw-scroll is
+   overflow: auto). The title attribute already carries the full value, so middle
+   content truncates losslessly; the score span stays untouched. */
+.grounded-citation {
+  max-width: 100%;
+}
+.grounded-citation > span:first-child {
+  min-width: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* C165 — HybridContextPackSummary nests two .grounded-context-pack sections inside
+   an outer one: collapse the doubled padding / stacked border-tops into a border-left
+   group and de-emphasise the inner headline so "Hybrid:" reads as the parent. */
+.grounded-context-pack .grounded-context-pack {
+  margin-top: 6px;
+  padding: 0 0 0 10px;
+  border-top: none;
+  border-left: 2px solid var(--line-soft);
+}
+.grounded-context-pack .grounded-context-pack-headline {
+  color: var(--fg-muted);
+}
+
+/* ==== uiux-fix F014: rail tooltips + avatar states (C016) ==== */
+/* Keyboard parity (WCAG 2.4.7 context): icon-only rail buttons reveal their
+   data-tip label on :focus-visible exactly like on hover, so sighted keyboard
+   users get the same visible labels as mouse users. */
+.rail-btn:focus-visible::after,
+.rail-new:focus-visible::after,
+.rail-avatar:focus-visible::after {
+  opacity: 1;
+  transform: translateY(-50%);
+}
+/* Hover feedback for the account avatar — mirrors .rail-new:hover */
+.rail-avatar:hover {
+  filter: brightness(1.12);
 }

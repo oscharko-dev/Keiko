@@ -15,8 +15,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
-import { ApiError } from "@/lib/api";
-import { MemoryFilters, type MemoryFilterState, EMPTY_FILTERS } from "./MemoryFilters";
+import { formatError } from "./format-error";
+import {
+  MemoryFilters,
+  type MemoryFilterState,
+  EMPTY_FILTERS,
+  SCOPE_LABELS,
+  TYPE_LABELS,
+} from "./MemoryFilters";
 import type {
   MemoryScopeKind,
   MemorySensitivity,
@@ -33,12 +39,6 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
 
 function parseCsvParam<T extends string>(raw: string | null, allowed: readonly T[]): readonly T[] {
   if (raw === null || raw.trim().length === 0) return [];
@@ -81,13 +81,11 @@ const STATUS_COLORS: Readonly<Record<string, string>> = {
   expired: "mc-badge-expired",
 };
 
+// No role="status": these badges are static metadata labels, not live status
+// messages — N rows produced N live regions for screen readers (uiux-fix F005).
 function StatusBadge({ status }: { readonly status: string }): ReactNode {
   const cls = STATUS_COLORS[status] ?? "mc-badge-default";
-  return (
-    <span role="status" aria-label={`Status: ${status}`} className={`mc-badge ${cls}`}>
-      {status}
-    </span>
-  );
+  return <span className={`mc-badge ${cls}`}>{status}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +99,8 @@ function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
         <div className="mc-row-main">
           <span className="mc-row-body">{record.body}</span>
           <div className="mc-row-meta">
-            <span className="mc-row-type">{record.type}</span>
-            <span className="mc-row-scope">{record.scope.kind}</span>
+            <span className="mc-row-type">{TYPE_LABELS[record.type]}</span>
+            <span className="mc-row-scope">{SCOPE_LABELS[record.scope.kind]}</span>
             {record.pinned ? (
               <span className="mc-row-pinned" aria-label="Pinned">
                 P
