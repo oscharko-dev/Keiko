@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -20,6 +21,7 @@ type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) =>
 type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 type SleepFn = (ms: number) => Promise<void>;
 type ProcessKiller = (pid: number, signal?: NodeJS.Signals | 0) => void;
+type PortAvailabilityFn = (host: string, port: number) => Promise<boolean>;
 type LifecycleFlag = "--port" | "--host" | "--state-dir" | "--start-timeout" | "--stop-timeout";
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
@@ -74,6 +76,7 @@ export interface LifecycleCliDeps {
   readonly sleep?: SleepFn | undefined;
   readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
   readonly killProcess?: ProcessKiller | undefined;
+  readonly isPortAvailable?: PortAvailabilityFn | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -82,6 +85,7 @@ interface LifecycleRuntimeDeps {
   readonly sleep: SleepFn;
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: ProcessKiller;
+  readonly isPortAvailable: PortAvailabilityFn;
 }
 
 interface HealthProbeResult {
@@ -235,6 +239,33 @@ function defaultIsProcessAlive(pid: number): boolean {
   }
 }
 
+function defaultIsPortAvailable(host: string, port: number): Promise<boolean> {
+  return new Promise<boolean>((resolveAvailable) => {
+    const server = createNetServer();
+    let settled = false;
+    const settle = (available: boolean): void => {
+      if (settled) return;
+      settled = true;
+      server.removeAllListeners("error");
+      server.removeAllListeners("listening");
+      if (server.listening) {
+        server.close(() => {
+          resolveAvailable(available);
+        });
+        return;
+      }
+      resolveAvailable(available);
+    };
+    server.once("error", () => {
+      settle(false);
+    });
+    server.once("listening", () => {
+      settle(true);
+    });
+    server.listen(port, host);
+  });
+}
+
 function runningPid(
   options: LifecycleOptions,
   isAlive: (pid: number) => boolean,
@@ -318,7 +349,7 @@ async function waitForHealth(
       const response = await deps.fetchImpl(healthUrl(options), {
         signal: AbortSignal.timeout(1_000),
       });
-      if (response.ok) {
+      if (response.ok && deps.isProcessAlive(pid)) {
         return true;
       }
     } catch {
@@ -326,6 +357,18 @@ async function waitForHealth(
     }
     await deps.sleep(500);
   }
+  return false;
+}
+
+async function ensureStartPortAvailable(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: Pick<LifecycleRuntimeDeps, "isPortAvailable">,
+): Promise<boolean> {
+  if (await deps.isPortAvailable(options.host, options.port)) return true;
+  io.err(
+    `keiko start: port ${options.host}:${String(options.port)} is already in use. Stop the existing process or choose another port with --port.\n`,
+  );
   return false;
 }
 
@@ -354,6 +397,8 @@ async function cmdStart(
     const stopped = await cmdStop(options, io, deps);
     if (stopped !== 0) return stopped;
   }
+
+  if (!(await ensureStartPortAvailable(options, io, deps))) return 1;
 
   const { child, logPath } = spawnUiProcess(options, env, deps, cwd);
 
@@ -442,6 +487,19 @@ async function cmdRestart(
   return cmdStart(options, io, env, deps, cwd);
 }
 
+function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
+  return {
+    spawnFn: deps.spawnFn ?? spawn,
+    fetchImpl: deps.fetchImpl ?? fetch,
+    sleep:
+      deps.sleep ??
+      ((ms: number): Promise<void> => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))),
+    isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
+    killProcess: deps.killProcess ?? process.kill.bind(process),
+    isPortAvailable: deps.isPortAvailable ?? defaultIsPortAvailable,
+  };
+}
+
 export async function runLifecycleCli(
   command: LifecycleCommand,
   args: readonly string[],
@@ -460,15 +518,7 @@ export async function runLifecycleCli(
     return 2;
   }
 
-  const fullDeps: LifecycleRuntimeDeps = {
-    spawnFn: deps.spawnFn ?? spawn,
-    fetchImpl: deps.fetchImpl ?? fetch,
-    sleep:
-      deps.sleep ??
-      ((ms: number): Promise<void> => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))),
-    isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
-    killProcess: deps.killProcess ?? process.kill.bind(process),
-  };
+  const fullDeps = runtimeDeps(deps);
 
   const handlers: Readonly<Record<LifecycleCommand, () => Promise<number>>> = {
     start: () => cmdStart(options, io, env, fullDeps, cwd),

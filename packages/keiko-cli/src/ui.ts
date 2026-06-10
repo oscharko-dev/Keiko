@@ -47,6 +47,17 @@ export interface UiCliArgs {
   readonly uiDbPath: string | undefined;
 }
 
+type UiParseResult = UiCliArgs | "help" | null;
+type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db";
+
+interface RawUiOptions {
+  portRaw?: string | undefined;
+  hostRaw?: string | undefined;
+  evidenceRaw?: string | undefined;
+  configRaw?: string | undefined;
+  uiDbRaw?: string | undefined;
+}
+
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
 // socket or require a built dist/. Defaults resolve the packaged assets relative to this module.
 export interface UiCliDeps {
@@ -76,15 +87,6 @@ export type SpawnFn = (
   opts: SpawnOptions,
 ) => ChildProcess;
 
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 function parsePort(raw: string): number | null {
   if (!/^\d{1,5}$/.test(raw)) {
     return null;
@@ -93,23 +95,62 @@ function parsePort(raw: string): number | null {
   return port >= 1 && port <= 65535 ? port : null;
 }
 
+function readFlagValue(args: readonly string[], index: number): string | null {
+  const value = args[index + 1];
+  return value === undefined || value.startsWith("--") ? null : value;
+}
+
+function isUiFlag(arg: string): arg is UiFlag {
+  return (
+    arg === "--port" ||
+    arg === "--host" ||
+    arg === "--evidence-dir" ||
+    arg === "--config" ||
+    arg === "--ui-db"
+  );
+}
+
+function setRawUiOption(raw: RawUiOptions, flag: UiFlag, value: string): void {
+  switch (flag) {
+    case "--port":
+      raw.portRaw = value;
+      return;
+    case "--host":
+      raw.hostRaw = value;
+      return;
+    case "--evidence-dir":
+      raw.evidenceRaw = value;
+      return;
+    case "--config":
+      raw.configRaw = value;
+      return;
+    case "--ui-db":
+      raw.uiDbRaw = value;
+      return;
+  }
+}
+
+function collectUiOptions(args: readonly string[]): RawUiOptions | "help" | null {
+  const raw: RawUiOptions = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) return null;
+    if (arg === "--help" || arg === "-h") return "help";
+    if (!isUiFlag(arg)) return null;
+    const value = readFlagValue(args, i);
+    if (value === null) return null;
+    setRawUiOption(raw, arg, value);
+    i += 1;
+  }
+  return raw;
+}
+
 // Parses flags. Returns the parsed args, or null on any usage error (missing flag value, invalid
 // port, or a host other than the two loopback names).
-export function parseUiArgs(args: readonly string[]): UiCliArgs | null {
-  const portRaw = flagValue(args, "--port");
-  const hostRaw = flagValue(args, "--host");
-  const evidenceRaw = flagValue(args, "--evidence-dir");
-  const configRaw = flagValue(args, "--config");
-  const uiDbRaw = flagValue(args, "--ui-db");
-  if (
-    portRaw === null ||
-    hostRaw === null ||
-    evidenceRaw === null ||
-    configRaw === null ||
-    uiDbRaw === null
-  ) {
-    return null;
-  }
+export function parseUiArgs(args: readonly string[]): UiParseResult {
+  const raw = collectUiOptions(args);
+  if (raw === "help" || raw === null) return raw;
+  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw } = raw;
   if (hostRaw !== undefined && !ALLOWED_HOSTS.has(hostRaw)) {
     return null;
   }
@@ -297,6 +338,19 @@ function ensureStaticRoot(staticRoot: string, io: CliIo): boolean {
   return false;
 }
 
+function parseUiArgsOrExit(args: readonly string[], io: CliIo): UiCliArgs | number {
+  const parsed = parseUiArgs(args);
+  if (parsed === "help") {
+    io.out(USAGE);
+    return 0;
+  }
+  if (parsed === null) {
+    io.err(USAGE);
+    return 2;
+  }
+  return parsed;
+}
+
 async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<void> {
   if (deps.createServer !== undefined) {
     return;
@@ -311,13 +365,10 @@ export async function runUiCli(
   deps: UiCliDeps = {},
 ): Promise<number> {
   const effectiveEnv = loadLocalKeikoEnv(deps.cwd ?? process.cwd(), env);
+  const parsed = parseUiArgsOrExit(args, io);
+  if (typeof parsed === "number") return parsed;
   const reExec = await maybeReExecForSqlite(effectiveEnv, deps);
   if (reExec !== undefined) return reExec;
-  const parsed = parseUiArgs(args);
-  if (parsed === null) {
-    io.err(USAGE);
-    return 2;
-  }
   const staticRoot = deps.staticRoot ?? defaultStaticRoot();
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
