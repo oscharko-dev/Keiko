@@ -197,15 +197,57 @@ describe("walkSource — files scope", () => {
     expect(files).toStrictEqual(["README.md", "src/index.ts"]);
   });
 
-  it("allows explicit files inside hidden or generated directories", () => {
+  it("allows explicit hidden files that are not security-denied", () => {
     const fs = simpleFs();
     const scope: KnowledgeSourceScope = {
       kind: "files",
       rootPath: ROOT,
-      files: [".git/config", "dist/bundle.js"],
+      files: [".vscode/settings.json"],
     };
     const files = collect(scope, fs);
-    expect(files).toStrictEqual([".git/config", "dist/bundle.js"]);
+    expect(files).toStrictEqual([".vscode/settings.json"]);
+  });
+
+  it("applies the always-on deny list to discovered descendants", () => {
+    const fs = memoryFs(ROOT, [
+      { relativePath: "README.md", content: "ok" },
+      { relativePath: ".env", content: "SECRET=1" },
+      { relativePath: ".npmrc", content: "//registry.example/:_authToken=secret" },
+      { relativePath: "id_rsa", content: "private key" },
+      { relativePath: "secrets/cert.pem", content: "pem" },
+      { relativePath: "secrets/token.key", content: "key" },
+      { relativePath: "src/service-account-prod.json", content: "{}" },
+      { relativePath: ".env.example", content: "SECRET=" },
+    ]);
+
+    const files = collect(folderScope(ROOT), fs);
+
+    expect(files).toContain("README.md");
+    expect(files).toContain(".env.example");
+    expect(files).not.toContain(".env");
+    expect(files).not.toContain(".npmrc");
+    expect(files).not.toContain("id_rsa");
+    expect(files).not.toContain("secrets/cert.pem");
+    expect(files).not.toContain("secrets/token.key");
+    expect(files).not.toContain("src/service-account-prod.json");
+  });
+
+  it("does not let explicit file scopes bypass the security deny list", () => {
+    const fs = memoryFs(ROOT, [
+      { relativePath: ".vscode/settings.json", content: "{}" },
+      { relativePath: ".git/config", content: "[core]" },
+      { relativePath: "dist/bundle.js", content: "// bundle" },
+      { relativePath: ".env", content: "SECRET=1" },
+    ]);
+    const scope: KnowledgeSourceScope = {
+      kind: "files",
+      rootPath: ROOT,
+      files: [".vscode/settings.json", ".git/config", "dist/bundle.js", ".env"],
+    };
+
+    const files = collect(scope, fs);
+
+    expect(files).toStrictEqual([".vscode/settings.json"]);
   });
 });
 
