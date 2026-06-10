@@ -82,16 +82,18 @@ describe("triggerFigmaSnapshot — coded BFF errors", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      triggerFigmaSnapshot("https://www.figma.com/design/AbCdEfGhIjKl/Board?node-id=1%3A2", {
-        acknowledgeReadOnly: true,
-      }),
-    ).rejects.toMatchObject<ApiError>({
+    const expectedError: Partial<ApiError> = {
       name: "ApiError",
       code: "FIGMA_PROXY_EGRESS_FAILED",
       message: "The forward proxy rejected the Figma egress request. Check proxy configuration.",
       status: 502,
-    });
+    };
+
+    await expect(
+      triggerFigmaSnapshot("https://www.figma.com/design/AbCdEfGhIjKl/Board?node-id=1%3A2", {
+        acknowledgeReadOnly: true,
+      }),
+    ).rejects.toMatchObject(expectedError);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
