@@ -22,14 +22,23 @@
 //   - Focus-visible is delegated to the design system (outline tokens).
 //   - All interactive targets are ≥ 24 × 24 px (WCAG 2.5.8).
 
-import { useCallback, useId, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { ApiError } from "@/lib/api";
+import { formatBytes, formatDate } from "@/lib/format";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
   generateFigmaCode,
 } from "@/lib/figma-snapshot-api";
 import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
-import { ApiError } from "@/lib/api";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,9 +64,28 @@ function isValidFigmaLink(raw: string): boolean {
 }
 
 function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
+  // ApiError messages (FIGMA_ROUTE_ERROR_MESSAGES) are clean and actionable on their
+  // own — surface them WITHOUT the SCREAMING_SNAKE code prefix (developer jargon).
   if (err instanceof Error) return err.message;
   return "An unexpected error occurred.";
+}
+
+/**
+ * Differentiated validation microcopy (WCAG 3.3.1 Error Identification) for a
+ * non-empty, invalid board link. Returns null when the link is empty or valid.
+ */
+function figmaLinkValidationMessage(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || isValidFigmaLink(trimmed)) return null;
+  try {
+    const host = new URL(trimmed).hostname.toLowerCase();
+    if (host === "figma.com" || host.endsWith(".figma.com")) {
+      return "Add a node-id by selecting a frame or section in Figma and copying its link (Copy link to selection).";
+    }
+  } catch {
+    // not parseable as a URL — fall through to the generic message
+  }
+  return "This doesn't look like a Figma board link. Use a figma.com design/file link that includes a node-id parameter.";
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -77,19 +105,37 @@ function ScreenCard({
   irSummary,
   imageByteLength,
 }: ScreenCardProps): ReactNode {
-  const kib = (imageByteLength / 1024).toFixed(1);
   return (
     <article
       className="figma-snapshot-screen-card"
       aria-label={`Screen ${String(index + 1)}: ${name}`}
     >
+      {/* uiux-fix F045 C378: the tile is a deliberate thumbnail surrogate (no image-serving
+          endpoint yet) — a frame glyph above the index reads as "screen N", not as a
+          failed image load. */}
       <div className="figma-snapshot-screen-placeholder" aria-hidden="true">
+        <svg
+          className="figma-snapshot-screen-frame-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        >
+          <path d="M7 2v20M17 2v20M2 7h20M2 17h20" />
+        </svg>
         <span className="figma-snapshot-screen-index">{String(index + 1)}</span>
       </div>
       <div className="figma-snapshot-screen-meta">
-        <h3 className="figma-snapshot-screen-name">{name}</h3>
+        {/* uiux-fix F045 C252: the name is ellipsised user content — title makes the
+            full name reachable on hover for mouse users. */}
+        <h3 className="figma-snapshot-screen-name" title={name}>
+          {name}
+        </h3>
         <p className="figma-snapshot-screen-summary">{irSummary}</p>
-        <p className="figma-snapshot-screen-size">{kib} KiB</p>
+        {/* uiux-fix F045 C313: app-wide byte convention via lib/format (B/KB/MB) instead
+            of an ad-hoc "KiB" — the only surface that used that spelling. */}
+        <p className="figma-snapshot-screen-size">{formatBytes(imageByteLength)}</p>
         <p className="figma-snapshot-screen-id">{screenId}</p>
       </div>
     </article>
@@ -119,7 +165,9 @@ export interface FigmaSnapshotWindowProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-type BuildState = "idle" | "building" | "done" | "error";
+// "loading" is the stored-snapshot read path — it never contacts Figma and must not
+// reuse the "building" copy ("fetching screens from Figma…").
+type BuildState = "idle" | "loading" | "building" | "done" | "error";
 
 export function FigmaSnapshotWindow({
   snapshotRunId,
@@ -130,6 +178,7 @@ export function FigmaSnapshotWindow({
 }: FigmaSnapshotWindowProps): ReactNode {
   const inputId = useId();
   const statusId = useId();
+  const validationId = useId();
 
   const [boardLink, setBoardLink] = useState("");
   const [buildState, setBuildState] = useState<BuildState>("idle");
@@ -137,13 +186,33 @@ export function FigmaSnapshotWindow({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Explicit read-only-scope acknowledgement (#760) — recorded server-side before the first build.
   const [consentChecked, setConsentChecked] = useState(false);
+  // uiux-fix F038 C210: when consent blocks a snapshot (inline pre-check OR the server's 428
+  // FIGMA_CONSENT_REQUIRED), the error must point AT the checkbox — mark it invalid and move
+  // focus to it instead of leaving the user to connect message and control themselves.
+  const [consentInvalid, setConsentInvalid] = useState(false);
+  const consentRef = useRef<HTMLInputElement | null>(null);
+
+  const flagConsentRequired = useCallback((): void => {
+    setConsentInvalid(true);
+  }, []);
   // Design-to-code (#755) state — a reviewable artifact generated from the stored snapshot.
   const [codeState, setCodeState] = useState<"idle" | "generating" | "done" | "error">("idle");
   const [code, setCode] = useState<FigmaCodegenResponse | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
 
   const linkValid = isValidFigmaLink(boardLink);
+  const linkError = figmaLinkValidationMessage(boardLink);
   const isBuilding = buildState === "building";
+  const isLoading = buildState === "loading";
+  const busy = isBuilding || isLoading;
+
+  // uiux-fix F038 C210: move focus onto the consent checkbox once a consent-blocked error has
+  // rendered. An effect (not an inline .focus() in the handler) because in the server-428 path
+  // the checkbox is still disabled={isBuilding} when the error is caught — focusing must wait
+  // for the re-render that re-enables it.
+  useEffect(() => {
+    if (consentInvalid && buildState === "error") consentRef.current?.focus();
+  }, [consentInvalid, buildState]);
 
   const runBuild = useCallback(
     async (link: string, isResnapshot: boolean): Promise<void> => {
@@ -160,33 +229,51 @@ export function FigmaSnapshotWindow({
         updateCfg({ snapshotRunId: result.runId });
         setBuildState("done");
       } catch (err) {
-        setErrorMsg(formatError(err));
+        // uiux-fix F038 C210: the server's 428 message names the policy but not the control —
+        // extend it with an instruction that points at the checkbox, and highlight + focus it.
+        if (err instanceof ApiError && err.code === "FIGMA_CONSENT_REQUIRED") {
+          setErrorMsg(
+            `${formatError(err)} Tick the acknowledgement checkbox below, then snapshot again.`,
+          );
+          flagConsentRequired();
+        } else {
+          setErrorMsg(formatError(err));
+        }
         setBuildState("error");
       }
     },
-    [triggerImpl, updateCfg, consentChecked],
+    [triggerImpl, updateCfg, consentChecked, flagConsentRequired],
   );
 
   const handleSubmit = useCallback(
     (e: FormEvent<HTMLFormElement>): void => {
       e.preventDefault();
-      if (!linkValid || isBuilding) return;
+      if (!linkValid || busy) return;
+      if (!consentChecked) {
+        // The server enforces the acknowledgement with FIGMA_CONSENT_REQUIRED (HTTP 428)
+        // on the first build for a board — fail inline instead of letting the first-run
+        // happy path end in a guaranteed server-error roundtrip.
+        setErrorMsg("Tick the read-only acknowledgement checkbox below, then snapshot again.");
+        setBuildState("error");
+        // uiux-fix F038 C210: point at the control, don't just describe it — highlight the
+        // checkbox and move focus onto it so the fix is one keypress away.
+        flagConsentRequired();
+        return;
+      }
       void runBuild(boardLink, false);
     },
-    [boardLink, isBuilding, linkValid, runBuild],
+    [boardLink, busy, consentChecked, linkValid, runBuild, flagConsentRequired],
   );
 
   const handleResnapshot = useCallback((): void => {
-    if (isBuilding) return;
-    const link =
-      boardLink.trim().length > 0
-        ? boardLink
-        : summary !== null
-          ? `https://www.figma.com/design/${summary.fileKey}/board?node-id=${summary.nodeId}`
-          : "";
-    if (link.length === 0) return;
+    if (busy || summary === null) return;
+    // uiux-fix F045 C249: "Re-snapshot this board" means THIS board — always rebuild the
+    // link from the stored summary instead of trusting whatever currently sits in the
+    // input (which may be invalid or point at a different board, bypassing the
+    // isValidFigmaLink gate). New boards go through Submit, which is gated.
+    const link = `https://www.figma.com/design/${summary.fileKey}/board?node-id=${summary.nodeId}`;
     void runBuild(link, true);
-  }, [boardLink, isBuilding, runBuild, summary]);
+  }, [busy, runBuild, summary]);
 
   const handleGenerateCode = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
@@ -207,8 +294,10 @@ export function FigmaSnapshotWindow({
   // Load a previously stored snapshot (e.g. after window re-open) when runId is in cfg but no
   // in-memory summary is present.
   const handleLoadStored = useCallback((): void => {
-    if (snapshotRunId === undefined || snapshotRunId.length === 0) return;
-    setBuildState("building");
+    if (snapshotRunId === undefined || snapshotRunId.length === 0 || busy) return;
+    // Distinct "loading" state — this path reads the locally stored evidence record
+    // only and never contacts Figma, so it must not show the "building" copy.
+    setBuildState("loading");
     setErrorMsg(null);
     loadImpl(snapshotRunId)
       .then((result) => {
@@ -219,13 +308,15 @@ export function FigmaSnapshotWindow({
         setErrorMsg(formatError(err));
         setBuildState("error");
       });
-  }, [loadImpl, snapshotRunId]);
+  }, [busy, loadImpl, snapshotRunId]);
 
+  // Keep the notice (and its button) mounted while loading — unmounting the just-
+  // activated button would drop keyboard/SR focus to <body>.
   const showLoadStored =
     snapshotRunId !== undefined &&
     snapshotRunId.length > 0 &&
     summary === null &&
-    buildState === "idle";
+    (buildState === "idle" || buildState === "loading");
 
   return (
     <section className="figma-snapshot-window" aria-label="Figma Snapshot">
@@ -243,37 +334,61 @@ export function FigmaSnapshotWindow({
             value={boardLink}
             onChange={(e) => {
               setBoardLink(e.target.value);
+              // Editing the link invalidates any previous error — clear it so stale
+              // and current feedback never contradict each other.
+              if (errorMsg !== null) setErrorMsg(null);
+              if (buildState === "error") setBuildState("idle");
+              if (consentInvalid) setConsentInvalid(false);
             }}
-            aria-describedby={statusId}
-            aria-invalid={boardLink.length > 0 && !linkValid ? "true" : undefined}
-            disabled={isBuilding}
+            aria-describedby={linkError !== null ? `${validationId} ${statusId}` : statusId}
+            aria-invalid={linkError !== null ? "true" : undefined}
+            readOnly={busy}
             autoComplete="off"
             spellCheck={false}
           />
+          {/* While busy the button stays enabled (aria-disabled + handler guard) so the
+              browser does not drop focus of the just-activated control to <body>. */}
           <button
             type="submit"
             className="figma-snapshot-trigger-btn"
-            disabled={!linkValid || isBuilding}
+            disabled={!linkValid && !busy}
+            aria-disabled={!linkValid || busy ? "true" : undefined}
             aria-busy={isBuilding}
           >
             {isBuilding ? "Building…" : "Snapshot"}
           </button>
         </div>
+        {linkError !== null && (
+          <p id={validationId} className="figma-snapshot-link-error">
+            {linkError}
+          </p>
+        )}
         {/* Explicit read-only-scope acknowledgement (#760): recorded server-side before the first
             fetch for a board. The connector reads files + renders images — it never writes. */}
         <label className="figma-snapshot-consent">
           <input
             type="checkbox"
             className="figma-snapshot-consent-checkbox"
+            ref={consentRef}
             checked={consentChecked}
+            // uiux-fix F038 C210: a consent-blocked snapshot marks THIS control invalid so the
+            // error visibly points at the checkbox (focus moves here too, see flagConsentRequired).
+            aria-invalid={consentInvalid ? "true" : undefined}
             onChange={(e) => {
               setConsentChecked(e.target.checked);
+              // Checking the box answers a consent error — clear stale feedback.
+              if (errorMsg !== null) setErrorMsg(null);
+              if (buildState === "error") setBuildState("idle");
+              setConsentInvalid(false);
             }}
             disabled={isBuilding}
           />
           <span>
             I acknowledge the configured Figma PAT is read-only and least-privilege (
-            <code>files:read</code>).
+            <code>files:read</code>).{" "}
+            <span className="figma-snapshot-consent-required">
+              Required before the first snapshot of a board.
+            </span>
           </span>
         </label>
         <p className="figma-snapshot-hint">
@@ -295,19 +410,55 @@ export function FigmaSnapshotWindow({
             Building snapshot — fetching screens from Figma…
           </p>
         )}
-        {buildState === "error" && errorMsg !== null && (
-          <p className="figma-snapshot-error" role="alert">
-            {errorMsg}
+        {isLoading && <p className="figma-snapshot-progress">Loading stored snapshot…</p>}
+        {/* WCAG 4.1.3: completion is announced here (visually hidden — the visible
+            result renders below, outside this live region). */}
+        {buildState === "done" && summary !== null && (
+          <p className="sr-only">Snapshot complete — {summary.reductionHint}.</p>
+        )}
+        {codeState === "done" && code !== null && (
+          <p className="sr-only">
+            Code generated — {String(code.fileCount)} file{code.fileCount !== 1 ? "s" : ""} ready
+            for review.
           </p>
         )}
+        {/* uiux-fix F045 C375: no role="alert" inside this polite atomic live region — the
+            region itself announces its content; a nested assertive alert caused double or
+            competing announcements depending on the screen reader. */}
+        {buildState === "error" && errorMsg !== null && (
+          <p className="figma-snapshot-error">{errorMsg}</p>
+        )}
       </div>
+
+      {/* ── First-run guidance (nothing captured or stored yet) ───────────── */}
+      {buildState === "idle" && summary === null && !showLoadStored && (
+        <div className="figma-snapshot-empty">
+          <p className="figma-snapshot-empty-title">Capture screens from a Figma board</p>
+          <ol className="figma-snapshot-empty-steps">
+            <li>In Figma, select the frame or section you want to capture.</li>
+            <li>Copy its link (Copy link to selection) — it contains the node-id.</li>
+            <li>Paste it above, acknowledge the read-only scope, then take the snapshot.</li>
+          </ol>
+          <p className="figma-snapshot-empty-note">
+            The snapshot stores the captured screens and their structure as immutable evidence —
+            connect this window to Quality Intelligence to ground generated tests in the design.
+            Requires a Figma access token configured on the server.
+          </p>
+        </div>
+      )}
 
       {/* ── Load stored snapshot ──────────────────────────────────────────── */}
       {showLoadStored && (
         <div className="figma-snapshot-stored-notice">
           <p className="figma-snapshot-stored-text">A stored snapshot is available.</p>
-          <button type="button" className="figma-snapshot-load-btn" onClick={handleLoadStored}>
-            Load snapshot
+          <button
+            type="button"
+            className="figma-snapshot-load-btn"
+            onClick={handleLoadStored}
+            aria-disabled={isLoading ? "true" : undefined}
+            aria-busy={isLoading}
+          >
+            {isLoading ? "Loading…" : "Load snapshot"}
           </button>
         </div>
       )}
@@ -318,6 +469,9 @@ export function FigmaSnapshotWindow({
           {/* Reduction info */}
           <div className="figma-snapshot-reduction">
             <p className="figma-snapshot-reduction-hint">{summary.reductionHint}</p>
+            {/* uiux-fix F045 C250: snapshot age — the information the re-snapshot
+                decision hinges on. Same date presenter as the rest of the app. */}
+            <p className="figma-snapshot-captured-at">Captured {formatDate(summary.fetchedAt)}</p>
             {summary.skippedCount > 0 && (
               <p className="figma-snapshot-skipped-notice">
                 {String(summary.skippedCount)} screen{summary.skippedCount !== 1 ? "s" : ""} could
@@ -344,7 +498,7 @@ export function FigmaSnapshotWindow({
               type="button"
               className="figma-snapshot-codegen-btn"
               onClick={handleGenerateCode}
-              disabled={codeState === "generating"}
+              aria-disabled={codeState === "generating" ? "true" : undefined}
               aria-busy={codeState === "generating"}
             >
               {codeState === "generating" ? "Generating code…" : "Generate code"}

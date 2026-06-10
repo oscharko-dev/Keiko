@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { deleteMemory, forgetMemory } from "@/lib/memory-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "./format-error";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
@@ -42,7 +42,8 @@ export function ForgetConfirmDialog({
   const isDeleteMode = mode === "delete";
 
   useEffect(() => {
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     cancelRef.current?.focus();
     return () => {
       restoreFocusRef.current?.focus();
@@ -97,17 +98,11 @@ export function ForgetConfirmDialog({
       if (isDeleteMode) {
         await deleteMemoryImpl(record.id as MemoryId);
       } else {
-        await forgetMemoryImpl(record.id as MemoryId, "user-initiated forget from Memory Center");
+        await forgetMemoryImpl(record.id as MemoryId, "user-initiated forget from MemoriaViva");
       }
       onComplete();
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`${err.code}: ${err.message}`);
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("An unexpected error occurred.");
-      }
+      setError(formatError(err));
       setSubmitting(false);
     }
   }, [deleteMemoryImpl, forgetMemoryImpl, isDeleteMode, onComplete, record.id]);

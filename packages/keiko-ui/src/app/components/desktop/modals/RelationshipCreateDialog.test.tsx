@@ -6,6 +6,8 @@ import { RelationshipCreateDialog } from "./RelationshipCreateDialog";
 vi.mock("../../../relationships/api", () => ({
   createRelationship: vi.fn(),
   validateRelationshipProposal: vi.fn(),
+  BACKEND_UNREACHABLE_MESSAGE:
+    "Unable to reach the local backend. Check that the Keiko server is running (keiko ui).",
   RelationshipApiError: class RelationshipApiError extends Error {
     readonly code: string;
     readonly status: number;
@@ -33,10 +35,12 @@ vi.mock("../../../relationships/api", () => ({
 }));
 
 import {
+  createRelationship,
   validateRelationshipProposal,
   RelationshipApiError,
 } from "../../../relationships/api";
 
+const mockCreateRelationship = vi.mocked(createRelationship);
 const mockValidateRelationshipProposal = vi.mocked(validateRelationshipProposal);
 
 function deferred<T>() {
@@ -83,6 +87,7 @@ describe("RelationshipCreateDialog", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockValidateRelationshipProposal.mockReset();
+    mockCreateRelationship.mockReset();
   });
 
   afterEach(() => {
@@ -115,7 +120,9 @@ describe("RelationshipCreateDialog", () => {
     expect(screen.queryByTestId("server-denial-banner")).not.toBeInTheDocument();
 
     await settlePreview(() => {
-      firstPreview.reject(makePreviewDenial("denied/non-existent-target", "Target does not exist."));
+      firstPreview.reject(
+        makePreviewDenial("denied/non-existent-target", "Target does not exist."),
+      );
     });
     expect(screen.queryByTestId("server-denial-banner")).not.toBeInTheDocument();
   });
@@ -139,7 +146,9 @@ describe("RelationshipCreateDialog", () => {
     expect(mockValidateRelationshipProposal).toHaveBeenCalledTimes(2);
 
     await settlePreview(() => {
-      secondPreview.reject(makePreviewDenial("denied/non-existent-target", "Target does not exist."));
+      secondPreview.reject(
+        makePreviewDenial("denied/non-existent-target", "Target does not exist."),
+      );
     });
     expect(screen.getByTestId("server-denial-banner")).toHaveTextContent("Target does not exist.");
 
@@ -188,6 +197,44 @@ describe("RelationshipCreateDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("server-denial-banner")).not.toBeInTheDocument();
+  });
+
+  it("mounts the overlay on document.body so position:fixed escapes the transformed canvas", () => {
+    renderDialog();
+    expect(screen.getByTestId("rel-create-overlay").parentElement).toBe(document.body);
+  });
+
+  it("does not submit via Ctrl/Cmd+Enter while the form is incomplete", () => {
+    renderDialog();
+    fireEvent.keyDown(screen.getByTestId("rel-create-dialog"), { key: "Enter", ctrlKey: true });
+    expect(mockCreateRelationship).not.toHaveBeenCalled();
+  });
+
+  it("clears a non-security submit denial on the next form edit so Create is not a dead end", async () => {
+    mockValidateRelationshipProposal.mockResolvedValue({
+      decision: { allowed: true, reasons: [] },
+    });
+    mockCreateRelationship.mockRejectedValueOnce(
+      new RelationshipApiError("relationship/bad-request", 'Field "id" is required.', 400),
+    );
+
+    renderDialog();
+    setProposal("src-a", "tgt-a");
+    await advancePreviewDebounce();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("server-denial-banner")).toHaveTextContent(
+      "relationship/bad-request",
+    );
+    expect(screen.getByRole("button", { name: "Create" })).toHaveAttribute("aria-disabled", "true");
+
+    // Editing the form clears the stale non-security submit denial.
+    setProposal("src-b", "tgt-b");
     expect(screen.queryByTestId("server-denial-banner")).not.toBeInTheDocument();
   });
 });

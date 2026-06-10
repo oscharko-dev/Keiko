@@ -21,15 +21,9 @@ import {
   rejectMemoryProposal,
   unpinMemory,
 } from "@/lib/memory-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "./format-error";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
 
 type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | null;
 
@@ -64,18 +58,24 @@ export function MemoryActions({
   const [showForget, setShowForget] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
 
-  const run = useCallback(async (action: BusyAction, fn: () => Promise<void>): Promise<void> => {
-    setBusy(action);
-    setError(null);
-    setNotice(null);
-    try {
-      await fn();
-    } catch (err) {
-      setError(formatError(err));
-    } finally {
-      setBusy(null);
-    }
-  }, []);
+  // Buttons use aria-disabled + this guard instead of native disabled so the
+  // pressed button keeps keyboard focus while busy (uiux-fix F005, PR #823 pattern).
+  const run = useCallback(
+    async (action: BusyAction, fn: () => Promise<void>): Promise<void> => {
+      if (busy !== null) return;
+      setBusy(action);
+      setError(null);
+      setNotice(null);
+      try {
+        await fn();
+      } catch (err) {
+        setError(formatError(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [busy],
+  );
 
   const handleAccept = useCallback((): void => {
     void run("accept", async () => {
@@ -86,7 +86,7 @@ export function MemoryActions({
 
   const handleReject = useCallback((): void => {
     void run("reject", async () => {
-      const res = await rejectImpl(record.id as MemoryId, "rejected by user in Memory Center");
+      const res = await rejectImpl(record.id as MemoryId, "rejected by user in MemoriaViva");
       onRecordChange(res.memory);
     });
   }, [onRecordChange, record.id, rejectImpl, run]);
@@ -107,7 +107,7 @@ export function MemoryActions({
 
   const handleArchive = useCallback((): void => {
     void run("archive", async () => {
-      const res = await archiveImpl(record.id as MemoryId, "archived by user in Memory Center");
+      const res = await archiveImpl(record.id as MemoryId, "archived by user in MemoriaViva");
       onRecordChange(res.memory);
     });
   }, [archiveImpl, onRecordChange, record.id, run]);
@@ -132,7 +132,7 @@ export function MemoryActions({
           <button
             type="button"
             className="lk-btn lk-btn-primary"
-            disabled={busy !== null}
+            aria-disabled={busy !== null}
             aria-busy={busy === "accept"}
             onClick={handleAccept}
             aria-label="Accept this memory proposal"
@@ -142,7 +142,7 @@ export function MemoryActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            disabled={busy !== null}
+            aria-disabled={busy !== null}
             aria-busy={busy === "reject"}
             onClick={handleReject}
             aria-label="Reject this memory proposal"
@@ -157,8 +157,9 @@ export function MemoryActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            disabled={busy !== null}
+            aria-disabled={busy !== null}
             onClick={() => {
+              if (busy !== null) return;
               setError(null);
               setNotice(null);
               setShowEdit(true);
@@ -170,8 +171,9 @@ export function MemoryActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            disabled={busy !== null}
+            aria-disabled={busy !== null}
             onClick={() => {
+              if (busy !== null) return;
               setError(null);
               setNotice(null);
               setShowCorrect(true);
@@ -188,7 +190,7 @@ export function MemoryActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            disabled={busy !== null}
+            aria-disabled={busy !== null}
             aria-busy={busy === "unpin"}
             onClick={handleUnpin}
             aria-label="Unpin this memory"
@@ -199,7 +201,7 @@ export function MemoryActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            disabled={busy !== null}
+            aria-disabled={busy !== null}
             aria-busy={busy === "pin"}
             onClick={handlePin}
             aria-label="Pin this memory for priority retrieval"
@@ -213,7 +215,7 @@ export function MemoryActions({
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          disabled={busy !== null}
+          aria-disabled={busy !== null}
           aria-busy={busy === "archive"}
           onClick={handleArchive}
           aria-label="Archive this memory"
@@ -226,8 +228,9 @@ export function MemoryActions({
         <button
           type="button"
           className="lk-btn lk-btn-danger"
-          disabled={busy !== null}
+          aria-disabled={busy !== null}
           onClick={() => {
+            if (busy !== null) return;
             setError(null);
             setNotice(null);
             setShowForget(true);
@@ -241,8 +244,9 @@ export function MemoryActions({
       <button
         type="button"
         className="lk-btn lk-btn-danger"
-        disabled={busy !== null}
+        aria-disabled={busy !== null}
         onClick={() => {
+          if (busy !== null) return;
           setError(null);
           setNotice(null);
           setShowDelete(true);

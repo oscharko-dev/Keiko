@@ -5,14 +5,18 @@ import { createPortal } from "react-dom";
 import { ApiError, setupGateway } from "@/lib/api";
 import { Icons } from "../Icons";
 
-function errorMessage(error: unknown): string {
+// Human-readable message first; the machine code (useful for support) is kept
+// separate and rendered as a secondary mono line, never as a raw
+// "CODE: message" prefix in the first-run flow (audit C191 — pattern:
+// RelationshipCreateDialog / error-and-denial-ux.md).
+function errorDetails(error: unknown): { readonly message: string; readonly code?: string } {
   if (error instanceof ApiError) {
-    return `${error.code}: ${error.message}`;
+    return { message: error.message, code: error.code };
   }
   if (error instanceof Error) {
-    return error.message;
+    return { message: error.message };
   }
-  return "The gateway could not be configured.";
+  return { message: "The gateway could not be configured." };
 }
 
 function deploymentNamesFromInput(value: string): readonly string[] {
@@ -48,6 +52,7 @@ export function GatewaySetupDialog({
   const [deploymentNames, setDeploymentNames] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [errorCode, setErrorCode] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
 
   useEffect(() => {
@@ -92,12 +97,27 @@ export function GatewaySetupDialog({
     return () => dialog.removeEventListener("keydown", onDialogKeyDown);
   }, [busy, onCancel, success]);
 
+  // After a failed test the controls are re-enabled but nothing was focused
+  // (the disabled submit dropped focus to <body>, killing the Tab trap) —
+  // return focus to the Base URL field so the user can correct directly
+  // (audit C186/C084).
+  useEffect(() => {
+    if (error !== undefined && !busy) {
+      baseUrlRef.current?.focus();
+    }
+  }, [error, busy]);
+
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (busy) return;
     setBusy(true);
     setError(undefined);
+    setErrorCode(undefined);
     setSuccess(undefined);
+    // All controls (incl. the focused submit) become disabled while testing,
+    // which would drop focus to <body> and break the Tab trap — park focus on
+    // the dialog container instead (audit C186).
+    dialogRef.current?.focus();
     try {
       const parsedDeploymentNames = deploymentNamesFromInput(deploymentNames);
       if (isAzureFoundryUrl(baseUrl) && parsedDeploymentNames.length === 0) {
@@ -115,11 +135,13 @@ export function GatewaySetupDialog({
       });
       const count = result.testedModelIds.length;
       setSuccess(
-        `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko...`,
+        `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…`,
       );
       window.setTimeout(() => window.location.reload(), 800);
     } catch (caught) {
-      setError(errorMessage(caught));
+      const details = errorDetails(caught);
+      setError(details.message);
+      setErrorCode(details.code);
       setBusy(false);
     }
   }
@@ -140,6 +162,10 @@ export function GatewaySetupDialog({
         aria-modal="true"
         aria-labelledby="gw-setup-title"
         aria-describedby="gw-setup-desc"
+        // tabIndex -1: keeps focus (and thus the Escape/Tab-trap keydown
+        // listener on this element) inside the dialog when a non-focusable
+        // area is clicked or all controls are disabled (audit C007/C186).
+        tabIndex={-1}
       >
         <form onSubmit={(event) => void submit(event)}>
           <div className="gw-setup-badge">
@@ -176,7 +202,9 @@ export function GatewaySetupDialog({
             />
           </label>
           <label className="gw-field">
-            <span>API key header optional</span>
+            <span>
+              API key header <span className="dlg-opt">optional</span>
+            </span>
             <input
               className="gw-input mono"
               value={apiKeyHeaderName}
@@ -204,8 +232,22 @@ export function GatewaySetupDialog({
             with model discovery. For Azure AI Foundry, paste deployment names exactly as shown in
             the Deployments tab. Testing several deployments can take up to 30 seconds.
           </div>
-          {error !== undefined ? <div className="gw-error">{error}</div> : null}
-          {success !== undefined ? <div className="gw-success">{success}</div> : null}
+          {/* role=alert/status: the test result arrives after a long async wait
+              while all controls are disabled — without a live region screen
+              readers never hear it (audit C084). */}
+          {error !== undefined ? (
+            <div className="gw-error" role="alert">
+              {error}
+              {errorCode !== undefined ? (
+                <div className="gw-error-code mono">{errorCode}</div>
+              ) : null}
+            </div>
+          ) : null}
+          {success !== undefined ? (
+            <div className="gw-success" role="status">
+              {success}
+            </div>
+          ) : null}
           <div className="gw-actions">
             {onCancel !== undefined ? (
               <button
@@ -224,7 +266,7 @@ export function GatewaySetupDialog({
                 busy || success !== undefined || baseUrl.trim() === "" || apiKey.trim() === ""
               }
             >
-              {busy ? "Testing connection..." : "Test & save"}
+              {busy ? "Testing connection…" : "Test & save"}
             </button>
           </div>
         </form>

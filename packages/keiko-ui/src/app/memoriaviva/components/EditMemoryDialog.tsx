@@ -12,7 +12,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts";
 import { correctMemory, editMemory } from "@/lib/memory-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "./format-error";
 
 const SENSITIVITY_LABELS: Readonly<Record<MemorySensitivity, string>> = {
   public: "Public",
@@ -45,16 +45,22 @@ export function EditMemoryDialog({
   const [sensitivity, setSensitivity] = useState<MemorySensitivity>(record.provenance.sensitivity);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True while the body field itself failed validation — drives aria-invalid +
+  // aria-describedby on the textarea so SR users find the offending field
+  // (uiux-fix F005, WCAG 3.3.1; pattern from PR #823).
+  const [bodyInvalid, setBodyInvalid] = useState(false);
 
   const firstRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
+  const errorId = useId();
   const isCorrectMode = mode === "correct";
 
   useEffect(() => {
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     firstRef.current?.focus();
     return () => {
       restoreFocusRef.current?.focus();
@@ -106,6 +112,9 @@ export function EditMemoryDialog({
     const trimmedBody = body.trim();
     if (trimmedBody.length === 0) {
       setError("Body cannot be empty.");
+      setBodyInvalid(true);
+      // Return focus to the offending field instead of leaving it on Save.
+      firstRef.current?.focus();
       return;
     }
 
@@ -129,13 +138,7 @@ export function EditMemoryDialog({
         onSave(res.memory);
       }
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`${err.code}: ${err.message}`);
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("An unexpected error occurred.");
-      }
+      setError(formatError(err));
     } finally {
       setSaving(false);
     }
@@ -183,9 +186,16 @@ export function EditMemoryDialog({
             rows={5}
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
               setBody(e.target.value);
+              // Typing clears the field-level validation state.
+              if (bodyInvalid) {
+                setBodyInvalid(false);
+                setError(null);
+              }
             }}
             disabled={saving}
             aria-required="true"
+            aria-invalid={bodyInvalid ? "true" : undefined}
+            aria-describedby={bodyInvalid ? errorId : undefined}
           />
         </div>
 
@@ -231,7 +241,7 @@ export function EditMemoryDialog({
         )}
 
         {error !== null ? (
-          <p role="alert" className="mc-dialog-error">
+          <p id={errorId} role="alert" className="mc-dialog-error">
             {error}
           </p>
         ) : null}

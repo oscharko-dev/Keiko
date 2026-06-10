@@ -119,6 +119,31 @@ describe("ReviewWidget", () => {
     expect(vi.mocked(fetchRunReport)).not.toHaveBeenCalled();
   });
 
+  // uiux-fix F018 C110: with the persistence callback the empty state offers an
+  // inline run-ID form instead of pointing at a non-existent "window configuration"
+  it("submits a pasted run ID from the empty state via onRunIdSubmit", async () => {
+    const onRunIdSubmit = vi.fn();
+    render(<ReviewWidget onRunIdSubmit={onRunIdSubmit} />);
+
+    expect(screen.getByText(/paste a run id below/i)).toBeInTheDocument();
+    expect(screen.queryByText(/window configuration/i)).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("textbox", { name: /run id/i }), "  r-123  ");
+    await userEvent.click(screen.getByRole("button", { name: /load run/i }));
+
+    expect(onRunIdSubmit).toHaveBeenCalledWith("r-123");
+    expect(vi.mocked(fetchRunReport)).not.toHaveBeenCalled();
+  });
+
+  it("ignores empty run-ID submissions in the empty state", async () => {
+    const onRunIdSubmit = vi.fn();
+    render(<ReviewWidget onRunIdSubmit={onRunIdSubmit} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /load run/i }));
+
+    expect(onRunIdSubmit).not.toHaveBeenCalled();
+  });
+
   it("shows aria-busy skeleton while loading", async () => {
     // fetchRunReport never resolves in this test
     vi.mocked(fetchRunReport).mockReturnValue(new Promise(() => {}));
@@ -179,7 +204,9 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-123" />);
     await screen.findByRole("button", { name: /apply/i });
 
-    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    // uiux-fix F018 C258: Apply is two-stage — arm the confirm step, then apply
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /confirm apply \(1 file\)/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/not in an appliable state/i)).toBeInTheDocument();
@@ -198,7 +225,10 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-123" />);
     await screen.findByRole("button", { name: /apply/i });
 
-    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+    // uiux-fix F018 C258: first click arms the confirm step and must not write yet
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+    expect(applyRun).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /confirm apply \(1 file\)/i }));
 
     await waitFor(() => {
       expect(applyRun).toHaveBeenCalledWith("r-123");
@@ -343,9 +373,11 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-corrupt" />);
 
     await waitFor(() => {
-      const status = screen.getByRole("status", { name: /evidence unavailable/i });
-      expect(status).toHaveTextContent("Evidence error");
-      expect(status).toHaveAttribute("title", "manifest could not be read");
+      // uiux-fix F023 C379 — the message is rendered inline (visible to sighted
+      // keyboard users), not hidden in title/aria-label only (WCAG 1.4.13).
+      const status = screen.getByText(/evidence error/i);
+      expect(status).toHaveAttribute("role", "status");
+      expect(status).toHaveTextContent("Evidence error: manifest could not be read");
     });
   });
 

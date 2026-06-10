@@ -181,13 +181,16 @@ registerWindowRender("files", (cfg, ctx) => {
     <FilesWidget onActiveFileChange={onActiveFileChange} onRootChange={onRootChange} />
   );
 });
+// Audit C302 — the config defaults are empty now (the old prototype values leaked
+// into the header badge); treat "" like absent so the widgets fall back to their
+// own demo/display defaults instead of rendering an empty tab label / URL input.
 registerWindowRender("editor", (cfg) => {
   const file = str(cfg, "file");
-  return file !== undefined ? <EditorWidget file={file} /> : <EditorWidget />;
+  return file !== undefined && file !== "" ? <EditorWidget file={file} /> : <EditorWidget />;
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
-  return url !== undefined ? <BrowserWidget url={url} /> : <BrowserWidget />;
+  return url !== undefined && url !== "" ? <BrowserWidget url={url} /> : <BrowserWidget />;
 });
 registerWindowRender("terminal", (cfg) => {
   const cwd = str(cfg, "cwd");
@@ -197,9 +200,18 @@ registerWindowRender("terminal", (cfg) => {
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <TerminalWidget {...props} />;
 });
-registerWindowRender("review", (cfg) => {
+// uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
+// state now offers an inline run-ID form, persisted via updateCfg like files/figma.
+registerWindowRender("review", (cfg, ctx) => {
   const runId = str(cfg, "runId");
-  return runId !== undefined && runId !== "" ? <ReviewWidget runId={runId} /> : <ReviewWidget />;
+  const onRunIdSubmit = (nextRunId: string): void => {
+    ctx.updateCfg({ runId: nextRunId });
+  };
+  return runId !== undefined && runId !== "" ? (
+    <ReviewWidget runId={runId} onRunIdSubmit={onRunIdSubmit} />
+  ) : (
+    <ReviewWidget onRunIdSubmit={onRunIdSubmit} />
+  );
 });
 registerWindowRender("agents", (cfg, ctx) => (
   <AgentRunWidget
@@ -208,14 +220,9 @@ registerWindowRender("agents", (cfg, ctx) => (
     linkedFilePath={ctx.linkedFilePath}
   />
 ));
-registerWindowRender("integ", (cfg) => {
-  const provider = str(cfg, "provider");
-  return provider !== undefined ? (
-    <IntegrationsWidget provider={provider} />
-  ) : (
-    <IntegrationsWidget />
-  );
-});
+// uiux-fix F023 C054 — no real integrations exist yet; the widget renders an honest
+// static list, so the legacy `provider` cfg (fabricated "connected" state) is ignored.
+registerWindowRender("integ", () => <IntegrationsWidget />);
 // Epic #750 #756 — Figma Snapshot Workspace window. snapshotRunId is persisted into cfg by the
 // component after a successful build so the connected QI hub can read it via linkedFigmaSnapshotRunIds.
 registerWindowRender("figma", (cfg, ctx) => {

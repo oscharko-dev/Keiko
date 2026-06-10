@@ -18,6 +18,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
+// Shared user-facing copy for transport-level failures. The server is started
+// via `keiko ui` (the CLI has no `serve` subcommand) — keep the hint accurate
+// and free of markdown backticks (they would render literally).
+export const BACKEND_UNREACHABLE_MESSAGE =
+  "Unable to reach the local backend. Check that the Keiko server is running (keiko ui).";
+
 // ─── Wire shapes (subset of api-contract.md §3 and §4) ────────────────────────
 
 export interface ApiRelationship {
