@@ -4,6 +4,7 @@
 // apply-mode → test-pass-rate + verification-completeness scored, temp-dir cleanup, scorecard shape.
 
 import { describe, expect, it } from "vitest";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
 import { runEvaluationSuite } from "./runner.js";
 import {
   ALL_FIXTURES,
@@ -146,7 +147,7 @@ describe("live-mode evidence semantics", () => {
     const store = createInMemoryEvidenceStore();
     store.put("old-run", "{}");
     const scorecard = await runEvaluationSuite(
-      { mode: "live", fixtures: [fixture] },
+      { mode: "live", fixtures: [fixture], modelIdOverride: "configured-live-model" },
       {
         store,
         now: tickingClock(FIXED_NOW, 10),
@@ -165,6 +166,21 @@ describe("live-mode evidence semantics", () => {
     expect(manifest.usageTotals.requestCount).toBeGreaterThan(0);
     expect(manifest.usageTotals.promptTokens).toBeGreaterThan(0);
     expect(manifest.usageTotals.completionTokens).toBeGreaterThan(0);
+  });
+
+  it("fails early when live mode starts without a resolved model selection", async () => {
+    const fixture = must(fixtureByName("unit-tests/happy-path"));
+    await expect(
+      runEvaluationSuite(
+        { mode: "live", fixtures: [fixture] },
+        {
+          store: createInMemoryEvidenceStore(),
+          now: fixedNow,
+          idSource: fixedId("live-missing-model"),
+          surfaceParity: SURFACE_PARITY_DEPS,
+        },
+      ),
+    ).rejects.toThrow(ConfigInvalidError);
   });
 });
 

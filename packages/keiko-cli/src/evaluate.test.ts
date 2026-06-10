@@ -69,6 +69,53 @@ function modelResponse(content: string): NormalizedResponse {
   };
 }
 
+function writeGatewayConfig(
+  dir: string,
+  options: {
+    readonly modelId?: string | undefined;
+    readonly capabilities?: readonly Record<string, unknown>[] | undefined;
+  } = {},
+): string {
+  const path = join(dir, "gateway.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      providers: [
+        {
+          modelId: options.modelId ?? "configured-live-model",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "example-test-token-1234567890",
+          timeoutMs: 30000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: options.capabilities ?? [
+        {
+          id: options.modelId ?? "configured-live-model",
+          kind: "chat",
+          contextWindow: 64000,
+          maxOutputTokens: 4096,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "test",
+          preferredUseCases: ["Test"],
+          knownLimitations: [],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return path;
+}
+
 // ─── --help ───────────────────────────────────────────────────────────────────
 
 describe("--help", () => {
@@ -257,33 +304,171 @@ describe("--live fail-closed", () => {
 
   it("redacts exact Keiko API-key env literals from successful live JSON output", async () => {
     const secret = "non-pattern-secret-12345";
+    const dir = mkdtempSync(join(tmpdir(), "keiko-eval-live-"));
     const { io, captured } = makeIo();
-    const code = await runEvaluateCli(
-      ["--fixture", "bug-investigation/investigation-only", "--live", "--json"],
-      io,
-      { KEIKO_DEFAULT_API_KEY: secret },
-      {
-        runner: {
-          modelProviderFactory: (): ModelPort =>
-            createScriptedModelPort([
-              modelResponse(
-                [
-                  "## Root cause",
-                  `The configured key marker is ${secret}.`,
-                  "## Confidence",
-                  "low",
-                ].join("\n"),
-              ),
-            ]),
-          store: createInMemoryEvidenceStore(),
-          now: fixedNow,
-          idSource: fixedId,
+    try {
+      const configPath = writeGatewayConfig(dir);
+      const code = await runEvaluateCli(
+        ["--fixture", "bug-investigation/investigation-only", "--live", "--json", "--config", configPath],
+        io,
+        { KEIKO_DEFAULT_API_KEY: secret },
+        {
+          runner: {
+            modelProviderFactory: (): ModelPort =>
+              createScriptedModelPort([
+                modelResponse(
+                  [
+                    "## Root cause",
+                    `The configured key marker is ${secret}.`,
+                    "## Confidence",
+                    "low",
+                  ].join("\n"),
+                ),
+              ]),
+            store: createInMemoryEvidenceStore(),
+            now: fixedNow,
+            idSource: fixedId,
+          },
         },
-      },
-    );
-    expect(code).toBe(0);
-    expect(captured().out).not.toContain(secret);
-    expect(captured().out).toContain("[REDACTED]");
+      );
+      expect(code).toBe(0);
+      expect(captured().out).not.toContain(secret);
+      expect(captured().out).toContain("[REDACTED]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("selects the configured live model instead of the fixture's hidden eval-model", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-eval-live-"));
+    const seenModelIds: string[] = [];
+    const { io, captured } = makeIo();
+    try {
+      const configPath = writeGatewayConfig(dir, {
+        modelId: "configured-live-model",
+        capabilities: [
+          {
+            id: "configured-live-model",
+            kind: "chat",
+            contextWindow: 64000,
+            maxOutputTokens: 4096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: ["Test"],
+            knownLimitations: [],
+          },
+        ],
+      });
+      const code = await runEvaluateCli(
+        ["--fixture", "bug-investigation/investigation-only", "--live", "--json", "--config", configPath],
+        io,
+        {},
+        {
+          runner: {
+            modelProviderFactory: (_fixture, _mode, modelId): ModelPort => {
+              seenModelIds.push(modelId);
+              return createScriptedModelPort([modelResponse("## Root cause\nConfigured model.")]);
+            },
+            store: createInMemoryEvidenceStore(),
+            now: fixedNow,
+            idSource: fixedId,
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(seenModelIds).toEqual(["configured-live-model"]);
+      expect(captured().out).toContain('"modelId": "configured-live-model"');
+      expect(captured().out).not.toContain('"modelId": "eval-model"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails early when no configured workflow-capable chat model is available", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-eval-live-"));
+    const { io, captured } = makeIo();
+    try {
+      const configPath = writeGatewayConfig(dir, {
+        capabilities: [
+          {
+            id: "configured-live-model",
+            kind: "chat",
+            contextWindow: 64000,
+            maxOutputTokens: 4096,
+            toolCalling: true,
+            structuredOutput: false,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: ["Test"],
+            knownLimitations: [],
+          },
+        ],
+      });
+      const code = await runEvaluateCli(["--suite", "all", "--live", "--config", configPath], io);
+      expect(code).toBe(1);
+      expect(captured().err).toContain("no configured workflow-capable chat model is available");
+      expect(captured().out).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an explicit --model that is configured but not workflow-capable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-eval-live-"));
+    const { io, captured } = makeIo();
+    try {
+      const configPath = writeGatewayConfig(dir, {
+        modelId: "configured-live-model",
+        capabilities: [
+          {
+            id: "configured-live-model",
+            kind: "chat",
+            contextWindow: 64000,
+            maxOutputTokens: 4096,
+            toolCalling: true,
+            structuredOutput: false,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: ["Test"],
+            knownLimitations: [],
+          },
+        ],
+      });
+      const code = await runEvaluateCli(
+        [
+          "--suite",
+          "all",
+          "--live",
+          "--model",
+          "configured-live-model",
+          "--config",
+          configPath,
+        ],
+        io,
+      );
+      expect(code).toBe(1);
+      expect(captured().err).toContain("not workflow-capable");
+      expect(captured().out).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
