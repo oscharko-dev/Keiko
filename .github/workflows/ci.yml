@@ -165,6 +165,7 @@ jobs:
           npm run build
           npm run prepare:bin
           npm run build:ui
+          npm run prune:package-native-optionals
       - name: Verify package surface
         run: npm run check:package-surface
       - name: Smoke - keiko ui serves /api/health
