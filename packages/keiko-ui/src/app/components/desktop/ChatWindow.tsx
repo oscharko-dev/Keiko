@@ -35,7 +35,8 @@ import {
 import { Toggle } from "./widgets/shared/Toggle";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
-import { ApiError, updateChat } from "@/lib/api";
+import { updateChat } from "@/lib/api";
+import { formatUserError } from "./format-error";
 import {
   fetchCapsules,
   fetchCapsuleSets,
@@ -71,6 +72,16 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
+// uiux-fix F042 (C308) — ONE canonical composer placeholder (U+2026 ellipsis, the
+// codebase's majority style). The same field previously flickered between "..."
+// and "…" depending on whether the chat already had messages.
+const COMPOSER_PLACEHOLDER = "Ask Keiko about your code…";
+
+// uiux-fix F042 (C308/C322) — shared send tooltip: the mini composer said "Send",
+// the full composer "Send message", and the Enter-to-send / Shift+Enter-for-newline
+// behaviour was discoverable nowhere.
+const SEND_TITLE = "Send message — Enter to send, Shift+Enter for a new line";
+
 // Workspace-aware starter prompts for the empty state.
 function starterPrompts(activeProject: ProjectWithAvailability | undefined): readonly string[] {
   if (activeProject !== undefined) {
@@ -88,7 +99,12 @@ function starterPrompts(activeProject: ProjectWithAvailability | undefined): rea
 }
 
 function timeLabel(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const date = new Date(timestamp);
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // uiux-fix F041 (C176) — chats persist across days/weeks: a bare "14:32" from
+  // last week is indistinguishable from today's, so older messages carry a date.
+  if (date.toDateString() === new Date().toDateString()) return time;
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
 }
 
 // Issue #153 — system messages that carry a workflow runId are rendered inline as
@@ -117,11 +133,69 @@ function onComposerKeyDown(
   send: () => Promise<void>,
 ): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
   return (event) => {
+    // uiux-fix F041 (C206) — Enter during IME composition (Japanese, Chinese,
+    // Korean, …) confirms the composition; it must never submit the message.
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
     }
   };
+}
+
+// uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
+// lenticular 【n】, fullwidth ［n］ — mirroring citation-attacher's tolerance) are
+// stripped together with their leading whitespace so copied prose stays clean.
+const CITATION_MARKER_PATTERN = /\s*[[【［]\d+[\]】］]/g;
+
+export function copyableMessageText(content: string): string {
+  return content.replace(CITATION_MARKER_PATTERN, "");
+}
+
+// uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
+// responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
+// non-secure contexts, announced status (WCAG 4.1.3), width-stable label swap.
+function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
+  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const handleCopy = useCallback(() => {
+    if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
+      setStatus("Copy unavailable: the clipboard requires a secure (HTTPS) connection.");
+      return;
+    }
+    void navigator.clipboard.writeText(copyableMessageText(content)).then(
+      () => {
+        setCopied(true);
+        setStatus("Message copied");
+        setTimeout(() => {
+          setCopied(false);
+          setStatus("");
+        }, 1500);
+      },
+      () => {
+        /* ignore clipboard errors */
+      },
+    );
+  }, [content]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className="chat-msg-copy"
+        aria-label={copied ? "Copied" : "Copy message"}
+        title={copied ? "Copied!" : "Copy message"}
+        data-copied={copied ? "true" : "false"}
+        onClick={handleCopy}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <span role="status" className="sr-only">
+        {status}
+      </span>
+    </>
+  );
 }
 
 function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
@@ -146,7 +220,15 @@ function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
           // degrades this one bubble to plain text instead of crashing the view.
           <SafeMarkdownBoundary source={message.content} />
         )}
-        <div className="chat-msg-time">{timeLabel(message.timestamp)}</div>
+        {/* uiux-fix F041 (C176) — full date+time stays reachable via title.
+            uiux-fix F042 (C208) — footer row: timestamp left, assistant-only
+            copy action right (revealed on bubble hover / keyboard focus). */}
+        <div className="chat-msg-foot">
+          <div className="chat-msg-time" title={new Date(message.timestamp).toLocaleString()}>
+            {timeLabel(message.timestamp)}
+          </div>
+          {isUser ? null : <MessageCopyButton content={message.content} />}
+        </div>
       </div>
     </article>
   );
@@ -157,7 +239,10 @@ function TypingBubble(): ReactNode {
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
         <div className="chat-msg-role">Keiko</div>
-        <span className="chat-typing" aria-label="Keiko is responding">
+        {/* uiux-fix F042 (C319) — aria-label is prohibited on a generic span and
+            ignored by AT; role="img" makes the label exposed. The lifecycle
+            announcement itself comes from SendLifecycleStatus. */}
+        <span className="chat-typing" role="img" aria-label="Keiko is responding">
           <i />
           <i />
           <i />
@@ -227,8 +312,16 @@ function ComposerBar({
 
   return (
     <div className="cmp-bar">
-      {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button */}
-      <AttachButton model={selectedModelCapability} onFiles={onAttachFiles} />
+      {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
+          uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
+          sr-only hint does not suggest a model switch that cannot succeed. */}
+      <AttachButton
+        model={selectedModelCapability}
+        onFiles={onAttachFiles}
+        anyModelSupportsAttachments={models.some(
+          (m) => m.supportsImageInput || m.supportsDocumentInput,
+        )}
+      />
       <span className="spacer" />
       {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
       <label className="cmp-model mono" title={selectTitle}>
@@ -313,7 +406,7 @@ function ComposerBar({
                   ? "Connecting to your gateway"
                   : draftEmpty
                     ? "Type a message to send"
-                    : "Send message"
+                    : SEND_TITLE
           }
           aria-label="Send message"
         >
@@ -377,11 +470,20 @@ export function sendStatusLabel(status: SendStatus): string {
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
   const label = sendStatusLabel(status);
-  if (label.length === 0) return null;
+  // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
+  // and only its CONTENT changes: a role="status" region inserted into the DOM
+  // together with its first message is unreliably announced (VoiceOver/Safari,
+  // partly NVDA), so "Submitting your message…" could be lost. The empty region
+  // is collapsed via .cmp-send-status:empty in globals.css (not display:none —
+  // hidden live regions are dropped by some screen readers).
   return (
     <div role="status" aria-live="polite" data-send-status={status} className="cmp-send-status">
-      <span className="cmp-loading-dot" aria-hidden="true" />
-      {label}
+      {label.length === 0 ? null : (
+        <>
+          <span className="cmp-loading-dot" aria-hidden="true" />
+          {label}
+        </>
+      )}
     </div>
   );
 }
@@ -415,6 +517,18 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
   // so we gate on contextWindowTokens > 0 via the shared predicate. This also keeps
   // aria-describedby from dangling at a BudgetIndicator that renders nothing.
   const budgetExceeded = isBudgetExceeded(budget);
+
+  // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
+  // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
+  // collapses the textarea back to its rows={2} minimum. The mini composer
+  // (MiniChat) has its own textarea without this effect and stays height:100%.
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const ta = taRef.current;
+    if (ta === null) return;
+    ta.style.height = "auto";
+    ta.style.height = `${String(Math.min(ta.scrollHeight, 220))}px`;
+  }, [draft]);
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -453,13 +567,17 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
       <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
       <textarea
         className="cmp-input"
+        ref={taRef}
         rows={2}
         value={draft}
         aria-label="Chat message"
         placeholder={placeholder}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={onComposerKeyDown(sendMessage)}
-        disabled={loading || sending}
+        // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
+        // fully editable while a send is in flight so the next message can be
+        // pre-typed during streaming. Re-submit stays blocked by the isInFlight
+        // guard in useChatSession, and the primary button is "Cancel" meanwhile.
       />
       {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
       <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
@@ -504,8 +622,9 @@ function EmptyComposerState({ session, noEligibleModels }: EmptyComposerStatePro
           : "Pick a project from the sidebar to scope your workspace, or ask anything below."}
       </p>
       {/* Starter prompts are only useful when a model is available */}
+      {/* uiux-fix F042 (C319) — without a role the group's aria-label is ignored by AT. */}
       {!noEligibleModels ? (
-        <div className="chatw-empty-prompts" aria-label="Starter prompts">
+        <div className="chatw-empty-prompts" role="group" aria-label="Starter prompts">
           {prompts.map((prompt) => (
             <button type="button" key={prompt} className="suggest" onClick={() => setDraft(prompt)}>
               <Icons.spark size={12} style={{ color: "var(--accent)" }} />
@@ -555,9 +674,7 @@ function ChatHero({
         session={session}
         ready={ready}
         placeholder={
-          loading
-            ? "Loading local workspace..."
-            : "Describe a task, paste a link, or ask anything..."
+          loading ? "Loading local workspace…" : "Describe a task, paste a link, or ask anything…"
         }
       />
       <div className="cmp-context">
@@ -606,10 +723,11 @@ function MiniChat({
           className="cmp-input cmp-input-mini"
           value={draft}
           aria-label="Chat message"
-          placeholder={loading ? "Loading..." : "Ask Keiko..."}
+          placeholder={loading ? "Loading…" : "Ask Keiko…"}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onComposerKeyDown(sendMessage)}
-          disabled={loading || sending}
+          // uiux-fix F041 (C205) — see ComposerCore: editable while sending so the
+          // next message can be pre-typed; re-submit is blocked by isInFlight.
         />
         {/* ST-F1 — match ComposerBar: while a send is in flight the primary
             action flips to "Cancel response" (#152 AC#3) so the mini composer
@@ -632,7 +750,7 @@ function MiniChat({
             data-on={ready}
             aria-disabled={!ready}
             aria-label="Send message"
-            title="Send"
+            title={SEND_TITLE}
           >
             <Icons.arrowUp size={16} />
           </button>
@@ -668,9 +786,8 @@ function groundedModeValue(chat: Chat): string {
 }
 
 function formatScopeUpdateError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "Unable to update knowledge scope.";
+  // uiux-fix F041 (C171) — message first, machine code as trailing detail.
+  return formatUserError(error, "Unable to update knowledge scope.");
 }
 
 interface ScopeOption {
@@ -695,7 +812,9 @@ function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): read
     ...options,
     {
       value: selectedValue,
-      label: `Knowledge capsule: ${capsuleId} (not ready)`,
+      // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
+      // suffix; two different words previously named the same state.
+      label: `Knowledge capsule: ${capsuleId} (unavailable)`,
     },
   ];
 }
@@ -725,17 +844,20 @@ function capsuleSetOptions(
   ];
 }
 
-function LocalKnowledgeScopeControl({
-  chat,
-  onChatChanged,
-}: {
-  readonly chat: Chat;
-  readonly onChatChanged: (chat: Chat) => void;
-}): ReactNode {
+// uiux-fix F041 (C172) — the capsule/set catalog is loaded ONCE at the scope-
+// header level and shared: the grounding select needs the option lists and the
+// connector pills need the display names (previously the pills always fell back
+// to raw capsule ids because their labels map was never populated).
+interface KnowledgeCatalog {
+  readonly capsules: readonly CapsuleListEntry[];
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly loadError: string | null;
+}
+
+function useKnowledgeCatalog(): KnowledgeCatalog {
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -756,10 +878,10 @@ function LocalKnowledgeScopeControl({
           setCapsuleSets(capsuleSetResult.value.capsuleSets);
         } else {
           setCapsuleSets([]);
-          setError(formatScopeUpdateError(capsuleSetResult.reason));
+          setLoadError(formatScopeUpdateError(capsuleSetResult.reason));
         }
       } catch (caught) {
-        if (!cancelled) setError(formatScopeUpdateError(caught));
+        if (!cancelled) setLoadError(formatScopeUpdateError(caught));
       }
     }
     void load();
@@ -767,6 +889,35 @@ function LocalKnowledgeScopeControl({
       cancelled = true;
     };
   }, []);
+
+  return { capsules, capsuleSets, loadError };
+}
+
+// uiux-fix F041 (C172) — scope key (`capsule:<id>` / `set:<id>`, matching
+// ConnectorScopePill.scopeKey) → full pill label with display name.
+function connectorLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const capsule of catalog.capsules) {
+    labels.set(`capsule:${capsule.id}`, `Capsule: ${capsule.displayName}`);
+  }
+  for (const capsuleSet of catalog.capsuleSets) {
+    labels.set(`set:${capsuleSet.id}`, `Capsule set: ${capsuleSet.displayName}`);
+  }
+  return labels;
+}
+
+function LocalKnowledgeScopeControl({
+  chat,
+  onChatChanged,
+  catalog,
+}: {
+  readonly chat: Chat;
+  readonly onChatChanged: (chat: Chat) => void;
+  readonly catalog: KnowledgeCatalog;
+}): ReactNode {
+  const { capsules, capsuleSets, loadError } = catalog;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -824,20 +975,15 @@ function LocalKnowledgeScopeControl({
   const value = groundedModeValue(chat);
   const capsuleChoices = capsuleOptions(chat, capsules);
   const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets);
+  // C172 — a catalog load failure surfaces here too; an update error wins.
+  const displayedError = error ?? loadError;
+  // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
+  // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
-    <label
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        flexWrap: "wrap",
-        fontSize: 12,
-      }}
-    >
-      <span className="mono" style={{ color: "var(--fg-dim)" }}>
-        Grounding
-      </span>
+    <label className="scope-grounding">
+      <span className="mono">Grounding</span>
       <select
+        className="scope-grounding-select"
         value={value}
         disabled={busy}
         aria-label="Grounding mode"
@@ -860,9 +1006,9 @@ function LocalKnowledgeScopeControl({
           </option>
         ))}
       </select>
-      {error !== null ? (
+      {displayedError !== null ? (
         <span role="alert" className="scope-connect-error">
-          {error}
+          {displayedError}
         </span>
       ) : null}
     </label>
@@ -881,11 +1027,13 @@ function ChatScopeHeader({
   readonly onChatChanged: (chat: Chat) => void;
   readonly lastGroundedBudgetStatus: LastGroundedBudgetStatus | undefined;
 }): ReactNode {
+  // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
+  // names and the grounding select's option lists.
+  const catalog = useKnowledgeCatalog();
+  // uiux-fix F041 (C178/C179) — layout moved from inline styles to the
+  // .chat-scope-header rule in globals.css (16px inset, themeable).
   return (
-    <div
-      className="chat-scope-header"
-      style={{ padding: "6px 12px", display: "flex", gap: 12, flexWrap: "wrap" }}
-    >
+    <div className="chat-scope-header">
       {/* Folder pills: one per connected folder/file source (1+N, #532). Self-guards to null. */}
       <ConnectedScopePill
         chat={chat}
@@ -893,8 +1041,12 @@ function ChatScopeHeader({
         lastGroundedBudgetStatus={lastGroundedBudgetStatus}
       />
       {/* Connector pills: one per Local Knowledge connector source (#189 Slice 3 M4). Mixed N. */}
-      <ConnectorScopePill chat={chat} onDisconnect={onChatChanged} />
-      <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} />
+      <ConnectorScopePill
+        chat={chat}
+        onDisconnect={onChatChanged}
+        labels={connectorLabels(catalog)}
+      />
+      <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} catalog={catalog} />
     </div>
   );
 }
@@ -902,7 +1054,9 @@ function ChatScopeHeader({
 // Issue #185 — surface the latest grounded answer's citations + uncertainty + omitted-count
 // directly under the assistant bubble it explains. Hidden when there is no grounded turn yet
 // or when the active chat carries no connectedScope binding (regular gateway chats never
-// produce one). Rendered as a single live region so screen-reader users hear it on update.
+// produce one). Rendered inside the role="log" conversation container, which already announces
+// additions politely — no own aria-live (uiux-fix F040 C167: nested live regions caused double
+// announcements of the same update).
 function GroundedAnswerPanel({
   chat,
   answer,
@@ -928,7 +1082,7 @@ function GroundedAnswerPanel({
   if (!hasFolderScope && !hasConnectorScope) return null;
   if (answer === undefined && !busy) return null;
   return (
-    <div className="chatw-grounded" aria-live="polite">
+    <div className="chatw-grounded">
       <GroundedAnswer answer={answer} busy={busy} />
       <LaunchGroundedWorkflowButton
         answer={answer}
@@ -1113,15 +1267,19 @@ function MemoryPanel({
     <section className="chat-memory-panel" aria-label="Conversation memory">
       <div className="chat-memory-panel-head">
         <div className="chat-memory-toggle">
+          {/* uiux-fix F042 (C323) — the panel mixed generic "memory" with the
+              product name: feature = MemoriaViva, items = memories. The budget
+              unit (tokens) was previously only discoverable from the disclosure
+              line after the next send. */}
           <Toggle
             on={memoryEnabled}
             onChange={setMemoryEnabled}
-            label="Enable memory for the next request"
+            label="Enable MemoriaViva for the next request"
           />
           <span>MemoriaViva {memoryEnabled ? "on" : "off"}</span>
         </div>
         <label className="chat-memory-budget">
-          <span>Budget</span>
+          <span>Budget (tokens)</span>
           <input
             type="number"
             min={0}
@@ -1139,7 +1297,7 @@ function MemoryPanel({
           aria-controls={disclosureId}
           onClick={() => setOpen((current) => !current)}
         >
-          {memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memory included"}
+          {memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included"}
         </button>
       </div>
       {open ? (
@@ -1222,10 +1380,20 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           : undefined,
   );
 
+  // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
+  // streaming content growth (lastContent dependency), but only while the
+  // reader is near the bottom; never yank someone who scrolled up into the
+  // history. Starting an own send (sending false→true) always jumps down.
+  const stickRef = useRef(true);
+  const prevSendingRef = useRef(false);
+  const lastVisible = visible.length > 0 ? visible[visible.length - 1] : undefined;
+  const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   useEffect(() => {
+    if (sending && !prevSendingRef.current) stickRef.current = true;
+    prevSendingRef.current = sending;
     const el = scrollRef.current;
-    if (el !== null) el.scrollTop = el.scrollHeight;
-  }, [visible.length, sending]);
+    if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [visible.length, sending, lastContent]);
 
   if (mini) {
     return (
@@ -1240,6 +1408,14 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
         ) : null}
         {noEligibleModels ? <NoModelAlert /> : null}
         <MiniChat session={session} ready={ready} />
+        {/* uiux-fix F009 C079 — the mini branch previously rendered no error
+            path at all: a failed send removed the optimistic message and the
+            user saw nothing. Same role="alert" block as the full composer. */}
+        {error !== undefined ? (
+          <div role="alert" className="cmp-err">
+            {error}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1277,7 +1453,23 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           <LoadingStatus />
         </div>
       ) : null}
-      <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
+      {/* uiux-fix F009 C078 — the log is a scrollable region with (often) no
+          focusable children: tabIndex makes it keyboard-scrollable (axe
+          scrollable-region-focusable); role="log" keeps the implicit polite
+          live-region semantics the previous aria-live="polite" provided.
+          C090 — onScroll tracks whether the reader is near the bottom. */}
+      <div
+        className="chatw-scroll"
+        ref={scrollRef}
+        role="log"
+        aria-label="Conversation"
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
+        tabIndex={0}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+        }}
+      >
         {visible.length === 0 ? (
           activeChat !== undefined ? (
             <EmptyComposerState session={session} noEligibleModels={noEligibleModels} />
@@ -1327,11 +1519,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
               void sendMessage();
             }}
           >
-            <ComposerCore
-              session={session}
-              ready={ready}
-              placeholder="Ask Keiko about your code..."
-            />
+            <ComposerCore session={session} ready={ready} placeholder={COMPOSER_PLACEHOLDER} />
             {error !== undefined ? (
               <div role="alert" className="cmp-err">
                 {error}
@@ -1355,7 +1543,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             <ComposerCore
               session={session}
               ready={ready}
-              placeholder={loading ? "Connecting to your gateway…" : "Ask Keiko about your code…"}
+              placeholder={loading ? "Connecting to your gateway…" : COMPOSER_PLACEHOLDER}
             />
             {error !== undefined ? (
               <div role="alert" className="cmp-err">

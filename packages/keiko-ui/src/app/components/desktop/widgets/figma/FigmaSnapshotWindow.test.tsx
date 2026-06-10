@@ -21,6 +21,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
+import { ApiError } from "@/lib/api";
 import type { FigmaSnapshotWindowProps } from "./FigmaSnapshotWindow";
 import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
@@ -103,8 +104,11 @@ function renderWindow(props: Partial<FigmaSnapshotWindowProps> = {}) {
   return { container, updateCfg };
 }
 
-// Submit the Snapshot form with a valid board link.
+// Submit the Snapshot form with a valid board link. The read-only acknowledgement is a
+// client-side precondition (mirrors the server's FIGMA_CONSENT_REQUIRED gate), so the
+// happy path checks it first.
 async function typeAndSubmit(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("checkbox", { name: /read-only and least-privilege/iu }));
   await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
   await user.click(screen.getByRole("button", { name: /snapshot/iu }));
 }
@@ -168,7 +172,7 @@ describe("FigmaSnapshotWindow", () => {
       await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
       // Board link + the consent/re-snapshot options object (#760/#759) — never a token.
       expect(trigger).toHaveBeenCalledWith(VALID_LINK, {
-        acknowledgeReadOnly: false,
+        acknowledgeReadOnly: true,
         isResnapshot: false,
       });
       // Security: no argument carries a token-like value.
@@ -189,7 +193,12 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await typeAndSubmit(user);
       expect(screen.getByText(/building snapshot/iu)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /building/iu })).toBeDisabled();
+      // aria-disabled (not native disabled) so the just-clicked button keeps focus;
+      // re-entry is guarded in the submit handler.
+      expect(screen.getByRole("button", { name: /building/iu })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
       resolveSnapshot(MOCK_SUMMARY);
       await waitFor(() =>
         expect(screen.queryByText(/building snapshot/iu)).not.toBeInTheDocument(),
@@ -281,6 +290,25 @@ describe("FigmaSnapshotWindow", () => {
       await user.click(screen.getByRole("button", { name: /re-snapshot this board/iu }));
       await waitFor(() => expect(trigger).toHaveBeenCalledTimes(2));
     });
+
+    it("re-snapshots the captured board even when the input holds an invalid value (F045 C249)", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      const input = screen.getByLabelText(/board link/iu);
+      await user.clear(input);
+      await user.type(input, "not-a-figma-link");
+      await user.click(screen.getByRole("button", { name: /re-snapshot this board/iu }));
+      await waitFor(() => expect(trigger).toHaveBeenCalledTimes(2));
+      // "this board" = the captured board: the link is rebuilt from the stored summary,
+      // never taken from the (here invalid) input — that path is reserved for Submit,
+      // which is gated on isValidFigmaLink.
+      expect(trigger.mock.calls[1]?.[0]).toBe(
+        "https://www.figma.com/design/AbCdEfGhIjKl/board?node-id=1:2",
+      );
+    });
   });
 
   describe("load stored snapshot", () => {
@@ -348,17 +376,217 @@ describe("FigmaSnapshotWindow", () => {
   });
 
   describe("read-only-scope consent (#760)", () => {
-    it("passes acknowledgeReadOnly:true to triggerImpl when the consent box is checked", async () => {
+    it("blocks submit without consent via an inline message — no server roundtrip (C108)", async () => {
       const trigger = resolvingTrigger();
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
+      await user.click(screen.getByRole("button", { name: /snapshot/iu }));
+      expect(trigger).not.toHaveBeenCalled();
+      expect(screen.getByText(/read-only acknowledgement/iu)).toBeInTheDocument();
+    });
+
+    it("clears the consent message once the box is checked", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
+      await user.click(screen.getByRole("button", { name: /snapshot/iu }));
+      expect(screen.getByText(/read-only acknowledgement/iu)).toBeInTheDocument();
       await user.click(screen.getByRole("checkbox", { name: /read-only and least-privilege/iu }));
-      await typeAndSubmit(user);
-      await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
-      expect(trigger).toHaveBeenCalledWith(VALID_LINK, {
-        acknowledgeReadOnly: true,
-        isResnapshot: false,
+      expect(screen.queryByText(/read-only acknowledgement/iu)).not.toBeInTheDocument();
+    });
+
+    it("marks the acknowledgement as required before the first snapshot", () => {
+      renderWindow();
+      expect(screen.getByText(/required before the first snapshot/iu)).toBeInTheDocument();
+    });
+
+    it("focuses and visually marks the checkbox when consent blocks a snapshot (F038 C210)", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
+      await user.click(screen.getByRole("button", { name: /snapshot/iu }));
+      // The error must point AT the control: aria-invalid drives the danger outline and
+      // focus lands on the checkbox so the fix is one keypress away.
+      const checkbox = screen.getByRole("checkbox", { name: /read-only and least-privilege/iu });
+      expect(checkbox).toHaveAttribute("aria-invalid", "true");
+      expect(checkbox).toHaveFocus();
+      // Ticking the box answers the error — the invalid marking clears with the message.
+      await user.click(checkbox);
+      expect(checkbox).not.toHaveAttribute("aria-invalid");
+    });
+
+    it("points the server's 428 FIGMA_CONSENT_REQUIRED at the checkbox (F038 C210)", async () => {
+      const err = new ApiError(
+        "FIGMA_CONSENT_REQUIRED",
+        "Acknowledge the read-only, least-privilege Figma scope before the first snapshot for this board.",
+        428,
+      );
+      const trigger = makeTrigger(async (): Promise<FigmaSnapshotSummary> => {
+        throw err;
       });
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      // The server message names the policy but not the control — the UI appends an
+      // instruction that references the checkbox and highlights + focuses it.
+      await waitFor(() =>
+        expect(
+          screen.getByText(/tick the acknowledgement checkbox below, then snapshot again/iu),
+        ).toBeInTheDocument(),
+      );
+      const checkbox = screen.getByRole("checkbox", { name: /read-only and least-privilege/iu });
+      expect(checkbox).toHaveAttribute("aria-invalid", "true");
+      expect(checkbox).toHaveFocus();
+    });
+  });
+
+  describe("link validation feedback (C093/C246)", () => {
+    it("explains a non-Figma URL inline", async () => {
+      renderWindow();
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/board link/iu), "https://example.com/nope");
+      expect(screen.getByText(/doesn't look like a figma board link/iu)).toBeInTheDocument();
+    });
+
+    it("explains a Figma URL without node-id inline (how to get one)", async () => {
+      renderWindow();
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/board link/iu), INVALID_LINK);
+      expect(
+        screen.getByText(/add a node-id by selecting a frame or section/iu),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("error handling polish (C209/C211)", () => {
+    it("shows ApiError messages without the raw error-code prefix", async () => {
+      const err = new ApiError(
+        "FIGMA_CONSENT_REQUIRED",
+        "Acknowledge the read-only, least-privilege Figma scope before the first snapshot for this board.",
+        428,
+      );
+      const trigger = makeTrigger(async (_link): Promise<FigmaSnapshotSummary> => {
+        throw err;
+      });
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(screen.getByText(/acknowledge the read-only/iu)).toBeInTheDocument(),
+      );
+      expect(screen.queryByText(/FIGMA_CONSENT_REQUIRED/u)).not.toBeInTheDocument();
+    });
+
+    it("clears a stale error as soon as the board link is edited", async () => {
+      const trigger = rejectingTrigger("FIGMA_AUTH_FAILED", "Token invalid or missing");
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(screen.getByText(/token invalid or missing/iu)).toBeInTheDocument(),
+      );
+      await user.type(screen.getByLabelText(/board link/iu), "x");
+      expect(screen.queryByText(/token invalid or missing/iu)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("first-run empty state (C213)", () => {
+    it("renders 3-step guidance when nothing is captured or stored", () => {
+      renderWindow();
+      expect(
+        screen.getByText(/select the frame or section you want to capture/iu),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/connect this window to quality intelligence/iu)).toBeInTheDocument();
+    });
+
+    it("hides the guidance when a stored snapshot is available", () => {
+      renderWindow({ snapshotRunId: "fs-stored-123" });
+      expect(
+        screen.queryByText(/select the frame or section you want to capture/iu),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("status announcements (C151/C245)", () => {
+    it("announces 'Loading stored snapshot' (not 'fetching from Figma') and keeps the button mounted", async () => {
+      let resolveLoad!: (s: FigmaSnapshotSummary) => void;
+      const loadSpy = vi.fn(
+        (_runId: string) =>
+          new Promise<FigmaSnapshotSummary>((res) => {
+            resolveLoad = res;
+          }),
+      );
+      renderWindow({ snapshotRunId: "fs-stored-123", loadImpl: loadSpy as unknown as LoadFn });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: /load snapshot/iu }));
+      expect(screen.getByText(/loading stored snapshot/iu)).toBeInTheDocument();
+      expect(screen.queryByText(/fetching screens from figma/iu)).not.toBeInTheDocument();
+      // C247: the activated button stays mounted (aria-disabled), so focus is not lost.
+      expect(screen.getByRole("button", { name: /loading/iu })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      resolveLoad(MOCK_SUMMARY);
+      await waitForDone();
+    });
+
+    it("announces snapshot completion in the live status region", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      expect(screen.getByText(/snapshot complete/iu)).toBeInTheDocument();
+    });
+  });
+
+  describe("snapshot metadata + microcopy (F045)", () => {
+    it("shows when the snapshot was captured (C250)", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      // formatDate output is locale-dependent — assert the label, not the rendering.
+      expect(screen.getByText(/^captured /iu)).toBeInTheDocument();
+    });
+
+    it("formats screen image sizes with the app-wide KB convention (C313)", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      // makeScreen(n) carries 1024*n bytes — lib/format formatBytes, not ad-hoc "KiB".
+      expect(screen.getByText("1.0 KB")).toBeInTheDocument();
+      expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+      expect(screen.queryByText(/KiB/u)).not.toBeInTheDocument();
+    });
+
+    it("exposes the full screen name via title on the ellipsised heading (C252)", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      expect(screen.getByRole("heading", { name: "Screen 1" })).toHaveAttribute(
+        "title",
+        "Screen 1",
+      );
+    });
+
+    it("announces errors via the polite status region without a nested alert (C375)", async () => {
+      const trigger = rejectingTrigger("FIGMA_AUTH_FAILED", "Token invalid or missing");
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      const msg = await screen.findByText(/token invalid or missing/iu);
+      // The live region (role="status", aria-atomic) announces its content itself — a
+      // nested role="alert" caused double/competing announcements (F045 C375).
+      expect(msg).not.toHaveAttribute("role");
     });
   });
 

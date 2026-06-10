@@ -4,10 +4,11 @@
 //   3. $KEIKO_STATE_DIR/memory/                 (shared keiko local-state convention)
 //   4. homedir()/.keiko/memory/                  (fallback)
 //
-// Every configured path is forced to be absolute, outside the current working directory, not a
-// symlink, and not under a symlinked ancestor. These guards prevent a stray relative path from
-// silently storing a customer's enterprise memory inside their project tree (where it would be
-// committed by accident) or being aimed at a symlink that points back into a sensitive location.
+// Every configured path is forced to be absolute, outside the current working directory except for
+// the gitignored .keiko/ runtime root, not a symlink, and not under a symlinked ancestor. These
+// guards prevent a stray relative path from silently storing a customer's enterprise memory inside
+// their project tree (where it would be committed by accident) or being aimed at a symlink that
+// points back into a sensitive location.
 
 import { homedir } from "node:os";
 import { existsSync, lstatSync } from "node:fs";
@@ -26,6 +27,12 @@ function isInsideCwd(candidate: string): boolean {
   const cwd = resolve(process.cwd());
   const r = resolve(candidate);
   return r === cwd || r.startsWith(`${cwd}${sep}`);
+}
+
+function isInsideRuntimeStateRoot(candidate: string): boolean {
+  const runtimeRoot = resolve(process.cwd(), DEFAULT_STATE_DIR);
+  const r = resolve(candidate);
+  return r === runtimeRoot || r.startsWith(`${runtimeRoot}${sep}`);
 }
 
 function hasSymlinkAncestor(path: string): boolean {
@@ -52,7 +59,7 @@ function guard(path: string, label: string): string {
     throw invalidPath(`${label} must be absolute.`);
   }
   const normalized = normalize(path);
-  if (isInsideCwd(normalized)) {
+  if (isInsideCwd(normalized) && !isInsideRuntimeStateRoot(normalized)) {
     throw invalidPath(`${label} must not be inside the current workspace.`);
   }
   if (existsSync(normalized) && lstatSync(normalized).isSymbolicLink()) {
@@ -77,7 +84,10 @@ export function resolveMemoryDir(
   }
   const stateDir = env.KEIKO_STATE_DIR;
   if (stateDir !== undefined && stateDir.length > 0) {
-    return guard(join(guard(stateDir, "KEIKO_STATE_DIR"), MEMORY_DIR_NAME), "KEIKO_STATE_DIR/memory");
+    return guard(
+      join(guard(stateDir, "KEIKO_STATE_DIR"), MEMORY_DIR_NAME),
+      "KEIKO_STATE_DIR/memory",
+    );
   }
   return join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
 }

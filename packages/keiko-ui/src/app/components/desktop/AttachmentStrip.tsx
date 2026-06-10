@@ -11,7 +11,7 @@
 // Server-side enforcement is deferred to issue #149.
 // NEVER store or display File.path / webkitRelativePath (AC #4).
 
-import { useCallback, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Icons } from "./Icons";
 import type {
   AttachmentRejectionReason,
@@ -79,13 +79,14 @@ function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNod
   return (
     <div className="attach-chip" role="listitem">
       {attachment.kind === "image" && attachment.previewDataUrl !== undefined ? (
-        // Thumbnail: capped at 40×40 via CSS; alt text = filename (AC #4 — no path).
+        // Thumbnail: capped at 40×40 via CSS. Decorative — the filename renders as
+        // adjacent text, so alt="" (uiux-fix F040 C320: the previous alt={name} +
+        // aria-hidden="true" combination was contradictory ARIA; AC #4 — no path).
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={attachment.previewDataUrl}
-          alt={attachment.name}
+          alt=""
           className="attach-chip-thumb"
-          aria-hidden="true"
           width={40}
           height={40}
         />
@@ -138,6 +139,42 @@ interface AttachDropZoneProps {
 export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): ReactNode {
   const [dragOver, setDragOver] = useState(false);
 
+  // uiux-fix F040 C207 — the zone is revealed only while a file drag is in
+  // progress somewhere in the window; previously it rendered as a permanently
+  // visible empty dashed band. Window-level dragenter/dragleave with a depth
+  // counter (entering a child fires dragleave on its parent) detects the drag;
+  // drop or dragend anywhere resets it.
+  const [dragActive, setDragActive] = useState(false);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let depth = 0;
+    const hasFiles = (event: globalThis.DragEvent): boolean =>
+      Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const handleWindowDragEnter = (event: globalThis.DragEvent): void => {
+      if (!hasFiles(event)) return;
+      depth += 1;
+      setDragActive(true);
+    };
+    const handleWindowDragLeave = (): void => {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragActive(false);
+    };
+    const reset = (): void => {
+      depth = 0;
+      setDragActive(false);
+    };
+    window.addEventListener("dragenter", handleWindowDragEnter);
+    window.addEventListener("dragleave", handleWindowDragLeave);
+    window.addEventListener("drop", reset);
+    window.addEventListener("dragend", reset);
+    return () => {
+      window.removeEventListener("dragenter", handleWindowDragEnter);
+      window.removeEventListener("dragleave", handleWindowDragLeave);
+      window.removeEventListener("drop", reset);
+      window.removeEventListener("dragend", reset);
+    };
+  }, [enabled]);
+
   const handleDragOver = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
       if (!enabled) return;
@@ -162,20 +199,26 @@ export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): React
     [enabled, onFiles],
   );
 
+  // uiux-fix F040 C207 — no permanent "Attachments not supported" band: the
+  // disabled state is already communicated by the attach button's tooltip and
+  // its sr-only hint, so the zone simply does not render.
+  if (!enabled) return null;
+
   return (
     <div
       className="attach-drop-zone"
-      aria-label={enabled ? "Drop files here to attach" : "Attachments not supported by this model"}
       data-dragover={dragOver ? "true" : undefined}
-      data-disabled={!enabled ? "true" : undefined}
+      data-active={dragActive ? "true" : "false"}
+      // uiux-fix F040 C320 — decorative drag target: the previous
+      // role="presentation" + aria-label combination was prohibited ARIA, and
+      // drag-and-drop has no screen-reader affordance anyway — the accessible
+      // attach path is the AttachButton file picker.
+      aria-hidden="true"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      role="presentation"
     >
-      {!enabled ? (
-        <span className="attach-drop-hint">Attachments not supported by this model</span>
-      ) : null}
+      <span className="attach-drop-hint">Drop files here to attach</span>
     </div>
   );
 }
@@ -188,9 +231,20 @@ const ATTACH_DISABLED_HINT_ID = "cmp-attach-disabled-hint";
 interface AttachButtonProps {
   readonly model: ModelCapability | undefined;
   readonly onFiles: (files: readonly File[]) => void;
+  /**
+   * uiux-fix F040 C207 — whether ANY configured model supports attachments.
+   * When false, the sr-only hint must not suggest switching models (there is
+   * no model the user could switch to). Defaults to true for callers that do
+   * not know the full model list.
+   */
+  readonly anyModelSupportsAttachments?: boolean;
 }
 
-export function AttachButton({ model, onFiles }: AttachButtonProps): ReactNode {
+export function AttachButton({
+  model,
+  onFiles,
+  anyModelSupportsAttachments = true,
+}: AttachButtonProps): ReactNode {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const supportsAny =
@@ -216,8 +270,9 @@ export function AttachButton({ model, onFiles }: AttachButtonProps): ReactNode {
       {/* Visually-hidden hint so screen readers discover why the button is disabled */}
       {!supportsAny ? (
         <span id={ATTACH_DISABLED_HINT_ID} className="sr-only">
-          The selected model does not support image or document input. Choose a different model to
-          attach files.
+          {anyModelSupportsAttachments
+            ? "The selected model does not support image or document input. Choose a different model to attach files."
+            : "The selected model does not support image or document input. No configured model currently supports attachments."}
         </span>
       ) : null}
       {/* Hidden file input — triggered imperatively by the button */}
@@ -266,8 +321,10 @@ export function AttachRejectionAlert({ reason, mimeType }: AttachRejectionAlertP
 //
 // After a send that included attached documents, discloses which documents contributed
 // extracted context and whether any was truncated to fit the bounded context budget. Only the
-// basename is shown — never a path (AC #4 of #147). role="status" announces politely so it does
-// not interrupt the assistant reply that lands at the same time.
+// basename is shown — never a path (AC #4 of #147). Rendered inside the role="log" conversation
+// container, which already announces additions politely — a nested role="status" live region
+// here would double-announce the same information (uiux-fix F040 C167), so this is a plain
+// labelled note.
 
 interface SentDocumentsNoteProps {
   readonly documents: readonly SentDocumentDisclosure[];
@@ -277,7 +334,7 @@ export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactN
   if (documents.length === 0) return null;
   const anyTruncated = documents.some((doc) => doc.truncated);
   return (
-    <div role="status" className="sent-docs-note" aria-label="Documents included as context">
+    <div role="note" className="sent-docs-note" aria-label="Documents included as context">
       <span className="sent-docs-note-label">
         {documents.length === 1
           ? "Document included as context:"

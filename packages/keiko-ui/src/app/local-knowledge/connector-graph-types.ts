@@ -16,6 +16,10 @@ export type { CapsuleListEntry, CapsulesResponse, CapsuleActionResponse };
 
 export type LoadStatus = "loading" | "ready" | "error";
 
+// Which row action is in flight — lets the row button show "Indexing…" /
+// "Cancelling…" / "Disconnecting…" like the detail page (uiux-fix F048, C233).
+export type RowActionKind = "index" | "cancel" | "disconnect";
+
 export interface ConnectorGraphProps {
   readonly fetchCapsulesImpl?: typeof fetchCapsules;
   readonly createCapsuleImpl?: typeof createCapsule;
@@ -29,10 +33,13 @@ export interface ConnectorGraphState {
   readonly loadStatus: LoadStatus;
   readonly loadError: string | null;
   readonly actionBusy: KnowledgeCapsuleId | null;
+  readonly actionKind: RowActionKind | null;
   readonly actionError: string | null;
   readonly creating: boolean;
   readonly createError: string | null;
   readonly reload: () => void;
+  readonly clearCreateError: () => void;
+  readonly clearActionError: () => void;
   readonly handleStartIndexing: (id: KnowledgeCapsuleId) => void;
   readonly handleCancelIndexing: (id: KnowledgeCapsuleId) => void;
   readonly handleDisconnect: (id: KnowledgeCapsuleId) => void;

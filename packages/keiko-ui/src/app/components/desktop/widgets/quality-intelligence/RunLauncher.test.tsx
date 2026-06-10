@@ -9,7 +9,8 @@
 //   - startImpl called with correct request shape for workspace source.
 //   - Run lifecycle: button shows "Cancel" during run; progress region visible.
 //   - Cancel: AbortSignal becomes aborted when Cancel is clicked.
-//   - onRunCompleted: called with the accepted runId after run finishes.
+//   - onRunCompleted: called with the accepted runId and recheckable source handles after run
+//     finishes.
 //   - Error path: startImpl rejection surfaces in qi-launch-error.
 //
 // Design note: startImpl is typed as the real function but replaced with a
@@ -153,10 +154,16 @@ describe("RunLauncher — initial render", () => {
     expect(screen.getByRole("spinbutton", { name: /seed \(optional\)/i })).toBeInTheDocument();
   });
 
-  it("renders a disabled 'Generate test cases' button when requirements are empty", () => {
+  it("renders a blocked 'Generate test cases' button when requirements are empty", () => {
     render(<RunLauncher />);
     const btn = screen.getByRole("button", { name: /generate test cases/i });
-    expect(btn).toBeDisabled();
+    // aria-disabled (NOT native disabled) keeps the button focusable so keyboard/AT users can
+    // reach it and hear the reason via aria-describedby (uiux F004, mirrors GovernedActionButton).
+    expect(btn).toHaveAttribute("aria-disabled", "true");
+    expect(btn).not.toBeDisabled();
+    expect(btn).toHaveAccessibleDescription(
+      "Add requirements text, a folder path, or connect a source to generate.",
+    );
   });
 });
 
@@ -197,10 +204,10 @@ describe("RunLauncher — Generate button enable/disable", () => {
     render(<RunLauncher />);
 
     const btn = screen.getByRole("button", { name: /generate test cases/i });
-    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("aria-disabled", "true");
 
     await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Login must work");
-    expect(btn).not.toBeDisabled();
+    expect(btn).not.toHaveAttribute("aria-disabled");
   });
 
   it("re-disables the Generate button when requirements text is cleared", async () => {
@@ -211,7 +218,10 @@ describe("RunLauncher — Generate button enable/disable", () => {
     await user.type(textarea, "Some text");
     await user.clear(textarea);
 
-    expect(screen.getByRole("button", { name: /generate test cases/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("enables the Generate button once folder path is non-empty (workspace source)", async () => {
@@ -219,10 +229,15 @@ describe("RunLauncher — Generate button enable/disable", () => {
     render(<RunLauncher />);
 
     await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
-    expect(screen.getByRole("button", { name: /generate test cases/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/code/my-project");
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 });
 
@@ -362,6 +377,32 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
   });
 
+  it("keeps keyboard focus on the same persistent button while it swaps Generate↔Cancel (WCAG 2.4.3, audit C031)", async () => {
+    const user = userEvent.setup();
+    const { startImpl, resolveStall } = makeStallingFake();
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Persistent focus");
+    const button = screen.getByRole("button", { name: /generate test cases/i });
+    await user.click(button);
+
+    // While running the SAME DOM node relabels to "Cancel" — focus must not fall to <body>.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBe(button);
+    });
+    expect(button).toHaveFocus();
+
+    act(() => {
+      resolveStall();
+    });
+
+    // After the run ends it relabels back to Generate, still focused.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate test cases/i })).toBe(button);
+    });
+    expect(button).toHaveFocus();
+  });
+
   it("renders the progress region (data-testid qi-launch-progress) while the run is active", async () => {
     const user = userEvent.setup();
     const { startImpl, resolveStall } = makeStallingFake();
@@ -382,7 +423,7 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     });
   });
 
-  it("delivers candidate:proposed and accepted events and calls onRunCompleted with the accepted runId", async () => {
+  it("delivers candidate:proposed and accepted events and omits pasted requirements from completion handles", async () => {
     const user = userEvent.setup();
     const acceptedRunId = "run-abc-123";
     const { startImpl, done } = makeStreamingFake([
@@ -408,7 +449,37 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     await done;
 
     await waitFor(() => {
-      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId);
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, []);
+    });
+  });
+
+  it("passes the launched workspace source to onRunCompleted so the run card can re-check drift", async () => {
+    const user = userEvent.setup();
+    const acceptedRunId = "run-workspace-123";
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: acceptedRunId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 2,
+      },
+      DONE_FRAME,
+    ]);
+    const onRunCompleted = vi.fn();
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
+    await user.type(screen.getByLabelText(/source label/i), "Drift fixture");
+    await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/tmp/drift-fixture");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await done;
+
+    await waitFor(() => {
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [
+        { kind: "workspace", label: "Drift fixture", path: "/tmp/drift-fixture" },
+      ]);
     });
   });
 
@@ -515,7 +586,9 @@ describe("RunLauncher — error path", () => {
       expect(screen.getByTestId("qi-launch-error")).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 });
 
@@ -524,7 +597,9 @@ describe("RunLauncher — connected Files source (#270 Slice 1)", () => {
 
   it("enables Generate from a connected folder with no manual input", () => {
     render(<RunLauncher onRunCompleted={vi.fn()} connectedRoot={ROOT} />);
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("renders the connected-source banner with the folder path", () => {
@@ -575,7 +650,9 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
 
   it("enables Generate from a connected file with no manual input", () => {
     render(<RunLauncher onRunCompleted={vi.fn()} connectedFilePath={FILE} />);
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("renders the connected-source banner labelled 'Connected file' with the file path", () => {
@@ -722,7 +799,10 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
     // server would reject with QI_BAD_SOURCE).
     render(<RunLauncher onRunCompleted={vi.fn()} connectedFilePath="spec.md" />);
     expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /generate test cases/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("lets manual requirements text override the connected file", async () => {
@@ -747,7 +827,9 @@ describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
 
   it("enables Generate when a capsule is connected and no manual input is present", () => {
     render(<RunLauncher connectedCapsuleIds={[CAPSULE_ID]} />);
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("renders the connected-source banner with 'Connected capsule' and the capsule id", () => {

@@ -14,7 +14,7 @@ import {
   exportQiRunTraceability,
   type QiTraceabilityFormat,
 } from "@/lib/quality-intelligence-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "./qiShared";
 
 // Traceability adapters are served by a dedicated, matrix-driven route (Epic #734, Issue #740);
 // they are surfaced here so the audit-ready requirement<->test matrix is reachable for a real user.
@@ -39,12 +39,6 @@ const ADAPTERS: ReadonlyArray<{ id: string; label: string; tms: boolean }> = [
   { id: "polarion", label: "Polarion (preview)", tms: true },
   { id: "quality-center", label: "Quality Center (preview)", tms: true },
 ];
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "Export failed.";
-}
 
 function base64ToUint8Array(b64: string): Uint8Array {
   const binary = atob(b64);
@@ -103,8 +97,10 @@ export function ExportBar({
     }
     const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly: false });
     if (res.dryRun) {
+      // "test case(s)", not the internal term "candidates" — the suite-wide object name
+      // (uiux-fix F047 C388: ExportBar said "candidates", hub "cases", launcher "test cases").
       setPreview(
-        `${res.candidateCount.toString()} candidates · ${res.byteLen.toString()} bytes\n\n${res.preview}`,
+        `${res.candidateCount.toString()} test case${res.candidateCount === 1 ? "" : "s"} · ${res.byteLen.toString()} bytes\n\n${res.preview}`,
       );
     } else {
       // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
@@ -158,8 +154,21 @@ export function ExportBar({
           void handleExport();
         }}
       >
-        {isTms ? "Preview" : "Download"}
+        {/* Explicit busy label — a 40-candidate PDF/ZIP export takes a noticeable moment, and the
+            neighbouring DriftPanel/RunLauncher both signal busy (uiux-fix F047 C155). */}
+        {busy ? "Exporting…" : isTms ? "Preview" : "Download"}
       </button>
+      {/* Persistent live region (uiux-fix F047 C155): exists before any result arrives so screen
+          readers reliably announce the download confirmation / preview readiness — a role="status"
+          element inserted together with its content is often skipped. The visible confirmation and
+          preview below stay conditional and are no longer live regions themselves. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {downloaded !== null
+          ? `Downloaded ${downloaded}`
+          : preview !== null
+            ? "Export preview ready below."
+            : ""}
+      </p>
       {isTms ? (
         <p className="qi-export-hint" role="note" data-testid="qi-export-connector-hint">
           {selected?.id === "quality-center"
@@ -168,25 +177,26 @@ export function ExportBar({
         </p>
       ) : null}
       {downloaded !== null ? (
-        <p
-          className="qi-export-success"
-          role="status"
-          aria-live="polite"
-          data-testid="qi-export-success"
-        >
+        <p className="qi-export-success" data-testid="qi-export-success">
           {`Downloaded ${downloaded}`}
         </p>
       ) : null}
       {preview !== null ? (
+        // tabIndex makes the scrollable preview keyboard-reachable (max-height + overflow:auto cut
+        // off longer previews with no way to scroll them by keyboard — uiux-fix F047 C269, WCAG
+        // 2.1.1 / axe scrollable-region-focusable); role+label name the region for AT.
+        /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- scrollable preview region must be keyboard-focusable (axe scrollable-region-focusable) */
         <pre
           className="qi-export-preview"
-          role="status"
-          aria-live="polite"
+          role="region"
+          aria-label="Export preview"
+          tabIndex={0}
           data-testid="qi-export-preview"
         >
           {preview}
         </pre>
-      ) : null}
+      ) : /* eslint-enable jsx-a11y/no-noninteractive-tabindex */
+      null}
       {error !== null ? (
         <p className="lk-alert" role="alert" data-testid="qi-export-error">
           {error}

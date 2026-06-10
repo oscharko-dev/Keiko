@@ -70,7 +70,7 @@ describe("CapsuleSetComposeDialog — validation", () => {
     const createImpl = vi.fn().mockResolvedValue(okSet());
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
-    await user.click(screen.getByRole("button", { name: /create set/i }));
+    await user.click(screen.getByRole("button", { name: /^combine$/i }));
     expect(screen.getByRole("alert")).toHaveTextContent(/set name is required/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
@@ -80,7 +80,7 @@ describe("CapsuleSetComposeDialog — validation", () => {
     const createImpl = vi.fn().mockResolvedValue(okSet());
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
     await user.type(screen.getByLabelText(/set name/i), "My Set");
-    await user.click(screen.getByRole("button", { name: /create set/i }));
+    await user.click(screen.getByRole("button", { name: /^combine$/i }));
     expect(screen.getByRole("alert")).toHaveTextContent(/at least one capsule/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe("CapsuleSetComposeDialog — submit", () => {
     await user.type(screen.getByLabelText(/set name/i), "Combined");
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
     await user.click(screen.getByRole("checkbox", { name: /gamma/i }));
-    await user.click(screen.getByRole("button", { name: /create set/i }));
+    await user.click(screen.getByRole("button", { name: /^combine$/i }));
 
     await waitFor(() => {
       expect(createImpl).toHaveBeenCalledWith({
@@ -117,7 +117,7 @@ describe("CapsuleSetComposeDialog — submit", () => {
 
     await user.type(screen.getByLabelText(/set name/i), "Combined");
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
-    await user.click(screen.getByRole("button", { name: /create set/i }));
+    await user.click(screen.getByRole("button", { name: /^combine$/i }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/incompatible embedding identity/i);

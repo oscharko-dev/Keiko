@@ -36,6 +36,7 @@ import type {
   WorkflowKind,
 } from "@/lib/types";
 import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
+import { formatUserError } from "../format-error";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
@@ -192,9 +193,8 @@ export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined)
 function errorMessage(error: unknown): string {
   // AC#3 — context-overflow provider errors map to a single actionable message.
   if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "Unknown error";
+  // uiux-fix F041 (C171) — message first, machine code as trailing detail.
+  return formatUserError(error, "Something went wrong. Try again.");
 }
 
 function sortChats(chats: readonly Chat[]): Chat[] {
@@ -251,7 +251,9 @@ export interface UseChatSessionResult {
   error: string | undefined;
   setDraft: (value: string) => void;
   setSelectedModel: (id: string) => void;
-  openNewChat: (project?: ProjectWithAvailability) => Promise<void>;
+  // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
+  // blank/whitespace falls back to DEFAULT_CHAT_TITLE.
+  openNewChat: (project?: ProjectWithAvailability, title?: string) => Promise<void>;
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
@@ -748,7 +750,7 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   const openNewChat = useCallback(
-    async (projectOverride?: ProjectWithAvailability): Promise<void> => {
+    async (projectOverride?: ProjectWithAvailability, title?: string): Promise<void> => {
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
         setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
@@ -756,9 +758,13 @@ export function useChatSession(): UseChatSessionResult {
       }
       setError(undefined);
       try {
+        const trimmedTitle = title?.trim();
         const input: { modelId: string; title: string; projectPath?: string } = {
           modelId,
-          title: DEFAULT_CHAT_TITLE,
+          title:
+            trimmedTitle !== undefined && trimmedTitle.length > 0
+              ? trimmedTitle
+              : DEFAULT_CHAT_TITLE,
         };
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
         if (targetPath !== undefined) input.projectPath = targetPath;

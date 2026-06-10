@@ -24,19 +24,23 @@ export interface SafeMarkdownProps {
 
 function CopyButton({ text }: { readonly text: string }): ReactNode {
   const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState("");
 
   const handleCopy = useCallback(() => {
     // navigator.clipboard is undefined in non-secure contexts (and unimplemented in jsdom).
-    // Guard with optional chaining + an explicit existence check so a click in those contexts
-    // becomes a no-op rather than a TypeError.
+    // Guard with optional chaining + an explicit existence check, and surface the failure as
+    // an announced status message rather than a silent no-op (audit C135).
     if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
+      setStatus("Copy unavailable: the clipboard requires a secure (HTTPS) connection.");
       return;
     }
     void navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
+        setStatus("Code copied");
         setTimeout(() => {
           setCopied(false);
+          setStatus("");
         }, 1500);
       },
       () => {
@@ -46,15 +50,24 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
   }, [text]);
 
   return (
-    <button
-      type="button"
-      className="sm-code-copy"
-      aria-label="Copy code block"
-      title={copied ? "Copied!" : "Copy code block"}
-      onClick={handleCopy}
-    >
-      {copied ? "✓" : "Copy"}
-    </button>
+    <>
+      <button
+        type="button"
+        className="sm-code-copy"
+        aria-label={copied ? "Copied" : "Copy code block"}
+        title={copied ? "Copied!" : "Copy code block"}
+        data-copied={copied ? "true" : "false"}
+        onClick={handleCopy}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+      {/* WCAG 4.1.3 — the visible label swap alone is silent for screen readers
+          (the aria-label is not re-announced on change); a status region carries
+          the copy success / unavailable feedback (audit C135). */}
+      <span role="status" className="sr-only">
+        {status}
+      </span>
+    </>
   );
 }
 
@@ -62,12 +75,16 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
 // Heading tag map — avoids template-literal restrict-template-expressions
 // ---------------------------------------------------------------------------
 
+// Markdown levels are demoted two steps (1→h3, 2→h4, …) so model-generated
+// "# Title" headings do not land as top-level h1/h2 in the document outline and
+// flood the screen-reader heading rotor alongside the app's own headings
+// (audit C315). HEADING_CLASSES below keeps the visual hierarchy unchanged.
 const HEADING_TAGS = {
-  1: "h1",
-  2: "h2",
-  3: "h3",
-  4: "h4",
-  5: "h5",
+  1: "h3",
+  2: "h4",
+  3: "h5",
+  4: "h6",
+  5: "h6",
   6: "h6",
 } as const satisfies Record<1 | 2 | 3 | 4 | 5 | 6, string>;
 
@@ -126,7 +143,8 @@ function renderBlockNode(node: SafeMarkdownNode, key: string): ReactNode | null 
       return (
         <div key={key} className="sm-code-block-frame">
           <div className="sm-code-block-header">
-            <span className="sm-code-lang">{lang ?? "untitled"}</span>
+            {/* "untitled" read like a missing file name; untagged fences are plain text (C307) */}
+            <span className="sm-code-lang">{lang ?? "text"}</span>
             <CopyButton text={codeText} />
           </div>
           <pre className="sm-pre">
@@ -224,6 +242,9 @@ function renderInlineNode(node: SafeMarkdownNode, key: string): ReactNode | null
       return (
         <a key={key} href={node.href} className="sm-link" rel="noopener noreferrer" target="_blank">
           {node.text}
+          {/* target="_blank" is invisible to screen readers — announce the context
+              switch in the accessible name without changing the visual layout (C316). */}
+          <span className="sr-only"> (opens in new tab)</span>
         </a>
       );
 

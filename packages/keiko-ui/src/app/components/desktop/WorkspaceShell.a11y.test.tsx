@@ -90,11 +90,16 @@ describe("Workspace shell accessibility", () => {
         <Header
           mode="manual"
           projectName="Keiko"
+          statusLabel="Connected"
+          statusTone="ok"
           onModeChange={vi.fn()}
           openPalette={vi.fn()}
+          openCommandPalette={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
           onCascade={vi.fn()}
+          onExpandFront={vi.fn()}
+          onRestoreFront={vi.fn()}
         />
         <div className="mid">
           <LeftRail
