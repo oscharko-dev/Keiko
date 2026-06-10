@@ -340,6 +340,7 @@ async function maybeReExecForSqlite(env: EnvSource, deps: UiCliDeps): Promise<nu
 
 function buildHandlerDepsOrReport(
   parsed: UiCliArgs,
+  cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
 ): UiHandlerDeps | number {
@@ -348,6 +349,7 @@ function buildHandlerDepsOrReport(
       configPath: resolveUiConfigPath(parsed, effectiveEnv),
       evidenceDir: parsed.evidenceDir,
       uiDbPath: parsed.uiDbPath,
+      initialProjectPath: cwd,
       env: effectiveEnv,
     });
   } catch (error) {
@@ -406,6 +408,7 @@ export async function runUiCli(
   const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
   const handlerDeps = buildHandlerDepsOrReport(
     parsed,
+    cwd,
     withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
     io,
   );

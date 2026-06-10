@@ -252,6 +252,43 @@ describe("FilesWidget", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("retargets a restored stale root to the launch project once", async () => {
+    vi.mocked(fetchProjects).mockResolvedValueOnce({
+      projects: [
+        {
+          path: "/sandbox",
+          name: "sandbox",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 2,
+          available: true,
+        },
+        {
+          path: "/old-keiko",
+          name: "Keiko",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      ],
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/old-keiko",
+      path: "",
+      truncated: false,
+      entries: [],
+    });
+    const onRootChange = vi.fn();
+
+    render(<FilesWidget root="/old-keiko" onRootChange={onRootChange} />);
+
+    await waitFor(() => {
+      expect(onRootChange).toHaveBeenCalledWith("/sandbox");
+    });
+    expect(onRootChange).toHaveBeenCalledTimes(1);
+  });
+
   it("renders tree loading errors", async () => {
     vi.mocked(fetchFilesTree).mockRejectedValueOnce(new Error("access denied"));
 

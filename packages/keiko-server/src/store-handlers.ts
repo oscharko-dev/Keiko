@@ -306,6 +306,16 @@ function projectWithAvailability(p: Project): ProjectWithAvailability {
   return { ...p, available: isProjectAvailable(p) };
 }
 
+function putPreferredProjectFirst(
+  projects: readonly ProjectWithAvailability[],
+  preferredProjectPath: string | undefined,
+): readonly ProjectWithAvailability[] {
+  if (preferredProjectPath === undefined) return projects;
+  const preferred = projects.find((project) => project.path === preferredProjectPath);
+  if (preferred === undefined) return projects;
+  return [preferred, ...projects.filter((project) => project.path !== preferredProjectPath)];
+}
+
 function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: string): boolean {
   return deps.store.findChatById(chatId)?.projectPath === projectPath;
 }
@@ -326,7 +336,10 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 // ──────────────────────────────────────────────────────────────────────────
 
 export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const projects = deps.store.listProjects().map(projectWithAvailability);
+  const projects = putPreferredProjectFirst(
+    deps.store.listProjects().map(projectWithAvailability),
+    deps.preferredProjectPath,
+  );
   return { status: 200, body: { projects } };
 }
 

@@ -61,6 +61,24 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.store.close();
   });
 
+  it("seeds the launch project into the UI store as the preferred project", () => {
+    const projectDir = tmp("launch-project-");
+    const evidenceDir = tmp("ev-launch-");
+    const dbPath = join(projectDir, ".keiko", "ui", "keiko-ui.db");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: dbPath,
+      initialProjectPath: projectDir,
+    });
+
+    expect(deps.preferredProjectPath).toBe(projectDir);
+    expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
+    deps.store.close();
+    deps.memoryVault?.close();
+  });
+
   it("resolves the DB path via KEIKO_UI_DATA_DIR when no explicit path is supplied", () => {
     const uiDir = tmp("ui-env-");
     const evidenceDir = tmp("ev-");

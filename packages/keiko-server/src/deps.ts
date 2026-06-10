@@ -28,9 +28,11 @@ import { dirname, join } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import {
+  assertUiDbOutsideProject,
   buildUiStoreOverDatabase,
   openNodeUiDatabase,
   resolveUiDbPath,
+  validateProjectPath,
   type UiStore,
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
@@ -96,6 +98,9 @@ export interface UiHandlerDeps {
   // Resolved UI database file path when known. Project onboarding uses this to prevent the UI DB
   // and selected repositories from overlapping on disk.
   readonly uiDbPath?: string | undefined;
+  // Project path selected by the process that launched this loopback UI. When set, /api/projects
+  // reports this project first so first-run UI state cannot drift to stale persisted rows.
+  readonly preferredProjectPath?: string | undefined;
   // ADR-0018 — bounded permitted-command execution manager. Optional for legacy tests; production
   // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
   readonly terminal?: TerminalExecutionManager | undefined;
@@ -153,6 +158,9 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
+  // so first-run project selection is deterministic even when an older UI DB already has rows.
+  readonly initialProjectPath?: string | undefined;
   // Optional setup tester (tests); production performs a real gateway call.
   readonly gatewaySetupTester?:
     | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
@@ -538,6 +546,19 @@ function composePersistence(
   return { store, relationship };
 }
 
+function seedInitialProject(
+  store: UiStore,
+  uiDbPath: string,
+  initialProjectPath: string | undefined,
+): string | undefined {
+  if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
+    return undefined;
+  }
+  const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
+  assertUiDbOutsideProject(uiDbPath, normalizedPath);
+  return store.createProject(normalizedPath).path;
+}
+
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly browser: BrowserSessionManager;
@@ -591,6 +612,11 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     redactString,
     options.env,
   );
+  const preferredProjectPath = seedInitialProject(
+    uiStore,
+    resolvedUiDbPath,
+    options.initialProjectPath,
+  );
   const peripherals = buildPeripherals(options, uiStore, evidenceStore, redactString, liveRedactor);
   return {
     config,
@@ -604,6 +630,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig),
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
+    preferredProjectPath,
     gatewayConfig: runtimeConfig,
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,

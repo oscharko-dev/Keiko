@@ -39,6 +39,7 @@ describe("installable-package-smoke script", () => {
     expect(source).toContain("getExportsOfModule");
     expect(source).toContain('dist", "ui", "static"');
     expect(source).toContain("/api/health");
+    expect(source).toContain("/api/projects");
   });
 
   it("guards `npm install` with a hard timeout so a hung install cannot wedge CI", () => {

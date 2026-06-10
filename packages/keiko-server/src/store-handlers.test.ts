@@ -182,6 +182,22 @@ describe("GET /api/projects", () => {
     expect(map[projDir]).toBe(true);
     expect(map[otherDir]).toBe(false);
   });
+
+  it("returns the launch project before stale persisted projects", async () => {
+    const staleDir = join(tmp, "aaa-stale-project");
+    mkdirSync(staleDir);
+    store.createProject(staleDir);
+    store.createProject(projDir);
+    await restartWithDeps({ preferredProjectPath: projDir });
+
+    const res = await fetch(url("/api/projects"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      projects: { path: string; available: boolean }[];
+    };
+    expect(body.projects.map((project) => project.path)).toEqual([projDir, staleDir]);
+    expect(body.projects[0]?.available).toBe(true);
+  });
 });
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────

@@ -125,6 +125,7 @@ export function FilesWidget({
   const [refreshKey, setRefreshKey] = useState(0);
   const activeFileChangeRef = useRef(onActiveFileChange);
   activeFileChangeRef.current = onActiveFileChange;
+  const checkedInitialProjectRootRef = useRef(false);
   // Focus restore (WCAG 2.4.3): closing the preview re-mounts the whole tree, which would drop
   // focus onto document.body. Remember the previewed path on close and put focus back onto its
   // tree row once the tree is rendered again (fallback: the widget container).
@@ -161,6 +162,27 @@ export function FilesWidget({
       cancelled = true;
     };
   }, [configuredRoot]);
+
+  useEffect(() => {
+    if (configuredRoot === null || onRootChange === undefined) return;
+    if (checkedInitialProjectRootRef.current) return;
+    checkedInitialProjectRootRef.current = true;
+    let cancelled = false;
+    void fetchProjects()
+      .then((payload) => {
+        if (cancelled) return;
+        const preferred = payload.projects.find((project) => project.available)?.path;
+        if (preferred !== undefined && preferred !== configuredRoot) {
+          onRootChange(preferred);
+        }
+      })
+      .catch(() => {
+        /* keep the restored root when the project list is unavailable */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configuredRoot, onRootChange]);
 
   const loadDirectory = useCallback(
     async (path: string): Promise<void> => {
