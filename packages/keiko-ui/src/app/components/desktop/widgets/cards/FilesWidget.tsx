@@ -296,7 +296,6 @@ export function FilesWidget({
       <ScopeConnectButton
         chatId={activeChat.id}
         scopeKind={scopeKind}
-        scopeRoot={resolvedRoot ?? apiRoot}
         currentScopeKind={activeChat.connectedScope?.kind}
         candidateRelativePaths={scopeKind === "workspace-root" ? [] : [relativePath]}
         chat={activeChat}
