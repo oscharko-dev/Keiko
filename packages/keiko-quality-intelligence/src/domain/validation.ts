@@ -1,8 +1,9 @@
 // Quality Intelligence validation (Epic #270, Issue #272).
 //
 // Pure schema/logic validators that emit `QualityIntelligenceValidationFinding`
-// records. NO judge calls — model-assisted validators (logic-judge,
-// faithfulness-judge, semantic-judge) live in #279.
+// records. NO judge calls in this module — the model-assisted adversarial
+// test-quality judge ships separately (Epic #736, keiko-server judgePort + the
+// workflow judge stage) and augments these deterministic checks.
 //
 // v1 covers four deterministic checks per candidate:
 //   1. schema-completeness — title/steps/expectedResults must be non-empty.

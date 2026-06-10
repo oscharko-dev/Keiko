@@ -1,6 +1,6 @@
 // Pure type interfaces for the verification summary layer (ADR-0007). The runtime functions
 // (buildVerificationSummary, summarizeForAudit, renderMarkdownSummary) stay in
-// src/verification/summary.ts. These types were extracted to contracts (issue #158) so the
+// packages/keiko-verification/src/summary.ts. These types were extracted to contracts (issue #158) so the
 // audit ledger (#10) and evidence layer can reference them without a circular dependency.
 
 import type {

@@ -1,7 +1,7 @@
 // Gateway-layer WIRE contract types: model identity, request/response shapes, streaming envelope,
 // and tool-call normalisation. Credential-bearing or runtime-port shapes (ModelProviderConfig,
 // GatewayConfig, CircuitBreakerConfig, ProviderAdapter, Clock, CircuitBreakerStatus) STAY in
-// src/gateway/types.ts so contracts never carries an apiKey-shaped surface. No runtime code lives
+// packages/keiko-model-gateway/src/types.ts so contracts never carries an apiKey-shaped surface. No runtime code lives
 // here. `readonly` everywhere; optional props are `| undefined` because exactOptionalPropertyTypes
 // is on.
 

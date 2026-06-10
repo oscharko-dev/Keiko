@@ -29,6 +29,26 @@ Keiko's long-term direction is a governed workspace where people can delegate kn
 
 Software engineering is the first use case because repositories, tests, reviews, and tool calls create hard evidence. The product direction is broader: a controlled agentic workspace for enterprise knowledge work.
 
+## What's New in 0.2.0
+
+### Quality Intelligence
+
+A native Workspace window that turns connected requirement sources into reviewable, evidence-backed test-case candidates. Open **Quality Intelligence** from the left rail, connect sources the same way Chat does — a single Fachkonzept file, folders, Knowledge Capsules, or a Figma snapshot, up to 16 at once — and press **Generate**. Quality Intelligence persists a redacted, integrity-hashed evidence manifest for each run. You get a coverage Gap Radar with per-requirement excerpts, a bidirectional requirement↔test traceability matrix (CSV/Markdown), drift detection with targeted regeneration ("Living Tests"), an optional adversarial test-quality judge, inline candidate editing, and export to PDF, Markdown, plain text, or a ZIP bundle. Quality Center export is a dry-run preview by design; live writes are rejected.
+
+Model use is capability-routed and optional: with no model configured, the structural stages still produce a deterministic baseline run.
+
+### Figma design connector
+
+Connect a Figma board read-only with a personal access token. The token is encrypted at rest with the same AES-256-GCM vault primitive as memory — the vault key comes from the macOS keychain, an environment variable, or a `0600` keyfile — and is never written to config files or logs. Keiko builds a deterministic clean Snapshot — screens, text, design tokens, navigation links — that can feed Quality Intelligence for design-to-tests, an accessibility baseline, and a first design-to-code slice. The connector is PAT-only, audited, consent-gated, and validates the exact `figma.com` host before any request.
+
+### MemoriaViva governed memory
+
+Keiko's memory is now encrypted at rest (AES-256-GCM vault, ADR-0035) — no plaintext memory content touches disk. Memories are captured from natural conversation when salient, decay and can be forgotten under governance rules (`keiko memory maintain`), and are recalled semantically via embeddings. The memory window is available from the left rail as **MemoriaViva**.
+
+### Conversation Center and grounding
+
+Chat now streams tokens over SSE (first token in well under a second on TLS-intercepted enterprise networks). Grounded answers can draw on any local folder plus Local Knowledge connectors simultaneously; reciprocal-rank fusion keeps one source from starving the others, and grounding budgets are operator-configurable.
+
 ## Requirements
 
 - Node.js 22 or newer.
@@ -177,7 +197,7 @@ Keiko is a local tool, not a remote service.
 Known limits:
 
 - Keiko is not a sandbox or OS-level isolation layer.
-- Evidence files are ordinary local files, not encrypted or tamper-evident records.
+- Workflow evidence files are ordinary local files. Quality Intelligence run manifests additionally carry SHA-256 integrity hashes that are verified on read (tamper-evident, not tamper-proof), and MemoriaViva memory content is encrypted at rest (ADR-0035); neither protects against an attacker with local file access and the vault key.
 - Local project scripts can execute repository code when you run verification.
 - Do not run Keiko against untrusted repositories.
 

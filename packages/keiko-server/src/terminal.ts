@@ -4,10 +4,10 @@
 // nothing new is invented here.
 //
 // Reuse (UNCHANGED):
-//   • runCommand from src/tools/exec.ts (sandbox env, no-shell, cwd realpath, output cap, abort)
-//   • EvidenceStore from src/audit/store.ts (atomic O_EXCL + realpath-contained write)
-//   • deepRedactStrings from src/audit/redaction.ts (Layer-2 redact-before-persist)
-//   • ProjectStore from src/ui/store/** (projectId → workspaceRoot)
+//   • runCommand from @oscharko-dev/keiko-tools exec.ts (sandbox env, no-shell, cwd realpath, output cap, abort)
+//   • EvidenceStore from @oscharko-dev/keiko-evidence (atomic O_EXCL + realpath-contained write)
+//   • deepRedactStrings from @oscharko-dev/keiko-security redaction.ts (Layer-2 redact-before-persist)
+//   • ProjectStore from packages/keiko-server/src/store/ (projectId → workspaceRoot)
 //
 // New (bounded composition):
 //   • TerminalExecutionManager: execute(input) / abort(executionId) / subscribe(handler).
