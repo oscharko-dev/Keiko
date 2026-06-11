@@ -235,9 +235,11 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
 
     const indexBtn = screen.getByRole("button", {
-      name: /attach a source before indexing capsule empty cap/i,
+      name: /start indexing capsule empty cap/i,
     });
-    expect(indexBtn).toBeDisabled();
+    expect(indexBtn).not.toBeDisabled();
+    expect(indexBtn).toHaveAttribute("aria-disabled", "true");
+    expect(indexBtn).toHaveAccessibleDescription("Attach a source before indexing.");
     expect(indexBtn).toHaveAttribute("title", "Attach a source before indexing this capsule.");
 
     await userEvent.setup().click(indexBtn);

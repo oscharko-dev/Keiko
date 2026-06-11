@@ -621,6 +621,136 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     const users = view.result.current.messages.filter((m) => m.role === "user");
     expect(users.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("refreshes a grounded turn from the chat's canonical projectPath after send", async () => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    const activeProjectPath = "/proj-active";
+    const canonicalChatPath = "/proj-canonical";
+    const groundedChat = makeChat({
+      projectPath: canonicalChatPath,
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [chatModelCapability("example-chat-model")],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: activeProjectPath,
+          name: "proj",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    const fetchChatsSpy = vi.spyOn(api, "fetchChats").mockImplementation(async (projectPath) => {
+      if (projectPath === activeProjectPath) return { chats: [groundedChat] };
+      if (projectPath === canonicalChatPath) return { chats: [{ ...groundedChat, updatedAt: 99 }] };
+      throw new Error(`unexpected fetchChats path: ${projectPath}`);
+    });
+    const canonicalMessages: ChatMessage[] = [
+      {
+        id: "user-canonical",
+        chatId: groundedChat.id,
+        role: "user",
+        content: "ground this",
+        timestamp: 3,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        id: "assistant-canonical",
+        chatId: groundedChat.id,
+        role: "assistant",
+        content: "answer",
+        timestamp: 4,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+    ];
+    const fetchChatMessagesSpy = vi
+      .spyOn(api, "fetchChatMessages")
+      .mockImplementation(async (chatId, projectPath) => {
+        if (projectPath === activeProjectPath) return { messages: [] };
+        if (chatId === groundedChat.id && projectPath === canonicalChatPath) {
+          return { messages: canonicalMessages };
+        }
+        throw new Error(`unexpected fetchChatMessages args: ${chatId} ${projectPath}`);
+      });
+    const groundedResponse = {
+      groundingKind: "connected-context",
+      userMessageId: "user-canonical",
+      assistantMessageId: "assistant-canonical",
+      content: "answer",
+      citations: [],
+      uncertainty: [{ kind: "supported", claim: "grounded answer resolved from canonical path" }],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: {
+        schemaVersion: "1",
+        scopeId: "cs-canonical",
+        scopeKind: "files",
+        fileCount: 1,
+        queryKind: "natural-language",
+        usage: {
+          searchCalls: 0,
+          filesRead: 0,
+          excerptBytes: 0,
+          modelInputTokens: 0,
+          modelOutputTokens: 0,
+          elapsedMs: 0,
+          rerankCalls: 0,
+        },
+        budget: {
+          searchCallsMax: 16,
+          filesReadMax: 32,
+          excerptBytesMax: 131_072,
+          modelInputTokensMax: 32_000,
+          modelOutputTokensMax: 4_096,
+          elapsedMsMax: 30_000,
+          rerankCallsMax: 0,
+        },
+        citationCount: 0,
+        omittedCount: 0,
+        omittedCounts: {
+          "outside-scope": 0,
+          binary: 0,
+          generated: 0,
+          ignored: 0,
+          "size-exceeded": 0,
+          "near-duplicate": 0,
+          "low-relevance": 0,
+          "redacted-only": 0,
+          "budget-exhausted": 0,
+          "tool-unavailable": 0,
+        },
+        uncertaintyCount: 1,
+        elapsedMs: 1,
+      },
+    } satisfies Awaited<ReturnType<typeof api.askGrounded>>;
+    vi.spyOn(api, "askGrounded").mockResolvedValue(groundedResponse);
+
+    const view = await bootHook();
+    act(() => view.result.current.setDraft("ground this"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("completed");
+    expect(fetchChatMessagesSpy).toHaveBeenLastCalledWith(groundedChat.id, canonicalChatPath);
+    expect(fetchChatsSpy).toHaveBeenLastCalledWith(canonicalChatPath);
+    expect(view.result.current.messages).toEqual(canonicalMessages);
+    expect(view.result.current.error).toBeUndefined();
+  });
 });
 
 // ─── useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2) ─────────

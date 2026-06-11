@@ -17,7 +17,11 @@ import {
   type KnowledgeStore,
   type RetrievalResult,
 } from "@oscharko-dev/keiko-local-knowledge";
-import type { RetrievalReference } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
 import { rerankAndSelect, type RerankInput, type SelectedCandidate } from "./grounded-rerank.js";
 
 import {
@@ -639,25 +643,123 @@ function persistFolderEvidence(
   return firstRunId;
 }
 
-function persistConnectorAudit(
-  store: KnowledgeStore,
-  connectors: readonly RetrievedConnector[],
+interface CapsuleUsageSummary {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
+  readonly chunkIds: readonly string[];
+  readonly referenceCount: number;
+}
+
+function summariseReferenceUsage(
+  references: readonly RetrievalReference[],
+): readonly CapsuleUsageSummary[] {
+  const byCapsule = new Map<
+    KnowledgeCapsuleId,
+    { sourceIds: Set<KnowledgeSourceId>; chunkIds: Set<string>; referenceCount: number }
+  >();
+  for (const reference of references) {
+    const current = byCapsule.get(reference.capsuleId) ?? {
+      sourceIds: new Set<KnowledgeSourceId>(),
+      chunkIds: new Set<string>(),
+      referenceCount: 0,
+    };
+    current.sourceIds.add(reference.citation.sourceId);
+    current.chunkIds.add(String(reference.chunkId));
+    current.referenceCount += 1;
+    byCapsule.set(reference.capsuleId, current);
+  }
+  return [...byCapsule.entries()]
+    .sort(([a], [b]) => (String(a) < String(b) ? -1 : 1))
+    .map(([capsuleId, value]) => ({
+      capsuleId,
+      sourceIds: [...value.sourceIds].sort((a, b) => (String(a) < String(b) ? -1 : 1)),
+      chunkIds: [...value.chunkIds].sort(),
+      referenceCount: value.referenceCount,
+    }));
+}
+
+function selectedConnectorReferences(
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly RetrievalReference[] {
+  return selected
+    .filter((s): s is SelectedCandidate<ConnectorPayload> => s.kind === "connector")
+    .map((s) => s.payload.reference);
+}
+
+function emitRetrievalAuditForConnector(
+  sink: ReturnType<typeof createSqliteAuditSink>,
+  src: RetrievedConnector,
+  occurredAt: number,
 ): void {
-  const sink = createSqliteAuditSink(store);
-  const occurredAt = Date.now();
-  for (const src of connectors) {
+  const usage = summariseReferenceUsage(src.references);
+  if (usage.length === 0) {
     for (const capsule of src.selected.capsules) {
       sink.emit({
         kind: "retrieval-performed",
         capsuleId: capsule.id,
         sourceIds: capsule.sourceIds,
-        chunkIds: src.references.map((reference) => String(reference.chunkId)),
-        referenceCount: src.references.length,
-        noEvidence: src.references.length === 0,
+        chunkIds: [],
+        referenceCount: 0,
+        noEvidence: true,
         occurredAt,
       });
     }
+    return;
   }
+  for (const entry of usage) {
+    sink.emit({
+      kind: "retrieval-performed",
+      capsuleId: entry.capsuleId,
+      sourceIds: entry.sourceIds,
+      chunkIds: entry.chunkIds,
+      referenceCount: entry.referenceCount,
+      noEvidence: false,
+      occurredAt,
+    });
+  }
+}
+
+function emitAnswerContextAudit(
+  sink: ReturnType<typeof createSqliteAuditSink>,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  modelId: string,
+  occurredAt: number,
+): void {
+  for (const entry of summariseReferenceUsage(selectedConnectorReferences(selected))) {
+    sink.emit({
+      kind: "answer-context-assembled",
+      capsuleId: entry.capsuleId,
+      sourceIds: entry.sourceIds,
+      chunkIds: entry.chunkIds,
+      referenceCount: entry.referenceCount,
+      citationCount: entry.referenceCount,
+      occurredAt,
+    });
+    sink.emit({
+      kind: "model-context-sent",
+      capsuleId: entry.capsuleId,
+      sourceIds: entry.sourceIds,
+      chunkIds: entry.chunkIds,
+      referenceCount: entry.referenceCount,
+      citationCount: entry.referenceCount,
+      modelId,
+      occurredAt,
+    });
+  }
+}
+
+function persistConnectorAudit(
+  store: KnowledgeStore,
+  connectors: readonly RetrievedConnector[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  modelId: string,
+): void {
+  const sink = createSqliteAuditSink(store);
+  const occurredAt = Date.now();
+  for (const src of connectors) {
+    emitRetrievalAuditForConnector(sink, src, occurredAt);
+  }
+  emitAnswerContextAudit(sink, selected, modelId, occurredAt);
 }
 
 // ─── Assembly + public entry ──────────────────────────────────────────────────
@@ -715,9 +817,18 @@ function assembleHybridAnswer(
   const citations = selectedFolderCitations(selected, redactor);
   const knowledgeCitations = selectedConnectorCitations(selected);
   const evidenceRunId = persistFolderEvidence(ctx, sources.folders);
-  persistConnectorAudit(store, sources.connectors);
+  persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
   const summary = folderSummary(sources.folders, redactor);
+  const noEvidenceUncertainty =
+    selected.length === 0
+      ? [
+          {
+            kind: "no-evidence",
+            claim: redactString(redactor, "No evidence found in the selected connected sources."),
+          },
+        ]
+      : [];
   return {
     groundingKind: "hybrid",
     ...ids,
@@ -728,6 +839,7 @@ function assembleHybridAnswer(
     uncertainty: [
       ...folderUncertainty(sources.folders, redactor),
       ...skippedUncertainty(sources.skipped, redactor),
+      ...noEvidenceUncertainty,
     ],
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,
@@ -747,6 +859,12 @@ interface ResolvedAnswerer {
   readonly answer: HybridAnswerer;
 }
 
+interface AnswerMeta {
+  readonly folderScopeCount: number;
+  readonly connectorScopeCount: number;
+  readonly connectorResult: ConnectorRetrieval;
+}
+
 function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | RouteResult {
   if (ctx.answer !== undefined) return { answer: ctx.answer };
   const model = ctx.deps.modelPortFactory(ctx.modelId);
@@ -754,6 +872,42 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal) };
+}
+
+function assembleHybridNoEvidenceRoute(
+  ctx: HybridGroundedAskCtx,
+  store: KnowledgeStore,
+  folders: readonly RetrievedFolder[],
+  meta: AnswerMeta,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+): RouteResult {
+  const content = redactString(
+    ctx.deps.redactor,
+    "No evidence found in the selected connected sources.",
+  );
+  const [userMessage, assistantMessage] = persistGroundedExchange(
+    ctx.deps,
+    ctx.chat.id,
+    redactString(ctx.deps.redactor, ctx.content),
+    content,
+  );
+  const answer = assembleHybridAnswer(
+    ctx,
+    {
+      folders,
+      connectors: meta.connectorResult.retrieved,
+      skipped: meta.connectorResult.skipped,
+      folderSourceCount: meta.folderScopeCount,
+      connectorSourceCount: meta.connectorScopeCount,
+    },
+    store,
+    selected,
+    limits,
+    { content, usage: { promptTokens: 0, completionTokens: 0 } },
+    { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
+  );
+  return { status: 200, body: answer };
 }
 
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
@@ -800,16 +954,15 @@ async function answerAndAssemble(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
   folders: readonly RetrievedFolder[],
-  meta: {
-    readonly folderScopeCount: number;
-    readonly connectorScopeCount: number;
-    readonly connectorResult: ConnectorRetrieval;
-  },
+  meta: AnswerMeta,
 ): Promise<RouteResult> {
-  const answerer = resolveHybridAnswerer(ctx);
-  if ("status" in answerer) return answerer;
   const limits = currentGroundingLimits(ctx.deps);
   const selected = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
+  if (selected.length === 0) {
+    return assembleHybridNoEvidenceRoute(ctx, store, folders, meta, selected, limits);
+  }
+  const answerer = resolveHybridAnswerer(ctx);
+  if ("status" in answerer) return answerer;
   const user = buildRerankedHybridUserMessage(ctx.content, selected, ctx.deps.redactor);
   const assistant = normalizeGroundedAnswerPayload(
     await answerer.answer(HYBRID_SYSTEM_PROMPT, user),

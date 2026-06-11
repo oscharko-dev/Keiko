@@ -84,6 +84,26 @@ describe("jsonParser", () => {
     expect(pointers(result.units)).toEqual([""]);
   });
 
+  it("aligns leaf offsets to bounded normalized leaf text", () => {
+    const result = jsonParser.parse(
+      selectionFromText(JSON.stringify({ a: "first", b: "second" }), { extension: "json" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText = (result as { readonly normalizedText?: string }).normalizedText;
+    expect(normalizedText).toBe('/a: "first"\n/b: "second"\n');
+    expect(result.units).toHaveLength(2);
+    const first = result.units[0];
+    const second = result.units[1];
+    if (first === undefined || second === undefined) throw new Error("expected two JSON leaves");
+    if (first.kind !== "json-path" || second.kind !== "json-path") {
+      throw new Error("expected JSON path units");
+    }
+    expect(first.characterStart).toBe(0);
+    expect(first.characterEnd).toBe('/a: "first"\n'.length);
+    expect(second.characterStart).toBe(first.characterEnd);
+    expect(second.characterEnd).toBe(normalizedText?.length);
+  });
+
   it("treats empty arrays and empty objects as leaves", () => {
     const obj = JSON.stringify({ empties: [], empty: {} });
     const result = jsonParser.parse(

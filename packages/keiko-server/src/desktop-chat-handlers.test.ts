@@ -249,6 +249,29 @@ describe("desktop chat routes", () => {
     expect(body.messages).toEqual([]);
   });
 
+  it("uses the preferred launch project when no projectPath is supplied", async () => {
+    const staleDir = join(tmp, "aaa-stale-project");
+    mkdirSync(staleDir);
+    store.createProject(staleDir, "stale");
+    await restartWithDeps(
+      deps(fakeModel("preferred response"), { preferredProjectPath: projectDir }),
+    );
+
+    const res = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ modelId: CHAT_MODEL }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      project: { path: string };
+      chat: { projectPath: string };
+    };
+    expect(body.project.path).toBe(projectDir);
+    expect(body.chat.projectPath).toBe(projectDir);
+  });
+
   it("uses the configured custom chat model as the default when no modelId is supplied", async () => {
     const modelId = "example-private-chat";
     await restartWithDeps(

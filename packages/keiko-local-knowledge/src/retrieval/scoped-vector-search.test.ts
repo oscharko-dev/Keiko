@@ -9,7 +9,12 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { EmbeddingModelIdentity, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleSetId,
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
@@ -137,6 +142,39 @@ describe("searchVectorsForScope — single capsule", () => {
       if (prev === undefined || curr === undefined) throw new Error("unreachable");
       expect(prev.score).toBeGreaterThanOrEqual(curr.score);
     }
+  });
+
+  it("restricts references to the optional source filter", async () => {
+    const { store } = getFixture();
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      sourceId: "src-a",
+      documentId: "doc-a",
+      contentHash: "a".repeat(64),
+      text: "alpha alpha alpha beta beta beta gamma gamma gamma delta delta delta",
+    });
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      sourceId: "src-b",
+      documentId: "doc-b",
+      contentHash: "b".repeat(64),
+      text: "iota iota iota kappa kappa kappa lambda lambda lambda mu mu mu",
+      unitId: "unit-cap-a-src-b",
+      skipCapsule: true,
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seededA.capsuleId], sourceFilter: [seededA.sourceId] },
+      "query",
+      { topK: 50 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(new Set(outcome.references.map((ref) => String(ref.citation.sourceId)))).toEqual(
+      new Set(["src-a"]),
+    );
   });
 });
 
@@ -404,5 +442,17 @@ describe("toScopeInput — single capsule sugar", () => {
   it("wraps a { capsuleId } object into a RetrievalScopeInput", () => {
     const input = toScopeInput({ capsuleId: "cap-a" as KnowledgeCapsuleId });
     expect(input.capsuleIds).toEqual(["cap-a"]);
+  });
+
+  it("preserves composed source filters", () => {
+    const input = toScopeInput({
+      capsuleSetId: "set-a" as CapsuleSetId,
+      capsuleIds: ["cap-a" as KnowledgeCapsuleId],
+      sourceIds: ["src-a" as KnowledgeSourceId],
+      alwaysQueryCapsuleIds: [],
+      sourceRoutingByCapsule: new Map(),
+    });
+    expect(input.capsuleIds).toEqual(["cap-a"]);
+    expect(input.sourceFilter).toEqual(["src-a"]);
   });
 });

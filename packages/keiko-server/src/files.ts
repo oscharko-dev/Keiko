@@ -150,16 +150,16 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return store.listProjects().find((project) => project.path === projectId);
 }
 
-function rootNameIsDenied(rootPath: string): boolean {
-  return pathIsDenied(basename(rootPath));
+function rootPathIsDenied(rootPath: string): boolean {
+  return pathIsDenied(rootPath);
 }
 
 async function resolveRegisteredRoot(project: Project): Promise<ResolvedProjectRoot> {
-  if (rootNameIsDenied(project.path)) {
+  if (rootPathIsDenied(project.path)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(project.path);
-  if (rootNameIsDenied(realRoot)) {
+  if (rootPathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return { root: project.path, realRoot };

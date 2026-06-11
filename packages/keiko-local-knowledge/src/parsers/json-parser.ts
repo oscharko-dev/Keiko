@@ -6,10 +6,10 @@
 // callers see one unit per traversal step so duplicate keys (which `JSON.parse` itself
 // resolves by last-wins) collapse the same way they do in the parsed object.
 //
-// Character offsets: every leaf is emitted with a whole-document span [0, text.length) because
-// `JSON.parse` discards positions and we have not yet wired a per-leaf re-scanner. The
-// JSON Pointer (not the character span) is what downstream layers (#195 chunker, #196 indexer)
-// use for citation. Precise per-leaf offsets are deferred to a follow-up issue.
+// Character offsets target a normalized line-oriented projection, not the raw JSON bytes:
+//   /json/pointer: <leaf-json>
+// This keeps downstream chunking bounded by the selected leaf instead of multiplying the whole
+// document once per leaf while preserving the JSON Pointer citation.
 
 import {
   decodeUtf8,
@@ -19,7 +19,12 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
-import type { ParserAdapter, ParserOptions, ParserSelectionInput } from "./types.js";
+import type {
+  InternalParserResult,
+  ParserAdapter,
+  ParserOptions,
+  ParserSelectionInput,
+} from "./types.js";
 
 const PARSER_ID = "json";
 const PARSER_VERSION = "1";
@@ -49,22 +54,42 @@ interface ScanContext {
   readonly startedAt: number;
   readonly units: ParsedUnit[];
   readonly diagnostics: ParserDiagnostic[];
+  readonly normalizedParts: string[];
+  normalizedLength: number;
   stopped: boolean;
 }
 
-function pushLeaf(ctx: ScanContext, pointer: string, start: number, end: number): void {
+function stringifyLeaf(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function appendNormalizedLeaf(
+  ctx: ScanContext,
+  pointer: string,
+  value: unknown,
+): { readonly start: number; readonly end: number } {
+  const label = pointer.length === 0 ? "/" : pointer;
+  const line = `${label}: ${stringifyLeaf(value)}\n`;
+  const start = ctx.normalizedLength;
+  ctx.normalizedParts.push(line);
+  ctx.normalizedLength += line.length;
+  return { start, end: ctx.normalizedLength };
+}
+
+function pushLeaf(ctx: ScanContext, pointer: string, value: unknown): void {
   const limit = shouldStop(ctx.startedAt, ctx.options, ctx.units.length);
   if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
     ctx.diagnostics.push(diagnostic(limit.code, limit.message, ctx.input.documentId, "info"));
     ctx.stopped = true;
     return;
   }
+  const span = appendNormalizedLeaf(ctx, pointer, value);
   ctx.units.push({
     kind: "json-path",
     documentId: ctx.input.documentId,
     jsonPointer: pointer,
-    characterStart: start,
-    characterEnd: end,
+    characterStart: span.start,
+    characterEnd: span.end,
   });
 }
 
@@ -94,11 +119,7 @@ function descendObject(ctx: ScanContext, value: Record<string, unknown>, pointer
 function walk(ctx: ScanContext, value: unknown, pointer: string): void {
   if (ctx.stopped) return;
   if (isLeaf(value)) {
-    // Character offsets are approximated as [0, text.length) for the root leaf and 0/0 for
-    // nested leaves — #195's chunker uses the JSON Pointer, not the character span, for
-    // citation, and #196 stores the raw text in the document body anyway. Honest "we did not
-    // re-scan" is preferable to inventing fake offsets.
-    pushLeaf(ctx, pointer, 0, ctx.text.length);
+    pushLeaf(ctx, pointer, value);
     return;
   }
   if (Array.isArray(value)) {
@@ -149,15 +170,14 @@ export const jsonParser: ParserAdapter = Object.freeze({
       startedAt: options.now(),
       units: [],
       diagnostics: [],
+      normalizedParts: [],
+      normalizedLength: 0,
       stopped: false,
     };
     walk(ctx, parsed.value, "");
-    return emptyResult(
-      jsonParser.capability,
-      input.documentId,
-      options,
-      ctx.diagnostics,
-      ctx.units,
-    );
+    return {
+      ...emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics, ctx.units),
+      normalizedText: ctx.normalizedParts.join(""),
+    } satisfies InternalParserResult;
   },
 });

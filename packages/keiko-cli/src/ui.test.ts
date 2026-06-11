@@ -206,6 +206,8 @@ describe("runUiCli", () => {
       expect(captured[0]?.uiDbPath).toBe(join(cwd, ".keiko", "ui", "keiko-ui.db"));
       expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
       expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(cwd, ".keiko", "memory"));
+      expect(captured[0]?.preferredProjectPath).toBe(cwd);
+      expect(captured[0]?.store.listProjects().map((project) => project.path)).toEqual([cwd]);
       captured[0]?.store.close();
       captured[0]?.memoryVault?.close();
     } finally {

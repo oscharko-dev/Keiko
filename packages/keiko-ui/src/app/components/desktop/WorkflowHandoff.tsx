@@ -405,6 +405,12 @@ export interface LaunchGroundedWorkflowButtonProps {
   ) => Promise<LaunchGroundedWorkflowHandoffResult>;
 }
 
+function isMultiSourceConnectedAnswer(
+  answer: Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>,
+): boolean {
+  return answer.citations.some((citation) => citation.source !== undefined);
+}
+
 export function LaunchGroundedWorkflowButton({
   answer,
   modelId,
@@ -416,7 +422,8 @@ export function LaunchGroundedWorkflowButton({
   if (
     answer === undefined ||
     answer.groundingKind !== "connected-context" ||
-    modelId === undefined
+    modelId === undefined ||
+    isMultiSourceConnectedAnswer(answer)
   ) {
     return null;
   }

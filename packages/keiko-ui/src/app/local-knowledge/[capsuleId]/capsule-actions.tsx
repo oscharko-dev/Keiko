@@ -88,6 +88,12 @@ function rootPathPlaceholder(kind: ConnectCapsuleSourceScope["kind"]): string {
   return "/absolute/path/to/folder";
 }
 
+function rootPathLabel(kind: ConnectCapsuleSourceScope["kind"]): string {
+  if (kind === "repository") return "Absolute repository path to connect";
+  if (kind === "files") return "Absolute root path for the selected files";
+  return "Absolute folder path to connect";
+}
+
 function buildScope(
   kind: ConnectCapsuleSourceScope["kind"],
   rootPath: string,
@@ -165,6 +171,9 @@ function ConnectSourceForm({
         </span>
       </div>
       <div className="lkd-connect-row">
+        <label htmlFor="lkd-connect-path-input" className="dlg-label">
+          {rootPathLabel(scopeKind)}
+        </label>
         <input
           id="lkd-connect-path-input"
           type="text"
@@ -172,13 +181,6 @@ function ConnectSourceForm({
           value={rootPath}
           disabled={busy}
           placeholder={rootPathPlaceholder(scopeKind)}
-          aria-label={
-            scopeKind === "repository"
-              ? "Absolute repository path to connect"
-              : scopeKind === "files"
-                ? "Absolute root path for the selected files"
-                : "Absolute folder path to connect"
-          }
           autoComplete="off"
           onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
           onKeyDown={(e) => {
@@ -188,12 +190,15 @@ function ConnectSourceForm({
       </div>
       {scopeKind === "files" ? (
         <div className="lkd-connect-row">
+          <label htmlFor="lkd-connect-files-input" className="dlg-label">
+            Relative files to connect
+          </label>
           <textarea
+            id="lkd-connect-files-input"
             className="dlg-input lkd-connect-input"
             value={filesInput}
             disabled={busy}
             placeholder={"src/app.ts\nREADME.md"}
-            aria-label="Relative files to connect"
             rows={4}
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFilesInput(e.target.value)}
           />
@@ -396,7 +401,6 @@ function ConfirmModal({
                 ref={confirmInputRef}
                 disabled={busy}
                 placeholder={capsuleDisplayName}
-                aria-label={`Type "${capsuleDisplayName}" to confirm deletion`}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => onNameChange(e.target.value)}
               />
             </div>

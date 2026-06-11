@@ -35,6 +35,7 @@ import {
   type GovernorState,
   type MicroIndex,
   type RetrievalRing,
+  type SearchAnchor,
 } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
@@ -344,6 +345,11 @@ interface ExcerptReadSummary {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
+interface CandidateOrdering {
+  readonly kept: readonly CandidateFile[];
+  readonly omitted: readonly OmittedContextEntry[];
+}
+
 interface LineWindow {
   readonly startLine: number;
   readonly endLine: number;
@@ -352,6 +358,141 @@ interface LineWindow {
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
 const EXCERPT_CONTEXT_LINES = 2;
 const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
+const LOCKFILE_NAMES = new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+  "cargo.lock",
+  "composer.lock",
+  "gemfile.lock",
+]);
+
+function basename(scopePath: string): string {
+  const index = scopePath.lastIndexOf("/");
+  return index >= 0 ? scopePath.slice(index + 1) : scopePath;
+}
+
+function compareByScopePath(a: OmittedContextEntry, b: OmittedContextEntry): number {
+  return a.scopePath.localeCompare(b.scopePath);
+}
+
+function isKeikoEvidenceArtifact(scopePath: string): boolean {
+  return scopePath.toLowerCase().startsWith(".keiko/evidence/");
+}
+
+function isLockfilePath(scopePath: string): boolean {
+  return LOCKFILE_NAMES.has(basename(scopePath).toLowerCase());
+}
+
+function queryTerms(queryText: string, anchors: readonly SearchAnchor[]): readonly string[] {
+  const terms = new Set<string>();
+  const loweredQuery = queryText.toLowerCase();
+  for (const token of loweredQuery.split(/[^a-z0-9._/-]+/)) {
+    if (token.length > 0) {
+      terms.add(token);
+    }
+  }
+  for (const anchor of anchors) {
+    const lowered = anchor.term.toLowerCase();
+    if (lowered.length > 0) {
+      terms.add(lowered);
+    }
+    for (const token of lowered.split(/[^a-z0-9._/-]+/)) {
+      if (token.length > 0) {
+        terms.add(token);
+      }
+    }
+  }
+  return [...terms];
+}
+
+function explicitlyTargetsRuntimeArtifact(
+  scopePath: string,
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  if (!isKeikoEvidenceArtifact(scopePath)) {
+    return false;
+  }
+  const loweredQuery = queryText.toLowerCase();
+  if (loweredQuery.includes(".keiko") || loweredQuery.includes("evidence artifact")) {
+    return true;
+  }
+  return queryTerms(queryText, anchors).some((term) => scopePath.toLowerCase().includes(term));
+}
+
+function explicitlyTargetsLockfile(
+  scopePath: string,
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  if (!isLockfilePath(scopePath)) {
+    return false;
+  }
+  const loweredQuery = queryText.toLowerCase();
+  if (
+    loweredQuery.includes("lockfile") ||
+    loweredQuery.includes("package manager") ||
+    loweredQuery.includes("packagemanager") ||
+    loweredQuery.includes("dependency version") ||
+    loweredQuery.includes("dependency versions") ||
+    loweredQuery.includes("resolved version") ||
+    loweredQuery.includes("resolved versions")
+  ) {
+    return true;
+  }
+  const path = scopePath.toLowerCase();
+  const name = basename(scopePath).toLowerCase();
+  return queryTerms(queryText, anchors).some((term) => path.includes(term) || name === term);
+}
+
+function refineCandidateOrdering(
+  kept: readonly CandidateFile[],
+  omitted: readonly OmittedContextEntry[],
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+  nowMs: number,
+): CandidateOrdering {
+  const preferred: CandidateFile[] = [];
+  const lockfiles: CandidateFile[] = [];
+  const runtimeArtifacts: CandidateFile[] = [];
+
+  for (const candidate of kept) {
+    const scopePath = candidate.scopePath;
+    if (
+      isKeikoEvidenceArtifact(scopePath) &&
+      !explicitlyTargetsRuntimeArtifact(scopePath, queryText, anchors)
+    ) {
+      runtimeArtifacts.push(candidate);
+      continue;
+    }
+    if (isLockfilePath(scopePath) && !explicitlyTargetsLockfile(scopePath, queryText, anchors)) {
+      lockfiles.push(candidate);
+      continue;
+    }
+    preferred.push(candidate);
+  }
+
+  if (preferred.length === 0) {
+    return { kept, omitted };
+  }
+
+  const nextOmitted = [...omitted];
+  for (const candidate of runtimeArtifacts) {
+    nextOmitted.push({
+      scopePath: candidate.scopePath,
+      reason: "low-relevance",
+      omittedAtMs: nowMs,
+    });
+  }
+  nextOmitted.sort(compareByScopePath);
+  return {
+    kept: [...preferred, ...lockfiles],
+    omitted: nextOmitted,
+  };
+}
 
 function groupEvidenceAtomsByPath(
   atoms: readonly EvidenceAtom[],
@@ -546,11 +687,18 @@ async function assembleGroundedPack({
   const atoms = rings.atoms;
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
+  const ordered = refineCandidateOrdering(
+    ranking.kept,
+    ranking.omitted,
+    input.query.text,
+    plan.anchors,
+    nowMs(),
+  );
   const atomsByPath = groupEvidenceAtomsByPath(atoms);
   const evidenceUncertainty =
-    atoms.length === 0 || ranking.kept.length === 0 ? [noEvidence(nowMs())] : [];
+    atoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [];
   const excerptReads = await readKeptExcerpts(
-    ranking.kept.map((c) => c.scopePath),
+    ordered.kept.map((c) => c.scopePath),
     { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs, signal: deps.signal },
   );
   const assembleOptions =
@@ -561,8 +709,8 @@ async function assembleGroundedPack({
       query: input.query,
       budget: plan.budget,
       atoms,
-      ranked: ranking.kept,
-      omittedFromRanking: [...rings.omitted, ...ranking.omitted],
+      ranked: ordered.kept,
+      omittedFromRanking: [...rings.omitted, ...ordered.omitted],
       excerpts: excerptReads.excerpts,
       initialUsage,
       initialUncertainty: [

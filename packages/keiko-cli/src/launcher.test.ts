@@ -163,6 +163,15 @@ describe("runLauncherCli install — happy paths", () => {
     expect(first?.contentSha256).toBe(hashContent(content));
   });
 
+  it("install accepts a scoped npm path containing @ in the executable location", () => {
+    const scopedExe = "/workspace/node_modules/@oscharko-dev/keiko/bin/keiko";
+    const h = makeHarness("linux", scopedExe);
+    const c = makeIo();
+    expect(runLauncherCli(["install"], c.io, {}, h.deps)).toBe(0);
+    const content = readFileSync(h.targetPath, "utf8");
+    expect(content).toContain(`Exec=${scopedExe} start --open\n`);
+  });
+
   it("install --port 3000 bakes the port into the Exec line", () => {
     const h = makeHarness();
     const c = makeIo();

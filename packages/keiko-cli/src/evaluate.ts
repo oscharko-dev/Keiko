@@ -7,7 +7,18 @@
 // error; 2 on usage error (unknown flag, mutual exclusion, unknown suite/fixture name).
 
 import { writeFileSync } from "node:fs";
-import { GatewayError, redact, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ConfigInvalidError,
+  GatewayError,
+  assertConfiguredModel,
+  findConfiguredCapability,
+  listConfiguredCapabilities,
+  loadConfigFromFile,
+  redact,
+  type EnvSource,
+  type GatewayConfig,
+  type ModelCapability,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createAuditRedactor, deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import { parseRunRequest } from "@oscharko-dev/keiko-server";
@@ -212,11 +223,15 @@ async function runSuite(
   deps: EvaluateDeps,
 ): Promise<number> {
   try {
+    const liveModelId = resolveLiveModelId(parsed, io, env);
+    if (typeof liveModelId === "number") {
+      return liveModelId;
+    }
     const scorecard = await runEvaluationSuite(
       {
         mode: parsed.live ? "live" : "offline",
         fixtures,
-        ...(parsed.model === undefined ? {} : { modelIdOverride: parsed.model }),
+        ...(liveModelId === undefined ? {} : { modelIdOverride: liveModelId }),
         ...(parsed.config === undefined ? {} : { configPath: parsed.config }),
       },
       // Provide Date.now as the default wall-clock so a real `keiko evaluate` prints the actual
@@ -240,6 +255,75 @@ async function runSuite(
       return 1;
     }
     return handleRunError(error, parsed, io);
+  }
+}
+
+function resolveLiveModelId(
+  parsed: EvaluateArgs,
+  io: CliIo,
+  env: EnvSource,
+): string | undefined | number {
+  if (!parsed.live) {
+    return parsed.model;
+  }
+  try {
+    const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
+    if (path === undefined) {
+      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+    }
+    const config = loadConfigFromFile(path, env);
+    if (parsed.model !== undefined) {
+      assertLiveEvaluationModel(config, parsed.model);
+      return parsed.model;
+    }
+    const modelId = selectLiveEvaluationModel(config);
+    if (modelId === undefined) {
+      io.err("Error: no configured workflow-capable chat model is available.\n");
+      return 1;
+    }
+    return modelId;
+  } catch (error) {
+    if (error instanceof GatewayError) {
+      io.err(
+        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+          `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
+      );
+      return 1;
+    }
+    throw error;
+  }
+}
+
+function isLiveEvaluationCapable(capability: ModelCapability | undefined): boolean {
+  return (
+    capability?.kind === "chat" &&
+    capability.workflowEligible &&
+    capability.toolCalling &&
+    capability.structuredOutput
+  );
+}
+
+const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
+
+function selectLiveEvaluationModel(config: GatewayConfig): string | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!isLiveEvaluationCapable(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best?.id;
+}
+
+function assertLiveEvaluationModel(config: GatewayConfig, modelId: string): void {
+  assertConfiguredModel(config, modelId);
+  if (!isLiveEvaluationCapable(findConfiguredCapability(config, modelId))) {
+    throw new ConfigInvalidError(
+      `model '${modelId}' is not workflow-capable; live evaluation requires chat + tool-calling + structured-output`,
+    );
   }
 }
 

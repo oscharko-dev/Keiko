@@ -8,9 +8,11 @@
 //      realpath escapes the root is dropped and reported via `walkSource`'s second yield
 //      channel (an InvalidEntry record) rather than thrown — that lets the caller log a
 //      `PATH_ESCAPE` diagnostic against the file instead of aborting the whole walk.
-//   3. Include/exclude globs are applied on the workspace-relative POSIX path; exclude
+//   3. The workspace deny list is enforced on every discovered descendant, including explicit
+//      `files` scopes. Hidden/generated-directory opt-in never relaxes the security deny list.
+//   4. Include/exclude globs are applied on the workspace-relative POSIX path; exclude
 //      wins on overlap.
-//   4. AbortSignal is checked at every directory boundary.
+//   5. AbortSignal is checked at every directory boundary.
 //
 // Returns an async iterable of `WalkYield` values. The walker is otherwise PURE — no
 // clock reads, no randomness — and the WorkspaceFs port is the only IO surface.
@@ -18,6 +20,7 @@
 import type { KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
 import { isSafeScopePath } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -187,11 +190,18 @@ function shouldSkipDirectoryEntry(ctx: WalkContext, entryName: string): boolean 
   return !ctx.bounds.recursive || !shouldDescendIntoDirectory(entryName);
 }
 
+function isDeniedRelativePath(relativePath: string): boolean {
+  return isDenied(relativePath);
+}
+
 function* yieldFileIfAllowed(
   ctx: WalkContext,
   absolutePath: string,
   relativePath: string,
 ): Generator<WalkYield> {
+  if (isDeniedRelativePath(relativePath)) {
+    return;
+  }
   // realpath containment gate (boundary). Skip the entry entirely on failure rather than
   // yielding a misleading diagnostic — the entry might be a transient broken symlink.
   const real = safeRealPath(ctx.fs, absolutePath);
@@ -220,10 +230,13 @@ function* yieldFileIfAllowed(
   yield { kind: "file", file: { relativePath, sizeBytes: size } };
 }
 
-function safeReadDir(
-  fs: WorkspaceFs,
-  absolutePath: string,
-): readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[] {
+interface WalkDirEntry {
+  readonly name: string;
+  readonly isDirectory: boolean;
+  readonly isFile: boolean;
+}
+
+function safeReadDir(fs: WorkspaceFs, absolutePath: string): readonly WalkDirEntry[] {
   try {
     return fs.readDir(absolutePath);
   } catch {
@@ -236,6 +249,25 @@ function safeReadDir(
 // observe abort between any two checks.
 function isAborted(ctx: WalkContext): boolean {
   return ctx.options.signal?.aborted === true;
+}
+
+function* yieldDirectoryEntry(
+  ctx: WalkContext,
+  absoluteDir: string,
+  entry: WalkDirEntry,
+  depth: number,
+): Generator<WalkYield> {
+  const childAbs = joinAbs(absoluteDir, entry.name);
+  const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
+  if (entry.isDirectory) {
+    if (isDeniedRelativePath(childRel)) return;
+    if (shouldSkipDirectoryEntry(ctx, entry.name)) return;
+    yield* descend(ctx, childAbs, depth + 1);
+    return;
+  }
+  if (entry.isFile) {
+    yield* yieldFileIfAllowed(ctx, childAbs, childRel);
+  }
 }
 
 function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generator<WalkYield> {
@@ -258,17 +290,7 @@ function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generat
       yield abortYield();
       return;
     }
-    const childAbs = joinAbs(absoluteDir, entry.name);
-    const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
-    if (entry.isDirectory) {
-      if (shouldSkipDirectoryEntry(ctx, entry.name)) continue;
-      yield* descend(ctx, childAbs, depth + 1);
-      continue;
-    }
-    if (!entry.isFile) {
-      continue;
-    }
-    yield* yieldFileIfAllowed(ctx, childAbs, childRel);
+    yield* yieldDirectoryEntry(ctx, absoluteDir, entry, depth);
   }
 }
 

@@ -306,6 +306,16 @@ function projectWithAvailability(p: Project): ProjectWithAvailability {
   return { ...p, available: isProjectAvailable(p) };
 }
 
+function putPreferredProjectFirst(
+  projects: readonly ProjectWithAvailability[],
+  preferredProjectPath: string | undefined,
+): readonly ProjectWithAvailability[] {
+  if (preferredProjectPath === undefined) return projects;
+  const preferred = projects.find((project) => project.path === preferredProjectPath);
+  if (preferred === undefined) return projects;
+  return [preferred, ...projects.filter((project) => project.path !== preferredProjectPath)];
+}
+
 function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: string): boolean {
   return deps.store.findChatById(chatId)?.projectPath === projectPath;
 }
@@ -326,7 +336,10 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 // ──────────────────────────────────────────────────────────────────────────
 
 export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const projects = deps.store.listProjects().map(projectWithAvailability);
+  const projects = putPreferredProjectFirst(
+    deps.store.listProjects().map(projectWithAvailability),
+    deps.preferredProjectPath,
+  );
   return { status: 200, body: { projects } };
 }
 
@@ -567,10 +580,13 @@ function validateScopePathAccess(
   }
 }
 
-function resolveRealRoot(rootInput: string, notAccessibleMessage: string): string {
+function resolveRealRoot(
+  rootInput: string,
+  notAccessibleMessage: string,
+): { readonly root: string; readonly realRoot: string } {
   const root = validateProjectPath(rootInput, { mustExist: true });
   try {
-    return realpathSync(root);
+    return { root, realRoot: realpathSync(root) };
   } catch {
     throw new InvalidRequest(notAccessibleMessage);
   }
@@ -580,16 +596,39 @@ function resolveRealRoot(rootInput: string, notAccessibleMessage: string): strin
 // (a folder outside the chat's project, so non-developers can connect any folder). Validate it like
 // a project root, then refuse credential/secret locations (deny-list) and credential-shaped path
 // metadata so home-directory browsing can never bind a secret folder as a grounded scope.
-function validateConnectedScopeRoot(deps: UiHandlerDeps, rootInput: string): string {
-  const realRoot = resolveRealRoot(rootInput, "Connected scope root is not accessible.");
-  if (pathIsDenied(realRoot)) {
-    throw new InvalidRequest("Connected scope root is excluded from Keiko's safe read surface.");
+function validateAccessibleRoot(
+  deps: UiHandlerDeps,
+  rootInput: string,
+  notAccessibleMessage: string,
+  deniedMessage: string,
+): string {
+  const { root, realRoot } = resolveRealRoot(rootInput, notAccessibleMessage);
+  if (pathIsDenied(root) || pathIsDenied(realRoot)) {
+    throw new InvalidRequest(deniedMessage);
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
     throw new InvalidRequest("Connected scope root contains credential-shaped metadata.");
   }
   return realRoot;
+}
+
+function validateConnectedScopeRoot(deps: UiHandlerDeps, rootInput: string): string {
+  return validateAccessibleRoot(
+    deps,
+    rootInput,
+    "Connected scope root is not accessible.",
+    "Connected scope root is excluded from Keiko's safe read surface.",
+  );
+}
+
+function validateFallbackProjectRoot(deps: UiHandlerDeps, projectPath: string): string {
+  return validateAccessibleRoot(
+    deps,
+    projectPath,
+    "Selected project is not accessible.",
+    "Selected project is excluded from Keiko's safe read surface.",
+  );
 }
 
 function validateConnectedScopeAccess(
@@ -600,7 +639,7 @@ function validateConnectedScopeAccess(
   const realRoot =
     scope.root !== undefined
       ? validateConnectedScopeRoot(deps, scope.root)
-      : resolveRealRoot(chat.projectPath, "Selected project is not accessible.");
+      : validateFallbackProjectRoot(deps, chat.projectPath);
   if (scope.kind === "workspace-root") return;
   for (const entry of scope.relativePaths) {
     validateScopePathAccess(deps, realRoot, scope.kind, entry);
