@@ -34,6 +34,14 @@ import { errorBody } from "./routes.js";
 import type { ChatMessage, NewChatMessage } from "./store/types.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const RESERVED_WORKFLOW_INPUT_FIELDS = new Set([
+  "apply",
+  "governedHandoff",
+  "limits",
+  "modelId",
+  "workflowHandoff",
+  "workspaceRoot",
+]);
 
 const VERIFY_NOOP_MODEL: ModelPort = {
   call: () => Promise.reject(new Error("verify runs must not call the model")),
@@ -142,12 +150,18 @@ function requireRecord(
   return value;
 }
 
+function validateWorkflowInput(input: Record<string, unknown>): RouteResult | null {
+  for (const field of RESERVED_WORKFLOW_INPUT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(input, field)) {
+      return badField("input", `must not include reserved workflow field "${field}"`);
+    }
+  }
+  return null;
+}
+
 function stringArrayField(
   body: Record<string, unknown>,
-  field: keyof Pick<
-    GroundedWorkflowHandoffWire,
-    "editablePaths" | "expectedChecks" | "unknowns"
-  >,
+  field: keyof Pick<GroundedWorkflowHandoffWire, "editablePaths" | "expectedChecks" | "unknowns">,
 ): readonly string[] | RouteResult {
   const value = body[field];
   if (!Array.isArray(value)) {
@@ -192,6 +206,7 @@ function parseExpectedChecks(
 
 interface ParsedGroundedHandoffBody {
   readonly assistantMessageId: string;
+  readonly chatId: string;
   readonly modelId: string;
   readonly workflowKind: WorkflowKind;
   readonly input: Record<string, unknown>;
@@ -201,9 +216,15 @@ interface ParsedGroundedHandoffBody {
   readonly requestedAtMs: number;
 }
 
-function parseWorkflowKindField(
-  body: Record<string, unknown>,
-): WorkflowKind | RouteResult {
+interface RequiredGroundedHandoffFields {
+  readonly assistantMessageId: string;
+  readonly chatId: string;
+  readonly modelId: string;
+  readonly workflowKind: WorkflowKind;
+  readonly input: Record<string, unknown>;
+}
+
+function parseWorkflowKindField(body: Record<string, unknown>): WorkflowKind | RouteResult {
   const workflowKind = requireString(body, "workflowKind");
   if (isRouteResult(workflowKind)) {
     return workflowKind;
@@ -217,11 +238,9 @@ function parseUnknowns(body: Record<string, unknown>): readonly string[] | Route
   return body.unknowns === undefined ? [] : stringArrayField(body, "unknowns");
 }
 
-function parseBody(raw: string): ParsedGroundedHandoffBody | RouteResult {
-  const body = parseJsonRecord(raw);
-  if (isRouteResult(body)) {
-    return body;
-  }
+function parseRequiredFields(
+  body: Record<string, unknown>,
+): RequiredGroundedHandoffFields | RouteResult {
   const workflowKind = parseWorkflowKindField(body);
   if (isRouteResult(workflowKind)) {
     return workflowKind;
@@ -230,6 +249,10 @@ function parseBody(raw: string): ParsedGroundedHandoffBody | RouteResult {
   if (isRouteResult(assistantMessageId)) {
     return assistantMessageId;
   }
+  const chatId = requireString(body, "chatId");
+  if (isRouteResult(chatId)) {
+    return chatId;
+  }
   const modelId = requireString(body, "modelId");
   if (isRouteResult(modelId)) {
     return modelId;
@@ -237,6 +260,22 @@ function parseBody(raw: string): ParsedGroundedHandoffBody | RouteResult {
   const input = requireRecord(body, "input");
   if (isRouteResult(input)) {
     return input;
+  }
+  const inputError = validateWorkflowInput(input);
+  if (inputError !== null) {
+    return inputError;
+  }
+  return { assistantMessageId, chatId, modelId, workflowKind, input };
+}
+
+function parseBody(raw: string): ParsedGroundedHandoffBody | RouteResult {
+  const body = parseJsonRecord(raw);
+  if (isRouteResult(body)) {
+    return body;
+  }
+  const required = parseRequiredFields(body);
+  if (isRouteResult(required)) {
+    return required;
   }
   const editablePaths = stringArrayField(body, "editablePaths");
   if (isRouteResult(editablePaths)) {
@@ -250,15 +289,12 @@ function parseBody(raw: string): ParsedGroundedHandoffBody | RouteResult {
   if (isRouteResult(requestedAtMs)) {
     return requestedAtMs;
   }
-  const expectedChecks = parseExpectedChecks(body, workflowKind);
+  const expectedChecks = parseExpectedChecks(body, required.workflowKind);
   if (isRouteResult(expectedChecks)) {
     return expectedChecks;
   }
   return {
-    assistantMessageId,
-    modelId,
-    workflowKind,
-    input,
+    ...required,
     editablePaths,
     expectedChecks,
     unknowns,
@@ -295,11 +331,9 @@ function runRequestFor(
 ): RunRequest | RouteResult {
   const parsed = parseRunRequest(
     JSON.stringify({
-      ...(workflowKind === "verification"
-        ? { taskType: "verify" }
-        : { workflowId: workflowKind }),
+      ...(workflowKind === "verification" ? { taskType: "verify" } : { workflowId: workflowKind }),
       modelId,
-      input: { workspaceRoot, ...input },
+      input: { ...input, workspaceRoot },
     }),
   );
   if ("code" in parsed) {
@@ -480,6 +514,12 @@ function resolveGroundedHandoffLaunch(
 ): ResolvedGroundedHandoffLaunch | RouteResult {
   const record = lookupGroundedTurn(body.assistantMessageId);
   if (record === undefined) {
+    return {
+      status: 404,
+      body: errorBody("NOT_FOUND", "Grounded handoff context is no longer available."),
+    };
+  }
+  if (record.chatId !== body.chatId) {
     return {
       status: 404,
       body: errorBody("NOT_FOUND", "Grounded handoff context is no longer available."),

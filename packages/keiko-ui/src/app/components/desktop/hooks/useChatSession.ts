@@ -1471,6 +1471,7 @@ export function useChatSession(): UseChatSessionResult {
       try {
         const result = await startGroundedWorkflowHandoff({
           assistantMessageId: input.assistantMessageId,
+          chatId: state.activeChat.id,
           modelId: input.modelId,
           workflowKind: input.workflowKind,
           input: input.input,

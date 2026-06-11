@@ -653,6 +653,7 @@ describe("useChatSession.launchGroundedWorkflowHandoff", () => {
     expect(start).toHaveBeenCalledOnce();
     expect(start.mock.calls[0]?.[0]).toMatchObject({
       assistantMessageId: "msg-a",
+      chatId: "chat-1",
       modelId: "wf-model",
       workflowKind: "unit-test-generation",
       input: { target: { kind: "file", filePath: "src/example.ts" } },

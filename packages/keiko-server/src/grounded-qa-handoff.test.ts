@@ -19,10 +19,7 @@ import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { handleGroundedWorkflowHandoff } from "./grounded-handoff.js";
-import {
-  clearAllGroundedTurns,
-  rememberGroundedTurn,
-} from "./grounded-turn-registry.js";
+import { clearAllGroundedTurns, rememberGroundedTurn } from "./grounded-turn-registry.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 
@@ -40,6 +37,7 @@ const DIFF =
 let workspaceRoot: string;
 let store: UiStore;
 let deps: UiHandlerDeps;
+let chatId: string;
 
 function fakeReq(body: string): IncomingMessage {
   return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
@@ -160,12 +158,42 @@ async function waitForTerminal(runId: string): Promise<void> {
 function handoffRequest(assistantMessageId: string): string {
   return JSON.stringify({
     assistantMessageId,
+    chatId,
     modelId: "test-model",
     workflowKind: "unit-test-generation",
     input: {
       target: { kind: "file", filePath: "src/add.ts" },
     },
     editablePaths: ["tests/add.test.ts"],
+    requestedAtMs: NOW,
+  });
+}
+
+function handoffRequestWithInput(
+  assistantMessageId: string,
+  input: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    assistantMessageId,
+    chatId,
+    modelId: "test-model",
+    workflowKind: "unit-test-generation",
+    input,
+    editablePaths: ["tests/add.test.ts"],
+    requestedAtMs: NOW,
+  });
+}
+
+function verificationHandoffRequest(assistantMessageId: string): string {
+  return JSON.stringify({
+    assistantMessageId,
+    chatId,
+    modelId: "test-model",
+    workflowKind: "verification",
+    input: {
+      targetFiles: ["src/add.ts"],
+    },
+    editablePaths: [],
     requestedAtMs: NOW,
   });
 }
@@ -200,6 +228,7 @@ beforeEach((): void => {
   store = createInMemoryUiStore();
   const project = store.createProject(workspaceRoot, "fixture");
   const chat = store.createChat(project.path, "Grounded handoff", "test-model");
+  chatId = chat.id;
   rememberGroundedTurn({
     assistantMessageId: "assistant-1",
     chatId: chat.id,
@@ -242,9 +271,65 @@ describe("handleGroundedWorkflowHandoff", () => {
     expectGovernedArtifacts(body.run.runId);
   });
 
+  it("preserves governed handoff provenance for grounded verification runs", async () => {
+    const result = await handleGroundedWorkflowHandoff(
+      ctx(verificationHandoffRequest("assistant-1")),
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
+    const body = result.body as {
+      run: { runId: string; fingerprint: string };
+      messages: readonly { id: string; role: string; content: string }[];
+    };
+
+    await waitForTerminal(body.run.runId);
+    const manifest = loadEvidence(deps.evidenceStore, body.run.runId);
+    expect(manifest?.governedHandoff).toMatchObject({
+      sourceGroundedRunId: "grounded-run-1",
+      workflowKind: "verification",
+      editablePathCount: 0,
+      readOnlyPathCount: 1,
+      evidenceAtomCount: 1,
+      expectedChecks: ["verify"],
+    });
+  });
+
   it("returns NOT_FOUND when the grounded turn registry no longer has the answer context", async () => {
     const result = await handleGroundedWorkflowHandoff(ctx(handoffRequest("missing-answer")), deps);
 
     expect(result.status).toBe(404);
   });
+
+  it("rejects handoff requests when the assistant message belongs to another chat", async () => {
+    const otherChat = store.createChat(workspaceRoot, "Other chat", "test-model");
+    const request = {
+      ...(JSON.parse(handoffRequest("assistant-1")) as Record<string, unknown>),
+      chatId: otherChat.id,
+    };
+
+    const result = await handleGroundedWorkflowHandoff(ctx(JSON.stringify(request)), deps);
+
+    expect(result.status).toBe(404);
+    expect(deps.registry.size()).toBe(0);
+  });
+
+  it.each(["apply", "governedHandoff", "limits", "modelId", "workflowHandoff", "workspaceRoot"])(
+    "rejects client-supplied workflow control field %s in the handoff input",
+    async (field) => {
+      const result = await handleGroundedWorkflowHandoff(
+        ctx(
+          handoffRequestWithInput("assistant-1", {
+            [field]: field === "workspaceRoot" ? join(tmpdir(), "attacker-workspace") : true,
+            target: { kind: "file", filePath: "src/add.ts" },
+          }),
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(400);
+      expect(JSON.stringify(result.body)).toContain(`reserved workflow field \\"${field}\\"`);
+      expect(deps.registry.size()).toBe(0);
+    },
+  );
 });

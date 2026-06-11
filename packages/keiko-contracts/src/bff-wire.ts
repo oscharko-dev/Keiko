@@ -287,6 +287,7 @@ export interface MessageResponse {
 
 export interface GroundedWorkflowHandoffRequest {
   readonly assistantMessageId: string;
+  readonly chatId: string;
   readonly modelId: string;
   readonly workflowKind: WorkflowKind;
   readonly input: Record<string, unknown>;

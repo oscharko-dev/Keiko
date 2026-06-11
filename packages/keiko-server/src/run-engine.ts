@@ -482,7 +482,16 @@ function persistOutcome(
     return persistExplainEvidence(runIdentity, outcome.result, ctx.evidence);
   }
   if (ctx.request.kind === "verify") {
-    return persistVerifyEvidence(runIdentity, ctx.evidence);
+    return persistVerifyEvidence(
+      runIdentity,
+      ctx.evidence,
+      ctx.request.governedHandoff === undefined
+        ? undefined
+        : buildGovernedHandoffEvidence({
+            request: ctx.request.governedHandoff,
+            sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+          }),
+    );
   }
   return persistWorkflowEvidence(
     runIdentity,

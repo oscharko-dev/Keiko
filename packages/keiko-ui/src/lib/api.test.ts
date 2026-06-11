@@ -398,6 +398,7 @@ describe("startGroundedWorkflowHandoff", () => {
 
     const result = await startGroundedWorkflowHandoff({
       assistantMessageId: "msg-a",
+      chatId: "chat-a",
       modelId: "wf-model",
       workflowKind: "unit-test-generation",
       input: { target: { kind: "file", filePath: "src/example.ts" } },
@@ -414,6 +415,7 @@ describe("startGroundedWorkflowHandoff", () => {
         method: "POST",
         body: JSON.stringify({
           assistantMessageId: "msg-a",
+          chatId: "chat-a",
           modelId: "wf-model",
           workflowKind: "unit-test-generation",
           input: { target: { kind: "file", filePath: "src/example.ts" } },

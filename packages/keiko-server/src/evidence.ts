@@ -108,15 +108,19 @@ const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {
 export function persistVerifyEvidence(
   identity: RunIdentity,
   ctx: EvidencePersistContext,
+  governedHandoff?: EvidenceManifest["governedHandoff"],
 ): EvidenceReport {
-  const manifest = buildVerifyManifest(identity);
+  const manifest = buildVerifyManifest(identity, governedHandoff);
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   return buildEvidenceReport(redacted, location);
 }
 
-function buildVerifyManifest(identity: RunIdentity): EvidenceManifest {
+function buildVerifyManifest(
+  identity: RunIdentity,
+  governedHandoff: EvidenceManifest["governedHandoff"] | undefined,
+): EvidenceManifest {
   const context =
     identity.workspaceRoot === undefined
       ? undefined
@@ -149,6 +153,7 @@ function buildVerifyManifest(identity: RunIdentity): EvidenceManifest {
     verification: undefined,
     patch: undefined,
     failure: undefined,
+    ...(governedHandoff === undefined ? {} : { governedHandoff }),
   };
 }
 
