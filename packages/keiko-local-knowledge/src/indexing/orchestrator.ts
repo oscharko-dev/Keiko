@@ -18,11 +18,12 @@
 // already persisted for completed documents are kept (the source-of-truth for resume is
 // the chunks/vectors tables, not the in-flight buffer).
 //
-// Force mode: deletes the capsule's pre-existing vector rows up front, then passes
-// `force=true` into the chunker so chunks are also re-emitted. Discovery's incremental
-// fast-path is bypassed by re-reading the bytes (the discovery layer already does the
-// content-hash compare for us — when force=true the orchestrator deletes the vectors but
-// the documents row stays valid, so chunk-and-embed still re-runs).
+// Force mode: passes `force=true` into the chunker per document so existing chunks are
+// replaced from the current source text, then re-embeds. Discovery's incremental
+// fast-path is bypassed (the skipped outcome is re-shaped to persisted in
+// handleFileExtracted) so chunk-and-embed re-runs even for unchanged file hashes.
+// Recovery mode (partial vector coverage, non-force): re-embeds using existing chunks
+// only — the chunker runs with force=false so it reuses the already-correct chunk rows.
 
 import { randomUUID } from "node:crypto";
 
@@ -499,6 +500,16 @@ function hasCompleteVectorCoverage(state: RunState, documentId: DocumentId): boo
   return coverage.chunkCount > 0 && coverage.vectorCount === coverage.chunkCount;
 }
 
+function persistedDocumentId(result: ExtractionResult): DocumentId {
+  if (result.outcome.kind !== "persisted") {
+    throw new IndexingError(
+      "INVALID_OPTIONS",
+      "chunkPersistedDocument called with non-persisted result",
+    );
+  }
+  return result.outcome.document.id;
+}
+
 function chunkPersistedDocument(
   state: RunState,
   result: ExtractionResult,
@@ -507,13 +518,7 @@ function chunkPersistedDocument(
   readonly documentId: DocumentId;
   readonly chunkCount: number;
 } {
-  if (result.outcome.kind !== "persisted") {
-    throw new IndexingError(
-      "INVALID_OPTIONS",
-      "chunkPersistedDocument called with non-persisted result",
-    );
-  }
-  const documentId = result.outcome.document.id;
+  const documentId = persistedDocumentId(result);
   const sourceText = resolveChunkSourceText(
     state,
     documentId,
@@ -527,6 +532,7 @@ function chunkPersistedDocument(
       sourceId: result.sourceId,
       documentId,
       sourceText,
+      force: state.options.force === true,
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     },
     state.options.chunkingOptions,
