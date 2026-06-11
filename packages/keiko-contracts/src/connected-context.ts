@@ -254,8 +254,9 @@ export interface ConnectedContextPack {
   readonly ledgerRef: EvidenceLedgerRef | undefined;
 }
 
-// ─── UI-safe pack summary ─────────────────────────────────────────────────────
-// Excludes raw content so it can render in browser surfaces without re-redaction.
+// ─── Pack summary ─────────────────────────────────────────────────────────────
+// In-process summary that excludes raw excerpt content. Browser-visible grounded-answer surfaces
+// use the stricter `GroundedAnswerContextPackSummary` projection from bff-wire.ts.
 export interface ConnectedContextPackSummary {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
   readonly stableId: string;
@@ -322,19 +323,23 @@ const TRAVERSAL_SEGMENT_RE = /(^|[\\/])(?:\.{1,2})(?:[\\/]|$)/;
 // constant equals the literal field type), so we widen to `string` before comparing. This
 // keeps the validator honest against runtime inputs that bypass the type system — e.g.,
 // objects materialized from JSON.parse or cross-version manifests.
-function schemaMismatch(actual: string, expected: string): boolean {
+function schemaMismatch(actual: unknown, expected: string): boolean {
   return actual !== expected;
 }
 
-function isFiniteNonNegativeInteger(value: number): boolean {
-  return Number.isInteger(value) && value >= 0;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function isFinitePositiveInteger(value: number): boolean {
-  return Number.isInteger(value) && value > 0;
+function isFiniteNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-function isNonEmptyTrimmed(value: string | null | undefined): boolean {
+function isFinitePositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isNonEmptyTrimmed(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
@@ -361,7 +366,10 @@ function hasInvalidSegments(path: string): boolean {
   return false;
 }
 
-export function isValidScopePath(path: string, options: IsValidScopePathOptions): boolean {
+export function isValidScopePath(path: unknown, options: IsValidScopePathOptions): boolean {
+  if (typeof path !== "string") {
+    return false;
+  }
   if (!options.mustBeRelative) {
     return false;
   }
@@ -383,6 +391,9 @@ export function isValidScopePath(path: string, options: IsValidScopePathOptions)
 }
 
 function isValidWorkspaceRootPath(path: string): boolean {
+  if (typeof path !== "string") {
+    return false;
+  }
   if (!isNonEmptyTrimmed(path)) {
     return false;
   }
@@ -402,6 +413,9 @@ function isValidWorkspaceRootPath(path: string): boolean {
 }
 
 export function isValidLineRange(range: LineRange): boolean {
+  if (!isRecord(range)) {
+    return false;
+  }
   if (!Number.isInteger(range.startLine) || !Number.isInteger(range.endLine)) {
     return false;
   }
@@ -412,6 +426,9 @@ export function isValidLineRange(range: LineRange): boolean {
 }
 
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
+  if (!isRecord(usage) || !isRecord(budget)) {
+    return false;
+  }
   const dims: readonly (readonly [number, number])[] = [
     [usage.searchCalls, budget.searchCallsMax],
     [usage.filesRead, budget.filesReadMax],
@@ -444,6 +461,51 @@ function buildResult(reasons: readonly string[]): ValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
+function hasStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function appendPrefixedReasons(
+  result: ValidationResult,
+  prefix: string,
+  reasons: string[],
+): void {
+  if (result.ok) {
+    return;
+  }
+  for (const reason of result.reasons) {
+    reasons.push(`${prefix}${reason}`);
+  }
+}
+
+function isRuntimeSelectedScope(value: unknown): value is SelectedScope {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (!SELECTED_SCOPE_KINDS.includes(value.kind as SelectedScopeKind)) {
+    return false;
+  }
+  return hasStringArray(value.relativePaths);
+}
+
+function isCandidateOmissionReason(value: unknown): value is CandidateOmissionReason {
+  return (
+    typeof value === "string" &&
+    CANDIDATE_OMISSION_REASONS.includes(value as CandidateOmissionReason)
+  );
+}
+
+function isConnectedFileRole(value: unknown): value is ConnectedFileRole {
+  return typeof value === "string" && CONNECTED_FILE_ROLES.includes(value as ConnectedFileRole);
+}
+
+function isUncertaintyMarkerKind(value: unknown): value is UncertaintyMarkerKind {
+  return (
+    typeof value === "string" &&
+    UNCERTAINTY_MARKER_KINDS.includes(value as UncertaintyMarkerKind)
+  );
+}
+
 function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
   const paths = scope.relativePaths;
   if (scope.kind === "workspace-root" && paths.length !== 0) {
@@ -463,7 +525,10 @@ function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
   }
 }
 
-function isPathWithinSelectedScope(scope: SelectedScope, candidatePath: string): boolean {
+function isPathWithinSelectedScope(scope: SelectedScope, candidatePath: unknown): boolean {
+  if (typeof candidatePath !== "string") {
+    return false;
+  }
   if (scope.kind === "workspace-root") {
     return true;
   }
@@ -472,8 +537,24 @@ function isPathWithinSelectedScope(scope: SelectedScope, candidatePath: string):
   );
 }
 
+function pathsOverlap(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+function setHasOverlappingPath(paths: ReadonlySet<string>, candidatePath: string): boolean {
+  for (const path of paths) {
+    if (pathsOverlap(path, candidatePath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function validateSelectedScope(scope: SelectedScope): ValidationResult {
   const reasons: string[] = [];
+  if (!isRecord(scope)) {
+    return buildResult(["scope invalid"]);
+  }
   pushIf(
     reasons,
     schemaMismatch(scope.schemaVersion, CONNECTED_CONTEXT_SCHEMA_VERSION),
@@ -485,7 +566,11 @@ export function validateSelectedScope(scope: SelectedScope): ValidationResult {
     pushIf(reasons, !isValidWorkspaceRootPath(scope.workspaceRoot), "scope.workspaceRoot invalid");
   }
   pushIf(reasons, !SELECTED_SCOPE_KINDS.includes(scope.kind), "scope.kind invalid");
-  if (SELECTED_SCOPE_KINDS.includes(scope.kind)) {
+  if (!Array.isArray(scope.relativePaths)) {
+    reasons.push("scope.relativePaths invalid");
+  } else if (!hasStringArray(scope.relativePaths)) {
+    reasons.push("scope.relativePaths contains an invalid path");
+  } else if (SELECTED_SCOPE_KINDS.includes(scope.kind)) {
     validateScopeKindPaths(scope, reasons);
   }
   pushIf(reasons, !isFiniteNonNegativeInteger(scope.connectedAtMs), "scope.connectedAtMs invalid");
@@ -496,23 +581,30 @@ export function validateSelectedScope(scope: SelectedScope): ValidationResult {
 }
 
 function validateLedgerRef(ref: EvidenceLedgerRef, reasons: string[], prefix: string): void {
+  if (!isRecord(ref)) {
+    reasons.push(`${prefix}.ledgerRef invalid`);
+    return;
+  }
   if (schemaMismatch(ref.evidenceSchemaVersion, "1")) {
     reasons.push(`${prefix}.ledgerRef.evidenceSchemaVersion mismatch`);
   }
   if (!isNonEmptyTrimmed(ref.runId)) {
     reasons.push(`${prefix}.ledgerRef.runId empty`);
   }
-  if (ref.atomId?.trim().length === 0) {
+  if (ref.atomId !== undefined && !isNonEmptyTrimmed(ref.atomId)) {
     reasons.push(`${prefix}.ledgerRef.atomId empty`);
   }
 }
 
-function isScoreInUnitInterval(score: number): boolean {
-  return Number.isFinite(score) && score >= 0 && score <= 1;
+function isScoreInUnitInterval(score: unknown): score is number {
+  return typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 1;
 }
 
 export function validateEvidenceAtom(atom: EvidenceAtom): ValidationResult {
   const reasons: string[] = [];
+  if (!isRecord(atom)) {
+    return buildResult(["atom invalid"]);
+  }
   pushIf(
     reasons,
     schemaMismatch(atom.schemaVersion, CONNECTED_CONTEXT_SCHEMA_VERSION),
@@ -558,8 +650,11 @@ export function validateEvidenceAtom(atom: EvidenceAtom): ValidationResult {
 
 export function validateRetrievalQuery(query: RetrievalQuery): ValidationResult {
   const reasons: string[] = [];
+  if (!isRecord(query)) {
+    return buildResult(["query invalid"]);
+  }
   pushIf(reasons, !RETRIEVAL_QUERY_KINDS.includes(query.kind), "query.kind invalid");
-  pushIf(reasons, query.text.length === 0, "query.text empty");
+  pushIf(reasons, !isNonEmptyTrimmed(query.text), "query.text empty");
   pushIf(reasons, !isFinitePositiveInteger(query.maxResults), "query.maxResults invalid");
   pushIf(reasons, !isFiniteNonNegativeInteger(query.emittedAtMs), "query.emittedAtMs invalid");
   return buildResult(reasons);
@@ -579,23 +674,31 @@ interface PackFileValidationSummary {
 }
 
 function validatePackFileEntry(
-  entry: ConnectedFileEntry,
+  entry: unknown,
   scope: SelectedScope,
   selectedPaths: Set<string>,
   reasons: string[],
 ): void {
-  if (selectedPaths.has(entry.scopePath)) {
-    reasons.push("pack.files contains duplicate scopePath");
-  } else {
-    selectedPaths.add(entry.scopePath);
+  if (!isRecord(entry)) {
+    reasons.push("pack.files entry invalid");
+    return;
   }
-  if (!CONNECTED_FILE_ROLES.includes(entry.role)) {
+  const scopePath = entry.scopePath;
+  if (typeof scopePath === "string" && isValidScopePath(scopePath, { mustBeRelative: true })) {
+    if (selectedPaths.has(scopePath)) {
+      reasons.push("pack.files contains duplicate scopePath");
+    } else if (setHasOverlappingPath(selectedPaths, scopePath)) {
+      reasons.push("pack.files contains overlapping scopePath");
+    }
+    selectedPaths.add(scopePath);
+  }
+  if (!isConnectedFileRole(entry.role)) {
     reasons.push("pack.files entry has invalid role");
   }
-  if (!isValidScopePath(entry.scopePath, { mustBeRelative: true })) {
+  if (!isValidScopePath(scopePath, { mustBeRelative: true })) {
     reasons.push("pack.files entry has invalid scopePath");
   }
-  if (!isPathWithinSelectedScope(scope, entry.scopePath)) {
+  if (!isPathWithinSelectedScope(scope, scopePath)) {
     reasons.push("pack.files entry falls outside selected scope");
   }
   if (!isNonEmptyTrimmed(entry.selectionReason)) {
@@ -603,80 +706,154 @@ function validatePackFileEntry(
   }
 }
 
-function validatePackExcerpt(
-  excerpt: ContextExcerpt,
+function validatePackExcerptAtom(
+  atom: unknown,
   entryScopePath: string,
   scope: SelectedScope,
   reasons: string[],
-): number {
-  if (excerpt.atom.scopePath !== entryScopePath) {
+): void {
+  const atomScopePath = isRecord(atom) ? atom.scopePath : undefined;
+  if (atomScopePath !== entryScopePath) {
     reasons.push("pack.files excerpt atom.scopePath does not match parent scopePath");
   }
-  const atomResult = validateEvidenceAtom(excerpt.atom);
-  if (!atomResult.ok) {
-    for (const reason of atomResult.reasons) {
-      reasons.push(`pack.files excerpt ${reason}`);
-    }
-  }
-  if (!isPathWithinSelectedScope(scope, excerpt.atom.scopePath)) {
+  appendPrefixedReasons(
+    validateEvidenceAtom(atom as EvidenceAtom),
+    "pack.files excerpt ",
+    reasons,
+  );
+  if (typeof atomScopePath === "string" && !isPathWithinSelectedScope(scope, atomScopePath)) {
     reasons.push("pack.files excerpt atom.scopePath falls outside selected scope");
   }
-  if (excerpt.atom.redactionState === "raw-internal") {
+  if (isRecord(atom) && atom.redactionState === "raw-internal") {
     reasons.push("pack.files excerpt atom.redactionState raw-internal");
   }
-  if (excerpt.contentBytes !== utf8ByteLength(excerpt.content)) {
+}
+
+function validatePackExcerptContent(excerpt: Record<string, unknown>, reasons: string[]): number {
+  if (typeof excerpt.content !== "string") {
+    reasons.push("pack.files excerpt content invalid");
+  }
+  if (!isFiniteNonNegativeInteger(excerpt.contentBytes)) {
+    reasons.push("pack.files excerpt contentBytes invalid");
+    return 0;
+  }
+  if (
+    typeof excerpt.content === "string" &&
+    excerpt.contentBytes !== utf8ByteLength(excerpt.content)
+  ) {
     reasons.push("pack.files excerpt contentBytes mismatch");
   }
   return excerpt.contentBytes;
 }
 
-function collectPackAtomIds(files: readonly ConnectedFileEntry[]): ReadonlySet<string> {
+function validatePackExcerpt(
+  excerpt: unknown,
+  entryScopePath: string,
+  scope: SelectedScope,
+  reasons: string[],
+): number {
+  if (!isRecord(excerpt)) {
+    reasons.push("pack.files excerpt invalid");
+    return 0;
+  }
+  validatePackExcerptAtom(excerpt.atom, entryScopePath, scope, reasons);
+  return validatePackExcerptContent(excerpt, reasons);
+}
+
+function collectPackAtomIds(files: unknown): ReadonlySet<string> {
   const atomIds = new Set<string>();
-  for (const entry of files) {
+  if (!Array.isArray(files)) {
+    return atomIds;
+  }
+  for (const entry of files as readonly unknown[]) {
+    if (!isRecord(entry) || !Array.isArray(entry.excerpts)) {
+      continue;
+    }
     for (const excerpt of entry.excerpts) {
-      atomIds.add(excerpt.atom.stableId);
+      if (!isRecord(excerpt) || !isRecord(excerpt.atom)) {
+        continue;
+      }
+      const stableId = excerpt.atom.stableId;
+      if (typeof stableId === "string") {
+        atomIds.add(stableId);
+      }
     }
   }
   return atomIds;
 }
 
 function validatePackFiles(
-  files: readonly ConnectedFileEntry[],
+  files: unknown,
   scope: SelectedScope,
   reasons: string[],
 ): PackFileValidationSummary {
   const selectedPaths = new Set<string>();
   let actualExcerptBytes = 0;
-  for (const entry of files) {
+  if (!Array.isArray(files)) {
+    reasons.push("pack.files invalid");
+    return { actualExcerptBytes, selectedPaths };
+  }
+  for (const entry of files as readonly unknown[]) {
     validatePackFileEntry(entry, scope, selectedPaths, reasons);
+    if (!isRecord(entry)) {
+      continue;
+    }
+    if (!Array.isArray(entry.excerpts)) {
+      reasons.push("pack.files entry excerpts invalid");
+      continue;
+    }
+    const parentScopePath = typeof entry.scopePath === "string" ? entry.scopePath : "";
     for (const excerpt of entry.excerpts) {
-      actualExcerptBytes += validatePackExcerpt(excerpt, entry.scopePath, scope, reasons);
+      actualExcerptBytes += validatePackExcerpt(excerpt, parentScopePath, scope, reasons);
     }
   }
   return { actualExcerptBytes, selectedPaths };
 }
 
+function validateOmittedPathState(
+  entry: Record<string, unknown>,
+  entryIndex: number,
+  reasons: string[],
+  selectedPaths: ReadonlySet<string>,
+  omittedPaths: Set<string>,
+): void {
+  const scopePath = entry.scopePath;
+  const validScopePath = isValidScopePath(scopePath, { mustBeRelative: true });
+  if (typeof scopePath === "string" && setHasOverlappingPath(selectedPaths, scopePath)) {
+    reasons.push("pack.omitted overlaps selected scopePath");
+  }
+  if (typeof scopePath === "string" && validScopePath) {
+    if (omittedPaths.has(scopePath)) {
+      reasons.push("pack.omitted contains duplicate scopePath");
+    } else if (setHasOverlappingPath(omittedPaths, scopePath)) {
+      reasons.push("pack.omitted contains overlapping scopePath");
+    }
+    omittedPaths.add(scopePath);
+  }
+  if (!validScopePath) {
+    reasons.push(`omitted[${entryIndex.toString()}].scopePath invalid`);
+  }
+}
+
 function validatePackOmitted(
-  entries: readonly OmittedContextEntry[],
+  entries: unknown,
   scope: SelectedScope,
   reasons: string[],
   selectedPaths: ReadonlySet<string>,
 ): void {
+  if (!Array.isArray(entries)) {
+    reasons.push("pack.omitted invalid");
+    return;
+  }
   const omittedPaths = new Set<string>();
   for (const [i, entry] of entries.entries()) {
-    if (selectedPaths.has(entry.scopePath)) {
-      reasons.push("pack.omitted overlaps selected scopePath");
+    if (!isRecord(entry)) {
+      reasons.push("pack.omitted entry invalid");
+      continue;
     }
-    if (omittedPaths.has(entry.scopePath)) {
-      reasons.push("pack.omitted contains duplicate scopePath");
-    } else {
-      omittedPaths.add(entry.scopePath);
-    }
-    if (!CANDIDATE_OMISSION_REASONS.includes(entry.reason)) {
+    validateOmittedPathState(entry, i, reasons, selectedPaths, omittedPaths);
+    if (!isCandidateOmissionReason(entry.reason)) {
       reasons.push("pack.omitted has invalid reason");
-    }
-    if (!isValidScopePath(entry.scopePath, { mustBeRelative: true })) {
-      reasons.push(`omitted[${i.toString()}].scopePath invalid`);
     }
     if (!isPathWithinSelectedScope(scope, entry.scopePath)) {
       reasons.push("pack.omitted entry falls outside selected scope");
@@ -687,37 +864,67 @@ function validatePackOmitted(
   }
 }
 
-function validatePackUncertainty(
-  entries: readonly UncertaintyMarker[],
+function validateImpactedAtomIds(
+  impactedAtomIds: unknown,
+  entryIndex: number,
   validAtomIds: ReadonlySet<string>,
   reasons: string[],
 ): void {
+  if (!Array.isArray(impactedAtomIds)) {
+    reasons.push(`uncertainty[${entryIndex.toString()}].impactedAtomIds invalid`);
+    return;
+  }
+  const impactedIds = new Set<string>();
+  for (const atomId of impactedAtomIds) {
+    if (!isNonEmptyTrimmed(atomId)) {
+      reasons.push(`uncertainty[${entryIndex.toString()}].impactedAtomIds invalid`);
+      continue;
+    }
+    if (impactedIds.has(atomId)) {
+      reasons.push(`uncertainty[${entryIndex.toString()}].impactedAtomIds duplicate`);
+      continue;
+    }
+    if (!validAtomIds.has(atomId)) {
+      reasons.push(`uncertainty[${entryIndex.toString()}].impactedAtomIds unknown`);
+      continue;
+    }
+    impactedIds.add(atomId);
+  }
+}
+
+function validateUncertaintyEntry(
+  entry: Record<string, unknown>,
+  entryIndex: number,
+  validAtomIds: ReadonlySet<string>,
+  reasons: string[],
+): void {
+  if (!isUncertaintyMarkerKind(entry.kind)) {
+    reasons.push("pack.uncertainty has invalid kind");
+  }
+  if (!isNonEmptyTrimmed(entry.claim)) {
+    reasons.push(`uncertainty[${entryIndex.toString()}].claim empty`);
+  }
+  if (!isFiniteNonNegativeInteger(entry.emittedAtMs)) {
+    reasons.push("pack.uncertainty has invalid emittedAtMs");
+  }
+  validateImpactedAtomIds(entry.impactedAtomIds, entryIndex, validAtomIds, reasons);
+}
+
+function validatePackUncertainty(
+  entries: unknown,
+  validAtomIds: ReadonlySet<string>,
+  reasons: string[],
+): void {
+  if (!Array.isArray(entries)) {
+    reasons.push("pack.uncertainty invalid");
+    return;
+  }
   for (const [i, entry] of entries.entries()) {
-    if (!UNCERTAINTY_MARKER_KINDS.includes(entry.kind)) {
-      reasons.push("pack.uncertainty has invalid kind");
+    if (!isRecord(entry)) {
+      reasons.push("pack.uncertainty entry invalid");
+      continue;
     }
-    if (!isNonEmptyTrimmed(entry.claim)) {
-      reasons.push(`uncertainty[${i.toString()}].claim empty`);
-    }
-    if (!isFiniteNonNegativeInteger(entry.emittedAtMs)) {
-      reasons.push("pack.uncertainty has invalid emittedAtMs");
-    }
-    const impactedIds = new Set<string>();
-    for (const atomId of entry.impactedAtomIds) {
-      if (!isNonEmptyTrimmed(atomId)) {
-        reasons.push(`uncertainty[${i.toString()}].impactedAtomIds invalid`);
-        continue;
-      }
-      if (impactedIds.has(atomId)) {
-        reasons.push(`uncertainty[${i.toString()}].impactedAtomIds duplicate`);
-        continue;
-      }
-      if (!validAtomIds.has(atomId)) {
-        reasons.push(`uncertainty[${i.toString()}].impactedAtomIds unknown`);
-        continue;
-      }
-      impactedIds.add(atomId);
-    }
+    validateUncertaintyEntry(entry, i, validAtomIds, reasons);
   }
 }
 
@@ -745,6 +952,14 @@ function validatePackBudget(
   actualExcerptBytes: number,
   reasons: string[],
 ): void {
+  if (!isRecord(pack.usage)) {
+    reasons.push("pack.usage invalid");
+    return;
+  }
+  if (!isRecord(pack.budget)) {
+    reasons.push("pack.budget invalid");
+    return;
+  }
   checkBudgetDimension(pack.usage.searchCalls, pack.budget.searchCallsMax, "searchCalls", reasons);
   checkBudgetDimension(pack.usage.filesRead, pack.budget.filesReadMax, "filesRead", reasons);
   checkBudgetDimension(
@@ -775,29 +990,53 @@ function validatePackBudget(
   }
 }
 
+function validatePackScopeAndQuery(pack: ConnectedContextPack, reasons: string[]): void {
+  appendPrefixedReasons(validateSelectedScope(pack.scope), "pack.", reasons);
+  appendPrefixedReasons(validateRetrievalQuery(pack.query), "pack.", reasons);
+}
+
+function validatePackFileCollection(
+  pack: ConnectedContextPack,
+  reasons: string[],
+): PackFileValidationSummary {
+  if (isRuntimeSelectedScope(pack.scope)) {
+    return validatePackFiles(pack.files, pack.scope, reasons);
+  }
+  if (!Array.isArray(pack.files)) {
+    reasons.push("pack.files invalid");
+  }
+  return { actualExcerptBytes: 0, selectedPaths: new Set<string>() };
+}
+
+function validatePackOmittedCollection(
+  pack: ConnectedContextPack,
+  fileSummary: PackFileValidationSummary,
+  reasons: string[],
+): void {
+  if (isRuntimeSelectedScope(pack.scope)) {
+    validatePackOmitted(pack.omitted, pack.scope, reasons, fileSummary.selectedPaths);
+    return;
+  }
+  if (!Array.isArray(pack.omitted)) {
+    reasons.push("pack.omitted invalid");
+  }
+}
+
 export function validateConnectedContextPack(pack: ConnectedContextPack): ValidationResult {
   const reasons: string[] = [];
+  if (!isRecord(pack)) {
+    return buildResult(["pack invalid"]);
+  }
   pushIf(
     reasons,
     schemaMismatch(pack.schemaVersion, CONNECTED_CONTEXT_SCHEMA_VERSION),
     "pack.schemaVersion mismatch",
   );
   pushIf(reasons, !isNonEmptyTrimmed(pack.stableId), "pack.stableId empty");
-  const scopeResult = validateSelectedScope(pack.scope);
-  if (!scopeResult.ok) {
-    for (const reason of scopeResult.reasons) {
-      reasons.push(`pack.${reason}`);
-    }
-  }
-  const queryResult = validateRetrievalQuery(pack.query);
-  if (!queryResult.ok) {
-    for (const reason of queryResult.reasons) {
-      reasons.push(`pack.${reason}`);
-    }
-  }
-  const fileSummary = validatePackFiles(pack.files, pack.scope, reasons);
+  validatePackScopeAndQuery(pack, reasons);
+  const fileSummary = validatePackFileCollection(pack, reasons);
   validatePackBudget(pack, fileSummary.actualExcerptBytes, reasons);
-  validatePackOmitted(pack.omitted, pack.scope, reasons, fileSummary.selectedPaths);
+  validatePackOmittedCollection(pack, fileSummary, reasons);
   validatePackUncertainty(pack.uncertainty, collectPackAtomIds(pack.files), reasons);
   pushIf(reasons, !isFiniteNonNegativeInteger(pack.emittedAtMs), "pack.emittedAtMs invalid");
   if (pack.ledgerRef !== undefined) {
