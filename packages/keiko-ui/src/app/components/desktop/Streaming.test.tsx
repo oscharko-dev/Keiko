@@ -680,6 +680,49 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
     expect(modelIds).not.toContain("test-ocr-only");
     expect(view.result.current.models.every((m) => m.kind === "chat")).toBe(true);
   });
+
+  it("prefers the most recently opened available project during bootstrap", async () => {
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [chatModelCapability("test-chat-eligible")],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: "/older-project",
+          name: "older-project",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 10,
+          available: true,
+        },
+        {
+          path: "/current-project",
+          name: "current-project",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 99,
+          available: true,
+        },
+      ],
+    });
+    const fetchChatsSpy = vi.spyOn(api, "fetchChats").mockImplementation(async (projectPath) => {
+      expect(projectPath).toBe("/current-project");
+      return { chats: [makeChat({ projectPath, title: "current chat" })] };
+    });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+    });
+
+    expect(fetchChatsSpy).toHaveBeenCalledWith("/current-project");
+    expect(view.result.current.activeProject?.path).toBe("/current-project");
+    expect(view.result.current.projects.map((project) => project.path)).toEqual([
+      "/current-project",
+      "/older-project",
+    ]);
+  });
 });
 
 // ─── Layer 3 SSE streaming — sendDesktopChatStream integration ───────────────

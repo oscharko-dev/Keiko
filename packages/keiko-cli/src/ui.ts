@@ -359,6 +359,19 @@ function buildHandlerDepsOrReport(
   }
 }
 
+function registerLaunchProjectOrReport(cwd: string, handlerDeps: UiHandlerDeps, io: CliIo): number | null {
+  try {
+    handlerDeps.store.createProject(cwd);
+    return null;
+  } catch (error) {
+    if (error instanceof UiStoreError) {
+      io.err(`keiko ui: ${error.message}\n`);
+      return 2;
+    }
+    throw error;
+  }
+}
+
 function ensureStaticRoot(staticRoot: string, io: CliIo): boolean {
   if (existsSync(staticRoot)) {
     return true;
@@ -410,6 +423,8 @@ export async function runUiCli(
     io,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
+  const launchProjectResult = registerLaunchProjectOrReport(cwd, handlerDeps, io);
+  if (launchProjectResult !== null) return launchProjectResult;
   const factory = deps.createServer ?? createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
   applyServerTimeouts(server);

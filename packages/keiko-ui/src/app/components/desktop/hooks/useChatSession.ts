@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
+import { sortProjects } from "@/lib/sidebar-sort";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
@@ -388,8 +389,8 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));
-  const project =
-    projectPayload.projects.find((item) => item.available) ?? projectPayload.projects[0];
+  const projects = sortProjects(projectPayload.projects);
+  const project = projects.find((item) => item.available) ?? projects[0];
 
   if (project !== undefined) {
     const chatPayload = await fetchChats(project.path).catch(() => ({ chats: [] }));
@@ -401,7 +402,7 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
       return {
         models: chatModels,
         selectedModel,
-        projects: Array.from(projectPayload.projects),
+        projects: Array.from(projects),
         activeProject: project,
         chats: sortedChats,
         activeChat: latestChat,
@@ -416,7 +417,7 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
     return {
       models: chatModels,
       selectedModel: undefined,
-      projects: Array.from(projectPayload.projects),
+      projects: Array.from(projects),
       activeProject: project,
       chats: [],
       activeChat: undefined,

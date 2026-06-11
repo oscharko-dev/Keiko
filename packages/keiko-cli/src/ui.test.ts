@@ -213,6 +213,31 @@ describe("runUiCli", () => {
     }
   });
 
+  it("registers the launch cwd as a project before the server starts", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-launch-project-"));
+    await writeFile(join(cwd, "package.json"), '{"name":"sandbox"}\n', "utf8");
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.store.listProjects().map((project) => project.path)).toContain(cwd);
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("preserves explicit state overrides while defaulting missing runtime paths", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-override-"));
