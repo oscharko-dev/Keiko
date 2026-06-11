@@ -10,6 +10,7 @@ import type { VerificationAuditSummary } from "./verification-summary.js";
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
 import type { ModelCapability } from "./gateway.js";
+import type { TaskType } from "./harness.js";
 // GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
@@ -24,6 +25,12 @@ import {
   type SelectedScopeKind,
 } from "./connected-context.js";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "./local-knowledge.js";
+import type {
+  OrchestrationChildRole,
+  OrchestrationExecutionMode,
+  OrchestrationSettlementDecision,
+  OrchestrationState,
+} from "./orchestration.js";
 import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
 
 export interface Project {
@@ -299,6 +306,74 @@ export interface GroundedWorkflowHandoffRequest {
 export interface GroundedWorkflowHandoffResponse {
   readonly run: { readonly runId: string; readonly fingerprint: string };
   readonly messages: readonly ChatMessage[];
+}
+
+export interface OrchestrationCreateChildWire {
+  readonly childId: string;
+  readonly title: string;
+  readonly role: OrchestrationChildRole;
+  readonly taskType: TaskType;
+  readonly input: Record<string, unknown>;
+  readonly dependsOn?: readonly string[] | undefined;
+  readonly resourceClaims?:
+    | readonly {
+        readonly kind: "file" | "patch" | "tool";
+        readonly resourceId: string;
+        readonly access: "read" | "write" | "exclusive";
+        readonly policy: "serialize" | "block" | "escalate";
+      }[]
+    | undefined;
+}
+
+export interface OrchestrationCreateRequestWire {
+  readonly executionMode: OrchestrationExecutionMode;
+  readonly limits?: Record<string, unknown> | undefined;
+  readonly childLimits?: Record<string, unknown> | undefined;
+  readonly settlementPolicy?: Record<string, unknown> | undefined;
+  readonly children: readonly OrchestrationCreateChildWire[];
+}
+
+export interface CreateRunRequestWire {
+  readonly workflowId?: "unit-test-generation" | "bug-investigation" | undefined;
+  readonly taskType?: "explain-plan" | "verify" | undefined;
+  readonly modelId: string;
+  readonly input: Record<string, unknown>;
+  readonly apply?: boolean | undefined;
+  readonly limits?: Record<string, unknown> | undefined;
+  readonly orchestration?: OrchestrationCreateRequestWire | undefined;
+}
+
+export interface OrchestrationChildRunWire {
+  readonly childId: string;
+  readonly title: string;
+  readonly role: OrchestrationChildRole;
+  readonly taskType: TaskType;
+  readonly dependsOn: readonly string[];
+  readonly runId?: string | undefined;
+  readonly state: "pending" | "running" | "completed" | "cancelled" | "failed" | "blocked";
+  readonly reason?: string | undefined;
+  readonly resourceConflicts?:
+    | readonly {
+        readonly conflictingChildId: string;
+        readonly resourceId: string;
+        readonly resourceKind: "file" | "patch" | "tool";
+        readonly outcome: "serialize" | "block" | "escalate";
+      }[]
+    | undefined;
+}
+
+export interface OrchestrationRunWire {
+  readonly runId: string;
+  readonly executionMode: OrchestrationExecutionMode;
+  readonly state: OrchestrationState | "pending";
+  readonly children: readonly OrchestrationChildRunWire[];
+  readonly settlement?: OrchestrationSettlementDecision | undefined;
+}
+
+export interface CreateRunResponseWire {
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly orchestration?: OrchestrationRunWire | undefined;
 }
 
 // ─── Desktop chat bootstrap (BFF /api/desktop/chat/bootstrap) ─────────────────────
@@ -810,6 +885,58 @@ export interface RunReport {
   readonly usage?: RunReportUsage;
   readonly applyReport?: RunReport;
   readonly appliedAt?: number;
+  readonly orchestration?: OrchestrationRunWire;
+}
+
+interface BaseRunStreamEventWire {
+  readonly schemaVersion: "1";
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+export interface OrchestrationRunStartedEventWire extends BaseRunStreamEventWire {
+  readonly type: "orchestration:run:started";
+  readonly executionMode: OrchestrationExecutionMode;
+  readonly childCount: number;
+}
+
+export interface OrchestrationChildDispatchedEventWire extends BaseRunStreamEventWire {
+  readonly type: "orchestration:child:dispatched";
+  readonly childId: string;
+  readonly childRunId: string;
+  readonly role: OrchestrationChildRole;
+  readonly taskType: TaskType;
+  readonly dependsOn: readonly string[];
+}
+
+export interface OrchestrationConflictEventWire extends BaseRunStreamEventWire {
+  readonly type: "orchestration:conflict";
+  readonly childId: string;
+  readonly conflictingChildId: string;
+  readonly resourceId: string;
+  readonly resourceKind: "file" | "patch" | "tool";
+  readonly resolution: "serialize" | "block" | "escalate";
+}
+
+export interface OrchestrationChildSettledEventWire extends BaseRunStreamEventWire {
+  readonly type: "orchestration:child:settled";
+  readonly childId: string;
+  readonly childRunId?: string | undefined;
+  readonly state: "completed" | "cancelled" | "failed" | "blocked";
+  readonly reason: string;
+}
+
+export interface OrchestrationSettlementEventWire extends BaseRunStreamEventWire {
+  readonly type: "orchestration:settlement";
+  readonly state: OrchestrationState;
+  readonly settlement: OrchestrationSettlementDecision;
+}
+
+export interface OrchestrationCancellationRequestedEventWire extends BaseRunStreamEventWire {
+  readonly type: "orchestration:run:cancelling";
+  readonly reason: string;
 }
 
 // ─── Evidence list entry (BFF GET /api/evidence) ──────────────────────────────────

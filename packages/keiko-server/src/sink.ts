@@ -42,16 +42,18 @@ export class QueueEventSink {
   private readonly capacity: number;
   private readonly writers = new Set<SseWriter>();
   private terminated = false;
+  private nextSeq = 0;
 
   // Bound so the sink can be passed directly as an `EventSink`/`WorkflowEventSink`/`BugWorkflowEventSink`.
   readonly emit = (event: StreamEvent): void => {
-    this.buffer.push(event);
+    const sequenced = { ...event, seq: this.nextSeq++ } satisfies StreamEvent;
+    this.buffer.push(sequenced);
     if (this.buffer.length > this.capacity) {
       this.buffer.shift();
     }
     for (const writer of [...this.writers]) {
       try {
-        const accepted = writer.write(event);
+        const accepted = writer.write(sequenced);
         if (accepted === false) {
           this.writers.delete(writer);
           writer.close();

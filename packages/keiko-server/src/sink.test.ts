@@ -30,7 +30,7 @@ describe("QueueEventSink ring buffer", () => {
       sink.emit(event(i));
     }
     const buffered = sink.buffered();
-    expect(buffered.map((e) => e.seq)).toEqual([3, 4, 5]);
+    expect(buffered.map((e) => e.seq)).toEqual([2, 3, 4]);
   });
 
   it("replays only events after the given seq on attach (Last-Event-ID resume)", () => {
@@ -40,7 +40,7 @@ describe("QueueEventSink ring buffer", () => {
     }
     const sub = recordingWriter();
     sink.attach(sub.writer, 2);
-    expect(sub.events.map((e) => e.seq)).toEqual([3, 4]);
+    expect(sub.events.map((e) => e.seq)).toEqual([3]);
   });
 
   it("fans live events out to every attached writer", () => {
@@ -50,8 +50,8 @@ describe("QueueEventSink ring buffer", () => {
     sink.attach(a.writer, -1);
     sink.attach(b.writer, -1);
     sink.emit(event(1));
-    expect(a.events.map((e) => e.seq)).toEqual([1]);
-    expect(b.events.map((e) => e.seq)).toEqual([1]);
+    expect(a.events.map((e) => e.seq)).toEqual([0]);
+    expect(b.events.map((e) => e.seq)).toEqual([0]);
   });
 
   it("stops fanning out to a detached writer (no leak after disconnect)", () => {
@@ -61,7 +61,7 @@ describe("QueueEventSink ring buffer", () => {
     sink.emit(event(1));
     detach();
     sink.emit(event(2));
-    expect(a.events.map((e) => e.seq)).toEqual([1]);
+    expect(a.events.map((e) => e.seq)).toEqual([0]);
   });
 
   it("drops and closes a writer that reports backpressure", () => {
@@ -123,6 +123,18 @@ describe("QueueEventSink ring buffer", () => {
     sink.emit(event(1));
     sink.emit(event(2));
     sink.closeAll();
-    expect(sink.buffered().map((e) => e.seq)).toEqual([1, 2]);
+    expect(sink.buffered().map((e) => e.seq)).toEqual([0, 1]);
+  });
+
+  it("assigns one monotonic stream sequence across mixed parent and child events", () => {
+    const sink = new QueueEventSink();
+    sink.emit({ schemaVersion: "1", runId: "parent", fingerprint: "fp", seq: 0, ts: 1, type: "orchestration:run:started" });
+    sink.emit({ schemaVersion: "1", runId: "child-a", fingerprint: "fp-a", seq: 0, ts: 2, type: "run:started" });
+    sink.emit({ schemaVersion: "1", runId: "child-b", fingerprint: "fp-b", seq: 0, ts: 3, type: "run:started" });
+    expect(sink.buffered().map((e) => `${e.runId}:${String(e.seq)}`)).toEqual([
+      "parent:0",
+      "child-a:1",
+      "child-b:2",
+    ]);
   });
 });

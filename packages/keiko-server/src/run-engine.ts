@@ -11,8 +11,16 @@ import { DryRunToolPort } from "@oscharko-dev/keiko-harness";
 import {
   canonicalise,
   createSession,
+  createOrchestrationSession,
+  DEFAULT_ROLE_POLICIES,
   HARNESS_VERSION,
   type AgentConfig,
+  type OrchestrationChildRequest,
+  type OrchestrationChildResult,
+  type OrchestrationConfig,
+  type OrchestrationSchedulerHooks,
+  type OrchestrationSessionResult,
+  type ResourceClaim,
 } from "@oscharko-dev/keiko-harness";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { generateUnitTests, investigateBug } from "@oscharko-dev/keiko-workflows";
@@ -27,6 +35,8 @@ import type { UnitTestWorkflowInput, UnitTestWorkflowReport } from "@oscharko-de
 import type { BugInvestigationInput, BugInvestigationReport } from "@oscharko-dev/keiko-workflows";
 import type {
   HarnessEvent,
+  OrchestrationSettlementDecision,
+  OrchestrationState,
   RunCompletedEvent,
   RunStartedEvent,
   TaskInput,
@@ -36,7 +46,11 @@ import type {
 import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { RunRequest } from "./run-request.js";
+import type {
+  OrchestrationChildRequestBody,
+  OrchestrationRequestBody,
+  RunRequest,
+} from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
@@ -52,18 +66,63 @@ import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
 export interface StartRunResult {
   readonly runId: string;
   readonly fingerprint: string;
+  readonly orchestration?: OrchestrationProjection | undefined;
 }
 
 export interface StartRunOptions {
   readonly runId?: string;
 }
 
-const KIND_TO_TASK_TYPE: Readonly<Record<RunRequest["kind"], TaskType>> = {
+const KIND_TO_TASK_TYPE: Readonly<Record<Exclude<RunRequest["kind"], "orchestration">, TaskType>> = {
   "unit-tests": "generate-unit-tests",
   "bug-investigation": "investigate-bug",
   "explain-plan": "explain-plan",
   verify: "verify",
 };
+
+type OrchestrationChildState = "pending" | "running" | "completed" | "cancelled" | "failed" | "blocked";
+
+interface OrchestrationChildProjection {
+  readonly childId: string;
+  readonly title: string;
+  readonly role: OrchestrationChildRequestBody["role"];
+  readonly taskType: TaskType;
+  readonly dependsOn: readonly string[];
+  runId?: string | undefined;
+  state: OrchestrationChildState;
+  reason?: string | undefined;
+  resourceConflicts?:
+    | readonly {
+        readonly conflictingChildId: string;
+        readonly resourceId: string;
+        readonly resourceKind: "file" | "patch" | "tool";
+        readonly outcome: "serialize" | "block" | "escalate";
+      }[]
+    | undefined;
+}
+
+interface OrchestrationProjection {
+  readonly executionMode: OrchestrationRequestBody["executionMode"];
+  state: OrchestrationState | "pending";
+  readonly children: OrchestrationChildProjection[];
+  settlement?: OrchestrationSettlementDecision | undefined;
+}
+
+interface OrchestrationStreamEvent {
+  readonly schemaVersion: "1";
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly seq: number;
+  readonly ts: number;
+  readonly type:
+    | "orchestration:run:started"
+    | "orchestration:child:dispatched"
+    | "orchestration:conflict"
+    | "orchestration:child:settled"
+    | "orchestration:settlement"
+    | "orchestration:run:cancelling";
+  readonly [key: string]: unknown;
+}
 
 interface EngineContext {
   readonly request: RunRequest;
@@ -74,6 +133,7 @@ interface EngineContext {
   readonly evidence?: EvidencePersistContext | undefined;
   readonly memoryVault?: MemoryVaultStore | undefined;
   readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
+  orchestration?: OrchestrationProjection | undefined;
 }
 
 // Assembles the workflow/task input by overlaying the request-level fields onto the client `input`
@@ -121,6 +181,18 @@ function workspaceRoot(request: RunRequest): string {
 }
 
 function workflowFingerprint(request: RunRequest): string {
+  if (request.kind === "orchestration") {
+    const canonical = canonicalise({
+      taskType: "orchestration",
+      taskInput: request.orchestration,
+      limits: request.limits ?? {},
+      modelId: request.modelId,
+      workingDirectory: workspaceRoot(request),
+      dryRun: true,
+      harnessVersion: HARNESS_VERSION,
+    });
+    return createHash("sha256").update(canonical, "utf8").digest("hex");
+  }
   const taskType = KIND_TO_TASK_TYPE[request.kind];
   const canonical = canonicalise({
     taskType,
@@ -189,6 +261,7 @@ interface DispatchOutcome {
   readonly appliable: AppliableSnapshot | undefined;
   // Present only for an explain-plan run: the raw harness RunResult, used to fold usage for evidence.
   readonly result?: RunResult | undefined;
+  readonly orchestration?: OrchestrationSessionResult | undefined;
 }
 
 interface Dispatched {
@@ -386,6 +459,235 @@ function readTargetFiles(value: unknown): readonly string[] | undefined {
   return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 }
 
+function orchestrationProjection(plan: OrchestrationRequestBody): OrchestrationProjection {
+  return {
+    executionMode: plan.executionMode,
+    state: "pending",
+    children: plan.children.map((child) => ({
+      childId: child.childId,
+      title: child.title,
+      role: child.role,
+      taskType: child.taskType,
+      dependsOn: child.dependsOn,
+      state: "pending",
+    })),
+  };
+}
+
+function childProjection(
+  orchestration: OrchestrationProjection,
+  childId: string,
+): OrchestrationChildProjection {
+  const child = orchestration.children.find((entry) => entry.childId === childId);
+  if (child === undefined) {
+    throw new Error(`unknown orchestration child ${childId}`);
+  }
+  return child;
+}
+
+function emitOrchestrationEvent(
+  sink: QueueEventSink,
+  runId: string,
+  fingerprint: string,
+  event: Omit<OrchestrationStreamEvent, "schemaVersion" | "runId" | "fingerprint" | "seq" | "ts">,
+): void {
+  sink.emit({
+    schemaVersion: "1",
+    runId,
+    fingerprint,
+    seq: 0,
+    ts: Date.now(),
+    ...event,
+  } as OrchestrationStreamEvent);
+}
+
+function toTaskInput(root: string, child: OrchestrationChildRequestBody): TaskInput {
+  if (child.taskType === "verify") {
+    return {
+      taskType: "verify",
+      input: {
+        workspaceRoot:
+          typeof child.input.workspaceRoot === "string" && child.input.workspaceRoot.length > 0
+            ? child.input.workspaceRoot
+            : root,
+        ...(Array.isArray(child.input.targetFiles)
+          ? {
+              targetFiles: child.input.targetFiles.filter(
+                (entry): entry is string => typeof entry === "string" && entry.length > 0,
+              ),
+            }
+          : {}),
+      },
+    };
+  }
+  return { taskType: child.taskType, input: child.input } as unknown as TaskInput;
+}
+
+function toResourceClaims(
+  claims: OrchestrationChildRequestBody["resourceClaims"],
+): readonly ResourceClaim[] | undefined {
+  return claims?.map((claim) => ({
+    kind: claim.kind,
+    resourceId: claim.resourceId,
+    access: claim.access,
+    policy: claim.policy,
+  }));
+}
+
+function dispatchOrchestration(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
+  if (ctx.request.kind !== "orchestration") {
+    throw new Error("dispatchOrchestration requires an orchestration request");
+  }
+  const fingerprint = workflowFingerprint(ctx.request);
+  const root = workspaceRoot(ctx.request);
+  const projection = orchestrationProjection(ctx.request.orchestration);
+  ctx.orchestration = projection;
+  const hooks: OrchestrationSchedulerHooks = {
+    afterDispatch: (child, session) => {
+      const current = childProjection(projection, child.plan.childId);
+      current.runId = session.runId;
+      current.state = "running";
+      projection.state = "running";
+      emitOrchestrationEvent(sink, runId, fingerprint, {
+        type: "orchestration:child:dispatched",
+        childId: child.plan.childId,
+        childRunId: session.runId,
+        role: child.plan.role,
+        taskType: child.task.taskType,
+        dependsOn: child.plan.dependsOn,
+      });
+    },
+    afterCompletion: (child, result) => {
+      const current = childProjection(projection, child.plan.childId);
+      current.runId = result.run?.runId ?? current.runId;
+      current.state = result.state;
+      current.reason = result.reason;
+      if (result.conflicts !== undefined) {
+        current.resourceConflicts = result.conflicts.map((conflict) => ({
+          conflictingChildId: conflict.conflictingChildId,
+          resourceId: conflict.claim.resourceId,
+          resourceKind: conflict.claim.kind,
+          outcome: conflict.outcome,
+        }));
+      }
+      emitOrchestrationEvent(sink, runId, fingerprint, {
+        type: "orchestration:child:settled",
+        childId: child.plan.childId,
+        ...(current.runId === undefined ? {} : { childRunId: current.runId }),
+        state: result.state,
+        reason: result.reason,
+      });
+    },
+    onBlocked: (child, conflicts) => {
+      const current = childProjection(projection, child.plan.childId);
+      current.state = "blocked";
+      current.reason = conflicts.map((conflict) => conflict.reason).join("; ");
+      current.resourceConflicts = conflicts.map((conflict) => ({
+        conflictingChildId: conflict.conflictingChildId,
+        resourceId: conflict.claim.resourceId,
+        resourceKind: conflict.claim.kind,
+        outcome: conflict.outcome,
+      }));
+      projection.state = "conflicted";
+      for (const conflict of conflicts) {
+        emitOrchestrationEvent(sink, runId, fingerprint, {
+          type: "orchestration:conflict",
+          childId: child.plan.childId,
+          conflictingChildId: conflict.conflictingChildId,
+          resourceId: conflict.claim.resourceId,
+          resourceKind: conflict.claim.kind,
+          resolution: conflict.outcome,
+        });
+      }
+    },
+  };
+  emitOrchestrationEvent(sink, runId, fingerprint, {
+    type: "orchestration:run:started",
+    executionMode: ctx.request.orchestration.executionMode,
+    childCount: ctx.request.orchestration.children.length,
+  });
+  const children: OrchestrationChildRequest[] = ctx.request.orchestration.children.map((child) => ({
+    plan: {
+      childId: child.childId,
+      title: child.title,
+      role: child.role,
+      taskType: child.taskType,
+      authority: DEFAULT_ROLE_POLICIES[child.role].defaultAuthority,
+      dependsOn: child.dependsOn,
+    },
+    task: toTaskInput(root, child),
+    ...(child.resourceClaims === undefined ? {} : { resourceClaims: toResourceClaims(child.resourceClaims) }),
+  }));
+  const config: OrchestrationConfig = {
+    model: ctx.request.modelId,
+    workingDirectory: root,
+    dryRun: true,
+    ...(ctx.request.orchestration.childLimits === undefined
+      ? {}
+      : { childLimits: ctx.request.orchestration.childLimits }),
+    ...(ctx.request.orchestration.limits === undefined
+      ? {}
+      : { limits: ctx.request.orchestration.limits }),
+    ...(ctx.request.orchestration.settlementPolicy === undefined
+      ? {}
+      : { settlementPolicy: ctx.request.orchestration.settlementPolicy }),
+  };
+  const session = createOrchestrationSession(
+    {
+      schemaVersion: "1",
+      parent: { runId, kind: "parent-run" },
+      executionMode: ctx.request.orchestration.executionMode,
+      children: children.map((child) => child.plan),
+    },
+    children,
+    config,
+    {
+      model: ctx.model,
+      tools: new DryRunToolPort(),
+      sink,
+      hooks,
+    },
+  );
+  const result = session.result.then((orchestrationResult): DispatchOutcome => {
+    const status: TerminalStatus =
+      orchestrationResult.state === "completed"
+        ? "completed"
+        : orchestrationResult.state === "cancelled"
+          ? "cancelled"
+          : "failed";
+    projection.state = orchestrationResult.state;
+    projection.settlement = orchestrationResult.settlement;
+    for (const childResult of Object.values(orchestrationResult.children)) {
+      const current = childProjection(projection, childResult.childId);
+      current.runId = childResult.run?.runId ?? current.runId;
+      current.state = childResult.state;
+      current.reason = childResult.reason;
+    }
+    emitOrchestrationEvent(sink, runId, fingerprint, {
+      type: "orchestration:settlement",
+      state: orchestrationResult.state,
+      settlement: orchestrationResult.settlement,
+    });
+    return {
+      status,
+      report: { status, orchestration: projection },
+      appliable: undefined,
+      orchestration: orchestrationResult,
+    };
+  });
+  return {
+    result,
+    cancel: (reason?: string): void => {
+      projection.state = "cancelling";
+      emitOrchestrationEvent(sink, runId, fingerprint, {
+        type: "orchestration:run:cancelling",
+        reason: reason ?? "cancelled via API",
+      });
+      session.cancel(reason);
+    },
+  };
+}
+
 // Registers the run, wires completion capture, and returns the synchronous {runId, fingerprint}. The
 // caller (POST /api/runs) has already validated the request and resolved the ModelPort. Throws
 // ActiveRunLimitError when the registry is at capacity (mapped to 429 upstream).
@@ -396,6 +698,13 @@ export function startRun(
 ): StartRunResult {
   const sink = new QueueEventSink();
   const startedAt = Date.now();
+  if (ctx.request.kind === "orchestration") {
+    const runId = options.runId ?? randomUUID();
+    const fingerprint = workflowFingerprint(ctx.request);
+    const dispatched = dispatchOrchestration(ctx, sink, runId);
+    registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
+    return { runId, fingerprint, orchestration: ctx.orchestration };
+  }
   if (ctx.request.kind === "explain-plan") {
     const { dispatched, runId, fingerprint } = dispatchExplain(ctx, sink, options.runId);
     registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
@@ -434,6 +743,7 @@ function registerAndCapture(
     modelId: ctx.request.modelId,
     sink: identity.sink,
     cancel: dispatched.cancel,
+    orchestration: ctx.orchestration,
   });
   void dispatched.result
     .then((outcome) => {
@@ -483,6 +793,9 @@ function persistOutcome(
   }
   if (ctx.request.kind === "verify") {
     return persistVerifyEvidence(runIdentity, ctx.evidence);
+  }
+  if (ctx.request.kind === "orchestration") {
+    return undefined;
   }
   return persistWorkflowEvidence(
     runIdentity,

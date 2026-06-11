@@ -274,3 +274,83 @@ describe("parseRunRequest Agent V1 workflow shapes", () => {
     expect(result.message).toMatch(/requires at least one/);
   });
 });
+
+describe("parseRunRequest orchestration variant", () => {
+  it("accepts an additive orchestration create payload without workflowId or taskType", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+        orchestration: {
+          executionMode: "parallel",
+          children: [
+            {
+              childId: "plan",
+              title: "Plan",
+              role: "planner",
+              taskType: "explain-plan",
+              input: { filePath: "src/a.ts", question: "why?" },
+            },
+            {
+              childId: "verify",
+              title: "Verify",
+              role: "validator",
+              taskType: "verify",
+              input: { targetFiles: ["src/a.ts"] },
+              dependsOn: ["plan"],
+            },
+          ],
+        },
+      }),
+    );
+    ok(result);
+    expect(result.kind).toBe("orchestration");
+    if (result.kind === "orchestration") {
+      expect(result.orchestration.executionMode).toBe("parallel");
+      expect(result.orchestration.children[1]?.dependsOn).toEqual(["plan"]);
+    }
+  });
+
+  it("rejects an orchestration payload when workflowId is also present", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        workflowId: "unit-test-generation",
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+        orchestration: { executionMode: "parallel", children: [] },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/without workflowId or taskType/);
+  });
+
+  it("rejects duplicate orchestration child ids", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+        orchestration: {
+          executionMode: "parallel",
+          children: [
+            {
+              childId: "dup",
+              title: "One",
+              role: "planner",
+              taskType: "explain-plan",
+              input: { filePath: "src/a.ts" },
+            },
+            {
+              childId: "dup",
+              title: "Two",
+              role: "validator",
+              taskType: "verify",
+              input: {},
+            },
+          ],
+        },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/duplicate orchestration childId/);
+  });
+});

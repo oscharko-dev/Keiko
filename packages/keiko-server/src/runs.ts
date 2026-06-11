@@ -7,6 +7,13 @@
 // so each server instance (and each test) owns an isolated registry with no cross-talk.
 
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import type {
+  OrchestrationChildRole,
+  OrchestrationExecutionMode,
+  OrchestrationSettlementDecision,
+  OrchestrationState,
+  TaskType,
+} from "@oscharko-dev/keiko-contracts";
 import type { QueueEventSink } from "./sink.js";
 
 export type RunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -39,8 +46,35 @@ export interface RunRecord {
   // Captured after the gated apply route succeeds. The original dry-run report remains in `report`.
   applyReport: unknown;
   appliedAt: number | undefined;
+  orchestration: OrchestrationRunRecord | undefined;
   // Epoch ms at which a terminated record becomes eligible for eviction; undefined while running.
   terminatedAt: number | undefined;
+}
+
+export interface OrchestrationChildRecord {
+  readonly childId: string;
+  readonly title: string;
+  readonly role: OrchestrationChildRole;
+  readonly taskType: TaskType;
+  readonly dependsOn: readonly string[];
+  runId?: string | undefined;
+  state: "pending" | "running" | "completed" | "cancelled" | "failed" | "blocked";
+  reason?: string | undefined;
+  resourceConflicts?:
+    | readonly {
+        readonly conflictingChildId: string;
+        readonly resourceId: string;
+        readonly resourceKind: "file" | "patch" | "tool";
+        readonly outcome: "serialize" | "block" | "escalate";
+      }[]
+    | undefined;
+}
+
+export interface OrchestrationRunRecord {
+  readonly executionMode: OrchestrationExecutionMode;
+  state: OrchestrationState | "pending";
+  readonly children: OrchestrationChildRecord[];
+  settlement?: OrchestrationSettlementDecision | undefined;
 }
 
 export interface RegisterRunInput {
@@ -49,6 +83,7 @@ export interface RegisterRunInput {
   readonly modelId: string;
   readonly sink: QueueEventSink;
   readonly cancel: (reason?: string) => void;
+  readonly orchestration?: OrchestrationRunRecord | undefined;
 }
 
 export interface RunRegistryOptions {
@@ -134,6 +169,7 @@ function registerRun(state: RegistryState, input: RegisterRunInput): RunRecord {
     appliable: undefined,
     applyReport: undefined,
     appliedAt: undefined,
+    orchestration: input.orchestration,
     terminatedAt: undefined,
   };
   state.records.set(input.runId, record);

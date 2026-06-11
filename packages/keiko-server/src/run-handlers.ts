@@ -381,7 +381,16 @@ export async function handleCreateRun(
   };
   try {
     const started = startRun(engineCtx, deps.redactor);
-    return { status: 202, body: { runId: started.runId, fingerprint: started.fingerprint } };
+    return {
+      status: 202,
+      body: {
+        runId: started.runId,
+        fingerprint: started.fingerprint,
+        ...(started.orchestration === undefined
+          ? {}
+          : { orchestration: started.orchestration }),
+      },
+    };
   } catch (error) {
     return mapRunStartError(error);
   }
@@ -476,7 +485,9 @@ export function handleCancelRun(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
   if (record === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
-  record.cancel("cancelled via UI");
+  if (record.status === "running") {
+    record.cancel("cancelled via UI");
+  }
   return { status: 200, body: { ok: true } };
 }
 
@@ -487,7 +498,15 @@ export function handleGetRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
   if (record.status === "running") {
-    return { status: 200, body: { report: { status: "running" } } };
+    return {
+      status: 200,
+      body: {
+        report: {
+          status: "running",
+          ...(record.orchestration === undefined ? {} : { orchestration: record.orchestration }),
+        },
+      },
+    };
   }
   return {
     status: 200,

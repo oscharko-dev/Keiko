@@ -183,8 +183,21 @@ export interface OrchestrationSchedulerHooks {
   readonly beforeDispatch?:
     | ((child: OrchestrationChildRequest, activeChildren: readonly string[]) => void | Promise<void>)
     | undefined;
+  readonly afterDispatch?:
+    | ((
+        child: OrchestrationChildRequest,
+        session: AgentSession,
+        activeChildren: readonly string[],
+      ) => void | Promise<void>)
+    | undefined;
   readonly afterCompletion?:
     | ((child: OrchestrationChildRequest, result: OrchestrationChildResult) => void | Promise<void>)
+    | undefined;
+  readonly onBlocked?:
+    | ((
+        child: OrchestrationChildRequest,
+        conflicts: readonly ResourceConflict[],
+      ) => void | Promise<void>)
     | undefined;
 }
 
@@ -699,6 +712,7 @@ async function runOrchestration(
           reason: dispatchDecision.conflicts.map((conflict) => conflict.reason).join("; "),
           conflicts: dispatchDecision.conflicts,
         };
+        await deps.hooks?.onBlocked?.(child, dispatchDecision.conflicts);
         state = transition(transitions, state, "conflicted", `resource conflict on ${child.plan.childId}`);
         continue;
       }
@@ -706,6 +720,7 @@ async function runOrchestration(
       state = transition(transitions, state, "dispatching", `dispatch ${child.plan.childId}`);
       const session = createSession(child.task, toConfig(config, child), deps);
       active.set(child.plan.childId, { child, session });
+      await deps.hooks?.afterDispatch?.(child, session, [...active.keys()]);
       state = transition(transitions, state, "running", `child ${child.plan.childId} running`);
       dispatchedAny = true;
     }

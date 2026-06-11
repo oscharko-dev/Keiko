@@ -8,10 +8,42 @@
 // them.
 
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import {
+  ORCHESTRATION_CHILD_ROLES,
+  ORCHESTRATION_EXECUTION_MODES,
+  type OrchestrationChildRole,
+  type OrchestrationExecutionMode,
+  type TaskType,
+} from "@oscharko-dev/keiko-contracts";
 
-export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
+export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify" | "orchestration";
 
-export interface RunRequest {
+export interface OrchestrationChildRequestBody {
+  readonly childId: string;
+  readonly title: string;
+  readonly role: OrchestrationChildRole;
+  readonly taskType: TaskType;
+  readonly input: Record<string, unknown>;
+  readonly dependsOn: readonly string[];
+  readonly resourceClaims?:
+    | readonly {
+        readonly kind: "file" | "patch" | "tool";
+        readonly resourceId: string;
+        readonly access: "read" | "write" | "exclusive";
+        readonly policy: "serialize" | "block" | "escalate";
+      }[]
+    | undefined;
+}
+
+export interface OrchestrationRequestBody {
+  readonly executionMode: OrchestrationExecutionMode;
+  readonly children: readonly OrchestrationChildRequestBody[];
+  readonly limits?: Record<string, unknown> | undefined;
+  readonly childLimits?: Record<string, unknown> | undefined;
+  readonly settlementPolicy?: Record<string, unknown> | undefined;
+}
+
+interface BaseRunRequest {
   readonly kind: RunKind;
   readonly modelId: string;
   readonly apply: boolean;
@@ -24,6 +56,15 @@ export interface RunRequest {
   readonly governedHandoffSourceGroundedRunId?: string | undefined;
 }
 
+export type RunRequest =
+  | (BaseRunRequest & {
+      readonly kind: "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
+    })
+  | (BaseRunRequest & {
+      readonly kind: "orchestration";
+      readonly orchestration: OrchestrationRequestBody;
+    });
+
 export interface RunRequestError {
   readonly code: "BAD_REQUEST";
   readonly message: string;
@@ -34,6 +75,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function resolveKind(body: Record<string, unknown>): RunKind | RunRequestError {
+  if (isRecord(body.orchestration)) {
+    const workflowId = body.workflowId;
+    const taskType = body.taskType;
+    if (workflowId !== undefined || taskType !== undefined) {
+      return {
+        code: "BAD_REQUEST",
+        message: "Provide orchestration on its own, without workflowId or taskType.",
+      };
+    }
+    return "orchestration";
+  }
   const workflowId = body.workflowId;
   const taskType = body.taskType;
   const hasWorkflow = workflowId !== undefined;
@@ -126,6 +178,46 @@ function validateStringArray(
 // only validates shape here.
 function validateVerifyInput(input: Record<string, unknown>): RunRequestError | null {
   return validateStringArray(input.targetFiles, "verify targetFiles");
+}
+
+function validateHarnessTaskInput(
+  taskType: TaskType,
+  input: Record<string, unknown>,
+  allowWorkspaceRootDefault = false,
+): RunRequestError | null {
+  if (taskType === "verify") {
+    if (!allowWorkspaceRootDefault) {
+      const workspaceRootError = validateWorkspaceRoot(input);
+      if (workspaceRootError !== null) {
+        return workspaceRootError;
+      }
+    } else if (input.workspaceRoot !== undefined) {
+      const workspaceRootError = validateWorkspaceRoot(input);
+      if (workspaceRootError !== null) {
+        return workspaceRootError;
+      }
+    }
+    return validateVerifyInput(input);
+  }
+  if (taskType === "explain-plan") {
+    return validateExplainPlanInput(input);
+  }
+  if (taskType === "generate-unit-tests") {
+    return (
+      validateStringField(input, "filePath", "generate-unit-tests filePath") ??
+      validateOptionalStringField(
+        input,
+        "targetFunction",
+        "generate-unit-tests targetFunction",
+      ) ??
+      validateOptionalStringField(input, "context", "generate-unit-tests context")
+    );
+  }
+  return (
+    validateStringField(input, "description", "investigate-bug description") ??
+    validateStringArray(input.filePaths, "investigate-bug filePaths") ??
+    validateOptionalStringField(input, "context", "investigate-bug context")
+  );
 }
 
 function validateExplainPlanInput(input: Record<string, unknown>): RunRequestError | null {
@@ -234,6 +326,9 @@ function validateRunInput(kind: RunKind, input: Record<string, unknown>): RunReq
   if (workspaceRootError !== null) {
     return workspaceRootError;
   }
+  if (kind === "orchestration") {
+    return null;
+  }
   if (kind === "verify") {
     return validateVerifyInput(input);
   }
@@ -244,6 +339,121 @@ function validateRunInput(kind: RunKind, input: Record<string, unknown>): RunReq
     return validateUnitTestsInput(input);
   }
   return validateBugInvestigationInput(input);
+}
+
+function isTaskType(value: unknown): value is TaskType {
+  return (
+    value === "generate-unit-tests" ||
+    value === "investigate-bug" ||
+    value === "explain-plan" ||
+    value === "verify"
+  );
+}
+
+function validateResourceClaims(value: unknown): RunRequestError | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    return { code: "BAD_REQUEST", message: "orchestration child resourceClaims must be an array." };
+  }
+  for (const claim of value) {
+    if (!isRecord(claim)) {
+      return { code: "BAD_REQUEST", message: "orchestration child resourceClaims must contain objects." };
+    }
+    if (!["file", "patch", "tool"].includes(String(claim.kind))) {
+      return { code: "BAD_REQUEST", message: "orchestration child resourceClaims kind is invalid." };
+    }
+    if (typeof claim.resourceId !== "string" || claim.resourceId.length === 0) {
+      return { code: "BAD_REQUEST", message: "orchestration child resourceClaims resourceId is required." };
+    }
+    if (!["read", "write", "exclusive"].includes(String(claim.access))) {
+      return { code: "BAD_REQUEST", message: "orchestration child resourceClaims access is invalid." };
+    }
+    if (!["serialize", "block", "escalate"].includes(String(claim.policy))) {
+      return { code: "BAD_REQUEST", message: "orchestration child resourceClaims policy is invalid." };
+    }
+  }
+  return null;
+}
+
+function validateOrchestration(body: Record<string, unknown>): OrchestrationRequestBody | RunRequestError {
+  const orchestration = body.orchestration;
+  if (!isRecord(orchestration)) {
+    return { code: "BAD_REQUEST", message: "orchestration must be an object." };
+  }
+  if (!ORCHESTRATION_EXECUTION_MODES.includes(orchestration.executionMode as OrchestrationExecutionMode)) {
+    return { code: "BAD_REQUEST", message: "orchestration executionMode is invalid." };
+  }
+  if (!Array.isArray(orchestration.children) || orchestration.children.length === 0) {
+    return { code: "BAD_REQUEST", message: "orchestration children must be a non-empty array." };
+  }
+  const seen = new Set<string>();
+  const children: OrchestrationChildRequestBody[] = [];
+  for (const child of orchestration.children) {
+    if (!isRecord(child)) {
+      return { code: "BAD_REQUEST", message: "orchestration children must contain objects." };
+    }
+    if (typeof child.childId !== "string" || child.childId.length === 0) {
+      return { code: "BAD_REQUEST", message: "orchestration childId is required." };
+    }
+    if (seen.has(child.childId)) {
+      return { code: "BAD_REQUEST", message: `duplicate orchestration childId: ${child.childId}` };
+    }
+    seen.add(child.childId);
+    if (typeof child.title !== "string" || child.title.length === 0) {
+      return { code: "BAD_REQUEST", message: `orchestration child ${child.childId} title is required.` };
+    }
+    if (!ORCHESTRATION_CHILD_ROLES.includes(child.role as OrchestrationChildRole)) {
+      return { code: "BAD_REQUEST", message: `orchestration child ${child.childId} role is invalid.` };
+    }
+    if (!isTaskType(child.taskType)) {
+      return { code: "BAD_REQUEST", message: `orchestration child ${child.childId} taskType is invalid.` };
+    }
+    if (!isRecord(child.input)) {
+      return { code: "BAD_REQUEST", message: `orchestration child ${child.childId} input must be an object.` };
+    }
+    const inputError = validateHarnessTaskInput(child.taskType, child.input, true);
+    if (inputError !== null) {
+      return inputError;
+    }
+    const dependsOnError = validateStringArray(child.dependsOn, `orchestration child ${child.childId} dependsOn`);
+    if (dependsOnError !== null) {
+      return dependsOnError;
+    }
+    const claimsError = validateResourceClaims(child.resourceClaims);
+    if (claimsError !== null) {
+      return claimsError;
+    }
+    children.push({
+      childId: child.childId,
+      title: child.title,
+      role: child.role as OrchestrationChildRole,
+      taskType: child.taskType,
+      input: child.input,
+      dependsOn: (child.dependsOn as readonly string[] | undefined) ?? [],
+      ...(Array.isArray(child.resourceClaims) ? { resourceClaims: child.resourceClaims as OrchestrationChildRequestBody["resourceClaims"] } : {}),
+    });
+  }
+  for (const child of children) {
+    for (const dependency of child.dependsOn) {
+      if (!seen.has(dependency)) {
+        return {
+          code: "BAD_REQUEST",
+          message: `orchestration child ${child.childId} depends on unknown child ${dependency}.`,
+        };
+      }
+    }
+  }
+  return {
+    executionMode: orchestration.executionMode as OrchestrationExecutionMode,
+    children,
+    ...(isRecord(orchestration.limits) ? { limits: orchestration.limits } : {}),
+    ...(isRecord(orchestration.childLimits) ? { childLimits: orchestration.childLimits } : {}),
+    ...(isRecord(orchestration.settlementPolicy)
+      ? { settlementPolicy: orchestration.settlementPolicy }
+      : {}),
+  };
 }
 
 // Parses the raw JSON text into a validated RunRequest, or a typed BAD_REQUEST error.
@@ -274,6 +484,20 @@ export function parseRunRequest(raw: string): RunRequest | RunRequestError {
     return inputError;
   }
   const limits = parsed.limits;
+  if (kind === "orchestration") {
+    const orchestration = validateOrchestration(parsed);
+    if ("code" in orchestration) {
+      return orchestration;
+    }
+    return {
+      kind,
+      modelId,
+      apply: false,
+      input,
+      ...(isRecord(limits) ? { limits } : { limits: undefined }),
+      orchestration,
+    };
+  }
   return {
     kind,
     modelId,

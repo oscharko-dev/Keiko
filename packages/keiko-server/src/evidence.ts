@@ -95,12 +95,16 @@ export function persistExplainEvidence(
   return buildEvidenceReport(redacted, location);
 }
 
-const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {
+const KIND_TO_TASK_TYPE: Readonly<Record<Exclude<RunKind, "orchestration">, TaskType>> = {
   "unit-tests": "generate-unit-tests",
   "bug-investigation": "investigate-bug",
   "explain-plan": "explain-plan",
   verify: "verify",
 };
+
+function evidenceTaskType(kind: RunKind): TaskType {
+  return kind === "orchestration" ? "explain-plan" : KIND_TO_TASK_TYPE[kind];
+}
 
 // Persists a terminated VERIFY run. Verify never calls a model, so usageTotals are all zero and
 // stateTransitions/toolCalls/commandExecutions stay empty (the verification orchestrator's own
@@ -134,7 +138,7 @@ function buildVerifyManifest(identity: RunIdentity): EvidenceManifest {
       runId: identity.runId,
       fingerprint: identity.fingerprint,
       harnessVersion: HARNESS_VERSION,
-      taskType: KIND_TO_TASK_TYPE[identity.kind],
+      taskType: evidenceTaskType(identity.kind),
       outcome: identity.status,
       startedAt: identity.startedAt,
       finishedAt: identity.finishedAt,
@@ -170,7 +174,7 @@ function buildExplainManifest(identity: RunIdentity, result: RunResult): Evidenc
       runId: identity.runId,
       fingerprint: identity.fingerprint,
       harnessVersion: HARNESS_VERSION,
-      taskType: KIND_TO_TASK_TYPE[identity.kind],
+      taskType: evidenceTaskType(identity.kind),
       outcome: identity.status,
       startedAt: identity.startedAt,
       finishedAt: identity.finishedAt,

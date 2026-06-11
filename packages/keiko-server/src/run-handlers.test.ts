@@ -120,6 +120,7 @@ function base(): string {
 interface CreateResponse {
   readonly runId: string;
   readonly fingerprint: string;
+  readonly orchestration?: { readonly state: string; readonly children: readonly unknown[] } | undefined;
 }
 
 async function createRun(apply = false): Promise<{ status: number; body: CreateResponse }> {
@@ -131,6 +132,38 @@ async function createRun(apply = false): Promise<{ status: number; body: CreateR
       input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
       modelId: "test-model",
       apply,
+    }),
+  });
+  return { status: res.status, body: (await res.json()) as CreateResponse };
+}
+
+async function createOrchestrationRun(): Promise<{ status: number; body: CreateResponse }> {
+  const res = await fetch(`${base()}/api/runs`, {
+    method: "POST",
+    headers: POST_JSON_HEADERS,
+    body: JSON.stringify({
+      modelId: "test-model",
+      input: { workspaceRoot: workspace },
+      orchestration: {
+        executionMode: "parallel",
+        children: [
+          {
+            childId: "plan",
+            title: "Plan",
+            role: "planner",
+            taskType: "explain-plan",
+            input: { filePath: "src/add.ts", question: "Summarize." },
+          },
+          {
+            childId: "verify",
+            title: "Verify",
+            role: "validator",
+            taskType: "verify",
+            input: { targetFiles: ["src/add.ts"] },
+            dependsOn: ["plan"],
+          },
+        ],
+      },
     }),
   });
   return { status: res.status, body: (await res.json()) as CreateResponse };
@@ -171,6 +204,14 @@ describe("POST /api/runs", () => {
     expect(created.status).toBe(202);
     expect(created.body.runId).toBeTruthy();
     expect(created.body.fingerprint).toBeTruthy();
+  });
+
+  it("starts an orchestration run and returns the parent projection additively", async () => {
+    await start(fakeModel("explanation"));
+    const created = await createOrchestrationRun();
+    expect(created.status).toBe(202);
+    expect(["pending", "running"]).toContain(created.body.orchestration?.state);
+    expect(created.body.orchestration?.children).toHaveLength(2);
   });
 
   it("rejects a missing model with 400 NO_MODEL", async () => {
@@ -245,6 +286,31 @@ describe("GET /api/runs/:runId", () => {
     expect(json.report.evidence.knownLimitations.length).toBeGreaterThan(0);
   });
 
+  it("surfaces orchestration state and settlement through the stable run report", async () => {
+    await start(fakeModel("explanation"));
+    const { body } = await createOrchestrationRun();
+    await awaitTerminal(body.runId);
+    const res = await fetch(`${base()}/api/runs/${body.runId}`);
+    const json = (await res.json()) as {
+      report: {
+        status: string;
+        orchestration?: {
+          state: string;
+          children: { childId: string; state: string; runId?: string }[];
+          settlement?: { outcome: string };
+        };
+      };
+    };
+    expect(json.report.status).toBe("completed");
+    expect(json.report.orchestration?.state).toBe("completed");
+    expect(json.report.orchestration?.children.map((child) => child.childId)).toEqual([
+      "plan",
+      "verify",
+    ]);
+    expect(json.report.orchestration?.children.every((child) => typeof child.runId === "string")).toBe(true);
+    expect(json.report.orchestration?.settlement?.outcome).toBe("accepted");
+  });
+
   it("returns 404 for an unknown run", async () => {
     await start(fakeModel("noop"));
     const res = await fetch(`${base()}/api/runs/nope`);
@@ -264,6 +330,17 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
     expect(text).toContain("event: ready");
     expect(text).toContain("event: workflow:started");
     expect(text).toContain("data: ");
+  });
+
+  it("streams orchestration lifecycle events alongside child harness events", async () => {
+    await start(fakeModel("explanation"));
+    const { body } = await createOrchestrationRun();
+    await awaitTerminal(body.runId);
+    const res = await fetch(`${base()}/api/runs/${body.runId}/events`);
+    const text = await res.text();
+    expect(text).toContain("event: orchestration:run:started");
+    expect(text).toContain("event: orchestration:child:dispatched");
+    expect(text).toContain("event: orchestration:settlement");
   });
 
   it("returns 404 for an unknown run", async () => {
@@ -291,6 +368,44 @@ describe("POST /api/runs/:runId/cancel", () => {
       body: JSON.stringify({ confirm: true }),
     });
     expect(second.status).toBe(200);
+  });
+
+  it("moves an orchestration run into cancelling before terminal cancellation", async () => {
+    await start(abortableModel());
+    const created = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        modelId: "test-model",
+        input: { workspaceRoot: workspace },
+        orchestration: {
+          executionMode: "single",
+          children: [
+            {
+              childId: "fix",
+              title: "Fix",
+              role: "implementer",
+              taskType: "investigate-bug",
+              input: { description: "hang until cancelled" },
+            },
+          ],
+        },
+      }),
+    });
+    const body = (await created.json()) as CreateResponse;
+    const cancel = await fetch(`${base()}/api/runs/${body.runId}/cancel`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+    expect(cancel.status).toBe(200);
+    const running = await fetch(`${base()}/api/runs/${body.runId}`);
+    const runningJson = (await running.json()) as {
+      report: { status: string; orchestration?: { state: string } };
+    };
+    expect(["running", "cancelled", "failed"]).toContain(runningJson.report.status);
+    expect(["cancelling", "cancelled"]).toContain(runningJson.report.orchestration?.state);
+    await awaitTerminal(body.runId);
   });
 
   it("returns 404 for an unknown run", async () => {
