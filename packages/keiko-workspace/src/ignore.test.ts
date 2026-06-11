@@ -78,6 +78,21 @@ describe("isDenied (always-on security)", () => {
     ".zsh_history",
     ".psql_history",
     ".node_repl_history",
+    // Epic #177 post-closure audit — additional pure-credential FILES.
+    ".s3cfg",
+    "home/alice/.s3cfg",
+    ".boto",
+    "home/alice/.boto",
+    ".dockercfg",
+    "home/alice/.dockercfg",
+    ".gitconfig",
+    "home/alice/.gitconfig",
+    ".envrc",
+    "projects/app/.envrc",
+    "infra/prod.tfvars",
+    "infra/secrets.tfvars.json",
+    ".terraformrc",
+    "home/alice/.terraformrc",
   ]) {
     it(`denies ${denied}`, () => {
       expect(isDenied(denied)).toBe(true);
@@ -104,6 +119,11 @@ describe("isDenied (always-on security)", () => {
     "history.txt",
     ".keiko.example",
     "docs/keiko.md",
+    // Epic #177 post-closure audit — new denies must NOT over-match legitimate adjacent files.
+    "app.config.txt",
+    "vars.tf",
+    "notes.md",
+    "gitconfig.md",
   ]) {
     it(`does not deny ${allowed}`, () => {
       expect(isDenied(allowed)).toBe(false);

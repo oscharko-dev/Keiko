@@ -68,6 +68,18 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   ".node_repl_history",
   ".irb_history",
   "service-account*.json",
+  // Epic #177 post-closure audit: additional pure-credential FILES denied outright. These filenames
+  // hold secrets by convention (cloud storage keys, OAuth tokens, VCS/registry/shell credentials,
+  // IaC variables); secret-shaped content in otherwise-allowed files is still scrubbed by the
+  // redaction layer as defence-in-depth.
+  ".s3cfg",
+  ".boto",
+  ".dockercfg",
+  ".gitconfig",
+  ".envrc",
+  "*.tfvars",
+  "*.tfvars.json",
+  ".terraformrc",
   // deps
   "node_modules",
   // Keiko runtime/evidence state. These files are internal product artifacts, not repository
