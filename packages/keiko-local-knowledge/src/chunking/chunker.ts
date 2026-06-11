@@ -30,15 +30,69 @@ import type {
   ResolvedChunkingOptions,
   TokenEstimator,
 } from "./types.js";
-import { DEFAULT_MAX_TOKENS, DEFAULT_MIN_TOKENS, DEFAULT_OVERLAP_TOKENS } from "./types.js";
+import {
+  ChunkingError,
+  DEFAULT_CHUNKING_STRATEGY_KEY,
+  DEFAULT_MAX_CHUNKS,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_MIN_TOKENS,
+  DEFAULT_OVERLAP_TOKENS,
+  MAX_CHUNK_TOKENS,
+  MAX_OVERLAP_TOKENS,
+  CHUNKING_STRATEGY_VERSION,
+} from "./types.js";
 import { defaultTokenEstimator } from "./token-estimator.js";
 
-function resolveOptions(options: ChunkingOptions | undefined): ResolvedChunkingOptions {
-  const maxTokens = options?.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const minTokens = options?.minTokens ?? DEFAULT_MIN_TOKENS;
-  const overlapTokens = options?.overlapTokens ?? DEFAULT_OVERLAP_TOKENS;
+const WHITESPACE_PATTERN = /\s+/gu;
+const INFORMATIVE_CHARACTER_PATTERN = /[\p{L}\p{N}]/u;
+
+function positiveInteger(raw: number | undefined, fallback: number, field: string): number {
+  const value = raw ?? fallback;
+  if (!Number.isFinite(value) || value < 1) {
+    throw new ChunkingError(`${field} must be a positive finite integer`);
+  }
+  return Math.floor(value);
+}
+
+function nonNegativeInteger(raw: number | undefined, fallback: number, field: string): number {
+  const value = raw ?? fallback;
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ChunkingError(`${field} must be a non-negative finite integer`);
+  }
+  return Math.floor(value);
+}
+
+export function resolveChunkingOptions(
+  options: ChunkingOptions | undefined,
+): ResolvedChunkingOptions {
+  const maxTokens = Math.min(
+    positiveInteger(options?.maxTokens, DEFAULT_MAX_TOKENS, "maxTokens"),
+    MAX_CHUNK_TOKENS,
+  );
+  const minTokens = nonNegativeInteger(options?.minTokens, DEFAULT_MIN_TOKENS, "minTokens");
+  const overlapTokens = Math.min(
+    nonNegativeInteger(options?.overlapTokens, DEFAULT_OVERLAP_TOKENS, "overlapTokens"),
+    MAX_OVERLAP_TOKENS,
+  );
+  const maxChunks = Math.min(
+    positiveInteger(options?.maxChunks, DEFAULT_MAX_CHUNKS, "maxChunks"),
+    DEFAULT_MAX_CHUNKS,
+  );
   const tokenEstimator: TokenEstimator = options?.tokenEstimator ?? defaultTokenEstimator;
-  return { maxTokens, minTokens, overlapTokens, tokenEstimator };
+  return { maxTokens, minTokens, overlapTokens, maxChunks, tokenEstimator };
+}
+
+export function chunkingStrategyKey(options: ChunkingOptions | undefined): string {
+  if (options === undefined) return DEFAULT_CHUNKING_STRATEGY_KEY;
+  const resolved = resolveChunkingOptions(options);
+  return [
+    CHUNKING_STRATEGY_VERSION,
+    `max=${String(resolved.maxTokens)}`,
+    `min=${String(resolved.minTokens)}`,
+    `overlap=${String(resolved.overlapTokens)}`,
+    `limit=${String(resolved.maxChunks)}`,
+    options.tokenEstimator === undefined ? "estimator=default" : "estimator=custom",
+  ].join("|");
 }
 
 interface UnitSpan {
@@ -58,13 +112,25 @@ function hashExcerpt(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+function normaliseChunkText(text: string): string {
+  return text.normalize("NFKC").replace(WHITESPACE_PATTERN, " ").trim();
+}
+
+export function chunkDedupeKey(text: string): string | undefined {
+  const normalised = normaliseChunkText(text);
+  if (normalised.length === 0) return undefined;
+  if (!INFORMATIVE_CHARACTER_PATTERN.test(normalised)) return undefined;
+  return hashExcerpt(normalised);
+}
+
 function buildChunk(
   sourceText: string,
   start: number,
   end: number,
   estimator: TokenEstimator,
-): ChunkingResult {
+): ChunkingResult | undefined {
   const excerpt = sourceText.slice(start, end);
+  if (chunkDedupeKey(excerpt) === undefined) return undefined;
   return {
     characterStart: start,
     characterEnd: end,
@@ -98,18 +164,31 @@ function shouldEmitSingleChunk(excerpt: string, resolved: ResolvedChunkingOption
   return resolved.tokenEstimator(excerpt) <= resolved.maxTokens;
 }
 
+function pushChunk(
+  chunks: ChunkingResult[],
+  chunk: ChunkingResult | undefined,
+  maxChunks: number,
+): void {
+  if (chunk === undefined) return;
+  if (chunks.length >= maxChunks) {
+    throw new ChunkingError(`chunkParsedUnit exceeded maxChunks ${String(maxChunks)}`);
+  }
+  chunks.push(chunk);
+}
+
 export function chunkParsedUnit(
   unit: ParsedUnit,
   sourceText: string,
   options?: ChunkingOptions,
 ): readonly ChunkingResult[] {
-  const resolved = resolveOptions(options);
+  const resolved = resolveChunkingOptions(options);
   const span = spanForUnit(unit, sourceText.length);
   if (span === undefined) return [];
 
   const excerpt = sourceText.slice(span.start, span.end);
   if (shouldEmitSingleChunk(excerpt, resolved)) {
-    return [buildChunk(sourceText, span.start, span.end, resolved.tokenEstimator)];
+    const chunk = buildChunk(sourceText, span.start, span.end, resolved.tokenEstimator);
+    return chunk === undefined ? [] : [chunk];
   }
 
   const { maxChars, stride } = computeStepSizes(resolved);
@@ -117,7 +196,11 @@ export function chunkParsedUnit(
   let cursor = span.start;
   while (cursor < span.end) {
     const end = Math.min(cursor + maxChars, span.end);
-    chunks.push(buildChunk(sourceText, cursor, end, resolved.tokenEstimator));
+    pushChunk(
+      chunks,
+      buildChunk(sourceText, cursor, end, resolved.tokenEstimator),
+      resolved.maxChunks,
+    );
     if (end >= span.end) break;
     cursor += stride;
   }

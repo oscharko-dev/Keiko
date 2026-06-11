@@ -117,6 +117,117 @@ describe("chunkDocument", () => {
     expect(rows.map((r) => r.order_index)).toEqual(rows.map((_, i) => i));
   });
 
+  it("preserves repeated boilerplate occurrences as distinct citation targets", () => {
+    const boilerplate = "Standard footer";
+    const text = `${boilerplate}\nunique body\n${boilerplate}`;
+    const secondStart = text.lastIndexOf(boilerplate);
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-1",
+      pageUnit(0, boilerplate.length, fixture.seeded.documentId),
+    );
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-2",
+      pageUnit(secondStart, secondStart + boilerplate.length, fixture.seeded.documentId),
+    );
+
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+
+    expect(result.chunkIds).toHaveLength(2);
+    expect(
+      countChunksForDocument(
+        fixture.store._internal.db,
+        fixture.seeded.capsuleId,
+        fixture.seeded.documentId,
+      ),
+    ).toBe(2);
+  });
+
+  it("preserves identical text across capsules", () => {
+    const text = "Shared policy footer";
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-1",
+      pageUnit(0, text.length, fixture.seeded.documentId),
+    );
+    const first = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+
+    const other = seedCapsuleSourceAndDocument(fixture.store, {
+      capsuleId: "cap-2",
+      sourceId: "src-2",
+      documentId: "doc-2",
+    });
+    seedParsedUnit(
+      fixture.store,
+      other.capsuleId,
+      "u-2",
+      pageUnit(0, text.length, other.documentId),
+    );
+    const second = chunkDocument(fixture.store, {
+      capsuleId: other.capsuleId,
+      sourceId: other.sourceId,
+      documentId: other.documentId,
+      sourceText: text,
+    });
+
+    expect(first.chunkIds).toHaveLength(1);
+    expect(second.chunkIds).toHaveLength(1);
+    expect(
+      countChunksForDocument(
+        fixture.store._internal.db,
+        fixture.seeded.capsuleId,
+        fixture.seeded.documentId,
+      ),
+    ).toBe(1);
+    expect(
+      countChunksForDocument(fixture.store._internal.db, other.capsuleId, other.documentId),
+    ).toBe(1);
+  });
+
+  it("rolls back when maxChunks is exceeded", () => {
+    const text = "alpha ".repeat(40);
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-1",
+      pageUnit(0, text.length, fixture.seeded.documentId),
+    );
+
+    expect(() =>
+      chunkDocument(
+        fixture.store,
+        {
+          capsuleId: fixture.seeded.capsuleId,
+          sourceId: fixture.seeded.sourceId,
+          documentId: fixture.seeded.documentId,
+          sourceText: text,
+        },
+        { maxTokens: 1, minTokens: 0, overlapTokens: 0, maxChunks: 2 },
+      ),
+    ).toThrow(/maxChunks/);
+    expect(
+      countChunksForDocument(
+        fixture.store._internal.db,
+        fixture.seeded.capsuleId,
+        fixture.seeded.documentId,
+      ),
+    ).toBe(0);
+  });
+
   it("is idempotent with force=false (second call is a no-op)", () => {
     const text = "Hello world.";
     seedParsedUnit(
@@ -238,7 +349,43 @@ describe("chunkDocument", () => {
       .get({ c: fixture.seeded.capsuleId, d: fixture.seeded.documentId }) as {
       readonly chunking_strategy_version: string | null;
     };
-    expect(row.chunking_strategy_version).toBe("issue-195-v1");
+    expect(row.chunking_strategy_version).toContain("issue-195-v2");
+    expect(row.chunking_strategy_version).toContain("max=400");
+  });
+
+  it("re-chunks when effective chunking options change", () => {
+    const text = "alpha ".repeat(80);
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-1",
+      pageUnit(0, text.length, fixture.seeded.documentId),
+    );
+    const first = chunkDocument(
+      fixture.store,
+      {
+        capsuleId: fixture.seeded.capsuleId,
+        sourceId: fixture.seeded.sourceId,
+        documentId: fixture.seeded.documentId,
+        sourceText: text,
+      },
+      { maxTokens: 50, minTokens: 0, overlapTokens: 0 },
+    );
+    expect(first.skippedExisting).toBe(false);
+
+    const second = chunkDocument(
+      fixture.store,
+      {
+        capsuleId: fixture.seeded.capsuleId,
+        sourceId: fixture.seeded.sourceId,
+        documentId: fixture.seeded.documentId,
+        sourceText: text,
+      },
+      { maxTokens: 10, minTokens: 0, overlapTokens: 0 },
+    );
+
+    expect(second.skippedExisting).toBe(false);
+    expect(second.chunkIds.length).toBeGreaterThan(first.chunkIds.length);
   });
 
   it("rolls back the transaction when AbortSignal aborts mid-document", () => {

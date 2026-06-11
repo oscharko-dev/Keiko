@@ -161,6 +161,9 @@ export interface CitationReference {
   readonly pageNumber?: number;
   readonly pageLabel?: string;
   readonly sectionPath?: readonly string[];
+  readonly jsonPointer?: string;
+  readonly tableName?: string;
+  readonly rowIndex?: number;
   readonly characterStart?: number;
   readonly characterEnd?: number;
   readonly safeDisplayName: string;

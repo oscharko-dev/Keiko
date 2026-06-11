@@ -192,7 +192,7 @@ function folderRerankInputs(
         kind: "folder" as const,
         redactedText: redactString(redactor, excerpt.content),
         engineScore: excerpt.atom.score,
-        sourceLabel: src.label,
+        sourceLabel: redactString(redactor, src.label),
         tieKey: excerpt.atom.stableId,
         payload: {
           kind: "folder" as const,
@@ -222,7 +222,7 @@ function connectorRerankInputs(
         readCitationExcerpt(store, reference.capsuleId, reference.citation, maxExcerptChars),
       ),
       engineScore: reference.score,
-      sourceLabel: src.label,
+      sourceLabel: redactString(redactor, src.label),
       tieKey: String(reference.chunkId),
       payload: { kind: "connector" as const, reference, lookup },
     }));
@@ -462,11 +462,17 @@ function selectedFolderCitations(
 
 function selectedConnectorCitations(
   selected: readonly SelectedCandidate<HybridPayload>[],
+  redactor: Redactor,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   return selected
     .filter((s): s is SelectedCandidate<ConnectorPayload> => s.kind === "connector")
     .map((s) =>
-      projectLocalKnowledgeCitation(s.payload.reference, `[${String(s.marker)}]`, s.payload.lookup),
+      projectLocalKnowledgeCitation(
+        s.payload.reference,
+        `[${String(s.marker)}]`,
+        s.payload.lookup,
+        (value) => redactString(redactor, value),
+      ),
     );
 }
 
@@ -831,7 +837,7 @@ function assembleHybridAnswer(
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
   const citations = selectedFolderCitations(selected, redactor);
-  const knowledgeCitations = selectedConnectorCitations(selected);
+  const knowledgeCitations = selectedConnectorCitations(selected, redactor);
   const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
     ctx,
     sources.folders,

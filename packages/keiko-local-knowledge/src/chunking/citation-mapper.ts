@@ -13,7 +13,9 @@
 //        - kind=page: copy pageNumber/pageLabel + characterStart/End directly.
 //        - kind=section: copy sectionPath + characterStart/End directly.
 //        - kind=html-block: copy headingPath + characterStart/End.
-//        - other kinds (json-path, csv-row, unsupported-media): characterStart/End only.
+//        - kind=json-path: copy jsonPointer + characterStart/End.
+//        - kind=csv-row: copy tableName/rowIndex + characterStart/End.
+//        - other kinds (unsupported-media): characterStart/End only.
 //      THEN: if the parsed_unit's span overlaps any persisted `pages` row, attach that
 //      page's pageNumber/pageLabel — section units inside a paged document still
 //      surface a citation page number.
@@ -47,6 +49,9 @@ interface ParsedUnitHopRow {
   readonly page_label: string | null;
   readonly section_path_json: string | null;
   readonly heading_path_json: string | null;
+  readonly json_pointer: string | null;
+  readonly table_name: string | null;
+  readonly row_index: number | null;
   readonly character_start: number | null;
   readonly character_end: number | null;
 }
@@ -66,7 +71,7 @@ const SELECT_CHUNK_SQL =
 
 const SELECT_PARSED_UNIT_SQL = [
   "SELECT kind, page_number, page_label, section_path_json,",
-  "  heading_path_json, character_start, character_end",
+  "  heading_path_json, json_pointer, table_name, row_index, character_start, character_end",
   "FROM parsed_units",
   "WHERE capsule_id = :c AND id = :id",
 ].join(" ");
@@ -137,48 +142,71 @@ interface HopFields {
   readonly pageNumber: number | undefined;
   readonly pageLabel: string | undefined;
   readonly sectionPath: readonly string[] | undefined;
+  readonly jsonPointer: string | undefined;
+  readonly tableName: string | undefined;
+  readonly rowIndex: number | undefined;
   readonly characterStart: number | undefined;
   readonly characterEnd: number | undefined;
 }
 
-function hopFieldsForUnit(unit: ParsedUnitHopRow): HopFields {
-  const characterStart = unit.character_start ?? undefined;
-  const characterEnd = unit.character_end ?? undefined;
-  if (unit.kind === "page") {
-    return {
-      pageNumber: unit.page_number ?? undefined,
-      pageLabel: unit.page_label ?? undefined,
-      sectionPath: undefined,
-      characterStart,
-      characterEnd,
-    };
-  }
-  if (unit.kind === "section") {
-    return {
-      pageNumber: undefined,
-      pageLabel: undefined,
-      sectionPath: parseStringArray(unit.section_path_json),
-      characterStart,
-      characterEnd,
-    };
-  }
-  if (unit.kind === "html-block") {
-    return {
-      pageNumber: undefined,
-      pageLabel: undefined,
-      sectionPath: parseStringArray(unit.heading_path_json),
-      characterStart,
-      characterEnd,
-    };
-  }
-  // json-path / csv-row / unsupported-media — character offsets only when present.
+function baseHopFields(unit: ParsedUnitHopRow): HopFields {
   return {
     pageNumber: undefined,
     pageLabel: undefined,
     sectionPath: undefined,
-    characterStart,
-    characterEnd,
+    jsonPointer: undefined,
+    tableName: undefined,
+    rowIndex: undefined,
+    characterStart: unit.character_start ?? undefined,
+    characterEnd: unit.character_end ?? undefined,
   };
+}
+
+type HopFieldsBuilder = (unit: ParsedUnitHopRow, base: HopFields) => HopFields;
+
+const HOP_FIELDS_BY_KIND = new Map<string, HopFieldsBuilder>([
+  [
+    "page",
+    (unit, base): HopFields => ({
+      ...base,
+      pageNumber: unit.page_number ?? undefined,
+      pageLabel: unit.page_label ?? undefined,
+    }),
+  ],
+  [
+    "section",
+    (unit, base): HopFields => ({
+      ...base,
+      sectionPath: parseStringArray(unit.section_path_json),
+    }),
+  ],
+  [
+    "html-block",
+    (unit, base): HopFields => ({
+      ...base,
+      sectionPath: parseStringArray(unit.heading_path_json),
+    }),
+  ],
+  [
+    "json-path",
+    (unit, base): HopFields => ({
+      ...base,
+      jsonPointer: unit.json_pointer ?? undefined,
+    }),
+  ],
+  [
+    "csv-row",
+    (unit, base): HopFields => ({
+      ...base,
+      tableName: unit.table_name ?? undefined,
+      rowIndex: unit.row_index ?? undefined,
+    }),
+  ],
+]);
+
+function hopFieldsForUnit(unit: ParsedUnitHopRow): HopFields {
+  const base = baseHopFields(unit);
+  return HOP_FIELDS_BY_KIND.get(unit.kind)?.(unit, base) ?? base;
 }
 
 function applyChunkSpan(hop: HopFields, chunk: ChunkRow): HopFields {
@@ -225,6 +253,9 @@ function buildCitation(
     ...(hop.pageNumber !== undefined ? { pageNumber: hop.pageNumber } : {}),
     ...(hop.pageLabel !== undefined ? { pageLabel: hop.pageLabel } : {}),
     ...(hop.sectionPath !== undefined ? { sectionPath: hop.sectionPath } : {}),
+    ...(hop.jsonPointer !== undefined ? { jsonPointer: hop.jsonPointer } : {}),
+    ...(hop.tableName !== undefined ? { tableName: hop.tableName } : {}),
+    ...(hop.rowIndex !== undefined ? { rowIndex: hop.rowIndex } : {}),
     ...(hop.characterStart !== undefined ? { characterStart: hop.characterStart } : {}),
     ...(hop.characterEnd !== undefined ? { characterEnd: hop.characterEnd } : {}),
   };

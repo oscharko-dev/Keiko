@@ -109,6 +109,9 @@ interface CitationRow {
   readonly page_number: number | null;
   readonly page_label: string | null;
   readonly section_path_json: string | null;
+  readonly json_pointer: string | null;
+  readonly table_name: string | null;
+  readonly row_index: number | null;
   readonly character_start: number | null;
   readonly character_end: number | null;
 }
@@ -123,7 +126,22 @@ function readCitationRows(
   const sql = [
     "SELECT c.id AS chunk_id, c.capsule_id, c.source_id, c.document_id,",
     "  d.safe_display_name AS safe_display_name,",
-    "  pu.page_number, pu.page_label, pu.section_path_json,",
+    "  COALESCE(pu.page_number, (",
+    "    SELECT p.page_number FROM pages p",
+    "    WHERE p.capsule_id = c.capsule_id AND p.document_id = c.document_id",
+    "      AND p.character_start <= COALESCE(c.character_start, pu.character_start)",
+    "      AND p.character_end >= COALESCE(c.character_end, pu.character_end)",
+    "    ORDER BY p.page_number ASC LIMIT 1",
+    "  )) AS page_number,",
+    "  COALESCE(pu.page_label, (",
+    "    SELECT p.page_label FROM pages p",
+    "    WHERE p.capsule_id = c.capsule_id AND p.document_id = c.document_id",
+    "      AND p.character_start <= COALESCE(c.character_start, pu.character_start)",
+    "      AND p.character_end >= COALESCE(c.character_end, pu.character_end)",
+    "    ORDER BY p.page_number ASC LIMIT 1",
+    "  )) AS page_label,",
+    "  COALESCE(pu.section_path_json, pu.heading_path_json) AS section_path_json,",
+    "  pu.json_pointer, pu.table_name, pu.row_index,",
     "  COALESCE(c.character_start, pu.character_start) AS character_start,",
     "  COALESCE(c.character_end, pu.character_end) AS character_end",
     "FROM chunks c",
@@ -283,6 +301,9 @@ function rowToCitation(row: CitationRow): CitationReference {
     ...(row.page_number !== null ? { pageNumber: row.page_number } : {}),
     ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
     ...(sectionPath !== undefined ? { sectionPath } : {}),
+    ...(row.json_pointer !== null ? { jsonPointer: row.json_pointer } : {}),
+    ...(row.table_name !== null ? { tableName: row.table_name } : {}),
+    ...(row.row_index !== null ? { rowIndex: row.row_index } : {}),
     ...(row.character_start !== null ? { characterStart: row.character_start } : {}),
     ...(row.character_end !== null ? { characterEnd: row.character_end } : {}),
   };
@@ -573,6 +594,9 @@ function lexicalMetadataBonus(query: string, citation: CitationReference): numbe
       citation.safeDisplayName,
       citation.pageLabel,
       ...(citation.sectionPath ?? []),
+      citation.jsonPointer,
+      citation.tableName,
+      citation.rowIndex === undefined ? undefined : String(citation.rowIndex),
       String(citation.pageNumber ?? ""),
     ]
       .filter((value): value is string => typeof value === "string" && value.length > 0)

@@ -222,4 +222,46 @@ describe("mapChunkToCitation", () => {
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
     expect(citation?.sectionPath).toEqual(["h1", "h2"]);
   });
+
+  it("preserves jsonPointer for json-path parsed units", () => {
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "json-path",
+      documentId: "doc-1" as never,
+      jsonPointer: "/policy/title",
+      characterStart: 0,
+      characterEnd: 17,
+    });
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: '{"policy":"title"}',
+    });
+    const chunkId = result.chunkIds[0] ?? ("" as never);
+    const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
+    expect(citation?.jsonPointer).toBe("/policy/title");
+    expect(citation?.characterStart).toBe(0);
+    expect(citation?.characterEnd).toBe(17);
+  });
+
+  it("preserves tableName and rowIndex for csv-row parsed units", () => {
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "csv-row",
+      documentId: "doc-1" as never,
+      tableName: "scores",
+      rowIndex: 3,
+      characterStart: 0,
+      characterEnd: 11,
+    });
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: "alpha,beta\n",
+    });
+    const chunkId = result.chunkIds[0] ?? ("" as never);
+    const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
+    expect(citation?.tableName).toBe("scores");
+    expect(citation?.rowIndex).toBe(3);
+  });
 });

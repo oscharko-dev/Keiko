@@ -396,6 +396,47 @@ describe("runIndexingJob — happy path", () => {
       ),
     ).toBe(true);
   });
+
+  it("emits extraction and chunking progress before the first real embedding request", async () => {
+    const single = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(80),
+    });
+    const seen: string[] = [];
+    let kindsBeforeFirstChunkEmbedding: readonly string[] | undefined;
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        if (req.input !== "ping" && kindsBeforeFirstChunkEmbedding === undefined) {
+          kindsBeforeFirstChunkEmbedding = [...seen];
+        }
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(single, {
+            embeddingAdapter: adapter,
+            progress: (event) => {
+              seen.push(event.kind);
+            },
+          }),
+        ),
+      );
+    } finally {
+      single.cleanup();
+    }
+
+    expect(kindsBeforeFirstChunkEmbedding).toContain("document-extracted");
+    expect(kindsBeforeFirstChunkEmbedding).toContain("document-chunked");
+    expect(kindsBeforeFirstChunkEmbedding).not.toContain("document-embedded");
+  });
 });
 
 // ─── Test 2: cancellation mid-pipeline ───────────────────────────────────────
@@ -969,5 +1010,31 @@ describe("runIndexingJob — concurrency clamp", () => {
       runIndexingJob(buildOptions(fixture, { embeddingAdapter: wrapped, concurrency: 99 })),
     );
     expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it("clamps oversized discovery maxDepth to the default bound", async () => {
+    const deepPath = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+    const single = buildFixture({
+      "root.txt": "root document",
+      [deepPath]: "deep document",
+    });
+
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(single, {
+            discoveryOptions: { maxDepth: 999, maxFiles: 999_999 },
+          }),
+        ),
+      );
+      const discovered = events
+        .filter((event) => event.kind === "document-discovered")
+        .map((event) => event.relativePath);
+
+      expect(discovered).toContain("root.txt");
+      expect(discovered).not.toContain(deepPath);
+    } finally {
+      single.cleanup();
+    }
   });
 });

@@ -12,7 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
-import { CHUNKING_STRATEGY_VERSION } from "./types.js";
+import { DEFAULT_CHUNKING_STRATEGY_KEY } from "./types.js";
 
 const INSERT_CHUNK_SQL = [
   "INSERT INTO chunks (",
@@ -107,11 +107,12 @@ export function hasStaleChunksForDocument(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
+  chunkingStrategyVersion: string = DEFAULT_CHUNKING_STRATEGY_KEY,
 ): boolean {
   const row = db.prepare(COUNT_STALE_CHUNKS_FOR_DOCUMENT_SQL).get({
     c: capsuleId,
     d: documentId,
-    v: CHUNKING_STRATEGY_VERSION,
+    v: chunkingStrategyVersion,
   }) as CountRow | undefined;
   return (row?.n ?? 0) > 0;
 }

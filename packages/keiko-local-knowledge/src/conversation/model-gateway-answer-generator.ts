@@ -30,6 +30,11 @@ import type { LocalKnowledgeGroundedContextPack } from "../retrieval/context-pac
 
 import type { AnswerGenerator, AnswerGeneratorInput } from "./types.js";
 
+const CITATION_METADATA_WHITESPACE_PATTERN = /\s+/gu;
+const MAX_PROMPT_CITATION_LABEL_CHARS = 240;
+
+type CitationMetadataRedactor = (value: string) => string;
+
 // Structural port satisfied by `Gateway.chat` from @oscharko-dev/keiko-model-gateway.
 // Tests pass a fake implementing this surface so the suite does not require a real
 // gateway / network adapter.
@@ -43,6 +48,7 @@ export interface ModelGatewayAnswerGeneratorOptions {
   // The capsule grounding policy the runner resolved. Used by the defensive
   // pre-call check; passing it here keeps the generator self-contained.
   readonly policy: CapsuleAnswerGroundingPolicy;
+  readonly redactCitationMetadata?: CitationMetadataRedactor;
 }
 
 // Surfaced when the defensive grounding check refuses to release refs to the gateway.
@@ -60,11 +66,13 @@ export class ModelGatewayAnswerGenerator implements AnswerGenerator {
   private readonly chatGateway: ChatGateway;
   private readonly modelId: string;
   private readonly policy: CapsuleAnswerGroundingPolicy;
+  private readonly redactCitationMetadata: CitationMetadataRedactor;
 
   public constructor(options: ModelGatewayAnswerGeneratorOptions) {
     this.chatGateway = options.chatGateway;
     this.modelId = options.modelId;
     this.policy = options.policy;
+    this.redactCitationMetadata = options.redactCitationMetadata ?? ((value): string => value);
   }
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
@@ -75,7 +83,7 @@ export class ModelGatewayAnswerGenerator implements AnswerGenerator {
       // the policy disallows. Refuse the gateway call rather than leak refs.
       throw new AnswerGroundingRejectedError();
     }
-    const messages = buildPromptMessages(input.query.text, input.pack);
+    const messages = buildPromptMessages(input.query.text, input.pack, this.redactCitationMetadata);
     const request: GatewayRequest = {
       modelId: this.modelId,
       messages,
@@ -92,8 +100,9 @@ export class ModelGatewayAnswerGenerator implements AnswerGenerator {
 export function buildPromptMessages(
   question: string,
   pack: LocalKnowledgeGroundedContextPack,
+  redactCitationMetadata: CitationMetadataRedactor = (value): string => value,
 ): readonly ChatMessage[] {
-  const citationsBlock = renderCitations(pack);
+  const citationsBlock = renderCitations(pack, redactCitationMetadata);
   return [
     {
       role: "system",
@@ -109,13 +118,29 @@ export function buildPromptMessages(
   ];
 }
 
-function renderCitations(pack: LocalKnowledgeGroundedContextPack): string {
+function sanitizeCitationMetadata(
+  value: string,
+  redactCitationMetadata: CitationMetadataRedactor,
+): string {
+  const compact = value.replace(CITATION_METADATA_WHITESPACE_PATTERN, " ").trim();
+  const redacted = redactCitationMetadata(compact);
+  return redacted
+    .replace(CITATION_METADATA_WHITESPACE_PATTERN, " ")
+    .trim()
+    .slice(0, MAX_PROMPT_CITATION_LABEL_CHARS);
+}
+
+function renderCitations(
+  pack: LocalKnowledgeGroundedContextPack,
+  redactCitationMetadata: CitationMetadataRedactor,
+): string {
   const lines: string[] = [];
   for (let i = 0; i < pack.citations.length; i += 1) {
     const c = pack.citations[i];
     if (c === undefined) continue;
     const index = i + 1;
-    lines.push(`[${String(index)}] ${c.safeDisplayName} (chunk ${String(c.chunkId)})`);
+    const label = sanitizeCitationMetadata(c.safeDisplayName, redactCitationMetadata) || "citation";
+    lines.push(`[${String(index)}] ${label} (chunk ${String(c.chunkId)})`);
   }
   return lines.join("\n");
 }

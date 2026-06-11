@@ -9,6 +9,7 @@ import type {
   GroundedAnswerContextPackSummary,
   GroundedEvidenceCitation,
   GroundedUncertainty,
+  LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
 
 function citation(overrides: Partial<GroundedEvidenceCitation> = {}): GroundedEvidenceCitation {
@@ -23,6 +24,24 @@ function citation(overrides: Partial<GroundedEvidenceCitation> = {}): GroundedEv
 
 function uncertainty(overrides: Partial<GroundedUncertainty> = {}): GroundedUncertainty {
   return { kind: "no-evidence", claim: "excerpt unavailable for src/baz.ts", ...overrides };
+}
+
+function knowledgeCitation(
+  overrides: Partial<LocalKnowledgeEvidenceCitation> = {},
+): LocalKnowledgeEvidenceCitation {
+  return {
+    stableId: "lk-1",
+    marker: "[1]",
+    label: "alpha.md",
+    score: 0.91,
+    lineage: {
+      capsuleId: "cap-1" as LocalKnowledgeEvidenceCitation["lineage"]["capsuleId"],
+      sourceId: "src-1" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+      documentId: "doc-1" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+      chunkId: "chunk-1" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+    },
+    ...overrides,
+  };
 }
 
 const OMITTED_COUNTS_ZERO = {
@@ -149,13 +168,13 @@ describe("GroundedAnswer", () => {
       assistantMessageId: "lk-a",
       content: "Alpha is described in the indexed capsule [1].",
       citations: [
-        {
+        knowledgeCitation({
           stableId: "lk-1",
           marker: "[1]",
           label: "alpha.md · section 1",
           score: 0.91,
           source: "Alpha Capsule / Product Manual",
-        },
+        }),
       ],
       uncertainty: [],
       omittedCount: 0,
@@ -189,13 +208,13 @@ describe("GroundedAnswer", () => {
       content: "Merged from the marketing folder and the product manual.",
       citations: [citation()],
       knowledgeCitations: [
-        {
+        knowledgeCitation({
           stableId: "hk-1",
           marker: "[1]",
           label: "manual.pdf · p.287",
           score: 0.88,
           source: "Quasar Manual / Product Docs",
-        },
+        }),
       ],
       uncertainty: [],
       omittedCount: 0,
@@ -489,12 +508,14 @@ describe("GroundedAnswer", () => {
       userMessageId: "lk-u",
       assistantMessageId: "lk-a",
       content: "Answer [1].",
-      citations: Array.from({ length: 10 }, (_, i) => ({
-        stableId: `lk-${String(i)}`,
-        marker: `[${String(i + 1)}]`,
-        label: `doc-${String(i)}.md`,
-        score: 1 - i * 0.05,
-      })),
+      citations: Array.from({ length: 10 }, (_, i) =>
+        knowledgeCitation({
+          stableId: `lk-${String(i)}`,
+          marker: `[${String(i + 1)}]`,
+          label: `doc-${String(i)}.md`,
+          score: 1 - i * 0.05,
+        }),
+      ),
       uncertainty: [],
       omittedCount: 0,
       elapsedMs: 5,

@@ -49,6 +49,9 @@ import { errorBody } from "./routes.js";
 export const DEFAULT_REFERENCE_BUDGET = 10;
 export const MAX_EXCERPT_CHARS = 900;
 export const MAX_PROMPT_REFERENCES = 8;
+const MAX_CITATION_LABEL_PART_CHARS = 160;
+const MAX_CITATION_LABEL_CHARS = 512;
+const METADATA_WHITESPACE_PATTERN = /\s+/gu;
 
 interface CapsuleUsageSummary {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -72,6 +75,9 @@ export interface SelectedLocalKnowledgeScope {
 export type LocalKnowledgeCitationSourceLookup = (
   reference: RetrievalReference,
 ) => string | undefined;
+
+type LabelRedactor = (value: string) => string;
+type AnswerCitation = AnswerGeneratorInput["references"][number]["citation"];
 
 function badRequest(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
@@ -260,19 +266,81 @@ export function scopeStateFailure(
   return undefined;
 }
 
-export function renderCitationLabel(
-  citation: AnswerGeneratorInput["references"][number]["citation"],
-): string {
-  const parts = [citation.safeDisplayName];
+function citationLabelPart(value: string, redactLabel: LabelRedactor | undefined): string {
+  const compact = value.replace(METADATA_WHITESPACE_PATTERN, " ").trim();
+  if (compact.length === 0) return "";
+  const redacted = redactLabel?.(compact) ?? compact;
+  return redacted
+    .replace(METADATA_WHITESPACE_PATTERN, " ")
+    .trim()
+    .slice(0, MAX_CITATION_LABEL_PART_CHARS);
+}
+
+function citationLabelFallback(value: string): string {
+  return value.length > 0 ? value : "citation";
+}
+
+function addCitationPagePart(
+  parts: string[],
+  citation: AnswerCitation,
+  redactLabel: LabelRedactor | undefined,
+): void {
   if (citation.pageLabel !== undefined) {
-    parts.push(`page ${citation.pageLabel}`);
-  } else if (citation.pageNumber !== undefined) {
+    const pageLabel = citationLabelPart(citation.pageLabel, redactLabel);
+    if (pageLabel.length > 0) parts.push(`page ${pageLabel}`);
+    return;
+  }
+  if (citation.pageNumber !== undefined) {
     parts.push(`page ${String(citation.pageNumber)}`);
   }
-  if (citation.sectionPath !== undefined && citation.sectionPath.length > 0) {
-    parts.push(citation.sectionPath.join(" > "));
-  }
-  return parts.join(" · ");
+}
+
+function citationSectionPathPart(
+  citation: AnswerCitation,
+  redactLabel: LabelRedactor | undefined,
+): string | undefined {
+  if (citation.sectionPath === undefined || citation.sectionPath.length === 0) return undefined;
+  const sectionPath = citation.sectionPath
+    .map((entry) => citationLabelPart(entry, redactLabel))
+    .filter((entry) => entry.length > 0);
+  return sectionPath.length > 0 ? sectionPath.join(" > ") : undefined;
+}
+
+function citationPointerPart(
+  citation: AnswerCitation,
+  redactLabel: LabelRedactor | undefined,
+): string | undefined {
+  if (citation.jsonPointer === undefined) return undefined;
+  const pointer = citationLabelPart(citation.jsonPointer, redactLabel);
+  return pointer.length > 0 ? pointer : undefined;
+}
+
+function citationTablePart(
+  citation: AnswerCitation,
+  redactLabel: LabelRedactor | undefined,
+): string | undefined {
+  if (citation.tableName === undefined) return undefined;
+  const tableName = citationLabelPart(citation.tableName, redactLabel);
+  if (tableName.length === 0) return undefined;
+  const rowLabel = citation.rowIndex === undefined ? "" : ` row ${String(citation.rowIndex)}`;
+  return `${tableName}${rowLabel}`;
+}
+
+export function renderCitationLabel(citation: AnswerCitation, redactLabel?: LabelRedactor): string {
+  const parts = [citationLabelPart(citation.safeDisplayName, redactLabel)];
+  addCitationPagePart(parts, citation, redactLabel);
+  const sectionPath = citationSectionPathPart(citation, redactLabel);
+  const pointer = citationPointerPart(citation, redactLabel);
+  const table = citationTablePart(citation, redactLabel);
+  if (sectionPath !== undefined) parts.push(sectionPath);
+  if (pointer !== undefined) parts.push(pointer);
+  if (table !== undefined) parts.push(table);
+  return citationLabelFallback(
+    parts
+      .filter((part) => part.length > 0)
+      .join(" · ")
+      .slice(0, MAX_CITATION_LABEL_CHARS),
+  );
 }
 
 function sourceLookupKey(capsuleId: KnowledgeCapsuleId, sourceId: KnowledgeSourceId): string {
@@ -313,14 +381,22 @@ export function projectLocalKnowledgeCitation(
   reference: RetrievalReference,
   marker: string,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
+  redactLabel?: LabelRedactor,
 ): LocalKnowledgeEvidenceCitation {
   const source = sourceLookup?.(reference);
+  const safeSource = source === undefined ? undefined : citationLabelPart(source, redactLabel);
   return {
     stableId: citationStableId(reference, marker),
     marker,
-    label: renderCitationLabel(reference.citation),
+    label: renderCitationLabel(reference.citation, redactLabel),
     score: reference.score,
-    ...(source !== undefined ? { source } : {}),
+    lineage: {
+      capsuleId: reference.capsuleId,
+      sourceId: reference.citation.sourceId,
+      documentId: reference.citation.documentId,
+      chunkId: reference.chunkId,
+    },
+    ...(safeSource !== undefined && safeSource.length > 0 ? { source: safeSource } : {}),
   };
 }
 
@@ -334,7 +410,7 @@ function buildReferenceLines(
   for (let i = 0; i < references.length; i += 1) {
     const reference = references[i];
     if (reference === undefined) continue;
-    const label = renderCitationLabel(reference.citation);
+    const label = renderCitationLabel(reference.citation, redactExcerpt);
     // Redact secret-shaped strings out of document excerpts before they reach the model,
     // matching the hybrid grounded-ask path (grounded-qa-hybrid.ts). Without this the
     // single-connector path would forward raw document content (e.g. an embedded API key)
@@ -618,12 +694,13 @@ export function buildLocalKnowledgeCitations(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   noEvidenceReason: string | undefined,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
+  redactLabel?: LabelRedactor,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   if (noEvidenceReason !== undefined) return [];
   // When the model emitted [n] markers, honour exactly what it cited.
   if (result.citations.length > 0) {
     return result.citations.map((entry) =>
-      projectLocalKnowledgeCitation(entry.reference, entry.marker, sourceLookup),
+      projectLocalKnowledgeCitation(entry.reference, entry.marker, sourceLookup, redactLabel),
     );
   }
   // Rescue (#189): the answer is grounded in the retrieved references but the model emitted no
@@ -631,8 +708,42 @@ export function buildLocalKnowledgeCitations(
   // order — instead of discarding a correct, evidence-backed answer.
   return result.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, index) => {
     const marker = `[${String(index + 1)}]`;
-    return projectLocalKnowledgeCitation(reference, marker, sourceLookup);
+    return projectLocalKnowledgeCitation(reference, marker, sourceLookup, redactLabel);
   });
+}
+
+function noEvidenceUncertainty(
+  noEvidenceReason: string | undefined,
+  assistantContent: string,
+): readonly GroundedUncertainty[] {
+  if (noEvidenceReason === undefined) return [];
+  return [
+    {
+      kind: noEvidenceReason,
+      claim: assistantContent,
+    },
+  ];
+}
+
+function buildLocalKnowledgeContextPack(
+  chat: Chat,
+  selected: SelectedLocalKnowledgeScope,
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  redactLabel: LabelRedactor | undefined,
+): LocalKnowledgeGroundedAnswer["contextPack"] {
+  const safeScopeLabel = citationLabelPart(selected.scopeLabel, redactLabel);
+  return {
+    kind: "local-knowledge",
+    scopeKind: selected.scopeKind,
+    scopeId: `lk-${hashString32(`${chat.id}|${safeScopeLabel}`)}`,
+    scopeLabel: citationLabelFallback(safeScopeLabel),
+    capsuleCount: result.pack.scope.capsuleCount,
+    sourceCount: result.pack.scope.sourceCount,
+    citationCount: citations.length,
+    referenceBudget: DEFAULT_REFERENCE_BUDGET,
+    referencesUsed: result.references.length,
+  };
 }
 
 function buildLocalKnowledgeAnswer(
@@ -643,6 +754,7 @@ function buildLocalKnowledgeAnswer(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   elapsedMs: number,
   assistantContent: string,
+  redactLabel?: LabelRedactor,
 ): LocalKnowledgeGroundedAnswer {
   const [user, assistant] = persisted;
   const noEvidenceReason = enforcedNoEvidenceReason(result);
@@ -650,6 +762,7 @@ function buildLocalKnowledgeAnswer(
     result,
     noEvidenceReason,
     buildSelectedScopeSourceLookup(store, selected),
+    redactLabel,
   );
   return {
     groundingKind: "local-knowledge",
@@ -657,30 +770,12 @@ function buildLocalKnowledgeAnswer(
     assistantMessageId: assistant.id,
     content: assistantContent,
     citations,
-    uncertainty:
-      noEvidenceReason === undefined
-        ? []
-        : [
-            {
-              kind: noEvidenceReason,
-              claim: assistantContent,
-            },
-          ],
+    uncertainty: noEvidenceUncertainty(noEvidenceReason, assistantContent),
     omittedCount: 0,
     elapsedMs,
     noEvidence: noEvidenceReason !== undefined,
     ...(noEvidenceReason !== undefined ? { noEvidenceReason } : {}),
-    contextPack: {
-      kind: "local-knowledge",
-      scopeKind: selected.scopeKind,
-      scopeId: `lk-${hashString32(`${chat.id}|${selected.scopeLabel}`)}`,
-      scopeLabel: selected.scopeLabel,
-      capsuleCount: result.pack.scope.capsuleCount,
-      sourceCount: result.pack.scope.sourceCount,
-      citationCount: citations.length,
-      referenceBudget: DEFAULT_REFERENCE_BUDGET,
-      referencesUsed: result.references.length,
-    },
+    contextPack: buildLocalKnowledgeContextPack(chat, selected, result, citations, redactLabel),
   };
 }
 
@@ -761,6 +856,7 @@ function persistScopedGroundedAnswer(
     result,
     elapsedMs,
     redactedAssistantContent,
+    (value: string): string => redactText(deps, value),
   ) satisfies GroundedAnswer;
 }
 

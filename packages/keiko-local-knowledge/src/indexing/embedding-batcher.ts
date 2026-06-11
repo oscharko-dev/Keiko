@@ -34,6 +34,7 @@ import {
   type EmbedBatchResult,
 } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
+import { chunkDedupeKey } from "../chunking/chunker.js";
 
 // ─── Concurrency primitive ───────────────────────────────────────────────────
 // Hand-rolled bounded-concurrency runner. Avoids pulling in `p-limit` (the local-knowledge
@@ -203,6 +204,33 @@ type ChunkOutcome =
   | { readonly ok: true; readonly chunk: ChunkToEmbed; readonly success: OpenAIEmbeddingSuccess }
   | { readonly ok: false; readonly chunk: ChunkToEmbed; readonly error: IndexingJobError };
 
+interface UniqueChunkRequest {
+  readonly key: string;
+  readonly representative: ChunkToEmbed;
+  readonly chunks: readonly ChunkToEmbed[];
+}
+
+function dedupeEmbeddingRequests(chunks: readonly ChunkToEmbed[]): readonly UniqueChunkRequest[] {
+  const byKey = new Map<string, { representative: ChunkToEmbed; chunks: ChunkToEmbed[] }>();
+  for (const chunk of chunks) {
+    const key = chunkDedupeKey(chunk.text) ?? `chunk:${String(chunk.id)}`;
+    const existing = byKey.get(key);
+    if (existing === undefined) {
+      byKey.set(key, { representative: chunk, chunks: [chunk] });
+    } else {
+      existing.chunks.push(chunk);
+    }
+  }
+  return [...byKey.entries()].map(([key, value]) => ({ key, ...value }));
+}
+
+function outcomeForChunk(outcome: ChunkOutcome, chunk: ChunkToEmbed): ChunkOutcome {
+  if (outcome.ok) {
+    return { ok: true, chunk, success: outcome.success };
+  }
+  return { ok: false, chunk, error: outcome.error };
+}
+
 function errorFromOutcome(
   outcome: Extract<OpenAIEmbeddingOutcome, { ok: false }>,
 ): IndexingJobError {
@@ -219,6 +247,54 @@ function checkAbort(signal: AbortSignal | undefined): IndexingJobError | undefin
   return undefined;
 }
 
+interface BuildOutcomesState {
+  identityFailure: IndexingJobError | undefined;
+}
+
+async function buildUniqueChunkOutcome(
+  request: UniqueChunkRequest,
+  options: EmbedBatchOptions,
+  state: BuildOutcomesState,
+): Promise<ChunkOutcome> {
+  if (state.identityFailure !== undefined) {
+    return { ok: false, chunk: request.representative, error: state.identityFailure };
+  }
+  const abortError = checkAbort(options.signal);
+  if (abortError !== undefined) {
+    return { ok: false, chunk: request.representative, error: abortError };
+  }
+  const outcome = await embedChunkWithRetry(options, request.representative);
+  if (!outcome.ok) {
+    return { ok: false, chunk: request.representative, error: errorFromOutcome(outcome) };
+  }
+  const observed = identityFromAdapter(options.pinnedIdentity, outcome.value);
+  const compat = assertCompatibleEmbeddingIdentity(options.pinnedIdentity, observed);
+  if (!compat.ok) {
+    state.identityFailure = {
+      code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+      message: compat.safeMessage,
+    };
+    return { ok: false, chunk: request.representative, error: state.identityFailure };
+  }
+  return { ok: true, chunk: request.representative, success: outcome.value };
+}
+
+function expandUniqueOutcomes(
+  uniqueRequests: readonly UniqueChunkRequest[],
+  uniqueOutcomes: readonly ChunkOutcome[],
+): readonly ChunkOutcome[] {
+  const outcomes: ChunkOutcome[] = [];
+  for (let i = 0; i < uniqueRequests.length; i += 1) {
+    const request = uniqueRequests[i];
+    const outcome = uniqueOutcomes[i];
+    if (request === undefined || outcome === undefined) continue;
+    for (const chunk of request.chunks) {
+      outcomes.push(outcomeForChunk(outcome, chunk));
+    }
+  }
+  return outcomes;
+}
+
 // Build all per-chunk outcomes BEFORE we open a write transaction. The identity gate runs
 // after every successful response so we fail fast on dimension mismatch.
 async function buildChunkOutcomes(
@@ -228,31 +304,15 @@ async function buildChunkOutcomes(
   readonly outcomes: readonly ChunkOutcome[];
   readonly identityFailure?: IndexingJobError;
 }> {
-  let identityFailure: IndexingJobError | undefined;
-  const outcomes = await runBounded(chunks, options.concurrency, async (chunk) => {
-    if (identityFailure !== undefined) {
-      return { ok: false, chunk, error: identityFailure } satisfies ChunkOutcome;
-    }
-    const abortError = checkAbort(options.signal);
-    if (abortError !== undefined) {
-      return { ok: false, chunk, error: abortError } satisfies ChunkOutcome;
-    }
-    const outcome = await embedChunkWithRetry(options, chunk);
-    if (!outcome.ok) {
-      return { ok: false, chunk, error: errorFromOutcome(outcome) } satisfies ChunkOutcome;
-    }
-    const observed = identityFromAdapter(options.pinnedIdentity, outcome.value);
-    const compat = assertCompatibleEmbeddingIdentity(options.pinnedIdentity, observed);
-    if (!compat.ok) {
-      identityFailure = {
-        code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-        message: compat.safeMessage,
-      };
-      return { ok: false, chunk, error: identityFailure } satisfies ChunkOutcome;
-    }
-    return { ok: true, chunk, success: outcome.value } satisfies ChunkOutcome;
+  const state: BuildOutcomesState = { identityFailure: undefined };
+  const uniqueRequests = dedupeEmbeddingRequests(chunks);
+  const uniqueOutcomes = await runBounded(uniqueRequests, options.concurrency, async (request) => {
+    return buildUniqueChunkOutcome(request, options, state);
   });
-  return identityFailure === undefined ? { outcomes } : { outcomes, identityFailure };
+  const outcomes = expandUniqueOutcomes(uniqueRequests, uniqueOutcomes);
+  return state.identityFailure === undefined
+    ? { outcomes }
+    : { outcomes, identityFailure: state.identityFailure };
 }
 
 // ─── Persistence boundary ─────────────────────────────────────────────────────

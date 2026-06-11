@@ -16,7 +16,7 @@ import type {
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
 
-import { chunkParsedUnit } from "./chunker.js";
+import { chunkParsedUnit, chunkingStrategyKey, resolveChunkingOptions } from "./chunker.js";
 import {
   countChunksForDocument,
   deleteChunksForDocument,
@@ -28,7 +28,7 @@ import {
 } from "./chunker-persist.js";
 import type { KnowledgeStore } from "../store.js";
 import type { ChunkDocumentParams, ChunkDocumentResult, ChunkingOptions } from "./types.js";
-import { CHUNKING_STRATEGY_VERSION, ChunkingError } from "./types.js";
+import { ChunkingError } from "./types.js";
 
 // ─── Row → ParsedUnit reconstitution ──────────────────────────────────────────
 // The parsed_units table is the canonical write surface for #194. We re-hydrate the
@@ -171,6 +171,17 @@ interface PersistContext {
   readonly sourceText: string;
 }
 
+function documentMaxChunks(options: ChunkingOptions | undefined): number {
+  return resolveChunkingOptions(options).maxChunks;
+}
+
+function optionsWithRemainingChunkBudget(
+  options: ChunkingOptions | undefined,
+  remaining: number,
+): ChunkingOptions {
+  return options === undefined ? { maxChunks: remaining } : { ...options, maxChunks: remaining };
+}
+
 function persistAllChunks(
   store: KnowledgeStore,
   ctx: PersistContext,
@@ -180,11 +191,21 @@ function persistAllChunks(
 ): readonly ChunkId[] {
   const db = store._internal.db;
   const chunkIds: ChunkId[] = [];
+  const maxChunks = documentMaxChunks(options);
+  const strategyKey = chunkingStrategyKey(options);
   let orderIndex = 0;
   for (const row of rows) {
     throwIfAborted(signal);
+    const remaining = maxChunks - chunkIds.length;
+    if (remaining <= 0) {
+      throw new ChunkingError(`chunkDocument exceeded maxChunks ${String(maxChunks)}`);
+    }
     const unit = rowToParsedUnit(row, ctx.documentId);
-    const chunks = chunkParsedUnit(unit, ctx.sourceText, options);
+    const chunks = chunkParsedUnit(
+      unit,
+      ctx.sourceText,
+      optionsWithRemainingChunkBudget(options, remaining),
+    );
     for (const chunk of chunks) {
       const id = composeChunkId(ctx.documentId, row.id, orderIndex);
       insertChunkRow(db, {
@@ -196,7 +217,7 @@ function persistAllChunks(
         orderIndex,
         tokenCount: chunk.tokenCount,
         safeExcerptHash: chunk.safeExcerptHash,
-        chunkingStrategyVersion: CHUNKING_STRATEGY_VERSION,
+        chunkingStrategyVersion: strategyKey,
         characterStart: chunk.characterStart,
         characterEnd: chunk.characterEnd,
       });
@@ -216,12 +237,15 @@ function loadChunkingPreflight(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
+  options: ChunkingOptions | undefined,
 ): ChunkingPreflight {
   const db = store._internal.db;
   const existingCount = countChunksForDocument(db, capsuleId, documentId);
   return {
     existingCount,
-    staleChunks: existingCount > 0 && hasStaleChunksForDocument(db, capsuleId, documentId),
+    staleChunks:
+      existingCount > 0 &&
+      hasStaleChunksForDocument(db, capsuleId, documentId, chunkingStrategyKey(options)),
   };
 }
 
@@ -262,7 +286,7 @@ export function chunkDocument(
   throwIfAborted(signal);
 
   const db = store._internal.db;
-  const preflight = loadChunkingPreflight(store, capsuleId, documentId);
+  const preflight = loadChunkingPreflight(store, capsuleId, documentId, options);
   assertDocumentSourceMatches(store, capsuleId, documentId, sourceId);
   if (shouldReuseExistingChunks(preflight, force)) {
     return { capsuleId, documentId, chunkIds: [], skippedExisting: true };

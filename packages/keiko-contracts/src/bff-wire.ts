@@ -23,7 +23,13 @@ import {
   type RetrievalQueryKind,
   type SelectedScopeKind,
 } from "./connected-context.js";
-import type { CapsuleSetId, KnowledgeCapsuleId } from "./local-knowledge.js";
+import type {
+  CapsuleSetId,
+  ChunkId,
+  DocumentId,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "./local-knowledge.js";
 import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
 
 export interface Project {
@@ -665,6 +671,12 @@ export interface LocalKnowledgeEvidenceCitation {
   readonly marker: string;
   readonly label: string;
   readonly score: number;
+  readonly lineage: {
+    readonly capsuleId: KnowledgeCapsuleId;
+    readonly sourceId: KnowledgeSourceId;
+    readonly documentId: DocumentId;
+    readonly chunkId: ChunkId;
+  };
   // Epic #189 — a short, human-readable label of the connector source this citation came from
   // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
   // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).

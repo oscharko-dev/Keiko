@@ -258,6 +258,12 @@ describe("local-knowledge multi-source contract (#189)", () => {
       marker: "[1]",
       label: "doc.md",
       score: 0.9,
+      lineage: {
+        capsuleId: "cap-a" as LocalKnowledgeEvidenceCitation["lineage"]["capsuleId"],
+        sourceId: "src-a" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+        documentId: "doc-a" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+        chunkId: "chunk-a" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+      },
       source: "Capsule A",
     };
     const hybrid: HybridGroundedAnswer = {

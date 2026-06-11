@@ -140,6 +140,24 @@ describe("ModelGatewayAnswerGenerator", () => {
     expect(gw.calls[0]?.cancellationSignal).toBe(controller.signal);
   });
 
+  it("redacts citation display metadata before sending the prompt", async () => {
+    const refs = [reference("ch-1", "manual-TOKEN-123.md")];
+    const pack = assembleGroundedContext(refs);
+    const gw = fakeGateway("answer");
+    const generator = new ModelGatewayAnswerGenerator({
+      chatGateway: gw.chat,
+      modelId: "test-model",
+      policy: "best-effort",
+      redactCitationMetadata: (value): string => value.replaceAll("TOKEN-123", "[REDACTED]"),
+    });
+
+    await generator.generate({ query, pack, references: refs });
+
+    const prompt = gw.calls[0]?.messages[1]?.content ?? "";
+    expect(prompt).toContain("manual-[REDACTED].md");
+    expect(prompt).not.toContain("TOKEN-123");
+  });
+
   it("produces byte-identical prompt messages for identical packs", () => {
     const refs = [reference("ch-1"), reference("ch-2")];
     const pack = assembleGroundedContext(refs);

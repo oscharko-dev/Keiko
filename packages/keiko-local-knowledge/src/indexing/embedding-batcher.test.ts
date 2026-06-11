@@ -102,6 +102,54 @@ describe("embedChunkBatch — happy path", () => {
     }
   });
 
+  it("deduplicates identical embedding payloads while preserving one vector per chunk", async () => {
+    const repeated = buildFixture("alpha ".repeat(900));
+    let calls = 0;
+    const chunks = repeated.chunks.slice(0, 2).map((chunk) => ({
+      ...chunk,
+      text: "repeated boilerplate paragraph",
+    }));
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        calls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    try {
+      expect(chunks).toHaveLength(2);
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store: repeated.store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("storage"),
+      });
+
+      expect(calls).toBe(1);
+      expect(result.errors).toEqual([]);
+      expect(result.vectors.map((vector) => vector.chunkId)).toEqual(
+        chunks.map((chunk) => chunk.id),
+      );
+      expect(
+        countVectorsForDocument(
+          repeated.store._internal.db,
+          repeated.seeded.capsuleId,
+          repeated.seeded.documentId,
+        ),
+      ).toBe(2);
+    } finally {
+      repeated.cleanup();
+    }
+  });
+
   it("returns an empty result for an empty input without touching the store", async () => {
     const result = await embedChunkBatch([], {
       adapter: happyAdapter(),

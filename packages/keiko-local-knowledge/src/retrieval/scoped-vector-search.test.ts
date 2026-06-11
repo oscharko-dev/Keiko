@@ -356,6 +356,110 @@ describe("searchVectorsForScope — citation fields", () => {
     }
   });
 
+  it("attaches a containing page hop for section chunks", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-a",
+      unit: {
+        kind: "section",
+        sectionPath: ["Chapter 2", "Controls"],
+        characterStart: 50,
+        characterEnd: 200,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "alpha beta gamma delta epsilon zeta eta theta",
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO pages (capsule_id, document_id, page_number, page_label, character_start, character_end, bbox_x, bbox_y, bbox_w, bbox_h) VALUES (:c, :d, :n, :l, :s, :e, NULL, NULL, NULL, NULL)",
+      )
+      .run({
+        c: seeded.capsuleId,
+        d: seeded.documentId,
+        n: 3,
+        l: "iii",
+        s: 40,
+        e: 210,
+      });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "query",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    for (const ref of outcome.references) {
+      expect(ref.citation.sectionPath).toEqual(["Chapter 2", "Controls"]);
+      expect(ref.citation.pageNumber).toBe(3);
+      expect(ref.citation.pageLabel).toBe("iii");
+    }
+  });
+
+  it("preserves jsonPointer for json-path citations", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-json",
+      safeDisplayName: "policy.json",
+      unit: {
+        kind: "json-path",
+        jsonPointer: "/policy/title",
+        characterStart: 0,
+        characterEnd: 64,
+      } satisfies ParsedUnitWithoutDocId,
+      text: '{"policy":{"title":"Controls"}}',
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "policy title",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    for (const ref of outcome.references) {
+      expect(ref.citation.safeDisplayName).toBe("policy.json");
+      expect(ref.citation.jsonPointer).toBe("/policy/title");
+    }
+  });
+
+  it("preserves tableName and rowIndex for csv-row citations", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-csv",
+      safeDisplayName: "scores.csv",
+      unit: {
+        kind: "csv-row",
+        tableName: "scores",
+        rowIndex: 2,
+        characterStart: 0,
+        characterEnd: 64,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "name,score\nalpha,98\n",
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "scores row",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    for (const ref of outcome.references) {
+      expect(ref.citation.safeDisplayName).toBe("scores.csv");
+      expect(ref.citation.tableName).toBe("scores");
+      expect(ref.citation.rowIndex).toBe(2);
+    }
+  });
+
   it("applies a lexical metadata bonus from section titles and document names", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {

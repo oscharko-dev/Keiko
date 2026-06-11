@@ -553,9 +553,7 @@ describe("validateKnowledgeCapsule", () => {
     expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "safe\x00danger" }).ok).toBe(
       false,
     );
-    expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "bell\x07" }).ok).toBe(
-      false,
-    );
+    expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "bell\x07" }).ok).toBe(false);
     expect(
       validateKnowledgeCapsule({
         ...happyCapsule(),
@@ -788,7 +786,11 @@ describe("validateConnectorGraphState", () => {
         ...happyGraph(),
         nodes: [
           { kind: "files-window", nodeId: "n-1", scope: happyFolderScope(), target: {} },
-          { kind: "local-knowledge", nodeId: "n-2", target: { kind: "capsule", capsuleId: "cap-1" } },
+          {
+            kind: "local-knowledge",
+            nodeId: "n-2",
+            target: { kind: "capsule", capsuleId: "cap-1" },
+          },
           { kind: "conversation-center", nodeId: "n-3", conversationId: "conv-1", route: "/chat" },
         ],
       }).ok,
@@ -940,6 +942,19 @@ describe("Foundry IQ lineage invariants", () => {
   });
 
   it("CitationReference requires capsuleId, sourceId, documentId, and chunkId", () => {
+    const objectCitation: CitationReference = {
+      documentId: doc("d-1"),
+      capsuleId: cap("c-1"),
+      sourceId: src("s-1"),
+      chunkId: chk("ch-1"),
+      safeDisplayName: "a.json",
+      jsonPointer: "/policy/title",
+      tableName: "csv",
+      rowIndex: 2,
+    };
+    expect(objectCitation.jsonPointer).toBe("/policy/title");
+    expect(objectCitation.rowIndex).toBe(2);
+
     // @ts-expect-error — missing chunkId
     const missingChunk: CitationReference = {
       documentId: doc("d-1"),

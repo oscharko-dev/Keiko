@@ -41,8 +41,10 @@ import {
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
 import { deleteChunksForDocument, hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
+import { chunkingStrategyKey } from "../chunking/index.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
+import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "../discovery/index.js";
 import {
   deleteDocumentRow,
   listPersistedDocumentsForSource,
@@ -100,6 +102,21 @@ function clampBatchSize(raw: number | undefined): number {
 function clampConcurrency(raw: number | undefined): number {
   const v = raw ?? DEFAULT_INDEXING_CONCURRENCY;
   return Math.max(1, Math.min(DEFAULT_INDEXING_CONCURRENCY, Math.floor(v)));
+}
+
+function clampDiscoveryInteger(raw: number | undefined, fallback: number): number {
+  if (raw === undefined || !Number.isFinite(raw)) return fallback;
+  return Math.max(1, Math.min(fallback, Math.floor(raw)));
+}
+
+function resolvedDiscoveryOptions(state: RunState): DiscoveryOptions {
+  const raw = state.options.discoveryOptions;
+  const base = {
+    maxDepth: clampDiscoveryInteger(raw?.maxDepth, DEFAULT_DISCOVERY_OPTIONS.maxDepth),
+    maxFiles: clampDiscoveryInteger(raw?.maxFiles, DEFAULT_DISCOVERY_OPTIONS.maxFiles),
+  };
+  const signal = raw?.signal ?? state.options.signal;
+  return signal === undefined ? base : { ...base, signal };
 }
 
 // ─── Source resolution ────────────────────────────────────────────────────────
@@ -512,6 +529,7 @@ function applyIncrementalFastPath(
     state.options.store._internal.db,
     state.capsule.id,
     documentId,
+    chunkingStrategyKey(state.options.chunkingOptions),
   );
   if (state.options.force !== true) {
     // Incremental fast-path #2: if vectors already exist for this document AND not in force
@@ -657,34 +675,48 @@ function applyEmbedResult(
   return completeEmbeddedDocument(state, events, documentId, embedResult);
 }
 
-// Wraps the chunk-then-embed pipeline for a single persisted document.
-async function handlePersistedDocument(
+function* persistedEvents(handling: PersistedHandling): Generator<IndexingEvent> {
+  for (const event of handling.events) {
+    yield event;
+  }
+}
+
+// Wraps the chunk-then-embed pipeline for a single persisted document. Extraction/chunking
+// events are yielded before awaiting embeddings, so progress consumers see pre-model work
+// immediately instead of only after all embedding batches finish.
+async function* handlePersistedDocument(
   state: RunState,
   result: ExtractionResult,
-): Promise<PersistedHandling> {
+): AsyncGenerator<IndexingEvent> {
   const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
-  if (documentId === null) return { events: [] };
+  if (documentId === null) return;
   if (result.outcome.document.status === "unsupported") {
     clearDocumentArtifacts(state, documentId, { deleteChunks: true });
     state.skippedDocuments += 1;
-    return {
-      events: [
-        {
-          kind: "document-extracted",
-          jobId: state.jobId,
-          documentId,
-          relativePath: result.relativePath,
-        },
-        { kind: "document-skipped", jobId: state.jobId, documentId, reason: "unsupported" },
-      ],
+    yield {
+      kind: "document-extracted",
+      jobId: state.jobId,
+      documentId,
+      relativePath: result.relativePath,
     };
+    yield { kind: "document-skipped", jobId: state.jobId, documentId, reason: "unsupported" };
+    return;
   }
 
   const fastPath = applyIncrementalFastPath(state, documentId);
-  if (fastPath !== undefined) return fastPath;
+  if (fastPath !== undefined) {
+    yield* persistedEvents(fastPath);
+    return;
+  }
 
   const chunkStep = tryChunkDocument(state, result, documentId);
-  if (!("chunked" in chunkStep)) return chunkStep;
+  if (!("chunked" in chunkStep)) {
+    yield* persistedEvents(chunkStep);
+    return;
+  }
+
+  yield* chunkStep.chunked.events;
+  persistJobProgress(state);
 
   const embedResult = await embedDocumentChunks(
     state,
@@ -692,13 +724,114 @@ async function handlePersistedDocument(
     sourceForResult(state, result),
     result.relativePath,
   );
-  return applyEmbedResult(
-    state,
-    documentId,
-    result.relativePath,
-    chunkStep.chunked.events,
-    embedResult,
-  );
+  yield* persistedEvents(applyEmbedResult(state, documentId, result.relativePath, [], embedResult));
+}
+
+function* handleExtractionSkippedEvents(
+  state: RunState,
+  result: ExtractionResult,
+): Generator<IndexingEvent> {
+  yield handleExtractionSkipped(state, result);
+}
+
+function* handleExtractionFailedEvents(
+  state: RunState,
+  result: ExtractionResult,
+): Generator<IndexingEvent> {
+  yield handleExtractionFailed(state, result);
+}
+
+// Routes a file-extracted event: force-skipped docs are re-shaped to persisted so the
+// standard chunk-and-embed pipeline runs on them.
+async function* handleFileExtracted(
+  state: RunState,
+  result: ExtractionResult,
+): AsyncGenerator<IndexingEvent> {
+  if (result.outcome.kind === "skipped") {
+    // In force mode, an "unchanged" document still needs chunk-and-embed because the
+    // orchestrator deleted the vector rows at job-started. Re-shape the skipped outcome
+    // as a persisted outcome (the document row exists and is valid) so the standard
+    // pipeline runs. Outside force mode, surface the skip as-is.
+    const staleChunks = hasStaleChunksForDocument(
+      state.options.store._internal.db,
+      state.capsule.id,
+      result.outcome.document.id,
+      chunkingStrategyKey(state.options.chunkingOptions),
+    );
+    if (state.options.force === true || staleChunks) {
+      const synthetic: ExtractionResult = {
+        capsuleId: result.capsuleId,
+        sourceId: result.sourceId,
+        relativePath: result.relativePath,
+        outcome: { kind: "persisted", document: result.outcome.document },
+        diagnostics: result.diagnostics,
+      };
+      yield* handlePersistedDocument(state, synthetic);
+      return;
+    }
+    yield* handleExtractionSkippedEvents(state, result);
+    return;
+  }
+  if (result.outcome.kind === "failed") {
+    yield* handleExtractionFailedEvents(state, result);
+    return;
+  }
+  yield* handlePersistedDocument(state, result);
+}
+
+async function* handleDiscoveryEvent(
+  state: RunState,
+  evt: ExtractionEvent,
+): AsyncGenerator<IndexingEvent> {
+  if (evt.kind === "file-discovered") {
+    state.totalDocuments += 1;
+    yield {
+      kind: "document-discovered",
+      jobId: state.jobId,
+      relativePath: evt.relativePath,
+      sizeBytes: evt.sizeBytes,
+    };
+    return;
+  }
+  if (evt.kind === "scope-error") {
+    state.failedDocuments += 1;
+    const err: IndexingJobError = {
+      code: `DISCOVERY_FAILED:${evt.error.code}`,
+      message: evt.error.message,
+    };
+    state.lastError = err;
+    yield {
+      kind: "document-failed",
+      jobId: state.jobId,
+      ...(evt.error.relativePath !== undefined ? { relativePath: evt.error.relativePath } : {}),
+      error: err,
+    };
+    return;
+  }
+  if (evt.kind === "cancelled" || evt.kind === "completed") {
+    // No-op at this level: the outer loop drives terminal events.
+    return;
+  }
+  // evt.kind === "file-extracted"
+  yield* handleFileExtracted(state, evt.result);
+}
+
+function shouldStopAfterEvent(event: IndexingEvent): boolean {
+  return event.kind === "document-failed" && event.error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY";
+}
+
+async function* streamDiscoveryEvent(
+  state: RunState,
+  evt: ExtractionEvent,
+): AsyncGenerator<IndexingEvent, boolean> {
+  for await (const event of handleDiscoveryEvent(state, evt)) {
+    persistJobProgress(state);
+    yield event;
+    if (shouldStopAfterEvent(event)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ─── Per-source pipeline ──────────────────────────────────────────────────────
@@ -727,15 +860,9 @@ async function* runOneSource(
       progress.cancelled = true;
       break;
     }
-    const events = await handleDiscoveryEvent(state, evt);
-    if (events.length > 0) {
-      persistJobProgress(state);
-    }
-    for (const e of events) {
-      yield e;
-      if (e.kind === "document-failed" && e.error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
-        return;
-      }
+    const shouldStop = yield* streamDiscoveryEvent(state, evt);
+    if (shouldStop) {
+      return;
     }
     // After yielding a batch we re-check the signal — the consumer's awaiting iterator
     // may have aborted between events.
@@ -745,80 +872,6 @@ async function* runOneSource(
     }
   }
   finalizeSourceRun(state, source, progress);
-}
-
-// Routes a file-extracted event: force-skipped docs are re-shaped to persisted so the
-// standard chunk-and-embed pipeline runs on them.
-async function handleFileExtracted(
-  state: RunState,
-  result: ExtractionResult,
-): Promise<readonly IndexingEvent[]> {
-  if (result.outcome.kind === "skipped") {
-    // In force mode, an "unchanged" document still needs chunk-and-embed because the
-    // orchestrator deleted the vector rows at job-started. Re-shape the skipped outcome
-    // as a persisted outcome (the document row exists and is valid) so the standard
-    // pipeline runs. Outside force mode, surface the skip as-is.
-    const staleChunks = hasStaleChunksForDocument(
-      state.options.store._internal.db,
-      state.capsule.id,
-      result.outcome.document.id,
-    );
-    if (state.options.force === true || staleChunks) {
-      const synthetic: ExtractionResult = {
-        capsuleId: result.capsuleId,
-        sourceId: result.sourceId,
-        relativePath: result.relativePath,
-        outcome: { kind: "persisted", document: result.outcome.document },
-        diagnostics: result.diagnostics,
-      };
-      const handled = await handlePersistedDocument(state, synthetic);
-      return handled.events;
-    }
-    return [handleExtractionSkipped(state, result)];
-  }
-  if (result.outcome.kind === "failed") {
-    return [handleExtractionFailed(state, result)];
-  }
-  const handled = await handlePersistedDocument(state, result);
-  return handled.events;
-}
-
-async function handleDiscoveryEvent(
-  state: RunState,
-  evt: ExtractionEvent,
-): Promise<readonly IndexingEvent[]> {
-  if (evt.kind === "file-discovered") {
-    state.totalDocuments += 1;
-    return [
-      {
-        kind: "document-discovered",
-        jobId: state.jobId,
-        relativePath: evt.relativePath,
-        sizeBytes: evt.sizeBytes,
-      },
-    ];
-  }
-  if (evt.kind === "scope-error") {
-    state.failedDocuments += 1;
-    const err: IndexingJobError = {
-      code: `DISCOVERY_FAILED:${evt.error.code}`,
-      message: evt.error.message,
-    };
-    state.lastError = err;
-    const failed: IndexingEvent = {
-      kind: "document-failed",
-      jobId: state.jobId,
-      ...(evt.error.relativePath !== undefined ? { relativePath: evt.error.relativePath } : {}),
-      error: err,
-    };
-    return [failed];
-  }
-  if (evt.kind === "cancelled" || evt.kind === "completed") {
-    // No-op at this level: the outer loop drives terminal events.
-    return [];
-  }
-  // evt.kind === "file-extracted"
-  return handleFileExtracted(state, evt.result);
 }
 
 interface SourceRunProgress {
@@ -835,11 +888,7 @@ function sourceDiscoveryParams(
   return {
     capsuleId: state.capsule.id,
     source,
-    ...(state.options.discoveryOptions !== undefined
-      ? { discovery: state.options.discoveryOptions }
-      : state.options.signal !== undefined
-        ? { discovery: { maxDepth: 12, maxFiles: 5_000, signal: state.options.signal } }
-        : {}),
+    discovery: resolvedDiscoveryOptions(state),
   };
 }
 

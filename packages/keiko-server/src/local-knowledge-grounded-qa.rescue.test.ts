@@ -15,12 +15,16 @@ import {
   buildLocalKnowledgeCitations,
   createEmbeddingAdapter,
   enforcedNoEvidenceReason,
+  renderCitationLabel,
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 type GroundedResult = Parameters<typeof buildLocalKnowledgeCitations>[0];
 
-function ref(n: number): RetrievalReference {
+function ref(
+  n: number,
+  citationOverrides: Partial<RetrievalReference["citation"]> = {},
+): RetrievalReference {
   const chunkId = `chunk-${String(n)}` as ChunkId;
   return {
     chunkId,
@@ -32,6 +36,7 @@ function ref(n: number): RetrievalReference {
       sourceId: "src-1" as KnowledgeSourceId,
       chunkId,
       safeDisplayName: `manual-${String(n)}.md`,
+      ...citationOverrides,
     },
   };
 }
@@ -87,6 +92,12 @@ describe("local-knowledge citation rescue (#189)", () => {
     expect(citations[0]?.label).toBe("manual-1.md");
     expect(citations[0]?.source).toBe("Alpha Capsule / Product Manual");
     expect(citations[0]?.score).toBe(0.9);
+    expect(citations[0]?.lineage).toEqual({
+      capsuleId: "cap-1",
+      sourceId: "src-1",
+      documentId: "doc-1",
+      chunkId: "chunk-1",
+    });
   });
 
   it("honours the model's explicit [n] citations when it did mark them", () => {
@@ -103,6 +114,32 @@ describe("local-knowledge citation rescue (#189)", () => {
     expect(citations[0]?.label).toBe("manual-1.md");
     expect(citations[0]?.source).toBe("Alpha Capsule / Product Manual");
     expect(citations[0]?.label.includes("chunk")).toBe(false);
+  });
+
+  it("redacts citation metadata labels before prompt and wire projection", () => {
+    const secret = "TOKEN-12345";
+    const redactor = (value: string): string => value.replaceAll(secret, "[REDACTED]");
+    const reference = ref(1, {
+      safeDisplayName: `manual-${secret}.md`,
+      pageLabel: secret,
+      sectionPath: [`Section ${secret}`],
+      jsonPointer: `/policy/${secret}`,
+      tableName: `table-${secret}`,
+      rowIndex: 2,
+    });
+
+    expect(renderCitationLabel(reference.citation, redactor)).not.toContain(secret);
+    const citations = buildLocalKnowledgeCitations(
+      result({ references: [reference], citations: [] }),
+      undefined,
+      () => `Alpha ${secret}`,
+      redactor,
+    );
+
+    expect(citations[0]?.label).not.toContain(secret);
+    expect(citations[0]?.source).not.toContain(secret);
+    expect(citations[0]?.label).toContain("[REDACTED]");
+    expect(citations[0]?.lineage.chunkId).toBe("chunk-1");
   });
 
   it("still returns no evidence for a genuinely empty retrieval", () => {

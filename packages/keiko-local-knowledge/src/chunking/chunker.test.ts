@@ -110,6 +110,20 @@ describe("chunkParsedUnit — pure", () => {
     expect(chunks[chunks.length - 1]?.characterEnd).toBe(text.length);
   });
 
+  it("hard-caps caller-supplied maxTokens before sizing chunks", () => {
+    const text = "z".repeat(20_000);
+    const unit = pageUnit(0, text.length);
+    const chunks = chunkParsedUnit(unit, text, {
+      maxTokens: Number.MAX_SAFE_INTEGER,
+      minTokens: 0,
+      overlapTokens: 0,
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.characterEnd - chunk.characterStart).toBeLessThanOrEqual(8_192);
+    }
+  });
+
   it("safeExcerptHash is deterministic across runs", () => {
     const text = "The quick brown fox jumps over the lazy dog.";
     const unit = pageUnit(0, text.length);
@@ -123,9 +137,28 @@ describe("chunkParsedUnit — pure", () => {
     expect(chunkParsedUnit(unsupportedUnit(), "anything", {})).toEqual([]);
   });
 
+  it("filters empty and punctuation-only noisy chunks", () => {
+    const text = " \n\t--- *** ... ";
+    const unit = pageUnit(0, text.length);
+    expect(chunkParsedUnit(unit, text)).toEqual([]);
+  });
+
   it("returns empty when the unit span is empty or inverted", () => {
     const unit = pageUnit(50, 50);
     expect(chunkParsedUnit(unit, "0123456789".repeat(10))).toEqual([]);
+  });
+
+  it("fails closed when a parsed unit exceeds maxChunks", () => {
+    const text = "alpha ".repeat(40);
+    const unit = pageUnit(0, text.length);
+    expect(() =>
+      chunkParsedUnit(unit, text, {
+        maxTokens: 1,
+        minTokens: 0,
+        overlapTokens: 0,
+        maxChunks: 2,
+      }),
+    ).toThrow(/maxChunks/);
   });
 
   it("clamps overlapTokens that meet or exceed maxTokens so it makes progress", () => {

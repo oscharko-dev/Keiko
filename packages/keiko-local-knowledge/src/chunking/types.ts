@@ -25,6 +25,7 @@ export interface ChunkingOptions {
   readonly maxTokens?: number;
   readonly minTokens?: number;
   readonly overlapTokens?: number;
+  readonly maxChunks?: number;
   readonly tokenEstimator?: TokenEstimator;
 }
 
@@ -32,12 +33,18 @@ export interface ChunkingOptions {
 export const DEFAULT_MAX_TOKENS = 400;
 export const DEFAULT_MIN_TOKENS = 64;
 export const DEFAULT_OVERLAP_TOKENS = 32;
-export const CHUNKING_STRATEGY_VERSION = "issue-195-v1" as const;
+export const DEFAULT_MAX_CHUNKS = 50_000;
+export const MAX_CHUNK_TOKENS = 2_048;
+export const MAX_OVERLAP_TOKENS = 1_024;
+export const CHUNKING_STRATEGY_VERSION = "issue-195-v2" as const;
+export const DEFAULT_CHUNKING_STRATEGY_KEY =
+  `${CHUNKING_STRATEGY_VERSION}|max=${String(DEFAULT_MAX_TOKENS)}|min=${String(DEFAULT_MIN_TOKENS)}|overlap=${String(DEFAULT_OVERLAP_TOKENS)}|limit=${String(DEFAULT_MAX_CHUNKS)}|estimator=default` as const;
 
 export interface ResolvedChunkingOptions {
   readonly maxTokens: number;
   readonly minTokens: number;
   readonly overlapTokens: number;
+  readonly maxChunks: number;
   readonly tokenEstimator: TokenEstimator;
 }
 
