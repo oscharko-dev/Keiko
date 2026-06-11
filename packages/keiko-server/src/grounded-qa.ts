@@ -47,6 +47,7 @@ import {
 } from "./grounded-orchestrator.js";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -812,6 +813,14 @@ async function dispatchFolderAsk(
   const scope = buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
+  }
+  // Epic #177 audit (GAP-B) — mirror the PATCH-route deny-list check for the grounded-ask hot
+  // path. The PATCH route validates via validateFallbackProjectRoot before persisting a scope;
+  // a chat whose projectPath was created before the deny-list was added (or via the test store)
+  // could otherwise reach the orchestrator with a credential-dir workspaceRoot. Reject before
+  // calling the runner so no filesystem access occurs against a denied path.
+  if (pathIsDenied(scope.workspaceRoot)) {
+    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   const resolved = resolveGroundedRunner(deps, chat, input.modelId, signal, runner);
   if ("status" in resolved) return resolved;

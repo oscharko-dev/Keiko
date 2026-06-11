@@ -384,7 +384,9 @@ function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): R
         target="_blank"
         rel="noopener noreferrer"
       >
-        View connected-context audit evidence
+        View connected-context audit evidence{" "}
+        {/* WCAG 3.2.2 — notify screen-reader users that this link opens in a new tab */}
+        <span className="sr-only">(opens in new tab)</span>
       </a>
     </div>
   );
