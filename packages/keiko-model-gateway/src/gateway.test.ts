@@ -10,17 +10,21 @@ import {
 import type {
   Clock,
   GatewayConfig,
+  GatewayOpenAiCompatibleProviderConfig,
   GatewayRequest,
   GatewayStreamChunk,
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  ProviderAdapterFactoryContext,
   ProviderRegistry,
 } from "./types.js";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
+function provider(
+  overrides: Partial<GatewayOpenAiCompatibleProviderConfig> = {},
+): GatewayOpenAiCompatibleProviderConfig {
   return {
     modelId: "example-chat-model",
     baseUrl: "https://provider.example/v1",
@@ -293,14 +297,7 @@ describe("Gateway.chat", () => {
 
   it("passes request metadata and injected fetch through the provider registry context", async () => {
     const fetchImpl: typeof fetch = () => Promise.reject(new Error("should not be called"));
-    let seenContext:
-      | {
-          readonly requestId: string;
-          readonly costClass: string;
-          readonly now: (() => number) | undefined;
-          readonly fetchImpl: typeof fetch | undefined;
-        }
-      | undefined;
+    let seenContext: ProviderAdapterFactoryContext | undefined;
     const registry: ProviderRegistry = {
       resolve: (_config, context) => {
         seenContext = context;

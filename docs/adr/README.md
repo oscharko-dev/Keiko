@@ -30,6 +30,7 @@ This page keeps only the product decisions needed by reviewers. It is not an imp
 | Memory vault encryption-at-rest                    | [ADR-0035](ADR-0035-memory-vault-encryption-at-rest.md) seals local memory CONTENT columns with AES-256-GCM (zero new deps), keeps index/scope metadata cleartext, and resolves the key via `KEIKO_MEMORY_KEY` > macOS Keychain > `0600` keyfile.                                                       |
 | Hybrid grounding evidence budget                   | [ADR-0036](ADR-0036-hybrid-grounding-reciprocal-rank-fusion.md) replaces the structurally folder-biased dual budgets in `runHybridGroundedAsk` with a single shared evidence pool ranked by Reciprocal Rank Fusion (`k=60`) across both lexical and vector engines.                                     |
 | Provider runtime contract boundary                 | [ADR-0037](ADR-0037-provider-runtime-contract-boundary.md) introduces an explicit provider-type contract, a runtime-only local-session resolver seam, and a separate safe provider projection that omits secrets, endpoints, and resolver details from browser-visible payloads.                       |
+| Provider runtime package boundary                  | [ADR-0038](ADR-0038-provider-runtime-package-boundary.md) keeps the credential-bearing provider runtime inside `@oscharko-dev/keiko-model-gateway`, forbids resolver drift into `contracts` or `server`, and records the extraction triggers that would justify a later dedicated package.            |
 
 ## Historical Records
 

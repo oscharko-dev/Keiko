@@ -25,6 +25,7 @@ import {
   smokeTestCandidates,
 } from "./gateway-setup.js";
 import type { RouteContext } from "./routes.js";
+import { isGatewayOpenAiCompatibleProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 
 const tmpDirs: string[] = [];
 
@@ -210,7 +211,11 @@ describe("handleGatewaySetup", () => {
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (config, modelIds) => {
-        const baseUrl = config.providers[0]?.baseUrl ?? "";
+        const provider = config.providers[0];
+        const baseUrl =
+          provider !== undefined && isGatewayOpenAiCompatibleProviderConfig(provider)
+            ? provider.baseUrl
+            : "";
         if (!baseUrl.endsWith("/v1")) {
           return Promise.reject(new Error("not found"));
         }
@@ -222,9 +227,16 @@ describe("handleGatewaySetup", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe(
-      "https://llm-gateway.example.com/v1",
-    );
+    const configuredProvider = currentGatewayConfig(deps)?.providers[0];
+    expect(configuredProvider).toBeDefined();
+    expect(isGatewayOpenAiCompatibleProviderConfig(configuredProvider!)).toBe(true);
+    if (
+      configuredProvider === undefined ||
+      !isGatewayOpenAiCompatibleProviderConfig(configuredProvider)
+    ) {
+      expect.unreachable("expected an OpenAI-compatible gateway provider");
+    }
+    expect(configuredProvider.baseUrl).toBe("https://llm-gateway.example.com/v1");
     deps.store.close();
   });
 
@@ -446,7 +458,9 @@ describe("handleGatewaySetup", () => {
         ),
       ).toBe(true);
       expect(
-        currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
+        currentGatewayConfig(deps)?.providers.map((provider) =>
+          isGatewayOpenAiCompatibleProviderConfig(provider) ? provider.apiKeyHeaderName : undefined,
+        ),
       ).toEqual(["x-litellm-key", "x-litellm-key"]);
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');

@@ -162,7 +162,11 @@ describe("GET /api/config", () => {
   it("returns effectiveGroundingLimits reflecting file config grounding block", () => {
     const configWithGrounding = {
       ...SAMPLE_CONFIG,
-      grounding: { maxConnectedSources: 4, maxLocalKnowledgeSources: 4 },
+      grounding: {
+        ...DEFAULT_GROUNDING_LIMITS,
+        maxConnectedSources: 4,
+        maxLocalKnowledgeSources: 4,
+      },
     };
     const result = handleConfig(
       ctx("/api/config"),

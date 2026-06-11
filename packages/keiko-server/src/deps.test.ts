@@ -10,6 +10,7 @@ import {
 } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
+import { isGatewayOpenAiCompatibleProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 
 const tmpDirs: string[] = [];
 
@@ -126,8 +127,17 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     expect(deps.config?.providers.map((provider) => provider.modelId)).toEqual([
       "example-chat-model",
     ]);
-    expect(deps.config?.providers[0]?.baseUrl).toBe("https://models.example.invalid/openai/v1");
-    expect(deps.config?.providers[0]?.apiKey).toBe("fake-test-key");
+    const configuredProvider = deps.config?.providers[0];
+    expect(configuredProvider).toBeDefined();
+    expect(isGatewayOpenAiCompatibleProviderConfig(configuredProvider!)).toBe(true);
+    if (
+      configuredProvider === undefined ||
+      !isGatewayOpenAiCompatibleProviderConfig(configuredProvider)
+    ) {
+      expect.unreachable("expected an OpenAI-compatible gateway provider");
+    }
+    expect(configuredProvider.baseUrl).toBe("https://models.example.invalid/openai/v1");
+    expect(configuredProvider.apiKey).toBe("fake-test-key");
     store.close();
   });
 
@@ -146,7 +156,16 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     });
 
     expect(deps.configPresent).toBe(true);
-    expect(deps.config?.providers[0]?.apiKeyHeaderName).toBe("x-litellm-key");
+    const configuredProvider = deps.config?.providers[0];
+    expect(configuredProvider).toBeDefined();
+    expect(isGatewayOpenAiCompatibleProviderConfig(configuredProvider!)).toBe(true);
+    if (
+      configuredProvider === undefined ||
+      !isGatewayOpenAiCompatibleProviderConfig(configuredProvider)
+    ) {
+      expect.unreachable("expected an OpenAI-compatible gateway provider");
+    }
+    expect(configuredProvider.apiKeyHeaderName).toBe("x-litellm-key");
     store.close();
   });
 

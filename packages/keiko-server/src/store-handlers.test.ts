@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -1230,7 +1231,7 @@ describe("PATCH /api/chats", () => {
     // Inject a gateway config with grounding.maxConnectedSources = 2 so the runtime cap is 2.
     const lowCapConfig = {
       ...customModelConfig(CHAT_MODEL),
-      grounding: { maxConnectedSources: 2 },
+      grounding: { ...DEFAULT_GROUNDING_LIMITS, maxConnectedSources: 2 },
     };
     await restartWithDeps({ config: lowCapConfig });
 
@@ -1273,7 +1274,7 @@ describe("PATCH /api/chats", () => {
     // GROUNDING_LIMIT_CEILINGS.maxConnectedSources is 64; 9999 must be clamped to it.
     const overCeilConfig = {
       ...customModelConfig(CHAT_MODEL),
-      grounding: { maxConnectedSources: 9999 },
+      grounding: { ...DEFAULT_GROUNDING_LIMITS, maxConnectedSources: 9999 },
     };
     await restartWithDeps({ config: overCeilConfig });
 
