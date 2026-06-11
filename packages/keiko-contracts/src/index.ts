@@ -86,6 +86,10 @@ export type {
   OrchestrationChildPlan,
   OrchestrationPlan,
   OrchestrationChildSettlement,
+  OrchestrationSettlementOutcome,
+  OrchestrationSettlementStrategy,
+  OrchestrationSettlementReason,
+  OrchestrationSettlementDecision,
   OrchestrationInvalidTransition,
 } from "./orchestration.js";
 export {
@@ -96,6 +100,8 @@ export {
   ORCHESTRATION_TERMINAL_STATES,
   ORCHESTRATION_CHILD_ROLES,
   ORCHESTRATION_CHILD_OUTCOMES,
+  ORCHESTRATION_SETTLEMENT_OUTCOMES,
+  ORCHESTRATION_SETTLEMENT_STRATEGIES,
   ORCHESTRATION_ALLOWED_STATE_TRANSITIONS,
   isOrchestrationStateTransitionAllowed,
   assertOrchestrationStateTransition,

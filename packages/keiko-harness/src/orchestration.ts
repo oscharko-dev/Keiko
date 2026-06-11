@@ -3,8 +3,12 @@ import type {
   OrchestrationAuthorityBoundary,
   OrchestrationChildPlan,
   OrchestrationChildRole,
+  OrchestrationChildSettlement,
   OrchestrationExecutionMode,
   OrchestrationPlan,
+  OrchestrationSettlementDecision,
+  OrchestrationSettlementReason,
+  OrchestrationSettlementStrategy,
   OrchestrationState,
   OrchestrationStateTransition,
   HarnessLimits,
@@ -165,6 +169,8 @@ export interface OrchestrationSessionResult {
   readonly state: OrchestrationState;
   readonly transitions: readonly OrchestrationStateTransition[];
   readonly children: Readonly<Record<string, OrchestrationChildResult>>;
+  readonly childSettlements: readonly OrchestrationChildSettlement[];
+  readonly settlement: OrchestrationSettlementDecision;
 }
 
 export interface OrchestrationSession {
@@ -182,6 +188,18 @@ export interface OrchestrationSchedulerHooks {
     | undefined;
 }
 
+export interface SettlementPolicy {
+  readonly preferCompatibleMerges: boolean;
+  readonly escalateOnConflicts: boolean;
+  readonly reviewerRequiredOnMultipleWriters: boolean;
+}
+
+export const DEFAULT_SETTLEMENT_POLICY: SettlementPolicy = {
+  preferCompatibleMerges: true,
+  escalateOnConflicts: true,
+  reviewerRequiredOnMultipleWriters: true,
+} as const;
+
 export interface OrchestrationDeps extends HarnessDeps {
   readonly clock?: Clock | undefined;
   readonly hooks?: OrchestrationSchedulerHooks | undefined;
@@ -190,6 +208,7 @@ export interface OrchestrationDeps extends HarnessDeps {
 export interface OrchestrationConfig extends AgentConfig {
   readonly childLimits?: Partial<HarnessLimits> | undefined;
   readonly limits?: Partial<OrchestrationLimits> | undefined;
+  readonly settlementPolicy?: Partial<SettlementPolicy> | undefined;
 }
 
 interface ActiveChild {
@@ -206,6 +225,10 @@ function resolveOrchestrationLimits(
   config: OrchestrationConfig,
 ): OrchestrationLimits {
   return { ...DEFAULT_ORCHESTRATION_LIMITS, ...config.limits };
+}
+
+function resolveSettlementPolicy(config: OrchestrationConfig): SettlementPolicy {
+  return { ...DEFAULT_SETTLEMENT_POLICY, ...config.settlementPolicy };
 }
 
 function toConfig(parent: OrchestrationConfig, child: OrchestrationChildRequest): AgentConfig {
@@ -253,6 +276,172 @@ function deriveClaims(child: OrchestrationChildRequest): readonly ResourceClaim[
     },
     ...explicit,
   ];
+}
+
+function toSettlementOutcome(
+  result: OrchestrationChildResult,
+): OrchestrationChildSettlement["outcome"] {
+  switch (result.state) {
+    case "completed":
+      return "succeeded";
+    case "cancelled":
+      return "cancelled";
+    case "blocked":
+      return "escalated";
+    case "failed":
+      return "failed";
+  }
+}
+
+function hasWriteClaim(child: OrchestrationChildRequest): boolean {
+  return deriveClaims(child).some((claim) => claim.access !== "read");
+}
+
+function areCompatibleForMerge(
+  accepted: readonly OrchestrationChildResult[],
+): boolean {
+  const patchDiffs = accepted
+    .map((result) => result.run?.patchDiff)
+    .filter((patchDiff): patchDiff is string => typeof patchDiff === "string" && patchDiff.length > 0);
+  return patchDiffs.length === accepted.length && accepted.length > 1;
+}
+
+function settlementsFor(
+  results: Readonly<Record<string, OrchestrationChildResult>>,
+): readonly OrchestrationChildSettlement[] {
+  return Object.values(results).map((result) => ({
+    childId: result.childId,
+    outcome: toSettlementOutcome(result),
+    accepted: result.state === "completed",
+    reason: result.reason,
+  }));
+}
+
+function buildSettlementDecision(
+  results: Readonly<Record<string, OrchestrationChildResult>>,
+  requests: ReadonlyMap<string, OrchestrationChildRequest>,
+  policy: SettlementPolicy,
+): OrchestrationSettlementDecision {
+  const completed = Object.values(results).filter((result) => result.state === "completed");
+  const blocked = Object.values(results).filter((result) => result.state === "blocked");
+  const failed = Object.values(results).filter((result) => result.state === "failed");
+  const acceptedCandidate = completed.at(-1);
+  const approvers = completed.filter((result) => {
+    const request = requests.get(result.childId);
+    return request?.plan.authority.canApproveSettlement === true;
+  });
+  const writerCount = completed.filter((result) => {
+    const request = requests.get(result.childId);
+    return request !== undefined && hasWriteClaim(request);
+  }).length;
+
+  if (acceptedCandidate !== undefined && approvers.length > 0) {
+    return {
+      outcome: "accepted",
+      strategy: "escalate-to-reviewer",
+      acceptedChildIds: [approvers.at(-1)!.childId],
+      discardedChildIds: Object.values(results)
+        .filter((result) => result.childId !== approvers.at(-1)!.childId)
+        .map((result) => result.childId),
+      escalatedChildIds: [],
+      mergedChildIds: [],
+      reason: {
+        code: "reviewer-required",
+        message: `Accepted ${approvers.at(-1)!.childId} as the authoritative settlement approver.`,
+      },
+    };
+  }
+
+  if (acceptedCandidate !== undefined && completed.length === 1 && blocked.length === 0 && failed.length === 0) {
+    return {
+      outcome: "accepted",
+      strategy: "prefer-single-writer",
+      acceptedChildIds: [acceptedCandidate.childId],
+      discardedChildIds: [],
+      escalatedChildIds: [],
+      mergedChildIds: [],
+      reason: {
+        code: "single-completed-child",
+        message: `Accepted ${acceptedCandidate.childId} as the sole completed child result.`,
+      },
+    };
+  }
+
+  if (
+    policy.preferCompatibleMerges &&
+    completed.length > 1 &&
+    areCompatibleForMerge(completed)
+  ) {
+    return {
+      outcome: "merged",
+      strategy: "merge-compatible-results",
+      acceptedChildIds: completed.map((result) => result.childId),
+      discardedChildIds: [],
+      escalatedChildIds: [],
+      mergedChildIds: completed.map((result) => result.childId),
+      reason: {
+        code: "compatible-results",
+        message: `Merged compatible completed results from ${completed.map((result) => result.childId).join(", ")}.`,
+      },
+    };
+  }
+
+  if (
+    policy.escalateOnConflicts &&
+    (blocked.length > 0 || (completed.length > 1 && writerCount > 1))
+  ) {
+    const escalated = [
+      ...blocked.map((result) => result.childId),
+      ...(completed.length > 1 && writerCount > 1
+        ? completed.map((result) => result.childId)
+        : []),
+    ];
+    return {
+      outcome: "escalated",
+      strategy: "escalate-to-reviewer",
+      acceptedChildIds: [],
+      discardedChildIds: failed.map((result) => result.childId),
+      escalatedChildIds: [...new Set(escalated)],
+      mergedChildIds: [],
+      reason: {
+        code: blocked.length > 0 ? "resource-conflict" : "reviewer-required",
+        message:
+          blocked.length > 0
+            ? `Escalated due to unresolved blocked children: ${blocked.map((result) => result.childId).join(", ")}.`
+            : "Escalated because multiple write-capable child results require reviewer settlement.",
+      },
+    };
+  }
+
+  if (completed.length > 0) {
+    return {
+      outcome: "accepted",
+      strategy: "discard-unsafe-results",
+      acceptedChildIds: [acceptedCandidate!.childId],
+      discardedChildIds: Object.values(results)
+        .filter((result) => result.childId !== acceptedCandidate!.childId)
+        .map((result) => result.childId),
+      escalatedChildIds: [],
+      mergedChildIds: [],
+      reason: {
+        code: "policy-conflict",
+        message: `Accepted ${acceptedCandidate!.childId} and discarded incompatible or unsafe sibling results.`,
+      },
+    };
+  }
+
+  return {
+    outcome: "no-safe-result",
+    strategy: "discard-unsafe-results",
+    acceptedChildIds: [],
+    discardedChildIds: Object.keys(results),
+    escalatedChildIds: [],
+    mergedChildIds: [],
+    reason: {
+      code: "no-safe-result",
+      message: "No safe child result was available for acceptance or merge.",
+    },
+  };
 }
 
 function transition(
@@ -455,6 +644,7 @@ async function runOrchestration(
   const active = new Map<string, ActiveChild>();
   const transitions: OrchestrationStateTransition[] = [];
   const limits = resolveOrchestrationLimits(config);
+  const settlementPolicy = resolveSettlementPolicy(config);
   const clock = deps.clock;
   const startedAt = clock?.now() ?? Date.now();
   let state: OrchestrationState = transition(transitions, "planning", "ready", "orchestration plan accepted");
@@ -592,7 +782,14 @@ async function runOrchestration(
     }
   }
 
-  return { runId, state, transitions, children: results };
+  return {
+    runId,
+    state,
+    transitions,
+    children: results,
+    childSettlements: settlementsFor(results),
+    settlement: buildSettlementDecision(results, requests, settlementPolicy),
+  };
 }
 
 export function createOrchestrationSession(

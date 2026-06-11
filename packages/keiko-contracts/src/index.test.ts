@@ -11,6 +11,8 @@ import {
   ORCHESTRATION_TERMINAL_STATES,
   ORCHESTRATION_CHILD_ROLES,
   ORCHESTRATION_CHILD_OUTCOMES,
+  ORCHESTRATION_SETTLEMENT_OUTCOMES,
+  ORCHESTRATION_SETTLEMENT_STRATEGIES,
   isOrchestrationStateTransitionAllowed,
   assertOrchestrationStateTransition,
   EVIDENCE_SCHEMA_VERSION,
@@ -131,6 +133,10 @@ import type {
   OrchestrationChildPlan,
   OrchestrationPlan,
   OrchestrationChildSettlement,
+  OrchestrationSettlementOutcome,
+  OrchestrationSettlementStrategy,
+  OrchestrationSettlementReason,
+  OrchestrationSettlementDecision,
   OrchestrationInvalidTransition,
 } from "./index.js";
 
@@ -159,6 +165,8 @@ describe("keiko-contracts package surface", () => {
     expect(ORCHESTRATION_TERMINAL_STATES.has("completed")).toBe(true);
     expect(ORCHESTRATION_CHILD_ROLES).toContain("implementer");
     expect(ORCHESTRATION_CHILD_OUTCOMES).toContain("partial-success");
+    expect(ORCHESTRATION_SETTLEMENT_OUTCOMES).toContain("accepted");
+    expect(ORCHESTRATION_SETTLEMENT_STRATEGIES).toContain("merge-compatible-results");
     expect(isOrchestrationStateTransitionAllowed("planning", "ready")).toBe(true);
     expect(assertOrchestrationStateTransition("completed", "running")).not.toBeNull();
   });
@@ -213,6 +221,10 @@ describe("keiko-contracts package surface", () => {
     pin<OrchestrationChildPlan>();
     pin<OrchestrationPlan>();
     pin<OrchestrationChildSettlement>();
+    pin<OrchestrationSettlementOutcome>();
+    pin<OrchestrationSettlementStrategy>();
+    pin<OrchestrationSettlementReason>();
+    pin<OrchestrationSettlementDecision>();
     pin<OrchestrationInvalidTransition>();
   });
 

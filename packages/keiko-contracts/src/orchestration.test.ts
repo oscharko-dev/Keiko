@@ -6,6 +6,8 @@ import {
   ORCHESTRATION_EXECUTION_MODES,
   ORCHESTRATION_RUN_KINDS,
   ORCHESTRATION_SCHEMA_VERSION,
+  ORCHESTRATION_SETTLEMENT_OUTCOMES,
+  ORCHESTRATION_SETTLEMENT_STRATEGIES,
   ORCHESTRATION_STATES,
   ORCHESTRATION_TERMINAL_STATES,
   assertOrchestrationStateTransition,
@@ -27,6 +29,8 @@ describe("multi-agent orchestration contract", () => {
       "merger",
     ]);
     expect(ORCHESTRATION_CHILD_OUTCOMES).toContain("escalated");
+    expect(ORCHESTRATION_SETTLEMENT_OUTCOMES).toContain("merged");
+    expect(ORCHESTRATION_SETTLEMENT_STRATEGIES).toContain("escalate-to-reviewer");
   });
 
   it("allows the documented forward transitions", () => {

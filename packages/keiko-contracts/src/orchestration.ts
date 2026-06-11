@@ -99,6 +99,46 @@ export interface OrchestrationChildSettlement {
   readonly reason: string;
 }
 
+export const ORCHESTRATION_SETTLEMENT_OUTCOMES = [
+  "accepted",
+  "merged",
+  "discarded",
+  "escalated",
+  "no-safe-result",
+] as const;
+export type OrchestrationSettlementOutcome =
+  (typeof ORCHESTRATION_SETTLEMENT_OUTCOMES)[number];
+
+export const ORCHESTRATION_SETTLEMENT_STRATEGIES = [
+  "prefer-single-writer",
+  "merge-compatible-results",
+  "escalate-to-reviewer",
+  "discard-unsafe-results",
+] as const;
+export type OrchestrationSettlementStrategy =
+  (typeof ORCHESTRATION_SETTLEMENT_STRATEGIES)[number];
+
+export interface OrchestrationSettlementReason {
+  readonly code:
+    | "single-completed-child"
+    | "compatible-results"
+    | "resource-conflict"
+    | "policy-conflict"
+    | "reviewer-required"
+    | "no-safe-result";
+  readonly message: string;
+}
+
+export interface OrchestrationSettlementDecision {
+  readonly outcome: OrchestrationSettlementOutcome;
+  readonly strategy: OrchestrationSettlementStrategy;
+  readonly acceptedChildIds: readonly string[];
+  readonly discardedChildIds: readonly string[];
+  readonly escalatedChildIds: readonly string[];
+  readonly mergedChildIds: readonly string[];
+  readonly reason: OrchestrationSettlementReason;
+}
+
 export interface OrchestrationInvalidTransition {
   readonly from: OrchestrationState;
   readonly to: OrchestrationState;

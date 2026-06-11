@@ -16,6 +16,7 @@ export {
   createOrchestrationSession,
   DEFAULT_ORCHESTRATION_LIMITS,
   DEFAULT_ROLE_POLICIES,
+  DEFAULT_SETTLEMENT_POLICY,
   type OrchestrationChildRequest,
   type OrchestrationChildResult,
   type OrchestrationConfig,
@@ -29,6 +30,7 @@ export {
   type ResourceConflict,
   type ResourceConflictPolicy,
   type ResourceKind,
+  type SettlementPolicy,
   type RolePolicy,
 } from "./orchestration.js";
 

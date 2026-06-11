@@ -62,6 +62,7 @@ import type {
   ResourceConflict,
   ResourceConflictPolicy,
   ResourceKind,
+  SettlementPolicy,
   RolePolicy,
   RunCancelledEvent,
   RunCompletedEvent,
@@ -114,6 +115,7 @@ describe("keiko-harness public surface", () => {
     expect(typeof harness.assertOrchestrationStateTransition).toBe("function");
     expect(harness.DEFAULT_ORCHESTRATION_LIMITS.maxConcurrentChildren).toBeGreaterThan(0);
     expect(harness.DEFAULT_ROLE_POLICIES.implementer.allowsParallel).toBe(true);
+    expect(harness.DEFAULT_SETTLEMENT_POLICY.escalateOnConflicts).toBe(true);
     // Error taxonomy (re-exported from keiko-security):
     expect(typeof harness.HarnessError).toBe("function");
     expect(typeof harness.HarnessInternalError).toBe("function");
@@ -214,6 +216,7 @@ describe("keiko-harness public surface", () => {
     pin<ResourceConflict>();
     pin<ResourceConflictPolicy>();
     pin<ResourceKind>();
+    pin<SettlementPolicy>();
     pin<RolePolicy>();
   });
 });

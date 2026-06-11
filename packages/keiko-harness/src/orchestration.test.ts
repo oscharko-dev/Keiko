@@ -77,6 +77,9 @@ describe("createOrchestrationSession", () => {
     expect(sequence).toEqual(["start:a", "done:a", "start:b", "done:b"]);
     expect(result.children.a?.state).toBe("completed");
     expect(result.children.b?.state).toBe("completed");
+    expect(result.childSettlements).toHaveLength(2);
+    expect(result.settlement.outcome).toBe("accepted");
+    expect(result.settlement.acceptedChildIds).toEqual(["b"]);
   });
 
   it("dispatches independent parallel-eligible children together in parallel mode", async () => {
@@ -102,6 +105,7 @@ describe("createOrchestrationSession", () => {
     const result = await session.result;
     expect(result.state).toBe("completed");
     expect(activeSnapshots).toEqual([[], ["one"]]);
+    expect(result.settlement.outcome).toBe("accepted");
   });
 
   it("propagates cancellation to active children", async () => {
@@ -134,6 +138,7 @@ describe("createOrchestrationSession", () => {
     expect(result.state).toBe("cancelled");
     expect(result.transitions.some((step) => step.to === "cancelling")).toBe(true);
     expect(result.children.a?.state).toBe("cancelled");
+    expect(result.settlement.outcome).toBe("no-safe-result");
   });
 
   it("fails when a child violates its role policy", async () => {
@@ -163,6 +168,7 @@ describe("createOrchestrationSession", () => {
     const result = await session.result;
     expect(result.state).toBe("failed");
     expect(result.children.bad?.reason).toContain("violates role policy");
+    expect(result.settlement.discardedChildIds).toContain("bad");
   });
 
   it("serializes same-file write claims before dispatching a second writer", async () => {
@@ -197,6 +203,44 @@ describe("createOrchestrationSession", () => {
     const result = await session.result;
     expect(result.state).toBe("completed");
     expect(sequence).toEqual(["start:one", "done:one", "start:two", "done:two"]);
+    expect(result.settlement.outcome).toBe("merged");
+    expect(result.settlement.mergedChildIds).toEqual(["one", "two"]);
+  });
+
+  it("accepts a merger child as the authoritative settlement approver", async () => {
+    const implementer = child(
+      "draft",
+      { taskType: "generate-unit-tests", input: { filePath: "src/a.test.ts" } },
+      "implementer",
+    );
+    const merger = child(
+      "merge-review",
+      { taskType: "investigate-bug", input: { description: "approve final merge" } },
+      "merger",
+      ["draft"],
+    );
+    const session = createOrchestrationSession(
+      {
+        schemaVersion: "1",
+        parent: { runId: "parent-1", kind: "parent-run" },
+        executionMode: "sequential",
+        children: [implementer.plan, merger.plan],
+      },
+      [implementer, merger],
+      CONFIG,
+      makeDeps(
+        scriptedModel([
+          response({ content: "--- a/a\n+++ b/a\n+draft" }),
+          response({ content: "approved merge plan" }),
+        ]).port,
+      ),
+    );
+    const result = await session.result;
+    expect(result.state).toBe("completed");
+    expect(result.settlement.outcome).toBe("accepted");
+    expect(result.settlement.strategy).toBe("escalate-to-reviewer");
+    expect(result.settlement.acceptedChildIds).toEqual(["merge-review"]);
+    expect(result.settlement.reason.code).toBe("reviewer-required");
   });
 
   it("blocks exclusive tool contention while allowing unaffected work to continue", async () => {
@@ -237,5 +281,7 @@ describe("createOrchestrationSession", () => {
     expect(result.children.first?.state).toBe("completed");
     expect(result.children.blocked?.state).toBe("blocked");
     expect(result.children.blocked?.conflicts?.[0]?.claim.resourceId).toBe("browser-session");
+    expect(result.settlement.outcome).toBe("escalated");
+    expect(result.settlement.escalatedChildIds).toContain("blocked");
   });
 });
