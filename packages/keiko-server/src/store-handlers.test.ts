@@ -17,7 +17,9 @@ import {
   groundedContextIndexRegistry,
   microIndexForGroundedScope,
 } from "./grounded-context-index.js";
+import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -108,12 +110,12 @@ async function restartWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void>
   await new Promise<void>((res) => server.listen(port, UI_HOST, res));
 }
 
-function openGroundedIndex(chatId: string): void {
+function openGroundedIndex(chatId: string, workspaceRoot = projDir): void {
   microIndexForGroundedScope(
     {
       schemaVersion: "1",
       scopeId: `scope-${chatId}`,
-      workspaceRoot: projDir,
+      workspaceRoot,
       kind: "files",
       relativePaths: ["src"],
       conversationId: chatId,
@@ -123,8 +125,21 @@ function openGroundedIndex(chatId: string): void {
   );
 }
 
+function rememberGroundedTurn(chatId: string, workspaceRoot = projDir): void {
+  groundedTurnRegistry.remember(
+    {
+      assistantMessageId: `assistant-${chatId}`,
+      chatId,
+      workspaceRoot,
+      packs: [{ files: [] } as unknown as ConnectedContextPack],
+    },
+    () => 1,
+  );
+}
+
 beforeEach(async () => {
   clearAllGroundedContextIndexes();
+  clearAllGroundedTurns();
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-static-"));
   tmp = mkdtempSync(join(tmpdir(), "keiko-store-handlers-"));
   projDir = join(tmp, "proj");
@@ -152,6 +167,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await closeServer();
   clearAllGroundedContextIndexes();
+  clearAllGroundedTurns();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
   rmSync(staticRoot, { recursive: true, force: true });
@@ -410,6 +426,26 @@ describe("DELETE /api/projects", () => {
     });
     expect(res.status).toBe(204);
     expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
+  it("clears external-root grounded state for chats cascaded by project deletion", async () => {
+    const externalRoot = join(tmp, "external-connected-root");
+    mkdirSync(externalRoot);
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    openGroundedIndex(chat.id, externalRoot);
+    rememberGroundedTurn(chat.id, externalRoot);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    expect(groundedTurnRegistry.lookup(`assistant-${chat.id}`, () => 2)).not.toBeUndefined();
+
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+
+    expect(res.status).toBe(204);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+    expect(groundedTurnRegistry.lookup(`assistant-${chat.id}`, () => 3)).toBeUndefined();
   });
 
   it("returns 404 for unknown project", async () => {
@@ -998,13 +1034,37 @@ describe("PATCH /api/chats", () => {
       };
     };
     expect(body.chat.connectedScopes).toHaveLength(2);
-    // The BFF validates access via realpath but persists the caller-supplied root verbatim
-    // (matching the single-source #532 behavior); realpathSync here only proves the dirs exist.
-    expect(realpathSync(alpha)).toContain("alpha");
-    expect(body.chat.connectedScopes[0]?.root).toBe(alpha);
-    expect(body.chat.connectedScopes[1]?.root).toBe(beta);
+    expect(body.chat.connectedScopes[0]?.root).toBe(realpathSync(alpha));
+    expect(body.chat.connectedScopes[1]?.root).toBe(realpathSync(beta));
     // Back-compat single field reflects the first source.
     expect(body.chat.connectedScope?.kind).toBe("directory");
+  });
+
+  it("canonicalizes a symlinked connectedScopes root before persistence", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const realRoot = join(tmp, "real-docs-root");
+    const linkedRoot = join(tmp, "linked-docs-root");
+    mkdirSync(join(realRoot, "docs"), { recursive: true });
+    symlinkSync(realRoot, linkedRoot, "dir");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScopes: [
+          { kind: "directory", relativePaths: ["docs"], connectedAtMs: 12, root: linkedRoot },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScopes: { root?: string }[];
+        connectedScope: { root?: string } | undefined;
+      };
+    };
+    expect(body.chat.connectedScopes[0]?.root).toBe(realpathSync(realRoot));
+    expect(body.chat.connectedScope?.root).toBe(realpathSync(realRoot));
   });
 
   it("rejects a connectedScopes list whose entry has a deny-listed root (.ssh)", async () => {

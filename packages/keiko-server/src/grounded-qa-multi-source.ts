@@ -326,6 +326,8 @@ export function createMultiSourceAnswerer(
 
 // ─── Retrieved-source record + worker ─────────────────────────────────────────
 
+const MAX_RETRIEVAL_CONCURRENCY = 4;
+
 interface RetrievedSource {
   readonly label: string;
   readonly pack: ConnectedContextPack;
@@ -351,12 +353,17 @@ async function retrieveAllSources(
   perScopeBudget: ExplorationBudget,
   labels: readonly string[],
 ): Promise<readonly RetrievedSource[] | RouteResult> {
-  const retrieved: RetrievedSource[] = [];
-  for (let i = 0; i < ctx.scopes.length; i += 1) {
+  const retrieved: (RetrievedSource | undefined)[] = new Array<RetrievedSource | undefined>(
+    ctx.scopes.length,
+  );
+  let nextIndex = 0;
+  let failure: RouteResult | undefined;
+
+  async function retrieveOne(i: number): Promise<void> {
     ensureNotCancelled(ctx.signal);
     const cs = ctx.scopes[i];
     const label = labels[i];
-    if (cs === undefined || label === undefined) continue;
+    if (cs === undefined || label === undefined) return;
     const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
     const out = await ctx.retriever({
       scope,
@@ -365,11 +372,25 @@ async function retrieveAllSources(
       budget: perScopeBudget,
     });
     if (!isValidGroundedPack(out.pack)) {
-      return internalError("Grounded answer context pack failed validation.");
+      failure = internalError("Grounded answer context pack failed validation.");
+      return;
     }
-    retrieved.push({ label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan });
+    retrieved[i] = { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan };
   }
-  return retrieved;
+
+  async function worker(): Promise<void> {
+    while (failure === undefined) {
+      const i = nextIndex;
+      nextIndex += 1;
+      if (i >= ctx.scopes.length) return;
+      await retrieveOne(i);
+    }
+  }
+
+  const workerCount = Math.min(MAX_RETRIEVAL_CONCURRENCY, Math.max(1, ctx.scopes.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (failure !== undefined) return failure;
+  return retrieved.filter((source): source is RetrievedSource => source !== undefined);
 }
 
 function mergedCitations(

@@ -27,6 +27,7 @@ import {
   assembleContextPack,
   canContinue,
   complete,
+  contextPackIndexKey,
   planAndGovern,
   rankCandidates,
   type ClarificationPrompt,
@@ -45,6 +46,7 @@ import {
   gitHistoryAdapter,
   importGraphAdapter,
   readExcerpt,
+  resolveWithinWorkspace,
   runStructuralAdapters,
   searchText,
   type SearchScope,
@@ -52,6 +54,7 @@ import {
   testSourcePairingAdapter,
   type WorkspaceFs,
   type WorkspaceInfo,
+  containedRealPathInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -521,6 +524,8 @@ interface ExcerptReadSummary {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
+type PackCacheIdentity = readonly string[];
+
 interface CandidateOrdering {
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -715,16 +720,52 @@ function mergeLineWindows(windows: readonly LineWindow[]): readonly LineWindow[]
   return merged;
 }
 
+function windowContainsAtom(window: LineWindow, atom: EvidenceAtom): boolean {
+  const range = atom.lineRange;
+  return (
+    range === undefined || (window.startLine <= range.startLine && window.endLine >= range.endLine)
+  );
+}
+
+function strongestAtomScoreForWindow(
+  window: LineWindow,
+  atomsForPath: readonly EvidenceAtom[],
+): number {
+  let score = 0;
+  for (const atom of atomsForPath) {
+    if (windowContainsAtom(window, atom) && atom.score > score) {
+      score = atom.score;
+    }
+  }
+  return score;
+}
+
+interface ExcerptWindowSelection {
+  readonly windows: readonly LineWindow[];
+  readonly omittedWindowCount: number;
+}
+
 function excerptLineWindows(
   atomsForPath: readonly EvidenceAtom[] | undefined,
-): readonly LineWindow[] {
+): ExcerptWindowSelection {
   if (atomsForPath === undefined || atomsForPath.length === 0) {
-    return [DEFAULT_EXCERPT_WINDOW];
+    return { windows: [DEFAULT_EXCERPT_WINDOW], omittedWindowCount: 0 };
   }
-  return mergeLineWindows(atomsForPath.map(lineWindowForAtom)).slice(
-    0,
-    MAX_EXCERPT_WINDOWS_PER_FILE,
-  );
+  const merged = mergeLineWindows(atomsForPath.map(lineWindowForAtom));
+  const selected = [...merged]
+    .sort((a, b) => {
+      const scoreDelta =
+        strongestAtomScoreForWindow(b, atomsForPath) - strongestAtomScoreForWindow(a, atomsForPath);
+      return scoreDelta === 0 ? a.startLine - b.startLine : scoreDelta;
+    })
+    .slice(0, MAX_EXCERPT_WINDOWS_PER_FILE)
+    .sort((a, b) =>
+      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+    );
+  return {
+    windows: selected,
+    omittedWindowCount: Math.max(0, merged.length - selected.length),
+  };
 }
 
 function exhaustedDimensions(remainingFiles: number, remainingBytes: number): string {
@@ -737,6 +778,7 @@ function exhaustedDimensions(remainingFiles: number, remainingBytes: number): st
 interface ReadPathExcerptWindowsResult {
   readonly windows: readonly ExcerptWindow[];
   readonly bytesConsumed: number;
+  readonly omittedWindowCount: number;
 }
 
 async function readPathExcerptWindows(
@@ -746,7 +788,8 @@ async function readPathExcerptWindows(
 ): Promise<ReadPathExcerptWindowsResult> {
   const windows: ExcerptWindow[] = [];
   let bytesConsumed = 0;
-  for (const window of excerptLineWindows(inputs.atomsByPath.get(scopePath))) {
+  const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
+  for (const window of selection.windows) {
     throwIfCancelled(inputs.signal);
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0) {
@@ -762,7 +805,7 @@ async function readPathExcerptWindows(
     windows.push({ ...window, content: result.content });
     bytesConsumed += utf8ByteLength(result.content);
   }
-  return { windows, bytesConsumed };
+  return { windows, bytesConsumed, omittedWindowCount: selection.omittedWindowCount };
 }
 
 async function readKeptExcerpts(
@@ -788,6 +831,14 @@ async function readKeptExcerpts(
       const { windows } = result;
       if (windows.length > 0) {
         excerpts.set(scopePath, windows);
+        if (result.omittedWindowCount > 0) {
+          uncertainty.push({
+            kind: "scope-incomplete",
+            claim: `excerpt window limit omitted ${String(result.omittedWindowCount)} additional matching range(s) in ${scopePath}`,
+            impactedAtomIds: [],
+            emittedAtMs: inputs.nowMs(),
+          });
+        }
         remainingFiles -= 1;
         remainingBytes -= result.bytesConsumed;
       }
@@ -810,6 +861,33 @@ function buildSearchScope(scope: SelectedScope, workspace: WorkspaceInfo): Searc
     scopeId: scope.scopeId,
     relativePaths: scope.relativePaths,
   };
+}
+
+function fileStateCacheIdentity(
+  keptPaths: readonly string[],
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+): PackCacheIdentity | undefined {
+  const identity: string[] = [];
+  try {
+    for (const scopePath of keptPaths) {
+      const target = containedRealPathInfo(
+        fs,
+        searchScope.workspace.root,
+        resolveWithinWorkspace(searchScope.workspace.root, scopePath),
+      );
+      const stat = fs.stat(target.path);
+      if (!stat.isFile || stat.mtimeMs === undefined) {
+        return undefined;
+      }
+      identity.push(
+        `${scopePath}:${target.realRelative}:${stat.size.toString()}:${stat.mtimeMs.toString()}`,
+      );
+    }
+  } catch {
+    return undefined;
+  }
+  return identity.sort();
 }
 
 interface ReadyPlanResult {
@@ -851,15 +929,112 @@ interface AssembleGroundedPackInputs {
   readonly nowMs: () => number;
 }
 
-async function assembleGroundedPack({
+interface EmptyGroundedPackInputs {
+  readonly input: OrchestratorInput;
+  readonly deps: OrchestratorDeps;
+  readonly plan: ExplorationPlan;
+  readonly governor: GovernorState;
+  readonly nowMs: () => number;
+  readonly stopReason: string;
+}
+
+interface GroundedPackCacheLookupInputs {
+  readonly input: OrchestratorInput;
+  readonly deps: OrchestratorDeps;
+  readonly plan: ExplorationPlan;
+  readonly rings: RingRunSummary;
+  readonly ordered: CandidateOrdering;
+  readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly initialUsage: ExplorationUsage;
+  readonly assembleOptions: AssembleOptionsForGroundedPack;
+}
+
+type AssembleOptionsForGroundedPack =
+  | { readonly nowMs: () => number }
+  | { readonly nowMs: () => number; readonly microIndex: MicroIndex };
+
+interface PreparedPackAssembly {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly initialUsage: ExplorationUsage;
+  readonly ordered: CandidateOrdering;
+  readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
+  readonly evidenceUncertainty: readonly UncertaintyMarker[];
+  readonly keptPaths: readonly string[];
+}
+
+interface FinalContextPackInputs {
+  readonly input: OrchestratorInput;
+  readonly plan: ExplorationPlan;
+  readonly rings: RingRunSummary;
+  readonly prepared: PreparedPackAssembly;
+  readonly excerptReads: ExcerptReadSummary;
+  readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly assembleOptions: AssembleOptionsForGroundedPack;
+}
+
+async function assembleEmptyGroundedPack({
+  input,
+  deps,
+  plan,
+  governor,
+  nowMs,
+  stopReason,
+}: EmptyGroundedPackInputs): Promise<ConnectedContextPack> {
+  const assembleOptions =
+    deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
+  const assemble = await assembleContextPack(
+    {
+      scope: input.scope,
+      query: input.query,
+      budget: plan.budget,
+      atoms: [],
+      ranked: [],
+      omittedFromRanking: [],
+      excerpts: new Map(),
+      initialUsage: clampUsageToBudget(governor.usage, plan.budget),
+      initialUncertainty: [budgetClipped(stopReason, nowMs())],
+    },
+    assembleOptions,
+  );
+  return assemble.pack;
+}
+
+function cachedGroundedPack({
   input,
   deps,
   plan,
   rings,
-  searchScope,
-  fs,
-  nowMs,
-}: AssembleGroundedPackInputs): Promise<ConnectedContextPack> {
+  ordered,
+  cacheIdentity,
+  initialUsage,
+  assembleOptions,
+}: GroundedPackCacheLookupInputs): ConnectedContextPack | undefined {
+  if (deps.microIndex === undefined || cacheIdentity === undefined) {
+    return undefined;
+  }
+  const key = contextPackIndexKey(
+    {
+      scope: input.scope,
+      query: input.query,
+      budget: plan.budget,
+      atoms: rings.atoms,
+      ranked: ordered.kept,
+      omittedFromRanking: [...rings.omitted, ...ordered.omitted],
+      excerpts: new Map(),
+      cacheIdentity,
+      initialUsage,
+    },
+    assembleOptions,
+  );
+  return deps.microIndex.get(key);
+}
+
+function preparePackAssembly(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  rings: RingRunSummary,
+  nowMs: () => number,
+): PreparedPackAssembly {
   const atoms = rings.atoms;
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
@@ -870,34 +1045,95 @@ async function assembleGroundedPack({
     plan.anchors,
     nowMs(),
   );
-  const atomsByPath = groupEvidenceAtomsByPath(atoms);
-  const evidenceUncertainty =
-    atoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [];
-  const excerptReads = await readKeptExcerpts(
-    ordered.kept.map((c) => c.scopePath),
-    { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs, signal: deps.signal },
-  );
-  const assembleOptions =
-    deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
+  return {
+    atoms,
+    initialUsage,
+    ordered,
+    atomsByPath: groupEvidenceAtomsByPath(atoms),
+    evidenceUncertainty:
+      atoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [],
+    keptPaths: ordered.kept.map((c) => c.scopePath),
+  };
+}
+
+async function assemblePackFromReads({
+  input,
+  plan,
+  rings,
+  prepared,
+  excerptReads,
+  cacheIdentity,
+  assembleOptions,
+}: FinalContextPackInputs): Promise<ConnectedContextPack> {
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
       query: input.query,
       budget: plan.budget,
-      atoms,
-      ranked: ordered.kept,
-      omittedFromRanking: [...rings.omitted, ...ordered.omitted],
+      atoms: prepared.atoms,
+      ranked: prepared.ordered.kept,
+      omittedFromRanking: [...rings.omitted, ...prepared.ordered.omitted],
       excerpts: excerptReads.excerpts,
-      initialUsage,
+      cacheIdentity,
+      initialUsage: prepared.initialUsage,
       initialUncertainty: [
         ...rings.uncertainty,
         ...excerptReads.uncertainty,
-        ...evidenceUncertainty,
+        ...prepared.evidenceUncertainty,
       ],
     },
     assembleOptions,
   );
   return assemble.pack;
+}
+
+async function assembleGroundedPack({
+  input,
+  deps,
+  plan,
+  rings,
+  searchScope,
+  fs,
+  nowMs,
+}: AssembleGroundedPackInputs): Promise<ConnectedContextPack> {
+  const prepared = preparePackAssembly(input, plan, rings, nowMs);
+  const cacheIdentity =
+    deps.microIndex === undefined
+      ? undefined
+      : fileStateCacheIdentity(prepared.keptPaths, searchScope, fs);
+  const assembleOptions =
+    deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
+  const cached = cachedGroundedPack({
+    input,
+    deps,
+    plan,
+    rings,
+    ordered: prepared.ordered,
+    cacheIdentity,
+    initialUsage: prepared.initialUsage,
+    assembleOptions,
+  });
+  if (cached !== undefined) {
+    return cached;
+  }
+  const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
+    searchScope,
+    fs,
+    budget: plan.budget,
+    initialUsage: prepared.initialUsage,
+    atomsByPath: prepared.atomsByPath,
+    nowMs,
+    signal: deps.signal,
+  });
+  return await assemblePackFromReads({
+    input,
+    plan,
+    rings,
+    prepared,
+    excerptReads,
+    cacheIdentity,
+    assembleOptions,
+  });
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
@@ -919,6 +1155,20 @@ export async function retrieveConnectedContextPack(
   const { plan, governor } = createReadyGovernedPlan(input, nowMs);
   deps.recordPlan?.(plan);
   throwIfCancelled(deps.signal);
+
+  const blockedByReadBudget = readBudgetStopReason(plan.budget);
+  if (blockedByReadBudget !== undefined) {
+    const pack = await assembleEmptyGroundedPack({
+      input,
+      deps,
+      plan,
+      governor,
+      nowMs,
+      stopReason: blockedByReadBudget,
+    });
+    throwIfCancelled(deps.signal);
+    return { pack, elapsedMs: Math.max(0, nowMs() - start), plan };
+  }
 
   const workspace = detect(input.workspaceRoot, fs);
   const searchScope = buildSearchScope(input.scope, workspace);

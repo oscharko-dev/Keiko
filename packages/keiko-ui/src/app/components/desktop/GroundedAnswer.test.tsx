@@ -129,7 +129,13 @@ describe("GroundedAnswer", () => {
   it("does not warn about coverage when omissions are only relevance or noise filtering", () => {
     const a = answer({
       contextPack: contextPack({
-        omittedCounts: { ...OMITTED_COUNTS_ZERO, "low-relevance": 9, ignored: 4 },
+        omittedCounts: {
+          ...OMITTED_COUNTS_ZERO,
+          "low-relevance": 9,
+          ignored: 4,
+          generated: 2,
+          "budget-exhausted": 1,
+        },
       }),
     });
     render(<GroundedAnswer answer={a} busy={false} />);

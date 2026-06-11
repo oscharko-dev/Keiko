@@ -30,7 +30,9 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  findConfiguredCapability,
   requestOpenAIEmbedding,
+  type GatewayConfig,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
@@ -119,6 +121,10 @@ function requestEmbeddingImpl(
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
 }
 
+function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boolean {
+  return findConfiguredCapability(config, modelId)?.kind === "embedding";
+}
+
 export function createEmbeddingAdapter(
   deps: UiHandlerDeps,
   modelIds: readonly string[],
@@ -131,6 +137,9 @@ export function createEmbeddingAdapter(
     const provider = config.providers.find((entry) => entry.modelId === modelId);
     if (provider === undefined) {
       return conflict(`No configured embedding provider matches local knowledge model ${modelId}.`);
+    }
+    if (!isConfiguredEmbeddingModel(config, provider.modelId)) {
+      return conflict(`Configured local knowledge model ${modelId} cannot serve embeddings.`);
     }
   }
   return {

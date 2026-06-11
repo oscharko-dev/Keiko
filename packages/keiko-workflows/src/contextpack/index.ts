@@ -24,4 +24,4 @@ export type {
   ExcerptSource,
   ExcerptWindow,
 } from "./assemble.js";
-export { assembleContextPack } from "./assemble.js";
+export { assembleContextPack, contextPackIndexKey } from "./assemble.js";

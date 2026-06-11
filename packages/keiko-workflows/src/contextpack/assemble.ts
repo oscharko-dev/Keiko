@@ -37,6 +37,7 @@ export interface AssembleInput {
   readonly ranked: readonly CandidateFile[];
   readonly omittedFromRanking: readonly OmittedContextEntry[];
   readonly excerpts: ReadonlyMap<string, ExcerptSource>;
+  readonly cacheIdentity?: readonly string[] | undefined;
   readonly initialUsage?: ExplorationUsage;
   readonly initialUncertainty?: readonly UncertaintyMarker[];
 }
@@ -381,23 +382,45 @@ function buildPlan(
   return plan;
 }
 
-function buildStableId(
-  scope: SelectedScope,
-  query: RetrievalQuery,
-  atoms: readonly EvidenceAtom[],
-): string {
+function cacheConnectedExcerpt(excerpt: ContextExcerpt): object {
+  return {
+    atom: cacheAtom(excerpt.atom),
+    contentHash: sha256Hex(excerpt.content),
+    contentBytes: excerpt.contentBytes,
+  };
+}
+
+function cacheConnectedFile(file: ConnectedFileEntry): object {
+  return {
+    scopePath: file.scopePath,
+    role: file.role,
+    selectionReason: file.selectionReason,
+    excerpts: file.excerpts.map(cacheConnectedExcerpt),
+  };
+}
+
+function buildStableId(input: AssembleInput, plan: BuildPlan): string {
+  const fingerprint = sha256Hex(
+    JSON.stringify({
+      scope: cacheScope(input.scope),
+      query: cacheQuery(input.query),
+      files: plan.files.map(cacheConnectedFile),
+      omitted: [...input.omittedFromRanking, ...plan.extraOmitted].map(cacheOmitted),
+      uncertainty: plan.uncertainty.map(cacheUncertainty),
+    }),
+  );
   return connectedContextPackStableId({
-    scopeId: scope.scopeId,
-    queryKind: query.kind,
-    queryText: query.text,
-    atomStableIds: atoms.map((a) => a.stableId),
+    scopeId: input.scope.scopeId,
+    queryKind: input.query.kind,
+    queryText: input.query.text,
+    atomStableIds: [`pack-fp-${fingerprint}`],
   });
 }
 
 function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): ConnectedContextPack {
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-    stableId: buildStableId(input.scope, input.query, input.atoms),
+    stableId: buildStableId(input, plan),
     scope: input.scope,
     query: input.query,
     budget: input.budget,
@@ -436,6 +459,7 @@ function cacheScope(scope: SelectedScope): object {
     relativePaths: scope.relativePaths,
     conversationId: scope.conversationId,
     connectedAtMs: scope.connectedAtMs,
+    explicitConnection: scope.explicitConnection,
   };
 }
 
@@ -470,7 +494,6 @@ function cacheUsage(usage: ExplorationUsage | undefined): object | undefined {
     excerptBytes: usage.excerptBytes,
     modelInputTokens: usage.modelInputTokens,
     modelOutputTokens: usage.modelOutputTokens,
-    elapsedMs: usage.elapsedMs,
     rerankCalls: usage.rerankCalls,
   };
 }
@@ -516,6 +539,13 @@ function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly o
     }));
 }
 
+function cacheExcerptIdentity(input: AssembleInput): readonly object[] | readonly string[] {
+  if (input.cacheIdentity !== undefined) {
+    return [...input.cacheIdentity].sort();
+  }
+  return cacheExcerpts(input.excerpts);
+}
+
 function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): readonly string[] {
   const fingerprintSource = JSON.stringify({
     scope: cacheScope(input.scope),
@@ -523,10 +553,13 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
     atoms: input.atoms.map(cacheAtom),
     budget: input.budget,
     initialUsage: cacheUsage(input.initialUsage),
-    initialUncertainty: input.initialUncertainty?.map(cacheUncertainty),
+    initialUncertainty:
+      input.cacheIdentity === undefined
+        ? input.initialUncertainty?.map(cacheUncertainty)
+        : undefined,
     ranked: input.ranked.map(cacheCandidate),
     omittedFromRanking: input.omittedFromRanking.map(cacheOmitted),
-    excerpts: cacheExcerpts(input.excerpts),
+    excerpts: cacheExcerptIdentity(input),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
     editablePaths: [...resolved.editablePaths].sort(),
     rerankerName: resolved.reranker.name,
@@ -534,17 +567,22 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
   return [`fp-${sha256Hex(fingerprintSource)}`];
 }
 
-export async function assembleContextPack(
-  input: AssembleInput,
-  options?: AssembleOptions,
-): Promise<AssembleResult> {
+export function contextPackIndexKey(input: AssembleInput, options?: AssembleOptions): string {
   const resolved = resolveOptions(options);
-  const key = makeIndexKey({
+  return makeIndexKey({
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
     queryText: input.query.text,
     atomStableIds: buildCacheAtomIds(input, resolved),
   });
+}
+
+export async function assembleContextPack(
+  input: AssembleInput,
+  options?: AssembleOptions,
+): Promise<AssembleResult> {
+  const resolved = resolveOptions(options);
+  const key = contextPackIndexKey(input, options);
   const cached = resolved.microIndex?.get(key);
   if (cached !== undefined) {
     return { pack: cached, fromIndex: true };
