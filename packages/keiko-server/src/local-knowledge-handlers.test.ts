@@ -19,7 +19,7 @@ import type {
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "./deps.js";
-import type { RouteContext } from "./routes.js";
+import type { RouteContext, RouteResult } from "./routes.js";
 import {
   handleDeleteLocalKnowledgeCapsule,
   handleCancelLocalKnowledgeCapsuleIndexing,
@@ -233,6 +233,67 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).toContain("Manuals");
     expect(JSON.stringify(result.body)).toContain('"scope":{"kind":"folder"}');
     expect(JSON.stringify(result.body)).not.toContain(docsRoot);
+  });
+
+  it("connect is idempotent: the same folder connected twice yields exactly one source", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "manuals");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "guide.md"), "# Guide\n", "utf8");
+    const connect = (rootPath: string): Promise<RouteResult> =>
+      handleConnectLocalKnowledgeCapsule(
+        {
+          ...baseCtx(tmp, "POST", {
+            scope: { kind: "folder", rootPath, recursive: true },
+            displayName: "Manuals",
+          }),
+          params: { capsuleId: "cap-1" },
+        },
+        depsFor(tmp),
+      );
+
+    const first = await connect(docsRoot);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    // Double-click: identical path again. A trailing-slash spelling of the same folder must
+    // fold into the same canonical identity as well.
+    const second = await connect(docsRoot);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    const third = await connect(`${docsRoot}/`);
+    expect(third.status, JSON.stringify(third.body)).toBe(200);
+
+    const body = third.body as { readonly sources: readonly unknown[] };
+    expect(body.sources).toHaveLength(1);
+  });
+
+  it("connect keeps genuinely different folders as separate sources", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const rootA = join(tmp, "manuals");
+    const rootB = join(tmp, "controlling");
+    mkdirSync(rootA, { recursive: true });
+    mkdirSync(rootB, { recursive: true });
+    const connect = (rootPath: string, displayName: string): Promise<RouteResult> =>
+      handleConnectLocalKnowledgeCapsule(
+        {
+          ...baseCtx(tmp, "POST", {
+            scope: { kind: "folder", rootPath, recursive: true },
+            displayName,
+          }),
+          params: { capsuleId: "cap-1" },
+        },
+        depsFor(tmp),
+      );
+
+    const first = await connect(rootA, "Manuals");
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    const second = await connect(rootB, "Controlling");
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+
+    const body = second.body as { readonly sources: readonly unknown[] };
+    expect(body.sources).toHaveLength(2);
   });
 
   it("writes source-added audit history when a source is connected", async () => {

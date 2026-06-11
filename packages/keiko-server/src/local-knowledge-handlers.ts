@@ -1483,6 +1483,32 @@ function guardConnectorSourcePath(scope: KnowledgeSourceScope): KnowledgeSourceS
   return canonical;
 }
 
+// Stable identity for connect-time dedup. Field-by-field (not JSON.stringify of the raw
+// object) so the request body's key order cannot defeat the comparison, and built on the
+// canonicalized scope so trailing-slash and symlink-alias spellings of the same folder fold
+// together. Scopes that differ in globs, recursion, or file lists stay distinct sources.
+function scopeIdentity(scope: KnowledgeSourceScope): string {
+  const canonical = canonicalizeScopeRoot(scope);
+  if (canonical.kind === "folder") {
+    return JSON.stringify([
+      "folder",
+      canonical.rootPath,
+      canonical.recursive,
+      canonical.includeGlobs ?? null,
+      canonical.excludeGlobs ?? null,
+    ]);
+  }
+  if (canonical.kind === "repository") {
+    return JSON.stringify([
+      "repository",
+      canonical.repositoryRoot,
+      canonical.includeGlobs ?? null,
+      canonical.excludeGlobs ?? null,
+    ]);
+  }
+  return JSON.stringify(["files", canonical.rootPath, canonical.files]);
+}
+
 export async function handleConnectLocalKnowledgeCapsule(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1496,6 +1522,19 @@ export async function handleConnectLocalKnowledgeCapsule(
       const capsule = getCapsule(env.store, capsuleId);
       if (capsule === undefined) {
         return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      // Idempotent connect: re-connecting an identical scope (double-click, trailing-slash or
+      // symlink-alias spelling of the same folder) must not create a second source row — a
+      // duplicate would double-index every document and double every grounded citation.
+      const targetIdentity = scopeIdentity(guarded);
+      const alreadyConnected = listCapsuleSources(env.store, capsule.id).some(
+        (source) => scopeIdentity(source.scope) === targetIdentity,
+      );
+      if (alreadyConnected) {
+        return {
+          status: 200,
+          body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
+        };
       }
       addSourceToCapsule(
         env.store,
