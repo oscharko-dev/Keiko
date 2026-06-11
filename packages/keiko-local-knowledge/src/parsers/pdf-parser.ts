@@ -10,6 +10,7 @@ import {
   emptyResult,
   objectLimitDiagnostic,
   oversizeDiagnostic,
+  parserIdentity,
   shouldStop,
 } from "./_internal.js";
 import type {
@@ -23,6 +24,10 @@ import type {
 
 const PARSER_ID = "pdf";
 const PARSER_VERSION = "1";
+const DEPENDENCY_VERSIONS = Object.freeze([
+  Object.freeze({ packageName: "pdfjs-dist", version: "6.0.227" }),
+  Object.freeze({ packageName: "@napi-rs/canvas", version: "1.0.0" }),
+]);
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
 
 export interface PdfTextItem {
@@ -373,7 +378,7 @@ async function asyncParse(
 
     return {
       documentId: input.documentId,
-      parser: { parserId: capability.parserId, parserVersion: capability.parserVersion },
+      parser: parserIdentity(capability),
       pages,
       sections: [],
       units,
@@ -396,6 +401,7 @@ async function asyncParse(
 const capability: ParserCapability = Object.freeze({
   parserId: PARSER_ID,
   parserVersion: PARSER_VERSION,
+  dependencyVersions: DEPENDENCY_VERSIONS,
   matches: isPdf,
 });
 

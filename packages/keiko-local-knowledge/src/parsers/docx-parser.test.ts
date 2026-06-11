@@ -74,6 +74,7 @@ describe("docxParser", () => {
       buildParserOptions(),
     );
     expect(result.parser.parserId).toBe("docx");
+    expect(result.parser.dependencyVersions).toEqual([{ packageName: "yauzl", version: "3.4.0" }]);
     expect(result.sections).toHaveLength(2);
     expect(result.units[0]).toMatchObject({
       kind: "section",

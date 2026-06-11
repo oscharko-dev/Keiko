@@ -9,6 +9,7 @@ import type {
   DocumentId,
   ParsedUnit,
   ParserDiagnostic,
+  ParserDependencyVersion,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -65,6 +66,9 @@ export interface ParserCapability {
   // Bumped when the adapter changes its unit-emission rules. Stored on
   // `ParserIdentity.parserVersion`.
   readonly parserVersion: string;
+  // Runtime package versions used by dependency-backed adapters. Omitted for dependency-free
+  // parsers so ParserResult lineage stays precise without inventing empty metadata.
+  readonly dependencyVersions?: readonly ParserDependencyVersion[];
   // Pure predicate over the selection input. MUST NOT read the FS, MUST NOT mutate the
   // bytes. Returns true only when this adapter is willing to handle the document.
   readonly matches: (input: ParserSelectionInput) => boolean;

@@ -13,6 +13,7 @@ import {
   emptyResult,
   objectLimitDiagnostic,
   oversizeDiagnostic,
+  parserIdentity,
   shouldStop,
 } from "./_internal.js";
 import type {
@@ -26,6 +27,9 @@ import type {
 
 const PARSER_ID = "docx";
 const PARSER_VERSION = "1";
+const DEPENDENCY_VERSIONS = Object.freeze([
+  Object.freeze({ packageName: "yauzl", version: "3.4.0" }),
+]);
 const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCUMENT_XML_ENTRY = "word/document.xml";
 const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
@@ -595,7 +599,7 @@ function docxParseResult(
   const normalizedText = paragraphs.map((paragraph) => paragraph.text).join("\n");
   return {
     documentId: input.documentId,
-    parser: { parserId: capability.parserId, parserVersion: capability.parserVersion },
+    parser: parserIdentity(capability),
     pages: [],
     sections: built.sections,
     units: built.units,
@@ -658,6 +662,7 @@ async function asyncParse(
 const capability: ParserCapability = Object.freeze({
   parserId: PARSER_ID,
   parserVersion: PARSER_VERSION,
+  dependencyVersions: DEPENDENCY_VERSIONS,
   matches: isDocx,
 });
 

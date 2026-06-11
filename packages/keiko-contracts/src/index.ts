@@ -387,6 +387,7 @@ export type {
   VectorId,
   EmbeddingVectorMetric,
   EmbeddingModelIdentity,
+  ParserDependencyVersion,
   ParserIdentity,
   KnowledgeSourceScope,
   KnowledgeSourceScopeKind,

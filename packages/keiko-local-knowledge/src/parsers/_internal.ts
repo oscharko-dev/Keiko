@@ -5,6 +5,7 @@ import type {
   DocumentId,
   ParsedUnit,
   ParserDiagnostic,
+  ParserIdentity,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -19,13 +20,23 @@ export function emptyResult(
 ): ParserResult {
   return {
     documentId,
-    parser: { parserId: capability.parserId, parserVersion: capability.parserVersion },
+    parser: parserIdentity(capability),
     pages: [],
     sections: [],
     units,
     diagnostics,
     extractedAt: options.now(),
   };
+}
+
+export function parserIdentity(capability: ParserCapability): ParserIdentity {
+  return capability.dependencyVersions === undefined
+    ? { parserId: capability.parserId, parserVersion: capability.parserVersion }
+    : {
+        parserId: capability.parserId,
+        parserVersion: capability.parserVersion,
+        dependencyVersions: capability.dependencyVersions,
+      };
 }
 
 export function diagnostic(

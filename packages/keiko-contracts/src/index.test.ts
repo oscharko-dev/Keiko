@@ -84,6 +84,7 @@ import type {
   ChunkId,
   VectorId,
   EmbeddingModelIdentity,
+  ParserDependencyVersion,
   ParserIdentity,
   KnowledgeSource,
   KnowledgeSourceScope,
@@ -238,6 +239,7 @@ describe("keiko-contracts package surface", () => {
     pin<ChunkId>();
     pin<VectorId>();
     pin<EmbeddingModelIdentity>();
+    pin<ParserDependencyVersion>();
     pin<ParserIdentity>();
     pin<KnowledgeSource>();
     pin<KnowledgeSourceScope>();

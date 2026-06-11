@@ -54,9 +54,15 @@ export interface EmbeddingModelIdentity {
   readonly modelRevision?: string;
 }
 
+export interface ParserDependencyVersion {
+  readonly packageName: string;
+  readonly version: string;
+}
+
 export interface ParserIdentity {
   readonly parserId: string;
   readonly parserVersion: string;
+  readonly dependencyVersions?: readonly ParserDependencyVersion[];
 }
 
 // ─── Knowledge source ─────────────────────────────────────────────────────────
@@ -248,4 +254,3 @@ export interface ConnectorGraphState {
   readonly edges: readonly ConnectorEdge[];
   readonly updatedAt: number;
 }
-

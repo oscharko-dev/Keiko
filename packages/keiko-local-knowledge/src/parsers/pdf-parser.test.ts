@@ -22,6 +22,10 @@ describe("pdfParser", () => {
       buildParserOptions(),
     );
     expect(result.parser.parserId).toBe("pdf");
+    expect(result.parser.dependencyVersions).toEqual([
+      { packageName: "pdfjs-dist", version: "6.0.227" },
+      { packageName: "@napi-rs/canvas", version: "1.0.0" },
+    ]);
     expect(result.pages).toHaveLength(1);
     expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 1 });
     expect("normalizedText" in result ? result.normalizedText : undefined).toContain("Hello PDF");
