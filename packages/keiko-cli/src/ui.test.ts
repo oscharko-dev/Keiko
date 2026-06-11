@@ -287,6 +287,7 @@ describe("runUiCli", () => {
         "KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL=https://models.example.invalid/openai/v1",
         "KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY=fake-test-key",
         "NPM_TOKEN=must-not-be-loaded",
+        "FIGMA_ACCESS_TOKEN=figd_test_allowlisted",
       ].join("\n"),
       "utf8",
     );
@@ -306,6 +307,8 @@ describe("runUiCli", () => {
       expect(captured[0]?.configPresent).toBe(true);
       expect(captured[0]?.config?.providers[0]?.modelId).toBe("example-chat-model");
       expect(captured[0]?.env.NPM_TOKEN).toBeUndefined();
+      // FIGMA_ACCESS_TOKEN is the one allowlisted non-KEIKO name (#751 connector contract).
+      expect(captured[0]?.env.FIGMA_ACCESS_TOKEN).toBe("figd_test_allowlisted");
       captured[0]?.store.close();
       captured[0]?.memoryVault?.close();
     } finally {

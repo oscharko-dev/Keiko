@@ -32,6 +32,11 @@ import type { CliIo } from "./runner.js";
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SQLITE_FLAG = "--experimental-sqlite";
 const KEIKO_ENV_NAME_RE = /^KEIKO_[A-Z0-9_]+$/;
+// Non-KEIKO names the local .env loader may import. Deliberately a closed allowlist —
+// arbitrary secrets must never be slurped into the server process. FIGMA_ACCESS_TOKEN is
+// part of the documented Figma connector contract (#751): the read-only PAT is configured
+// via .env and consumed server-side only.
+const ENV_NAME_ALLOWLIST: ReadonlySet<string> = new Set(["FIGMA_ACCESS_TOKEN"]);
 const DEFAULT_STATE_DIR = ".keiko";
 
 const USAGE = `Usage:
@@ -197,7 +202,7 @@ function loadLocalKeikoEnv(cwd: string, env: EnvSource): EnvSource {
     const equals = line.indexOf("=");
     if (equals <= 0) continue;
     const key = line.slice(0, equals).trim();
-    if (!KEIKO_ENV_NAME_RE.test(key)) continue;
+    if (!KEIKO_ENV_NAME_RE.test(key) && !ENV_NAME_ALLOWLIST.has(key)) continue;
     if (merged[key] !== undefined) continue;
     merged[key] = parseEnvValue(line.slice(equals + 1));
   }
