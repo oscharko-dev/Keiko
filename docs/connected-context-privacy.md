@@ -49,10 +49,11 @@ Three things live on your disk:
    (default: `./.keiko/evidence/`), redacted at persist time
    ([packages/keiko-evidence/src/](../packages/keiko-evidence/src/)). Each manifest
    pins the workflow kind, model id, usage, applied limits, and outcome. Grounded
-   connected-context answers also write a `connectedContext` audit section with selected
-   scope shape, redacted scope-relative paths, query hash/byte count, tools used,
-   citation line ranges, omission reasons, excerpt byte counts, and excerpt hashes. It
-   does **not** persist query text or excerpt content.
+   connected-context answers store a non-path root fingerprint in the generic evidence
+   context, and write a `connectedContext` audit section with selected scope shape,
+   redacted scope-relative paths, query hash/byte count, tools used, citation line
+   ranges, omission reasons, excerpt byte counts, and excerpt hashes. It does **not**
+   persist the absolute workspace root, query text, or excerpt content.
 3. **The connected-scope binding.** A pointer (relative paths + timestamp) on the chat
    row. The scope ID is a SHA-256 prefix of `chatId|connectedAtMs` and is opaque to
    the model.
@@ -62,10 +63,10 @@ One thing is process-local but not written to disk:
 - **Micro-indexes for connected context.** Keiko may keep a small in-memory index for a
   connected scope so repeated grounded requests can reuse deterministic workspace reads.
   Micro-index entries retain assembled `ConnectedContextPack` objects, including their
-  redacted excerpts and scope-relative citation metadata. These indexes are bounded by
-  the workflow cache defaults, capped per server process, expire after the micro-index
-  TTL, and are cleared when the chat scope is replaced, the chat is closed or deleted,
-  or the project is deleted
+  redacted excerpts and scope-relative citation metadata. These indexes are bounded per
+  server process, capped per scope, swept on an unref'd interval after TTL expiry, and
+  cleared when the chat scope is replaced, the chat is closed or deleted, or the project
+  is deleted
   ([packages/keiko-server/src/grounded-context-index.ts](../packages/keiko-server/src/grounded-context-index.ts),
   [packages/keiko-server/src/store-handlers.ts](../packages/keiko-server/src/store-handlers.ts)).
 
@@ -102,9 +103,9 @@ relay, no telemetry endpoint, no analytics beacon.
 The evidence ledger keeps the most recent 50 runs per process
 (`DEFAULT_RETENTION.maxRuns`). Override via the audit config; see
 [packages/keiko-contracts/src/evidence.ts](../packages/keiko-contracts/src/evidence.ts).
-Process-local grounded micro-indexes use the workflow micro-index TTL and per-index
-entry cap, plus a server registry cap of 128 scopes; expired entries are swept or
-evicted before reuse, and evicted indexes are cleared.
+Process-local grounded micro-indexes use the workflow micro-index TTL, a server-side cap
+of 8 cached packs per connected scope, and a registry cap of 32 scopes. Expired entries
+are swept on a background interval and before reuse, and evicted indexes are cleared.
 
 ## Per-answer transparency
 

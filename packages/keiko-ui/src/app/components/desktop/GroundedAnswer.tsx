@@ -369,23 +369,35 @@ function CoverageNotice({
   );
 }
 
-function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): ReactNode {
-  if (runId === undefined) return null;
+function AuditEvidenceLink({
+  runId,
+  runIds,
+}: {
+  readonly runId: string | undefined;
+  readonly runIds?: readonly string[] | undefined;
+}): ReactNode {
+  const ids = Array.from(new Set([...(runId === undefined ? [] : [runId]), ...(runIds ?? [])]));
+  if (ids.length === 0) return null;
   // uiux-fix F012 C136/C164 — the endpoint returns a raw JSON manifest; same-tab navigation
   // replaced the whole workspace (windows, scroll position, live streams) with a JSON dump.
   // Open in a new tab and style with the app link pattern instead of UA defaults.
   return (
     <div className="grounded-meta">
-      <a
-        className="sm-link"
-        href={`/api/evidence/${encodeURIComponent(runId)}`}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        View connected-context audit evidence{" "}
-        {/* WCAG 3.2.2 — notify screen-reader users that this link opens in a new tab */}
-        <span className="sr-only">(opens in new tab)</span>
-      </a>
+      {ids.map((id, index) => (
+        <a
+          key={id}
+          className="sm-link"
+          href={`/api/evidence/${encodeURIComponent(id)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {ids.length === 1
+            ? "View connected-context audit evidence"
+            : `View connected-context audit evidence ${String(index + 1)}`}{" "}
+          {/* WCAG 3.2.2 — notify screen-reader users that this link opens in a new tab */}
+          <span className="sr-only">(opens in new tab)</span>
+        </a>
+      ))}
     </div>
   );
 }
@@ -460,7 +472,7 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
           omittedCount={answer.omittedCount}
           omittedCounts={answer.contextPack.folder.omittedCounts}
         />
-        <AuditEvidenceLink runId={answer.evidenceRunId} />
+        <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
         <HybridContextPackSummary contextPack={answer.contextPack} />
       </div>
     );
@@ -474,7 +486,7 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
         omittedCount={answer.omittedCount}
         omittedCounts={answer.contextPack.omittedCounts}
       />
-      <AuditEvidenceLink runId={answer.evidenceRunId} />
+      <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
       <ContextPackSummary contextPack={answer.contextPack} />
     </div>
   );

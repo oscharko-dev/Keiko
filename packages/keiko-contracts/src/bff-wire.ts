@@ -647,6 +647,9 @@ export interface ConnectedContextGroundedAnswer {
   readonly userMessageId: string;
   readonly assistantMessageId: string;
   readonly evidenceRunId?: string | undefined;
+  // Multi-source connected-context answers persist one manifest per inspected source. Keep the
+  // legacy primary handle above, and expose the full set so reviewers can reach every manifest.
+  readonly evidenceRunIds?: readonly string[] | undefined;
   readonly content: string;
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly uncertainty: readonly GroundedUncertainty[];
@@ -699,6 +702,7 @@ export interface HybridGroundedAnswer {
   readonly userMessageId: string;
   readonly assistantMessageId: string;
   readonly evidenceRunId?: string | undefined;
+  readonly evidenceRunIds?: readonly string[] | undefined;
   readonly content: string;
   // folder evidence (source-tagged, like the multi-source connected answer)
   readonly citations: readonly GroundedEvidenceCitation[];

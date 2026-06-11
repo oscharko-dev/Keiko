@@ -15,6 +15,8 @@ export interface GroundedContextIndexRegistryOptions {
   readonly ttlMs?: number;
   readonly maxEntriesPerScope?: number;
   readonly maxScopes?: number;
+  readonly sweepIntervalMs?: number;
+  readonly autoSweep?: boolean;
 }
 
 export interface GroundedContextIndexRegistry {
@@ -24,6 +26,7 @@ export interface GroundedContextIndexRegistry {
   clearAll(): void;
   sweep(nowMs: () => number): void;
   size(): number;
+  dispose(): void;
 }
 
 interface MutableClock {
@@ -44,9 +47,13 @@ interface ResolvedOptions {
   readonly ttlMs: number;
   readonly maxEntriesPerScope: number;
   readonly maxScopes: number;
+  readonly sweepIntervalMs: number;
+  readonly autoSweep: boolean;
 }
 
-const DEFAULT_MAX_SCOPES = 128;
+const DEFAULT_MAX_SCOPES = 32;
+const DEFAULT_MAX_ENTRIES_PER_SCOPE = 8;
+const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 
 function assertPositiveInteger(name: string, value: number): void {
   if (!Number.isInteger(value) || value <= 0) {
@@ -54,15 +61,23 @@ function assertPositiveInteger(name: string, value: number): void {
   }
 }
 
+function optionOrDefault<T>(value: T | undefined, fallback: T): T {
+  return value ?? fallback;
+}
+
 function resolveOptions(options: GroundedContextIndexRegistryOptions | undefined): ResolvedOptions {
+  const provided = options ?? {};
   const resolved = {
-    ttlMs: options?.ttlMs ?? DEFAULT_MICRO_INDEX.ttlMs,
-    maxEntriesPerScope: options?.maxEntriesPerScope ?? DEFAULT_MICRO_INDEX.maxEntries,
-    maxScopes: options?.maxScopes ?? DEFAULT_MAX_SCOPES,
+    ttlMs: optionOrDefault(provided.ttlMs, DEFAULT_MICRO_INDEX.ttlMs),
+    maxEntriesPerScope: optionOrDefault(provided.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),
+    maxScopes: optionOrDefault(provided.maxScopes, DEFAULT_MAX_SCOPES),
+    sweepIntervalMs: optionOrDefault(provided.sweepIntervalMs, DEFAULT_SWEEP_INTERVAL_MS),
+    autoSweep: optionOrDefault(provided.autoSweep, true),
   };
   assertPositiveInteger("ttlMs", resolved.ttlMs);
   assertPositiveInteger("maxEntriesPerScope", resolved.maxEntriesPerScope);
   assertPositiveInteger("maxScopes", resolved.maxScopes);
+  assertPositiveInteger("sweepIntervalMs", resolved.sweepIntervalMs);
   return resolved;
 }
 
@@ -180,6 +195,14 @@ export function createGroundedContextIndexRegistry(
 ): GroundedContextIndexRegistry {
   const resolved = resolveOptions(options);
   const entries = new Map<string, RegistryEntry>();
+  const sweepTimer = resolved.autoSweep
+    ? setInterval(() => {
+        evictExpired(entries, Date.now());
+      }, resolved.sweepIntervalMs)
+    : undefined;
+  if (sweepTimer !== undefined) {
+    sweepTimer.unref();
+  }
 
   return {
     forScope(scope, nowMs): MicroIndex {
@@ -199,6 +222,12 @@ export function createGroundedContextIndexRegistry(
     },
     size(): number {
       return entries.size;
+    },
+    dispose(): void {
+      if (sweepTimer !== undefined) {
+        clearInterval(sweepTimer);
+      }
+      clearEntries(entries);
     },
   };
 }

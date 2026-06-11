@@ -410,6 +410,31 @@ describe("GroundedAnswer", () => {
     expect(link).toHaveClass("sm-link");
   });
 
+  it("links every connected-context audit evidence run for multi-source answers", () => {
+    render(
+      <GroundedAnswer
+        answer={answer({
+          evidenceRunId: "grounded-run-1",
+          evidenceRunIds: ["grounded-run-1", "grounded-run-2"],
+        })}
+        busy={false}
+      />,
+    );
+    const first = screen.getByRole("link", {
+      name: "View connected-context audit evidence 1 (opens in new tab)",
+    });
+    const second = screen.getByRole("link", {
+      name: "View connected-context audit evidence 2 (opens in new tab)",
+    });
+    expect(first).toHaveAttribute("href", "/api/evidence/grounded-run-1");
+    expect(second).toHaveAttribute("href", "/api/evidence/grounded-run-2");
+    expect(
+      screen.queryByRole("link", {
+        name: "View connected-context audit evidence 3 (opens in new tab)",
+      }),
+    ).toBeNull();
+  });
+
   // ─── uiux-fix F012 C091: citation cap + disclosure ───────────────────────────
 
   it("caps the evidence list at 8 top-scored chips and reveals the rest on demand", () => {

@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -447,7 +447,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(store.listMessages(chatId)).toEqual([]);
   });
 
-  it("persists one evidence run per source root and reports the first run id", async () => {
+  it("persists one evidence run per source root and reports all run ids", async () => {
     const scopeA: ChatConnectedScope = {
       kind: "directory",
       relativePaths: ["src/a.ts"],
@@ -475,10 +475,12 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(puts).toHaveLength(2);
     expect(puts.map((p) => p.workspaceRoot)).toStrictEqual([
-      realpathSync(scopeA.root ?? ""),
-      realpathSync(scopeB.root ?? ""),
+      expect.stringMatching(/^connected-context-root-[0-9a-f]{16}$/),
+      expect.stringMatching(/^connected-context-root-[0-9a-f]{16}$/),
     ]);
+    expect(new Set(puts.map((p) => p.workspaceRoot)).size).toBe(2);
     expect(answer.evidenceRunId).toBe(puts[0]?.runId);
+    expect(answer.evidenceRunIds).toEqual(puts.map((p) => p.runId));
   });
 
   it("strips planner scaffolding from merged answers and carries final model usage", async () => {

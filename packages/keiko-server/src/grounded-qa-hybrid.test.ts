@@ -387,11 +387,22 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       connectorRetrieve: singleConnectorRetrieve(capId),
       answer: sentinelAnswerer(HYBRID_ANSWER_SENTINEL, answererSeen),
     };
+    const evidenceRunIds: string[] = [];
 
     // Act
     const result = await handleGroundedAsk(
       routeCtx(JSON.stringify({ chatId, content: "What is alpha?" })),
-      hybridDeps(),
+      hybridDeps({
+        evidenceStore: {
+          put: (runId: string): string => {
+            evidenceRunIds.push(runId);
+            return runId;
+          },
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+      }),
       undefined,
       undefined,
       hybrid,
@@ -441,6 +452,8 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.contextPack.kind).toBe("hybrid");
     expect(answer.contextPack.folderSourceCount).toBe(1);
     expect(answer.contextPack.connectorSourceCount).toBe(1);
+    expect(answer.evidenceRunId).toBe(evidenceRunIds[0]);
+    expect(answer.evidenceRunIds).toEqual(evidenceRunIds);
 
     // referencesUsed ≤ referenceBudget (hybridMaxCandidates) — invariant from ADR-0036
     // mutation: using pre-RRF sum instead of selected count → violates invariant when budget shrinks

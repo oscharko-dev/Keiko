@@ -476,14 +476,16 @@ function mergedUncertainty(
 
 // Persists ONE evidence run per source, each naming the root that source actually searched (L1
 // honesty rule, mirrored from the single path). Returns the FIRST source's run id, which the
-// answer surfaces as its primary evidenceRunId.
+// answer surfaces as its primary evidenceRunId, plus the full set for audit discovery.
 function persistPerSourceEvidence(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
 ): {
   readonly firstRunId: string | undefined;
+  readonly runIds: readonly string[];
 } {
   let firstRunId: string | undefined;
+  const runIds: string[] = [];
   for (const src of sources) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
@@ -509,8 +511,9 @@ function persistPerSourceEvidence(
       },
     );
     firstRunId ??= runId;
+    runIds.push(runId);
   }
-  return { firstRunId };
+  return { firstRunId, runIds };
 }
 
 function assembleMultiSourceAnswer(
@@ -529,12 +532,13 @@ function assembleMultiSourceAnswer(
     ),
   );
   const mergedSummary = mergeContextPackSummaries(summaries);
-  const { firstRunId } = persistPerSourceEvidence(ctx, sources);
+  const { firstRunId, runIds } = persistPerSourceEvidence(ctx, sources);
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,
     assistantMessageId: ids.assistantMessageId,
     evidenceRunId: firstRunId,
+    evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
     citations,
     uncertainty: mergedUncertainty(sources, redactor),

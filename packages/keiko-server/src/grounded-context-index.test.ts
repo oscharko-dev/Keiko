@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 
 import { createGroundedContextIndexRegistry } from "./grounded-context-index.js";
 
 const NOW = 1_700_000_000_000;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function scope(overrides: Partial<SelectedScope> = {}): SelectedScope {
   return {
@@ -21,7 +25,11 @@ function scope(overrides: Partial<SelectedScope> = {}): SelectedScope {
 
 describe("createGroundedContextIndexRegistry", () => {
   it("reuses one micro-index for the same connected scope/session", () => {
-    const registry = createGroundedContextIndexRegistry({ ttlMs: 60_000, maxScopes: 8 });
+    const registry = createGroundedContextIndexRegistry({
+      ttlMs: 60_000,
+      maxScopes: 8,
+      autoSweep: false,
+    });
     const first = registry.forScope(scope(), () => NOW);
     const second = registry.forScope(scope(), () => NOW + 1_000);
     expect(second).toBe(first);
@@ -29,7 +37,11 @@ describe("createGroundedContextIndexRegistry", () => {
   });
 
   it("splits indexes when the connected scope changes", () => {
-    const registry = createGroundedContextIndexRegistry({ ttlMs: 60_000, maxScopes: 8 });
+    const registry = createGroundedContextIndexRegistry({
+      ttlMs: 60_000,
+      maxScopes: 8,
+      autoSweep: false,
+    });
     const first = registry.forScope(scope(), () => NOW);
     const second = registry.forScope(scope({ connectedAtMs: NOW + 1 }), () => NOW);
     expect(second).not.toBe(first);
@@ -37,7 +49,11 @@ describe("createGroundedContextIndexRegistry", () => {
   });
 
   it("clears all indexes for a conversation", () => {
-    const registry = createGroundedContextIndexRegistry({ ttlMs: 60_000, maxScopes: 8 });
+    const registry = createGroundedContextIndexRegistry({
+      ttlMs: 60_000,
+      maxScopes: 8,
+      autoSweep: false,
+    });
     registry.forScope(scope({ scopeId: "scope-a" }), () => NOW);
     registry.forScope(scope({ scopeId: "scope-b" }), () => NOW);
     registry.forScope(scope({ conversationId: "chat-2" }), () => NOW);
@@ -46,9 +62,28 @@ describe("createGroundedContextIndexRegistry", () => {
   });
 
   it("sweeps expired scope indexes", () => {
-    const registry = createGroundedContextIndexRegistry({ ttlMs: 100, maxScopes: 8 });
+    const registry = createGroundedContextIndexRegistry({
+      ttlMs: 100,
+      maxScopes: 8,
+      autoSweep: false,
+    });
     registry.forScope(scope(), () => NOW);
     registry.sweep(() => NOW + 101);
     expect(registry.size()).toBe(0);
+  });
+
+  it("auto-sweeps idle expired indexes without a later grounded request", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const registry = createGroundedContextIndexRegistry({
+      ttlMs: 100,
+      maxScopes: 8,
+      sweepIntervalMs: 25,
+    });
+    registry.forScope(scope(), () => Date.now());
+    expect(registry.size()).toBe(1);
+    vi.advanceTimersByTime(125);
+    expect(registry.size()).toBe(0);
+    registry.dispose();
   });
 });

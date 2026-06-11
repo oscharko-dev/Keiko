@@ -16,6 +16,9 @@ const SAFE_GROUNDED_FALLBACK =
 const ORCHESTRATION_PREFIX_RE =
   /^(searching for\b|search query\b|we need to call search\b|let'?s search\b|calling search\b|tool call\b|plan\b:|system prompt\b:|developer prompt\b:|internal planning\b:|internal reasoning\b:|hidden instruction\b:)/i;
 
+const PROMPT_DISCLOSURE_RE =
+  /^(system prompt\b:|developer prompt\b:|internal planning\b:|internal reasoning\b:|hidden instruction\b:)/i;
+
 const ARGUMENT_LINE_RE =
   /^(?:[{[]|["']?(?:path|query|max_results|maxResults|tool|arguments|scope|search)["']?\s*:)/i;
 
@@ -67,7 +70,11 @@ function leadingContentIndex(lines: readonly string[]): number {
 export function sanitizeGroundedAnswerContent(content: string): string {
   const lines = content.split("\n");
   const index = leadingContentIndex(lines);
-  const sanitized = lines.slice(index).join("\n").trim();
+  const sanitized = lines
+    .slice(index)
+    .filter((line) => !PROMPT_DISCLOSURE_RE.test(line.trim()))
+    .join("\n")
+    .trim();
   return sanitized.length > 0 ? sanitized : SAFE_GROUNDED_FALLBACK;
 }
 

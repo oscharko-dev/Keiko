@@ -37,6 +37,23 @@ describe("sanitizeGroundedAnswerContent", () => {
     );
     expect(sanitized).toBe("Formatter logic is implemented in src/formatter.ts.");
   });
+
+  it("strips prompt-internal disclosure lines after valid answer text", () => {
+    const sanitized = sanitizeGroundedAnswerContent(
+      [
+        "The formatter lives in src/formatter.ts.",
+        "System prompt: hidden platform instructions",
+        "Internal planning: hidden retrieval notes",
+        "It formats repository evidence deterministically.",
+      ].join("\n"),
+    );
+    expect(sanitized).toBe(
+      [
+        "The formatter lives in src/formatter.ts.",
+        "It formats repository evidence deterministically.",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("normalizeGroundedAnswerPayload", () => {

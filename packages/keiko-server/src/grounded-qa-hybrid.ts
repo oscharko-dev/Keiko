@@ -613,12 +613,14 @@ function folderUncertainty(
 
 // Persists ONE evidence run per folder source (mirrors the #532 per-source persist) plus the
 // connector retrieval/answer-context audit via the LK sink (mirrors the single-connector path).
-// Returns the first folder run id, surfaced as the answer's primary evidenceRunId.
+// Returns the first folder run id, surfaced as the answer's primary evidenceRunId, plus the full
+// folder evidence set so reviewers can inspect every connected-context source.
 function persistFolderEvidence(
   ctx: HybridGroundedAskCtx,
   folders: readonly RetrievedFolder[],
-): string | undefined {
+): { readonly firstRunId: string | undefined; readonly runIds: readonly string[] } {
   let firstRunId: string | undefined;
+  const runIds: string[] = [];
   for (const src of folders) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
@@ -644,8 +646,9 @@ function persistFolderEvidence(
       },
     );
     firstRunId ??= runId;
+    runIds.push(runId);
   }
-  return firstRunId;
+  return { firstRunId, runIds };
 }
 
 interface CapsuleUsageSummary {
@@ -809,6 +812,20 @@ function buildHybridContextPack(
   };
 }
 
+function noEvidenceUncertainty(
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  return selected.length === 0
+    ? [
+        {
+          kind: "no-evidence",
+          claim: redactString(redactor, "No evidence found in the selected connected sources."),
+        },
+      ]
+    : [];
+}
+
 function assembleHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
@@ -821,30 +838,25 @@ function assembleHybridAnswer(
   const { redactor } = ctx.deps;
   const citations = selectedFolderCitations(selected, redactor);
   const knowledgeCitations = selectedConnectorCitations(selected);
-  const evidenceRunId = persistFolderEvidence(ctx, sources.folders);
+  const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
+    ctx,
+    sources.folders,
+  );
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
   const summary = folderSummary(sources.folders, redactor);
-  const noEvidenceUncertainty =
-    selected.length === 0
-      ? [
-          {
-            kind: "no-evidence",
-            claim: redactString(redactor, "No evidence found in the selected connected sources."),
-          },
-        ]
-      : [];
   return {
     groundingKind: "hybrid",
     ...ids,
     evidenceRunId,
+    evidenceRunIds,
     content: redactString(redactor, assistant.content),
     citations,
     knowledgeCitations,
     uncertainty: [
       ...folderUncertainty(sources.folders, redactor),
       ...skippedUncertainty(sources.skipped, redactor),
-      ...noEvidenceUncertainty,
+      ...noEvidenceUncertainty(selected, redactor),
     ],
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,

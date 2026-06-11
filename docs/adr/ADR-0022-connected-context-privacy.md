@@ -95,9 +95,9 @@ deleting chats. Users who want to remove evidence remove the run manifest direct
 The grounded-answer path may reuse a small `MicroIndex` per connected chat scope. This
 index stores full `ConnectedContextPack` values in memory, including query metadata,
 selected files, and excerpt content. The server registry is in-memory only and bounded:
-entries use the workflow micro-index TTL and per-index entry cap, the server keeps at
-most 128 scoped indexes, expired entries are swept before reuse, and evicted entries
-call `index.clear()`.
+entries use the workflow micro-index TTL, the server keeps at most 32 scoped indexes
+with at most 8 cached packs per scope, expired entries are swept on an unref'd
+background interval and before reuse, and evicted entries call `index.clear()`.
 
 Chat/project lifecycle hooks clear this state deterministically: deleting a project
 clears indexes for that workspace root, deleting or closing a chat clears indexes for
@@ -112,12 +112,14 @@ Every successful grounded answer writes an `EvidenceManifest` with
 records selected-scope shape, redacted scope-relative paths, query kind plus query text
 hash/byte count, tools/provenance used, citation line ranges, omitted reasons,
 uncertainty counts, budget/usage, excerpt byte counts, and hashes of redacted excerpt
-content.
+content. The generic evidence `context.workspaceRoot` field stores a non-path local
+fingerprint for connected-context runs, not the absolute workspace root.
 
-It deliberately does not persist query text, excerpt text, model prompts, provider
-configuration, credentials, or full `ConnectedContextPack` objects. The BFF returns the
-manifest run id on `GroundedAnswer.evidenceRunId`, and the UI links to the local evidence
-detail route for reviewers who need the durable audit record.
+It deliberately does not persist the absolute workspace root, query text, excerpt text,
+model prompts, provider configuration, credentials, or full `ConnectedContextPack`
+objects. The BFF returns the manifest run id on `GroundedAnswer.evidenceRunId`, and the
+UI links to the local evidence detail route for reviewers who need the durable audit
+record.
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 

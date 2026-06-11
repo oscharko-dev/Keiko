@@ -175,6 +175,10 @@ describe("connected-context evidence", () => {
     assertNoSensitiveText(manifest);
     const audit = requireConnectedContext(manifest);
     expect(manifest.run.fingerprint).toBe(sha256Hex("pack-[REDACTED]"));
+    expect(manifest.context?.workspaceRoot).toBe(
+      `connected-context-root-${sha256Hex("/repo/[REDACTED]").slice(0, 16)}`,
+    );
+    expect(JSON.stringify(manifest)).not.toContain("/repo/");
     expect(audit.scope.scopeIdHash).toBe(sha256Hex("scope-[REDACTED]"));
     expect(audit.query.queryTextHash).toBe(sha256Hex("explain [REDACTED]"));
     expect(audit.plan).toMatchObject({
@@ -190,5 +194,40 @@ describe("connected-context evidence", () => {
     );
     expect(audit.files[0]?.excerpts[0]?.contentSha256).toBe(sha256Hex("[REDACTED]"));
     expect(audit.files[0]?.excerpts[0]?.contentSha256).not.toBe(sha256Hex(PEM_FAKE));
+  });
+
+  it("applies evidence retention after writing connected-context manifests", () => {
+    const store = createInMemoryEvidenceStore();
+    const baseInput = {
+      modelId: "example-chat-model",
+      workspaceRoot: "/repo",
+      chatId: "chat-1",
+      pack: pack(),
+      citationCount: 1,
+      elapsedMs: 42,
+    } as const;
+
+    persistConnectedContextEvidence(
+      {
+        ...baseInput,
+        runId: "grounded-run-1",
+        startedAt: NOW,
+        finishedAt: NOW + 1,
+      },
+      { store, env: {}, retention: { maxRuns: 1 } },
+    );
+    persistConnectedContextEvidence(
+      {
+        ...baseInput,
+        runId: "grounded-run-2",
+        startedAt: NOW + 10,
+        finishedAt: NOW + 11,
+      },
+      { store, env: {}, retention: { maxRuns: 1 } },
+    );
+
+    expect(store.list()).toEqual(["grounded-run-2"]);
+    expect(loadEvidence(store, "grounded-run-1")).toBeUndefined();
+    expect(loadEvidence(store, "grounded-run-2")).toBeDefined();
   });
 });

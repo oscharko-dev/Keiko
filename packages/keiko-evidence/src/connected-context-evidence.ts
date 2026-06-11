@@ -12,13 +12,16 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
+import { applyRetention } from "./retention.js";
 import {
+  DEFAULT_RETENTION,
   EVIDENCE_SCHEMA_VERSION,
   type EvidenceConnectedContextAudit,
   type EvidenceConnectedContextExcerpt,
   type EvidenceConnectedContextFile,
   type EvidenceManifest,
   type EvidenceStore,
+  type RetentionPolicy,
 } from "./types.js";
 
 type Redactor = (input: string) => string;
@@ -63,6 +66,7 @@ export interface ConnectedContextEvidenceContext {
   readonly env: EnvSource;
   readonly additionalSecrets?: readonly string[] | undefined;
   readonly costClassResolver?: ((modelId: string) => CostClass | "unknown") | undefined;
+  readonly retention?: RetentionPolicy | undefined;
 }
 
 export interface ConnectedContextEvidencePersistResult {
@@ -93,9 +97,13 @@ function numberRecord(value: object): Record<string, number> {
   return out;
 }
 
+function workspaceRootAuditId(workspaceRoot: string, redact: Redactor): string {
+  return `connected-context-root-${sha256Hex(redactString(redact, workspaceRoot)).slice(0, 16)}`;
+}
+
 function contextOf(input: ConnectedContextEvidenceInput, redact: Redactor): AuditSummary {
   return {
-    workspaceRoot: redactString(redact, input.workspaceRoot),
+    workspaceRoot: workspaceRootAuditId(input.workspaceRoot, redact),
     totalCandidates: input.pack.files.length + input.pack.omitted.length,
     usedBytes: input.pack.usage.excerptBytes,
     budgetBytes: input.pack.budget.excerptBytesMax,
@@ -296,5 +304,6 @@ export function persistConnectedContextEvidence(
   const manifest = buildConnectedContextEvidenceManifest(input, ctx.costClassResolver, redactor);
   const safeManifest = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(safeManifest.run.runId, JSON.stringify(safeManifest, null, 2));
+  applyRetention(ctx.store, ctx.retention ?? DEFAULT_RETENTION);
   return { manifest: safeManifest, location, report: buildEvidenceReport(safeManifest, location) };
 }
