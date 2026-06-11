@@ -78,13 +78,20 @@ const readTextColor = (node: FigmaSourceNode): string | undefined =>
 const readBackgroundColor = (node: FigmaSourceNode): string | undefined =>
   nodeType(node) === "TEXT" ? undefined : firstSolidPaintHex(node, "fills");
 
-const buildNode = (pruned: PrunedNode): IrNode => {
+// Subtrees deeper than this are truncated to prevent RangeError on malformed chain-like inputs.
+// Same shared constant as prune.ts — see there for the rationale. Must stay in sync with every
+// other recursive walk in this pipeline (tokens, links, a11y, screenIrTestBaseline).
+const MAX_TREE_DEPTH = 512;
+
+function buildNodeAt(pruned: PrunedNode, depth: number): IrNode {
   const node = pruned.source;
   const imageFills = readImageFills(node);
   const text = readString(node.characters);
   const boundingBox = readBoundingBox(node);
   const textColor = readTextColor(node);
   const backgroundColor = readBackgroundColor(node);
+  const children =
+    depth >= MAX_TREE_DEPTH ? [] : pruned.children.map((c) => buildNodeAt(c, depth + 1));
   return {
     id: nodeId(node),
     name: nodeName(node),
@@ -95,13 +102,17 @@ const buildNode = (pruned: PrunedNode): IrNode => {
     ...(textColor !== undefined ? { textColor } : {}),
     ...(backgroundColor !== undefined ? { backgroundColor } : {}),
     imageFills,
-    children: pruned.children.map(buildNode),
+    children,
   };
-};
+}
 
 /** Normalize a pruned screen root into its IR node tree. Child order follows source order. */
-export const normalizeScreenRoot = (pruned: PrunedNode): IrNode => buildNode(pruned);
+export const normalizeScreenRoot = (pruned: PrunedNode): IrNode => buildNodeAt(pruned, 0);
+
+function countIrNodesAt(node: IrNode, depth: number): number {
+  if (depth > MAX_TREE_DEPTH) return 1;
+  return 1 + node.children.reduce((sum, child) => sum + countIrNodesAt(child, depth + 1), 0);
+}
 
 /** Count the IR nodes in a normalized tree, used for the reduction ratio. */
-export const countIrNodes = (node: IrNode): number =>
-  1 + node.children.reduce((sum, child) => sum + countIrNodes(child), 0);
+export const countIrNodes = (node: IrNode): number => countIrNodesAt(node, 0);

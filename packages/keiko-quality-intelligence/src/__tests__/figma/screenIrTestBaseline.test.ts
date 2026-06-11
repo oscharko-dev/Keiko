@@ -329,4 +329,63 @@ describe("renderBaselineText", () => {
     expect(text).toContain("(control-action)");
     expect(text).toContain("Pay");
   });
+
+  // Fix #6: traceability — sourceNodeId must appear in rendered text so the
+  // generated test case is attributable to its origin node.
+  it("appends [node:<sourceNodeId>] for items that have a sourceNodeId (Fix #6)", () => {
+    const ir = screen(
+      "s9",
+      "Profile",
+      node("root", "container", {
+        children: [node("save-btn", "button", { text: "Save" })],
+      }),
+    );
+    const text = renderBaselineText(deriveScreenTestBaseline(ir));
+    // control-action item for "save-btn" must carry [node:save-btn]
+    expect(text).toContain("[node:save-btn]");
+    // screen-render item has no sourceNodeId → no [node:...] suffix on that line
+    const screenRenderLine = text.split("\n").find((l) => l.includes("(screen-render)"));
+    expect(screenRenderLine).toBeDefined();
+    expect(screenRenderLine).not.toContain("[node:");
+  });
+});
+
+// ─── Fix #4: deep-chain parseIrNode RangeError regression ───────────────────
+// parseScreenIr on a 5000-deep irJson chain must not throw.
+
+describe("parseScreenIr — 5000-deep irJson chain degrades, no RangeError (Fix #4)", () => {
+  // Build a deeply nested irJson object. Each level is a valid serialised IrNode.
+  const deepIrJson = (depth: number): Record<string, unknown> => {
+    let inner: Record<string, unknown> = {
+      id: "leaf",
+      name: "leaf",
+      type: "FRAME",
+      interactionHint: "container",
+      imageFills: [],
+      children: [],
+    };
+    for (let i = depth; i >= 1; i -= 1) {
+      const si = String(i);
+      inner = {
+        id: `n${si}`,
+        name: `n${si}`,
+        type: "FRAME",
+        interactionHint: "container",
+        imageFills: [],
+        children: [inner],
+      };
+    }
+    return { id: "screen-deep", name: "DeepScreen", root: inner };
+  };
+
+  it("does not throw RangeError for a 5000-deep irJson chain", () => {
+    expect(() => parseScreenIr(deepIrJson(5000))).not.toThrow();
+  });
+
+  it("returns a defined ScreenIr (not undefined) from a deep chain", () => {
+    const result = parseScreenIr(deepIrJson(5000));
+    expect(result).toBeDefined();
+    expect(result?.id).toBe("screen-deep");
+    expect(result?.root).toBeDefined();
+  });
 });

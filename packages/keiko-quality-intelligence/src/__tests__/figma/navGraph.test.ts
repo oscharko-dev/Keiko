@@ -376,3 +376,109 @@ function serialiseAll(graph: NavGraph): unknown {
     items: [...byScreen.entries()].map(([id, items]) => [id, items]),
   };
 }
+
+// ─── Fix #1: dense-graph flow cap (DoS regression) ──────────────────────────
+// 12 fully-connected screens produce 773,784+ acyclic paths without the cap.
+
+describe("deriveNavFlows / deriveNavTestItemsByScreen — MAX_NAV_FLOWS cap (Fix #1)", () => {
+  // Build a fully-connected graph of N screens (every screen links to every other).
+  const fullyConnected = (n: number): ScreenIrResult => {
+    const screens: ScreenIr[] = [];
+    const links: InterScreenLink[] = [];
+    for (let i = 0; i < n; i += 1) {
+      const si = String(i);
+      screens.push(screen(`s${si}`, `Screen${si}`, node(`root${si}`, [node(`btn${si}`)])));
+    }
+    for (let i = 0; i < n; i += 1) {
+      for (let j = 0; j < n; j += 1) {
+        if (i !== j) links.push(link(`btn${String(i)}`, "ON_CLICK", `root${String(j)}`));
+      }
+    }
+    return result(screens, links);
+  };
+
+  it("completes quickly and caps flow count at ≤ MAX_NAV_FLOWS for a 12-screen dense graph", () => {
+    const start = Date.now();
+    const graph = deriveNavGraph(fullyConnected(12));
+    const flows = deriveNavFlows(graph);
+    const elapsed = Date.now() - start;
+
+    // Must finish fast (well under 2 s even on slow CI) rather than materialising 773,784 paths.
+    expect(elapsed).toBeLessThan(2000);
+    // The cap is 500; enumeration must not exceed it.
+    expect(flows.length).toBeLessThanOrEqual(500);
+    expect(flows.length).toBeGreaterThan(0);
+  });
+
+  it("emits a coverage-notice item when flow enumeration is truncated", () => {
+    const graph = deriveNavGraph(fullyConnected(12));
+    const byScreen = deriveNavTestItemsByScreen(graph);
+    const allItems = [...byScreen.values()].flat();
+    const notices = allItems.filter(
+      (i) => i.category === "coverage-notice" && i.title.includes("truncated"),
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.title).toContain("500");
+  });
+
+  it("does not emit a coverage-notice when flow count is under the cap", () => {
+    // A simple 3-screen linear chain produces only a few flows.
+    const graph = deriveNavGraph(
+      result(
+        [
+          screen("s-a", "A", node("a-root", [node("a-btn")])),
+          screen("s-b", "B", node("b-root", [node("b-btn")])),
+          screen("s-c", "C", node("c-root")),
+        ],
+        [
+          link("canvas", "FLOW_START", "a-root"),
+          link("a-btn", "ON_CLICK", "b-root"),
+          link("b-btn", "ON_CLICK", "c-root"),
+        ],
+      ),
+    );
+    const byScreen = deriveNavTestItemsByScreen(graph);
+    const allItems = [...byScreen.values()].flat();
+    const capNotices = allItems.filter(
+      (i) => i.category === "coverage-notice" && i.title.includes("truncated"),
+    );
+    expect(capNotices).toHaveLength(0);
+  });
+});
+
+// ─── Fix #5: URL actions surface as unresolvedLinks (not silently dropped) ──
+
+describe("deriveNavGraph — URL actions (Fix #5)", () => {
+  it("surfaces a URL action as an unresolved link with targetNodeId 'url:<href>'", () => {
+    // URL actions carry { type:'URL', url:'https://...' } — no destinationId.
+    // extractInterScreenLinks emits them with targetNodeId='url:<href>'; no screen owns that id
+    // so they appear in unresolvedLinks instead of being silently dropped.
+    const urlLink: InterScreenLink = {
+      sourceNodeId: "btn-ext",
+      trigger: "ON_CLICK",
+      targetNodeId: "url:https://example.com/docs",
+    };
+    const graph = deriveNavGraph(
+      result([screen("s-a", "A", node("a-root", [node("btn-ext")]))], [urlLink]),
+    );
+    // Must appear in unresolvedLinks, not in edges.
+    expect(graph.edges).toHaveLength(0);
+    expect(graph.unresolvedLinks).toHaveLength(1);
+    expect(graph.unresolvedLinks[0]?.targetNodeId).toBe("url:https://example.com/docs");
+    expect(graph.unresolvedLinks[0]?.trigger).toBe("ON_CLICK");
+  });
+
+  it("keeps a URL-action unresolved link alongside regular unresolved links", () => {
+    const links: InterScreenLink[] = [
+      { sourceNodeId: "btn-a", trigger: "ON_CLICK", targetNodeId: "url:https://example.com" },
+      { sourceNodeId: "btn-b", trigger: "ON_CLICK", targetNodeId: "ghost-node" },
+    ];
+    const graph = deriveNavGraph(
+      result([screen("s-a", "A", node("a-root", [node("btn-a"), node("btn-b")]))], links),
+    );
+    expect(graph.unresolvedLinks).toHaveLength(2);
+    const targets = graph.unresolvedLinks.map((u) => u.targetNodeId);
+    expect(targets).toContain("url:https://example.com");
+    expect(targets).toContain("ghost-node");
+  });
+});

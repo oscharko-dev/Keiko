@@ -71,14 +71,22 @@ interface TokenAccumulator {
   readonly radius: Set<number>;
 }
 
-const visit = (pruned: PrunedNode, acc: TokenAccumulator): void => {
+// Shared constant — see prune.ts for rationale. Must stay in sync with every other recursive walk.
+const MAX_TREE_DEPTH = 512;
+
+function visitAt(pruned: PrunedNode, acc: TokenAccumulator, depth: number): void {
+  if (depth > MAX_TREE_DEPTH) return;
   const node = pruned.source;
   collectPaintColors(node, "fills", acc.colors);
   collectPaintColors(node, "strokes", acc.colors);
   collectTypography(node, acc.typography);
   collectSpacing(node, acc.spacing);
   collectRadius(node, acc.radius);
-  for (const child of pruned.children) visit(child, acc);
+  for (const child of pruned.children) visitAt(child, acc, depth + 1);
+}
+
+const visit = (pruned: PrunedNode, acc: TokenAccumulator): void => {
+  visitAt(pruned, acc, 0);
 };
 
 const toColorTokens = (values: ReadonlySet<string>): readonly ColorToken[] =>
@@ -106,7 +114,9 @@ export const extractDesignTokens = (screens: readonly PrunedNode[]): DesignToken
 
   return {
     colors: toColorTokens(acc.colors),
-    typography: [...acc.typography.values()].sort((a, b) => a.id.localeCompare(b.id)),
+    typography: [...acc.typography.values()].sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    ),
     spacing: toSpacingTokens(acc.spacing),
     radius: toRadiusTokens(acc.radius),
   };

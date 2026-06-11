@@ -97,12 +97,18 @@ function parseImageFills(value: unknown): IrNode["imageFills"] {
   return refs;
 }
 
+// Subtrees deeper than this are truncated during parse so a chain-like persisted irJson cannot cause
+// a RangeError. Shared constant — see prune.ts for rationale. Must stay in sync with every walk.
+const MAX_TREE_DEPTH = 512;
+
 // Parse a node's children list, dropping any malformed child rather than failing the whole node.
-function parseIrChildren(value: unknown): IrNode[] {
+// depth tracks how deep we are so the recursion is bounded at MAX_TREE_DEPTH.
+function parseIrChildren(value: unknown, depth: number): IrNode[] {
+  if (depth > MAX_TREE_DEPTH) return [];
   if (!Array.isArray(value)) return [];
   const children: IrNode[] = [];
   for (const child of value) {
-    const parsed = parseIrNode(child);
+    const parsed = parseIrNodeAt(child, depth);
     if (parsed !== undefined) children.push(parsed);
   }
   return children;
@@ -123,7 +129,8 @@ function parseOptionalNodeFields(value: Record<string, unknown>): Partial<IrNode
 // Total, defensive IR-node parser: an opaque serialised node (from the snapshot's `irJson`) is
 // accepted only when its required structural fields are present and well-typed; anything malformed
 // yields `undefined` so a corrupt screen degrades to "no items" rather than crashing the run.
-function parseIrNode(value: unknown): IrNode | undefined {
+// depth is passed through parseIrChildren to bound total recursion at MAX_TREE_DEPTH.
+function parseIrNodeAt(value: unknown, depth: number): IrNode | undefined {
   if (!isObject(value)) return undefined;
   const { id, name, type, interactionHint } = value;
   if (!isString(id) || !isString(name) || !isString(type)) return undefined;
@@ -135,8 +142,12 @@ function parseIrNode(value: unknown): IrNode | undefined {
     interactionHint: interactionHint as IrNode["interactionHint"],
     ...parseOptionalNodeFields(value),
     imageFills: parseImageFills(value.imageFills),
-    children: parseIrChildren(value.children),
+    children: parseIrChildren(value.children, depth + 1),
   };
+}
+
+function parseIrNode(value: unknown): IrNode | undefined {
+  return parseIrNodeAt(value, 0);
 }
 
 /**
@@ -226,14 +237,24 @@ function stateItem(node: IrNode, ctx: DerivationContext, label: string): Structu
   };
 }
 
-function collectNodeItems(node: IrNode, ctx: DerivationContext, out: StructuralTestItem[]): void {
+function collectNodeItemsAt(
+  node: IrNode,
+  ctx: DerivationContext,
+  out: StructuralTestItem[],
+  depth: number,
+): void {
+  if (depth > MAX_TREE_DEPTH) return;
   if (node.interactionHint === "input") out.push(...fieldItems(node, ctx));
   if (node.interactionHint === "button" || node.interactionHint === "link") {
     out.push(...controlItems(node, ctx));
   }
   const state = stateLabel(node.name);
   if (state !== undefined) out.push(stateItem(node, ctx, state));
-  for (const child of node.children) collectNodeItems(child, ctx, out);
+  for (const child of node.children) collectNodeItemsAt(child, ctx, out, depth + 1);
+}
+
+function collectNodeItems(node: IrNode, ctx: DerivationContext, out: StructuralTestItem[]): void {
+  collectNodeItemsAt(node, ctx, out, 0);
 }
 
 function screenRenderItem(ctx: DerivationContext): StructuralTestItem {
@@ -271,7 +292,10 @@ export function deriveScreenTestBaseline(
  */
 export function renderBaselineText(baseline: ScreenTestBaseline): string {
   const header = `Screen: ${baseline.screenName} [${baseline.screenId}]`;
-  const lines = baseline.items.map((item) => `- (${item.category}) ${item.title}`);
+  const lines = baseline.items.map((item) => {
+    const nodeRef = item.sourceNodeId !== undefined ? ` [node:${item.sourceNodeId}]` : "";
+    return `- (${item.category}) ${item.title}${nodeRef}`;
+  });
   return [
     header,
     "Structural test baseline (deterministic, derived from Screen-IR):",

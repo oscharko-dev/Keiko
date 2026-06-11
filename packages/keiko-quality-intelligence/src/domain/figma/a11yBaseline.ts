@@ -199,12 +199,17 @@ const altTextRule = (ctx: ScreenContext, node: IrNode): StructuralTestItem | und
     ? a11yItem(ctx, node.id, "alt", `Image "${node.name}" exposes descriptive alt text`)
     : undefined;
 
-function visit(
+// Shared constant — see prune.ts for rationale. Must stay in sync with every other recursive walk.
+const MAX_TREE_DEPTH = 512;
+
+function visitAt(
   node: IrNode,
   ctx: ScreenContext,
   inheritedBackground: string | undefined,
   acc: WalkAccumulator,
+  depth: number,
 ): void {
+  if (depth > MAX_TREE_DEPTH) return;
   const background = node.backgroundColor ?? inheritedBackground;
   for (const item of [
     nameRule(ctx, node),
@@ -217,7 +222,16 @@ function visit(
   if (INTERACTIVE.has(node.interactionHint) && node.boundingBox !== undefined) {
     acc.focusables.push({ nodeId: node.id, label: nodeLabel(node), box: node.boundingBox });
   }
-  for (const child of node.children) visit(child, ctx, background, acc);
+  for (const child of node.children) visitAt(child, ctx, background, acc, depth + 1);
+}
+
+function visit(
+  node: IrNode,
+  ctx: ScreenContext,
+  inheritedBackground: string | undefined,
+  acc: WalkAccumulator,
+): void {
+  visitAt(node, ctx, inheritedBackground, acc, 0);
 }
 
 const focusOrderItem = (

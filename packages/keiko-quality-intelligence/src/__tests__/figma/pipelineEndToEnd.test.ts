@@ -297,7 +297,9 @@ describe("Figma pipeline end-to-end (synthetic board, #757)", () => {
   it("emits well-formed per-screen HTML, a token stylesheet, and an index — with nav scaffolding", () => {
     const out = runPipeline(syntheticBoard());
 
-    const loginHtml = fileByPath(out.artifact, "screens/1:1.html");
+    // Fix #7: screen ids containing ":" are sanitized (colon → dash) in file paths; raw id is kept
+    // in data-screen-id. hrefs are now prefixed with "./" to avoid URI-scheme misparse.
+    const loginHtml = fileByPath(out.artifact, "screens/1-1.html");
     expect(loginHtml.trim().startsWith("<!doctype html>")).toBe(true);
     expect(loginHtml).toMatch(/<html[^>]*>[\s\S]*<\/html>/u);
     expect(loginHtml).toContain("</body>");
@@ -305,12 +307,12 @@ describe("Figma pipeline end-to-end (synthetic board, #757)", () => {
     expect(loginHtml).toContain("Sign in to continue");
     // The wired link becomes framework-agnostic nav scaffolding to the Home screen (no router words).
     expect(loginHtml).toMatch(/<nav[^>]*>/u);
-    expect(loginHtml).toContain('href="2:1.html"');
+    expect(loginHtml).toContain('href="./2-1.html"');
     expect(loginHtml.toLowerCase()).not.toContain("router");
 
     const index = fileByPath(out.artifact, "index.html");
-    expect(index).toContain('href="screens/1:1.html"');
-    expect(index).toContain('href="screens/2:1.html"');
+    expect(index).toContain('href="screens/1-1.html"');
+    expect(index).toContain('href="screens/2-1.html"');
 
     expect(out.artifact.adapterName).toBe(htmlCssAdapter.name);
   });

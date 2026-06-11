@@ -23,6 +23,15 @@ import {
 
 const MASTER_TYPES: ReadonlySet<string> = new Set(["COMPONENT", "COMPONENT_SET"]);
 
+// Subtrees deeper than this are truncated (not walked). Prevents RangeError on malformed inputs with
+// chain-like node trees thousands of levels deep. Documented contract: malformed input degrades, never
+// crashes (cleanToScreenIr.ts header).
+// Shared contract: every recursive tree walk in this pipeline (prune → normalize → tokens → links →
+// a11y → screenIrTestBaseline) uses the same value so that none overflow before the others. 512 is
+// far above any legitimate Figma board depth (< 50 in practice) while staying safe inside vitest
+// worker threads, which have a smaller default JS stack than bare Node.
+const MAX_TREE_DEPTH = 512;
+
 /** A node that survived pruning, paired with its pruned children. */
 export interface PrunedNode {
   readonly source: FigmaSourceNode;
@@ -39,26 +48,33 @@ const hasOwnPayload = (node: FigmaSourceNode): boolean => {
 
 const isDroppedByType = (node: FigmaSourceNode): boolean => MASTER_TYPES.has(nodeType(node));
 
-/**
- * Prune a node, returning the kept node (with kept children) or `undefined` when the node itself is
- * dropped. A node is dropped when hidden, a component master, or an empty scaffold.
- */
-export const pruneNode = (node: FigmaSourceNode): PrunedNode | undefined => {
+function pruneNodeAt(node: FigmaSourceNode, depth: number): PrunedNode | undefined {
+  if (depth > MAX_TREE_DEPTH) return undefined;
   if (isHidden(node) || isDroppedByType(node)) return undefined;
 
   const children: PrunedNode[] = [];
   for (const child of childNodes(node)) {
-    const kept = pruneNode(child);
+    const kept = pruneNodeAt(child, depth + 1);
     if (kept !== undefined) children.push(kept);
   }
 
   if (children.length === 0 && !hasOwnPayload(node)) return undefined;
   return { source: node, children };
-};
+}
+
+/**
+ * Prune a node, returning the kept node (with kept children) or `undefined` when the node itself is
+ * dropped. A node is dropped when hidden, a component master, or an empty scaffold. Subtrees deeper
+ * than MAX_TREE_DEPTH are truncated so malformed chain-like inputs degrade rather than overflow.
+ */
+export const pruneNode = (node: FigmaSourceNode): PrunedNode | undefined => pruneNodeAt(node, 0);
+
+function countSourceNodesAt(node: FigmaSourceNode, depth: number): number {
+  if (depth > MAX_TREE_DEPTH) return 1; // count the truncated subtree root only
+  let total = 1;
+  for (const child of childNodes(node)) total += countSourceNodesAt(child, depth + 1);
+  return total;
+}
 
 /** Total node count of a raw subtree (root included), used for the reduction ratio. */
-export const countSourceNodes = (node: FigmaSourceNode): number => {
-  let total = 1;
-  for (const child of childNodes(node)) total += countSourceNodes(child);
-  return total;
-};
+export const countSourceNodes = (node: FigmaSourceNode): number => countSourceNodesAt(node, 0);

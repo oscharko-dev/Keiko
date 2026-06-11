@@ -11,6 +11,18 @@
 // `tokens.css` (the `:root` custom-property table), and one `screens/<id>.html` per screen. Pure: no
 // IO, no model, no Date — a given plan yields a byte-identical artifact. All text and attribute values
 // are HTML-escaped so the reviewable artifact cannot inject markup.
+//
+// CSS value handling: fontFamily tokens are emitted as quoted strings with embedded double-quotes
+// escaped and control/injection characters ('{', '}', ';', '</', '*/', newlines) stripped, so a
+// hostile font name cannot break out of the custom-property declaration. Color tokens are validated
+// against /^#[0-9a-fA-F]{3,8}$/ and numeric tokens as finite numbers; invalid values are dropped
+// rather than emitted.
+//
+// Screen file names: Figma ids may contain ':' (Windows-invalid) and ';' (URI scheme risk in hrefs).
+// sanitizeScreenFileName replaces /[:;]/g with '-'. Collisions after substitution are resolved by a
+// numeric suffix. All relative hrefs inside screen HTML are prefixed with './' so they are relative
+// to the screens/ directory, not ambiguous URI-scheme fragments. The raw screen id is preserved in
+// the data-screen-id attribute.
 
 import type { CodeArtifact, CodeFile, CodeTargetAdapter } from "./codeTargetAdapter.js";
 import type {
@@ -44,8 +56,46 @@ const escapeHtml = (value: string): string =>
 
 const indent = (depth: number): string => INDENT.repeat(depth);
 
-// Map a target-neutral element role to a semantic HTML tag. Containers become <section>; everything
-// else is the closest semantic element. No role yields a framework component.
+// ─── Fix #7: safe screen file names ──────────────────────────────────────────
+//
+// Figma ids contain ':' (invalid on Windows file paths) and INSTANCE ids contain ';' which is
+// parsed as a URI scheme separator in sibling hrefs (e.g. "I123:456;789:12.html" → opaque URI).
+// We replace /[:;]/g with '-'; ids are unique before substitution so collisions are rare, but a
+// numeric suffix is appended defensively.
+function buildSafeNameIndex(screens: readonly ScreenEmission[]): ReadonlyMap<string, string> {
+  const seen = new Map<string, number>();
+  const result = new Map<string, string>();
+  for (const screen of screens) {
+    const base = screen.screenId.replace(/[:;]/gu, "-");
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    result.set(screen.screenId, count === 0 ? base : `${base}-${String(count)}`);
+  }
+  return result;
+}
+
+// ─── Fix #8: CSS value sanitization ──────────────────────────────────────────
+//
+// fontFamily is emitted as a CSS quoted string. Embedded double-quotes are escaped as \\22 (the
+// CSS hex escape for ") and injection sequences ('{', '}', ';', '</', '*/', newlines, control
+// chars) are stripped, so a hostile font name cannot break out of the declaration.
+// Unicode escapes for control characters (U+0000-U+001F) and DEL (U+007F) avoid the no-control-regex
+// lint rule while matching the same character set at runtime.
+// eslint-disable-next-line no-control-regex
+const CSS_INJECTION_RE = /[{};]|<\/|\*\/|[\u0000-\u001f\u007f]/gu;
+
+const safeFontFamily = (family: string): string => {
+  const cleaned = family.replace(CSS_INJECTION_RE, "").replace(/"/gu, "\\22 ");
+  return `"${cleaned}"`;
+};
+
+// Valid CSS hex color: 3, 4, 6, or 8 hex digits.
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/u;
+
+const isSafeColor = (value: string): boolean => HEX_COLOR_RE.test(value);
+
+// ─── Map a target-neutral element role to a semantic HTML tag ─────────────────
+// Containers become <section>; everything else is the closest semantic element.
 const TAG_BY_ROLE: Readonly<Record<EmissionRole, string>> = {
   button: "button",
   input: "input",
@@ -58,10 +108,12 @@ const TAG_BY_ROLE: Readonly<Record<EmissionRole, string>> = {
 // Roles that render as void (self-closing) elements with no children/text.
 const VOID_ROLES = new Set<EmissionRole>(["input", "image"]);
 
+// Fix #6: additionally emit data-node-id so the element's IR origin is traceable in the HTML output.
 function elementAttributes(element: EmissionElement): string {
   const parts = [
     `data-role="${escapeHtml(element.role)}"`,
     `data-name="${escapeHtml(element.displayName)}"`,
+    `data-node-id="${escapeHtml(element.id)}"`,
   ];
   if (element.role === "link") parts.push('href="#"');
   if (element.role === "input") parts.push(`aria-label="${escapeHtml(element.displayName)}"`);
@@ -82,11 +134,18 @@ function renderElement(element: EmissionElement, depth: number): readonly string
   return lines;
 }
 
-function renderNav(navTargets: readonly EmissionNavTarget[], depth: number): readonly string[] {
+// Fix #7: hrefs use the sanitized name and are prefixed with './' so they resolve relative to the
+// screens/ directory and cannot be misinterpreted as URI schemes.
+function renderNav(
+  navTargets: readonly EmissionNavTarget[],
+  safeNames: ReadonlyMap<string, string>,
+  depth: number,
+): readonly string[] {
   if (navTargets.length === 0) return [];
   const lines: string[] = [`${indent(depth)}<nav aria-label="Screen navigation">`];
   for (const target of navTargets) {
-    const href = `${escapeHtml(target.toScreenId)}.html`;
+    const safeName = safeNames.get(target.toScreenId) ?? target.toScreenId.replace(/[:;]/gu, "-");
+    const href = `./${escapeHtml(safeName)}.html`;
     const trigger = escapeHtml(target.trigger);
     const label = escapeHtml(target.toScreenName);
     lines.push(`${indent(depth + 1)}<a href="${href}" data-trigger="${trigger}">${label}</a>`);
@@ -95,10 +154,11 @@ function renderNav(navTargets: readonly EmissionNavTarget[], depth: number): rea
   return lines;
 }
 
-function renderScreenHtml(screen: ScreenEmission): string {
+// Fix #7: screen file uses safe name; raw id is preserved in data-screen-id for traceability.
+function renderScreenHtml(screen: ScreenEmission, safeNames: ReadonlyMap<string, string>): string {
   const title = escapeHtml(screen.screenName);
   const body = [
-    ...renderNav(screen.navTargets, 3),
+    ...renderNav(screen.navTargets, safeNames, 3),
     `${indent(3)}<main data-screen-id="${escapeHtml(screen.screenId)}">`,
     ...renderElement(screen.root, 4),
     `${indent(3)}</main>`,
@@ -119,12 +179,18 @@ function renderScreenHtml(screen: ScreenEmission): string {
   ].join("\n");
 }
 
-function renderIndexHtml(screens: readonly ScreenEmission[]): string {
-  const links = screens.map(
-    (screen) =>
-      `${indent(3)}<li><a href="screens/${escapeHtml(screen.screenId)}.html">` +
-      `${escapeHtml(screen.screenName)}</a></li>`,
-  );
+// Fix #7: index links use safe names for the href path but display the human-readable screen name.
+function renderIndexHtml(
+  screens: readonly ScreenEmission[],
+  safeNames: ReadonlyMap<string, string>,
+): string {
+  const links = screens.map((screen) => {
+    const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
+    return (
+      `${indent(3)}<li><a href="screens/${escapeHtml(safeName)}.html">` +
+      `${escapeHtml(screen.screenName)}</a></li>`
+    );
+  });
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -150,26 +216,42 @@ const spaceVar = (index: number): string => `--space-${String(index + 1)}`;
 const radiusVar = (index: number): string => `--radius-${String(index + 1)}`;
 const fontVar = (index: number): string => `--font-${String(index + 1)}`;
 
-const colorLine = (token: ColorToken, index: number): string =>
-  `${indent(1)}${colorVar(index)}: ${token.value};`;
+// Fix #8: validate color before emit; drop invalid tokens rather than emitting them.
+const colorLine = (token: ColorToken, index: number): string | undefined =>
+  isSafeColor(token.value) ? `${indent(1)}${colorVar(index)}: ${token.value};` : undefined;
 
-const spaceLine = (token: SpacingToken, index: number): string =>
-  `${indent(1)}${spaceVar(index)}: ${String(token.value)}px;`;
+const spaceLine = (token: SpacingToken, index: number): string | undefined =>
+  Number.isFinite(token.value)
+    ? `${indent(1)}${spaceVar(index)}: ${String(token.value)}px;`
+    : undefined;
 
-const radiusLine = (token: RadiusToken, index: number): string =>
-  `${indent(1)}${radiusVar(index)}: ${String(token.value)}px;`;
+const radiusLine = (token: RadiusToken, index: number): string | undefined =>
+  Number.isFinite(token.value)
+    ? `${indent(1)}${radiusVar(index)}: ${String(token.value)}px;`
+    : undefined;
 
-// A typography token becomes a font-shorthand-style custom property referencing its family + size.
-const fontLine = (token: TypographyToken, index: number): string =>
-  `${indent(1)}${fontVar(index)}: ${String(token.fontWeight)} ${String(token.fontSize)}px/` +
-  `${String(token.lineHeight)}px ${token.fontFamily};`;
+// Fix #8: fontFamily is sanitized via safeFontFamily (quoted + injection chars stripped).
+// Weight, size, lineHeight are validated as finite numbers before emit.
+const fontLine = (token: TypographyToken, index: number): string | undefined => {
+  if (
+    !Number.isFinite(token.fontWeight) ||
+    !Number.isFinite(token.fontSize) ||
+    !Number.isFinite(token.lineHeight)
+  ) {
+    return undefined;
+  }
+  return (
+    `${indent(1)}${fontVar(index)}: ${String(token.fontWeight)} ${String(token.fontSize)}px/` +
+    `${String(token.lineHeight)}px ${safeFontFamily(token.fontFamily)};`
+  );
+};
 
 function renderTokensCss(tokens: DesignTokens): string {
-  const lines = [
-    ...tokens.colors.map(colorLine),
-    ...tokens.spacing.map(spaceLine),
-    ...tokens.radius.map(radiusLine),
-    ...tokens.typography.map(fontLine),
+  const lines: string[] = [
+    ...tokens.colors.map(colorLine).filter((l): l is string => l !== undefined),
+    ...tokens.spacing.map(spaceLine).filter((l): l is string => l !== undefined),
+    ...tokens.radius.map(radiusLine).filter((l): l is string => l !== undefined),
+    ...tokens.typography.map(fontLine).filter((l): l is string => l !== undefined),
   ];
   return [
     "/* Design tokens (deterministic, from the Figma Snapshot Screen-IR). */",
@@ -181,13 +263,17 @@ function renderTokensCss(tokens: DesignTokens): string {
 }
 
 function emitHtmlCss(plan: CodeEmissionPlan): CodeArtifact {
+  const safeNames = buildSafeNameIndex(plan.screens);
   const files: CodeFile[] = [
-    { path: "index.html", contents: renderIndexHtml(plan.screens) },
+    { path: "index.html", contents: renderIndexHtml(plan.screens, safeNames) },
     { path: "tokens.css", contents: renderTokensCss(plan.tokens) },
-    ...plan.screens.map((screen) => ({
-      path: `screens/${screen.screenId}.html`,
-      contents: renderScreenHtml(screen),
-    })),
+    ...plan.screens.map((screen) => {
+      const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
+      return {
+        path: `screens/${safeName}.html`,
+        contents: renderScreenHtml(screen, safeNames),
+      };
+    }),
   ];
   return { adapterName: ADAPTER_NAME, files };
 }

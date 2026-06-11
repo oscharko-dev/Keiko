@@ -56,7 +56,7 @@ export const cleanScopedNodesToScreenIr = (rawRoot: unknown): ScreenIrResult => 
       const ir = normalizeScreenRoot(screenRoot);
       return { id: ir.id, name: ir.name, root: ir };
     })
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const keptNodeCount = screens.reduce((sum, screen) => sum + countIrNodes(screen.root), 0);
 

@@ -197,10 +197,11 @@ describe("htmlCssAdapter — semantic HTML", () => {
     );
     const html = fileByPath(artifact, "screens/s-login.html");
     expect(html).toMatch(/<nav[^>]*>/u);
-    expect(html).toContain('href="s-home.html"');
+    // Fix #7: hrefs are now prefixed with "./" so they are unambiguous relative references.
+    expect(html).toContain('href="./s-home.html"');
     expect(html).toContain('data-trigger="ON_CLICK"');
     // The anchor is labelled with the human-readable target screen name.
-    expect(html).toMatch(/<a href="s-home\.html" data-trigger="ON_CLICK">Home<\/a>/u);
+    expect(html).toMatch(/<a href="\.\/s-home\.html" data-trigger="ON_CLICK">Home<\/a>/u);
     // Framework/router vocabulary must not leak into framework-agnostic output.
     expect(html.toLowerCase()).not.toContain("react");
     expect(html.toLowerCase()).not.toContain("router");
@@ -401,5 +402,115 @@ describe("edge cases", () => {
     expect(html).toContain("World");
     expect(html).not.toContain("<button");
     expect(html).not.toContain("<input");
+  });
+});
+
+// ─── Fix #6: traceability — data-node-id on every element ───────────────────
+
+describe("htmlCssAdapter — data-node-id traceability (Fix #6)", () => {
+  it("emits data-node-id on every element so generated tests are node-attributable", () => {
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-login.html");
+    // Each element carries data-node-id matching its IR node id.
+    expect(html).toContain('data-node-id="login-root"');
+    expect(html).toContain('data-node-id="login-title"');
+    expect(html).toContain('data-node-id="login-email"');
+    expect(html).toContain('data-node-id="login-submit"');
+  });
+});
+
+// ─── Fix #7: safe screen file paths for ids containing ':' or ';' ───────────
+
+describe("htmlCssAdapter — sanitized screen file names (Fix #7)", () => {
+  it("replaces ':' and ';' in screen ids with '-' in file paths and hrefs", () => {
+    // Real Figma INSTANCE ids look like 'I123:456;789:12' — ':' is Windows-invalid and
+    // INSTANCE:COMPONENT parses as a URI scheme in an href.
+    const instanceScreen = screen("I123:456;789:12", "InstanceScreen", node("root", "container"));
+    const artifact = emitCode(
+      { screens: [instanceScreen], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
+    // File path must use the sanitized name (colons and semicolons replaced).
+    const html = fileByPath(artifact, "screens/I123-456-789-12.html");
+    expect(html).toBeDefined();
+    // The raw id must be preserved in data-screen-id for traceability.
+    expect(html).toContain('data-screen-id="I123:456;789:12"');
+    // index.html must link to the sanitized name.
+    const index = fileByPath(artifact, "index.html");
+    expect(index).toContain('href="screens/I123-456-789-12.html"');
+    // Sanitized href must not parse as a URI scheme (no bare 'I123:' scheme).
+    const hrefMatch = /href="([^"]+)"/u.exec(index);
+    expect(hrefMatch?.[1]).not.toMatch(/^[A-Za-z][A-Za-z0-9+\-.]*:/u);
+  });
+
+  it("prefixes in-screen nav hrefs with './' to prevent URI-scheme misparse", () => {
+    const artifact = emitCode(
+      { screens: [loginScreen(), homeScreen()], tokens: NO_TOKENS, hints: loginHomeHints() },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-login.html");
+    // Must use './' prefix — 's-home.html' alone could be confused with a relative path starting
+    // with a scheme-like prefix if the id had colons.
+    expect(html).toContain('href="./s-home.html"');
+    expect(html).not.toContain('href="s-home.html"');
+  });
+});
+
+// ─── Fix #8: CSS value injection prevention ──────────────────────────────────
+
+describe("htmlCssAdapter — CSS value sanitization (Fix #8)", () => {
+  it("quotes fontFamily and cannot break out of the CSS declaration block", () => {
+    // A hostile fontFamily tries to close the declaration, inject a rule, then open a comment.
+    const hostiletokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typo:evil",
+          kind: "typography",
+          fontFamily: "'}; } body { background: red } /*",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: hostiletokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const css = fileByPath(artifact, "tokens.css");
+    // Injection characters must not appear unquoted in the CSS.
+    expect(css).not.toContain("body { background");
+    // The typography token is still emitted — sanitized, not dropped.
+    // The CSS variable uses the --font-N numbering convention.
+    expect(css).toContain("--font-1");
+    // The curly braces and semicolons are stripped; the remainder is quoted.
+    expect(css).toContain('"');
+  });
+
+  it("drops invalid (non-hex) color tokens rather than emitting them verbatim", () => {
+    const badTokens: DesignTokens = {
+      colors: [
+        { id: "c:bad", kind: "color", value: "red; } body{background:blue" },
+        { id: "c:good", kind: "color", value: "#aabbcc" },
+      ],
+      typography: [],
+      spacing: [],
+      radius: [],
+    };
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: badTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const css = fileByPath(artifact, "tokens.css");
+    // Invalid color token must be dropped.
+    expect(css).not.toContain("body{background");
+    // Valid color token must still appear.
+    expect(css).toContain("#aabbcc");
   });
 });

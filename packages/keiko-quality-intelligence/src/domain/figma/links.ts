@@ -9,6 +9,9 @@
 //   3. CANVAS `flowStartingPoints[]` + `prototypeStartNodeID` — flow entry points, emitted as
 //      `{ sourceNodeId: <canvasId>, trigger: "FLOW_START", targetNodeId }`.
 //
+// URL actions (type=URL, url=<href>) are surfaced with targetNodeId `url:<href>` so they appear in
+// `unresolvedLinks` downstream (no screen owns a `url:` node id) rather than being silently dropped.
+//
 // Links come from the pruned tree (hidden/dropped nodes emit nothing) plus the raw root for flow
 // entry points. The output is sorted by a stable structural key so order never depends on traversal.
 
@@ -18,13 +21,24 @@ import type { PrunedNode } from "./prune.js";
 
 const FLOW_START = "FLOW_START";
 const UNKNOWN_TRIGGER = "UNKNOWN";
+// Shared constant — see prune.ts for rationale. Must stay in sync with every other recursive walk.
+const MAX_TREE_DEPTH = 512;
+
+// URL actions carry type="URL" and a url field instead of a destinationId. We surface them with the
+// synthetic target `url:<href>` so they appear in unresolvedLinks downstream (no screen owns a node
+// with that id) rather than being silently dropped. Board-content URLs are acceptable here.
+const readUrlAction = (action: Record<string, unknown>): string | undefined => {
+  if (readString(action.type) !== "URL") return undefined;
+  const url = readString(action.url);
+  return url !== undefined ? `url:${url}` : undefined;
+};
 
 const readDestination = (action: Record<string, unknown>): string | undefined => {
   const direct = readString(action.destinationId);
   if (direct !== undefined) return direct;
   const nav = asNode(action.navigation);
   if (nav !== undefined) return readString(nav.destinationId);
-  return undefined;
+  return readUrlAction(action);
 };
 
 const triggerType = (entry: Record<string, unknown>): string => {
@@ -62,9 +76,14 @@ const collectInteractions = (node: FigmaSourceNode, out: InterScreenLink[]): voi
   }
 };
 
-const visit = (pruned: PrunedNode, out: InterScreenLink[]): void => {
+function visitAt(pruned: PrunedNode, out: InterScreenLink[], depth: number): void {
+  if (depth > MAX_TREE_DEPTH) return;
   collectInteractions(pruned.source, out);
-  for (const child of pruned.children) visit(child, out);
+  for (const child of pruned.children) visitAt(child, out, depth + 1);
+}
+
+const visit = (pruned: PrunedNode, out: InterScreenLink[]): void => {
+  visitAt(pruned, out, 0);
 };
 
 const collectFlowEntries = (root: FigmaSourceNode, out: InterScreenLink[]): void => {
@@ -92,5 +111,6 @@ export const extractInterScreenLinks = (
 
   const byKey = new Map<string, InterScreenLink>();
   for (const link of collected) byKey.set(linkKey(link), link);
-  return [...byKey.values()].sort((a, b) => linkKey(a).localeCompare(linkKey(b)));
+  const byCode = (x: string, y: string): number => (x < y ? -1 : x > y ? 1 : 0);
+  return [...byKey.values()].sort((a, b) => byCode(linkKey(a), linkKey(b)));
 };
