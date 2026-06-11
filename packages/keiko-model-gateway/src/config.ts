@@ -206,6 +206,62 @@ function emptyToUndefined(config: OutboundHttpEgressConfig): OutboundHttpEgressC
   return Object.keys(config).length === 0 ? undefined : config;
 }
 
+// Parses the four egress env vars INDEPENDENTLY so a malformed proxy URL (e.g. a
+// credentialed HTTPS_PROXY) never silently discards a valid caBundlePath or noProxy.
+// Each field is parsed in isolation; invalid fields are skipped with a console.warn
+// (naming the var, never the value) and the rest are still applied.
+export function parseEnvEgressConfigFaultTolerant(env: EnvSource): OutboundHttpEgressConfig {
+  const fields: {
+    key: keyof OutboundHttpEgressConfig;
+    envNames: readonly string[];
+    parser: (value: unknown, path: string) => string | readonly string[] | undefined;
+  }[] = [
+    {
+      key: "httpProxy",
+      envNames: ["KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy"],
+      parser: optionalProxyUrl,
+    },
+    {
+      key: "httpsProxy",
+      envNames: ["KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"],
+      parser: optionalProxyUrl,
+    },
+    {
+      key: "noProxy",
+      envNames: ["KEIKO_NO_PROXY", "NO_PROXY", "no_proxy"],
+      parser: optionalNoProxy,
+    },
+    {
+      key: "caBundlePath",
+      envNames: ["KEIKO_CA_BUNDLE_PATH"],
+      parser: optionalCaBundlePath,
+    },
+  ];
+  const result: { -readonly [K in keyof OutboundHttpEgressConfig]?: OutboundHttpEgressConfig[K] } =
+    {};
+  for (const { key, envNames, parser } of fields) {
+    const rawVar = envNames.find((n) => {
+      const v = env[n];
+      return v !== undefined && v.trim().length > 0;
+    });
+    if (rawVar === undefined) continue;
+    try {
+      const parsed = parser(env[rawVar], `egress.${key}`);
+      if (parsed !== undefined) {
+        // The conditional cast is safe: each branch's parser returns the correct type for that key.
+        (result as Record<string, unknown>)[key] = parsed;
+      }
+    } catch {
+      // Log the variable name only — never the value (may contain credentials).
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[keiko-model-gateway] Ignoring invalid egress env var ${rawVar} (reason: ${key} parse failed)`,
+      );
+    }
+  }
+  return result;
+}
+
 function parseEgressConfig(raw: unknown, env: EnvSource): OutboundHttpEgressConfig | undefined {
   const block = egressBlock(raw);
   const httpProxy = optionalProxyUrl(

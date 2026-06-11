@@ -289,26 +289,78 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
 
-function parseEnvOnlyEgressConfig(env: EnvSource): GatewayEgressConfig | undefined {
+// Probes a single egress env var by running parseGatewayConfig with only that variable
+// set, returning the resulting egress field or undefined when the value is invalid.
+// Logs a warning naming the variable on failure — never the value (may contain credentials).
+function probeEgressField(
+  envName: string,
+  envValue: string,
+  fieldKey: keyof GatewayEgressConfig,
+): GatewayEgressConfig[keyof GatewayEgressConfig] | undefined {
   try {
-    return parseGatewayConfig(
+    const probed = parseGatewayConfig(
       {
         providers: [
-          {
-            modelId: "keiko-egress-probe",
-            baseUrl: "http://127.0.0.1",
-            apiKey: "keiko-egress-probe-key",
-          },
+          { modelId: "keiko-egress-probe", baseUrl: "http://127.0.0.1", apiKey: "probe-key" },
         ],
       },
-      env,
+      { [envName]: envValue },
     ).egress;
+    return probed?.[fieldKey];
   } catch (error) {
     if (error instanceof GatewayError) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[keiko-model-gateway] Ignoring invalid egress env var ${envName} (reason: ${fieldKey} parse failed)`,
+      );
       return undefined;
     }
     throw error;
   }
+}
+
+function firstEnvValue(
+  env: EnvSource,
+  ...names: string[]
+): { name: string; value: string } | undefined {
+  for (const name of names) {
+    const value = env[name];
+    if (typeof value === "string" && value.trim().length > 0) return { name, value };
+  }
+  return undefined;
+}
+
+function parseEnvOnlyEgressConfig(env: EnvSource): GatewayEgressConfig | undefined {
+  // Parse each egress field independently so a malformed HTTPS_PROXY (e.g. with embedded
+  // credentials) never silently discards a valid caBundlePath or noProxy. Each invalid
+  // field emits a console.warn (var name only, never the value) and the rest are applied.
+  const result: { -readonly [K in keyof GatewayEgressConfig]?: GatewayEgressConfig[K] } = {};
+
+  const httpProxy = firstEnvValue(env, "KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy");
+  if (httpProxy !== undefined) {
+    const val = probeEgressField(httpProxy.name, httpProxy.value, "httpProxy");
+    if (val !== undefined) result.httpProxy = val as string;
+  }
+
+  const httpsProxy = firstEnvValue(env, "KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy");
+  if (httpsProxy !== undefined) {
+    const val = probeEgressField(httpsProxy.name, httpsProxy.value, "httpsProxy");
+    if (val !== undefined) result.httpsProxy = val as string;
+  }
+
+  const noProxy = firstEnvValue(env, "KEIKO_NO_PROXY", "NO_PROXY", "no_proxy");
+  if (noProxy !== undefined) {
+    const val = probeEgressField(noProxy.name, noProxy.value, "noProxy");
+    if (val !== undefined) result.noProxy = val as readonly string[];
+  }
+
+  const caBundlePath = firstEnvValue(env, "KEIKO_CA_BUNDLE_PATH");
+  if (caBundlePath !== undefined) {
+    // caBundlePath is just a trimmed string — no validation that rejects valid paths.
+    result.caBundlePath = caBundlePath.value.trim();
+  }
+
+  return Object.keys(result).length === 0 ? undefined : result;
 }
 
 export function currentGatewayEgressConfig(

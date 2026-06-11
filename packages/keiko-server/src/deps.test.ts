@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,5 +293,60 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
     db.close();
     expect(row.short_result).not.toContain(SECRET);
     expect(row.short_result).toContain("[REDACTED]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// currentGatewayEgressConfig — fail-open env parse fix (item 1)
+// ---------------------------------------------------------------------------
+
+describe("currentGatewayEgressConfig — fault-tolerant env egress parsing", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a credentialed HTTPS_PROXY does not silently produce undefined egress — caBundlePath survives", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-egress-ft-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        HTTPS_PROXY: "http://user:pass@corp-proxy.invalid:8080",
+        KEIKO_CA_BUNDLE_PATH: "/etc/keiko/corp-ca.pem",
+      },
+      store,
+    });
+    const egress = currentGatewayEgressConfig(deps);
+    // Bad HTTPS_PROXY must NOT cause caBundlePath to be silently dropped.
+    expect(egress?.caBundlePath).toBe("/etc/keiko/corp-ca.pem");
+    expect(egress?.httpsProxy).toBeUndefined();
+    // A warning must have been logged naming the env var, never the value.
+    expect(warn).toHaveBeenCalled();
+    const warningText = (warn.mock.calls[0] as string[])[0] ?? "";
+    expect(warningText).toContain("HTTPS_PROXY");
+    expect(warningText).not.toContain("pass");
+    store.close();
+  });
+
+  it("a malformed HTTP_PROXY does not discard a valid noProxy setting", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-egress-noproxy-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        HTTP_PROXY: "ftp://invalid-scheme.invalid",
+        NO_PROXY: "localhost,127.0.0.1",
+      },
+      store,
+    });
+    const egress = currentGatewayEgressConfig(deps);
+    expect(egress?.httpProxy).toBeUndefined();
+    expect(egress?.noProxy).toEqual(["localhost", "127.0.0.1"]);
+    expect(warn).toHaveBeenCalled();
+    store.close();
   });
 });

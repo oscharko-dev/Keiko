@@ -1,11 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   loadConfigFromFile,
   parseCapabilityList,
+  parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
   parseModelCapability,
   toSafeObject,
@@ -897,5 +898,81 @@ describe("toSafeObject grounding field", () => {
     const safe = toSafeObject(config);
     expect(safe.grounding).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call(safe, "grounding")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseEnvEgressConfigFaultTolerant — per-field independent parsing
+// ---------------------------------------------------------------------------
+
+describe("parseEnvEgressConfigFaultTolerant", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns an empty object when no egress env vars are set", () => {
+    const result = parseEnvEgressConfigFaultTolerant({});
+    expect(result).toEqual({});
+  });
+
+  it("parses valid env vars into an egress config", () => {
+    const result = parseEnvEgressConfigFaultTolerant({
+      KEIKO_HTTP_PROXY: "http://proxy.example.invalid:8080",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/corp.pem",
+    });
+    expect(result.httpProxy).toBe("http://proxy.example.invalid:8080/");
+    expect(result.caBundlePath).toBe("/etc/keiko/corp.pem");
+  });
+
+  it("a malformed HTTPS_PROXY does NOT discard a valid caBundlePath", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const result = parseEnvEgressConfigFaultTolerant({
+      HTTPS_PROXY: "http://user:pass@proxy.example.invalid:8080",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/corp.pem",
+    });
+    expect(result.caBundlePath).toBe("/etc/keiko/corp.pem");
+    expect(result.httpsProxy).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+    // Warning must name the var, never the value (may contain password)
+    expect(warn.mock.calls[0]?.[0]).toContain("HTTPS_PROXY");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("pass");
+  });
+
+  it("a malformed HTTP_PROXY does NOT discard a valid noProxy setting", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const result = parseEnvEgressConfigFaultTolerant({
+      HTTP_PROXY: "ftp://proxy.example.invalid",
+      NO_PROXY: "localhost,127.0.0.1",
+    });
+    expect(result.httpProxy).toBeUndefined();
+    expect(result.noProxy).toEqual(["localhost", "127.0.0.1"]);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("HTTP_PROXY");
+  });
+
+  it("a credentialed HTTPS_PROXY is logged by var name only (no credentials in warning)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    parseEnvEgressConfigFaultTolerant({
+      HTTPS_PROXY: "http://user:supersecret@corp-proxy:8080",
+    });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).not.toContain("supersecret");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("user");
+    expect(warn.mock.calls[0]?.[0]).toContain("HTTPS_PROXY");
+  });
+
+  it("KEIKO_* vars take precedence over standard env vars", () => {
+    const result = parseEnvEgressConfigFaultTolerant({
+      KEIKO_HTTP_PROXY: "http://keiko-proxy.invalid:8080",
+      HTTP_PROXY: "http://standard-proxy.invalid:8080",
+    });
+    expect(result.httpProxy).toBe("http://keiko-proxy.invalid:8080/");
+  });
+
+  it("parses KEIKO_NO_PROXY as a comma-separated string", () => {
+    const result = parseEnvEgressConfigFaultTolerant({
+      KEIKO_NO_PROXY: "localhost, 127.0.0.1, .corp.example",
+    });
+    expect(result.noProxy).toEqual(["localhost", "127.0.0.1", ".corp.example"]);
   });
 });

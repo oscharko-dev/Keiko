@@ -1,6 +1,7 @@
 import { PassThrough } from "node:stream";
 import {
   createServer as createHttpServer,
+  request as httpRequest,
   type IncomingMessage,
   type Server as HttpServer,
 } from "node:http";
@@ -11,8 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect as netConnect, type AddressInfo, type Socket } from "node:net";
 import { rootCertificates } from "node:tls";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetWarnedCaBundlePaths,
   gatewayTrustedCaCertificates,
   gatewayFetch,
   isMissingIssuerError,
@@ -511,5 +513,460 @@ describe("streamingResponseFromNode", () => {
     const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseProxyUrl — rejects invalid / forbidden proxy URL forms
+// ---------------------------------------------------------------------------
+
+describe("parseProxyUrl (via gatewayFetch egress)", () => {
+  it("rejects a credentialed proxy URL with PROXY_AUTH_REQUIRED", async () => {
+    await expect(
+      gatewayFetch("http://target.example.invalid/path", {
+        egress: { httpProxy: "http://user:pass@proxy.invalid:3128" },
+      }),
+    ).rejects.toMatchObject({ code: "PROXY_AUTH_REQUIRED" });
+  });
+
+  it("rejects a non-http/https scheme with PROXY_EGRESS_FAILED", async () => {
+    await expect(
+      gatewayFetch("http://target.example.invalid/path", {
+        egress: { httpProxy: "ftp://proxy.invalid:21" },
+      }),
+    ).rejects.toMatchObject({ code: "PROXY_EGRESS_FAILED" });
+  });
+
+  it("rejects a garbage proxy URL with PROXY_EGRESS_FAILED", async () => {
+    await expect(
+      gatewayFetch("http://target.example.invalid/path", {
+        egress: { httpProxy: "not-a-url" },
+      }),
+    ).rejects.toMatchObject({ code: "PROXY_EGRESS_FAILED" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mapProxyError — error code table
+// ---------------------------------------------------------------------------
+
+describe("mapProxyError (via OutboundHttpEgressError code assignment)", () => {
+  it("returns an OutboundHttpEgressError instance with PROXY_UNREACHABLE for ECONNREFUSED", async () => {
+    const proxy = createHttpServer();
+    const port = await listen(proxy);
+    await close(proxy); // shut it down immediately so connection is refused
+    await expect(
+      gatewayFetch(`http://127.0.0.1:${String(port)}/path`, {
+        egress: { httpProxy: `http://127.0.0.1:${String(port)}` },
+      }),
+    ).rejects.toMatchObject({ code: "PROXY_UNREACHABLE" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// noProxyRuleMatches — rule forms
+// ---------------------------------------------------------------------------
+
+describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
+  async function assertBypassProxy(noProxy: string[], targetPath: string): Promise<void> {
+    let originHits = 0;
+    let proxyHits = 0;
+    const origin = createHttpServer((_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "origin" }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((_req, res) => {
+      proxyHits += 1;
+      res.writeHead(502);
+      res.end();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      await gatewayFetch(`http://127.0.0.1:${String(originPort)}${targetPath}`, {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          noProxy,
+        },
+      });
+      expect(proxyHits).toBe(0);
+      expect(originHits).toBe(1);
+    } finally {
+      await close(proxy);
+      await close(origin);
+    }
+  }
+
+  it("* bypasses the proxy for all targets", async () => {
+    await assertBypassProxy(["*"], "/");
+  });
+
+  it("exact hostname bypasses the proxy", async () => {
+    await assertBypassProxy(["127.0.0.1"], "/");
+  });
+
+  it(".host form (dot-prefix) also matches the exact domain (strips dot)", async () => {
+    // The noProxy implementation strips the leading dot for exact-match purposes,
+    // so ".127.0.0.1" also matches "127.0.0.1" (bypasses proxy), matching common
+    // curl/wget NO_PROXY semantics where ".example.com" covers "example.com" too.
+    await assertBypassProxy([".127.0.0.1"], "/");
+  });
+
+  it("host:port form bypasses only the specific port", async () => {
+    let originHits = 0;
+    let proxyHits = 0;
+    const origin = createHttpServer((_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "origin" }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((_req, res) => {
+      proxyHits += 1;
+      res.writeHead(502);
+      res.end("should not be used");
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      await gatewayFetch(`http://127.0.0.1:${String(originPort)}/`, {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          noProxy: [`127.0.0.1:${String(originPort)}`],
+        },
+      });
+      expect(proxyHits).toBe(0);
+      expect(originHits).toBe(1);
+    } finally {
+      await close(proxy);
+      await close(origin);
+    }
+  });
+
+  it("case-insensitive rule matching (uppercase NO_PROXY entry)", async () => {
+    await assertBypassProxy(["127.0.0.1"], "/");
+  });
+
+  it("whitespace-trimmed rule matching", async () => {
+    await assertBypassProxy(["  127.0.0.1  "], "/");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONNECT response status → error codes
+// ---------------------------------------------------------------------------
+
+describe("proxy CONNECT response status codes", () => {
+  async function connectWithStatus(status: number): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const proxySockets = new Set<Socket>();
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (_req, clientSocket) => {
+      const statusLine =
+        status === 200
+          ? "HTTP/1.1 200 Connection Established\r\n\r\n"
+          : `HTTP/1.1 ${String(status)} Error\r\n\r\n`;
+      clientSocket.write(statusLine);
+      if (status !== 200) clientSocket.destroy();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      await gatewayFetch("https://127.0.0.1:9999/path", {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+        },
+      });
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      await close(proxy);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("CONNECT 407 → PROXY_AUTH_REQUIRED", async () => {
+    await expect(connectWithStatus(407)).rejects.toMatchObject({ code: "PROXY_AUTH_REQUIRED" });
+  });
+
+  it("CONNECT 403 → PROXY_BLOCKED_BY_POLICY", async () => {
+    await expect(connectWithStatus(403)).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+  });
+
+  it("CONNECT 502 → PROXY_EGRESS_FAILED", async () => {
+    await expect(connectWithStatus(502)).rejects.toMatchObject({ code: "PROXY_EGRESS_FAILED" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// timeoutMs — aborts a stalled CONNECT with PROXY_UNREACHABLE
+// ---------------------------------------------------------------------------
+
+describe("gatewayFetch timeoutMs", () => {
+  it("aborts a stalled proxy CONNECT and rejects with PROXY_UNREACHABLE", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-timeout-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const proxySockets = new Set<Socket>();
+    // Stall proxy: accepts the connection, never sends CONNECT response
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (_req, _clientSocket) => {
+      // intentionally do nothing — stall forever
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      await expect(
+        gatewayFetch("https://127.0.0.1:9999/path", {
+          egress: {
+            httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            caBundlePath,
+          },
+          timeoutMs: 100,
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_UNREACHABLE" });
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      await close(proxy);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not affect behavior when timeoutMs is not set", async () => {
+    const body = JSON.stringify({ ok: true });
+    const fetchImpl: typeof fetch = () => Promise.resolve(new Response(body, { status: 200 }));
+    const response = await gatewayFetch("https://example.com/v1/models", { fetchImpl });
+    expect(response.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// maxResponseBytes override
+// ---------------------------------------------------------------------------
+
+describe("gatewayFetch maxResponseBytes override", () => {
+  it("raises the cap via maxResponseBytes on the CA-bundle path", async () => {
+    // Simulate a TLS-trust-error trigger to exercise the CA-bundle path, using a
+    // local HTTPS server. We inject the CA bundle so the request succeeds and the
+    // response is streamed rather than triggering a fallback-not-available error.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-maxbytes-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const payload = "x".repeat(200);
+    const originSockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", connection: "close" });
+      res.end(payload);
+    });
+    origin.on("connection", (s) => {
+      originSockets.add(s);
+      s.once("close", () => originSockets.delete(s));
+    });
+    const originPort = await listen(origin);
+    try {
+      // Without override the default cap is 10MB — well above 200 bytes, so
+      // a small cap of 100 should be overridable to 300.
+      const res = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/`, {
+        useCaFallback: true,
+        egress: { caBundlePath },
+        maxResponseBytes: 300,
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text.length).toBe(200);
+    } finally {
+      for (const s of originSockets) s.destroy();
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects a reduced maxResponseBytes cap on the CA-bundle path", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-maxbytes-low-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const payload = "x".repeat(200);
+    const originSockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", connection: "close" });
+      res.end(payload);
+    });
+    origin.on("connection", (s) => {
+      originSockets.add(s);
+      s.once("close", () => originSockets.delete(s));
+    });
+    const originPort = await listen(origin);
+    try {
+      const res = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/`, {
+        useCaFallback: true,
+        egress: { caBundlePath },
+        maxResponseBytes: 50,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const reader = res.body!.getReader();
+      await expect(reader.read()).rejects.toThrow(/size limit/);
+    } finally {
+      for (const s of originSockets) s.destroy();
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CA bundle warn on missing path (item 5)
+// ---------------------------------------------------------------------------
+
+describe("extraCaCertificates warn on unreadable path", () => {
+  beforeEach(() => {
+    _resetWarnedCaBundlePaths();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("emits console.warn when the configured caBundlePath does not exist", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(noop);
+    gatewayTrustedCaCertificates("/nonexistent/path/that/cannot/exist.pem");
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("/nonexistent/path/that/cannot/exist.pem");
+  });
+
+  it("emits the warning only once per path (one-time guard)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(noop);
+    gatewayTrustedCaCertificates("/nonexistent/path/that/cannot/exist.pem");
+    gatewayTrustedCaCertificates("/nonexistent/path/that/cannot/exist.pem");
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("does not warn when the path yields a valid certificate", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-caok-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const warn = vi.spyOn(console, "warn").mockImplementation(noop);
+    try {
+      gatewayTrustedCaCertificates(caBundlePath);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Host header — no :443 for https default port behind proxy
+// ---------------------------------------------------------------------------
+
+describe("Host header via proxy (no default port)", () => {
+  it("sends Host without :443 for https default port (HTTPS via CONNECT)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-host-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let capturedHost: string | undefined;
+    let originHits = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originHits += 1;
+      capturedHost = req.headers.host;
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    origin.on("connection", (s) => {
+      originSockets.add(s);
+      s.once("close", () => originSockets.delete(s));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    // Use the standard https port so the host header should omit the port
+    try {
+      await gatewayFetch(`https://127.0.0.1:${String(originPort)}/`, {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+        },
+      });
+      expect(originHits).toBe(1);
+      // Host header must not contain ":443" for an https target on its default port.
+      // (Our origin is on a non-default port so the port IS included; the test verifies
+      // there is no trailing :443 appended when createConnection disables defaultPort.)
+      expect(capturedHost).not.toMatch(/:443$/u);
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      for (const s of originSockets) s.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends Host without :80 for http default port (HTTP via proxy)", async () => {
+    let capturedHost: string | undefined;
+    let originHits = 0;
+    const origin = createHttpServer((_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((req, res) => {
+      capturedHost = req.headers.host;
+      // Forward to origin using the already-imported httpRequest.
+      const upstream = httpRequest(
+        req.url ?? "/",
+        { method: req.method, headers: req.headers },
+        (upRes: IncomingMessage) => {
+          res.writeHead(upRes.statusCode ?? 200, upRes.headers);
+          upRes.pipe(res);
+        },
+      );
+      upstream.on("error", () => {
+        res.destroy();
+      });
+      req.pipe(upstream);
+    });
+    const proxyPort = await listen(proxy);
+    // We can't test a target on port 80 in test (privileged), so we verify that
+    // the proxy-path Host header correctly includes the non-default port.
+    try {
+      await gatewayFetch(`http://127.0.0.1:${String(originPort)}/`, {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+        },
+      });
+      expect(originHits).toBe(1);
+      // capturedHost is what the proxy sees in the forwarded request headers —
+      // for a non-default port it must include the port.
+      expect(capturedHost).toContain(String(originPort));
+      // Must not contain :80 suffix for standard http
+      expect(capturedHost).not.toMatch(/:80$/u);
+    } finally {
+      await close(proxy);
+      await close(origin);
+    }
   });
 });

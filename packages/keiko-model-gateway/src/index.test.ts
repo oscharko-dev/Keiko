@@ -19,6 +19,7 @@ import {
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
   normalizeApiKeyHeaderName,
+  parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
   toSafeObject,
   validateBaseUrl,
@@ -96,6 +97,7 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof apiKeyHeaderValue).toBe("function");
     expect(typeof loadConfigFromFile).toBe("function");
     expect(typeof normalizeApiKeyHeaderName).toBe("function");
+    expect(typeof parseEnvEgressConfigFaultTolerant).toBe("function");
     expect(typeof parseGatewayConfig).toBe("function");
     expect(typeof toSafeObject).toBe("function");
     expect(typeof validateBaseUrl).toBe("function");

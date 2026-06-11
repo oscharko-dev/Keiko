@@ -16,6 +16,12 @@ export interface GatewayFetchOptions extends RequestInit {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly useCaFallback?: boolean | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  // When set, an AbortSignal.timeout(timeoutMs) is composed with any caller signal.
+  // A timeout during proxy CONNECT rejects with PROXY_UNREACHABLE; after tunnel
+  // establishment or on the direct path it surfaces as the standard AbortError.
+  readonly timeoutMs?: number | undefined;
+  // Override the default 10 MB cap for this fetch (e.g. large Figma render images).
+  readonly maxResponseBytes?: number | undefined;
 }
 
 export type OutboundHttpEgressErrorCode =
@@ -101,11 +107,24 @@ function readCertificateFile(path: string): readonly string[] {
   }
 }
 
+// One-time set of paths we have already warned about so the warning fires once per path.
+const warnedCaBundlePaths = new Set<string>();
+
 function extraCaCertificates(caBundlePath?: string): readonly string[] {
   const paths = [process.env.NODE_EXTRA_CA_CERTS, caBundlePath].filter(
     (path): path is string => path !== undefined && path.trim().length > 0,
   );
-  return paths.flatMap((path) => readCertificateFile(path));
+  return paths.flatMap((path) => {
+    const certs = readCertificateFile(path);
+    // Warn once when a configured path yields no certificates so the operator
+    // can tell the file is missing or unreadable without throwing at startup.
+    if (certs.length === 0 && !warnedCaBundlePaths.has(path)) {
+      warnedCaBundlePaths.add(path);
+      // eslint-disable-next-line no-console
+      console.warn(`[keiko-model-gateway] CA bundle at ${path} could not be read or is empty`);
+    }
+    return certs;
+  });
 }
 
 type CaCertificateSource = "default" | "system" | "bundled" | "extra";
@@ -134,6 +153,11 @@ export function gatewayTrustedCaCertificates(caBundlePath?: string): readonly st
   );
 }
 
+// Exposed for tests to reset the one-time warning set between runs.
+export function _resetWarnedCaBundlePaths(): void {
+  warnedCaBundlePaths.clear();
+}
+
 function bodyToString(body: BodyInit | null | undefined): string | undefined {
   if (body === undefined || body === null) {
     return undefined;
@@ -157,11 +181,14 @@ export function streamingResponseFromNode(
   maxBytes: number = MAX_RESPONSE_BYTES,
 ): Response {
   let total = 0;
+  let done = false;
   const body = new ReadableStream<Uint8Array>({
     start(controller): void {
       res.on("data", (chunk: Buffer) => {
+        if (done) return;
         total += chunk.length;
         if (total > maxBytes) {
+          done = true;
           controller.error(new Error("gateway response exceeded the size limit"));
           onCancel();
           return;
@@ -169,13 +196,18 @@ export function streamingResponseFromNode(
         controller.enqueue(new Uint8Array(chunk));
       });
       res.on("end", () => {
+        if (done) return;
+        done = true;
         controller.close();
       });
       res.on("error", (error) => {
+        if (done) return;
+        done = true;
         controller.error(error);
       });
     },
     cancel(): void {
+      done = true;
       onCancel();
     },
   });
@@ -186,13 +218,29 @@ export function streamingResponseFromNode(
   });
 }
 
+// Composes a caller-supplied AbortSignal with an AbortSignal.timeout so both
+// cancellation and deadline are observed. Returns undefined when neither is set.
+function composeSignal(
+  callerSignal: AbortSignal | null | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  const timeoutSignal = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
+  if (callerSignal != null && timeoutSignal !== undefined) {
+    return AbortSignal.any([callerSignal, timeoutSignal]);
+  }
+  if (callerSignal != null) return callerSignal;
+  return timeoutSignal;
+}
+
 function fetchWithCaBundle(
   url: string,
   init: RequestInit,
   egress?: OutboundHttpEgressConfig,
+  maxResponseBytes?: number,
 ): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
+  const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
     const req = httpsRequest(
       url,
@@ -203,7 +251,7 @@ function fetchWithCaBundle(
         signal: init.signal ?? undefined,
       },
       (res) => {
-        resolve(streamingResponseFromNode(res, () => req.destroy()));
+        resolve(streamingResponseFromNode(res, () => req.destroy(), cap));
       },
     );
     req.on("error", reject);
@@ -226,6 +274,16 @@ function defaultPort(protocol: string): string {
 
 function targetPort(url: URL): string {
   return url.port.length > 0 ? url.port : defaultPort(url.protocol);
+}
+
+// Returns the Host header value for a target URL: omit the port when it is the
+// default for the scheme (443 for https, 80 for http) so the value matches what
+// undici sends directly and satisfies SigV4 pre-signed S3 URLs behind a proxy.
+function hostHeader(url: URL): string {
+  const isDefaultPort =
+    (url.protocol === "https:" && (url.port === "" || url.port === "443")) ||
+    (url.protocol === "http:" && (url.port === "" || url.port === "80"));
+  return isDefaultPort ? url.hostname : `${url.hostname}:${url.port}`;
 }
 
 function noProxyRuleMatches(rule: string, host: string, hostPort: string): boolean {
@@ -294,6 +352,8 @@ const PROXY_UNREACHABLE_CODES = new Set([
   "ENETUNREACH",
 ]);
 
+const ABORT_ERROR_NAMES = new Set(["AbortError", "TimeoutError"]);
+
 function mapProxyError(error: unknown): Error {
   if (error instanceof OutboundHttpEgressError) return error;
   if (isRecoverableTlsTrustError(error)) {
@@ -302,13 +362,33 @@ function mapProxyError(error: unknown): Error {
       "TLS certificate verification failed for outbound egress.",
     );
   }
-  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
-  if (code !== undefined && PROXY_UNREACHABLE_CODES.has(code)) {
-    return new OutboundHttpEgressError("PROXY_UNREACHABLE", "Configured proxy is unreachable.");
+  if (error instanceof Error) {
+    const code = isRecord(error) ? (error as Record<string, unknown>).code : undefined;
+    if (
+      (typeof code === "string" && PROXY_UNREACHABLE_CODES.has(code)) ||
+      ABORT_ERROR_NAMES.has(error.name)
+    ) {
+      return new OutboundHttpEgressError("PROXY_UNREACHABLE", "Configured proxy is unreachable.");
+    }
+    return error;
   }
-  return error instanceof Error
-    ? error
-    : new OutboundHttpEgressError("PROXY_EGRESS_FAILED", "Outbound egress failed.");
+  return new OutboundHttpEgressError("PROXY_EGRESS_FAILED", "Outbound egress failed.");
+}
+
+const PROXY_UNREACHABLE_ERROR = new OutboundHttpEgressError(
+  "PROXY_UNREACHABLE",
+  "Configured proxy is unreachable.",
+);
+
+function attachAbortGuard(signal: AbortSignal, onAbort: () => void): () => void {
+  if (signal.aborted) {
+    onAbort();
+    return () => undefined;
+  }
+  signal.addEventListener("abort", onAbort, { once: true });
+  return () => {
+    signal.removeEventListener("abort", onAbort);
+  };
 }
 
 function openProxySocket(
@@ -339,12 +419,13 @@ function openProxySocket(
     const onAbort = (): void => {
       socket.destroy();
       settle(() => {
-        reject(new DOMException("The operation was aborted.", "AbortError"));
+        reject(PROXY_UNREACHABLE_ERROR);
       });
     };
+    let removeAbort = (): void => undefined;
     const cleanup = (): void => {
       socket.off("error", onError);
-      signal?.removeEventListener("abort", onAbort);
+      removeAbort();
     };
     const socket =
       proxy.protocol === "https:"
@@ -352,11 +433,7 @@ function openProxySocket(
         : netConnect({ host, port }, onConnect);
     socket.once("error", onError);
     if (signal !== undefined) {
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
-      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbort = attachAbortGuard(signal, onAbort);
     }
   });
 }
@@ -365,15 +442,13 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let settled = false;
-    const cleanup = (): void => {
-      socket.off("data", onData);
-      socket.off("error", onError);
-      signal?.removeEventListener("abort", onAbort);
-    };
+    let removeAbort = (): void => undefined;
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
-      cleanup();
+      socket.off("data", onData);
+      socket.off("error", onError);
+      removeAbort();
       fn();
     };
     const onData = (chunk: Buffer): void => {
@@ -395,17 +470,13 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
     const onAbort = (): void => {
       socket.destroy();
       settle(() => {
-        reject(new DOMException("The operation was aborted.", "AbortError"));
+        reject(PROXY_UNREACHABLE_ERROR);
       });
     };
     socket.on("data", onData);
     socket.once("error", onError);
     if (signal !== undefined) {
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
-      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbort = attachAbortGuard(signal, onAbort);
     }
   });
 }
@@ -505,10 +576,16 @@ function fetchHttpViaProxy(
   init: RequestInit,
   proxy: URL,
   ca: readonly string[],
+  maxResponseBytes?: number,
 ): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
+  // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs).
+  if (!Object.prototype.hasOwnProperty.call(headers, "host")) {
+    headers.host = hostHeader(target);
+  }
   const request = proxy.protocol === "https:" ? httpsRequest : httpRequest;
+  const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return responseFromClientRequest((resolve, reject) => {
     const req = request(
       {
@@ -523,9 +600,13 @@ function fetchHttpViaProxy(
       },
       (res: IncomingMessage) => {
         resolve(
-          streamingResponseFromNode(res, () => {
-            req.destroy();
-          }),
+          streamingResponseFromNode(
+            res,
+            () => {
+              req.destroy();
+            },
+            cap,
+          ),
         );
       },
     );
@@ -541,13 +622,20 @@ async function fetchHttpsViaProxy(
   init: RequestInit,
   proxy: URL,
   ca: readonly string[],
+  maxResponseBytes?: number,
 ): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
   if (!Object.prototype.hasOwnProperty.call(headers, "connection")) {
     headers.connection = "close";
   }
+  // Ensure Host header omits :443 so it matches what undici sends directly and
+  // satisfies SigV4 pre-signed S3 URLs behind a proxy.
+  if (!Object.prototype.hasOwnProperty.call(headers, "host")) {
+    headers.host = hostHeader(target);
+  }
   const socket = await createTlsTunnel(target, proxy, ca, init.signal ?? undefined);
+  const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return responseFromClientRequest((resolve, reject) => {
     const req = httpRequest(
       {
@@ -561,9 +649,13 @@ async function fetchHttpsViaProxy(
       },
       (res) => {
         resolve(
-          streamingResponseFromNode(res, () => {
-            req.destroy();
-          }),
+          streamingResponseFromNode(
+            res,
+            () => {
+              req.destroy();
+            },
+            cap,
+          ),
         );
       },
     );
@@ -579,33 +671,57 @@ function fetchViaProxy(
   init: RequestInit,
   proxyRaw: string,
   egress: OutboundHttpEgressConfig | undefined,
+  maxResponseBytes?: number,
 ): Promise<Response> {
   const proxy = parseProxyUrl(proxyRaw);
   const ca = gatewayTrustedCaCertificates(egress?.caBundlePath);
   return target.protocol === "https:"
-    ? fetchHttpsViaProxy(target, init, proxy, ca)
-    : fetchHttpViaProxy(target, init, proxy, ca);
+    ? fetchHttpsViaProxy(target, init, proxy, ca, maxResponseBytes)
+    : fetchHttpViaProxy(target, init, proxy, ca, maxResponseBytes);
+}
+
+// Extracted from gatewayFetch to keep its cyclomatic complexity within the limit.
+async function fetchDirectWithCaFallback(
+  url: string,
+  init: RequestInit,
+  doFetch: typeof fetch,
+  useCaFallback: boolean,
+  egress: OutboundHttpEgressConfig | undefined,
+  maxResponseBytes: number | undefined,
+): Promise<Response> {
+  try {
+    return await doFetch(url, init);
+  } catch (error) {
+    if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
+      return fetchWithCaBundle(url, init, egress, maxResponseBytes);
+    }
+    throw error;
+  }
 }
 
 export async function gatewayFetch(
   url: string,
   options: GatewayFetchOptions = {},
 ): Promise<Response> {
-  const { fetchImpl, useCaFallback = fetchImpl === undefined, egress, ...init } = options;
+  const {
+    fetchImpl,
+    useCaFallback = fetchImpl === undefined,
+    egress,
+    timeoutMs,
+    maxResponseBytes,
+    ...rest
+  } = options;
+  // Compose caller signal + optional timeout into a single signal for all paths.
+  const composedSignal = composeSignal(rest.signal, timeoutMs);
+  const init: RequestInit =
+    composedSignal !== undefined ? { ...rest, signal: composedSignal } : rest;
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
   const proxy = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
   if (proxy !== undefined) {
-    return fetchViaProxy(target, init, proxy, egress);
+    return fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
   }
-  try {
-    return await doFetch(url, init);
-  } catch (error) {
-    if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
-      return fetchWithCaBundle(url, init, egress);
-    }
-    throw error;
-  }
+  return fetchDirectWithCaFallback(url, init, doFetch, useCaFallback, egress, maxResponseBytes);
 }
 
 export async function readJsonCapped(
