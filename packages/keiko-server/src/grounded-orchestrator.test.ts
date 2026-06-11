@@ -611,6 +611,80 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("charges structural fan-out before running adapters", async () => {
+    const pairAdapter = testSourcePairingAdapter as {
+      lookup: typeof testSourcePairingAdapter.lookup;
+    };
+    const importAdapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const originalPairLookup = pairAdapter.lookup;
+    const originalImportLookup = importAdapter.lookup;
+    let pairCalls = 0;
+    let importCalls = 0;
+    pairAdapter.lookup = (...args): ReturnType<typeof originalPairLookup> => {
+      pairCalls += 1;
+      return originalPairLookup(...args);
+    };
+    importAdapter.lookup = (...args): ReturnType<typeof originalImportLookup> => {
+      importCalls += 1;
+      return originalImportLookup(...args);
+    };
+    try {
+      const out = await retrieveConnectedContextPack(
+        input({
+          query: happyQuery({
+            text: "Investigate src/foo.ts tests/foo.test.ts `MyClass`",
+          }),
+          budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 2 },
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      expect(out.pack.usage.searchCalls).toBe(2);
+      expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      pairAdapter.lookup = originalPairLookup;
+      importAdapter.lookup = originalImportLookup;
+    }
+    expect(pairCalls).toBe(0);
+    expect(importCalls).toBe(0);
+  });
+
+  it("clips answer-phase budget overages into a valid pack", async () => {
+    let now = NOW;
+    const budget: OrchestratorInput["budget"] = {
+      ...DEFAULT_EXPLORATION_BUDGET,
+      modelInputTokensMax: 10,
+      modelOutputTokensMax: 5,
+      elapsedMsMax: 100,
+    };
+    const answerer: GroundedAnswerer = {
+      answer: () => {
+        now += 250;
+        return Promise.resolve({
+          content: "answer",
+          usage: { promptTokens: 999, completionTokens: 777 },
+        });
+      },
+    };
+    const out = await runGroundedExploration(input({ budget }), {
+      answerer,
+      nowMs: () => now,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(out.elapsedMs).toBe(250);
+    expect(out.pack.usage.modelInputTokens).toBe(10);
+    expect(out.pack.usage.modelOutputTokens).toBe(5);
+    expect(out.pack.usage.elapsedMs).toBe(100);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("modelInputTokens"))).toBe(true);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("modelOutputTokens"))).toBe(true);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("elapsedMs"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("preserves repository-search omission reasons in the context pack", async () => {
     writeFileSync(join(ROOT, "src/asset.png"), "\x89PNG\r\n\x1a\n\0binary");
     const out = await runGroundedExploration(input(), {

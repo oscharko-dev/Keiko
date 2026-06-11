@@ -325,6 +325,10 @@ function redactedString(redactor: Redactor, value: string): string {
   return typeof redacted === "string" ? redacted : value;
 }
 
+export function promptSafeExcerptText(value: string): string {
+  return value.split("```").join("` ` `");
+}
+
 export function packBudgetSummary(pack: ConnectedContextPack): string {
   const { usage, budget } = pack;
   return [
@@ -357,7 +361,7 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
         `- Evidence ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
       );
       lines.push("```");
-      lines.push(redactedString(redactor, excerpt.content));
+      lines.push(promptSafeExcerptText(redactedString(redactor, excerpt.content)));
       lines.push("```");
     }
   }
@@ -583,6 +587,7 @@ function persistGroundedAuditEvidence(
       // the real grounding root so the audit trail is honest about which tree produced the answer.
       workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
+      plan: output.plan,
       pack: output.pack,
       citationCount,
       elapsedMs: output.elapsedMs,

@@ -192,6 +192,15 @@ function budgetClipped(stopReason: string, nowMs: number): UncertaintyMarker {
   };
 }
 
+function answerBudgetClipped(dimensions: readonly string[], nowMs: number): UncertaintyMarker {
+  return {
+    kind: "budget-clipped",
+    claim: `grounded answer exceeded budget: ${dimensions.join(", ")}`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 function noEvidence(nowMs: number): UncertaintyMarker {
   return {
     kind: "no-evidence",
@@ -337,6 +346,10 @@ function structuralQueriesForRing(
   return queries.length === 0 ? [inputs.query] : queries;
 }
 
+function plannedSearchCallsForRing(ring: RetrievalRing, inputs: SearchInputs): number {
+  return ring.kind === "structural" ? structuralQueriesForRing(ring, inputs).length : 1;
+}
+
 function mergeAtomsByStableId(
   results: readonly RunRingStructuralResult[],
   cap: number,
@@ -422,6 +435,29 @@ interface RingRunSummary {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
+interface RingReservation {
+  readonly governor: GovernorState;
+  readonly marker?: UncertaintyMarker | undefined;
+}
+
+function reserveRingSearchCalls(
+  governor: GovernorState,
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): RingReservation {
+  const reserved = applyUsage(
+    governor,
+    usageDelta({ searchCalls: plannedSearchCallsForRing(ring, inputs) }),
+  );
+  if (reserved.status !== "budget-exhausted") {
+    return { governor: reserved };
+  }
+  return {
+    governor: reserved,
+    marker: budgetClipped(reserved.stopReason ?? "budget exhausted", inputs.nowMs()),
+  };
+}
+
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
@@ -445,15 +481,12 @@ async function runAllRings(
     if (!canContinue(governor)) {
       break;
     }
-    const reservedSearchCall = applyUsage(governor, usageDelta({ searchCalls: 1 }));
-    if (reservedSearchCall.status === "budget-exhausted") {
-      governor = reservedSearchCall;
-      uncertainty.push(
-        budgetClipped(reservedSearchCall.stopReason ?? "budget exhausted", inputs.nowMs()),
-      );
+    const reservation = reserveRingSearchCalls(governor, ring, inputs);
+    governor = reservation.governor;
+    if (reservation.marker !== undefined) {
+      uncertainty.push(reservation.marker);
       break;
     }
-    governor = reservedSearchCall;
     const result = await runRing(ring, inputs);
     throwIfCancelled(inputs.signal);
     const afterRing = applyUsage(governor, result.usage);
@@ -911,15 +944,27 @@ export async function runGroundedExploration(
   const start = nowMs();
   const { pack, plan } = await retrieveConnectedContextPack(input, deps);
   const answer = normalizeGroundedAnswerPayload(await deps.answerer.answer(input.query.text, pack));
+  const elapsedMs = Math.max(0, nowMs() - start);
+  const exhaustedAnswerDimensions = [
+    ...(answer.usage.promptTokens > pack.budget.modelInputTokensMax ? ["modelInputTokens"] : []),
+    ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
+      ? ["modelOutputTokens"]
+      : []),
+    ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
+  ];
   const groundedPack: ConnectedContextPack = {
     ...pack,
     usage: {
       ...pack.usage,
-      modelInputTokens: answer.usage.promptTokens,
-      modelOutputTokens: answer.usage.completionTokens,
+      modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
+      modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
+      elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
     },
+    uncertainty:
+      exhaustedAnswerDimensions.length === 0
+        ? pack.uncertainty
+        : [...pack.uncertainty, answerBudgetClipped(exhaustedAnswerDimensions, nowMs())],
   };
-  const elapsedMs = Math.max(0, nowMs() - start);
   return { pack: groundedPack, assistantContent: answer.content, elapsedMs, plan };
 }
 

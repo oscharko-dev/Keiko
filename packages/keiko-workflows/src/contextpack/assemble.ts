@@ -470,6 +470,7 @@ function cacheUsage(usage: ExplorationUsage | undefined): object | undefined {
     excerptBytes: usage.excerptBytes,
     modelInputTokens: usage.modelInputTokens,
     modelOutputTokens: usage.modelOutputTokens,
+    elapsedMs: usage.elapsedMs,
     rerankCalls: usage.rerankCalls,
   };
 }

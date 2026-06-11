@@ -295,7 +295,7 @@ describe("assembleContextPack", () => {
     ]);
   });
 
-  it("micro-index key still reuses live repeated questions with fresh emitted timestamps", async () => {
+  it("micro-index key changes when elapsed usage changes", async () => {
     const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
     const first: AssembleInput = {
       ...baseInput(),
@@ -328,8 +328,9 @@ describe("assembleContextPack", () => {
     const r1 = await assembleContextPack(first, { nowMs: fixedNow, microIndex: idx });
     const r2 = await assembleContextPack(second, { nowMs: fixedNow, microIndex: idx });
     expect(r1.fromIndex).toBe(false);
-    expect(r2.fromIndex).toBe(true);
-    expect(r2.pack).toBe(r1.pack);
+    expect(r2.fromIndex).toBe(false);
+    expect(r2.pack).not.toBe(r1.pack);
+    expect(r2.pack.usage.elapsedMs).toBe(99);
   });
 
   it("produces an empty pack when there are no atoms or candidates", async () => {

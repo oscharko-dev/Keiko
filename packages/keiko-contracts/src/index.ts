@@ -254,6 +254,7 @@ export type {
   EvidenceConnectedContextFile,
   EvidenceConnectedContextOmitted,
   EvidenceConnectedContextUncertainty,
+  EvidenceConnectedContextPlan,
   EvidenceConnectedContextAudit,
   EvidenceManifest,
   AuditRedactionConfig,

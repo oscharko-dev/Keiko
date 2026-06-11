@@ -246,6 +246,17 @@ export interface EvidenceConnectedContextUncertainty {
   readonly impactedAtomCount: number;
 }
 
+export interface EvidenceConnectedContextPlan {
+  readonly planIdHash: string;
+  readonly state: string;
+  readonly createdAtMs: number | undefined;
+  readonly anchorCount: number;
+  readonly anchorKinds: Record<string, number>;
+  readonly anchorTermHashes: readonly string[];
+  readonly ringKinds: readonly string[];
+  readonly clarificationReason: string | undefined;
+}
+
 export interface EvidenceConnectedContextAudit {
   readonly packSchemaVersion: "1";
   readonly packStableIdHash: string;
@@ -256,6 +267,7 @@ export interface EvidenceConnectedContextAudit {
   };
   readonly scope: EvidenceConnectedContextScope;
   readonly query: EvidenceConnectedContextQuery;
+  readonly plan: EvidenceConnectedContextPlan | undefined;
   readonly budget: {
     readonly usage: Record<string, number>;
     readonly limits: Record<string, number>;

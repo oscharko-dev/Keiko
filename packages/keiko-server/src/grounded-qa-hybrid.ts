@@ -87,6 +87,7 @@ import {
   isValidGroundedPack,
   mappedGatewayError,
   persistGroundedExchange,
+  promptSafeExcerptText,
   redactString,
 } from "./grounded-qa.js";
 
@@ -140,6 +141,7 @@ interface RetrievedFolder {
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
   readonly scope: SelectedScope;
+  readonly plan: RetrievalOnlyOutput["plan"];
 }
 
 interface RetrievedConnector {
@@ -277,7 +279,7 @@ async function retrieveFolderPacks(
     if (!isValidGroundedPack(out.pack)) {
       return internalError("Grounded answer context pack failed validation.");
     }
-    retrieved.push({ label, pack: out.pack, elapsedMs: out.elapsedMs, scope });
+    retrieved.push({ label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan });
   }
   return retrieved;
 }
@@ -405,7 +407,9 @@ function buildRerankedHybridUserMessage(
     lines.push(`[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}`);
     lines.push("```text");
     lines.push(
-      candidate.redactedText.length > 0 ? candidate.redactedText : "(No excerpt text available.)",
+      candidate.redactedText.length > 0
+        ? promptSafeExcerptText(candidate.redactedText)
+        : "(No excerpt text available.)",
     );
     lines.push("```");
     lines.push("");
@@ -625,6 +629,7 @@ function persistFolderEvidence(
         modelId: ctx.modelId,
         workspaceRoot: src.scope.workspaceRoot,
         chatId: ctx.chat.id,
+        plan: src.plan,
         pack: src.pack,
         citationCount: buildCitations(src.pack, ctx.deps.redactor).length,
         elapsedMs: src.elapsedMs,
