@@ -13,7 +13,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { buildParserOptions, type ParserOptions, type ParserRegistry } from "../parsers/index.js";
 import type { KnowledgeStore } from "../store.js";
 
-import { extractDocument } from "./extract.js";
+import { extractDocument, recordExtractionFailure } from "./extract.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions, type ExtractionEvent } from "./types.js";
 import { walkSource, type WalkYield } from "./walk.js";
 
@@ -84,6 +84,15 @@ async function* handleWalkYield(
     if (yld.error.code === "CANCELLED") {
       yield { kind: "cancelled", reason: yld.error.message };
       return;
+    }
+    if (yld.error.relativePath !== undefined && yld.error.code !== "INVALID_SCOPE") {
+      recordExtractionFailure(deps, {
+        capsuleId: params.capsuleId,
+        source: params.source,
+        file: { relativePath: yld.error.relativePath, sizeBytes: 0 },
+        error: yld.error,
+      });
+      counters.failed += 1;
     }
     yield { kind: "scope-error", error: yld.error };
     return;

@@ -7,6 +7,8 @@ import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "@oscharko-de
 interface MemFsEntry {
   readonly content: Uint8Array;
   readonly realPathOverride?: string;
+  readonly hardLinkCount?: number;
+  readonly isSymbolicLink?: boolean;
 }
 
 function toAbs(root: string, rel: string): string {
@@ -55,6 +57,8 @@ export interface MemoryFsFile {
   readonly relativePath: string;
   readonly content: string | Uint8Array;
   readonly realPathOverride?: string;
+  readonly hardLinkCount?: number;
+  readonly isSymbolicLink?: boolean;
 }
 
 function buildMap(files: readonly MemoryFsFile[]): Map<string, MemFsEntry> {
@@ -62,10 +66,12 @@ function buildMap(files: readonly MemoryFsFile[]): Map<string, MemFsEntry> {
   const map = new Map<string, MemFsEntry>();
   for (const f of files) {
     const bytes = typeof f.content === "string" ? encoder.encode(f.content) : f.content;
-    const entry: MemFsEntry =
-      f.realPathOverride !== undefined
-        ? { content: bytes, realPathOverride: f.realPathOverride }
-        : { content: bytes };
+    const entry: MemFsEntry = {
+      content: bytes,
+      ...(f.realPathOverride !== undefined ? { realPathOverride: f.realPathOverride } : {}),
+      ...(f.hardLinkCount !== undefined ? { hardLinkCount: f.hardLinkCount } : {}),
+      ...(f.isSymbolicLink !== undefined ? { isSymbolicLink: f.isSymbolicLink } : {}),
+    };
     map.set(f.relativePath, entry);
   }
   return map;
@@ -91,7 +97,8 @@ function memoryStat(
       size: map.get(key)?.content.byteLength ?? 0,
       isFile: true,
       isDirectory: false,
-      isSymbolicLink: false,
+      isSymbolicLink: map.get(key)?.isSymbolicLink ?? false,
+      hardLinkCount: map.get(key)?.hardLinkCount,
     };
   };
 }

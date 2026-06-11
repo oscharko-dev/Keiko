@@ -122,10 +122,16 @@ export interface DocumentIdSource {
 // deterministic in `(capsuleId, sourceId, relativePath)` so a re-walk of the same scope
 // targets the SAME `documents` row — that's the lineage anchor for incremental updates.
 //
-// The `#` character is encoded as `%23` before embedding so that a file literally named
-// `a#u0.md` cannot produce an id that collides with a parsed_unit suffix (`#u0`) or a
-// diagnostic suffix (`#d0`) derived from a different document.
+// Delimiter characters are percent-escaped before embedding so that the three tuple members
+// stay injective even when source ids or paths contain `:`, `%`, or `#`. Ordinary paths keep
+// their historical ids; only collision-capable characters are escaped.
+function encodeDocumentIdComponent(value: string): string {
+  return value.replace(/%/g, "%25").replace(/#/g, "%23").replace(/:/g, "%3A");
+}
+
 export function documentIdFor(input: DocumentIdSource): DocumentId {
-  const encodedPath = input.relativePath.replace(/#/g, "%23");
-  return `doc:${String(input.capsuleId)}:${String(input.sourceId)}:${encodedPath}` as DocumentId;
+  const encodedCapsuleId = encodeDocumentIdComponent(String(input.capsuleId));
+  const encodedSourceId = encodeDocumentIdComponent(String(input.sourceId));
+  const encodedPath = encodeDocumentIdComponent(input.relativePath);
+  return `doc:${encodedCapsuleId}:${encodedSourceId}:${encodedPath}` as DocumentId;
 }

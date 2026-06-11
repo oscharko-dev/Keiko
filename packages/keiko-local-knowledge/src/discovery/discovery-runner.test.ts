@@ -10,7 +10,15 @@ import { addSourceToCapsule } from "../source-lifecycle.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
-import { buildParserOptions, createDefaultParserRegistry } from "../parsers/index.js";
+import {
+  buildParserOptions,
+  createDefaultParserRegistry,
+  createParserRegistry,
+  registerParser,
+  type ParserAdapter,
+  type ParserOptions,
+  type ParserSelectionInput,
+} from "../parsers/index.js";
 
 import { discoverAndExtract } from "./discovery-runner.js";
 import { folderScope, memoryFs } from "./test-support.js";
@@ -47,6 +55,13 @@ async function collect(iter: AsyncGenerator<ExtractionEvent>): Promise<readonly 
     events.push(evt);
   }
   return events;
+}
+
+function count(table: string): number {
+  const row = store._internal.db
+    .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c`)
+    .get({ c: capsuleId }) as { readonly n?: number } | undefined;
+  return row?.n ?? 0;
 }
 
 describe("discoverAndExtract — happy path", () => {
@@ -130,7 +145,67 @@ describe("discoverAndExtract — scope errors", () => {
     if (completed?.kind === "completed") {
       expect(completed.totalDiscovered).toBe(1);
       expect(completed.totalExtracted).toBe(1);
+      expect(completed.totalFailed).toBe(1);
     }
+    expect(count("documents")).toBe(2);
+    expect(count("parser_diagnostics")).toBe(1);
+  });
+
+  it("turns a throwing parser into one failed file and continues extracting later files", async () => {
+    const fs = memoryFs(ROOT, [
+      { relativePath: "bad.txt", content: "bad" },
+      { relativePath: "good.txt", content: "good" },
+    ]);
+    const adapter: ParserAdapter = {
+      capability: {
+        parserId: "scripted-text",
+        parserVersion: "1",
+        matches: (input: ParserSelectionInput) => input.extension === "txt",
+      },
+      parse: (input: ParserSelectionInput, options: ParserOptions) => {
+        const text = new TextDecoder("utf-8").decode(input.bytes);
+        if (text === "bad") throw new Error("parser failed");
+        return {
+          documentId: input.documentId,
+          parser: { parserId: "scripted-text", parserVersion: "1" },
+          pages: [],
+          sections: [],
+          units: [
+            {
+              kind: "section",
+              documentId: input.documentId,
+              sectionPath: ["good"],
+              characterStart: 0,
+              characterEnd: text.length,
+            },
+          ],
+          diagnostics: [],
+          extractedAt: options.now(),
+        };
+      },
+    };
+    const registry = registerParser(createParserRegistry(), adapter);
+
+    const events = await collect(
+      discoverAndExtract({ fs, store, parserRegistry: registry }, { capsuleId, source }),
+    );
+
+    const extracted = events.filter((e) => e.kind === "file-extracted");
+    expect(extracted).toHaveLength(2);
+    expect(
+      extracted.some(
+        (event) =>
+          event.result.outcome.kind === "failed" &&
+          event.result.outcome.error.code === "PARSER_FAILED",
+      ),
+    ).toBe(true);
+    const completed = events.find((e) => e.kind === "completed");
+    if (completed?.kind === "completed") {
+      expect(completed.totalDiscovered).toBe(2);
+      expect(completed.totalExtracted).toBe(1);
+      expect(completed.totalFailed).toBe(1);
+    }
+    expect(count("documents")).toBe(2);
   });
 });
 

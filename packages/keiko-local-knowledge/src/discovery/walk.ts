@@ -19,7 +19,7 @@
 
 import type { KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
 import { isSafeScopePath } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
@@ -136,10 +136,38 @@ function abortYield(): WalkYield {
   };
 }
 
-function safeStatSize(fs: WorkspaceFs, absolutePath: string): number | undefined {
+function safeStatFile(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  realPath: string,
+  relativePath: string,
+): WorkspaceStat | DiscoveryError | undefined {
   try {
-    const stats = fs.stat(absolutePath);
-    return stats.isFile ? stats.size : undefined;
+    const requestedStats = fs.stat(absolutePath);
+    if (requestedStats.hardLinkCount !== undefined && requestedStats.hardLinkCount > 1) {
+      return {
+        code: "READ_FAILED",
+        message: "selected file is not eligible for extraction",
+        relativePath,
+      };
+    }
+  } catch {
+    // Some WorkspaceFs fakes only stat the canonical realPath shape (not the mixed-separator
+    // requested path). Fall through to stat the resolved path below.
+  }
+  try {
+    const realStats = fs.stat(realPath);
+    if (!realStats.isFile) {
+      return undefined;
+    }
+    if (realStats.hardLinkCount !== undefined && realStats.hardLinkCount > 1) {
+      return {
+        code: "READ_FAILED",
+        message: "selected file is not eligible for extraction",
+        relativePath,
+      };
+    }
+    return realStats;
   } catch {
     return undefined;
   }
@@ -219,15 +247,23 @@ function* yieldFileIfAllowed(
     };
     return;
   }
+  const realRel = toPosixRelative(ctx.bounds.rootPath, real);
+  if (isDeniedRelativePath(realRel)) {
+    return;
+  }
   if (!isGlobMatched(ctx.bounds, relativePath)) {
     return;
   }
-  const size = safeStatSize(ctx.fs, real);
-  if (size === undefined) {
+  const stat = safeStatFile(ctx.fs, absolutePath, real, relativePath);
+  if (stat === undefined) {
+    return;
+  }
+  if ("code" in stat) {
+    yield { kind: "error", error: stat };
     return;
   }
   ctx.filesYielded += 1;
-  yield { kind: "file", file: { relativePath, sizeBytes: size } };
+  yield { kind: "file", file: { relativePath, sizeBytes: stat.size } };
 }
 
 interface WalkDirEntry {

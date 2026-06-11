@@ -19,6 +19,7 @@ import {
   registerParser,
 } from "../parsers/index.js";
 import type {
+  AsyncParserAdapter,
   ParserAdapter,
   ParserOptions,
   ParserRegistry,
@@ -96,6 +97,38 @@ describe("extractDocument — markdown success path", () => {
       )
       .get({ c: capsuleId, d: doc.id }) as { readonly normalized_text?: string } | undefined;
     expect(textRow?.normalized_text).toBe("# Hello\n\nWorld");
+  });
+
+  it("persists colliding-looking filenames as separate documents", async () => {
+    const fs = memoryFs(ROOT, [
+      { relativePath: "a#u0.md", content: "# Hash" },
+      { relativePath: "a%23u0.md", content: "# Percent" },
+    ]);
+    const registry = createDefaultParserRegistry();
+
+    const first = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "a#u0.md", sizeBytes: 6 },
+      },
+    );
+    const second = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "a%23u0.md", sizeBytes: 9 },
+      },
+    );
+
+    expect(first.outcome.kind).toBe("persisted");
+    expect(second.outcome.kind).toBe("persisted");
+    if (first.outcome.kind !== "persisted" || second.outcome.kind !== "persisted") return;
+    expect(first.outcome.document.id).not.toBe(second.outcome.document.id);
+    expect(count("documents")).toBe(2);
+    expect(count("document_texts")).toBe(2);
   });
 });
 
@@ -348,7 +381,118 @@ describe("extractDocument — path containment", () => {
     expect(result.outcome.kind).toBe("failed");
     if (result.outcome.kind !== "failed") return;
     expect(result.outcome.error.code).toBe("PATH_ESCAPE");
+    expect(result.outcome.document.status).toBe("failed");
+    expect(count("documents")).toBe(1);
+    expect(count("parser_diagnostics")).toBe(1);
+  });
+
+  it("rejects direct extraction for files outside the selected source policy without persisting them", async () => {
+    source = addSourceToCapsule(store, capsuleId, {
+      id: "src-scoped" as KnowledgeSourceId,
+      displayName: "scoped docs",
+      tags: [],
+      scope: folderScope(ROOT, {
+        includeGlobs: ["docs/**"],
+        excludeGlobs: ["docs/private/**"],
+      }),
+    });
+    const fs = memoryFs(ROOT, [
+      { relativePath: "README.md", content: "# Hidden from scope" },
+      { relativePath: "docs/private/secret.md", content: "# Private" },
+    ]);
+    const registry = createDefaultParserRegistry();
+
+    const outside = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "README.md", sizeBytes: 19 } },
+    );
+    const excluded = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "docs/private/secret.md", sizeBytes: 9 } },
+    );
+
+    expect(outside.outcome.kind).toBe("failed");
+    expect(excluded.outcome.kind).toBe("failed");
+    if (outside.outcome.kind === "failed") expect(outside.outcome.error.code).toBe("INVALID_SCOPE");
+    if (excluded.outcome.kind === "failed")
+      expect(excluded.outcome.error.code).toBe("INVALID_SCOPE");
     expect(count("documents")).toBe(0);
+  });
+
+  it("rechecks denied real paths before reading direct extraction targets", async () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/link.txt",
+        content: "secret",
+        realPathOverride: `${ROOT}/.env`,
+      },
+      { relativePath: ".env", content: "TOKEN=1" },
+    ]);
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "docs/link.txt", sizeBytes: 6 } },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("READ_FAILED");
+    expect(result.outcome.error.message).toBe("resolved file is denied by workspace policy");
+    expect(count("documents")).toBe(1);
+    expect(count("document_texts")).toBe(0);
+  });
+
+  it("allows in-scope symlinks after realpath containment and deny checks pass", async () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/link.txt",
+        content: "ignored symlink bytes",
+        realPathOverride: `${ROOT}/docs/target.txt`,
+        isSymbolicLink: true,
+      },
+      { relativePath: "docs/target.txt", content: "target text" },
+    ]);
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "docs/link.txt", sizeBytes: 10 } },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.documentPath).toBe("docs/link.txt");
+    const row = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | { readonly normalized_text?: string }
+      | undefined;
+    expect(row?.normalized_text).toBe("target text");
+  });
+
+  it("rejects hard-linked direct extraction targets before reading bytes", async () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/allowed.txt",
+        content: "secret",
+        hardLinkCount: 2,
+      },
+    ]);
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "docs/allowed.txt", sizeBytes: 6 } },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("READ_FAILED");
+    expect(result.outcome.error.message).toBe("selected file is not eligible for extraction");
+    expect(count("documents")).toBe(1);
   });
 
   it("redacts absolute paths from parser diagnostics before returning and persisting them", async () => {
@@ -414,6 +558,119 @@ describe("extractDocument — path containment", () => {
     expect(row?.message).not.toContain(privateRoot);
     expect(row?.message).toContain("~/secret.txt");
   });
+
+  it("persists a redacted failed row when byte reading fails", async () => {
+    const privateRoot = "/Users/victim/work/docs";
+    source = addSourceToCapsule(store, capsuleId, {
+      id: "src-read-fail" as KnowledgeSourceId,
+      displayName: "private docs",
+      tags: [],
+      scope: folderScope(privateRoot),
+    });
+    const fs = {
+      ...memoryFs(privateRoot, [{ relativePath: "secret.txt", content: "hidden" }]),
+      readFileBytes: (_absolutePath: string, _maxBytes: number): Promise<Uint8Array> =>
+        Promise.reject(new Error(`${privateRoot}/secret.txt is locked`)),
+    };
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "secret.txt", sizeBytes: 6 },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("READ_FAILED");
+    expect(result.outcome.error.message).not.toContain(privateRoot);
+    expect(count("documents")).toBe(1);
+    const row = store._internal.db
+      .prepare("SELECT message FROM parser_diagnostics WHERE capsule_id = :c LIMIT 1")
+      .get({ c: capsuleId }) as { readonly message?: string } | undefined;
+    expect(row?.message).toBe("readFileBytes failed for selected file");
+  });
+
+  it("converts a throwing parser adapter into a persisted failed extraction", async () => {
+    const privateRoot = "/Users/victim/work/docs";
+    source = addSourceToCapsule(store, capsuleId, {
+      id: "src-throwing" as KnowledgeSourceId,
+      displayName: "private docs",
+      tags: [],
+      scope: folderScope(privateRoot),
+    });
+    const fs = memoryFs(privateRoot, [{ relativePath: "bad.txt", content: "bad" }]);
+    const adapter: ParserAdapter = {
+      capability: {
+        parserId: "throwing-parser",
+        parserVersion: "1",
+        matches: () => true,
+      },
+      parse: () => {
+        throw new Error(`boom at ${privateRoot}/bad.txt`);
+      },
+    };
+    const registry: ParserRegistry = {
+      list: () => [adapter],
+      resolve: () => ({ kind: "matched", adapter }),
+    };
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "bad.txt", sizeBytes: 3 },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error).toMatchObject({
+      code: "PARSER_FAILED",
+      message: "parser adapter failed while extracting document",
+    });
+    expect(result.outcome.error.message).not.toContain(privateRoot);
+    expect(count("documents")).toBe(1);
+    expect(count("parser_diagnostics")).toBe(1);
+  });
+
+  it("converts an async parser rejection into a persisted failed extraction", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "bad.txt", content: "bad" }]);
+    const adapter: AsyncParserAdapter = {
+      capability: {
+        parserId: "async-throwing-parser",
+        parserVersion: "1",
+        matches: () => true,
+      },
+      parse: () => {
+        throw new Error("sync path should not run");
+      },
+      parseAsync: () => Promise.reject(new Error("async parser failed")),
+    };
+    const registry: ParserRegistry = {
+      list: () => [adapter],
+      resolve: () => ({ kind: "matched", adapter }),
+    };
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "bad.txt", sizeBytes: 3 },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("PARSER_FAILED");
+    expect(count("documents")).toBe(1);
+    expect(count("parser_diagnostics")).toBe(1);
+  });
 });
 
 describe("documentIdFor", () => {
@@ -440,6 +697,35 @@ describe("documentIdFor", () => {
     expect(hashFile).not.toBe(unitId);
     // Also verify the # is encoded in the id (not raw).
     expect(String(hashFile)).toContain("%23");
+  });
+
+  it("escapes %, #, and : so distinct source/path tuples cannot collide", () => {
+    const hashPath = documentIdFor({
+      capsuleId,
+      sourceId: source.id,
+      relativePath: "a#u0.md",
+    });
+    const percentPath = documentIdFor({
+      capsuleId,
+      sourceId: source.id,
+      relativePath: "a%23u0.md",
+    });
+    const sourceColon = documentIdFor({
+      capsuleId,
+      sourceId: "src:x" as KnowledgeSourceId,
+      relativePath: "y.md",
+    });
+    const pathColon = documentIdFor({
+      capsuleId,
+      sourceId: "src" as KnowledgeSourceId,
+      relativePath: "x:y.md",
+    });
+
+    expect(hashPath).not.toBe(percentPath);
+    expect(sourceColon).not.toBe(pathColon);
+    expect(String(percentPath)).toContain("%25");
+    expect(String(sourceColon)).toContain("src%3Ax");
+    expect(String(pathColon)).toContain("x%3Ay.md");
   });
 });
 
@@ -469,5 +755,34 @@ describe("extractDocument — Windows separator normalisation", () => {
       // Provide diagnostic info if the test fails.
       expect(result.outcome.error.code).not.toBe("PATH_ESCAPE");
     }
+  });
+
+  it("normalizes direct extraction relative paths before minting document ids", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "docs/guide.md", content: "# Guide" }]);
+    const registry = createDefaultParserRegistry();
+
+    const first = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "docs\\guide.md", sizeBytes: 7 },
+      },
+    );
+    const second = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "docs/guide.md", sizeBytes: 7 },
+      },
+    );
+
+    expect(first.outcome.kind).toBe("persisted");
+    expect(second.outcome.kind).toBe("skipped");
+    if (first.outcome.kind !== "persisted" || second.outcome.kind !== "skipped") return;
+    expect(first.outcome.document.id).toBe(second.outcome.document.id);
+    expect(first.outcome.document.documentPath).toBe("docs/guide.md");
+    expect(count("documents")).toBe(1);
   });
 });

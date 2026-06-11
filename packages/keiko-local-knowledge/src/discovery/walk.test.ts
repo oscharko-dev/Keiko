@@ -94,7 +94,12 @@ describe("walkSource — Windows separator normalisation", () => {
       readFileUtf8: () => "content",
       stat: (p) => {
         if (p === winRoot || p === "C:\\Users\\workspace\\docs\\notes\\report.md") {
-          return { size: fileContent.byteLength, isFile: p !== winRoot, isDirectory: p === winRoot, isSymbolicLink: false };
+          return {
+            size: fileContent.byteLength,
+            isFile: p !== winRoot,
+            isDirectory: p === winRoot,
+            isSymbolicLink: false,
+          };
         }
         throw new Error(`ENOENT: ${p}`);
       },
@@ -120,7 +125,8 @@ describe("walkSource — Windows separator normalisation", () => {
       recursive: true,
     })) {
       if (yld.kind === "file") files.push(yld.file.relativePath);
-      if (yld.kind === "error" && yld.error.code === "PATH_ESCAPE") errors.push(yld.error.relativePath ?? "");
+      if (yld.kind === "error" && yld.error.code === "PATH_ESCAPE")
+        errors.push(yld.error.relativePath ?? "");
     }
     // The file must not be rejected as PATH_ESCAPE; containment must pass after normalisation.
     expect(errors).toStrictEqual([]);
@@ -148,6 +154,62 @@ describe("walkSource — path containment", () => {
     }
     expect(errors).toStrictEqual(["shady.txt"]);
     expect(files).toStrictEqual(["README.md"]);
+  });
+
+  it("does not yield files whose realPath resolves to a denied workspace path", () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/link.txt",
+        content: "secret",
+        realPathOverride: `${ROOT}/.env`,
+      },
+      { relativePath: ".env", content: "SECRET=1" },
+    ]);
+
+    const files = collect(folderScope(ROOT), fs);
+
+    expect(files).toStrictEqual([]);
+  });
+
+  it("yields in-scope symlinks after their realPath passes the boundary checks", () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/link.txt",
+        content: "ignored",
+        realPathOverride: `${ROOT}/docs/target.txt`,
+        isSymbolicLink: true,
+      },
+      { relativePath: "docs/target.txt", content: "target" },
+    ]);
+    const scope: KnowledgeSourceScope = {
+      kind: "files",
+      rootPath: ROOT,
+      files: ["docs/link.txt"],
+    };
+
+    const files = collect(scope, fs);
+
+    expect(files).toStrictEqual(["docs/link.txt"]);
+  });
+
+  it("emits a READ_FAILED error for hard-linked aliases", () => {
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/allowed.txt",
+        content: "secret",
+        hardLinkCount: 2,
+      },
+    ]);
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe("error");
+    if (out[0]?.kind === "error") {
+      expect(out[0].error).toMatchObject({
+        code: "READ_FAILED",
+        relativePath: "docs/allowed.txt",
+      });
+    }
   });
 
   it("emits INVALID_SCOPE when the scope root is unsafe", () => {
