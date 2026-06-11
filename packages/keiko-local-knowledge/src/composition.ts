@@ -19,19 +19,21 @@
 
 import { randomUUID } from "node:crypto";
 
-import type {
-  CapsuleSet,
-  CapsuleSetId,
-  KnowledgeCapsule,
-  KnowledgeCapsuleId,
-  KnowledgeSource,
-  KnowledgeSourceId,
-  KnowledgeSourceScopeKind,
+import {
+  isSafeDisplaySummary,
+  validateKnowledgeSourceScope,
+  type CapsuleSet,
+  type CapsuleSetId,
+  type KnowledgeCapsule,
+  type KnowledgeCapsuleId,
+  type KnowledgeSource,
+  type KnowledgeSourceId,
+  type KnowledgeSourceScopeKind,
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule } from "./capsule-lifecycle.js";
 import { getCapsuleSet, createCapsuleSet, createCapsuleSetWithinTxn } from "./capsule-set-lifecycle.js";
-import { KnowledgeNotFoundError } from "./errors.js";
+import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import { listCapsuleSources, type AddCapsuleSourceInput } from "./source-lifecycle.js";
 import { validateSourceRoutingForCapsule } from "./source-routing-validation.js";
 import type { KnowledgeStore } from "./store.js";
@@ -234,7 +236,28 @@ export function addSourcesToCapsule(
     throw new KnowledgeNotFoundError(`Capsule not found: ${String(capsuleId)}`);
   }
   assertNoneAlreadyLinked(store, capsuleId, inputs);
+  assertSafeSourceInputs(inputs);
   return runAddSourcesTransaction(store, capsuleId, inputs);
+}
+
+function assertSafeSourceInputs(inputs: readonly AddCapsuleSourceInput[]): void {
+  for (const input of inputs) {
+    if (input.displayName.trim().length === 0 || !isSafeDisplaySummary(input.displayName)) {
+      throw new KnowledgeStoreError("displayName must be a browser-safe non-empty string");
+    }
+    if (input.description !== undefined && !isSafeDisplaySummary(input.description)) {
+      throw new KnowledgeStoreError("description must be browser-safe when set");
+    }
+    for (const tag of input.tags) {
+      if (tag.trim().length === 0 || !isSafeDisplaySummary(tag)) {
+        throw new KnowledgeStoreError("tag must be a browser-safe non-empty string");
+      }
+    }
+    const result = validateKnowledgeSourceScope(input.scope);
+    if (!result.ok) {
+      throw new KnowledgeStoreError(result.errors.join(" "));
+    }
+  }
 }
 
 function assertNoDuplicateInputIds(inputs: readonly AddCapsuleSourceInput[]): void {
@@ -279,14 +302,16 @@ function runAddSourcesTransaction(
   // insert against the same `capsule_sources` table.
   db.exec("BEGIN");
   try {
+    const insertKnowledgeSource = db.prepare(
+      "INSERT INTO knowledge_sources (id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at) ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, description = excluded.description, tags_json = excluded.tags_json, scope_kind = excluded.scope_kind, scope_json = excluded.scope_json, updated_at = excluded.updated_at",
+    );
     const insertSource = db.prepare(
       "INSERT INTO capsule_sources (id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :capsule_id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at)",
     );
     const insertAudit = db.prepare(INSERT_AUDIT_SQL);
     for (const input of inputs) {
-      insertSource.run({
+      const params = {
         id: input.id,
-        capsule_id: capsuleId,
         display_name: input.displayName,
         description: input.description ?? null,
         tags_json: JSON.stringify(input.tags),
@@ -294,7 +319,9 @@ function runAddSourcesTransaction(
         scope_json: scopeJsonWithoutKind(input.scope),
         created_at: now,
         updated_at: now,
-      });
+      };
+      insertKnowledgeSource.run(params);
+      insertSource.run({ ...params, capsule_id: capsuleId });
       insertAudit.run({
         id: randomUUID(),
         capsule_id: capsuleId,

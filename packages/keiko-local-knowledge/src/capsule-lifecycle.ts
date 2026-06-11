@@ -21,6 +21,7 @@ import {
   type KnowledgeCapsule,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
+  isSafeStorageReference,
   isSafeDisplaySummary,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -141,6 +142,9 @@ function assertSafeCreateCapsuleInput(input: CreateCapsuleInput): void {
   assertSafeOptionalDisplayField("sourceRoutingInstructions", input.sourceRoutingInstructions);
   for (const tag of input.tags) {
     assertSafeDisplayField("tag", tag);
+  }
+  if (!isSafeStorageReference(input.storageReference)) {
+    throw new KnowledgeStoreError("storageReference must be a safe relative path");
   }
 }
 

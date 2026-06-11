@@ -231,6 +231,8 @@ describe("local-knowledge handlers", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(201);
     // The freshly attached source is surfaced in the capsule detail body.
     expect(JSON.stringify(result.body)).toContain("Manuals");
+    expect(JSON.stringify(result.body)).toContain('"scope":{"kind":"folder"}');
+    expect(JSON.stringify(result.body)).not.toContain(docsRoot);
   });
 
   it("writes source-added audit history when a source is connected", async () => {
@@ -975,8 +977,8 @@ describe("local-knowledge handlers", () => {
       scope: { kind: "folder", rootPath: join(tmp, "docs"), recursive: true },
     });
     store._internal.db
-      .prepare("UPDATE capsule_sources SET scope_json = '{' WHERE capsule_id = :c AND id = 'src-1'")
-      .run({ c: capId });
+      .prepare("UPDATE knowledge_sources SET scope_json = '{' WHERE id = 'src-1'")
+      .run();
     store.close();
 
     const result = await handleGetLocalKnowledgeCapsule(
@@ -986,8 +988,14 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({
-      error: { code: "LOCAL_KNOWLEDGE_UNAVAILABLE" },
+      error: {
+        code: "LOCAL_KNOWLEDGE_UNAVAILABLE",
+        message:
+          "Local knowledge storage is unavailable. Check the local runtime state and try again.",
+      },
     });
+    expect(JSON.stringify(result.body)).not.toContain(tmp);
+    expect(JSON.stringify(result.body)).not.toContain("scope_json");
   });
 
   it("recovers an orphaned running job to a terminal state after restart", async () => {

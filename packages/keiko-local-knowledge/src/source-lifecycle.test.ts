@@ -4,7 +4,7 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createCapsule } from "./capsule-lifecycle.js";
-import { KnowledgeNotFoundError } from "./errors.js";
+import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import {
   addSourceToCapsule,
   listCapsuleSources,
@@ -41,6 +41,10 @@ describe("addSourceToCapsule + listCapsuleSources", () => {
     const sources = listCapsuleSources(store, capsuleId);
     expect(sources).toHaveLength(1);
     expect(sources[0]).toStrictEqual(source);
+    const independent = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM knowledge_sources WHERE id = 'src-1'")
+      .get() as unknown as CountRow;
+    expect(independent.n).toBe(1);
   });
 
   it("returns an empty array when the capsule has no sources", () => {
@@ -67,6 +71,21 @@ describe("addSourceToCapsule + listCapsuleSources", () => {
       expect(source.scope.repositoryRoot).toBe("/srv/repo");
     }
   });
+
+  it("rejects unsafe scope paths before persistence", () => {
+    expect(() =>
+      addSourceToCapsule(store, capsuleId, {
+        id: "src-bad" as KnowledgeSourceId,
+        displayName: "bad",
+        tags: [],
+        scope: { kind: "folder", rootPath: "../escape", recursive: true },
+      }),
+    ).toThrow(KnowledgeStoreError);
+    const row = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM knowledge_sources WHERE id = 'src-bad'")
+      .get() as unknown as CountRow;
+    expect(row.n).toBe(0);
+  });
 });
 
 describe("removeSourceFromCapsule", () => {
@@ -74,6 +93,10 @@ describe("removeSourceFromCapsule", () => {
     addSourceToCapsule(store, capsuleId, sampleSourceInput("src-x"));
     removeSourceFromCapsule(store, capsuleId, "src-x" as KnowledgeSourceId);
     expect(listCapsuleSources(store, capsuleId)).toStrictEqual([]);
+    const independent = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM knowledge_sources WHERE id = 'src-x'")
+      .get() as unknown as CountRow;
+    expect(independent.n).toBe(1);
   });
 
   it("raises KnowledgeNotFoundError when the source does not belong to the capsule", () => {

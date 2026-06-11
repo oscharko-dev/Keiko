@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 9 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 10 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -61,12 +61,42 @@ CREATE TABLE capsules (
 ) STRICT;
 `.trim();
 
+const CREATE_KNOWLEDGE_SOURCES = `
+CREATE TABLE knowledge_sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  tags_json TEXT NOT NULL,
+  scope_kind TEXT NOT NULL,
+  scope_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+`.trim();
+
 // capsule_sources adds UNIQUE (capsule_id, id) so dependent tables can FK against the
 // composite (capsule_id, source_id) pair — that enforces the Foundry-IQ lineage invariant
 // at the database level: a chunk's source_id cannot belong to a different capsule than the
-// chunk itself. Independent single-column FKs would let mismatched capsule/source/document
-// IDs co-exist on the same chunk row.
+// chunk itself. It also links to `knowledge_sources`, the independent source metadata table
+// used by lifecycle reads; existing stores gain that table through the v10 backfill.
 const CREATE_CAPSULE_SOURCES = `
+CREATE TABLE capsule_sources (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  tags_json TEXT NOT NULL,
+  scope_kind TEXT NOT NULL,
+  scope_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (id) REFERENCES knowledge_sources(id) ON DELETE RESTRICT,
+  UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+const CREATE_CAPSULE_SOURCES_V1 = `
 CREATE TABLE capsule_sources (
   id TEXT PRIMARY KEY NOT NULL,
   capsule_id TEXT NOT NULL,
@@ -341,6 +371,7 @@ const CREATE_CAPSULE_AUDIT_EVENTS_INDEX =
 export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   PRAGMA_FOREIGN_KEYS,
   CREATE_CAPSULES,
+  CREATE_KNOWLEDGE_SOURCES,
   CREATE_CAPSULE_SOURCES,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
@@ -359,6 +390,11 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
 
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
 export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
+  "CREATE INDEX idx_knowledge_sources_updated ON knowledge_sources(updated_at DESC, id ASC);",
+  "CREATE INDEX idx_capsule_set_members_capsule ON capsule_set_members(capsule_id);",
+  "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
+  "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
+  "CREATE INDEX idx_sections_capsule ON sections(capsule_id);",
   "CREATE INDEX idx_documents_capsule_source ON documents(capsule_id, source_id, status);",
   "CREATE INDEX idx_documents_capsule_status ON documents(capsule_id, status);",
   "CREATE INDEX idx_documents_content_hash ON documents(capsule_id, content_hash);",
@@ -399,7 +435,7 @@ export interface KnowledgeCapsuleMigration {
 const V1_DDL_WITHOUT_V2: readonly string[] = [
   PRAGMA_FOREIGN_KEYS,
   CREATE_CAPSULES,
-  CREATE_CAPSULE_SOURCES,
+  CREATE_CAPSULE_SOURCES_V1,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
   CREATE_PAGES,
@@ -431,6 +467,23 @@ const V9_PERFORMANCE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_parsed_units_capsule_document ON parsed_units(capsule_id, document_id);",
   "CREATE INDEX idx_parser_diagnostics_capsule_created ON parser_diagnostics(capsule_id, created_at DESC, id DESC);",
   "CREATE INDEX idx_indexing_jobs_capsule_started ON indexing_jobs(capsule_id, started_at DESC, id DESC);",
+] as const;
+
+const V10_SOURCE_AND_DELETE_INDEXES: readonly string[] = [
+  CREATE_KNOWLEDGE_SOURCES,
+  `
+INSERT INTO knowledge_sources (
+  id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at
+)
+SELECT id, display_name, description, tags_json, scope_kind, scope_json, MIN(created_at), MAX(updated_at)
+FROM capsule_sources
+GROUP BY id;
+`.trim(),
+  "CREATE INDEX idx_knowledge_sources_updated ON knowledge_sources(updated_at DESC, id ASC);",
+  "CREATE INDEX idx_capsule_set_members_capsule ON capsule_set_members(capsule_id);",
+  "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
+  "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
+  "CREATE INDEX idx_sections_capsule ON sections(capsule_id);",
 ] as const;
 
 const CREATE_CAPSULE_MEMBERSHIP_CHANGES_V5 = CREATE_CAPSULE_MEMBERSHIP_CHANGES.replace(
@@ -553,6 +606,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "Add large-capsule scoped indexes for retrieval filters, health counts, bounded history reads, and retention cleanup (Issue #265 audit).",
     up: V9_PERFORMANCE_INDEXES,
   },
+  {
+    version: 10,
+    reason:
+      "Persist KnowledgeSources independently from capsule membership and index capsule-delete verification paths (Issue #193 audit).",
+    up: V10_SOURCE_AND_DELETE_INDEXES,
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -579,12 +638,18 @@ export const KNOWLEDGE_CAPSULE_V1_TABLES: readonly string[] = [
 
 export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   ...KNOWLEDGE_CAPSULE_V1_TABLES,
+  "knowledge_sources",
   "document_texts",
   "capsule_membership_changes",
   "capsule_audit_events",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
+  "idx_knowledge_sources_updated",
+  "idx_capsule_set_members_capsule",
+  "idx_document_texts_capsule",
+  "idx_pages_capsule",
+  "idx_sections_capsule",
   "idx_documents_capsule_source",
   "idx_documents_capsule_status",
   "idx_documents_content_hash",

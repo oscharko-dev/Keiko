@@ -85,7 +85,7 @@ const FULL_DETAIL: CapsuleDetailData = {
     {
       sourceId: "src-1",
       displayName: "Project Docs",
-      scope: { kind: "folder", rootPath: "/docs", recursive: true },
+      scope: { kind: "folder" },
       // Use distinct counts from the job below so getByText doesn't find duplicates
       indexedCount: 8,
       failedCount: 1,

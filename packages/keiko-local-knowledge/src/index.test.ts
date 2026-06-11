@@ -41,8 +41,6 @@ const PUBLIC_EXPORTS = [
   "mediaTypeFor",
   "walkSource",
   "DEFAULT_DISCOVERY_OPTIONS",
-  "scriptedAdapter",
-  "seedCapsuleWithVectors",
 ] as const;
 
 describe("barrel surface", () => {
@@ -61,7 +59,6 @@ describe("barrel surface", () => {
   it("does not expose unscoped chunk/vector readers", () => {
     const names = Object.keys(api);
     const offenders = names.filter((name) => {
-      if (name === "seedCapsuleWithVectors") return false;
       return (
         /^list(All|Every)/.test(name) ||
         /Vectors?$/.test(name) ||
@@ -71,6 +68,8 @@ describe("barrel surface", () => {
       );
     });
     expect(offenders, `unscoped reader exports leaked: ${offenders.join(", ")}`).toStrictEqual([]);
+    expect(api).not.toHaveProperty("scriptedAdapter");
+    expect(api).not.toHaveProperty("seedCapsuleWithVectors");
   });
 
   it("each `list*` export takes the capsule (or set) as its scope arg", () => {

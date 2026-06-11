@@ -26,9 +26,9 @@ import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
-  seedCapsuleWithVectors,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import {
   handleGroundedAsk,

@@ -62,6 +62,8 @@ const MAX_BODY_BYTES = 32_000;
 // thousands of parser diagnostics / job rows cannot inflate a single JSON response.
 const MAX_DIAGNOSTICS_PER_RESPONSE = 500;
 const MAX_JOBS_PER_RESPONSE = 500;
+const LOCAL_KNOWLEDGE_STORE_UNAVAILABLE_MESSAGE =
+  "Local knowledge storage is unavailable. Check the local runtime state and try again.";
 
 class InvalidRequest extends Error {
   public constructor(message: string) {
@@ -370,7 +372,7 @@ function loadSourceStats(
 ): readonly {
   readonly sourceId: string;
   readonly displayName: string;
-  readonly scope: KnowledgeSource["scope"];
+  readonly scope: { readonly kind: KnowledgeSource["scope"]["kind"] };
   readonly indexedCount: number;
   readonly failedCount: number;
   readonly skippedCount: number;
@@ -378,14 +380,15 @@ function loadSourceStats(
   const rows = store._internal.db
     .prepare(
       [
-        "SELECT s.id AS source_id, s.display_name, s.scope_kind, s.scope_json,",
+        "SELECT s.id AS source_id, ks.display_name, ks.scope_kind, ks.scope_json,",
         "  SUM(CASE WHEN d.status = 'extracted' THEN 1 ELSE 0 END) AS indexed_count,",
         "  SUM(CASE WHEN d.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,",
         "  SUM(CASE WHEN d.status IN ('skipped', 'unsupported') THEN 1 ELSE 0 END) AS skipped_count",
         "FROM capsule_sources AS s",
+        "JOIN knowledge_sources AS ks ON ks.id = s.id",
         "LEFT JOIN documents AS d ON d.capsule_id = s.capsule_id AND d.source_id = s.id",
         "WHERE s.capsule_id = :c",
-        "GROUP BY s.id, s.display_name, s.scope_kind, s.scope_json",
+        "GROUP BY s.id, ks.display_name, ks.scope_kind, ks.scope_json",
         "ORDER BY s.created_at ASC, s.id ASC",
       ].join(" "),
     )
@@ -393,7 +396,7 @@ function loadSourceStats(
   return rows.map((row) => ({
     sourceId: row.source_id,
     displayName: row.display_name,
-    scope: parseScope(row.scope_kind, row.scope_json),
+    scope: { kind: parseScope(row.scope_kind, row.scope_json).kind },
     indexedCount: row.indexed_count,
     failedCount: row.failed_count,
     skippedCount: row.skipped_count,
@@ -720,6 +723,15 @@ function canonicalizeCapsuleSourceRoots(
     if (JSON.stringify(canonicalScope) === JSON.stringify(source.scope)) {
       continue;
     }
+    store._internal.db
+      .prepare(
+        "UPDATE knowledge_sources SET scope_json = :scope_json, updated_at = :updated_at WHERE id = :id",
+      )
+      .run({
+        scope_json: scopeToJson(canonicalScope),
+        updated_at: now,
+        id: source.id,
+      });
     store._internal.db
       .prepare(
         "UPDATE capsule_sources SET scope_json = :scope_json, updated_at = :updated_at WHERE capsule_id = :c AND id = :id",
@@ -1090,7 +1102,7 @@ async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Pro
       return notFound(error.message);
     }
     if (error instanceof KnowledgeStoreError) {
-      return serviceUnavailable(error.message);
+      return serviceUnavailable(LOCAL_KNOWLEDGE_STORE_UNAVAILABLE_MESSAGE);
     }
     throw error;
   }

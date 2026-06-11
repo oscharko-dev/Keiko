@@ -7,6 +7,7 @@
 
 import {
   isSafeDisplaySummary,
+  validateKnowledgeSourceScope,
   type KnowledgeCapsuleId,
   type KnowledgeSource,
   type KnowledgeSourceId,
@@ -37,11 +38,25 @@ interface CapsuleSourceRow {
   readonly updated_at: number;
 }
 
+interface SourceParams extends Readonly<Record<string, string | number | null>> {
+  readonly id: KnowledgeSourceId;
+  readonly display_name: string;
+  readonly description: string | null;
+  readonly tags_json: string;
+  readonly scope_kind: string;
+  readonly scope_json: string;
+  readonly created_at: number;
+  readonly updated_at: number;
+}
+
 const INSERT_SQL =
   "INSERT INTO capsule_sources (id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :capsule_id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at)";
 
+const INSERT_KNOWLEDGE_SOURCE_SQL =
+  "INSERT INTO knowledge_sources (id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at) ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, description = excluded.description, tags_json = excluded.tags_json, scope_kind = excluded.scope_kind, scope_json = excluded.scope_json, updated_at = excluded.updated_at";
+
 const SELECT_BY_CAPSULE_SQL =
-  "SELECT * FROM capsule_sources WHERE capsule_id = :c ORDER BY created_at ASC, id ASC";
+  "SELECT ks.* FROM capsule_sources AS cs JOIN knowledge_sources AS ks ON ks.id = cs.id WHERE cs.capsule_id = :c ORDER BY cs.created_at ASC, cs.id ASC";
 
 const SELECT_BY_TUPLE_SQL = "SELECT id FROM capsule_sources WHERE capsule_id = :c AND id = :s";
 
@@ -63,6 +78,12 @@ function assertSafeOptionalDisplayField(field: string, value: string | undefined
   if (value !== undefined && !isSafeDisplaySummary(value)) {
     throw new KnowledgeStoreError(`${field} must be browser-safe when set`);
   }
+}
+
+function assertSafeScope(scope: KnowledgeSourceScope): void {
+  const result = validateKnowledgeSourceScope(scope);
+  if (result.ok) return;
+  throw new KnowledgeStoreError(result.errors.join(" "));
 }
 
 function parseScope(kind: string, json: string): KnowledgeSourceScope {
@@ -98,6 +119,40 @@ function scopeToJson(scope: KnowledgeSourceScope): string {
   return JSON.stringify(copy);
 }
 
+function sourceParams(input: AddCapsuleSourceInput, now: number): SourceParams {
+  return {
+    id: input.id,
+    display_name: input.displayName,
+    description: input.description ?? null,
+    tags_json: JSON.stringify(input.tags),
+    scope_kind: input.scope.kind,
+    scope_json: scopeToJson(input.scope),
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function insertSourceLink(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  params: SourceParams,
+): void {
+  const db = store._internal.db;
+  db.exec("BEGIN");
+  try {
+    db.prepare(INSERT_KNOWLEDGE_SOURCE_SQL).run(params);
+    db.prepare(INSERT_SQL).run({ ...params, capsule_id: capsuleId });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE|PRIMARY KEY/i.test(msg)) {
+      throw new KnowledgeStoreError("source already exists", { cause: error });
+    }
+    throw new KnowledgeStoreError("failed to add source", { cause: error });
+  }
+}
+
 export function addSourceToCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -109,31 +164,10 @@ export function addSourceToCapsule(
   for (const tag of input.tags) {
     assertSafeDisplayField("tag", tag);
   }
-  const db = store._internal.db;
+  assertSafeScope(input.scope);
   const now = store._internal.now();
-  db.exec("BEGIN");
-  try {
-    db.prepare(INSERT_SQL).run({
-      id: input.id,
-      capsule_id: capsuleId,
-      display_name: input.displayName,
-      description: input.description ?? null,
-      tags_json: JSON.stringify(input.tags),
-      scope_kind: input.scope.kind,
-      scope_json: scopeToJson(input.scope),
-      created_at: now,
-      updated_at: now,
-    });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    const msg = error instanceof Error ? error.message : String(error);
-    if (/UNIQUE|PRIMARY KEY/i.test(msg)) {
-      throw new KnowledgeStoreError("source already exists", { cause: error });
-    }
-    throw new KnowledgeStoreError("failed to add source", { cause: error });
-  }
-  const fetched = db.prepare(SELECT_BY_TUPLE_SQL).get({ c: capsuleId, s: input.id });
+  insertSourceLink(store, capsuleId, sourceParams(input, now));
+  const fetched = store._internal.db.prepare(SELECT_BY_TUPLE_SQL).get({ c: capsuleId, s: input.id });
   if (fetched === undefined) {
     throw new KnowledgeStoreError(
       `addSourceToCapsule: insert succeeded but row not found for ${String(input.id)}`,
@@ -155,7 +189,9 @@ function readSource(
   sourceId: KnowledgeSourceId,
 ): KnowledgeSource {
   const row = store._internal.db
-    .prepare("SELECT * FROM capsule_sources WHERE capsule_id = :c AND id = :s")
+    .prepare(
+      "SELECT ks.* FROM capsule_sources AS cs JOIN knowledge_sources AS ks ON ks.id = cs.id WHERE cs.capsule_id = :c AND cs.id = :s",
+    )
     .get({ c: capsuleId, s: sourceId });
   if (row === undefined) {
     throw new KnowledgeNotFoundError(

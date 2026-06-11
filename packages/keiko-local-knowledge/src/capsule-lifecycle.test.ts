@@ -151,6 +151,7 @@ describe("deleteCapsule + cascade", () => {
 
     const before = countAll(store);
     expect(before.capsules).toBe(2);
+    expect(before.knowledge_sources).toBe(2);
     for (const table of ALL_DEPENDENT_TABLES) {
       expect(before[table]).toBeGreaterThanOrEqual(1);
     }
@@ -158,6 +159,7 @@ describe("deleteCapsule + cascade", () => {
     deleteCapsule(store, a.id);
 
     expect(getCapsule(store, a.id)).toBeUndefined();
+    expect(countAll(store).knowledge_sources).toBe(2);
 
     // Capsule B's rows survive
     for (const table of ALL_DEPENDENT_TABLES) {
@@ -201,6 +203,22 @@ describe("deleteCapsule + cascade", () => {
   });
 });
 
+describe("capsule storage references", () => {
+  it("rejects unsafe storage references before persistence", () => {
+    for (const storageReference of ["../escape", "/etc/passwd"]) {
+      expect(() =>
+        createCapsule(
+          store,
+          sampleCapsuleInput({
+            id: `cap-${storageReference.replace(/[^a-z]/gi, "")}` as KnowledgeCapsuleId,
+            storageReference,
+          }),
+        ),
+      ).toThrow(KnowledgeStoreError);
+    }
+  });
+});
+
 // ─── Local helpers ────────────────────────────────────────────────────────────
 
 const ALL_DEPENDENT_TABLES = [
@@ -218,6 +236,7 @@ const ALL_DEPENDENT_TABLES = [
 
 interface CountMap {
   readonly capsules: number;
+  readonly knowledge_sources: number;
   readonly capsule_sources: number;
   readonly documents: number;
   readonly document_texts: number;
@@ -235,6 +254,7 @@ function countAll(s: KnowledgeStore): CountMap {
     (s._internal.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as unknown as CountRow).n;
   return {
     capsules: c("capsules"),
+    knowledge_sources: c("knowledge_sources"),
     capsule_sources: c("capsule_sources"),
     documents: c("documents"),
     document_texts: c("document_texts"),
@@ -257,6 +277,10 @@ function seedFullLineage(s: KnowledgeStore, capsuleId: string, suffix: string): 
   const vectorId = `vec-${suffix}`;
   const diagId = `diag-${suffix}`;
   const jobId = `job-${suffix}`;
+
+  db.prepare(
+    "INSERT INTO knowledge_sources (id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, 'src', '[]', 'folder', '{}', 1, 1)",
+  ).run({ id: sourceId });
 
   db.prepare(
     "INSERT INTO capsule_sources (id, capsule_id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :c, 'src', '[]', 'folder', '{}', 1, 1)",

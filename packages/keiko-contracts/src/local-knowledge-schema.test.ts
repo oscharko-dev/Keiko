@@ -84,6 +84,13 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     1000,
     1000,
   );
+  if (listSqliteMaster(db, "table").includes("knowledge_sources")) {
+    db.prepare(
+      `INSERT INTO knowledge_sources (
+         id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(sourceId, "Demo source", "[]", "folder", "{}", 1000, 1000);
+  }
   db.prepare(
     `INSERT INTO capsule_sources (
        id, capsule_id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at
@@ -184,8 +191,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 9 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(9);
+  it("is the integer 10 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(10);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -428,6 +435,7 @@ describe("lineage enforcement", () => {
       for (const table of dependents) {
         expect(countRows(db, table)).toBe(0);
       }
+      expect(countRows(db, "knowledge_sources")).toBe(1);
     } finally {
       db.close();
     }

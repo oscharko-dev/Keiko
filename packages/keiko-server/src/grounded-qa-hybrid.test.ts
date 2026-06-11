@@ -35,11 +35,10 @@ import type {
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
-  scriptedAdapter,
-  seedCapsuleWithVectors,
   updateCapsuleState,
   type RetrievalResult,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { scriptedAdapter, seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";

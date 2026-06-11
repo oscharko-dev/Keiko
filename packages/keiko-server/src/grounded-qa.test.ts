@@ -39,10 +39,9 @@ import {
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
-  scriptedAdapter,
-  seedCapsuleWithVectors,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { scriptedAdapter, seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 
 const NOW = 1_700_000_000_000;

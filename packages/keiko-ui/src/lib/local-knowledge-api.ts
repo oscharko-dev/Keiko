@@ -8,7 +8,6 @@ import type {
   CapsuleSetId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
-  KnowledgeSource,
   KnowledgeSourceScope,
   CapsuleLifecycleState,
   CapsuleHealth,
@@ -256,7 +255,7 @@ export async function disconnectCapsule(
 export interface SourceIndexStats {
   readonly sourceId: string;
   readonly displayName: string;
-  readonly scope: KnowledgeSource["scope"];
+  readonly scope: { readonly kind: KnowledgeSourceScope["kind"] };
   readonly indexedCount: number;
   readonly failedCount: number;
   readonly skippedCount: number;
