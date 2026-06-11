@@ -38,6 +38,8 @@
     "format:check": "prettier --check .",
     "test": "npm run build:packages && vitest run",
     "test:coverage": "npm run build:packages && vitest run --coverage",
+    "dev:start": "node scripts/dev-start.mjs",
+    "dev:stop": "node scripts/dev-stop.mjs",
     "prepare:bin": "node scripts/ensure-bin-mode.mjs",
     "build:ui": "node scripts/build-ui.mjs",
     "prune:package-native-optionals": "node scripts/prune-package-native-optionals.mjs",
