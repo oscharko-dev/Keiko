@@ -990,6 +990,15 @@ export function useChatSession(): UseChatSessionResult {
           } else if (caught instanceof DOMException && caught.name === "AbortError") {
             resolve("cancelled");
           } else {
+            // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
+            // UI does not silently swallow the failure. The server has already persisted the
+            // user message at this point; removing it here is UI-only — it reappears on reload,
+            // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
+            setError(errorMessage(caught));
+            setState((previous) => ({
+              ...previous,
+              messages: previous.messages.filter((message) => message.id !== optimisticId),
+            }));
             resolve("failed");
           }
         });

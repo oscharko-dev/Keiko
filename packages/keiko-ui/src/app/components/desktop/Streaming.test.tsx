@@ -1257,4 +1257,45 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants[0]?.content).toBe("fallback answer");
   });
+
+  // ST-L3-5 — mid-stream client error (e.g. network drop / reader TypeError):
+  // error must be surfaced in state AND the optimistic user-message removed.
+  // Mutation: removing setError in the catch branch leaves error null (first assertion fails).
+  // Mutation: removing the optimisticId filter leaves the orphaned user row (second assertion fails).
+  it("sets state.error and removes the optimistic user message on a mid-stream generic rejection", async () => {
+    const networkError = new TypeError("Failed to fetch");
+    vi.spyOn(api, "sendDesktopChatStream").mockRejectedValue(networkError);
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("trigger network error"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("failed");
+    expect(view.result.current.error).toBeTruthy();
+    // No orphaned user message — the optimistic row must have been removed.
+    const users = view.result.current.messages.filter((m) => m.role === "user");
+    expect(users).toHaveLength(0);
+    // No partial assistant content persisted.
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(0);
+  });
+
+  // ST-L3-6 — AbortError mid-stream: must NOT set state.error (cancel is not an error).
+  // Mutation: treating AbortError as a generic error would set error here (assertion fails).
+  it("does not set state.error when the stream is aborted (AbortError)", async () => {
+    vi.spyOn(api, "sendDesktopChatStream").mockRejectedValue(
+      new DOMException("aborted", "AbortError"),
+    );
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("cancel me"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("cancelled");
+    expect(view.result.current.error).toBeUndefined();
+  });
 });
