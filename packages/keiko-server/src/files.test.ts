@@ -6,8 +6,10 @@ import {
   buildRedactor,
   createInMemoryUiStore,
   listFilesDirectories,
+  readFilesContent,
   readFilesPreview,
   readFilesTree,
+  writeFilesContent,
 } from "./index.js";
 import type { UiStore } from "./store/index.js";
 
@@ -238,6 +240,48 @@ describe("desktop files browser", () => {
       expect(preview.content).not.toContain(secret);
       expect(preview.content).toContain("[REDACTED]");
     }
+  });
+
+  it("loads editable text content for a workspace file", async () => {
+    const content = await readFilesContent(store, root, "src/app.ts");
+
+    expect(content.path).toBe("src/app.ts");
+    expect(content.content).toContain('const value: string = "ok";');
+    expect(content.maxBytes).toBe(1_000_000);
+  });
+
+  it("writes editable text content back to the selected root", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "changed";\n',
+      expectedModifiedAt: initial.modifiedAt,
+    });
+
+    expect(saved.content).toBe('export const value = "changed";\n');
+    const roundTrip = await readFilesContent(store, root, "src/app.ts");
+    expect(roundTrip.content).toBe('export const value = "changed";\n');
+  });
+
+  it("rejects saving when the file changed after the editor loaded it", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    await writeFile(join(root, "src", "app.ts"), 'export const value = "other";\n', "utf8");
+
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "stale";\n',
+        expectedModifiedAt: initial.modifiedAt,
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "WRITE_CONFLICT",
+    });
   });
 
   it("refuses to preview .env.local (matches the .env.* deny pattern)", async () => {

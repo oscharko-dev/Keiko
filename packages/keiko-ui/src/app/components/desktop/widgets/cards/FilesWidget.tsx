@@ -17,6 +17,7 @@ interface FilesWidgetProps {
   // persists it into cfg.root so the new root survives reload (widgets/index.tsx). When omitted,
   // the root bar is hidden (the widget is then locked to its configured/fallback root).
   onRootChange?: (root: string) => void;
+  onOpenFile?: ((root: string, path: string) => void) | undefined;
 }
 
 // Parent directory of an absolute POSIX/Windows path, or null at the filesystem root. Pure string
@@ -108,6 +109,7 @@ export function FilesWidget({
   root,
   onActiveFileChange,
   onRootChange,
+  onOpenFile,
 }: FilesWidgetProps): ReactNode {
   const session = useOptionalChatSessionContext();
   const activeChat = session?.activeChat;
@@ -472,6 +474,7 @@ export function FilesWidget({
       <FilePreview
         root={resolvedRoot ?? apiRoot}
         path={selectedPath}
+        onOpenInEditor={onOpenFile}
         onClose={() => {
           restoreFocusPathRef.current = selectedPath;
           setSelectedPath(null);

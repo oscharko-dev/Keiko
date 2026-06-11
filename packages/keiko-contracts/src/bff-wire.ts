@@ -886,7 +886,7 @@ export interface TerminalEventEnvelope {
   readonly payload: Readonly<Record<string, unknown>>;
 }
 
-// ─── Files browser (read-only registered-project filesystem) ──────────────────────
+// ─── Files browser + editor (selected-root filesystem) ────────────────────────────
 
 export interface FilesDirectoryRoot {
   readonly label: string;
@@ -953,6 +953,18 @@ export type FilesPreviewResponse =
       readonly reason: "unsupported" | "too_large";
       readonly maxBytes?: number;
     });
+
+export interface FilesContentResponse extends FilesPreviewBase {
+  readonly content: string;
+  readonly maxBytes: number;
+}
+
+export interface FilesWriteRequest {
+  readonly root: string;
+  readonly path: string;
+  readonly content: string;
+  readonly expectedModifiedAt?: number;
+}
 
 // ─── Browser tool (ADR-0017) wire types ───────────────────────────────────────────
 

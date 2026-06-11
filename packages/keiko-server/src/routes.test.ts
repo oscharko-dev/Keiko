@@ -192,6 +192,15 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the files editor routes", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/content"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "PATCH" && r.pattern === "/api/files/content"),
+    ).toBeDefined();
+  });
+
   it("includes the run-summary message routes (#66)", () => {
     const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",

@@ -146,20 +146,24 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   editor: {
     title: "Editor",
     icon: "editor",
-    desc: "Code preview (demo)",
+    desc: "Edit a text file",
     w: 480,
     h: 360,
     config: [
-      // Audit C302 — the old def "windows.jsx" was a design-prototype artifact that
-      // prefilled the form and then stuck in the header badge. Empty default; the
-      // placeholder carries the hint and the demo widget supplies its own label.
       {
         key: "file",
-        label: "Tab label",
+        label: "File path",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "file.jsx",
+        placeholder: "src/app.ts",
+      },
+      {
+        key: "root",
+        label: "Root",
+        type: "directory",
+        def: "",
+        optional: true,
       },
     ],
   },

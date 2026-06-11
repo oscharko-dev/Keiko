@@ -1,112 +1,159 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { ApiError, fetchFilesContent, saveFilesContent } from "../../../../../lib/api";
 import { Icons } from "../../Icons";
 
-// Mock highlighted source for the editor card. Verbatim from project/widgets.jsx
-// 142-151. Token class "" means "no highlight class" — rendered as a bare span.
-// Welle 5+ may swap this for a real editor binding once the workflow store
-// exposes per-file diffs.
-type Token = readonly [cls: string, text: string];
-
-interface CodeLine {
-  readonly n: number;
-  readonly t: readonly Token[];
-}
-
-const CODE: readonly CodeLine[] = [
-  {
-    n: 1,
-    t: [
-      ["k", "const"],
-      ["", " "],
-      ["v", "{ useState }"],
-      ["", " = "],
-      ["v", "React"],
-    ],
-  },
-  { n: 2, t: [] },
-  {
-    n: 3,
-    t: [
-      ["k", "function"],
-      ["", " "],
-      ["f", "WindowFrame"],
-      ["p", "({ win, on })"],
-      ["", " {"],
-    ],
-  },
-  {
-    n: 4,
-    t: [
-      ["", "  "],
-      ["k", "const"],
-      ["", " [drag, setDrag] = "],
-      ["f", "useState"],
-      ["p", "(null)"],
-    ],
-  },
-  {
-    n: 5,
-    t: [
-      ["", "  "],
-      ["k", "return"],
-      ["", " "],
-      ["p", "<section"],
-      ["a", " className"],
-      ["", "="],
-      ["s", '"window"'],
-      ["p", ">"],
-    ],
-  },
-  {
-    n: 6,
-    t: [
-      ["", "    "],
-      ["c", "// drag · resize · snap"],
-    ],
-  },
-  {
-    n: 7,
-    t: [
-      ["", "  "],
-      ["p", "</section>"],
-    ],
-  },
-  { n: 8, t: [["", "}"]] },
-];
-
 interface EditorWidgetProps {
-  file?: string;
+  readonly root?: string;
+  readonly file?: string;
 }
 
-export function EditorWidget({ file = "windows.jsx" }: EditorWidgetProps): ReactNode {
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  return error instanceof Error ? error.message : "The file could not be loaded.";
+}
+
+function formatDate(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+}
+
+export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
+  const [content, setContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
+  const [modifiedAt, setModifiedAt] = useState<number | null>(null);
+  const [maxBytes, setMaxBytes] = useState<number | null>(null);
+  const [loading, setLoading] = useState(root !== undefined && file !== undefined);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
+  const dirty = hasTarget && content !== savedContent;
+
+  useEffect(() => {
+    if (!hasTarget) {
+      setContent("");
+      setSavedContent("");
+      setModifiedAt(null);
+      setMaxBytes(null);
+      setLoading(false);
+      setSaving(false);
+      setError(null);
+      setNotice(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    void fetchFilesContent(root, file)
+      .then((response) => {
+        if (cancelled) return;
+        setContent(response.content);
+        setSavedContent(response.content);
+        setModifiedAt(response.modifiedAt);
+        setMaxBytes(response.maxBytes);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasTarget, root, file]);
+
+  const save = async (): Promise<void> => {
+    if (!hasTarget || !dirty || saving) return;
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await saveFilesContent({
+        root,
+        path: file,
+        content,
+        expectedModifiedAt: modifiedAt ?? undefined,
+      });
+      setContent(response.content);
+      setSavedContent(response.content);
+      setModifiedAt(response.modifiedAt);
+      setMaxBytes(response.maxBytes);
+      setNotice(`Saved ${formatDate(response.modifiedAt)}`);
+    } catch (err: unknown) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void save();
+    }
+  };
+
+  const statusText = useMemo(() => {
+    if (!hasTarget) return "Open a file from the Files window to start editing.";
+    if (loading) return "Loading file…";
+    if (saving) return "Saving…";
+    if (error !== null) return error;
+    if (notice !== null) return notice;
+    if (dirty) return "Unsaved changes";
+    if (modifiedAt !== null) return `Saved ${formatDate(modifiedAt)}`;
+    return "Ready";
+  }, [dirty, error, hasTarget, loading, modifiedAt, notice, saving]);
+
   return (
     <div className="editor">
       <div className="ed-tabs mono">
         <span className="ed-tab active">
-          <Icons.editor size={12} /> {file}
+          <Icons.editor size={12} /> {file ?? "Editor"}
         </span>
+        <span className="spacer" />
+        {hasTarget ? (
+          <button
+            type="button"
+            className="ed-save"
+            onClick={() => void save()}
+            disabled={!dirty || loading || saving}
+          >
+            Save
+          </button>
+        ) : null}
       </div>
-      <div className="ed-mock-note" role="note">
-        Static demo — file editing isn&apos;t available yet. Use the Files window to browse real
-        files.
+      <div className="ed-meta">
+        <span className="ed-status" role={error !== null ? "alert" : "status"}>
+          {statusText}
+        </span>
+        {maxBytes !== null ? <span className="ed-limit mono">Limit {maxBytes.toLocaleString()} B</span> : null}
       </div>
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable code region must be keyboard-focusable (axe scrollable-region-focusable) */}
-      <div className="ed-code mono" tabIndex={0} role="region" aria-label={`Code preview: ${file}`}>
-        {CODE.map((l) => (
-          <div key={l.n} className="ed-line">
-            <span className="ed-num">{l.n}</span>
-            <span className="ed-src">
-              {l.t.map((s, i) => (
-                <span key={i} className={s[0] === "" ? undefined : `tk-${s[0]}`}>
-                  {s[1]}
-                </span>
-              ))}
-            </span>
-          </div>
-        ))}
-      </div>
+      {!hasTarget ? (
+        <div className="ed-empty" role="note">
+          Choose a file from the Files window and use <strong>Open in editor</strong>.
+        </div>
+      ) : (
+        <textarea
+          className="ed-textarea mono"
+          aria-label={file !== undefined ? `Editor: ${file}` : "Editor"}
+          value={content}
+          onChange={(event) => {
+            setContent(event.target.value);
+            if (notice !== null) setNotice(null);
+          }}
+          onKeyDown={onEditorKeyDown}
+          disabled={loading || saving || error !== null}
+          spellCheck={false}
+        />
+      )}
     </div>
   );
 }

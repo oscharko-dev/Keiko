@@ -159,6 +159,47 @@ describe("FilesWidget", () => {
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
   });
 
+  it("opens the previewed file in the editor on demand", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "package.json",
+      name: "package.json",
+      sizeBytes: 18,
+      modifiedAt: 1,
+      extension: "json",
+      mime: "application/json",
+      symlink: false,
+      kind: "text",
+      content: '{"name":"keiko"}\n',
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+
+    const onOpenFile = vi.fn();
+    render(<FilesWidget root="/repo space" onOpenFile={onOpenFile} />);
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
+    await screen.findByText('"keiko"');
+    await userEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+  });
+
   it("connects the repository root scope from the Files window", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/resolved-repo",

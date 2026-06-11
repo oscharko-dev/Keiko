@@ -1,9 +1,10 @@
 // Read-only filesystem browser for the desktop Files widget. The browser receives
-// only metadata or redacted preview content; every request is contained inside a
-// registered project root after realpath resolution.
+// preview or editor content; every request is contained inside a selected root after
+// realpath resolution.
 
+import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
-import { lstat, opendir, open, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, opendir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -92,6 +93,18 @@ export type FilesPreviewResponse =
       readonly maxBytes?: number | undefined;
     });
 
+export interface FilesContentResponse extends FilesPreviewBase {
+  readonly content: string;
+  readonly maxBytes: number;
+}
+
+class BodyTooLargeError extends Error {
+  public constructor() {
+    super("request body too large");
+    this.name = "BodyTooLargeError";
+  }
+}
+
 class FilesError extends Error {
   public constructor(
     public readonly status: number,
@@ -130,6 +143,14 @@ async function runFilesHandler(
     if (error instanceof FilesError) return filesErrorResult(error);
     throw error;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRouteResult(value: unknown): value is RouteResult {
+  return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
 async function resolveDirectory(candidate: string): Promise<string> {
@@ -593,6 +614,59 @@ async function readPrefix(
   }
 }
 
+async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+  return new Promise<string>((resolveBody, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let capped = false;
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        if (!capped) {
+          capped = true;
+          chunks.length = 0;
+          reject(new BodyTooLargeError());
+          req.resume();
+        }
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!capped) resolveBody(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", reject);
+  });
+}
+
+async function readJsonObject(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<Record<string, unknown> | RouteResult> {
+  let raw: string;
+  try {
+    raw = await readBody(req, maxBytes);
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) {
+      return {
+        status: 413,
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+      };
+    }
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = raw.length === 0 ? {} : JSON.parse(raw);
+  } catch {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
+  }
+  if (!isRecord(parsed)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
+  }
+  return parsed;
+}
+
 function basePreview(target: ResolvedTarget): FilesPreviewBase {
   const name = basename(target.relativePath);
   const extension = extensionOf(name);
@@ -637,6 +711,86 @@ async function textPreview(
     kind: "text",
     content: typeof redacted === "string" ? redacted : content,
     truncated: prefix.truncated,
+    maxBytes: MAX_TEXT_PREVIEW_BYTES,
+  };
+}
+
+async function editableTextContent(
+  target: ResolvedTarget,
+  base: FilesPreviewBase,
+): Promise<FilesContentResponse> {
+  if (target.stats.size > MAX_TEXT_PREVIEW_BYTES) {
+    throw new FilesError(
+      413,
+      "FILE_TOO_LARGE",
+      `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
+    );
+  }
+  const content = await readFile(target.path, "utf8");
+  return {
+    ...base,
+    content,
+    maxBytes: MAX_TEXT_PREVIEW_BYTES,
+  };
+}
+
+export async function readFilesContent(
+  store: UiStore,
+  rootInput: string | null,
+  pathInput: string | null,
+): Promise<FilesContentResponse> {
+  const target = await resolveInsideRoot(store, rootInput, pathInput);
+  if (!target.stats.isFile()) {
+    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
+  }
+  const base = basePreview(target);
+  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
+  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+    throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
+  }
+  return editableTextContent(target, base);
+}
+
+export async function writeFilesContent(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  readonly content: string;
+  readonly expectedModifiedAt?: number | undefined;
+}): Promise<FilesContentResponse> {
+  const target = await resolveInsideRoot(args.store, args.rootInput, args.pathInput);
+  if (!target.stats.isFile()) {
+    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
+  }
+  const base = basePreview(target);
+  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
+  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+    throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
+  }
+  if (
+    args.expectedModifiedAt !== undefined &&
+    Math.abs(target.stats.mtimeMs - args.expectedModifiedAt) > 1
+  ) {
+    throw new FilesError(
+      409,
+      "WRITE_CONFLICT",
+      "This file changed on disk. Reload it before saving again.",
+    );
+  }
+  if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
+    throw new FilesError(
+      413,
+      "FILE_TOO_LARGE",
+      `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
+    );
+  }
+  await writeFile(target.path, args.content, "utf8");
+  const updatedStats = await stat(target.path);
+  return {
+    ...base,
+    sizeBytes: updatedStats.size,
+    modifiedAt: updatedStats.mtimeMs,
+    content: args.content,
     maxBytes: MAX_TEXT_PREVIEW_BYTES,
   };
 }
@@ -701,4 +855,48 @@ export async function handleFilesPreview(
       deps.redactor,
     ),
   }));
+}
+
+export async function handleFilesContent(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    if ((ctx.req.method ?? "GET").toUpperCase() === "GET") {
+      return {
+        status: 200,
+        body: await readFilesContent(
+          deps.store,
+          ctx.url.searchParams.get("root"),
+          ctx.url.searchParams.get("path"),
+        ),
+      };
+    }
+    const body = await readJsonObject(ctx.req, MAX_TEXT_PREVIEW_BYTES * 2 + 16_384);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    const content = body.content;
+    if (rootInput === null || pathInput === null || typeof content !== "string") {
+      return {
+        status: 400,
+        body: errorBody(
+          "BAD_REQUEST",
+          "root, path, and content are required for a file save request.",
+        ),
+      };
+    }
+    const expectedModifiedAt =
+      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined;
+    return {
+      status: 200,
+      body: await writeFilesContent({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        content,
+        expectedModifiedAt,
+      }),
+    };
+  });
 }
