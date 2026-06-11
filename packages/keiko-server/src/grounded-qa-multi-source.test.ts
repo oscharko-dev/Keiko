@@ -627,4 +627,101 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.content).toBe("single answer");
     expect(answer.citations.every((c) => c.source === undefined)).toBe(true);
   });
+
+  // ─── Fail-soft: pack validation failure skips, not aborts ────────────────
+
+  it("fail-soft: 1 bad source + 2 healthy → 200 with answer from healthy sources and skip in uncertainty", async () => {
+    // Arrange: 3 scopes — scopeB returns an invalid pack (stableId: ""), the other two are healthy.
+    // Before the fix this test was RED (retrieveAllSources returned 500 as soon as scopeB failed).
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("api"),
+    };
+    const scopeB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("broken"),
+    };
+    const scopeC: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/c.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("web"),
+    };
+    const chatId = makeChat([scopeA, scopeB, scopeC]);
+    const goodPack = scopePack("src/a.ts", 0.7, "good-a");
+    const goodPackC = scopePack("src/c.ts", 0.5, "good-c");
+    // Invalid pack: stableId is empty, which fails validateConnectedContextPack.
+    const badPack: ConnectedContextPack = { ...scopePack("src/b.ts", 0.3, "bad-b"), stableId: "" };
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", goodPack],
+      ["src/b.ts", badPack],
+      ["src/c.ts", goodPackC],
+    ]);
+    const answered = { count: 0 };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam(packPerScope(byPath), constAnswerer("partial answer", answered)),
+    );
+    // Must succeed (200), not fail (500)
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).toBe("partial answer");
+    // Answerer receives only the 2 healthy packs
+    expect(answered.count).toBe(2);
+    // Citations only from healthy sources
+    const sources = answer.citations.map((c) => c.source);
+    expect(sources).toContain("api");
+    expect(sources).toContain("web");
+    expect(sources).not.toContain("broken");
+    // Skip surfaced in uncertainty
+    const skippedEntries = answer.uncertainty.filter(
+      (u) => u.kind === "source-skipped" && u.claim.includes("broken"),
+    );
+    expect(skippedEntries.length).toBeGreaterThan(0);
+  });
+
+  it("fail-soft: all sources bad → coded error returned (500 internal error)", async () => {
+    // All 2 scopes return an invalid pack → no healthy source → must return a coded error.
+    // Before the fix this test was GREEN (it already returned 500, but for the wrong reason).
+    // After the fix the same path is taken only when ALL sources fail.
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("broken-a"),
+    };
+    const scopeB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("broken-b"),
+    };
+    const chatId = makeChat([scopeA, scopeB]);
+    const badPack = (path: string, id: string): ConnectedContextPack => ({
+      ...scopePack(path, 0.3, id),
+      stableId: "",
+    });
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", badPack("src/a.ts", "bad-a")],
+      ["src/b.ts", badPack("src/b.ts", "bad-b")],
+    ]);
+    let answererCalled = false;
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain both" })),
+      recordingDeps([]),
+      undefined,
+      seam(packPerScope(byPath), () => {
+        answererCalled = true;
+        return Promise.resolve("nope");
+      }),
+    );
+    expect(result.status).toBe(500);
+    expect(answererCalled).toBe(false);
+  });
 });
