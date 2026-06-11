@@ -21,6 +21,7 @@ import {
   type KnowledgeCapsule,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
+  isSafeDisplaySummary,
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
@@ -122,6 +123,27 @@ function parseTags(json: string): readonly string[] {
   return parsed.filter((entry): entry is string => typeof entry === "string");
 }
 
+function assertSafeDisplayField(field: string, value: string): void {
+  if (value.trim().length === 0 || !isSafeDisplaySummary(value)) {
+    throw new KnowledgeStoreError(`${field} must be a browser-safe non-empty string`);
+  }
+}
+
+function assertSafeOptionalDisplayField(field: string, value: string | undefined): void {
+  if (value !== undefined && !isSafeDisplaySummary(value)) {
+    throw new KnowledgeStoreError(`${field} must be browser-safe when set`);
+  }
+}
+
+function assertSafeCreateCapsuleInput(input: CreateCapsuleInput): void {
+  assertSafeDisplayField("displayName", input.displayName);
+  assertSafeOptionalDisplayField("description", input.description);
+  assertSafeOptionalDisplayField("sourceRoutingInstructions", input.sourceRoutingInstructions);
+  for (const tag of input.tags) {
+    assertSafeDisplayField("tag", tag);
+  }
+}
+
 function listSourceIdsFor(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -182,6 +204,7 @@ export function createCapsule(
   input: CreateCapsuleInput,
   auditSink?: AuditEventSink,
 ): KnowledgeCapsule {
+  assertSafeCreateCapsuleInput(input);
   const now = store._internal.now();
   const params = {
     id: input.id,
@@ -293,10 +316,12 @@ export function updateCapsuleDetails(
   const assignments: string[] = [];
   const params: Record<string, string | number> = { id, now: store._internal.now() };
   if (patch.displayName !== undefined) {
+    assertSafeDisplayField("displayName", patch.displayName);
     assignments.push("display_name = :displayName");
     params.displayName = patch.displayName;
   }
   if (patch.description !== undefined) {
+    assertSafeOptionalDisplayField("description", patch.description);
     assignments.push("description = :description");
     params.description = patch.description;
   }

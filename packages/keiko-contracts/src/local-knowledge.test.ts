@@ -15,6 +15,7 @@ import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
 } from "./local-knowledge.js";
 import {
+  CAPSULE_REINDEX_MODES,
   DOCUMENT_STATUSES,
   INDEXING_JOB_STATUSES,
   PARSED_UNIT_KINDS,
@@ -30,6 +31,8 @@ import type {
 } from "./local-knowledge.js";
 import type {
   CapsuleDeleteRequest,
+  CapsuleHealth,
+  CapsuleReindexRequest,
   ChunkRecord,
   CitationReference,
   DocumentRecord,
@@ -39,6 +42,7 @@ import type {
 import {
   isSafeDisplaySummary,
   validateCapsuleSet,
+  validateCapsuleReindexRequest,
   validateConnectorGraphState,
   validateEmbeddingModelIdentity,
   validateKnowledgeCapsule,
@@ -190,6 +194,7 @@ describe("frozen-constant arrays", () => {
     expect(PARSED_UNIT_KINDS.length).toBeGreaterThan(0);
     expect(INDEXING_JOB_STATUSES.length).toBeGreaterThan(0);
     expect(PARSER_DIAGNOSTIC_SEVERITIES).toEqual(["info", "warning", "error"]);
+    expect(CAPSULE_REINDEX_MODES).toEqual(["changed-files", "repair-failed"]);
   });
 });
 
@@ -496,6 +501,42 @@ describe("validateKnowledgeSourceScope", () => {
       }).ok,
     ).toBe(false);
   });
+
+  it("rejects empty, unsafe, duplicate, and cancelling glob lists", () => {
+    expect(
+      validateKnowledgeSourceScope({
+        kind: "folder",
+        rootPath: "knowledge",
+        recursive: false,
+        includeGlobs: [],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateKnowledgeSourceScope({
+        kind: "folder",
+        rootPath: "knowledge",
+        recursive: false,
+        includeGlobs: ["../escape/**"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateKnowledgeSourceScope({
+        kind: "folder",
+        rootPath: "knowledge",
+        recursive: false,
+        includeGlobs: ["**/*.md", "**/*.md"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateKnowledgeSourceScope({
+        kind: "folder",
+        rootPath: "knowledge",
+        recursive: false,
+        includeGlobs: ["**/*.md"],
+        excludeGlobs: ["**/*.md"],
+      }).ok,
+    ).toBe(false);
+  });
 });
 
 // ─── validateKnowledgeCapsule ─────────────────────────────────────────────────
@@ -579,6 +620,27 @@ describe("validateKnowledgeCapsule", () => {
       false,
     );
   });
+
+  it("rejects unsafe optional metadata keys and values", () => {
+    expect(
+      validateKnowledgeCapsule({
+        ...happyCapsule(),
+        metadata: { "unsafe\x07key": "ok" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateKnowledgeCapsule({
+        ...happyCapsule(),
+        metadata: { safe: "x".repeat(1025) },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateKnowledgeCapsule({
+        ...happyCapsule(),
+        metadata: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${String(i)}`, "v"])),
+      }).ok,
+    ).toBe(false);
+  });
 });
 
 // ─── validateCapsuleSet ───────────────────────────────────────────────────────
@@ -607,6 +669,31 @@ describe("validateCapsuleSet", () => {
   it("rejects empty id or displayName", () => {
     expect(validateCapsuleSet({ ...happyCapsuleSet(), id: "" }).ok).toBe(false);
     expect(validateCapsuleSet({ ...happyCapsuleSet(), displayName: "   " }).ok).toBe(false);
+  });
+
+  it("rejects browser-unsafe display metadata", () => {
+    expect(validateCapsuleSet({ ...happyCapsuleSet(), displayName: "bad\x07" }).ok).toBe(false);
+    expect(validateCapsuleSet({ ...happyCapsuleSet(), description: "bad\x00" }).ok).toBe(false);
+    expect(validateCapsuleSet({ ...happyCapsuleSet(), tags: ["ok", "bad\x1b"] }).ok).toBe(false);
+  });
+});
+
+// ─── validateCapsuleReindexRequest ────────────────────────────────────────────
+describe("validateCapsuleReindexRequest", () => {
+  it("accepts a shared reindex request contract", () => {
+    expect(
+      validateCapsuleReindexRequest({
+        capsuleId: "cap-1",
+        mode: "changed-files",
+        force: true,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects invalid mode, missing capsule id, and non-boolean force", () => {
+    expect(validateCapsuleReindexRequest({ capsuleId: "", mode: "changed-files" }).ok).toBe(false);
+    expect(validateCapsuleReindexRequest({ capsuleId: "cap-1", mode: "all-files" }).ok).toBe(false);
+    expect(validateCapsuleReindexRequest({ capsuleId: "cap-1", force: "yes" }).ok).toBe(false);
   });
 });
 
@@ -690,6 +777,33 @@ describe("validateConnectorGraphState", () => {
             conversationId: "conv-1",
             route: "",
           },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects cross-kind extra payload fields on graph nodes and targets", () => {
+    expect(
+      validateConnectorGraphState({
+        ...happyGraph(),
+        nodes: [
+          { kind: "files-window", nodeId: "n-1", scope: happyFolderScope(), target: {} },
+          { kind: "local-knowledge", nodeId: "n-2", target: { kind: "capsule", capsuleId: "cap-1" } },
+          { kind: "conversation-center", nodeId: "n-3", conversationId: "conv-1", route: "/chat" },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateConnectorGraphState({
+        ...happyGraph(),
+        nodes: [
+          { kind: "files-window", nodeId: "n-1", scope: happyFolderScope() },
+          {
+            kind: "local-knowledge",
+            nodeId: "n-2",
+            target: { kind: "capsule", capsuleId: "cap-1", capsuleSetId: "set-1" },
+          },
+          { kind: "conversation-center", nodeId: "n-3", conversationId: "conv-1", route: "/chat" },
         ],
       }).ok,
     ).toBe(false);
@@ -899,6 +1013,39 @@ describe("CapsuleDeleteRequest", () => {
       deleteSources: true,
     };
     expect(req.deleteSources).toBeDefined();
+  });
+});
+
+describe("CapsuleReindexRequest", () => {
+  it("type-pins the shared reindex request shape", () => {
+    const req: CapsuleReindexRequest = {
+      capsuleId: cap("c-1"),
+      mode: "repair-failed",
+      force: false,
+    };
+    expect(req.mode).toBe("repair-failed");
+  });
+});
+
+describe("CapsuleHealth lineage", () => {
+  it("requires sourceIds alongside capsuleId", () => {
+    // @ts-expect-error — sourceIds are required so health cannot become capsule-only.
+    const missingSources: CapsuleHealth = {
+      capsuleId: cap("c-1"),
+      lifecycleState: "ready",
+      storageSizeBytes: 0,
+      documentCount: 0,
+      chunkCount: 0,
+      vectorCount: 0,
+      embeddingIdentity: happyEmbeddingIdentity() as CapsuleHealth["embeddingIdentity"],
+      vectorCompatible: true,
+      failedDocuments: 0,
+      skippedDocuments: 0,
+      unsupportedDocuments: 0,
+      unsupportedGuidance: [],
+      staleReasons: [],
+    };
+    expect(missingSources.capsuleId).toBe(cap("c-1"));
   });
 });
 

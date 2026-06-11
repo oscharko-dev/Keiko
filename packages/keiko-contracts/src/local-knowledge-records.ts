@@ -211,6 +211,19 @@ export const INDEXING_JOB_STATUSES: readonly IndexingJobStatus[] = [
   "cancelled",
 ] as const;
 
+export type CapsuleReindexMode = "changed-files" | "repair-failed";
+
+export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
+  "changed-files",
+  "repair-failed",
+] as const;
+
+export interface CapsuleReindexRequest {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly mode?: CapsuleReindexMode;
+  readonly force?: boolean;
+}
+
 export interface IndexingJobError {
   readonly code: string;
   readonly message: string;
@@ -233,6 +246,7 @@ export interface IndexingJobRecord {
 // ─── Capsule health + delete ──────────────────────────────────────────────────
 export interface CapsuleHealth {
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
   readonly lifecycleState: CapsuleLifecycleState;
   readonly storageSizeBytes: number;
   readonly documentCount: number;

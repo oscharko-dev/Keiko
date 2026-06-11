@@ -12,6 +12,8 @@ import type {
   KnowledgeSourceScope,
   CapsuleLifecycleState,
   CapsuleHealth,
+  CapsuleReindexRequest,
+  CapsuleDeleteRequest,
   ParserDiagnostic,
   IndexingJobRecord,
 } from "@oscharko-dev/keiko-contracts";
@@ -292,9 +294,14 @@ export async function fetchCapsuleDetail(
 // ---------------------------------------------------------------------------
 
 export async function deleteCapsule(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse> {
+  const request: CapsuleDeleteRequest = {
+    capsuleId,
+    deleteIndex: true,
+    deleteSources: false,
+  };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
-    { method: "DELETE", body: JSON.stringify({ deleteIndex: true, deleteSources: false }) },
+    { method: "DELETE", body: JSON.stringify(request) },
   );
 }
 
@@ -305,9 +312,10 @@ export async function deleteCapsule(capsuleId: KnowledgeCapsuleId): Promise<Caps
 export async function refreshCapsuleChangedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "changed-files" };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
-    { method: "POST", body: JSON.stringify({ mode: "changed-files" }) },
+    { method: "POST", body: JSON.stringify(request) },
   );
 }
 
@@ -318,8 +326,9 @@ export async function refreshCapsuleChangedFiles(
 export async function repairCapsuleFailedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "repair-failed" };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
-    { method: "POST", body: JSON.stringify({ mode: "repair-failed" }) },
+    { method: "POST", body: JSON.stringify(request) },
   );
 }

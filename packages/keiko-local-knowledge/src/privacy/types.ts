@@ -71,6 +71,7 @@ export interface CapsuleSourceRemovedEvent {
 export interface IndexingJobStartedEvent {
   readonly kind: "indexing-job-started";
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
   readonly jobId: string;
   readonly occurredAt: number;
 }
@@ -78,6 +79,7 @@ export interface IndexingJobStartedEvent {
 export interface IndexingJobCompletedEvent {
   readonly kind: "indexing-job-completed";
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
   readonly jobId: string;
   readonly processedDocuments: number;
   readonly failedDocuments: number;
@@ -87,6 +89,7 @@ export interface IndexingJobCompletedEvent {
 export interface IndexingJobFailedEvent {
   readonly kind: "indexing-job-failed";
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
   readonly jobId: string;
   readonly errorCode: string;
   readonly occurredAt: number;
@@ -95,6 +98,7 @@ export interface IndexingJobFailedEvent {
 export interface RetentionAppliedEvent {
   readonly kind: "retention-applied";
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
   readonly deletedVectorCount: number;
   readonly deletedExtractedTextCount: number;
   readonly occurredAt: number;

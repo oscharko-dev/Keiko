@@ -33,6 +33,7 @@ import {
   PARSED_UNIT_KINDS,
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
+  CAPSULE_REINDEX_MODES,
   isSafeScopePath,
   isSafeStorageReference,
   isSafeDisplaySummary,
@@ -40,6 +41,7 @@ import {
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
   validateCapsuleSet,
+  validateCapsuleReindexRequest,
   validateConnectorGraphState,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
   KNOWLEDGE_CAPSULE_DDL,
@@ -101,6 +103,7 @@ import type {
   RetrievalReference,
   ParserResult,
   ParserDiagnostic,
+  CapsuleReindexRequest,
   IndexingJobRecord,
   CapsuleHealth,
   CapsuleDeleteRequest,
@@ -209,6 +212,7 @@ describe("keiko-contracts package surface", () => {
     expect(PARSED_UNIT_KINDS).toContain("page");
     expect(PARSER_DIAGNOSTIC_SEVERITIES).toContain("error");
     expect(INDEXING_JOB_STATUSES).toContain("succeeded");
+    expect(CAPSULE_REINDEX_MODES).toContain("changed-files");
     expect(typeof isSafeScopePath).toBe("function");
     expect(typeof isSafeStorageReference).toBe("function");
     expect(typeof isSafeDisplaySummary).toBe("function");
@@ -216,6 +220,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof validateKnowledgeSourceScope).toBe("function");
     expect(typeof validateKnowledgeCapsule).toBe("function");
     expect(typeof validateCapsuleSet).toBe("function");
+    expect(typeof validateCapsuleReindexRequest).toBe("function");
     expect(typeof validateConnectorGraphState).toBe("function");
   });
 
@@ -252,6 +257,7 @@ describe("keiko-contracts package surface", () => {
     pin<RetrievalReference>();
     pin<ParserResult>();
     pin<ParserDiagnostic>();
+    pin<CapsuleReindexRequest>();
     pin<IndexingJobRecord>();
     pin<CapsuleHealth>();
     pin<CapsuleDeleteRequest>();

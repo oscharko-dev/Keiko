@@ -78,6 +78,16 @@ function redactChunkIds(chunkIds: readonly string[]): readonly string[] {
 }
 
 function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | null {
+  if (
+    event.kind === "indexing-job-started" ||
+    event.kind === "indexing-job-completed" ||
+    event.kind === "indexing-job-failed" ||
+    event.kind === "retention-applied"
+  ) {
+    return {
+      sourceIds: [...event.sourceIds],
+    };
+  }
   if (event.kind === "retrieval-performed") {
     return {
       sourceIds: [...event.sourceIds],

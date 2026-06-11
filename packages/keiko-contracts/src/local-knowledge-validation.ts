@@ -15,15 +15,20 @@ import type {
   KnowledgeCapsule,
   KnowledgeSourceScope,
 } from "./local-knowledge.js";
+import type { CapsuleReindexRequest } from "./local-knowledge-records.js";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CAPSULE_LIFECYCLE_STATES,
+  CAPSULE_METADATA_KEY_MAX_CHARS,
+  CAPSULE_METADATA_MAX_KEYS,
+  CAPSULE_METADATA_VALUE_MAX_CHARS,
   CAPSULE_OUTPUT_MODES,
   CAPSULE_RETRIEVAL_EFFORTS,
   CONNECTOR_NODE_KINDS,
   EMBEDDING_VECTOR_METRICS,
   KNOWLEDGE_SOURCE_SCOPE_KINDS,
 } from "./local-knowledge.js";
+import { CAPSULE_REINDEX_MODES } from "./local-knowledge-records.js";
 import { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 
 // ─── Result types ─────────────────────────────────────────────────────────────
@@ -111,6 +116,54 @@ function validateSafeDisplayStringArrayField(
   }
 }
 
+function validateSafeMetadataMap(errors: string[], field: string, value: unknown): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!isRecord(value)) {
+    errors.push(`${field} must be an object when set`);
+    return;
+  }
+  const entries = Object.entries(value);
+  if (entries.length > CAPSULE_METADATA_MAX_KEYS) {
+    errors.push(`${field} may contain at most ${String(CAPSULE_METADATA_MAX_KEYS)} entries`);
+    return;
+  }
+  for (const [key, entryValue] of entries) {
+    if (!isSafeDisplayString(key) || key.length > CAPSULE_METADATA_KEY_MAX_CHARS) {
+      errors.push(
+        `${field} keys must be browser-safe non-empty strings no longer than ${String(CAPSULE_METADATA_KEY_MAX_CHARS)} characters`,
+      );
+      return;
+    }
+    if (
+      typeof entryValue !== "string" ||
+      !isSafeDisplaySummary(entryValue) ||
+      entryValue.length > CAPSULE_METADATA_VALUE_MAX_CHARS
+    ) {
+      errors.push(
+        `${field} values must be browser-safe strings no longer than ${String(CAPSULE_METADATA_VALUE_MAX_CHARS)} characters`,
+      );
+      return;
+    }
+  }
+}
+
+function validateOnlyKeys(
+  record: Record<string, unknown>,
+  allowedKeys: readonly string[],
+  field: string,
+  errors: string[],
+): void {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) {
+      errors.push(`${field} must not include ${key}`);
+      return;
+    }
+  }
+}
+
 // ─── EmbeddingModelIdentity ───────────────────────────────────────────────────
 function pushBadEnum(
   errors: string[],
@@ -163,9 +216,32 @@ function validateGlobs(field: string, globs: unknown, errors: string[]): void {
     errors.push(`${field} must be a string array when set`);
     return;
   }
+  if (globs.length === 0) {
+    errors.push(`${field} must be omitted instead of set to an empty array`);
+    return;
+  }
+  const seen = new Set<string>();
   for (const glob of globs) {
-    if (glob.length === 0 || glob.includes("\0")) {
-      errors.push(`${field} entry must be a non-empty NUL-free string`);
+    if (glob.length === 0 || glob.includes("\0") || !isSafeStorageReference(glob)) {
+      errors.push(`${field} entry must be a safe relative NUL-free glob`);
+      return;
+    }
+    if (seen.has(glob)) {
+      errors.push(`${field} entries must be unique`);
+      return;
+    }
+    seen.add(glob);
+  }
+}
+
+function validateGlobOverlap(input: Record<string, unknown>, errors: string[]): void {
+  if (!isStringArray(input.includeGlobs) || !isStringArray(input.excludeGlobs)) {
+    return;
+  }
+  const include = new Set(input.includeGlobs);
+  for (const exclude of input.excludeGlobs) {
+    if (include.has(exclude)) {
+      errors.push("scope.excludeGlobs entries must not exactly cancel includeGlobs entries");
       return;
     }
   }
@@ -180,6 +256,7 @@ function validateFolderScope(input: Record<string, unknown>, errors: string[]): 
   }
   validateGlobs("scope.includeGlobs", input.includeGlobs, errors);
   validateGlobs("scope.excludeGlobs", input.excludeGlobs, errors);
+  validateGlobOverlap(input, errors);
 }
 
 function validateRepositoryScope(input: Record<string, unknown>, errors: string[]): void {
@@ -188,6 +265,7 @@ function validateRepositoryScope(input: Record<string, unknown>, errors: string[
   }
   validateGlobs("scope.includeGlobs", input.includeGlobs, errors);
   validateGlobs("scope.excludeGlobs", input.excludeGlobs, errors);
+  validateGlobOverlap(input, errors);
 }
 
 function validateFilesScope(input: Record<string, unknown>, errors: string[]): void {
@@ -284,6 +362,7 @@ function validateKnowledgeCapsuleDisplayMetadata(
     );
   }
   validateSafeDisplayStringArrayField(errors, "capsule.tags", input.tags);
+  validateSafeMetadataMap(errors, "capsule.metadata", input.metadata);
 }
 
 export function validateKnowledgeCapsule(
@@ -340,12 +419,13 @@ export function validateCapsuleSet(input: unknown): LocalKnowledgeValidation<Cap
   if (!isNonEmptyTrimmedString(input.id)) {
     errors.push("capsuleSet.id must be a non-empty string");
   }
-  if (!isNonEmptyTrimmedString(input.displayName)) {
-    errors.push("capsuleSet.displayName must be a non-empty trimmed string");
+  if (!isSafeDisplayString(input.displayName)) {
+    errors.push("capsuleSet.displayName must be a browser-safe non-empty trimmed string");
   }
-  if (!isStringArray(input.tags)) {
-    errors.push("capsuleSet.tags must be a string array");
+  if (input.description !== undefined && !isSafeDisplayString(input.description)) {
+    errors.push("capsuleSet.description must be a browser-safe non-empty trimmed string");
   }
+  validateSafeDisplayStringArrayField(errors, "capsuleSet.tags", input.tags);
   validateCapsuleSetCapsuleIds(input, errors);
   if (!isFiniteNonNegativeNumber(input.composedAt)) {
     errors.push("capsuleSet.composedAt must be a finite non-negative number");
@@ -356,8 +436,34 @@ export function validateCapsuleSet(input: unknown): LocalKnowledgeValidation<Cap
   return { ok: true, value: input as unknown as CapsuleSet };
 }
 
+export function validateCapsuleReindexRequest(
+  input: unknown,
+): LocalKnowledgeValidation<CapsuleReindexRequest> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["reindexRequest must be an object"] };
+  }
+  const errors: string[] = [];
+  if (!isNonEmptyTrimmedString(input.capsuleId)) {
+    errors.push("reindexRequest.capsuleId must be a non-empty string");
+  }
+  if (
+    input.mode !== undefined &&
+    !CAPSULE_REINDEX_MODES.includes(input.mode as (typeof CAPSULE_REINDEX_MODES)[number])
+  ) {
+    errors.push(`reindexRequest.mode must be one of ${CAPSULE_REINDEX_MODES.join("|")}`);
+  }
+  if (input.force !== undefined && typeof input.force !== "boolean") {
+    errors.push("reindexRequest.force must be a boolean when provided");
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, value: input as unknown as CapsuleReindexRequest };
+}
+
 // ─── ConnectorGraphState ──────────────────────────────────────────────────────
 function validateFilesWindowNode(node: Record<string, unknown>, errors: string[]): void {
+  validateOnlyKeys(node, ["kind", "nodeId", "scope"], "graph.nodes entry.files-window", errors);
   const scopeResult = validateKnowledgeSourceScope(node.scope);
   if (!scopeResult.ok) {
     for (const reason of scopeResult.errors) {
@@ -375,6 +481,12 @@ function validateLocalKnowledgeNodeTarget(
     return;
   }
   if (target.kind === "capsule") {
+    validateOnlyKeys(
+      target,
+      ["kind", "capsuleId"],
+      "graph.nodes entry.local-knowledge.target.capsule",
+      errors,
+    );
     if (!isNonEmptyTrimmedString(target.capsuleId)) {
       errors.push(
         "graph.nodes entry.local-knowledge.target.capsuleId must be a non-empty string",
@@ -383,6 +495,12 @@ function validateLocalKnowledgeNodeTarget(
     return;
   }
   if (target.kind === "capsule-set") {
+    validateOnlyKeys(
+      target,
+      ["kind", "capsuleSetId"],
+      "graph.nodes entry.local-knowledge.target.capsule-set",
+      errors,
+    );
     if (!isNonEmptyTrimmedString(target.capsuleSetId)) {
       errors.push(
         "graph.nodes entry.local-knowledge.target.capsuleSetId must be a non-empty string",
@@ -394,6 +512,7 @@ function validateLocalKnowledgeNodeTarget(
 }
 
 function validateLocalKnowledgeNode(node: Record<string, unknown>, errors: string[]): void {
+  validateOnlyKeys(node, ["kind", "nodeId", "target"], "graph.nodes entry.local-knowledge", errors);
   validateLocalKnowledgeNodeTarget(node.target, errors);
 }
 
@@ -401,6 +520,12 @@ function validateConversationCenterNode(
   node: Record<string, unknown>,
   errors: string[],
 ): void {
+  validateOnlyKeys(
+    node,
+    ["kind", "nodeId", "conversationId", "route"],
+    "graph.nodes entry.conversation-center",
+    errors,
+  );
   if (!isNonEmptyTrimmedString(node.conversationId)) {
     errors.push("graph.nodes entry.conversation-center.conversationId must be a non-empty string");
   }

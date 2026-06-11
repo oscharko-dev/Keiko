@@ -436,6 +436,8 @@ export type {
   ParserDiagnostic,
   ParserResult,
   IndexingJobStatus,
+  CapsuleReindexMode,
+  CapsuleReindexRequest,
   IndexingJobError,
   IndexingJobRecord,
   CapsuleHealth,
@@ -446,6 +448,7 @@ export {
   PARSED_UNIT_KINDS,
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
+  CAPSULE_REINDEX_MODES,
 } from "./local-knowledge-records.js";
 export { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 export type {
@@ -459,6 +462,7 @@ export {
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
   validateCapsuleSet,
+  validateCapsuleReindexRequest,
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
 

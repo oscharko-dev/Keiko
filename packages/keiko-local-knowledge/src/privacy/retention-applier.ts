@@ -17,7 +17,7 @@
 //   * A missing field on the policy SKIPS the corresponding statement — `undefined` means
 //     "retain indefinitely", per the types.ts contract.
 
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeStoreError } from "../errors.js";
 import type { KnowledgeStore } from "../store.js";
@@ -39,6 +39,10 @@ const DELETE_OLD_DOCUMENT_TEXTS_SQL =
 
 interface ChangesRow {
   readonly changes: number;
+}
+
+interface SourceIdRow {
+  readonly id: string;
 }
 
 function cutoffFor(now: number, days: number): number {
@@ -68,6 +72,16 @@ function runDelete(
     | ChangesRow
     | undefined;
   return row?.changes ?? 0;
+}
+
+function sourceIdsForCapsule(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+): readonly KnowledgeSourceId[] {
+  const rows = store._internal.db
+    .prepare("SELECT id FROM capsule_sources WHERE capsule_id = :capsule_id ORDER BY id ASC")
+    .all({ capsule_id: capsuleId }) as unknown as readonly SourceIdRow[];
+  return rows.map((row) => row.id as KnowledgeSourceId);
 }
 
 export function applyRetentionToCapsule(
@@ -114,6 +128,7 @@ export function applyRetentionToCapsule(
   auditSink?.emit({
     kind: "retention-applied",
     capsuleId,
+    sourceIds: sourceIdsForCapsule(store, capsuleId),
     deletedVectorCount,
     deletedExtractedTextCount,
     occurredAt: now,

@@ -982,6 +982,10 @@ function persistStartedJob(state: RunState, sources: readonly KnowledgeSource[])
   }
 }
 
+function sourceIdsForState(state: RunState): readonly KnowledgeSourceId[] {
+  return [...state.sourcesById.values()].map((source) => source.id);
+}
+
 function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): IndexingEvent {
   const event: IndexingEvent = {
     kind: "job-started",
@@ -993,6 +997,7 @@ function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): I
   state.options.auditSink?.emit({
     kind: "indexing-job-started",
     capsuleId: state.capsule.id,
+    sourceIds: sources.map((source) => source.id),
     jobId: state.jobId,
     occurredAt: state.startedAt,
   });
@@ -1117,6 +1122,7 @@ function* finalize(
     state.options.auditSink?.emit({
       kind: "indexing-job-failed",
       capsuleId: state.capsule.id,
+      sourceIds: sourceIdsForState(state),
       jobId: state.jobId,
       errorCode: err.code,
       occurredAt: finishedAt,
@@ -1127,6 +1133,7 @@ function* finalize(
   state.options.auditSink?.emit({
     kind: "indexing-job-completed",
     capsuleId: state.capsule.id,
+    sourceIds: sourceIdsForState(state),
     jobId: state.jobId,
     processedDocuments: result.processedDocuments,
     failedDocuments: result.failedDocuments,

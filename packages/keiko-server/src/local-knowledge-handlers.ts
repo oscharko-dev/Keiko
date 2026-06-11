@@ -36,6 +36,8 @@ import type {
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import {
   CAPSULE_SET_MAX_MEMBERS,
+  isSafeDisplaySummary,
+  validateCapsuleReindexRequest,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
@@ -625,6 +627,7 @@ function buildCapsuleHealth(
     unsupportedDocuments > 0 ? loadUnsupportedGuidance(store, capsule.id) : [];
   return {
     capsuleId: capsule.id,
+    sourceIds: capsule.sourceIds,
     lifecycleState: capsule.lifecycleState,
     storageSizeBytes: storageSizeBytes(dbPath),
     documentCount,
@@ -773,45 +776,41 @@ function parseCapsuleId(ctx: RouteContext): KnowledgeCapsule["id"] {
   return capsuleId as KnowledgeCapsule["id"];
 }
 
-function parseReindexMode(
-  body: Record<string, unknown>,
-): "changed-files" | "repair-failed" | undefined {
-  const mode = body.mode;
-  if (mode === undefined || mode === "changed-files" || mode === "repair-failed") {
-    return mode;
+function requireSafeDisplayText(field: string, value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || !isSafeDisplaySummary(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be a browser-safe non-empty string.`);
   }
-  throw new InvalidRequest('Field "mode" must be "changed-files" or "repair-failed".');
+  return trimmed;
 }
 
-// O2-GAP-1 (Epic #189): reindex callers can opt into a forced re-embed. Plumbed
-// through to runIndexingJob so a capsule whose embedding model rotated can be
-// rebuilt without manual store surgery.
-function parseReindexForce(body: Record<string, unknown>): boolean {
-  const force = body.force;
-  if (force === undefined) return false;
-  if (typeof force !== "boolean") {
-    throw new InvalidRequest('Field "force" must be a boolean when provided.');
+function safeOptionalDisplayText(field: string, value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  return force;
+  if (typeof value !== "string") {
+    throw new InvalidRequest(`Field "${field}" must be a string when provided.`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  if (!isSafeDisplaySummary(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be browser-safe when provided.`);
+  }
+  return trimmed;
 }
 
 function parseCreateCapsuleInput(body: Record<string, unknown>): {
   readonly displayName: string;
   readonly description?: string;
 } {
-  const displayName = typeof body.displayName === "string" ? body.displayName.trim() : undefined;
-  if (displayName === undefined || displayName.length === 0) {
+  if (typeof body.displayName !== "string") {
     throw new InvalidRequest('Field "displayName" must be a non-empty string.');
   }
-  const descriptionRaw = body.description;
-  if (descriptionRaw === undefined) {
-    return { displayName };
-  }
-  if (typeof descriptionRaw !== "string") {
-    throw new InvalidRequest('Field "description" must be a string when provided.');
-  }
-  const description = descriptionRaw.trim();
-  return description.length === 0 ? { displayName } : { displayName, description };
+  const displayName = requireSafeDisplayText("displayName", body.displayName);
+  const description = safeOptionalDisplayText("description", body.description);
+  return description === undefined ? { displayName } : { displayName, description };
 }
 
 // Issue #621: derive native vector dimensions from the embedding model id rather than
@@ -1105,15 +1104,12 @@ function parseCreateCapsuleSetInput(body: Record<string, unknown>): {
   readonly description?: string;
   readonly capsuleIds: readonly KnowledgeCapsuleId[];
 } {
-  const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
-  if (displayName.length === 0) {
+  if (typeof body.displayName !== "string") {
     throw new InvalidRequest('Field "displayName" must be a non-empty string.');
   }
+  const displayName = requireSafeDisplayText("displayName", body.displayName);
   const capsuleIds = parseSetCapsuleIds(body.capsuleIds);
-  const description =
-    typeof body.description === "string" && body.description.trim().length > 0
-      ? body.description.trim()
-      : undefined;
+  const description = safeOptionalDisplayText("description", body.description);
   return description === undefined
     ? { displayName, capsuleIds }
     : { displayName, description, capsuleIds };
@@ -1168,16 +1164,20 @@ function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsP
   }
   const patch: { displayName?: string; description?: string } = {};
   if (body.displayName !== undefined) {
-    if (typeof body.displayName !== "string" || body.displayName.trim().length === 0) {
+    if (typeof body.displayName !== "string") {
       throw new InvalidRequest('Field "displayName" must be a non-empty string when provided.');
     }
-    patch.displayName = body.displayName.trim();
+    patch.displayName = requireSafeDisplayText("displayName", body.displayName);
   }
   if (body.description !== undefined) {
     if (typeof body.description !== "string") {
       throw new InvalidRequest('Field "description" must be a string when provided.');
     }
-    patch.description = body.description.trim();
+    const trimmed = body.description.trim();
+    if (!isSafeDisplaySummary(trimmed)) {
+      throw new InvalidRequest('Field "description" must be browser-safe when provided.');
+    }
+    patch.description = trimmed;
   }
   if (patch.displayName === undefined && patch.description === undefined) {
     throw new InvalidRequest("Patch must include displayName or description.");
@@ -1363,8 +1363,11 @@ function parseConnectSourceInput(body: Record<string, unknown>): {
   const displayNameRaw = body.displayName;
   const displayName =
     typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0
-      ? displayNameRaw.trim()
+      ? requireSafeDisplayText("displayName", displayNameRaw)
       : basename(connectScopeRootPath(scope));
+  if (!isSafeDisplaySummary(displayName)) {
+    throw new InvalidRequest('Field "displayName" must be browser-safe when provided.');
+  }
   return { scope, displayName };
 }
 
@@ -1469,8 +1472,12 @@ export async function handleReindexLocalKnowledgeCapsule(
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
     const body = await readJsonObject(ctx.req);
-    const mode = parseReindexMode(body);
-    const force = parseReindexForce(body);
+    const reindexRequest = validateCapsuleReindexRequest({ ...body, capsuleId });
+    if (!reindexRequest.ok) {
+      throw new InvalidRequest(reindexRequest.errors.join(" "));
+    }
+    const mode = reindexRequest.value.mode;
+    const force = reindexRequest.value.force ?? false;
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);

@@ -129,10 +129,11 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
     const events: readonly CapsuleAuditEvent[] = [
       { kind: "capsule-created", capsuleId, occurredAt: 1 },
       { kind: "capsule-deleted", capsuleId, occurredAt: 2 },
-      { kind: "indexing-job-started", capsuleId, jobId: "job-1", occurredAt: 3 },
+      { kind: "indexing-job-started", capsuleId, sourceIds: [sourceId], jobId: "job-1", occurredAt: 3 },
       {
         kind: "indexing-job-completed",
         capsuleId,
+        sourceIds: [sourceId],
         jobId: "job-1",
         processedDocuments: 5,
         failedDocuments: 0,
@@ -141,6 +142,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
       {
         kind: "indexing-job-failed",
         capsuleId,
+        sourceIds: [sourceId],
         jobId: "job-1",
         errorCode: "embedding-failed",
         occurredAt: 5,
@@ -148,6 +150,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
       {
         kind: "retention-applied",
         capsuleId,
+        sourceIds: [sourceId],
         deletedVectorCount: 1,
         deletedExtractedTextCount: 0,
         occurredAt: 6,
@@ -192,7 +195,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
-        details_json: null,
+        details_json: '{"sourceIds":["src-audit"]}',
         occurred_at: 3,
       },
       {
@@ -204,7 +207,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: 0,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
-        details_json: null,
+        details_json: '{"sourceIds":["src-audit"]}',
         occurred_at: 4,
       },
       {
@@ -216,7 +219,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
-        details_json: null,
+        details_json: '{"sourceIds":["src-audit"]}',
         occurred_at: 5,
       },
       {
@@ -228,7 +231,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: 1,
         deleted_extracted_text_count: 0,
-        details_json: null,
+        details_json: '{"sourceIds":["src-audit"]}',
         occurred_at: 6,
       },
     ]);

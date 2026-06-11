@@ -5,11 +5,12 @@
 // deletes of the parent capsule, but the verify+delete sequence is correct under WAL's
 // single-writer semantics).
 
-import type {
-  KnowledgeCapsuleId,
-  KnowledgeSource,
-  KnowledgeSourceId,
-  KnowledgeSourceScope,
+import {
+  isSafeDisplaySummary,
+  type KnowledgeCapsuleId,
+  type KnowledgeSource,
+  type KnowledgeSourceId,
+  type KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
@@ -52,6 +53,18 @@ function parseTags(json: string): readonly string[] {
   return parsed.filter((entry): entry is string => typeof entry === "string");
 }
 
+function assertSafeDisplayField(field: string, value: string): void {
+  if (value.trim().length === 0 || !isSafeDisplaySummary(value)) {
+    throw new KnowledgeStoreError(`${field} must be a browser-safe non-empty string`);
+  }
+}
+
+function assertSafeOptionalDisplayField(field: string, value: string | undefined): void {
+  if (value !== undefined && !isSafeDisplaySummary(value)) {
+    throw new KnowledgeStoreError(`${field} must be browser-safe when set`);
+  }
+}
+
 function parseScope(kind: string, json: string): KnowledgeSourceScope {
   const parsed = JSON.parse(json) as unknown;
   if (typeof parsed !== "object" || parsed === null) {
@@ -91,6 +104,11 @@ export function addSourceToCapsule(
   input: AddCapsuleSourceInput,
   auditSink?: AuditEventSink,
 ): KnowledgeSource {
+  assertSafeDisplayField("displayName", input.displayName);
+  assertSafeOptionalDisplayField("description", input.description);
+  for (const tag of input.tags) {
+    assertSafeDisplayField("tag", tag);
+  }
   const db = store._internal.db;
   const now = store._internal.now();
   db.exec("BEGIN");
