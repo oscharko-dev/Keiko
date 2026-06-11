@@ -19,6 +19,17 @@ function provider(modelId: string): ModelProviderConfig {
   };
 }
 
+function localSessionProvider(modelId: string): ModelProviderConfig {
+  return {
+    providerType: "openai-codex-local-session",
+    modelId,
+    credentialResolver: { kind: "codex-cli" },
+    timeoutMs: 30_000,
+    maxRetries: 3,
+    retryBaseDelayMs: 500,
+  };
+}
+
 function config(
   modelIds: readonly string[],
   capabilities: readonly ModelCapability[] = [],
@@ -137,6 +148,26 @@ describe("selectConfiguredModel", () => {
       { kind: "chat", toolCalling: true, structuredOutput: true },
     );
     expect(selected).toBe("example-private-chat");
+  });
+});
+
+describe("findConfiguredCapability", () => {
+  it("derives a local-session-aware default capability for Codex-backed configured models", () => {
+    const capability = findConfiguredCapability(
+      {
+        providers: [localSessionProvider("gpt-5.4")],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+      "gpt-5.4",
+    );
+    expect(capability).toMatchObject({
+      id: "gpt-5.4",
+      toolCalling: false,
+      structuredOutput: true,
+      workflowEligible: true,
+      streaming: false,
+    });
+    expect(isConversationEligibleModel(capability!)).toBe(true);
   });
 });
 

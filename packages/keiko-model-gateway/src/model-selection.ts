@@ -1,11 +1,13 @@
 import {
   createDefaultChatCapability,
+  createDefaultCodexLocalSessionCapability,
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
 } from "./capabilities.js";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayConfig, ModelCapability, ModelKind } from "./types.js";
+import { isOpenAiCodexLocalSessionProviderConfig } from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 
@@ -48,11 +50,14 @@ export function findConfiguredCapability(
   config: GatewayConfig,
   modelId: string,
 ): ModelCapability | undefined {
+  const configuredProvider = config.providers.find((provider) => provider.modelId === modelId);
   return (
     config.capabilities?.find((capability) => capability.id === modelId) ??
     listCapabilities().find((capability) => capability.id === modelId) ??
-    (config.providers.some((provider) => provider.modelId === modelId)
-      ? isLikelyEmbeddingModelId(modelId)
+    (configuredProvider !== undefined
+      ? isOpenAiCodexLocalSessionProviderConfig(configuredProvider)
+        ? createDefaultCodexLocalSessionCapability(modelId)
+        : isLikelyEmbeddingModelId(modelId)
         ? createDefaultEmbeddingCapability(modelId)
         : createDefaultChatCapability(modelId)
       : undefined)

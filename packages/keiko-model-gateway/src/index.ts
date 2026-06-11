@@ -59,6 +59,7 @@ export {
 export {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
+  createDefaultCodexLocalSessionCapability,
   explainConversationIneligibility,
   findCapability,
   isConversationEligibleModel,

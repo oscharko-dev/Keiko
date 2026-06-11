@@ -4,6 +4,7 @@ import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
+  createDefaultCodexLocalSessionCapability,
   createDefaultEmbeddingCapability,
   explainConversationIneligibility,
   findCapability,
@@ -100,6 +101,18 @@ describe("capability registry", () => {
   it("declares the default capability as kind 'chat'", () => {
     const cap = createDefaultChatCapability("example-chat-model");
     expect(cap.kind).toBe("chat");
+  });
+
+  it("creates local-session coding capabilities for Codex-backed configured models", () => {
+    const cap = createDefaultCodexLocalSessionCapability("gpt-5.4");
+    expect(cap).toMatchObject({
+      id: "gpt-5.4",
+      kind: "chat",
+      toolCalling: false,
+      structuredOutput: true,
+      workflowEligible: true,
+      throughputHint: "Codex local session",
+    });
   });
 });
 

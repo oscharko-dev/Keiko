@@ -1,4 +1,8 @@
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  CodexLocalSessionAdapter,
+  type CodexCliCommandRunner,
+} from "./codex-local-session-adapter.js";
 import { OpenAiAdapter, type AdapterDeps } from "./openai-adapter.js";
 import type {
   GatewayOpenAiCompatibleProviderConfig,
@@ -53,6 +57,18 @@ function unsupportedAdapterFactory(
   return () => new UnsupportedProviderAdapter(providerType);
 }
 
+function codexLocalSessionAdapterFactory(
+  context: ProviderAdapterFactoryContext,
+  commandRunner: CodexCliCommandRunner | undefined,
+): ProviderAdapter {
+  return new CodexLocalSessionAdapter({
+    commandRunner,
+    requestId: context.requestId,
+    costClass: context.costClass,
+    ...(context.now === undefined ? {} : { now: context.now }),
+  });
+}
+
 export interface StaticProviderRegistryOptions {
   readonly adapters?: ReadonlyMap<string, ProviderAdapterFactory> | undefined;
 }
@@ -84,7 +100,13 @@ function gatewayConfigValidator(config: ModelProviderConfig): void {
   }
 }
 
-export function defaultAdapterFactories(): ReadonlyMap<string, ProviderAdapterFactory> {
+export interface DefaultAdapterFactoryDeps {
+  readonly codexCliCommandRunner?: CodexCliCommandRunner | undefined;
+}
+
+export function defaultAdapterFactories(
+  deps: DefaultAdapterFactoryDeps = {},
+): ReadonlyMap<string, ProviderAdapterFactory> {
   return new Map<string, ProviderAdapterFactory>([
     [
       "gateway-openai-compatible",
@@ -99,19 +121,22 @@ export function defaultAdapterFactories(): ReadonlyMap<string, ProviderAdapterFa
     ],
     [
       "openai-codex-local-session",
-      unsupportedAdapterFactory("openai-codex-local-session"),
+      (context) => codexLocalSessionAdapterFactory(context, deps.codexCliCommandRunner),
     ],
   ]);
 }
 
 export interface DefaultProviderRegistryDeps {
   readonly fetchImpl?: typeof fetch | undefined;
+  readonly codexCliCommandRunner?: CodexCliCommandRunner | undefined;
 }
 
 export function createDefaultProviderRegistry(
   deps: DefaultProviderRegistryDeps = {},
 ): ProviderRegistry {
-  const adapters = new Map(defaultAdapterFactories());
+  const adapters = new Map(
+    defaultAdapterFactories({ codexCliCommandRunner: deps.codexCliCommandRunner }),
+  );
   const gatewayFactory = adapters.get("gateway-openai-compatible");
   if (gatewayFactory !== undefined && deps.fetchImpl !== undefined) {
     adapters.set("gateway-openai-compatible", (context) =>

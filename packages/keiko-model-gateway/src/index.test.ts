@@ -11,6 +11,7 @@ import {
   CAPABILITY_REGISTRY,
   CAPABILITY_DATA,
   createDefaultChatCapability,
+  createDefaultCodexLocalSessionCapability,
   findCapability,
   listCapabilities,
   resolveCostClass,
@@ -99,6 +100,7 @@ describe("keiko-model-gateway package surface", () => {
 
   it("exposes the capability helpers as callable functions", () => {
     expect(typeof createDefaultChatCapability).toBe("function");
+    expect(typeof createDefaultCodexLocalSessionCapability).toBe("function");
     expect(typeof findCapability).toBe("function");
     expect(typeof listCapabilities).toBe("function");
     expect(typeof resolveCostClass).toBe("function");

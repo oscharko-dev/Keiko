@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
-import { StaticProviderRegistry } from "./provider-registry.js";
+import { createDefaultProviderRegistry, StaticProviderRegistry } from "./provider-registry.js";
 import {
   CircuitOpenError,
   ConfigInvalidError,
@@ -319,7 +319,7 @@ describe("Gateway.chat", () => {
     expect(seenContext?.fetchImpl).toBe(fetchImpl);
   });
 
-  it("fails closed for a configured local-session provider until a runtime adapter is registered", async () => {
+  it("routes a configured local-session provider through the default provider registry", async () => {
     const gateway = new Gateway(
       config([
         {
@@ -331,11 +331,58 @@ describe("Gateway.chat", () => {
           retryBaseDelayMs: 1,
         },
       ]),
-      { clock: stubClock() },
+      {
+        providerRegistry: createDefaultProviderRegistry({
+          codexCliCommandRunner: async (input) => {
+            if (input.command === "version") {
+              return {
+                stdout: "codex-cli 0.138.0-alpha.7",
+                stderr: "",
+                exitCode: 0,
+                terminatedBySignal: null,
+              };
+            }
+            if (input.command === "doctor-json") {
+              return {
+                stdout: JSON.stringify({
+                  overallStatus: "ok",
+                  checks: {
+                    "auth.credentials": { status: "ok" },
+                    "network.websocket_reachability": { status: "ok" },
+                  },
+                }),
+                stderr: "",
+                exitCode: 0,
+                terminatedBySignal: null,
+              };
+            }
+            if (input.command === "exec-json") {
+              return {
+                stdout: [
+                  JSON.stringify({ type: "turn.started" }),
+                  JSON.stringify({
+                    type: "item.completed",
+                    item: { id: "item_1", type: "agent_message", text: "local answer" },
+                  }),
+                  JSON.stringify({
+                    type: "turn.completed",
+                    usage: { input_tokens: 8, output_tokens: 3 },
+                  }),
+                ].join("\n"),
+                stderr: "",
+                exitCode: 0,
+                terminatedBySignal: null,
+              };
+            }
+            throw new Error(`unexpected command ${input.command}`);
+          },
+        }),
+        clock: stubClock(),
+      },
     );
-    await expect(gateway.chat({ modelId: "gpt-5-codex", messages: REQUEST.messages })).rejects.toBeInstanceOf(
-      ConfigInvalidError,
-    );
+    const result = await gateway.chat({ modelId: "gpt-5-codex", messages: REQUEST.messages });
+    expect(result.modelId).toBe("gpt-5-codex");
+    expect(result.content).toBe("local answer");
   });
 });
 

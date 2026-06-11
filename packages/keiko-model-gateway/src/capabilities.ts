@@ -106,6 +106,32 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
   };
 }
 
+export function createDefaultCodexLocalSessionCapability(modelId: string): ModelCapability {
+  return {
+    id: modelId,
+    kind: "chat",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: true,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: /mini/u.test(modelId) ? "low" : "medium",
+    latencyClass: /mini/u.test(modelId) ? "fast" : "standard",
+    throughputHint: "Codex local session",
+    preferredUseCases: ["Local coding workflow"],
+    knownLimitations: [
+      "Gateway tool-call bridging is not available through the local Codex session provider",
+      "Streaming is synthesized from buffered local-session execution",
+      "Image input and document input require explicit capability enrichment",
+    ],
+    supportsSeeding: false,
+    supportsResponseFormat: true,
+  };
+}
+
 // Every requested boolean capability (when true) must be advertised by the model.
 function satisfiesBooleanRequirements(cap: ModelCapability, query: CapabilityQuery): boolean {
   if (query.toolCalling === true && !cap.toolCalling) {
