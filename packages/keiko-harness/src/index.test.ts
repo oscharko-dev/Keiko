@@ -57,6 +57,11 @@ import type {
   PatchProposedEvent,
   ReasoningTraceEvent,
   RecordedToolCall,
+  ResourceAccessMode,
+  ResourceClaim,
+  ResourceConflict,
+  ResourceConflictPolicy,
+  ResourceKind,
   RolePolicy,
   RunCancelledEvent,
   RunCompletedEvent,
@@ -204,6 +209,11 @@ describe("keiko-harness public surface", () => {
     pin<ToolCallStartedEvent>();
     pin<ToolPort>();
     pin<VerificationResultEvent>();
+    pin<ResourceAccessMode>();
+    pin<ResourceClaim>();
+    pin<ResourceConflict>();
+    pin<ResourceConflictPolicy>();
+    pin<ResourceKind>();
     pin<RolePolicy>();
   });
 });

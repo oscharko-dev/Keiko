@@ -12,6 +12,7 @@ import type {
 } from "./types.js";
 import { createSession, type AgentConfig, type AgentSession, type HarnessDeps } from "./session.js";
 import { defaultIdSource } from "./fingerprint.js";
+import { resolveTaskPlan } from "./tasks/policy.js";
 
 export interface RolePolicy {
   readonly role: OrchestrationChildRole;
@@ -127,7 +128,27 @@ export const DEFAULT_ORCHESTRATION_LIMITS: OrchestrationLimits = {
 export interface OrchestrationChildRequest {
   readonly plan: OrchestrationChildPlan;
   readonly task: TaskInput;
+  readonly resourceClaims?: readonly ResourceClaim[] | undefined;
   readonly config?: Partial<AgentConfig> | undefined;
+}
+
+export type ResourceKind = "file" | "patch" | "tool";
+export type ResourceAccessMode = "read" | "write" | "exclusive";
+export type ResourceConflictPolicy = "serialize" | "block" | "escalate";
+
+export interface ResourceClaim {
+  readonly kind: ResourceKind;
+  readonly resourceId: string;
+  readonly access: ResourceAccessMode;
+  readonly policy: ResourceConflictPolicy;
+}
+
+export interface ResourceConflict {
+  readonly childId: string;
+  readonly conflictingChildId: string;
+  readonly claim: ResourceClaim;
+  readonly outcome: ResourceConflictPolicy;
+  readonly reason: string;
 }
 
 export interface OrchestrationChildResult {
@@ -136,6 +157,7 @@ export interface OrchestrationChildResult {
   readonly attempts: number;
   readonly run: Awaited<AgentSession["result"]> | undefined;
   readonly reason: string;
+  readonly conflicts?: readonly ResourceConflict[] | undefined;
 }
 
 export interface OrchestrationSessionResult {
@@ -175,6 +197,11 @@ interface ActiveChild {
   readonly session: AgentSession;
 }
 
+interface DispatchDecision {
+  readonly action: "dispatch" | "defer" | "block";
+  readonly conflicts: readonly ResourceConflict[];
+}
+
 function resolveOrchestrationLimits(
   config: OrchestrationConfig,
 ): OrchestrationLimits {
@@ -192,6 +219,40 @@ function toConfig(parent: OrchestrationConfig, child: OrchestrationChildRequest)
 
 function resolveRolePolicy(child: OrchestrationChildRequest): RolePolicy {
   return DEFAULT_ROLE_POLICIES[child.plan.role];
+}
+
+function deriveClaims(child: OrchestrationChildRequest): readonly ResourceClaim[] {
+  const explicit = child.resourceClaims ?? [];
+  const plan = resolveTaskPlan(child.task);
+  if (plan.targetFile === "<unspecified>") {
+    return explicit;
+  }
+  if (child.plan.authority.canWriteWorkspace || plan.allowsPatch) {
+    return [
+      {
+        kind: "file",
+        resourceId: plan.targetFile,
+        access: "write",
+        policy: "serialize",
+      },
+      {
+        kind: "patch",
+        resourceId: plan.targetFile,
+        access: "write",
+        policy: "serialize",
+      },
+      ...explicit,
+    ];
+  }
+  return [
+    {
+      kind: "file",
+      resourceId: plan.targetFile,
+      access: "read",
+      policy: "serialize",
+    },
+    ...explicit,
+  ];
 }
 
 function transition(
@@ -294,6 +355,64 @@ function validateChild(child: OrchestrationChildRequest): string | null {
   return null;
 }
 
+function claimsConflict(a: ResourceClaim, b: ResourceClaim): boolean {
+  if (a.kind !== b.kind || a.resourceId !== b.resourceId) {
+    return false;
+  }
+  if (a.kind === "tool") {
+    return a.access === "exclusive" || b.access === "exclusive";
+  }
+  return !(a.access === "read" && b.access === "read");
+}
+
+function strongestPolicy(
+  left: ResourceConflictPolicy,
+  right: ResourceConflictPolicy,
+): ResourceConflictPolicy {
+  const priority: Record<ResourceConflictPolicy, number> = {
+    serialize: 0,
+    block: 1,
+    escalate: 2,
+  };
+  return priority[left] >= priority[right] ? left : right;
+}
+
+function evaluateClaims(
+  child: OrchestrationChildRequest,
+  active: ReadonlyMap<string, ActiveChild>,
+): DispatchDecision {
+  const childClaims = deriveClaims(child);
+  const conflicts: ResourceConflict[] = [];
+  for (const [activeChildId, current] of active.entries()) {
+    for (const left of childClaims) {
+      for (const right of deriveClaims(current.child)) {
+        if (!claimsConflict(left, right)) {
+          continue;
+        }
+        const outcome = strongestPolicy(left.policy, right.policy);
+        conflicts.push({
+          childId: child.plan.childId,
+          conflictingChildId: activeChildId,
+          claim: left,
+          outcome,
+          reason: `${left.kind} claim on ${left.resourceId} conflicts with active child ${activeChildId}`,
+        });
+      }
+    }
+  }
+  if (conflicts.length === 0) {
+    return { action: "dispatch", conflicts };
+  }
+  const outcome = conflicts.reduce<ResourceConflictPolicy>(
+    (current, conflict) => strongestPolicy(current, conflict.outcome),
+    "serialize",
+  );
+  if (outcome === "serialize") {
+    return { action: "defer", conflicts };
+  }
+  return { action: "block", conflicts };
+}
+
 function chooseNextCompleted(
   active: ReadonlyMap<string, ActiveChild>,
 ): Promise<readonly [string, Awaited<AgentSession["result"]>]> {
@@ -377,6 +496,22 @@ async function runOrchestration(
         state = transition(transitions, state, "failed", validation);
         break;
       }
+      const dispatchDecision = evaluateClaims(child, active);
+      if (dispatchDecision.action === "defer") {
+        continue;
+      }
+      if (dispatchDecision.action === "block") {
+        results[child.plan.childId] = {
+          childId: child.plan.childId,
+          state: "blocked",
+          attempts: 0,
+          run: undefined,
+          reason: dispatchDecision.conflicts.map((conflict) => conflict.reason).join("; "),
+          conflicts: dispatchDecision.conflicts,
+        };
+        state = transition(transitions, state, "conflicted", `resource conflict on ${child.plan.childId}`);
+        continue;
+      }
       await deps.hooks?.beforeDispatch?.(child, [...active.keys()]);
       state = transition(transitions, state, "dispatching", `dispatch ${child.plan.childId}`);
       const session = createSession(child.task, toConfig(config, child), deps);
@@ -397,6 +532,10 @@ async function runOrchestration(
     }
 
     if (Object.keys(results).length === orchestration.children.length && active.size === 0) {
+      if (Object.values(results).some((result) => result.state === "blocked")) {
+        state = transition(transitions, state, "blocked", "resource conflicts left one or more children blocked");
+        break;
+      }
       if (state === "cancelling") {
         state = transition(transitions, state, "cancelled", "all children settled after cancellation");
       } else if (state !== "failed") {

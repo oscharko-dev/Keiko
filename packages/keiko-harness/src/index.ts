@@ -24,6 +24,11 @@ export {
   type OrchestrationSchedulerHooks,
   type OrchestrationSession,
   type OrchestrationSessionResult,
+  type ResourceAccessMode,
+  type ResourceClaim,
+  type ResourceConflict,
+  type ResourceConflictPolicy,
+  type ResourceKind,
   type RolePolicy,
 } from "./orchestration.js";
 
