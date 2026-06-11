@@ -200,6 +200,16 @@ function hitEmissionLimit(runner: SearchTextRunner, state: RunState): boolean {
   return false;
 }
 
+// Returns true for NodeJS.ErrnoException (EACCES, ENOENT, EIO, …). Checked by the presence of a
+// string `code` property so TypeError and other programmer errors are NOT swallowed.
+export function isIoError(err: unknown): boolean {
+  if (err === null || typeof err !== "object" || !("code" in err)) {
+    return false;
+  }
+  const { code } = err as Record<"code", unknown>;
+  return typeof code === "string";
+}
+
 function readForScan(
   runner: SearchTextRunner,
   relativePath: string,
@@ -215,6 +225,12 @@ function readForScan(
   } catch (err) {
     if (err instanceof FileTooLargeError) {
       candidates.push(buildCandidate(relativePath, "size-exceeded"));
+      return undefined;
+    }
+    // TOCTOU: permissions or availability may change between discovery and read.
+    // A single unreadable file must degrade to a skip, not crash the whole scan.
+    if (isIoError(err)) {
+      candidates.push(buildCandidate(relativePath, "tool-unavailable"));
       return undefined;
     }
     throw err;
@@ -276,7 +292,18 @@ export async function scanFile(
     candidates.push(buildCandidate(file.relativePath, "ignored"));
     return;
   }
-  if (await probeBinary(runner.fs, contained.path, file.sizeBytes)) {
+  let isBinary: boolean;
+  try {
+    isBinary = await probeBinary(runner.fs, contained.path, file.sizeBytes);
+  } catch (err) {
+    // TOCTOU: file may have become unreadable (EACCES, ENOENT, …) between discovery and probe.
+    if (isIoError(err)) {
+      candidates.push(buildCandidate(file.relativePath, "tool-unavailable"));
+      return;
+    }
+    throw err;
+  }
+  if (isBinary) {
     candidates.push(buildCandidate(file.relativePath, "binary"));
     return;
   }

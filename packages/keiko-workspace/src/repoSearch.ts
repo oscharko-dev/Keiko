@@ -31,6 +31,7 @@ import {
   elapsed,
   gatherCandidates,
   hitLimit,
+  isIoError,
   probeBinary,
   scanFile,
   type CandidateSet,
@@ -126,6 +127,34 @@ function assertWorkspaceRoot(workspace: WorkspaceInfo): void {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Yields to the event loop every SCAN_YIELD_INTERVAL files so a large cold NFS/SMB workspace
+// cannot block the event loop for multiple seconds. discoverFiles() itself remains synchronous
+// (sync walk is load-bearing for importGraph/testSourcePairing callers); the yield here covers
+// the already-async per-file scan pass where the loop overhead is measurable.
+const SCAN_YIELD_INTERVAL = 64;
+
+async function runScanLoop(
+  runner: SearchTextRunner,
+  candidateSet: CandidateSet,
+  state: RunState,
+  atoms: EvidenceAtom[],
+  candidates: CandidateFile[],
+): Promise<void> {
+  let loopIndex = 0;
+  for (const file of candidateSet.files) {
+    if (hitLimit(runner, state)) {
+      break;
+    }
+    loopIndex += 1;
+    if (loopIndex % SCAN_YIELD_INTERVAL === 0) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    await scanFile(runner, file, state, atoms, candidates);
+  }
+}
+
 export async function searchText(
   scope: SearchScope,
   query: RetrievalQuery,
@@ -163,12 +192,7 @@ export async function searchText(
     matchesReturned: 0,
     truncated: candidateSet.truncated,
   };
-  for (const file of candidateSet.files) {
-    if (hitLimit(runner, state)) {
-      break;
-    }
-    await scanFile(runner, file, state, atoms, candidates);
-  }
+  await runScanLoop(runner, candidateSet, state, atoms, candidates);
   return {
     atoms,
     candidates,
@@ -347,6 +371,38 @@ function assertExcerptRange(request: ReadExcerptRequest): void {
   }
 }
 
+// Probes for binary content and throws RepoSearchUnsupportedFileError on both binary detection
+// and IO errors (EACCES, ENOENT, …) so the caller can treat both as a graceful skip.
+async function assertExcerptNotBinary(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  size: number,
+  scopePath: string,
+): Promise<void> {
+  let isBinary: boolean;
+  try {
+    isBinary = await probeBinary(fs, absolutePath, size);
+  } catch (err) {
+    // TOCTOU: permissions or availability may change between stat and probe (EACCES, ENOENT, …).
+    // Re-classify as an unsupported-file skip so readKeptExcerpts degrades gracefully instead
+    // of crashing the whole grounded answer (the comment at grounded-orchestrator readKeptExcerpts
+    // explicitly promises this invariant).
+    if (isIoError(err)) {
+      throw new RepoSearchUnsupportedFileError(
+        `cannot read excerpt of unreadable file: ${scopePath}`,
+        "io-error",
+      );
+    }
+    throw err;
+  }
+  if (isBinary) {
+    throw new RepoSearchUnsupportedFileError(
+      `cannot read excerpt of binary file: ${scopePath}`,
+      "binary",
+    );
+  }
+}
+
 export async function readExcerpt(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -361,12 +417,7 @@ export async function readExcerpt(
   assertExcerptReadableByPolicy(scope, request.scopePath, target.realScopePath);
   assertExcerptWithinSelectedScope(scope, target.realScopePath);
   const stat = fs.stat(target.path);
-  if (await probeBinary(fs, target.path, stat.size)) {
-    throw new RepoSearchUnsupportedFileError(
-      `cannot read excerpt of binary file: ${request.scopePath}`,
-      "binary",
-    );
-  }
+  await assertExcerptNotBinary(fs, target.path, stat.size, request.scopePath);
   // Read enough of the file to reach the requested line window (bounded by MAX_EXCERPT_FILE_BYTES),
   // then clamp the returned content to the caller's request.maxBytes budget. The read cap is
   // intentionally larger than request.maxBytes so a window deep in a multi-kibibyte file is still

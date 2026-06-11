@@ -1197,3 +1197,102 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(r.atoms[0]?.emittedAtMs).toBe(FIXED_NOW());
   });
 });
+
+// ─── Audit findings: IO-error resilience (release criteria #179) ─────────────
+
+function makeErrnoError(code: string): Error & { code: string } {
+  const err = new Error(`${code}: permission denied`) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
+describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
+  // WorkspaceFs fake whose readFileBytes rejects with EACCES for a specific file.
+  // Models the TOCTOU window between discovery and binary probe (Finding 1).
+  it("searchText degrades to tool-unavailable candidate when probeBinary throws EACCES", async () => {
+    const { scope, fs: baseFs } = memScope({
+      "src/secret.ts": "needle\n",
+      "src/ok.ts": "needle\n",
+    });
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+        if (absolutePath.includes("secret.ts")) {
+          return Promise.reject(makeErrnoError("EACCES"));
+        }
+        if (baseFs.readFileBytes !== undefined) {
+          return baseFs.readFileBytes(absolutePath, maxBytes);
+        }
+        return Promise.resolve(new Uint8Array());
+      },
+    };
+    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    // The readable file still produces an atom; the EACCES file is a skip candidate, not a crash.
+    expect(r.atoms.some((a) => a.scopePath === "src/ok.ts")).toBe(true);
+    expect(
+      r.candidates.some((c) => c.scopePath === "src/secret.ts" && c.omitted === "tool-unavailable"),
+    ).toBe(true);
+  });
+
+  it("searchText degrades to tool-unavailable candidate when readWorkspaceFile throws EACCES", async () => {
+    const { scope, fs: baseFs } = memScope({
+      "src/secret.ts": "needle\n",
+      "src/ok.ts": "needle\n",
+    });
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      readFileUtf8: (absolutePath): string => {
+        if (absolutePath.includes("secret.ts")) {
+          throw makeErrnoError("EACCES");
+        }
+        return baseFs.readFileUtf8(absolutePath);
+      },
+    };
+    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.some((a) => a.scopePath === "src/ok.ts")).toBe(true);
+    expect(
+      r.candidates.some((c) => c.scopePath === "src/secret.ts" && c.omitted === "tool-unavailable"),
+    ).toBe(true);
+  });
+});
+
+describe("IO-error resilience (Audit Finding 2 – excerpt path)", () => {
+  // readExcerpt must re-classify an EACCES during the binary probe as
+  // RepoSearchUnsupportedFileError so that readKeptExcerpts skips the file instead of
+  // crashing the grounded answer (the orchestrator comment explicitly promises this).
+  it("readExcerpt throws RepoSearchUnsupportedFileError when probeBinary throws EACCES", async () => {
+    const { scope, fs: baseFs } = memScope({ "src/a.ts": "content\n" });
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      readFileBytes: (): Promise<Uint8Array> => Promise.reject(makeErrnoError("EACCES")),
+    };
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 64 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchUnsupportedFileError);
+  });
+
+  it("readExcerpt re-throws TypeError (non-IO) from probeBinary unchanged", async () => {
+    const { scope, fs: baseFs } = memScope({ "src/a.ts": "content\n" });
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      readFileBytes: (): Promise<Uint8Array> => Promise.reject(new TypeError("unexpected shape")),
+    };
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 64 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(TypeError);
+  });
+});
