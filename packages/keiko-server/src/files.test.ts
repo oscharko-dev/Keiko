@@ -295,6 +295,26 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("refuses to read or write denied editor content", async () => {
+    await writeFile(join(root, ".env.local"), "API_KEY=value\n");
+
+    await expect(readFilesContent(store, root, ".env.local")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: ".env.local",
+        content: "API_KEY=changed\n",
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
   it("returns image previews below the image cap", async () => {
     const preview = await readFilesPreview(store, root, "assets/pixel.png", buildRedactor({}));
 

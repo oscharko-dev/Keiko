@@ -163,6 +163,8 @@ export function FilePreview({
     : (preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview"));
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
+  const canOpenInEditor =
+    onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
   const lines: readonly (readonly Token[])[] =
     preview?.kind === "text"
       ? shouldHighlight
@@ -192,7 +194,7 @@ export function FilePreview({
         </span>
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
-        {onOpenInEditor !== undefined ? (
+        {canOpenInEditor ? (
           <button
             className="fpv-back"
             type="button"

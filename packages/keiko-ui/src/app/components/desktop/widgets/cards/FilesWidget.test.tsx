@@ -200,6 +200,45 @@ describe("FilesWidget", () => {
     expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
   });
 
+  it("does not offer editor launch for unsupported previews", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "archive.bin",
+          path: "archive.bin",
+          kind: "file",
+          sizeBytes: 6,
+          extension: "bin",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "archive.bin",
+      name: "archive.bin",
+      sizeBytes: 6,
+      modifiedAt: 1,
+      extension: "bin",
+      mime: "application/octet-stream",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    const onOpenFile = vi.fn();
+    render(<FilesWidget root="/repo space" onOpenFile={onOpenFile} />);
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /archive\.bin/i }));
+    await screen.findByText(/no safe text or image preview/i);
+
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+    expect(onOpenFile).not.toHaveBeenCalled();
+  });
+
   it("connects the repository root scope from the Files window", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/resolved-repo",
