@@ -182,6 +182,33 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
 
+### Connected sources: folder search vs. Knowledge Capsules
+
+Chat and Quality Intelligence can both connect to external knowledge. The connection type determines how content is indexed and searched.
+
+**Folder and file search (fast, ephemeral):**
+
+The fast search of connected folders and files loads text-based documents on demand and scans them at request time. It covers plain-text formats only: code, markdown, JSON, CSV, HTML, configuration files, and similar UTF-8 text. Binary detection is content-based (a byte-level probe of each file), not extension-based — binary files, images, and container formats such as PDF and DOCX are skipped by the fast search, never parsed. Files larger than 2 MiB are omitted; the UI displays a coverage notice showing how many files were skipped and why (oversized, binary, unreadable, or corrupt). Corruption does not halt the search — malformed files are skipped and the run continues.
+
+Use folder search for:
+
+- Codebases and configuration repositories
+- Text-based documentation
+- Ad-hoc browsing of a project structure
+
+**Knowledge Capsules (persistent, indexed):**
+
+Knowledge Capsules are the right choice for larger, heterogeneous, or long-lived knowledge collections. Documents are parsed into chunks, embedded with vector representations, and indexed persistently in the Keiko workspace. The index survives workspace restarts and can be reused across multiple chats and Quality Intelligence runs without re-parsing. Unlike the fast search, capsules run real document parsers: in addition to the plain-text formats they parse PDF and Office documents (DOCX), plus JSON, CSV, and HTML. Capsules are composed into Capsule Sets for thematic grouping.
+
+Create a capsule when:
+
+- You have a stable collection of documents (team handbook, product specs, compliance guides, architectural decisions)
+- Content is larger than a few files or contains PDFs and Office documents
+- You want to reuse the same knowledge across multiple chats or QI runs
+- Semantic search (finding related concepts, not just keyword matches) is valuable
+
+The effective difference is scope and persistence: folder search is ephemeral and works best for the current project; capsules are permanent and work well for external, domain-specific knowledge that applies across projects.
+
 ## Install as an app
 
 After Keiko's UI loads in a Chromium-family browser (Chrome, Edge, or Chromium), an "Install Keiko" affordance appears in the page header. Accepting the prompt installs Keiko as a standalone application with the Keiko icon in your OS application shelf, Dock, or Start menu.
@@ -227,6 +254,40 @@ Environment variables can override file values:
 Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, and `api-key`.
 
 Do not commit gateway config files, API tokens, `.keiko/`, or evidence that contains project-specific review material unless your process explicitly requires it.
+
+### Grounding limits
+
+Operators can tune how many sources a chat or Quality Intelligence run may connect and how large the retrieved context can be. All fields accept positive integers; values above the hard ceiling are clamped silently.
+
+Add a `grounding` block to `keiko.config.json`:
+
+```json
+{
+  "providers": [{ "...": "..." }],
+  "grounding": {
+    "maxConnectedSources": 8,
+    "hybridMaxExcerptBytes": 65536
+  }
+}
+```
+
+Environment variables override file config. Each variable maps to the matching field via `KEIKO_GROUNDING_` + the field name in SCREAMING_SNAKE_CASE:
+
+| Variable                                      | Field                      | Default | Hard ceiling |
+| --------------------------------------------- | -------------------------- | ------- | ------------ |
+| `KEIKO_GROUNDING_MAX_CONNECTED_SOURCES`       | `maxConnectedSources`      | 16      | 64           |
+| `KEIKO_GROUNDING_MAX_LOCAL_KNOWLEDGE_SOURCES` | `maxLocalKnowledgeSources` | 16      | 64           |
+| `KEIKO_GROUNDING_MAX_PROMPT_REFERENCES`       | `maxPromptReferences`      | 8       | 64           |
+| `KEIKO_GROUNDING_MAX_EXCERPT_CHARS`           | `maxExcerptChars`          | 900     | 20 000       |
+| `KEIKO_GROUNDING_REFERENCE_BUDGET`            | `referenceBudget`          | 10      | 256          |
+| `KEIKO_GROUNDING_HYBRID_MAX_CANDIDATES`       | `hybridMaxCandidates`      | 24      | 256          |
+| `KEIKO_GROUNDING_HYBRID_MAX_EXCERPT_BYTES`    | `hybridMaxExcerptBytes`    | 131 072 | 524 288      |
+
+`maxConnectedSources` bounds the number of folder/file scope entries per chat. `maxLocalKnowledgeSources` bounds the number of Knowledge Capsule or Capsule Set bindings per chat.
+
+On top of the per-list bounds, a single combined cap of `max(maxConnectedSources, maxLocalKnowledgeSources)` — default 16 — applies across all connected source kinds together (folders, files, repositories, and knowledge connectors). This combined cap is enforced everywhere a source is connected: a Chat PATCH that would exceed it is rejected with HTTP 400, the workspace connect gesture shows a visible "source limit reached" notice instead of binding, and Quality Intelligence drops over-cap run sources with a coverage notice. Chats that already exceed the cap (rows written under a higher prior operator config) may keep or shrink their existing sources but cannot grow; at ask time only the first 16 sources per kind are explored and the rest surface as skipped-source notices.
+
+The effective limits at runtime are visible via `GET /api/config` as `effectiveGroundingLimits`.
 
 ## Security boundaries
 
