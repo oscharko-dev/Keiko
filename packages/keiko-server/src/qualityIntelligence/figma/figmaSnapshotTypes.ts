@@ -36,6 +36,7 @@ export interface FigmaSnapshotScreen {
 /** Why a detected screen produced no render and was excluded from `screens` (partial-render). */
 export type FigmaSkippedScreenReason =
   | "render-url-missing"
+  | "render-url-blocked"
   | "render-fetch-failed"
   | "render-empty"
   | "render-oversized";

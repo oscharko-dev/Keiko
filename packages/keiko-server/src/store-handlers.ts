@@ -130,6 +130,10 @@ function notFoundResult(message: string): RouteResult {
   return { status: 404, body: errorBody("not_found", message) };
 }
 
+function forbiddenResult(code: string, message: string): RouteResult {
+  return { status: 403, body: errorBody(code, message) };
+}
+
 function payloadTooLarge(): RouteResult {
   return {
     status: 413,
@@ -356,6 +360,9 @@ export async function handleCreateProject(
     const path = requireString(body, "path");
     const name = optionalString(body, "name");
     const normalizedPath = validateProjectPath(path, { mustExist: true });
+    if (pathIsDenied(normalizedPath)) {
+      return forbiddenResult("DENIED", "The project path is excluded from Keiko's safe read surface.");
+    }
     assertUiDbOutsideProject(deps.uiDbPath, normalizedPath);
     const project = deps.store.createProject(normalizedPath, name);
     return { status: 201, body: { project: projectWithAvailability(project) } };

@@ -26,6 +26,7 @@ export interface FigmaSnapshotImageRef {
 
 export type FigmaSnapshotSkipReason =
   | "render-url-missing"
+  | "render-url-blocked"
   | "render-fetch-failed"
   | "render-empty"
   | "render-oversized";
