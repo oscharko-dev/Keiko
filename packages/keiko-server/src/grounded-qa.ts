@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import {
   CancelledError,
+  ContextOverflowError,
   GatewayError,
   findCapability,
   findConfiguredCapability,
@@ -450,6 +451,14 @@ function promptBudgetedMessages(
   const emptyPack = withPromptExcerptByteLimit(pack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
   const overheadBytes = promptByteLength(emptyMessages);
+  // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
+  // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
+  // prompt to the provider which would result in an opaque 400 context-window error.
+  if (overheadBytes > limit) {
+    throw new ContextOverflowError(
+      `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
+    );
+  }
   let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
   while (maxExcerptBytes >= 0) {
     messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);

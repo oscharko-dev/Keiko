@@ -32,6 +32,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   CancelledError,
+  ContextOverflowError,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
@@ -41,7 +42,10 @@ import {
   resolveKnowledgeStorePath,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
-import { scriptedAdapter, seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
+import {
+  scriptedAdapter,
+  seedCapsuleWithVectors,
+} from "@oscharko-dev/keiko-local-knowledge/testing";
 import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 
 const NOW = 1_700_000_000_000;
@@ -466,6 +470,25 @@ describe("buildGroundedGatewayMessages", () => {
     expect(promptByteLength(messages)).toBeLessThanOrEqual(1024 * 4);
     expect(messages[1]?.content).toContain("src/foo.ts");
     expect(messages[1]?.content).toContain("Repository evidence excerpts:");
+  });
+
+  it("throws ContextOverflowError when prompt overhead alone exceeds the model input limit", () => {
+    // modelInputTokensMax=1 → limit=4 bytes, which is smaller than any real system+question prompt.
+    // Before the fix, promptBudgetedMessages returned the over-limit messages silently, causing a
+    // provider 400. After the fix it must throw ContextOverflowError so the caller surfaces a clean
+    // 502 GATEWAY_CONTEXT_OVERFLOW instead of an opaque provider error.
+    const base = packWithCitations();
+    const tinyBudgetPack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, modelInputTokensMax: 1 },
+    };
+    expect(() =>
+      buildGroundedGatewayMessages(
+        GROUNDED_FIXTURE_QUESTION,
+        tinyBudgetPack,
+        buildRedactor({}, undefined),
+      ),
+    ).toThrow(ContextOverflowError);
   });
 });
 
