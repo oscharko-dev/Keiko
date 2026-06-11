@@ -296,9 +296,7 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
 
     expect(snapshot.screens).toHaveLength(0);
-    expect(snapshot.skippedScreens).toEqual([
-      { screenId: "1:1", reason: "render-url-blocked" },
-    ]);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
     expect(renders.requests).toHaveLength(0);
   });
 
@@ -320,9 +318,7 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     // confirms the render call is still made for non-IP https URLs (the CDN allowlist would
     // block this; we use the IP-block strategy — see figmaSnapshotBuilder.ts comment).
     // The renderPort stub returns empty bytes for unknown URLs → render-empty skip.
-    expect(snapshot.skippedScreens).toEqual([
-      { screenId: "1:1", reason: "render-empty" },
-    ]);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-empty" }]);
   });
 
   it("skips a screen whose render URL is an IPv4 loopback address (SSRF)", async () => {
@@ -338,9 +334,7 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
 
     expect(snapshot.screens).toHaveLength(0);
-    expect(snapshot.skippedScreens).toEqual([
-      { screenId: "1:1", reason: "render-url-blocked" },
-    ]);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
     expect(renders.requests).toHaveLength(0);
   });
 
@@ -357,9 +351,7 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
 
     expect(snapshot.screens).toHaveLength(0);
-    expect(snapshot.skippedScreens).toEqual([
-      { screenId: "1:1", reason: "render-url-blocked" },
-    ]);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
     expect(renders.requests).toHaveLength(0);
   });
 
@@ -372,6 +364,131 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
 
     expect(snapshot.screens).toHaveLength(1);
     expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("blocks a trailing-dot localhost URL (SSRF — trailing-dot bypass)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://localhost./render/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("blocks a *.localhost reserved-TLD subdomain (SSRF)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://internal.localhost/render/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("blocks a non-standard port (internal service, not a CDN)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://s3.amazonaws.com:8443/bucket/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("allows port 443 explicitly in the URL (standard HTTPS port)", async () => {
+    const screens = [screen("1:1", "Home")];
+    // Port 443 is the HTTPS default — should pass the guard.
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://ephemeral:443/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({ "https://ephemeral:443/1:1.png": png(10) });
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+});
+
+describe("buildFigmaSnapshot — render egress abort codes (#750 audit)", () => {
+  it("re-throws a FIGMA_TLS_CA_FAILURE from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
+    const images = imagesPort();
+    const tlsError = new FigmaConnectorError("FIGMA_TLS_CA_FAILURE");
+    const renders: FigmaRenderPort = () => Promise.reject(tlsError);
+
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_TLS_CA_FAILURE" });
+  });
+
+  it("re-throws a FIGMA_PROXY_UNREACHABLE from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_UNREACHABLE"));
+
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_UNREACHABLE" });
+  });
+
+  it("skips with coded reason for a non-abort coded error (FIGMA_RATE_LIMITED)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    // After all retries are exhausted the render port throws FIGMA_RATE_LIMITED.
+    // That is NOT in the abort set, so it should produce a skip with the code in the reason.
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_RATE_LIMITED"));
+    const { sleep } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      sleep,
+    });
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens[0]?.screenId).toBe("1:1");
+    expect(snapshot.skippedScreens[0]?.reason).toBe("render-fetch-failed:FIGMA_RATE_LIMITED");
+  });
+
+  it("skips with plain reason for an unclassified (non-FigmaConnectorError) throw", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () => Promise.reject(new Error("network blip"));
+    const { sleep } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      sleep,
+    });
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens[0]?.reason).toBe("render-fetch-failed");
   });
 });
 
@@ -484,7 +601,11 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     });
 
     expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1"]);
-    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:2", reason: "render-fetch-failed" }]);
+    // After retry exhaustion fetchWithBackoff throws FIGMA_RATE_LIMITED — the code is appended
+    // to the skip reason so metrics distinguish rate-limit misconfigurations from network flakes.
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:2", reason: "render-fetch-failed:FIGMA_RATE_LIMITED" },
+    ]);
   });
 
   it("never runs more than `downloadConcurrency` byte downloads at once", async () => {

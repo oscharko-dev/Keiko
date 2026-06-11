@@ -24,10 +24,15 @@ export interface FigmaSnapshotImageRef {
   readonly byteLength: number;
 }
 
+/** Why a screen was excluded from the snapshot. The `render-fetch-failed:<CODE>` variant carries
+ * the FigmaConnectorErrorCode suffix when the download threw a coded error, letting retention
+ * and metrics distinguish misconfigured egress from an unclassified network flake.
+ */
 export type FigmaSnapshotSkipReason =
   | "render-url-missing"
   | "render-url-blocked"
   | "render-fetch-failed"
+  | `render-fetch-failed:${string}`
   | "render-empty"
   | "render-oversized";
 

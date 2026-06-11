@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { handleFigmaGenerateCode, type FigmaCodegenResponse } from "../figmaCodegenRoutes.js";
+import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext } from "../../routes.js";
 import type { UiHandlerDeps } from "../../deps.js";
@@ -57,7 +58,12 @@ const seedSnapshot = (dir: string, runId: string): void => {
       version: undefined,
       fetchedAt: "1970-01-01T00:00:00.000Z",
     },
-    integrityHash: "hash",
+    // The store re-verifies the snapshot-level integrity hash on load, so the fixture
+    // must persist the genuinely recomputable value (per-screen hashes may stay synthetic).
+    integrityHash: hashSnapshot(1, undefined, [
+      { screenId: "s1", integrityHash: "h1" },
+      { screenId: "s2", integrityHash: "h2" },
+    ]),
     screens: [
       {
         screenId: "s1",
@@ -129,7 +135,8 @@ describe("handleFigmaGenerateCode (#755)", () => {
     seedSnapshot(dir, "fs-3");
     const b = body(handleFigmaGenerateCode(ctxFor("fs-3"), depsFor(dir)));
     const s1 = b.files.find((f) => f.path === "screens/s1.html")?.contents ?? "";
-    expect(s1).toContain('href="s2.html"');
+    // './' prefix keeps INSTANCE-style screen ids from parsing as URI schemes in the href.
+    expect(s1).toContain('href="./s2.html"');
     expect(s1).toContain("Welcome"); // text-aware emission carries the IR text
   });
 

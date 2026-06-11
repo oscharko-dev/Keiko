@@ -69,6 +69,15 @@ const chunk = <T>(items: readonly T[], size: number): readonly (readonly T[])[] 
   return out;
 };
 
+// Returns true when the hostname is an IP literal or a local/loopback name that must be blocked.
+const isBlockedHostname = (h: string): boolean =>
+  h.length === 0 ||
+  /^\d+\.\d+\.\d+\.\d+$/.test(h) ||
+  h.startsWith("[") ||
+  h === "localhost" ||
+  h.endsWith(".localhost") ||
+  h.endsWith(".local");
+
 // Validates that a render URL returned by the Figma API is safe to follow. Blocks http:
 // (plaintext) and IP-literal hostnames (RFC-1918, loopback, link-local) to prevent SSRF via
 // a compromised or MITM'd API response. A broad IP-block is preferred over a tight CDN
@@ -81,14 +90,12 @@ const isRenderUrlSafe = (raw: string): boolean => {
     return false;
   }
   if (url.protocol !== "https:") return false;
-  const h = url.hostname;
-  // Block IP literals (IPv4, bracketed IPv6, and bare IPv6).
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) return false;
-  if (h.startsWith("[")) return false;
-  // Block localhost and .local mDNS names.
-  if (h === "localhost" || h.endsWith(".local")) return false;
-  // Block empty hostname (e.g. file:// or protocol-relative edge cases).
-  if (h.length === 0) return false;
+  // Normalise: lowercase + strip exactly one trailing dot so "localhost." == "localhost".
+  const h = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (isBlockedHostname(h)) return false;
+  // Only allow the default HTTPS port (443 or implicit) — non-standard ports indicate an
+  // internal service, not a CDN. url.port is "" when the port is the scheme default.
+  if (url.port !== "" && url.port !== "443") return false;
   return true;
 };
 
@@ -168,9 +175,36 @@ const renderSkipReason = (
   return null;
 };
 
-// Downloads one screen's render bytes and classifies the result into a kept screen or a skip. The
-// pre-signed byte download is wrapped in the same deterministic 429 backoff; a single screen still
-// failing after retries degrades to a skip (partial render), never aborting the whole build.
+// Hard-egress codes for the render-byte download host (S3/CDN — a DIFFERENT host than
+// api.figma.com). If the render port throws a FigmaConnectorError in this family, it means
+// TLS or proxy is misconfigured for the render CDN; swallowing it would yield a "successful"
+// snapshot with every screen skipped while hiding the root cause. Re-throw to abort the build,
+// consistent with the DEEP_FETCH_ABORT_CODES discipline in figmaScopedPagination.ts.
+// Using ReadonlySet<string> so this set is forward-compatible with the new codes
+// (FIGMA_PROXY_AUTH_REQUIRED, FIGMA_PROXY_BLOCKED_BY_POLICY) landing in a parallel change to
+// figmaConnectorErrors.ts without requiring a re-touch of this file.
+const RENDER_EGRESS_ABORT_CODES: ReadonlySet<string> = new Set([
+  "FIGMA_TLS_CA_FAILURE",
+  "FIGMA_PROXY_UNREACHABLE",
+  "FIGMA_PROXY_EGRESS_FAILED",
+  "FIGMA_PROXY_AUTH_REQUIRED",
+  "FIGMA_PROXY_BLOCKED_BY_POLICY",
+]);
+
+// Classifies a render-port throw into a re-throw (hard egress abort) or a coded skip outcome.
+// Hard-egress errors abort the whole build — they affect every screen on the same host so
+// swallowing them would silently produce an empty snapshot.
+const classifyRenderError = (screenId: string, err: unknown): ScreenOutcome => {
+  if (err instanceof FigmaConnectorError) {
+    if (RENDER_EGRESS_ABORT_CODES.has(err.code)) throw err;
+    return skip(screenId, `render-fetch-failed:${err.code}`);
+  }
+  return skip(screenId, "render-fetch-failed");
+};
+
+// Downloads one screen's render bytes and classifies the result into a kept screen or a skip.
+// A single screen failing after retries degrades to a skip (partial render), never aborting.
+// Exception: hard egress errors (TLS/proxy misconfiguration) abort via classifyRenderError.
 const resolveScreen = async (
   input: BuildFigmaSnapshotInput,
   ir: ScreenIr,
@@ -181,13 +215,18 @@ const resolveScreen = async (
   const maxBytes = input.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
   const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
   const sleep = input.sleep ?? realFigmaRetrySleep;
-  const response = await fetchWithBackoff(
-    () => input.renderPort({ url: renderUrl, headers: {} }),
-    policy,
-    sleep,
-  ).catch(() => null);
+  let response: { readonly status: number; readonly bytes: Uint8Array };
+  try {
+    response = await fetchWithBackoff(
+      () => input.renderPort({ url: renderUrl, headers: {} }),
+      policy,
+      sleep,
+    );
+  } catch (err) {
+    return classifyRenderError(ir.id, err);
+  }
   const reason = renderSkipReason(response, maxBytes);
-  if (reason !== null || response === null) return skip(ir.id, reason ?? "render-fetch-failed");
+  if (reason !== null) return skip(ir.id, reason);
   const sha256 = hashBytes(response.bytes);
   const screen: FigmaSnapshotScreen = {
     screenId: ir.id,

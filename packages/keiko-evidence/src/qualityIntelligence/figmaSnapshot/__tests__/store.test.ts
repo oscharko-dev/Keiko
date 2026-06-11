@@ -1,16 +1,27 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EvidenceWriteError } from "../../../errors.js";
+import { EvidenceReadError, EvidenceWriteError } from "../../../errors.js";
 import {
   createNodeFigmaSnapshotStore,
+  enforceFigmaSnapshotRetention,
   type FigmaSnapshotStore,
   type RecordFigmaSnapshotInput,
 } from "../store.js";
 import type { FigmaSnapshotRecord, FigmaSnapshotScreenRow } from "../schema.js";
 
 const RUN_ID = "00000000-0000-4000-8000-000000000001";
+const RUN_ID_2 = "00000000-0000-4000-8000-000000000002";
+const RUN_ID_3 = "00000000-0000-4000-8000-000000000003";
+
+// Correct integrity hash for the baseInput fixture: sha256 of canonical(
+//   { screens: [{integrityHash:"b"*64, screenId:"1:1"},{integrityHash:"c"*64, screenId:"1:2"}],
+//     snapshotSchemaVersion:1, version:"v-pinned-1" })
+// Pre-computed to keep tests deterministic without depending on crypto at describe time.
+const BASE_INTEGRITY_HASH = "fd7a4f5be941a3d16d98379b51a2f43f577420f2402db028b846700cd8e44ab4";
+// Hash for zero screens, same provenance (version:"v-pinned-1").
+const EMPTY_INTEGRITY_HASH = "5439a337ebe6807307c9c0728da47f801073462d4bfcdb446cfedd858bb12af3";
 
 const loadOrThrow = (store: FigmaSnapshotStore, runId: string): FigmaSnapshotRecord => {
   const record = store.load(runId);
@@ -47,7 +58,7 @@ const baseInput = (): RecordFigmaSnapshotInput => ({
     version: "v-pinned-1",
     fetchedAt: "2026-06-09T00:00:00.000Z",
   },
-  integrityHash: "a".repeat(64),
+  integrityHash: BASE_INTEGRITY_HASH,
   screens: [
     {
       screenId: "1:1",
@@ -73,7 +84,7 @@ describe("createNodeFigmaSnapshotStore", () => {
     const loaded = loadOrThrow(store, RUN_ID);
 
     expect(loaded.figmaSnapshotSchemaVersion).toBe(1);
-    expect(loaded.integrityHash).toBe("a".repeat(64));
+    expect(loaded.integrityHash).toBe(BASE_INTEGRITY_HASH);
     expect(loaded.provenance.fileKey).toBe("KEY123");
     expect(loaded.provenance.version).toBe("v-pinned-1");
     expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2"]);
@@ -134,7 +145,12 @@ describe("createNodeFigmaSnapshotStore", () => {
 
   it("persists a valid empty snapshot (no screens)", () => {
     const store = createNodeFigmaSnapshotStore(dir);
-    store.record({ ...baseInput(), screens: [], skippedScreens: [] });
+    store.record({
+      ...baseInput(),
+      screens: [],
+      skippedScreens: [],
+      integrityHash: EMPTY_INTEGRITY_HASH,
+    });
 
     const loaded = loadOrThrow(store, RUN_ID);
     expect(loaded.screens).toHaveLength(0);
@@ -188,5 +204,190 @@ describe("createNodeFigmaSnapshotStore", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── Integrity check on load (#3) ────────────────────────────────────────────────────────────
+
+describe("createNodeFigmaSnapshotStore — integrity check on load", () => {
+  it("round-trip: record then load succeeds when hash is correct", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    // load() must not throw — the recomputed hash matches the persisted one.
+    expect(() => loadOrThrow(store, RUN_ID)).not.toThrow();
+  });
+
+  it("rejects a record whose per-screen integrityHash was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    // Tamper: change a screen's integrityHash on disk. The snapshot-level hash is computed from
+    // the per-screen integrityHash values, so this causes a mismatch on load.
+    const qiDir = join(dir, "qi");
+    const file = join(qiDir, `${RUN_ID}.figma-snapshot.json`);
+    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const screens = raw.screens as Record<string, unknown>[];
+    if (screens[0] !== undefined) {
+      screens[0] = { ...screens[0], integrityHash: "d".repeat(64) };
+    }
+    writeFileSync(file, JSON.stringify(raw), "utf8");
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+});
+
+// ─── Orphan cleanup (#5) ─────────────────────────────────────────────────────────────────────
+
+describe("createNodeFigmaSnapshotStore — orphan side-dir cleanup", () => {
+  it("removes a side-dir that has no matching record on first store use", () => {
+    // Simulate a crash after side-files were written but before the record was written:
+    // record once to create the side-dir, then remove the record JSON to create an orphan,
+    // then create a new store (sweep fires on first use).
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const qiDir = join(dir, "qi");
+    const sideBase = join(qiDir, "figma-snapshots");
+    const orphanDir = join(sideBase, RUN_ID);
+    rmSync(join(qiDir, `${RUN_ID}.figma-snapshot.json`), { force: true });
+
+    // New store instance — sweep fires on first use.
+    const store2 = createNodeFigmaSnapshotStore(dir);
+    expect(store2.load(RUN_ID)).toBeUndefined();
+
+    // Orphaned side-dir should be gone.
+    expect(lstatSync(orphanDir, { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("removes the side-dir when the record write fails mid-operation", () => {
+    // Inject a randomSuffix that throws on the 3rd call (the record JSON temp), after both
+    // side-files have been written (2 screens × 1 randomSuffix call each = calls 1-2).
+    let callCount = 0;
+    const badRandomSuffix = (): string => {
+      callCount += 1;
+      // Calls 1-2: side-file atomicWriteBytes (one per screen). Call 3: record atomicWriteOnce.
+      if (callCount >= 3) throw new EvidenceWriteError("injected record-write failure");
+      return `00000000-0000-4000-8000-${String(callCount).padStart(12, "0")}`;
+    };
+    const store = createNodeFigmaSnapshotStore(dir, { randomSuffix: badRandomSuffix });
+
+    expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+
+    // Side-dir must have been cleaned up after the record write failed.
+    const sideDir = join(dir, "qi", "figma-snapshots", RUN_ID);
+    expect(lstatSync(sideDir, { throwIfNoEntry: false })).toBeUndefined();
+  });
+});
+
+// ─── listByScope (#6) ────────────────────────────────────────────────────────────────────────
+
+describe("createNodeFigmaSnapshotStore — listByScope", () => {
+  it("returns [] when no snapshots exist yet", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    expect(store.listByScope("KEY123", "0:1")).toEqual([]);
+  });
+
+  it("returns only records matching the requested fileKey+nodeId, newest first", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    // Scope A — two records with different fetchedAt.
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+        version: "v1",
+        fetchedAt: "2026-06-01T00:00:00.000Z",
+      },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+        version: "v2",
+        fetchedAt: "2026-06-10T00:00:00.000Z",
+      },
+    });
+
+    // Scope B — different nodeId.
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_3,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "9:9",
+        version: "v1",
+        fetchedAt: "2026-06-05T00:00:00.000Z",
+      },
+    });
+
+    const results = store.listByScope("KEY123", "0:1");
+
+    expect(results).toHaveLength(2);
+    // Newest first.
+    expect(results[0]?.runId).toBe(RUN_ID_2);
+    expect(results[1]?.runId).toBe(RUN_ID);
+    expect(results[0]?.fetchedAt).toBe("2026-06-10T00:00:00.000Z");
+    expect(results[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("skips an unparseable record silently (does not throw)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    // Plant a corrupt JSON file.
+    const qiDir = join(dir, "qi");
+    writeFileSync(join(qiDir, `${RUN_ID_2}.figma-snapshot.json`), "not json", "utf8");
+
+    expect(() => store.listByScope("KEY123", "0:1")).not.toThrow();
+    // Only the valid record is returned.
+    expect(store.listByScope("KEY123", "0:1")).toHaveLength(1);
+  });
+});
+
+// ─── Retention enforcement (#4) ──────────────────────────────────────────────────────────────
+
+describe("enforceFigmaSnapshotRetention", () => {
+  it("is a no-op when the record count is within the cap", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    enforceFigmaSnapshotRetention(dir, { maxRecords: 10 });
+
+    // Record still present.
+    expect(loadOrThrow(store, RUN_ID).runId).toBe(RUN_ID);
+  });
+
+  it("deletes the oldest record + side-dir when count exceeds maxRecords", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+
+    // Cap to 1 — the older RUN_ID should be evicted.
+    enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+
+    expect(store.load(RUN_ID)).toBeUndefined();
+    expect(loadOrThrow(store, RUN_ID_2).runId).toBe(RUN_ID_2);
+    // Side-dir for the evicted run should be gone.
+    const sideDir = join(dir, "qi", "figma-snapshots", RUN_ID);
+    expect(lstatSync(sideDir, { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("is a no-op when the evidence dir does not exist yet", () => {
+    const nonExistent = join(dir, "does-not-exist");
+    expect(() => {
+      enforceFigmaSnapshotRetention(nonExistent, { maxRecords: 1 });
+    }).not.toThrow();
   });
 });

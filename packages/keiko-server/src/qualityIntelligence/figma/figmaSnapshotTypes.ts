@@ -33,11 +33,16 @@ export interface FigmaSnapshotScreen {
   readonly integrityHash: string;
 }
 
-/** Why a detected screen produced no render and was excluded from `screens` (partial-render). */
+/** Why a detected screen produced no render and was excluded from `screens` (partial-render).
+ * The `render-fetch-failed` member also appears as `render-fetch-failed:<CODE>` when the fetch
+ * threw a FigmaConnectorError — the code suffix lets metrics distinguish an egress
+ * misconfiguration (e.g. `FIGMA_EGRESS_TIMEOUT`) from an unclassified network flake.
+ */
 export type FigmaSkippedScreenReason =
   | "render-url-missing"
   | "render-url-blocked"
   | "render-fetch-failed"
+  | `render-fetch-failed:${string}`
   | "render-empty"
   | "render-oversized";
 
