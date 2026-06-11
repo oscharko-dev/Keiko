@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -46,6 +46,7 @@ import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
   requestOpenAIEmbedding,
+  verifyEmbeddingCapability,
   type GatewayConfig,
   type ModelProviderConfig,
   type OpenAIEmbeddingAdapter,
@@ -303,10 +304,14 @@ function configuredProviderForCapsule(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
 ): ModelProviderConfig | undefined {
-  return configuredEmbeddingProvider(
+  const provider = configuredEmbeddingProvider(
     currentGatewayConfig(deps),
     capsule.embeddingModelIdentity.modelId,
   );
+  if (provider === undefined) return undefined;
+  return storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, provider)
+    ? provider
+    : undefined;
 }
 
 function embeddingCompatibilityReason(
@@ -318,8 +323,12 @@ function embeddingCompatibilityReason(
   if (!config.providers.some((entry) => entry.modelId === modelId)) {
     return "The configured embedding model no longer matches this capsule.";
   }
-  if (configuredEmbeddingProvider(config, modelId) === undefined) {
+  const provider = configuredEmbeddingProvider(config, modelId);
+  if (provider === undefined) {
     return "The configured model for this capsule cannot serve embeddings.";
+  }
+  if (!storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, provider)) {
+    return "The configured embedding gateway no longer matches this capsule.";
   }
   return undefined;
 }
@@ -813,24 +822,24 @@ function parseCreateCapsuleInput(body: Record<string, unknown>): {
   return description === undefined ? { displayName } : { displayName, description };
 }
 
-// Issue #621: derive native vector dimensions from the embedding model id rather than
-// hardcoding 1536, which is wrong for text-embedding-3-large (native: 3072).
-function derivedVectorDimensions(modelId: string): number {
-  const lower = modelId.toLowerCase();
-  if (lower.includes("text-embedding-3-large")) return 3072;
-  if (lower.includes("text-embedding-3-small")) return 1536;
-  if (lower.includes("text-embedding-ada-002")) return 1536;
-  // Conservative default for unknown embedding models.
-  return 1536;
+function normalizedEndpointFingerprint(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
-function defaultEmbeddingIdentity(modelId: string): KnowledgeCapsule["embeddingModelIdentity"] {
-  return {
-    provider: "openai",
-    modelId,
-    vectorDimensions: derivedVectorDimensions(modelId),
-    vectorMetric: "cosine",
-  };
+function embeddingProviderIdentity(provider: ModelProviderConfig): string {
+  return `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`;
+}
+
+function storedProviderMatchesConfiguredProvider(
+  storedProvider: string,
+  provider: ModelProviderConfig,
+): boolean {
+  // Legacy capsules created before #192 audit fixes stored the generic "openai" label.
+  // Keep those usable; new capsules store a non-secret endpoint fingerprint so future
+  // gateway swaps mark them incompatible instead of mixing unrelated vector spaces.
+  if (!storedProvider.startsWith("openai-compatible:")) return true;
+  return storedProvider === embeddingProviderIdentity(provider);
 }
 
 // Issue #621 / #677: select the first provider whose resolved capability is embedding-capable.
@@ -845,6 +854,61 @@ export function selectEmbeddingModelId(
 
 function createCapsuleStorageReference(capsuleId: string): string {
   return `capsules/${capsuleId}`;
+}
+
+async function verifiedNewCapsuleEmbeddingIdentity(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+): Promise<
+  | { readonly ok: true; readonly identity: KnowledgeCapsule["embeddingModelIdentity"] }
+  | { readonly ok: false; readonly result: RouteResult }
+> {
+  const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  try {
+    const result = await verifyEmbeddingCapability(adapter, {
+      modelId: provider.modelId,
+      provider: embeddingProviderIdentity(provider),
+      vectorMetric: "cosine",
+      timeoutMs: provider.timeoutMs,
+    });
+    if (result.ok) {
+      return { ok: true, identity: result.identity };
+    }
+    return { ok: false, result: conflict(result.safeMessage) };
+  } catch {
+    return {
+      ok: false,
+      result: conflict("embedding capability preflight failed before capsule creation"),
+    };
+  }
+}
+
+async function resolveNewCapsuleEmbeddingIdentity(
+  deps: UiHandlerDeps,
+): Promise<
+  | { readonly ok: true; readonly identity: KnowledgeCapsule["embeddingModelIdentity"] }
+  | { readonly ok: false; readonly result: RouteResult }
+> {
+  const config = currentGatewayConfig(deps);
+  const configuredModelId = selectEmbeddingModelId(config);
+  if (configuredModelId === undefined) {
+    return {
+      ok: false,
+      result: conflict(
+        "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
+      ),
+    };
+  }
+  const provider = configuredEmbeddingProvider(config, configuredModelId);
+  if (provider === undefined) {
+    return {
+      ok: false,
+      result: conflict(
+        "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
+      ),
+    };
+  }
+  return verifiedNewCapsuleEmbeddingIdentity(deps, provider);
 }
 
 function latestRunningJobId(
@@ -1213,11 +1277,9 @@ export async function handleCreateLocalKnowledgeCapsule(
     const input = parseCreateCapsuleInput(await readJsonObject(ctx.req));
     const env = openStoreForDeps(deps);
     try {
-      const configuredModelId = selectEmbeddingModelId(currentGatewayConfig(deps));
-      if (configuredModelId === undefined) {
-        return conflict(
-          "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
-        );
+      const embeddingIdentity = await resolveNewCapsuleEmbeddingIdentity(deps);
+      if (!embeddingIdentity.ok) {
+        return embeddingIdentity.result;
       }
       const capsuleId = randomUUID() as KnowledgeCapsule["id"];
       const capsule = createCapsule(
@@ -1230,7 +1292,7 @@ export async function handleCreateLocalKnowledgeCapsule(
           retrievalEffort: "default",
           outputMode: "snippets",
           answerGroundingPolicy: "require-citations",
-          embeddingModelIdentity: defaultEmbeddingIdentity(configuredModelId),
+          embeddingModelIdentity: embeddingIdentity.identity,
           lifecycleState: "draft",
           storageReference: createCapsuleStorageReference(capsuleId),
         },

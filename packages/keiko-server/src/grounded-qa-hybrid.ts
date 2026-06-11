@@ -299,12 +299,6 @@ function resolveConnectorScopes(
   return resolved;
 }
 
-function distinctEmbeddingModelIds(selected: SelectedLocalKnowledgeScope): readonly string[] {
-  return Array.from(
-    new Set(selected.capsules.map((capsule) => capsule.embeddingModelIdentity.modelId)),
-  );
-}
-
 function connectorQuery(scope: ChatLocalKnowledgeScope, content: string): RetrievalQueryShape {
   return {
     text: content,
@@ -318,7 +312,7 @@ type RetrievalQueryShape = Parameters<typeof runLocalKnowledgeRetrieval>[1];
 
 function defaultConnectorRetrieve(ctx: HybridGroundedAskCtx): ConnectorRetrieve {
   return async (store, scope, selected): Promise<RetrievalResult> => {
-    const embeddingAdapter = createEmbeddingAdapter(ctx.deps, distinctEmbeddingModelIds(selected));
+    const embeddingAdapter = createEmbeddingAdapter(ctx.deps, selected.capsules);
     if ("status" in embeddingAdapter) {
       throw new EmbeddingAdapterError(embeddingAdapter);
     }

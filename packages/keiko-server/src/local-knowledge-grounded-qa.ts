@@ -119,6 +119,20 @@ function hashString32(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+function normalizedEndpointFingerprint(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
+function embeddingProviderIdentity(baseUrl: string): string {
+  return `openai-compatible:${normalizedEndpointFingerprint(baseUrl)}`;
+}
+
+function storedProviderMatchesConfiguredProvider(storedProvider: string, baseUrl: string): boolean {
+  if (!storedProvider.startsWith("openai-compatible:")) return true;
+  return storedProvider === embeddingProviderIdentity(baseUrl);
+}
+
 function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
@@ -131,19 +145,28 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
 
 export function createEmbeddingAdapter(
   deps: UiHandlerDeps,
-  modelIds: readonly string[],
+  capsules: readonly KnowledgeCapsule[],
 ): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  for (const modelId of modelIds) {
+  for (const capsule of capsules) {
+    const modelId = capsule.embeddingModelIdentity.modelId;
     const provider = config.providers.find((entry) => entry.modelId === modelId);
     if (provider === undefined) {
       return conflict(`No configured embedding provider matches local knowledge model ${modelId}.`);
     }
     if (!isConfiguredEmbeddingModel(config, provider.modelId)) {
       return conflict(`Configured local knowledge model ${modelId} cannot serve embeddings.`);
+    }
+    if (
+      !storedProviderMatchesConfiguredProvider(
+        capsule.embeddingModelIdentity.provider,
+        provider.baseUrl,
+      )
+    ) {
+      return conflict(`Configured local knowledge gateway no longer matches model ${modelId}.`);
     }
   }
   return {
@@ -749,10 +772,7 @@ async function runScopedGroundedAnswer(
   selected: SelectedLocalKnowledgeScope,
   signal: AbortSignal,
 ): Promise<GroundedAnswer | RouteResult> {
-  const embeddingAdapter = createEmbeddingAdapter(
-    deps,
-    Array.from(new Set(selected.capsules.map((capsule) => capsule.embeddingModelIdentity.modelId))),
-  );
+  const embeddingAdapter = createEmbeddingAdapter(deps, selected.capsules);
   if ("status" in embeddingAdapter) return embeddingAdapter;
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId);

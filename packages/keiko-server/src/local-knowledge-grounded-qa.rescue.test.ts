@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type {
   ChunkId,
   DocumentId,
+  KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   RetrievalReference,
@@ -43,6 +44,28 @@ function result(over: Partial<GroundedResult>): GroundedResult {
     pack: undefined as never,
     noEvidence: false,
     ...over,
+  };
+}
+
+function capsule(provider = "openai"): KnowledgeCapsule {
+  return {
+    id: "cap-1" as KnowledgeCapsuleId,
+    displayName: "Alpha Capsule",
+    tags: [],
+    sourceIds: [],
+    retrievalEffort: "default",
+    outputMode: "snippets",
+    answerGroundingPolicy: "require-citations",
+    embeddingModelIdentity: {
+      provider,
+      modelId: "text-embedding-3-small",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+    },
+    lifecycleState: "ready",
+    storageReference: "capsules/cap-1",
+    createdAt: 1,
+    updatedAt: 1,
   };
 }
 
@@ -148,9 +171,32 @@ describe("local-knowledge embedding capability gate", () => {
       },
     } as unknown as UiHandlerDeps;
 
-    const adapter = createEmbeddingAdapter(deps, ["text-embedding-3-small"]);
+    const adapter = createEmbeddingAdapter(deps, [capsule()]);
 
     expect("status" in adapter ? adapter.status : 200).toBe(409);
     expect(embeddingRequests).toBe(0);
+  });
+
+  it("rejects a fingerprinted capsule when the configured gateway changes", () => {
+    const deps = {
+      config: {
+        providers: [
+          {
+            modelId: "text-embedding-3-small",
+            baseUrl: "https://provider-b.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    } as unknown as UiHandlerDeps;
+
+    const adapter = createEmbeddingAdapter(deps, [capsule("openai-compatible:0000000000000000")]);
+
+    expect("status" in adapter ? adapter.status : 200).toBe(409);
+    expect("body" in adapter ? JSON.stringify(adapter.body) : "").not.toContain("provider-b");
   });
 });

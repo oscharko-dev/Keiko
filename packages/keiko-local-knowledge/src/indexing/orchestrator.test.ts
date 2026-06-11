@@ -672,6 +672,44 @@ describe("runIndexingJob — embedding capability preflight", () => {
     }
   });
 
+  it("fails before discovery when the gateway reports a different embedding model identity", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const before = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
+    expect(before).toBeGreaterThan(0);
+
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        requestCount += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: "canonical-embedding-model",
+          },
+        };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter, force: true })),
+    );
+
+    expect(requestCount).toBe(1);
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(before);
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+      expect(terminal.error.message).toBe(
+        "embedding model identity changed — existing capsules are no longer compatible",
+      );
+      expect(terminal.result.processedDocuments).toBe(0);
+      expect(terminal.result.vectorsPersisted).toBe(0);
+    }
+  });
+
   it("persists a fixed safe message when embedding preflight throws", async () => {
     const adapter = {
       endpoint: "https://private-gateway.internal/v1",

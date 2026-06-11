@@ -34,7 +34,10 @@ import type {
   KnowledgeSource,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { verifyEmbeddingCapability } from "@oscharko-dev/keiko-model-gateway";
+import {
+  assertCompatibleEmbeddingIdentity,
+  verifyEmbeddingCapability,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
 import { deleteChunksForDocument, hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
@@ -945,7 +948,17 @@ async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobErr
       expectedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     });
-    if (result.ok) return undefined;
+    if (result.ok) {
+      const compatibility = assertCompatibleEmbeddingIdentity(
+        state.capsule.embeddingModelIdentity,
+        result.identity,
+      );
+      if (compatibility.ok) return undefined;
+      return {
+        code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+        message: compatibility.safeMessage,
+      };
+    }
     return {
       code:
         result.reason === "dimension-mismatch"

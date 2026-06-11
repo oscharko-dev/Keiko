@@ -66,6 +66,12 @@ function gatewayConfig(modelId: string): GatewayConfig {
   };
 }
 
+function embeddingDimensionsForTestModel(modelId: string): number {
+  if (modelId.toLowerCase().includes("text-embedding-3-large")) return 3072;
+  if (modelId === "my-custom-embedding-v1") return 768;
+  return 1536;
+}
+
 function chatCapability(modelId: string): NonNullable<GatewayConfig["capabilities"]>[number] {
   return {
     id: modelId,
@@ -98,9 +104,7 @@ function depsFor(tmp: string, override?: string | GatewayConfig): UiHandlerDeps 
       ok: true as const,
       value: {
         vector: Float32Array.from(
-          {
-            length: request.modelId.toLowerCase().includes("text-embedding-3-large") ? 3072 : 1536,
-          },
+          { length: embeddingDimensionsForTestModel(request.modelId) },
           (_, index) => index / 1000,
         ),
         modelId: request.modelId,
@@ -1345,7 +1349,7 @@ describe("local-knowledge handlers", () => {
       expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
     });
 
-    it("records 1536 dimensions as conservative fallback for an unknown model", async () => {
+    it("records probed dimensions for an unknown OpenAI-compatible embedding model", async () => {
       const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
       tempDirs.push(tmp);
 
@@ -1360,7 +1364,62 @@ describe("local-knowledge handlers", () => {
           readonly embeddingModelIdentity: { readonly vectorDimensions: number };
         };
       };
-      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(768);
+    });
+
+    it("marks new capsules incompatible when the configured embedding gateway changes", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+      const modelId = "text-embedding-3-small";
+
+      const created = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Gateway Bound" }),
+        depsFor(tmp, modelId),
+      );
+
+      expect(created.status).toBe(201);
+      const createdBody = created.body as {
+        readonly capsule: {
+          readonly id: KnowledgeCapsuleId;
+          readonly embeddingModelIdentity: { readonly provider: string };
+        };
+      };
+      expect(createdBody.capsule.embeddingModelIdentity.provider).toMatch(
+        /^openai-compatible:[0-9a-f]{16}$/,
+      );
+      expect(createdBody.capsule.embeddingModelIdentity.provider).not.toContain("gateway.example");
+
+      const baseGateway = gatewayConfig(modelId);
+      const baseProvider = baseGateway.providers[0];
+      if (baseProvider === undefined) throw new Error("test gateway missing provider");
+      const changedGateway = {
+        ...baseGateway,
+        providers: [
+          {
+            ...baseProvider,
+            baseUrl: "https://other-gateway.example.test/v1",
+          },
+        ],
+      };
+      const fetched = await handleGetLocalKnowledgeCapsule(
+        {
+          ...baseCtx(tmp, "GET"),
+          params: { capsuleId: createdBody.capsule.id },
+        },
+        depsFor(tmp, changedGateway),
+      );
+
+      expect(fetched.status).toBe(200);
+      const fetchedBody = fetched.body as {
+        readonly health: {
+          readonly vectorCompatible: boolean;
+          readonly staleReasons: readonly string[];
+        };
+      };
+      expect(fetchedBody.health.vectorCompatible).toBe(false);
+      expect(
+        fetchedBody.health.staleReasons.some((reason) => /embedding gateway/i.test(reason)),
+      ).toBe(true);
     });
   });
 
