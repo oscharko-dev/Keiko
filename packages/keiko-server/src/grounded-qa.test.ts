@@ -388,6 +388,38 @@ describe("handleGroundedAsk", () => {
     expect(body.error.message).toContain("connected scope");
   });
 
+  it("rejects a grounded ask whose workspace root is on the deny-list before invoking the runner", async () => {
+    // Epic #177 audit (GAP-B): a chat whose projectPath sits inside a credential directory must be
+    // refused at the route — before any filesystem access — with a generic message that does not
+    // echo the denied path (CWE-209).
+    const deniedRoot = join(tmp, ".aws", "project");
+    mkdirSync(deniedRoot, { recursive: true });
+    const project = store.createProject(deniedRoot, "denied");
+    const chat = store.createChat(project.path, "Denied root", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
+    });
+
+    let runnerCalled = false;
+    const spyRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
+      void input;
+      runnerCalled = true;
+      return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "What is in here?", modelId: CHAT_MODEL })),
+      deps(),
+      spyRunner,
+    );
+
+    expect(result.status).toBe(400);
+    expect(runnerCalled).toBe(false);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.message).toContain("safe read surface");
+    expect(JSON.stringify(result)).not.toContain(".aws");
+  });
+
   it("passes repository-root connectedScope kind through to the grounded runner", async () => {
     const project = store.createProject(tmp, "demo");
     const chat = store.createChat(project.path, "Repository scope", CHAT_MODEL);

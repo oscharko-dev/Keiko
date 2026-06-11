@@ -150,6 +150,54 @@ describe("redact", () => {
     const prose = "Follow the password reset link to continue.";
     expect(redact(prose)).toBe(prose);
   });
+
+  // Epic #177 post-closure audit — new redaction patterns: secret_key, prefixed refresh_token,
+  // Stripe keys, and over-redaction guards.
+  it("redacts a secret_key value in INI shape (.s3cfg)", () => {
+    const result = redact("secret_key = " + "AKIA" + "LEAKLEAKLEAKLEAK");
+    expect(result).not.toContain("LEAKLEAKLEAKLEAK");
+    expect(result).toContain("secret_key");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a gs_oauth2_refresh_token value despite underscore prefix (.boto)", () => {
+    const result = redact("gs_oauth2_refresh_token = 1//0abc" + "LEAKLEAKLEAKLEAK");
+    expect(result).not.toContain("LEAKLEAKLEAKLEAK");
+    expect(result).toContain("refresh_token");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a Stripe live secret key (sk_live_)", () => {
+    const key = "sk_live_" + "0123456789abcdefXYZ"; // split so the literal is not contiguous
+    const result = redact(`STRIPE_KEY=${key}`);
+    expect(result).not.toContain(key);
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a Stripe restricted key (rk_live_)", () => {
+    const key = "rk_live_" + "0123456789abcdefXYZ"; // split so the literal is not contiguous
+    expect(redact(key)).not.toContain(key);
+  });
+
+  it("redacts a Stripe test key (sk_test_)", () => {
+    const key = "sk_test_" + "0123456789abcdefXYZ"; // split so the literal is not contiguous
+    expect(redact(key)).not.toContain(key);
+  });
+
+  it("does not redact a prose sentence containing 'password' with no assignment", () => {
+    const prose = "Please reset your password soon.";
+    expect(redact(prose)).toBe(prose);
+  });
+
+  it("does not redact ordinary words that resemble a Stripe key prefix", () => {
+    expect(redact("skater_link")).toBe("skater_link");
+    expect(redact("kotlin_sk_")).toBe("kotlin_sk_");
+  });
+
+  it("does not redact a function call that contains 'secret' with no assignment value", () => {
+    const code = "my_secret_helper(config)";
+    expect(redact(code)).toBe(code);
+  });
 });
 
 // Secret-shaped fixtures are built by concatenation/repeat so no contiguous real-shaped token

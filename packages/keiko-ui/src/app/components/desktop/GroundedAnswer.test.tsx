@@ -390,7 +390,12 @@ describe("GroundedAnswer", () => {
 
   it("links to the local connected-context audit evidence when a run id is present", () => {
     render(<GroundedAnswer answer={answer({ evidenceRunId: "grounded-run-1" })} busy={false} />);
-    const link = screen.getByRole("link", { name: "View connected-context audit evidence" });
+    // WCAG 3.2.2 — the accessible name carries the new-tab hint via an sr-only span so screen
+    // reader users are warned the link opens a new tab; asserting the full name keeps the hint
+    // mutation-robust (removing the span fails the lookup).
+    const link = screen.getByRole("link", {
+      name: "View connected-context audit evidence (opens in new tab)",
+    });
     expect(link).toHaveAttribute("href", "/api/evidence/grounded-run-1");
     // uiux-fix F012 C136/C164: the endpoint returns raw JSON — open in a new tab so the
     // workspace survives, and use the app link pattern instead of UA default styling.
