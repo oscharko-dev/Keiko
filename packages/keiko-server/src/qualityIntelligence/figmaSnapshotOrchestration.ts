@@ -58,6 +58,13 @@ export interface GovernedSnapshotDeps {
   readonly pagination?: Partial<ScopedPaginationLimits>;
   /** Shared enterprise egress settings for Figma API + render downloads (#802). */
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  /**
+   * Creation-time overrides forwarded to the default HTTP and render ports when no explicit
+   * httpPort/renderPort is injected. Currently only `timeoutMs` (maps to
+   * KEIKO_FIGMA_REQUEST_TIMEOUT_MS). Ignored when httpPort/renderPort are injected directly
+   * (route tests supply fakes that honour their own timeouts).
+   */
+  readonly portOptions?: { readonly timeoutMs?: number };
   // Injectable transports + keychain so route tests run without real egress or the login keychain.
   readonly httpPort?: FigmaHttpPort;
   readonly renderPort?: FigmaRenderPort;
@@ -173,8 +180,10 @@ export const governedSnapshotBuild = async (
   const target = parseFigmaTarget(boardLink);
   if (target === null) throw new FigmaConnectorError("FIGMA_MALFORMED_URL");
   const scopeRef = deriveFigmaScopeRef(target.fileKey, target.nodeId);
-  const httpPort = deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress);
-  const renderPort = deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress);
+  const httpPort =
+    deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress, undefined, deps.portOptions);
+  const renderPort =
+    deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress, undefined, deps.portOptions);
   const vaultToken = readFigmaVaultToken(deps);
 
   gateConsent(deps, scopeRef);

@@ -54,6 +54,7 @@ export type FigmaConnectorErrorCode =
   | "FIGMA_NETWORK_UNREACHABLE"
   | "FIGMA_EGRESS_TIMEOUT"
   | "FIGMA_EGRESS_FAILED"
+  | "FIGMA_BUILD_TIMEOUT"
   | "FIGMA_INTERNAL";
 
 const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
@@ -97,6 +98,8 @@ const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
   FIGMA_EGRESS_TIMEOUT:
     "The Figma request timed out before completing. Retry; if it persists, raise KEIKO_FIGMA_REQUEST_TIMEOUT_MS or check upstream latency.",
   FIGMA_EGRESS_FAILED: "The outbound request to Figma failed before a response was received.",
+  FIGMA_BUILD_TIMEOUT:
+    "The snapshot build exceeded the configured deadline. No partial snapshot was stored. Retry or raise KEIKO_FIGMA_BUILD_DEADLINE_MS.",
   FIGMA_INTERNAL: "The Figma connector could not service the request.",
 };
 

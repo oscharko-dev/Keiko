@@ -19,6 +19,28 @@
 //
 // Both routes honour the existing QI error-envelope convention:
 //   { error: { code: string; message: string } }
+//
+// In-flight coalescing (item 2):
+//   Concurrent POSTs for the same scope (fileKey:nodeId) share ONE build promise. The FIRST
+//   caller starts the governed build, mints the runId ONCE, persists ONCE (inside the build
+//   chain so a deadline-expired-but-completed build still persists and is recoverable via an
+//   immediate retry POST). Subsequent callers await the same promise and receive the same
+//   runId/response. The entry is removed on settle (finally). Failures propagate to all
+//   waiters with the same coded error.
+//
+// Build deadline (item 3):
+//   KEIKO_FIGMA_BUILD_DEADLINE_MS (default 600 000 ms). The awaiting handler races the
+//   coalesced build promise against a deadline rejection. On deadline the handler responds
+//   504 FIGMA_BUILD_TIMEOUT WITHOUT a runId. The coalesced build itself continues (other
+//   waiters may exist); persist is INSIDE the build chain, so if/when the build completes
+//   a subsequent POST for the same scope finds the map empty and re-coalesces cheaply.
+//   The underlying build is bounded by per-fetch timeouts and pagination budgets.
+//
+// Client disconnect (item 4):
+//   The handler listens for the 'close' event on ctx.req. On disconnect the per-waiter
+//   race resolves promptly (504 FIGMA_BUILD_TIMEOUT body never sent over the wire).
+//   The coalesced build continues — other waiters (if any) are unaffected and will
+//   receive the result when the build settles.
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -63,11 +85,24 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     "The forward proxy rejected the Figma egress request. Check proxy configuration.",
   FIGMA_PROXY_UNREACHABLE:
     "The configured forward proxy is unreachable. Check proxy host and port settings.",
+  FIGMA_PROXY_AUTH_REQUIRED:
+    "The forward proxy requires authentication. Configure proxy credentials or an allow rule.",
+  FIGMA_PROXY_BLOCKED_BY_POLICY:
+    "The forward proxy blocked the Figma egress request. Ask the proxy operator to allow api.figma.com.",
   FIGMA_TLS_CA_FAILURE:
     "The Figma egress TLS certificate could not be verified. Check the configured CA bundle.",
   FIGMA_RATE_LIMITED: "Figma rate-limited the snapshot-build. Please wait a moment and try again.",
   FIGMA_OVERSIZED_SCOPE:
     "The selected Figma board section is too large. Select a smaller section (frame or page).",
+  FIGMA_RESPONSE_TOO_LARGE:
+    "The Figma API response exceeded the size limit. Select a smaller section.",
+  FIGMA_NETWORK_UNREACHABLE:
+    "The outbound request to Figma failed. Check network connectivity and egress policy.",
+  FIGMA_EGRESS_TIMEOUT:
+    "The Figma request timed out. Retry or raise KEIKO_FIGMA_REQUEST_TIMEOUT_MS.",
+  FIGMA_EGRESS_FAILED: "The outbound request to Figma failed before a response was received.",
+  FIGMA_BUILD_TIMEOUT:
+    "The snapshot build exceeded the configured deadline. No partial snapshot was stored.",
   FIGMA_INTERNAL: "An unexpected error occurred during the snapshot-build.",
   FIGMA_BAD_LINK:
     "The board link is not a valid Figma URL, or it is missing a node-id " +
@@ -94,7 +129,7 @@ function figmaErrorBody(code: string): FigmaErrorBody {
   return code === "FIGMA_CONSENT_REQUIRED" ? { ...base, scopes: EXPECTED_FIGMA_SCOPES } : base;
 }
 
-// Codes that map to 502 (upstream/auth problems, not client errors).
+// Codes that map to 502 (upstream/auth/egress problems, not client errors).
 const FIGMA_502_CODES = new Set<FigmaConnectorErrorCode>([
   "FIGMA_TOKEN_MISSING",
   "FIGMA_TOKEN_INVALID",
@@ -103,8 +138,14 @@ const FIGMA_502_CODES = new Set<FigmaConnectorErrorCode>([
   "FIGMA_INSUFFICIENT_SCOPE",
   "FIGMA_PROXY_EGRESS_FAILED",
   "FIGMA_PROXY_UNREACHABLE",
+  "FIGMA_PROXY_AUTH_REQUIRED",
+  "FIGMA_PROXY_BLOCKED_BY_POLICY",
   "FIGMA_TLS_CA_FAILURE",
   "FIGMA_UPSTREAM_UNAVAILABLE",
+  "FIGMA_NETWORK_UNREACHABLE",
+  "FIGMA_EGRESS_TIMEOUT",
+  "FIGMA_EGRESS_FAILED",
+  "FIGMA_RESPONSE_TOO_LARGE",
 ]);
 
 function figmaStatusForCode(code: FigmaConnectorErrorCode): number {
@@ -114,6 +155,7 @@ function figmaStatusForCode(code: FigmaConnectorErrorCode): number {
   if (code === "FIGMA_OVERSIZED_SCOPE") return 422;
   // Precondition Required: the operator must acknowledge the read-only scope before the build (#760).
   if (code === "FIGMA_CONSENT_REQUIRED") return 428;
+  if (code === "FIGMA_BUILD_TIMEOUT") return 504;
   return 500;
 }
 
@@ -344,6 +386,29 @@ function figmaPaginationFromEnv(env: EnvSource): Partial<ScopedPaginationLimits>
   return overrides;
 }
 
+/** Default total snapshot-build deadline in milliseconds (10 minutes). */
+const DEFAULT_BUILD_DEADLINE_MS = 600_000;
+
+/** Default per-fetch request timeout in milliseconds (1 minute). */
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+// Parses a positive-integer env var, returning the default when the value is absent or invalid.
+function readPositiveIntEnv(raw: string | undefined, defaultValue: number): number {
+  if (raw === undefined) return defaultValue;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : defaultValue;
+}
+
+/** KEIKO_FIGMA_BUILD_DEADLINE_MS — total build deadline used by the coalesced promise race. */
+function figmaBuildDeadlineMsFromEnv(env: EnvSource): number {
+  return readPositiveIntEnv(env.KEIKO_FIGMA_BUILD_DEADLINE_MS, DEFAULT_BUILD_DEADLINE_MS);
+}
+
+/** KEIKO_FIGMA_REQUEST_TIMEOUT_MS — per-fetch timeout threaded into the transport ports. */
+function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
+  return readPositiveIntEnv(env.KEIKO_FIGMA_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
+}
+
 // Map a thrown error from the governed build to a coded route result: a coded connector error maps to
 // its status (consent-required → 428, auth → 502, rate-limit → 429, …); anything else is a safe 500.
 function figmaErrorResult(err: unknown): RouteResult {
@@ -390,11 +455,101 @@ function persistSnapshot(
   return record;
 }
 
+// ─── In-flight coalescing ──────────────────────────────────────────────────────
+//
+// Keyed by "fileKey:nodeId" (the snapshot scope). The FIRST POST starts the governed build,
+// mints the runId ONCE, and persists ONCE (inside the build chain — see header comment for
+// the persist-inside-build design decision). Subsequent POSTs for the same scope await the
+// SAME promise and receive the same runId and response. The entry is removed on settle
+// (finally) so a retry POSTing after the build completes always starts fresh.
+
+interface CoalescedBuildEntry {
+  readonly promise: Promise<RouteResult>;
+}
+
+// The map is module-level so it is shared across concurrent requests on the same server instance.
+// It is exposed via makeInFlightMap so tests can inject a fresh map (isolation without mocking).
+let defaultInFlightMap = new Map<string, CoalescedBuildEntry>();
+
+/** Injectable for tests — returns the module-level map by default. */
+export function makeInFlightMap(): Map<string, CoalescedBuildEntry> {
+  return defaultInFlightMap;
+}
+
+/** Reset the module-level coalescing map. Used by tests to ensure isolation. */
+export function resetInFlightMap(): void {
+  defaultInFlightMap = new Map<string, CoalescedBuildEntry>();
+}
+
+/** Derive the scope key (fileKey:nodeId) for the in-flight map. */
+function scopeKeyFor(boardLink: string): string | undefined {
+  const target = parseFigmaTarget(boardLink);
+  if (target === null) return undefined;
+  return `${target.fileKey}:${target.nodeId}`;
+}
+
+// Starts the governed build + persist and removes the map entry on settle.
+// Persist is INSIDE this chain: if a caller's deadline fires but the build later completes,
+// the record is stored and an immediate retry POST coalesces or finds it via the GET route.
+function startCoalescedBuild(
+  scopeKey: string,
+  inFlight: Map<string, CoalescedBuildEntry>,
+  boardLink: string,
+  body: ParsedTriggerBody,
+  evidenceDir: string,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const buildAndPersist = async (): Promise<RouteResult> => {
+    let result: GovernedSnapshotResult;
+    try {
+      // The governed build resolves the vault>config>env PAT (#758), gates on recorded read-only
+      // consent before any egress + audits the action + computes metrics (#760), and deep-fetches +
+      // renders within the snapshot boundary (#837/#759). Errors (incl. consent-required) are coded.
+      result = await governedSnapshotBuild(
+        boardLink,
+        {
+          evidenceDir,
+          env: deps.env,
+          now: new Date().toISOString(),
+          acknowledgeReadOnly: body.acknowledgeReadOnly,
+          pagination: figmaPaginationFromEnv(deps.env),
+          egress: currentGatewayEgressConfig(deps),
+          portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
+        },
+        body.isResnapshot,
+      );
+    } catch (err) {
+      return figmaErrorResult(err);
+    }
+
+    const runId = `fs-${randomUUID()}`;
+    const stored = persistSnapshot(evidenceDir, runId, result);
+    if ("status" in stored) return stored;
+    return { status: 201, body: recordToSummary(stored, result.coverage, result.metrics) };
+  };
+
+  const promise = buildAndPersist().finally(() => {
+    inFlight.delete(scopeKey);
+  });
+  inFlight.set(scopeKey, { promise });
+  return promise;
+}
+
+// Returns a promise that rejects with a FIGMA_BUILD_TIMEOUT error after `ms` milliseconds.
+function deadlineRejection(ms: number): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    setTimeout(() => {
+      reject(new FigmaConnectorError("FIGMA_BUILD_TIMEOUT"));
+    }, ms);
+  });
+}
+
 // ─── POST /api/figma/snapshots ─────────────────────────────────────────────────
 
 export async function handleFigmaTriggerSnapshot(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  inFlight: Map<string, CoalescedBuildEntry> = defaultInFlightMap,
 ): Promise<RouteResult> {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) {
@@ -404,31 +559,34 @@ export async function handleFigmaTriggerSnapshot(
   if ("status" in bodyResult) return bodyResult;
   const body: ParsedTriggerBody = bodyResult;
 
-  let result: GovernedSnapshotResult;
+  const scopeKey = scopeKeyFor(body.boardLink);
+  if (scopeKey === undefined) {
+    // parseTriggerBody already validates the board link; this is a belt-and-suspenders guard.
+    return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
+  }
+
+  // Coalesce: join an existing build for this scope, or start a new one.
+  const existing = inFlight.get(scopeKey);
+  const buildPromise =
+    existing !== undefined
+      ? existing.promise
+      : startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps);
+
+  const deadlineMs = figmaBuildDeadlineMsFromEnv(deps.env);
+
+  // Per-waiter race: deadline + client-disconnect both resolve this waiter promptly while the
+  // coalesced build (and its persist) continues uninterrupted for other waiters.
+  const disconnectPromise = new Promise<never>((_resolve, reject) => {
+    ctx.req.once("close", () => {
+      reject(new FigmaConnectorError("FIGMA_BUILD_TIMEOUT"));
+    });
+  });
+
   try {
-    // The governed build resolves the vault>config>env PAT (#758), gates on recorded read-only
-    // consent before any egress + audits the action + computes metrics (#760), and deep-fetches +
-    // renders within the snapshot boundary (#837/#759). Errors (incl. consent-required) are coded.
-    result = await governedSnapshotBuild(
-      body.boardLink,
-      {
-        evidenceDir,
-        env: deps.env,
-        now: new Date().toISOString(),
-        acknowledgeReadOnly: body.acknowledgeReadOnly,
-        pagination: figmaPaginationFromEnv(deps.env),
-        egress: currentGatewayEgressConfig(deps),
-      },
-      body.isResnapshot,
-    );
+    return await Promise.race([buildPromise, deadlineRejection(deadlineMs), disconnectPromise]);
   } catch (err) {
     return figmaErrorResult(err);
   }
-
-  const runId = `fs-${randomUUID()}`;
-  const stored = persistSnapshot(evidenceDir, runId, result);
-  if ("status" in stored) return stored;
-  return { status: 201, body: recordToSummary(stored, result.coverage, result.metrics) };
 }
 
 // ─── DELETE /api/figma/token — revoke the stored PAT (#758 rotation/revocation, #760 audit) ───
