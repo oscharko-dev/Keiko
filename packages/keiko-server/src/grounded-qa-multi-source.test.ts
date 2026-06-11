@@ -19,9 +19,15 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ChatConnectedScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import { handleGroundedAsk, type GroundedRunner, type MultiSourceSeam } from "./grounded-qa.js";
+import {
+  handleGroundedAsk,
+  promptByteLength,
+  type GroundedRunner,
+  type MultiSourceSeam,
+} from "./grounded-qa.js";
 import {
   buildConnectedScopes,
+  buildMultiSourceGatewayMessages,
   mergeContextPackSummaries,
   sourceLabels,
   splitExplorationBudget,
@@ -34,6 +40,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import { RepoSearchUnsupportedFileError } from "@oscharko-dev/keiko-workspace";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -63,10 +70,10 @@ function fakeRes(): RouteContext["res"] {
   return res;
 }
 
-function ctx(body: string): RouteContext {
+function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
     req: fakeReq(body),
-    res: fakeRes(),
+    res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
@@ -272,6 +279,36 @@ describe("buildConnectedScopes", () => {
   });
 });
 
+describe("buildMultiSourceGatewayMessages", () => {
+  it("prunes prompt-only excerpt content to fit the summed model input budget", () => {
+    const packA = scopePack("src/a.ts", 0.3, "low");
+    const packB = scopePack("src/b.ts", 0.9, "high");
+    const [budgetedA, budgetedB] = [packA, packB].map((pack) => ({
+      ...pack,
+      budget: { ...pack.budget, modelInputTokensMax: 512 },
+      files: pack.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          content: "x".repeat(20_000),
+          contentBytes: 20_000,
+        })),
+      })),
+    }));
+    const messages = buildMultiSourceGatewayMessages(
+      "explain both",
+      [
+        { label: "api", pack: budgetedA ?? packA },
+        { label: "web", pack: budgetedB ?? packB },
+      ],
+      buildRedactor({}, undefined),
+    );
+    expect(promptByteLength(messages)).toBeLessThanOrEqual((512 + 512) * 4);
+    expect(messages[1]?.content).toContain("Source 1: api");
+    expect(messages[1]?.content).toContain("Source 2: web");
+  });
+});
+
 describe("mergeContextPackSummaries", () => {
   it("sums usage/budget/counts and flags fileCount -1 when any source is workspace-root", () => {
     const a = buildGroundedAnswerContextPackSummary(scopePack("src/a.ts", 0.4, "a"), 1, 11);
@@ -292,6 +329,46 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it("maps typed workspace errors to safe 400 responses before answering or persisting", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("api"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("web"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    let answererCalled = false;
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain both" })),
+      recordingDeps([]),
+      undefined,
+      seam(
+        () =>
+          Promise.reject(
+            new RepoSearchUnsupportedFileError("Connected source is not readable.", "denied"),
+          ),
+        () => {
+          answererCalled = true;
+          return Promise.resolve("must not answer");
+        },
+      ),
+    );
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toBe("Connected source is not readable.");
+    expect(answererCalled).toBe(false);
+    expect(store.listMessages(chatId)).toEqual([]);
+  });
+
   it("merges two sources: citations carry BOTH labels, omitted/usage/budget are summed", async () => {
     const scopeA: ChatConnectedScope = {
       kind: "directory",
@@ -336,6 +413,38 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.contextPack.usage.searchCalls).toBe(baseSummary.usage.searchCalls * 2);
     expect(answer.contextPack.budget.filesReadMax).toBe(baseSummary.budget.filesReadMax * 2);
     expect(answer.uncertainty).toHaveLength(2);
+  });
+
+  it("does not persist a merged answer when the client disconnects after answering", async () => {
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("api"),
+    };
+    const scopeB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("web"),
+    };
+    const chatId = makeChat([scopeA, scopeB]);
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.3, "low")],
+      ["src/b.ts", scopePack("src/b.ts", 0.9, "high")],
+    ]);
+    const res = fakeRes();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain both" }), res),
+      recordingDeps([]),
+      undefined,
+      seam(packPerScope(byPath), () => {
+        res.emit("close");
+        return Promise.resolve("late merged answer");
+      }),
+    );
+    expect(result.status).toBe(499);
+    expect(store.listMessages(chatId)).toEqual([]);
   });
 
   it("persists one evidence run per source root and reports the first run id", async () => {

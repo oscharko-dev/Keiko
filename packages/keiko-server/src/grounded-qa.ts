@@ -385,6 +385,82 @@ export function promptSafeExcerptText(value: string): string {
   return value.split("```").join("` ` `");
 }
 
+const APPROX_BYTES_PER_TOKEN = 4;
+
+export function promptByteLength(messages: readonly GatewayChatMessage[]): number {
+  return Buffer.byteLength(messages.map((message) => message.content).join("\n"), "utf8");
+}
+
+export function modelInputPromptByteLimit(modelInputTokensMax: number): number {
+  return Math.max(0, Math.floor(modelInputTokensMax) * APPROX_BYTES_PER_TOKEN);
+}
+
+function clampUtf8Bytes(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, mid), "utf8") <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return value.slice(0, low);
+}
+
+function packExcerptCount(pack: ConnectedContextPack): number {
+  return pack.files.reduce((count, file) => count + file.excerpts.length, 0);
+}
+
+export function withPromptExcerptByteLimit(
+  pack: ConnectedContextPack,
+  maxExcerptBytes: number,
+): ConnectedContextPack {
+  return {
+    ...pack,
+    files: pack.files.map((file) => ({
+      ...file,
+      excerpts: file.excerpts.map((excerpt) => ({
+        ...excerpt,
+        content: clampUtf8Bytes(excerpt.content, maxExcerptBytes),
+      })),
+    })),
+  };
+}
+
+function promptBudgetedMessages(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  build: (
+    question: string,
+    pack: ConnectedContextPack,
+    redactor: Redactor,
+  ) => readonly GatewayChatMessage[],
+): readonly GatewayChatMessage[] {
+  const limit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax);
+  let messages = build(question, pack, redactor);
+  if (limit === 0 || promptByteLength(messages) <= limit) return messages;
+  const excerptCount = packExcerptCount(pack);
+  if (excerptCount === 0) return messages;
+
+  const emptyPack = withPromptExcerptByteLimit(pack, 0);
+  const emptyMessages = build(question, emptyPack, redactor);
+  const overheadBytes = promptByteLength(emptyMessages);
+  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
+  while (maxExcerptBytes >= 0) {
+    messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
+    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
+      return messages;
+    }
+    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
+  }
+  return emptyMessages;
+}
+
 export function packBudgetSummary(pack: ConnectedContextPack): string {
   const { usage, budget } = pack;
   return [
@@ -444,7 +520,7 @@ export function uncertaintyLines(
 // here for back-compat) so the hybrid path can interpolate it without a circular-import TDZ.
 export { GROUNDED_SYSTEM_PROMPT };
 
-function buildGroundedGatewayMessages(
+function buildRawGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
@@ -472,6 +548,14 @@ function buildGroundedGatewayMessages(
     { role: "system", content: GROUNDED_SYSTEM_PROMPT },
     { role: "user", content: userContent },
   ];
+}
+
+export function buildGroundedGatewayMessages(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+): readonly GatewayChatMessage[] {
+  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages);
 }
 
 function createGatewayAnswerer(

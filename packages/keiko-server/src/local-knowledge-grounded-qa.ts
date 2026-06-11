@@ -30,6 +30,9 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  CancelledError,
+  GatewayError,
+  findCapability,
   findConfiguredCapability,
   requestOpenAIEmbedding,
   type GatewayConfig,
@@ -37,8 +40,9 @@ import {
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
+import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 
@@ -682,6 +686,15 @@ function buildStateFailureAnswer(
 }
 
 function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteResult {
+  const config = currentGatewayConfig(deps);
+  const capability =
+    config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
+  if (capability?.kind !== "chat") {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+    };
+  }
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
@@ -692,6 +705,40 @@ function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteRe
 function redactText(deps: UiHandlerDeps, value: string): string {
   const redacted = deps.redactor(value);
   return typeof redacted === "string" ? redacted : value;
+}
+
+type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;
+
+function persistScopedGroundedAnswer(
+  chat: Chat,
+  input: AskInput,
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  selected: SelectedLocalKnowledgeScope,
+  result: ScopedGroundedResult,
+  startedAt: number,
+): GroundedAnswer {
+  const elapsedMs = Date.now() - startedAt;
+  const auditSink = createSqliteAuditSink(env.store);
+  const occurredAt = Date.now();
+  emitRetrievalAudit(auditSink, selected, result, occurredAt);
+  if (result.references.length > 0) emitAnswerContextAudit(auditSink, result, occurredAt);
+  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  const assistantContent =
+    noEvidenceReason === undefined
+      ? result.answer.trim()
+      : "No evidence found in the selected knowledge scope.";
+  const redactedUserContent = redactText(deps, input.content);
+  const redactedAssistantContent = redactText(deps, assistantContent);
+  return buildLocalKnowledgeAnswer(
+    chat,
+    env.store,
+    selected,
+    persistGroundedExchange(deps, chat.id, redactedUserContent, redactedAssistantContent),
+    result,
+    elapsedMs,
+    redactedAssistantContent,
+  ) satisfies GroundedAnswer;
 }
 
 async function runScopedGroundedAnswer(
@@ -722,27 +769,10 @@ async function runScopedGroundedAnswer(
     },
     localKnowledgeQuery(chat, input),
   );
-  const elapsedMs = Date.now() - startedAt;
-  const occurredAt = Date.now();
-  emitRetrievalAudit(auditSink, selected, result, occurredAt);
-  if (result.references.length > 0) emitAnswerContextAudit(auditSink, result, occurredAt);
-  const noEvidenceReason = enforcedNoEvidenceReason(result);
-  const assistantContent =
-    noEvidenceReason === undefined
-      ? result.answer.trim()
-      : "No evidence found in the selected knowledge scope.";
-  const redactedUserContent = redact(input.content);
-  const redactedAssistantContent = redact(assistantContent);
-  const answer = buildLocalKnowledgeAnswer(
-    chat,
-    env.store,
-    selected,
-    persistGroundedExchange(deps, chat.id, redactedUserContent, redactedAssistantContent),
-    result,
-    elapsedMs,
-    redactedAssistantContent,
-  );
-  return answer satisfies GroundedAnswer;
+  if (signal.aborted) {
+    throw new CancelledError("grounded request cancelled");
+  }
+  return persistScopedGroundedAnswer(chat, input, deps, env, selected, result, startedAt);
 }
 
 export async function handleLocalKnowledgeGroundedAsk(
@@ -772,6 +802,14 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in answer) return answer;
     return { status: 200, body: answer };
   } catch (error) {
+    if (error instanceof CancelledError) {
+      return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
+    }
+    if (error instanceof GatewayError) {
+      const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
+      const message = redact(error.message, currentRedactionSecrets(deps));
+      return { status, body: errorBody(error.code, message) };
+    }
     // Issue #154 (GAP-B) — this catch-all surfaces an arbitrary dynamic error message (a gateway
     // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
     // same redactor the content path uses before it reaches the wire; the fixed fallback is static.

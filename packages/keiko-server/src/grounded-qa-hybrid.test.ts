@@ -90,10 +90,10 @@ function fakeRes(): RouteContext["res"] {
   return res;
 }
 
-function routeCtx(body: string): RouteContext {
+function routeCtx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
     req: fakeReq(body),
-    res: fakeRes(),
+    res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
@@ -460,6 +460,45 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       "model-context-sent",
       "retrieval-performed",
     ]);
+  });
+
+  it("does not persist a hybrid answer when the client disconnects after answering", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Disconnect Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/disconnect.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("disconnect-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/disconnect.ts", folderPack("src/disconnect.ts", 0.7, "disconnect-atom")],
+    ]);
+    const res = fakeRes();
+    const hybrid: HybridSeam = {
+      folderRetriever: folderRetrieverFor(packMap),
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: () => {
+        res.emit("close");
+        return Promise.resolve("late hybrid answer");
+      },
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What changed?" }), res),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    expect(result.status).toBe(499);
+    expect(store.listMessages(chatId)).toEqual([]);
   });
 
   it("strips planner scaffolding from hybrid answers and carries final model usage", async () => {

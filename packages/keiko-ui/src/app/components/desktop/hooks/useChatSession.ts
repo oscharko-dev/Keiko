@@ -225,6 +225,15 @@ export function resolveSelectedModelId(
   return pickChatModelId(models);
 }
 
+function hasGroundingScope(chat: Chat): boolean {
+  return (
+    chat.connectedScope !== undefined ||
+    (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0) ||
+    chat.localKnowledgeScope !== undefined ||
+    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0)
+  );
+}
+
 export type ChatSessionApi = UseChatSessionResult;
 
 export interface UseChatSessionResult {
@@ -1239,8 +1248,7 @@ export function useChatSession(): UseChatSessionResult {
       // attached. The epic's sendGrounded signature (with modelId + signal +
       // SendStatus return) is the canonical one; #355 expanded only the
       // routing predicate, not the underlying send path.
-      const isGrounded =
-        chat.connectedScope !== undefined || chat.localKnowledgeScope !== undefined;
+      const isGrounded = hasGroundingScope(chat);
       // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
       // path derives its context from the repo/local-knowledge scope, not from attachments.
       const { entries: documentContext, disclosures } = isGrounded

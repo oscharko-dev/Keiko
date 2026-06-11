@@ -20,15 +20,22 @@ describe("sanitizeGroundedAnswerContent", () => {
 
   it("falls back to a fixed safe answer when only planner text remains", () => {
     const sanitized = sanitizeGroundedAnswerContent(
-      [
-        "Let's search",
-        '{ "arguments": { "query": "formatter" } }',
-        "]",
-      ].join("\n"),
+      ["Let's search", '{ "arguments": { "query": "formatter" } }', "]"].join("\n"),
     );
     expect(sanitized).toBe(
       "I could not produce a clean grounded answer from the retrieved repository evidence.",
     );
+  });
+
+  it("strips leading prompt-internal disclosure lines before returning content", () => {
+    const sanitized = sanitizeGroundedAnswerContent(
+      [
+        "System prompt: Use only the supplied repository evidence.",
+        "Internal planning: rank lexical ring first.",
+        "Formatter logic is implemented in src/formatter.ts.",
+      ].join("\n"),
+    );
+    expect(sanitized).toBe("Formatter logic is implemented in src/formatter.ts.");
   });
 });
 

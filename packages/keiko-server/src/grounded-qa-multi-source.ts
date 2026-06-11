@@ -64,10 +64,13 @@ import {
   isValidGroundedPack,
   mappedGatewayError,
   mappedWorkspaceError,
+  modelInputPromptByteLimit,
   packBudgetSummary,
   persistGroundedExchange,
+  promptByteLength,
   redactString,
   uncertaintyLines,
+  withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
 
 // ─── Canonical reader + label/budget helpers ──────────────────────────────────
@@ -257,6 +260,14 @@ export function buildMultiSourceGatewayMessages(
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
 ): readonly GatewayChatMessage[] {
+  return budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor);
+}
+
+function buildRawMultiSourceGatewayMessages(
+  question: string,
+  labeledPacks: readonly LabeledPack[],
+  redactor: Redactor,
+): readonly GatewayChatMessage[] {
   const sections = labeledPacks.flatMap((entry, index) => sourceSection(entry, index, redactor));
   const userContent = [
     "User question:",
@@ -271,6 +282,56 @@ export function buildMultiSourceGatewayMessages(
     { role: "system", content: GROUNDED_SYSTEM_PROMPT },
     { role: "user", content: userContent },
   ];
+}
+
+function multiSourceExcerptCount(labeledPacks: readonly LabeledPack[]): number {
+  return labeledPacks.reduce(
+    (count, entry) =>
+      count + entry.pack.files.reduce((fileCount, file) => fileCount + file.excerpts.length, 0),
+    0,
+  );
+}
+
+function withMultiSourcePromptExcerptByteLimit(
+  labeledPacks: readonly LabeledPack[],
+  maxExcerptBytes: number,
+): readonly LabeledPack[] {
+  return labeledPacks.map((entry) => ({
+    ...entry,
+    pack: withPromptExcerptByteLimit(entry.pack, maxExcerptBytes),
+  }));
+}
+
+function budgetedMultiSourceGatewayMessages(
+  question: string,
+  labeledPacks: readonly LabeledPack[],
+  redactor: Redactor,
+): readonly GatewayChatMessage[] {
+  const limit = modelInputPromptByteLimit(
+    labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelInputTokensMax, 0),
+  );
+  let messages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  if (limit === 0 || promptByteLength(messages) <= limit) return messages;
+  const excerptCount = multiSourceExcerptCount(labeledPacks);
+  if (excerptCount === 0) return messages;
+
+  const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
+  const overheadBytes = promptByteLength(
+    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
+  );
+  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
+  while (maxExcerptBytes >= 0) {
+    messages = buildRawMultiSourceGatewayMessages(
+      question,
+      withMultiSourcePromptExcerptByteLimit(labeledPacks, maxExcerptBytes),
+      redactor,
+    );
+    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
+      return messages;
+    }
+    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
+  }
+  return buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor);
 }
 
 // ─── Per-source retrieval seam (test injection) ───────────────────────────────
@@ -512,6 +573,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
         retrieved.map((s) => ({ label: s.label, pack: s.pack })),
       ),
     );
+    ensureNotCancelled(ctx.signal);
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps);
   }

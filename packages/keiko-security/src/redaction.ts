@@ -39,7 +39,7 @@ const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]
 // ("client_secret": "x"), INI/env (db_password=x), or YAML (secret: x) shape — keeping the key and
 // separator, dropping the value. ReDoS-safe: alternation of literals + one linear value class.
 const SECRET_KEY_NAMES =
-  "passwd|password|secret_key|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential";
+  "passwd|password|api_?token|token|secret_key|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential";
 const SECRET_KEY_VALUE_PATTERN = new RegExp(
   `(?<![A-Za-z0-9])(${SECRET_KEY_NAMES})(["']?\\s*[:=]\\s*["']?)[^\\s"'\`,;&]+`,
   "gi",

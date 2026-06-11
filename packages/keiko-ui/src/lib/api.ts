@@ -388,7 +388,9 @@ export interface UpdateChatInput {
   branchLabel?: string;
   status?: ChatStatus;
   connectedScope?: ChatConnectedScope | null;
+  connectedScopes?: readonly ChatConnectedScope[] | null;
   localKnowledgeScope?: ChatLocalKnowledgeScope | null;
+  localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
 }
 
 export async function updateChat(id: string, patch: UpdateChatInput): Promise<ChatResponse> {

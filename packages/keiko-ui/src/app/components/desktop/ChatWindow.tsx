@@ -775,14 +775,35 @@ function ChatContext({ root }: { readonly root: string }): ReactNode {
 }
 
 function groundedModeValue(chat: Chat): string {
-  if (chat.localKnowledgeScope?.kind === "capsule") {
-    return `capsule:${chat.localKnowledgeScope.capsuleId}`;
+  const firstLocalKnowledgeScope = chat.localKnowledgeScopes?.[0] ?? chat.localKnowledgeScope;
+  if (firstLocalKnowledgeScope?.kind === "capsule") {
+    return `capsule:${firstLocalKnowledgeScope.capsuleId}`;
   }
-  if (chat.localKnowledgeScope?.kind === "capsule-set") {
-    return `capsule-set:${chat.localKnowledgeScope.capsuleSetId}`;
+  if (firstLocalKnowledgeScope?.kind === "capsule-set") {
+    return `capsule-set:${firstLocalKnowledgeScope.capsuleSetId}`;
   }
-  if (chat.connectedScope !== undefined) return "files";
+  if (hasFolderGroundingScope(chat)) return "files";
   return "none";
+}
+
+function hasFolderGroundingScope(chat: Chat | undefined): boolean {
+  return (
+    chat !== undefined &&
+    (chat.connectedScope !== undefined ||
+      (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0))
+  );
+}
+
+function hasConnectorGroundingScope(chat: Chat | undefined): boolean {
+  return (
+    chat !== undefined &&
+    (chat.localKnowledgeScope !== undefined ||
+      (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0))
+  );
+}
+
+function hasGroundingScope(chat: Chat | undefined): boolean {
+  return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
 }
 
 function formatScopeUpdateError(error: unknown): string {
@@ -925,43 +946,45 @@ function LocalKnowledgeScopeControl({
     try {
       if (value === "none") {
         const response = await updateChat(chat.id, {
-          connectedScope: null,
-          localKnowledgeScope: null,
+          connectedScopes: null,
+          localKnowledgeScopes: null,
         });
         onChatChanged(response.chat);
         return;
       }
       if (value === "files") {
-        const response = await updateChat(chat.id, { localKnowledgeScope: null });
+        const response = await updateChat(chat.id, { localKnowledgeScopes: null });
         onChatChanged(response.chat);
         return;
       }
       if (value.startsWith("capsule-set:")) {
+        const scope: ChatLocalKnowledgeScope = {
+          kind: "capsule-set",
+          capsuleSetId: value.slice("capsule-set:".length) as Extract<
+            ChatLocalKnowledgeScope,
+            { readonly kind: "capsule-set" }
+          >["capsuleSetId"],
+          connectedAtMs: Date.now(),
+        };
         const response = await updateChat(chat.id, {
-          connectedScope: null,
-          localKnowledgeScope: {
-            kind: "capsule-set",
-            capsuleSetId: value.slice("capsule-set:".length) as Extract<
-              ChatLocalKnowledgeScope,
-              { readonly kind: "capsule-set" }
-            >["capsuleSetId"],
-            connectedAtMs: Date.now(),
-          },
+          connectedScopes: null,
+          localKnowledgeScopes: [scope],
         });
         onChatChanged(response.chat);
         return;
       }
       if (value.startsWith("capsule:")) {
+        const scope: ChatLocalKnowledgeScope = {
+          kind: "capsule",
+          capsuleId: value.slice("capsule:".length) as Extract<
+            ChatLocalKnowledgeScope,
+            { readonly kind: "capsule" }
+          >["capsuleId"],
+          connectedAtMs: Date.now(),
+        };
         const response = await updateChat(chat.id, {
-          connectedScope: null,
-          localKnowledgeScope: {
-            kind: "capsule",
-            capsuleId: value.slice("capsule:".length) as Extract<
-              ChatLocalKnowledgeScope,
-              { readonly kind: "capsule" }
-            >["capsuleId"],
-            connectedAtMs: Date.now(),
-          },
+          connectedScopes: null,
+          localKnowledgeScopes: [scope],
         });
         onChatChanged(response.chat);
       }
@@ -992,7 +1015,7 @@ function LocalKnowledgeScopeControl({
         }}
       >
         <option value="none">Model only</option>
-        <option value="files" disabled={chat.connectedScope === undefined}>
+        <option value="files" disabled={!hasFolderGroundingScope(chat)}>
           Live Files context
         </option>
         {capsuleChoices.map((capsule) => (
@@ -1073,13 +1096,7 @@ function GroundedAnswerPanel({
   if (chat === undefined) return null;
   // Show the grounded panel when the chat has ANY scope binding (folder or connector, singular or
   // plural). This covers the legacy single-source fields and the #532/#189 plural list fields.
-  const hasFolderScope =
-    chat.connectedScope !== undefined ||
-    (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0);
-  const hasConnectorScope =
-    chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0);
-  if (!hasFolderScope && !hasConnectorScope) return null;
+  if (!hasGroundingScope(chat)) return null;
   if (answer === undefined && !busy) return null;
   return (
     <div className="chatw-grounded">
@@ -1484,8 +1501,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             {sending && sendStatus !== "streaming" ? (
               <div className="chatw-typing-row">
                 <TypingBubble />
-                {activeChat?.connectedScope !== undefined ||
-                activeChat?.localKnowledgeScope !== undefined ? (
+                {hasGroundingScope(activeChat) ? (
                   <button
                     type="button"
                     className="grounded-cancel-btn"

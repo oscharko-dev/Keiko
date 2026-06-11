@@ -22,7 +22,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import { handleGroundedAsk, type GroundedRunner } from "./grounded-qa.js";
+import {
+  buildGroundedGatewayMessages,
+  handleGroundedAsk,
+  type GroundedRunner,
+} from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
@@ -44,6 +48,7 @@ const XOXB_FAKE = ["xoxb", "-1234567890-abcdef1234567890"].join("");
 const AIZA_FAKE = ["AIza", "SyD-faKeGoogleAPIKey1234567890abcd"].join("");
 const BEARER_FAKE = ["Bear", "er abc123def456ghi789"].join("");
 const PEM_FAKE = ["-----", "BEGIN PRIVATE KEY-----faketokenbody-----END PRIVATE KEY-----"].join("");
+const TOKEN_ASSIGNMENT_FAKE = ["supersecret", "1234567890"].join("");
 
 const SECRET_SHAPES: readonly string[] = [
   SK_FAKE,
@@ -53,6 +58,7 @@ const SECRET_SHAPES: readonly string[] = [
   AIZA_FAKE,
   BEARER_FAKE,
   PEM_FAKE,
+  TOKEN_ASSIGNMENT_FAKE,
 ];
 const SECRET_SCOPE_PATH = ["src/", SK_FAKE, ".ts"].join("");
 
@@ -95,6 +101,7 @@ function attackerPack(): ConnectedContextPack {
   // Build a ConnectedContextPack with secret-shaped strings in every field the contract
   // accepts a string for. The pack uses scope.kind = "files" (the most common scope) and
   // one excerpt so file/atom/excerpt paths all carry attacker data.
+  const excerptContent = [`token = ${TOKEN_ASSIGNMENT_FAKE}`, PEM_FAKE].join("\n");
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     stableId: "pack-attacker",
@@ -129,7 +136,7 @@ function attackerPack(): ConnectedContextPack {
     usage: {
       searchCalls: 0,
       filesRead: 1,
-      excerptBytes: PEM_FAKE.length,
+      excerptBytes: new TextEncoder().encode(excerptContent).length,
       modelInputTokens: 0,
       modelOutputTokens: 0,
       elapsedMs: 0,
@@ -159,8 +166,8 @@ function attackerPack(): ConnectedContextPack {
             },
             // Excerpt content carries a private-key block. Excerpts are pack-internal and
             // never travel on the wire — this test confirms that invariant.
-            content: PEM_FAKE,
-            contentBytes: PEM_FAKE.length,
+            content: excerptContent,
+            contentBytes: new TextEncoder().encode(excerptContent).length,
           },
         ],
       },
@@ -214,6 +221,17 @@ function assertNoSecretShape(value: string, where: string): void {
 }
 
 describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
+  it("redacts generic token assignments before repository evidence reaches the prompt", () => {
+    const messages = buildGroundedGatewayMessages(
+      "explain",
+      attackerPack(),
+      buildRedactor({}, undefined),
+    );
+    const serialised = JSON.stringify(messages);
+    assertNoSecretShape(serialised, "gateway prompt");
+    expect(serialised).toContain("token = [REDACTED]");
+  });
+
   it("the contextPack summary structurally cannot carry workspaceRoot/relativePaths/query.text", async () => {
     const chatId = await setupChat();
     const assistantSafe = "Inspected 1 file(s) for the query."; // safe by construction

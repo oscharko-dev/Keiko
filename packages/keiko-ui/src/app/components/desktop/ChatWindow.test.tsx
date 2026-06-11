@@ -7,7 +7,7 @@ import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contr
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import type { Chat, ModelCapability } from "@/lib/types";
+import type { Chat, GroundedAnswer, ModelCapability } from "@/lib/types";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
 vi.mock("@/lib/local-knowledge-api", () => ({
@@ -142,6 +142,119 @@ describe("ChatWindow cancel button", () => {
       }),
     );
     expect(screen.getByRole("button", { name: "Cancel grounded request" })).toBeInTheDocument();
+  });
+
+  it("renders the cancel button while sending with plural-only connectedScopes", () => {
+    const chat = makeChat({
+      connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
+    });
+    renderWindow(
+      makeSession({
+        activeChat: chat,
+        sending: true,
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Cancel grounded request" })).toBeInTheDocument();
+  });
+
+  it("renders the grounded panel for a plural-only connectedScopes chat", () => {
+    const chat = makeChat({
+      connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
+    });
+    const latestGrounded: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      content: "grounded",
+      citations: [
+        {
+          scopePath: "src/a.ts",
+          lineRange: { startLine: 1, endLine: 2 },
+          score: 0.9,
+          stableId: "atom-1",
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 5,
+      contextPack: {
+        schemaVersion: "1",
+        scopeId: "cs-plural",
+        scopeKind: "files",
+        fileCount: 1,
+        queryKind: "natural-language",
+        usage: {
+          searchCalls: 1,
+          filesRead: 1,
+          excerptBytes: 64,
+          modelInputTokens: 10,
+          modelOutputTokens: 5,
+          elapsedMs: 5,
+          rerankCalls: 0,
+        },
+        budget: {
+          searchCallsMax: 16,
+          filesReadMax: 32,
+          excerptBytesMax: 131_072,
+          modelInputTokensMax: 32_000,
+          modelOutputTokensMax: 4_096,
+          elapsedMsMax: 30_000,
+          rerankCallsMax: 0,
+        },
+        citationCount: 1,
+        omittedCount: 0,
+        omittedCounts: {
+          "outside-scope": 0,
+          binary: 0,
+          generated: 0,
+          ignored: 0,
+          "size-exceeded": 0,
+          "near-duplicate": 0,
+          "low-relevance": 0,
+          "redacted-only": 0,
+          "budget-exhausted": 0,
+          "tool-unavailable": 0,
+        },
+        uncertaintyCount: 0,
+        elapsedMs: 5,
+      },
+    };
+    renderWindow(
+      makeSession({
+        activeChat: chat,
+        latestGrounded,
+        messages: [
+          {
+            id: "a",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "grounded",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    expect(screen.getByText("src/a.ts:1-2")).toBeInTheDocument();
+    expect(screen.getByText("Scope: 1 file in files (s-plural)")).toBeInTheDocument();
   });
 
   it("calls cancelGrounded when the cancel button is clicked", async () => {

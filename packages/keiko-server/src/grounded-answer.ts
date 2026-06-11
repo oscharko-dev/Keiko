@@ -14,7 +14,7 @@ const SAFE_GROUNDED_FALLBACK =
   "I could not produce a clean grounded answer from the retrieved repository evidence.";
 
 const ORCHESTRATION_PREFIX_RE =
-  /^(searching for\b|search query\b|we need to call search\b|let'?s search\b|calling search\b|tool call\b|plan\b:)/i;
+  /^(searching for\b|search query\b|we need to call search\b|let'?s search\b|calling search\b|tool call\b|plan\b:|system prompt\b:|developer prompt\b:|internal planning\b:|internal reasoning\b:|hidden instruction\b:)/i;
 
 const ARGUMENT_LINE_RE =
   /^(?:[{[]|["']?(?:path|query|max_results|maxResults|tool|arguments|scope|search)["']?\s*:)/i;

@@ -972,6 +972,7 @@ async function answerAndAssemble(
   const assistant = normalizeGroundedAnswerPayload(
     await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
   );
+  ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,

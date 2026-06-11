@@ -17,7 +17,12 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import { handleGroundedAsk, type GroundedRunner } from "./grounded-qa.js";
+import {
+  buildGroundedGatewayMessages,
+  handleGroundedAsk,
+  promptByteLength,
+  type GroundedRunner,
+} from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
@@ -38,6 +43,7 @@ import {
   seedCapsuleWithVectors,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -113,6 +119,26 @@ function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
         throughputHint: "test endpoint",
         preferredUseCases: ["Grounded repository Q&A"],
         knownLimitations: [],
+      },
+    ],
+  };
+}
+
+function nonChatRequestedModelConfig(): GatewayConfig {
+  const base = customModelConfig(CHAT_MODEL);
+  const chatCapability = base.capabilities?.[0];
+  if (chatCapability === undefined) {
+    throw new Error("expected chat capability");
+  }
+  return {
+    ...base,
+    capabilities: [
+      chatCapability,
+      {
+        ...chatCapability,
+        id: "text-embedding-3-small",
+        kind: "embedding",
+        workflowEligible: false,
       },
     ],
   };
@@ -418,6 +444,32 @@ async function runHandler(
   return handleGroundedAsk(ctx(body), deps(), customRunner);
 }
 
+describe("buildGroundedGatewayMessages", () => {
+  it("prunes prompt-only excerpt content to fit the model input budget", () => {
+    const base = packWithCitations();
+    const budgetedPack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, modelInputTokensMax: 1024 },
+      files: base.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          content: "x".repeat(20_000),
+          contentBytes: 20_000,
+        })),
+      })),
+    };
+    const messages = buildGroundedGatewayMessages(
+      GROUNDED_FIXTURE_QUESTION,
+      budgetedPack,
+      buildRedactor({}, undefined),
+    );
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(1024 * 4);
+    expect(messages[1]?.content).toContain("src/foo.ts");
+    expect(messages[1]?.content).toContain("Repository evidence excerpts:");
+  });
+});
+
 describe("handleGroundedAsk", () => {
   it("rejects body that is not JSON with 400 BAD_REQUEST", async () => {
     const result = await runHandler("not-json");
@@ -446,6 +498,20 @@ describe("handleGroundedAsk", () => {
     expect(result.status).toBe(400);
     const body = result.body as { error: { code: string; message: string } };
     expect(body.error.message).toContain("connected scope");
+  });
+
+  it("maps typed workspace search errors to safe 400 responses without persistence", async () => {
+    const { chatId } = await setupChatWithScope();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain src/foo.ts" })),
+      deps(),
+      () => Promise.reject(new RepoSearchInvalidQueryError("Query is not usable.")),
+    );
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toBe("Query is not usable.");
+    expect(store.listMessages(chatId)).toEqual([]);
   });
 
   it("rejects a grounded ask whose workspace root is on the deny-list before invoking the runner", async () => {
@@ -974,6 +1040,97 @@ describe("handleGroundedAsk", () => {
     // matching the redaction the hybrid path already applies.
     expect(prompt).toContain("alpha");
     expect(prompt).not.toContain(secret);
+  });
+
+  it("rejects non-chat model ids for single-connector grounded asks", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
+    const uiDbPath = join(tmp, "keiko-ui.db");
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      capsuleId: "cap-non-chat",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    store.updateChat(chat.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const adapter = scriptedAdapter();
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: "What is alpha?",
+          modelId: "text-embedding-3-small",
+        }),
+      ),
+      deps(
+        fakeModel("must not run", requests),
+        {},
+        {
+          uiDbPath,
+          localKnowledgeEmbeddingRequest: adapter.request,
+          config: nonChatRequestedModelConfig(),
+          configPresent: true,
+        },
+      ),
+    );
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toBe("modelId must be a configured chat model id.");
+    expect(requests).toEqual([]);
+    expect(store.listMessages(chat.id)).toEqual([]);
+  });
+
+  it("does not persist a single-connector answer when the client disconnects after answering", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
+    const uiDbPath = join(tmp, "keiko-ui.db");
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      capsuleId: "cap-cancel-after-answer",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    store.updateChat(chat.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: NOW },
+    });
+    const res = fakeRes();
+    const requests: GatewayRequest[] = [];
+    const model: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        requests.push(request);
+        res.emit("close");
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "Late local answer [1].",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "grounded-qa-cancel-test",
+            promptTokens: 41,
+            completionTokens: 7,
+            latencyMs: 13,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "What is alpha?" }), res),
+      deps(model, {}, { uiDbPath, localKnowledgeEmbeddingRequest: adapter.request }),
+    );
+    expect(result.status).toBe(499);
+    expect(requests).toHaveLength(1);
+    expect(store.listMessages(chat.id)).toEqual([]);
   });
 
   it("does not record model-context-sent when the model call fails", async () => {

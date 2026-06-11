@@ -133,6 +133,21 @@ describe("redact", () => {
     expect(result).toContain("[REDACTED]");
   });
 
+  it("redacts generic token and apiToken assignments in allowed source files", () => {
+    const tokenValue = ["supersecret", "1234567890"].join("");
+    const apiTokenValue = ["opaque-api-token-", "abcdef123456"].join("");
+    const result = redact(
+      [`token = ${tokenValue}`, `"apiToken": "${apiTokenValue}"`, "const tokenCount = 3;"].join(
+        "\n",
+      ),
+    );
+    expect(result).not.toContain(tokenValue);
+    expect(result).not.toContain(apiTokenValue);
+    expect(result).toContain("token = [REDACTED]");
+    expect(result).toContain("apiToken");
+    expect(result).toContain("const tokenCount = 3;");
+  });
+
   it("redacts an aws_secret_access_key value by key name", () => {
     const secret = ["wJalrXUtnFEMI/K7MDENG/bPxRfiCY", "EXAMPLEKEY"].join("");
     const result = redact(`aws_secret_access_key = ${secret}`);

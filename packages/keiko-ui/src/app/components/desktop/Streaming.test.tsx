@@ -622,6 +622,102 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(users.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("routes plural-only connectedScopes through grounded Q&A", async () => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    const groundedChat = makeChat({
+      connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
+    });
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [chatModelCapability("example-chat-model")],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: PROJECT_PATH,
+          name: "proj",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [groundedChat] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+    const askGroundedSpy = vi.spyOn(api, "askGrounded").mockResolvedValue({
+      groundingKind: "connected-context",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      content: "grounded",
+      citations: [],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: {
+        schemaVersion: "1",
+        scopeId: "cs-plural",
+        scopeKind: "files",
+        fileCount: 1,
+        queryKind: "natural-language",
+        usage: {
+          searchCalls: 0,
+          filesRead: 0,
+          excerptBytes: 0,
+          modelInputTokens: 0,
+          modelOutputTokens: 0,
+          elapsedMs: 0,
+          rerankCalls: 0,
+        },
+        budget: {
+          searchCallsMax: 16,
+          filesReadMax: 32,
+          excerptBytesMax: 131_072,
+          modelInputTokensMax: 32_000,
+          modelOutputTokensMax: 4_096,
+          elapsedMsMax: 30_000,
+          rerankCallsMax: 0,
+        },
+        citationCount: 0,
+        omittedCount: 0,
+        omittedCounts: {
+          "outside-scope": 0,
+          binary: 0,
+          generated: 0,
+          ignored: 0,
+          "size-exceeded": 0,
+          "near-duplicate": 0,
+          "low-relevance": 0,
+          "redacted-only": 0,
+          "budget-exhausted": 0,
+          "tool-unavailable": 0,
+        },
+        uncertaintyCount: 0,
+        elapsedMs: 1,
+      },
+    });
+    const ungroundedSpy = vi.spyOn(api, "sendDesktopChat").mockResolvedValue({
+      chat: groundedChat,
+      messages: [],
+    });
+
+    const view = await bootHook();
+    expect(view.result.current.activeChat?.connectedScope).toBeUndefined();
+    expect(view.result.current.activeChat?.connectedScopes).toHaveLength(1);
+
+    act(() => view.result.current.setDraft("ground plural scope"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(askGroundedSpy).toHaveBeenCalledWith(
+      { chatId: groundedChat.id, content: "ground plural scope", modelId: "example-chat-model" },
+      expect.any(AbortSignal),
+    );
+    expect(ungroundedSpy).not.toHaveBeenCalled();
+    expect(view.result.current.sendStatus).toBe("completed");
+  });
+
   it("refreshes a grounded turn from the chat's canonical projectPath after send", async () => {
     vi.restoreAllMocks();
     api.clearModelCacheForTests();
