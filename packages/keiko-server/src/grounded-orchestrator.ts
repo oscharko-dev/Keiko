@@ -133,6 +133,7 @@ export const echoAnswerer: GroundedAnswerer = {
 interface SearchInputs {
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
+  readonly anchors: readonly SearchAnchor[];
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
@@ -141,6 +142,7 @@ interface SearchInputs {
 interface RingResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
+  readonly uncertainty: readonly UncertaintyMarker[];
   readonly usage: ExplorationUsage;
 }
 
@@ -199,6 +201,15 @@ function noEvidence(nowMs: number): UncertaintyMarker {
   };
 }
 
+function toolUnavailable(claim: string, nowMs: number): UncertaintyMarker {
+  return {
+    kind: "tool-unavailable",
+    claim,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 function readBudgetStopReason(budget: ExplorationBudget): string | undefined {
   const exhausted = [
     ...(budget.filesReadMax <= 0 ? ["filesRead"] : []),
@@ -231,6 +242,129 @@ function omittedFromSearchCandidates(
   return omitted;
 }
 
+function safeAdapterName(name: string): string {
+  const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, "");
+  return cleaned.length === 0 ? "structural-adapter" : cleaned;
+}
+
+function adapterDiagnostics(
+  result: {
+    readonly unavailable: readonly string[];
+    readonly errored: readonly { readonly name: string }[];
+  },
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  const markers: UncertaintyMarker[] = [];
+  const seen = new Set<string>();
+  for (const name of result.unavailable) {
+    const safeName = safeAdapterName(name);
+    if (seen.has(`unavailable:${safeName}`)) {
+      continue;
+    }
+    seen.add(`unavailable:${safeName}`);
+    markers.push(toolUnavailable(`structural adapter unavailable: ${safeName}`, nowMs));
+  }
+  for (const error of result.errored) {
+    const safeName = safeAdapterName(error.name);
+    if (seen.has(`errored:${safeName}`)) {
+      continue;
+    }
+    seen.add(`errored:${safeName}`);
+    markers.push(toolUnavailable(`structural adapter failed safely: ${safeName}`, nowMs));
+  }
+  return markers;
+}
+
+function dedupeUncertainty(markers: readonly UncertaintyMarker[]): readonly UncertaintyMarker[] {
+  const seen = new Set<string>();
+  const out: UncertaintyMarker[] = [];
+  for (const marker of markers) {
+    const key = `${marker.kind}:${marker.claim}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(marker);
+  }
+  return out;
+}
+
+function anchorKindForTerm(
+  term: string,
+  anchors: readonly SearchAnchor[],
+): SearchAnchor["kind"] | undefined {
+  return anchors.find((anchor) => anchor.term === term)?.kind;
+}
+
+function looksPathAnchor(term: string): boolean {
+  return term.includes("/") || /\.[a-z0-9]+$/i.test(term);
+}
+
+function queryForStructuralAnchor(
+  term: string,
+  kind: SearchAnchor["kind"] | undefined,
+  base: RetrievalQuery,
+): RetrievalQuery {
+  return {
+    ...base,
+    kind:
+      kind === "identifier" || (!looksPathAnchor(term) && kind !== "path")
+        ? "exact-symbol"
+        : "natural-language",
+    text: term,
+  };
+}
+
+function structuralQueriesForRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): readonly RetrievalQuery[] {
+  const queries: RetrievalQuery[] = [];
+  const seen = new Set<string>();
+  for (const term of ring.anchorTerms) {
+    const anchorKind = anchorKindForTerm(term, inputs.anchors);
+    if (anchorKind !== "path" && anchorKind !== "identifier" && anchorKind !== "quoted") {
+      continue;
+    }
+    const query = queryForStructuralAnchor(term, anchorKind, inputs.query);
+    const key = `${query.kind}:${query.text}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    queries.push(query);
+  }
+  return queries.length === 0 ? [inputs.query] : queries;
+}
+
+function mergeAtomsByStableId(
+  results: readonly RunRingStructuralResult[],
+  cap: number,
+): readonly EvidenceAtom[] {
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const result of results) {
+    for (const atom of result.atoms) {
+      if (atoms.length >= cap) {
+        return atoms;
+      }
+      if (seen.has(atom.stableId)) {
+        continue;
+      }
+      seen.add(atom.stableId);
+      atoms.push(atom);
+    }
+  }
+  return atoms;
+}
+
+interface RunRingStructuralResult {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly unavailable: readonly string[];
+  readonly errored: readonly { readonly name: string }[];
+  readonly elapsedMs: number;
+}
+
 async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
   if (ring.kind === "lexical") {
     const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
@@ -246,6 +380,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     return {
       atoms: result.atoms,
       omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
+      uncertainty: [],
       usage: usageDelta({ elapsedMs: result.elapsedMs }),
     };
   }
@@ -257,18 +392,26 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     ring.kind === "structural"
       ? { adapters: [testSourcePairingAdapter, importGraphAdapter] }
       : { adapters: [gitHistoryAdapter] };
-  const result = await runStructuralAdapters(
-    registry,
-    inputs.searchScope,
-    inputs.query,
-    ring.searchLimits,
-    inputs.fs,
-    { nowMs: inputs.nowMs },
+  const queries =
+    ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
+  const results = await Promise.all(
+    queries.map((query) =>
+      runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
+        nowMs: inputs.nowMs,
+      }),
+    ),
+  );
+  const elapsedMs = results.reduce((sum, result) => sum + result.elapsedMs, 0);
+  const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
+  const atoms = ring.kind === "git-history" ? [] : mergeAtomsByStableId(results, cap);
+  const uncertainty = dedupeUncertainty(
+    results.flatMap((result) => adapterDiagnostics(result, inputs.nowMs())),
   );
   return {
-    atoms: result.atoms,
+    atoms,
     omitted: [],
-    usage: usageDelta({ elapsedMs: result.elapsedMs }),
+    uncertainty,
+    usage: usageDelta({ elapsedMs }),
   };
 }
 
@@ -314,9 +457,9 @@ async function runAllRings(
     const result = await runRing(ring, inputs);
     throwIfCancelled(inputs.signal);
     const afterRing = applyUsage(governor, result.usage);
-    const ringAtoms = result.atoms;
-    atoms.push(...ringAtoms);
+    atoms.push(...result.atoms);
     omitted.push(...result.omitted);
+    uncertainty.push(...result.uncertainty);
     if (afterRing.status === "budget-exhausted") {
       governor = afterRing;
       uncertainty.push(budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()));
@@ -748,7 +891,7 @@ export async function retrieveConnectedContextPack(
   const searchScope = buildSearchScope(input.scope, workspace);
   const rings = await runAllRings(
     plan.rings,
-    { searchScope, query: input.query, fs, nowMs, signal: deps.signal },
+    { searchScope, query: input.query, anchors: plan.anchors, fs, nowMs, signal: deps.signal },
     governor,
   );
   throwIfCancelled(deps.signal);

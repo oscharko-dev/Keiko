@@ -261,6 +261,49 @@ describe("runGroundedExploration", () => {
     expect(Array.isArray(out.pack.omitted)).toBe(true);
   });
 
+  it("runs structural adapters over planner anchors instead of the full natural-language prompt", async () => {
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "tests/foo.test.ts")).toBe(true);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "tests/foo.test.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes("MyClass")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("surfaces structural adapter unavailability through sanitized uncertainty", async () => {
+    const adapter = importGraphAdapter as {
+      isAvailable: typeof importGraphAdapter.isAvailable;
+    };
+    const originalIsAvailable = adapter.isAvailable;
+    adapter.isAvailable = (): Promise<boolean> => Promise.resolve(false);
+    try {
+      const out = await retrieveConnectedContextPack(input(), {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      });
+      const marker = out.pack.uncertainty.find(
+        (entry) => entry.kind === "tool-unavailable" && entry.claim.includes("import-graph"),
+      );
+      expect(marker?.claim).toBe("structural adapter unavailable: import-graph");
+      expect(marker?.claim).not.toContain(ROOT);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      adapter.isAvailable = originalIsAvailable;
+    }
+  });
+
   it("records the exploration plan before workspace detection or repository exploration", async () => {
     const events: string[] = [];
     const out = await runGroundedExploration(input(), {
@@ -521,9 +564,32 @@ describe("runGroundedExploration", () => {
       importAdapter.lookup = originalImportLookup;
       gitAdapter.lookup = originalGitLookup;
     }
-    expect(pairCalls).toBe(1);
-    expect(importCalls).toBe(1);
+    expect(pairCalls).toBeGreaterThan(0);
+    expect(importCalls).toBeGreaterThan(0);
     expect(gitCalls).toBe(1);
+  });
+
+  it("does not send git-history metadata paths into excerpt selection", async () => {
+    mkdirSync(join(ROOT, ".git", "logs"), { recursive: true });
+    writeFileSync(join(ROOT, ".git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(
+      join(ROOT, ".git", "logs", "HEAD"),
+      "0000000000000000000000000000000000000000 abc123def456 Alice <alice@example.com> 1700000000 +0000\tcommit: seed\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and recent git history" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.every((file) => !file.scopePath.startsWith(".git/"))).toBe(true);
+    expect(out.pack.uncertainty.every((marker) => !marker.claim.includes(".git/HEAD"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {

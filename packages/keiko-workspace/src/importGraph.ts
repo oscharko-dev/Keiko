@@ -119,9 +119,12 @@ async function scanFileForImports(
   atoms: EvidenceAtom[],
 ): Promise<void> {
   const abs = resolveWithinWorkspace(ctx.scope.workspace.root, relativePath);
-  assertContainedRealPath(ctx.fs, ctx.scope.workspace.root, abs, "scope");
-  const stat = ctx.fs.stat(abs);
-  if (await probeBinary(ctx.fs, abs, stat.size)) {
+  const containedAbs = assertContainedRealPath(ctx.fs, ctx.scope.workspace.root, abs, "scope");
+  const stat = ctx.fs.stat(containedAbs);
+  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
+    return;
+  }
+  if (await probeBinary(ctx.fs, containedAbs, stat.size)) {
     return;
   }
   const content = readWorkspaceFile(
