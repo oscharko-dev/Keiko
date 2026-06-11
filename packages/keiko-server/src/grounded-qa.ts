@@ -7,8 +7,10 @@
 import type { IncomingMessage } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { basename } from "node:path";
 import {
   CancelledError,
+  ContextOverflowError,
   GatewayError,
   findCapability,
   findConfiguredCapability,
@@ -299,18 +301,44 @@ function canonicalGroundedRoot(rootInput: string, deps: UiHandlerDeps): string |
   return realRoot;
 }
 
+// A scope that failed canonicalization. `reason` is the original RouteResult (preserved verbatim
+// for hard-fail cases when every source is denied). `message` is a safe, non-path skip notice.
+interface SkippedFolderScope {
+  readonly label: string;
+  readonly message: string;
+  readonly reason: RouteResult;
+}
+
+interface CanonicalizedFolderScopes {
+  readonly canonical: readonly ChatConnectedScope[];
+  readonly skipped: readonly SkippedFolderScope[];
+}
+
+function skippedFolderMessage(result: RouteResult): string {
+  const body = result.body as { error?: { message?: string } };
+  return body.error?.message ?? "not accessible";
+}
+
+// Fail-soft canonicalization: inaccessible/denied scopes are collected in `skipped` instead of
+// aborting the entire request. Callers apply the hard-400 only when NO healthy scope remains.
 function canonicalizeGroundedFolderScopes(
   chat: Chat,
   deps: UiHandlerDeps,
   scopes: readonly ChatConnectedScope[],
-): readonly ChatConnectedScope[] | RouteResult {
+): CanonicalizedFolderScopes {
   const canonical: ChatConnectedScope[] = [];
+  const skipped: SkippedFolderScope[] = [];
   for (const scope of scopes) {
-    const realRoot = canonicalGroundedRoot(scope.root ?? chat.projectPath, deps);
-    if (typeof realRoot !== "string") return realRoot;
+    const rootInput = scope.root ?? chat.projectPath;
+    const realRoot = canonicalGroundedRoot(rootInput, deps);
+    if (typeof realRoot !== "string") {
+      const label = scope.root !== undefined ? basename(scope.root) : "project";
+      skipped.push({ label, message: skippedFolderMessage(realRoot), reason: realRoot });
+      continue;
+    }
     canonical.push({ ...scope, root: realRoot });
   }
-  return canonical;
+  return { canonical, skipped };
 }
 
 function withCanonicalFolderScopes(chat: Chat, scopes: readonly ChatConnectedScope[]): Chat {
@@ -450,6 +478,14 @@ function promptBudgetedMessages(
   const emptyPack = withPromptExcerptByteLimit(pack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
   const overheadBytes = promptByteLength(emptyMessages);
+  // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
+  // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
+  // prompt to the provider which would result in an opaque 400 context-window error.
+  if (overheadBytes > limit) {
+    throw new ContextOverflowError(
+      `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
+    );
+  }
   let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
   while (maxExcerptBytes >= 0) {
     messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
@@ -906,6 +942,7 @@ async function dispatchMultiSourceAsk(
   args: PreparedGroundedAsk,
   deps: UiHandlerDeps,
   scopes: ReturnType<typeof buildConnectedScopes>,
+  skippedFolders: readonly SkippedFolderScope[],
   seamOverride: MultiSourceSeam | undefined,
 ): Promise<RouteResult> {
   const { chat, input, signal } = args;
@@ -928,6 +965,7 @@ async function dispatchMultiSourceAsk(
     retriever: seam.retriever,
     answerer: seam.answerer,
     signal,
+    preSkipped: skippedFolders.map((s) => ({ label: s.label, message: s.message })),
   });
 }
 
@@ -943,19 +981,21 @@ function singleScopeFromList(
   return buildSelectedScopeFrom(chat, cs, deriveScopeIdFrom(chat, cs, 0));
 }
 
-// Epic #532 — the folder-only branch (0 → bad request; 1 → the byte-identical legacy single-source
-// runner; 2+ → the multi-source merge). Extracted so handleGroundedAsk stays the thin count-based
-// dispatcher.
+// Epic #532 — the folder-only branch (0 handled by caller; 1 → single-source runner unless
+// there are pre-skipped folders, in which case multi-source carries the skip notice; 2+ → the
+// multi-source merge). Extracted so handleGroundedAsk stays the thin count-based dispatcher.
 async function dispatchFolderAsk(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
   scopes: ReturnType<typeof buildConnectedScopes>,
+  skippedFolders: readonly SkippedFolderScope[],
   runner: GroundedRunner | undefined,
   multiSource: MultiSourceSeam | undefined,
 ): Promise<RouteResult> {
   const { chat, input, signal } = prepared;
-  if (scopes.length >= 2) {
-    return dispatchMultiSourceAsk(prepared, deps, scopes, multiSource);
+  // 2+ healthy folders or 1 healthy + some skipped → multi-source (carries skip-notice).
+  if (scopes.length >= 2 || (scopes.length === 1 && skippedFolders.length > 0)) {
+    return dispatchMultiSourceAsk(prepared, deps, scopes, skippedFolders, multiSource);
   }
   const scope = buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
   if (scope === undefined) {
@@ -1008,6 +1048,7 @@ function hybridSeamFields(seam: HybridSeam | undefined): Partial<{
 async function dispatchHybridAsk(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
+  skippedFolders: readonly SkippedFolderScope[],
   seam: HybridSeam | undefined,
 ): Promise<RouteResult> {
   const { chat, input, signal } = prepared;
@@ -1024,6 +1065,11 @@ async function dispatchHybridAsk(
     modelId,
     deps,
     signal,
+    preSkippedFolders: skippedFolders.map((s) => ({
+      label: s.label,
+      reason: "not-accessible",
+      message: s.message,
+    })),
     ...hybridSeamFields(seam),
   });
 }
@@ -1044,28 +1090,34 @@ export async function handleGroundedAsk(
   // keep the EXISTING folder path (#532, byte-identical). A lone connector with no folders keeps the
   // EXISTING single-connector path (#189, byte-identical). Everything else (folders+connector, or
   // 2+ connectors) is the hybrid merge.
+  // Fail-soft: inaccessible/denied folders are skipped; only effective (canonical) counts drive
+  // dispatch. A chat with ONLY denied/inaccessible sources still returns the original 400 so the
+  // user sees a clear rejection (security preserved).
   const folderScopes = buildConnectedScopes(chat);
-  const canonicalFolderScopes = canonicalizeGroundedFolderScopes(chat, deps, folderScopes);
-  if (isRouteResult(canonicalFolderScopes)) return canonicalFolderScopes;
+  const { canonical: canonicalFolderScopes, skipped: skippedFolders } =
+    canonicalizeGroundedFolderScopes(chat, deps, folderScopes);
   const preparedWithCanonicalFolders: PreparedGroundedAsk = {
     ...prepared,
     chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),
   };
   const connectorCount = buildLocalKnowledgeScopes(chat).length;
-  if (folderScopes.length === 0 && connectorCount === 0) {
-    return badRequest("Chat has no connected scope.");
+  const effectiveFolders = canonicalFolderScopes.length;
+  if (effectiveFolders === 0 && connectorCount === 0) {
+    // Hard-fail: return the first skipped reason (preserves exact 400 message) or the generic guard.
+    return skippedFolders[0]?.reason ?? badRequest("Chat has no connected scope.");
   }
   if (connectorCount === 0) {
     return dispatchFolderAsk(
       preparedWithCanonicalFolders,
       deps,
       canonicalFolderScopes,
+      skippedFolders,
       runner,
       multiSource,
     );
   }
-  if (folderScopes.length === 0 && connectorCount === 1) {
+  if (effectiveFolders === 0 && connectorCount === 1) {
     return handleLocalKnowledgeGroundedAsk(chat, prepared.input, deps, prepared.signal);
   }
-  return dispatchHybridAsk(preparedWithCanonicalFolders, deps, hybrid);
+  return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
 }

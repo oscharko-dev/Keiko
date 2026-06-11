@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
 import {
@@ -32,6 +32,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   CancelledError,
+  ContextOverflowError,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
@@ -41,7 +42,10 @@ import {
   resolveKnowledgeStorePath,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
-import { scriptedAdapter, seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
+import {
+  scriptedAdapter,
+  seedCapsuleWithVectors,
+} from "@oscharko-dev/keiko-local-knowledge/testing";
 import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 
 const NOW = 1_700_000_000_000;
@@ -467,6 +471,25 @@ describe("buildGroundedGatewayMessages", () => {
     expect(messages[1]?.content).toContain("src/foo.ts");
     expect(messages[1]?.content).toContain("Repository evidence excerpts:");
   });
+
+  it("throws ContextOverflowError when prompt overhead alone exceeds the model input limit", () => {
+    // modelInputTokensMax=1 → limit=4 bytes, which is smaller than any real system+question prompt.
+    // Before the fix, promptBudgetedMessages returned the over-limit messages silently, causing a
+    // provider 400. After the fix it must throw ContextOverflowError so the caller surfaces a clean
+    // 502 GATEWAY_CONTEXT_OVERFLOW instead of an opaque provider error.
+    const base = packWithCitations();
+    const tinyBudgetPack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, modelInputTokensMax: 1 },
+    };
+    expect(() =>
+      buildGroundedGatewayMessages(
+        GROUNDED_FIXTURE_QUESTION,
+        tinyBudgetPack,
+        buildRedactor({}, undefined),
+      ),
+    ).toThrow(ContextOverflowError);
+  });
 });
 
 describe("handleGroundedAsk", () => {
@@ -692,6 +715,110 @@ describe("handleGroundedAsk", () => {
     expect(body.error.message).toContain("not accessible");
     expect(JSON.stringify(result)).not.toContain("src/foo.ts");
     expect(JSON.stringify(result)).not.toContain(project.path);
+  });
+
+  // ── Fail-soft: a folder ROOT that became inaccessible/denied between connect and ask must skip
+  //    that source and answer from the healthy ones, instead of aborting the whole N+1 run.
+  it("fails soft when one connected folder root is inaccessible but a healthy root remains", async () => {
+    const project = store.createProject(tmp, "demo");
+    const goodRoot = mkdtempSync(join(tmpdir(), "keiko-good-root-"));
+    const deadRoot = mkdtempSync(join(tmpdir(), "keiko-dead-root-"));
+    seedScopedRepo(goodRoot);
+    const chat = store.createChat(project.path, "Resilient multi-source", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: goodRoot, connectedAtMs: NOW },
+        { kind: "workspace-root", relativePaths: [], root: deadRoot, connectedAtMs: NOW + 1 },
+      ],
+    });
+    rmSync(deadRoot, { recursive: true, force: true });
+    const seenRequests: GatewayRequest[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("Grounded answer from the healthy root.", seenRequests)),
+    );
+
+    // The run proceeds (model is asked) and surfaces the skipped source rather than 400-ing.
+    expect(result.status).toBe(200);
+    expect(seenRequests.length).toBeGreaterThanOrEqual(1);
+    const body = result.body as { uncertainty?: readonly { kind: string; claim: string }[] };
+    const skipMarkers = (body.uncertainty ?? []).filter((u) => u.kind === "source-skipped");
+    expect(skipMarkers.length).toBeGreaterThanOrEqual(1);
+    expect(skipMarkers.some((u) => u.claim.includes(basename(deadRoot)))).toBe(true);
+    // The dead root's absolute path must not leak into the response.
+    expect(JSON.stringify(result)).not.toContain(deadRoot);
+  });
+
+  it("hard-fails through the multi-source list path when the ONLY connected folder resolves to a denied dir", async () => {
+    // The store deny-list is lexical, so a clean-named symlink persists; the grounded
+    // canonicalization re-checks the symlink-resolved real path. With no healthy source left, the
+    // fail-soft path must still return the original 400 (a denied-only chat never answers).
+    const project = store.createProject(tmp, "demo");
+    const deniedRoot = join(tmp, ".ssh");
+    const linkedRoot = join(tmp, "denied-list-link");
+    mkdirSync(deniedRoot, { recursive: true });
+    symlinkSync(deniedRoot, linkedRoot, "dir");
+    const chat = store.createChat(project.path, "Denied only (list)", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: linkedRoot, connectedAtMs: NOW },
+      ],
+    });
+    const seenRequests: GatewayRequest[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("should not run", seenRequests)),
+    );
+
+    expect(result.status).toBe(400);
+    expect(seenRequests).toHaveLength(0);
+    const body = result.body as { error: { message: string } };
+    expect(body.error.message).toContain("excluded from Keiko's safe read surface");
+    expect(JSON.stringify(result)).not.toContain(".ssh");
+  });
+
+  it("hard-fails with the original safe error when the ONLY connected folder root is inaccessible", async () => {
+    const project = store.createProject(tmp, "demo");
+    const deadRoot = mkdtempSync(join(tmpdir(), "keiko-dead-only-"));
+    const chat = store.createChat(project.path, "Inaccessible only", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: deadRoot, connectedAtMs: NOW },
+      ],
+    });
+    rmSync(deadRoot, { recursive: true, force: true });
+    const seenRequests: GatewayRequest[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("should not run", seenRequests)),
+    );
+
+    expect(result.status).toBe(400);
+    expect(seenRequests).toHaveLength(0);
+    const body = result.body as { error: { message: string } };
+    expect(body.error.message).toContain("not accessible");
+    expect(JSON.stringify(result)).not.toContain(deadRoot);
   });
 
   it("neutralizes excerpt fence markers before sending repository evidence to the model", async () => {

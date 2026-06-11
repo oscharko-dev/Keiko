@@ -10,6 +10,7 @@
 import { basename } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  ContextOverflowError,
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -319,6 +320,14 @@ function budgetedMultiSourceGatewayMessages(
   const overheadBytes = promptByteLength(
     buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
   );
+  // When overhead alone (system prompt + question + framing for all sources) exceeds the limit,
+  // no amount of excerpt trimming can bring the prompt within budget. Throw instead of sending
+  // an over-limit prompt to the provider which would result in an opaque 400 context-window error.
+  if (overheadBytes > limit) {
+    throw new ContextOverflowError(
+      `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
+    );
+  }
   let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
   while (maxExcerptBytes >= 0) {
     messages = buildRawMultiSourceGatewayMessages(
@@ -398,6 +407,17 @@ interface RetrievedSource {
   readonly plan: RetrievalOnlyOutput["plan"];
 }
 
+interface SkippedScope {
+  readonly label: string;
+  readonly message: string;
+}
+
+interface RetrievalOutcome {
+  readonly retrieved: readonly RetrievedSource[];
+  readonly skipped: readonly SkippedScope[];
+  readonly firstError: RouteResult | undefined;
+}
+
 export interface MultiSourceAskInput {
   readonly chat: Chat;
   readonly scopes: readonly ChatConnectedScope[];
@@ -407,6 +427,9 @@ export interface MultiSourceAskInput {
   readonly retriever: GroundedRetriever;
   readonly answerer: MultiSourceAnswerer;
   readonly signal: AbortSignal;
+  // Upfront-skipped sources (inaccessible/denied at canonicalization time). Merged into the
+  // `source-skipped` uncertainty entries so the caller sees which folders were omitted.
+  readonly preSkipped?: readonly { readonly label: string; readonly message: string }[];
 }
 
 async function retrieveAllSources(
@@ -414,12 +437,13 @@ async function retrieveAllSources(
   query: RetrievalQuery,
   perScopeBudget: ExplorationBudget,
   labels: readonly string[],
-): Promise<readonly RetrievedSource[] | RouteResult> {
+): Promise<RetrievalOutcome | RouteResult> {
   const retrieved: (RetrievedSource | undefined)[] = new Array<RetrievedSource | undefined>(
     ctx.scopes.length,
   );
+  const skipped: SkippedScope[] = [];
   let nextIndex = 0;
-  let failure: RouteResult | undefined;
+  let firstError: RouteResult | undefined;
 
   async function retrieveOne(i: number): Promise<void> {
     ensureNotCancelled(ctx.signal);
@@ -434,14 +458,15 @@ async function retrieveAllSources(
       budget: perScopeBudget,
     });
     if (!isValidGroundedPack(out.pack)) {
-      failure = internalError("Grounded answer context pack failed validation.");
+      skipped.push({ label, message: "Pack validation failed." });
+      firstError ??= internalError("Grounded answer context pack failed validation.");
       return;
     }
     retrieved[i] = { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan };
   }
 
   async function worker(): Promise<void> {
-    while (failure === undefined) {
+    for (;;) {
       const i = nextIndex;
       nextIndex += 1;
       if (i >= ctx.scopes.length) return;
@@ -451,8 +476,9 @@ async function retrieveAllSources(
 
   const workerCount = Math.min(MAX_RETRIEVAL_CONCURRENCY, Math.max(1, ctx.scopes.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  if (failure !== undefined) return failure;
-  return retrieved.filter((source): source is RetrievedSource => source !== undefined);
+  const sources = retrieved.filter((source): source is RetrievedSource => source !== undefined);
+  if (sources.length === 0 && firstError !== undefined) return firstError;
+  return { retrieved: sources, skipped, firstError };
 }
 
 function mergedCitations(
@@ -467,11 +493,22 @@ function mergedCitations(
 
 function mergedUncertainty(
   sources: readonly RetrievedSource[],
+  skipped: readonly SkippedScope[],
+  preSkipped: readonly { readonly label: string; readonly message: string }[],
   redactor: Redactor,
 ): readonly GroundedUncertainty[] {
-  return sources.flatMap((src) =>
+  const fromPacks = sources.flatMap((src) =>
     src.pack.uncertainty.map((u) => ({ kind: u.kind, claim: redactString(redactor, u.claim) })),
   );
+  const allSkipped = [
+    ...preSkipped.map((s) => ({ label: s.label, message: s.message })),
+    ...skipped,
+  ];
+  const fromSkipped = allSkipped.map((entry) => ({
+    kind: "source-skipped",
+    claim: redactString(redactor, `Source ${entry.label} skipped: ${entry.message}`),
+  }));
+  return [...fromPacks, ...fromSkipped];
 }
 
 // Persists ONE evidence run per source, each naming the root that source actually searched (L1
@@ -519,6 +556,7 @@ function persistPerSourceEvidence(
 function assembleMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
+  skipped: readonly SkippedScope[],
   assistant: GroundedAnswerResult,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): GroundedAnswer {
@@ -541,7 +579,7 @@ function assembleMultiSourceAnswer(
     evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
     citations,
-    uncertainty: mergedUncertainty(sources, redactor),
+    uncertainty: mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
     omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: {
@@ -559,16 +597,16 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   const query = buildQuery(ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
   const perScopeBudget = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, ctx.scopes.length);
-  let sources: readonly RetrievedSource[] | RouteResult;
+  let outcome: RetrievalOutcome | RouteResult;
   try {
-    sources = await retrieveAllSources(ctx, query, perScopeBudget, labels);
+    outcome = await retrieveAllSources(ctx, query, perScopeBudget, labels);
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps);
   }
-  if (isRouteResult(sources)) {
-    return sources;
+  if (isRouteResult(outcome)) {
+    return outcome;
   }
-  const retrieved = sources;
+  const { retrieved, skipped } = outcome;
   let assistant: GroundedAnswerResult;
   try {
     assistant = normalizeGroundedAnswerPayload(
@@ -587,7 +625,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     redactString(ctx.deps.redactor, ctx.content),
     redactString(ctx.deps.redactor, assistant.content),
   );
-  const answer = assembleMultiSourceAnswer(ctx, retrieved, assistant, {
+  const answer = assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
   });
@@ -601,8 +639,8 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   return { status: 200, body: answer };
 }
 
-function isRouteResult(value: readonly RetrievedSource[] | RouteResult): value is RouteResult {
-  return !Array.isArray(value);
+function isRouteResult(value: RetrievalOutcome | RouteResult): value is RouteResult {
+  return "status" in value;
 }
 
 function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {

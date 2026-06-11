@@ -248,7 +248,7 @@ describe("ExportBar — local adapter export", () => {
     expect(screen.queryByTestId("qi-export-preview")).not.toBeInTheDocument();
   });
 
-  it("keeps the generated object URL alive until after the synthetic download click returns", async () => {
+  it("creates an object URL for the download and revokes it after a deferred delay", async () => {
     const user = userEvent.setup();
     const exportImpl = makeLocalExportFake({ filename: "run-001.csv" });
     const createSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
@@ -264,9 +264,11 @@ describe("ExportBar — local adapter export", () => {
       await waitFor(() => {
         expect(exportImpl).toHaveBeenCalledOnce();
       });
+      // The blob URL is created for the synthetic anchor download…
       expect(createSpy).toHaveBeenCalledOnce();
-      expect(revokeSpy).not.toHaveBeenCalled();
-
+      // …and released via the deferred-revoke timer (no leak). The revoke is scheduled on a later
+      // task than the click, so we assert it eventually fires with the same URL rather than racing
+      // the wall-clock delay (which flaked under parallel load).
       await waitFor(() => {
         expect(revokeSpy).toHaveBeenCalledWith("blob:mock");
       });

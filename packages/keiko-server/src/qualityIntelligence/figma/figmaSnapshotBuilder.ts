@@ -69,6 +69,29 @@ const chunk = <T>(items: readonly T[], size: number): readonly (readonly T[])[] 
   return out;
 };
 
+// Validates that a render URL returned by the Figma API is safe to follow. Blocks http:
+// (plaintext) and IP-literal hostnames (RFC-1918, loopback, link-local) to prevent SSRF via
+// a compromised or MITM'd API response. A broad IP-block is preferred over a tight CDN
+// allowlist because Figma's pre-signed render URLs span multiple AWS S3 regions/CDN fronts.
+const isRenderUrlSafe = (raw: string): boolean => {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  const h = url.hostname;
+  // Block IP literals (IPv4, bracketed IPv6, and bare IPv6).
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) return false;
+  if (h.startsWith("[")) return false;
+  // Block localhost and .local mDNS names.
+  if (h === "localhost" || h.endsWith(".local")) return false;
+  // Block empty hostname (e.g. file:// or protocol-relative edge cases).
+  if (h.length === 0) return false;
+  return true;
+};
+
 const buildImagesUrl = (
   fileKey: string,
   ids: readonly string[],
@@ -133,6 +156,18 @@ const skip = (screenId: string, reason: FigmaSkippedScreenReason): ScreenOutcome
   skipped: { screenId, reason },
 });
 
+// Classifies a finished render download into a skip reason, or null when the bytes are usable.
+const renderSkipReason = (
+  response: { readonly status: number; readonly bytes: Uint8Array } | null,
+  maxBytes: number,
+): FigmaSkippedScreenReason | null => {
+  if (response === null) return "render-fetch-failed";
+  if (response.status < 200 || response.status >= 300) return "render-fetch-failed";
+  if (response.bytes.length === 0) return "render-empty";
+  if (response.bytes.length > maxBytes) return "render-oversized";
+  return null;
+};
+
 // Downloads one screen's render bytes and classifies the result into a kept screen or a skip. The
 // pre-signed byte download is wrapped in the same deterministic 429 backoff; a single screen still
 // failing after retries degrades to a skip (partial render), never aborting the whole build.
@@ -142,6 +177,7 @@ const resolveScreen = async (
   renderUrl: string | null,
 ): Promise<ScreenOutcome> => {
   if (renderUrl === null) return skip(ir.id, "render-url-missing");
+  if (!isRenderUrlSafe(renderUrl)) return skip(ir.id, "render-url-blocked");
   const maxBytes = input.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
   const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
   const sleep = input.sleep ?? realFigmaRetrySleep;
@@ -150,10 +186,8 @@ const resolveScreen = async (
     policy,
     sleep,
   ).catch(() => null);
-  if (response === null) return skip(ir.id, "render-fetch-failed");
-  if (response.status < 200 || response.status >= 300) return skip(ir.id, "render-fetch-failed");
-  if (response.bytes.length === 0) return skip(ir.id, "render-empty");
-  if (response.bytes.length > maxBytes) return skip(ir.id, "render-oversized");
+  const reason = renderSkipReason(response, maxBytes);
+  if (reason !== null || response === null) return skip(ir.id, reason ?? "render-fetch-failed");
   const sha256 = hashBytes(response.bytes);
   const screen: FigmaSnapshotScreen = {
     screenId: ir.id,

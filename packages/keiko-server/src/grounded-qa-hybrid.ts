@@ -132,6 +132,9 @@ export interface HybridGroundedAskCtx {
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
+  // Upfront-skipped folder scopes (inaccessible/denied at canonicalization time). Merged into
+  // `skippedFolders` uncertainty entries alongside retrieval-time folder skips.
+  readonly preSkippedFolders?: readonly { readonly label: string; readonly reason: string; readonly message: string }[];
 }
 
 // ─── Retrieved-source records ─────────────────────────────────────────────────
@@ -154,6 +157,11 @@ interface SkippedConnector {
   readonly label: string;
   readonly reason: string;
   readonly message: string;
+}
+
+interface FolderRetrieval {
+  readonly retrieved: readonly RetrievedFolder[];
+  readonly skipped: readonly SkippedConnector[];
 }
 
 interface ConnectorRetrieval {
@@ -260,10 +268,11 @@ async function retrieveFolderPacks(
   folderScopes: readonly ChatConnectedScope[],
   query: RetrievalQuery,
   retriever: FolderRetriever,
-): Promise<readonly RetrievedFolder[] | RouteResult> {
+): Promise<FolderRetrieval> {
   const labels = sourceLabels(folderScopes);
   const budget = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, folderScopes.length);
   const retrieved: RetrievedFolder[] = [];
+  const skipped: SkippedConnector[] = [];
   for (let i = 0; i < folderScopes.length; i += 1) {
     ensureNotCancelled(ctx.signal);
     const cs = folderScopes[i];
@@ -277,11 +286,12 @@ async function retrieveFolderPacks(
       budget,
     });
     if (!isValidGroundedPack(out.pack)) {
-      return internalError("Grounded answer context pack failed validation.");
+      skipped.push({ label, reason: "pack-validation-failed", message: "Pack validation failed." });
+      continue;
     }
     retrieved.push({ label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan });
   }
-  return retrieved;
+  return { retrieved, skipped };
 }
 
 // ─── Connector retrieval ──────────────────────────────────────────────────────
@@ -323,7 +333,7 @@ function defaultConnectorRetrieve(ctx: HybridGroundedAskCtx): ConnectorRetrieve 
   };
 }
 
-class EmbeddingAdapterError extends Error {
+export class EmbeddingAdapterError extends Error {
   public constructor(public readonly result: RouteResult) {
     super("embedding adapter unavailable");
     this.name = "EmbeddingAdapterError";
@@ -352,7 +362,14 @@ async function retrieveConnectors(
       continue;
     }
     const outcome = await retrieveOneConnector(retrieve, store, scope, selected);
-    if ("status" in outcome) return outcome;
+    if ("status" in outcome) {
+      skipped.push({
+        label,
+        reason: "embedding-unavailable",
+        message: "Embedding adapter unavailable.",
+      });
+      continue;
+    }
     retrieved.push({ label, selected, references: outcome.references });
   }
   return { retrieved, skipped };
@@ -776,6 +793,7 @@ interface RetrievedSources {
   readonly folders: readonly RetrievedFolder[];
   readonly connectors: readonly RetrievedConnector[];
   readonly skipped: readonly SkippedConnector[];
+  readonly skippedFolders: readonly SkippedConnector[];
   readonly folderSourceCount: number;
   readonly connectorSourceCount: number;
 }
@@ -855,6 +873,7 @@ function assembleHybridAnswer(
     knowledgeCitations,
     uncertainty: [
       ...folderUncertainty(sources.folders, redactor),
+      ...skippedUncertainty(sources.skippedFolders, redactor),
       ...skippedUncertainty(sources.skipped, redactor),
       ...noEvidenceUncertainty(selected, redactor),
     ],
@@ -879,6 +898,7 @@ interface ResolvedAnswerer {
 interface AnswerMeta {
   readonly folderScopeCount: number;
   readonly connectorScopeCount: number;
+  readonly folderResult: FolderRetrieval;
   readonly connectorResult: ConnectorRetrieval;
 }
 
@@ -894,7 +914,6 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
 function assembleHybridNoEvidenceRoute(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
-  folders: readonly RetrievedFolder[],
   meta: AnswerMeta,
   selected: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
@@ -912,9 +931,10 @@ function assembleHybridNoEvidenceRoute(
   const answer = assembleHybridAnswer(
     ctx,
     {
-      folders,
+      folders: meta.folderResult.retrieved,
       connectors: meta.connectorResult.retrieved,
       skipped: meta.connectorResult.skipped,
+      skippedFolders: meta.folderResult.skipped,
       folderSourceCount: meta.folderScopeCount,
       connectorSourceCount: meta.connectorScopeCount,
     },
@@ -947,36 +967,37 @@ async function runHybridWithStore(
   const resolved = resolveConnectorScopes(connectorScopes, store);
   if ("status" in resolved) return resolved;
   const query = buildQuery(ctx.content, () => Date.now());
-  const folders = await retrieveFolderPacks(
+  const rawFolderResult = await retrieveFolderPacks(
     ctx,
     folderScopes,
     query,
     ctx.folderRetriever ?? defaultRetriever(ctx.signal),
   );
-  if (isRouteResult(folders)) return folders;
+  // Merge upfront-skipped folders (inaccessible/denied at canonicalization) with retrieval-time
+  // folder skips so all omissions appear in the assembled uncertainty entries.
+  const folderResult: FolderRetrieval = ctx.preSkippedFolders !== undefined
+    ? { ...rawFolderResult, skipped: [...ctx.preSkippedFolders, ...rawFolderResult.skipped] }
+    : rawFolderResult;
   const connectorResult = await retrieveConnectors(ctx, store, connectorScopes, resolved);
   if ("status" in connectorResult) return connectorResult;
-  return await answerAndAssemble(ctx, store, folders, {
+  return await answerAndAssemble(ctx, store, {
     folderScopeCount: folderScopes.length,
     connectorScopeCount: connectorScopes.length,
+    folderResult,
     connectorResult,
   });
-}
-
-function isRouteResult(value: readonly RetrievedFolder[] | RouteResult): value is RouteResult {
-  return !Array.isArray(value);
 }
 
 async function answerAndAssemble(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
-  folders: readonly RetrievedFolder[],
   meta: AnswerMeta,
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
+  const { retrieved: folders } = meta.folderResult;
   const selected = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
   if (selected.length === 0) {
-    return assembleHybridNoEvidenceRoute(ctx, store, folders, meta, selected, limits);
+    return assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits);
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
@@ -997,6 +1018,7 @@ async function answerAndAssemble(
       folders,
       connectors: meta.connectorResult.retrieved,
       skipped: meta.connectorResult.skipped,
+      skippedFolders: meta.folderResult.skipped,
       folderSourceCount: meta.folderScopeCount,
       connectorSourceCount: meta.connectorScopeCount,
     },

@@ -281,6 +281,100 @@ const recordingSleep = (): { readonly sleep: FigmaRetrySleep; readonly delays: n
 
 const TEST_POLICY = { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 5000 } as const;
 
+describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
+  it("skips a screen whose render URL uses http:// (non-TLS)", async () => {
+    const screens = [screen("1:1", "Home")];
+    // Override the imagesPort stub to return an http:// URL.
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "http://127.0.0.1/render/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-url-blocked" },
+    ]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("skips a screen whose render URL points at a non-Figma domain with https", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://evil.internal/leak?path=/etc/passwd" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    // evil.internal is not an IP, so it passes the IP-literal check — but it IS an https URL
+    // that could resolve internally. The IP-block strategy does not block arbitrary hostnames
+    // (only IP literals and localhost/.local). This test documents the current contract and
+    // confirms the render call is still made for non-IP https URLs (the CDN allowlist would
+    // block this; we use the IP-block strategy — see figmaSnapshotBuilder.ts comment).
+    // The renderPort stub returns empty bytes for unknown URLs → render-empty skip.
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-empty" },
+    ]);
+  });
+
+  it("skips a screen whose render URL is an IPv4 loopback address (SSRF)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://127.0.0.1:8080/internal-route" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-url-blocked" },
+    ]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("skips a screen whose render URL is an IPv4 private-range address (SSRF)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://169.254.169.254/latest/meta-data/" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-url-blocked" },
+    ]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("allows a legitimate https://ephemeral/ render URL (existing fixtures still work)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
+
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+});
+
 describe("buildFigmaSnapshot — resilience (#759)", () => {
   it("retries a 429 on /v1/images then succeeds, sleeping the deterministic schedule", async () => {
     const screens = [screen("1:1", "Home")];

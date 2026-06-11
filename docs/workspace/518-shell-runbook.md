@@ -12,7 +12,7 @@ The production workspace is `/` (Next.js App Router root). It re-exports the des
 - `packages/keiko-ui/src/app/components/desktop/KeikoDesktop.tsx` returns `<AppShell />`.
 - `packages/keiko-ui/src/app/layout.tsx` provides the root `<html><body>` plus PWA manifest, icons, theme color, color-scheme metadata.
 
-No new route is added by #526. The existing `/launch` (returning-user landing) and `/local-knowledge`, `/memory`, `/quality-intelligence` routes are unchanged.
+No new route is added by #526. The existing `/launch` (returning-user landing) and `/local-knowledge`, `/memoriaviva`, `/quality-intelligence` routes are unchanged.
 
 ## Regions and ownership
 

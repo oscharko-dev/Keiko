@@ -350,6 +350,38 @@ describe("POST /api/projects", () => {
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("invalid_request");
   });
+
+  it("returns 403 DENIED for a deny-listed path (e.g. ~/.ssh)", async () => {
+    // ~/.ssh is a deny-listed path segment; a symlink pointing there must also be blocked.
+    const sshDir = join(tmp, ".ssh");
+    mkdirSync(sshDir);
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: sshDir }),
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DENIED");
+    expect(store.listProjects()).toHaveLength(0);
+  });
+
+  it("still creates a normal project after rejecting a denied one (guard is non-destructive)", async () => {
+    const sshDir = join(tmp, ".ssh");
+    mkdirSync(sshDir, { recursive: true });
+    await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: sshDir }),
+    });
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: projDir }),
+    });
+    expect(res.status).toBe(201);
+    expect(store.listProjects()).toHaveLength(1);
+  });
 });
 
 // ─── Route 15: PATCH /api/projects ────────────────────────────────────────────

@@ -454,7 +454,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
         ? resolvedRoot
         : typeof configuredRoot === "string" && configuredRoot.length > 0
           ? configuredRoot
-          : "src";
+          : null;
+    // No real root available — do not fabricate a sentinel (mirrors resolvedFilesRoot).
+    // Returning null prevents a spurious "Context src/" badge in the Chat header and avoids
+    // forwarding a non-absolute path to the QI Generate route.
+    if (root === null || !isAbsoluteRoot(root)) return null;
     const active = w.cfg["activeFilePath"];
     return {
       id: w.id,
@@ -599,6 +603,18 @@ function isAbsoluteRoot(root: string): boolean {
 }
 
 /**
+ * Strips trailing path separators from an absolute root, normalising Windows backslashes to
+ * forward slashes. Windows drive roots ("C:/") are kept intact — trimming them would produce
+ * an invalid path. Mirrors the trimTrailingSeparators() logic in connectedSources.ts so that
+ * dedup comparisons in appendScope are resilient to trailing-slash differences.
+ */
+function normaliseRoot(root: string): string {
+  // Windows drive root: keep the trailing slash that follows the colon (C:/ or C:\).
+  if (/^[A-Za-z]:[/\\]?$/u.test(root)) return root.replace(/\\/gu, "/");
+  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+/**
  * Resolves the real absolute root of a Files window.
  * Returns null when only the "src" sentinel fallback would apply — the spec
  * says we must NOT bind that fallback as a connectedScope.
@@ -638,12 +654,15 @@ export function appendScope(
   now: number,
   maxScopes: number = MAX_SCOPES,
 ): readonly ChatConnectedScope[] | null {
-  if (!isAbsoluteRoot(root)) return null;
-  if (current.some((s) => s.root === root)) return current;
+  // Normalise trailing separators before any check so "/foo" and "/foo/" are treated identically.
+  const normRoot = normaliseRoot(root);
+  if (!isAbsoluteRoot(normRoot)) return null;
+  if (current.some((s) => s.root !== undefined && normaliseRoot(s.root) === normRoot))
+    return current;
   const next: ChatConnectedScope = {
     kind: "workspace-root",
     relativePaths: [],
-    root,
+    root: normRoot,
     connectedAtMs: now,
   };
   const combined = [...current, next];
