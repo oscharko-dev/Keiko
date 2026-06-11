@@ -1487,6 +1487,11 @@ function guardConnectorSourcePath(scope: KnowledgeSourceScope): KnowledgeSourceS
 // object) so the request body's key order cannot defeat the comparison, and built on the
 // canonicalized scope so trailing-slash and symlink-alias spellings of the same folder fold
 // together. Scopes that differ in globs, recursion, or file lists stay distinct sources.
+//
+// files scope: the array order has no logical meaning (unlike includeGlobs/excludeGlobs on
+// folder/repository scopes where first-match-wins makes order semantically significant), so
+// we sort before serializing. This ensures [a,b] and [b,a] map to the same identity and the
+// idempotency check fires correctly on permuted re-connects.
 function scopeIdentity(scope: KnowledgeSourceScope): string {
   const canonical = canonicalizeScopeRoot(scope);
   if (canonical.kind === "folder") {
@@ -1506,7 +1511,7 @@ function scopeIdentity(scope: KnowledgeSourceScope): string {
       canonical.excludeGlobs ?? null,
     ]);
   }
-  return JSON.stringify(["files", canonical.rootPath, canonical.files]);
+  return JSON.stringify(["files", canonical.rootPath, [...canonical.files].sort()]);
 }
 
 export async function handleConnectLocalKnowledgeCapsule(

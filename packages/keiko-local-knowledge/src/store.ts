@@ -68,6 +68,12 @@ function defaultClock(): number {
   return Date.now();
 }
 
+// Concurrent writers (indexing write + grounded-ask audit INSERT) must wait for the writer
+// lock instead of failing immediately with SQLITE_BUSY → HTTP 500. 5_000ms matches the
+// keiko-server UI DB constant (packages/keiko-server/src/store/db.ts, issue #639) and is
+// the conservative default for the local single-writer desktop pattern.
+export const LK_STORE_BUSY_TIMEOUT_MS = 5_000;
+
 function applyDurabilityPragmas(db: DatabaseSync): void {
   // WAL: crash-safe single-writer; readers do not block the writer. Right tradeoff for
   // the indexing+retrieval mix the local-knowledge layer will see.
@@ -77,6 +83,7 @@ function applyDurabilityPragmas(db: DatabaseSync): void {
   // the host process; matches keiko-server's #62 store.
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);
 }
 
 function rejectUnsupportedProtection(opts: OpenKnowledgeStoreOptions): void {

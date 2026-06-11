@@ -13,7 +13,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { openKnowledgeStore } from "./store.js";
+import { LK_STORE_BUSY_TIMEOUT_MS, openKnowledgeStore } from "./store.js";
 
 interface CountRow {
   readonly n: number;
@@ -64,6 +64,21 @@ describe("openKnowledgeStore — fresh install", () => {
         readonly foreign_keys: number;
       };
       expect(fk.foreign_keys).toBe(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("sets PRAGMA busy_timeout to LK_STORE_BUSY_TIMEOUT_MS", () => {
+    // Concurrent writes (indexing + audit INSERT) must wait for the writer lock instead of
+    // failing immediately with SQLITE_BUSY. Mirrors the UI DB test in db.test.ts (#639).
+    const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
+    try {
+      const db = store._internal.db;
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(LK_STORE_BUSY_TIMEOUT_MS);
     } finally {
       store.close();
     }

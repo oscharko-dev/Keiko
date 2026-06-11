@@ -296,6 +296,74 @@ describe("local-knowledge handlers", () => {
     expect(body.sources).toHaveLength(2);
   });
 
+  it("files-scope connect is idempotent when the files array is permuted", async () => {
+    // Regression for #964 follow-up: [a,b] and [b,a] must fold to the same scopeIdentity so
+    // the second connect is a no-op and no duplicate source row is created.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "alpha.md"), "# Alpha\n", "utf8");
+    writeFileSync(join(docsRoot, "beta.md"), "# Beta\n", "utf8");
+
+    const connectFiles = (files: string[]): Promise<RouteResult> =>
+      handleConnectLocalKnowledgeCapsule(
+        {
+          ...baseCtx(tmp, "POST", {
+            scope: { kind: "files", rootPath: docsRoot, files },
+            displayName: "Docs",
+          }),
+          params: { capsuleId: "cap-1" },
+        },
+        depsFor(tmp),
+      );
+
+    const first = await connectFiles(["alpha.md", "beta.md"]);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+
+    // Same set, reversed order — must be a no-op.
+    const second = await connectFiles(["beta.md", "alpha.md"]);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+
+    const body = second.body as { readonly sources: readonly unknown[] };
+    expect(body.sources).toHaveLength(1);
+  });
+
+  it("files-scope connect creates a distinct source when the file set genuinely differs", async () => {
+    // Negative test: a logically different files set must still produce a second source.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "alpha.md"), "# Alpha\n", "utf8");
+    writeFileSync(join(docsRoot, "beta.md"), "# Beta\n", "utf8");
+    writeFileSync(join(docsRoot, "gamma.md"), "# Gamma\n", "utf8");
+
+    const connectFiles = (files: string[]): Promise<RouteResult> =>
+      handleConnectLocalKnowledgeCapsule(
+        {
+          ...baseCtx(tmp, "POST", {
+            scope: { kind: "files", rootPath: docsRoot, files },
+            displayName: "Docs",
+          }),
+          params: { capsuleId: "cap-1" },
+        },
+        depsFor(tmp),
+      );
+
+    const first = await connectFiles(["alpha.md", "beta.md"]);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+
+    // Different set (gamma replaces beta) — must produce a second source.
+    const second = await connectFiles(["alpha.md", "gamma.md"]);
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+
+    const body = second.body as { readonly sources: readonly unknown[] };
+    expect(body.sources).toHaveLength(2);
+  });
+
   it("writes source-added audit history when a source is connected", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
