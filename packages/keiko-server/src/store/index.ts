@@ -11,6 +11,7 @@ export type {
   Project,
   UiStore,
   UiStoreFactoryOptions,
+  UpdateChatOptions,
   UpdateChatMessagePatch,
   UpdateChatPatch,
   UpdateProjectPatch,

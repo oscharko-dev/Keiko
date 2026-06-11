@@ -68,6 +68,30 @@ describe("ScopeConnectButton", () => {
     expect(screen.getByRole("button")).toHaveTextContent("Update connected scope");
   });
 
+  it('labels "Update connected scope" for plural-only connectedScopes chats', () => {
+    const chat = makeChat({
+      connectedScopes: [
+        {
+          kind: "workspace-root",
+          relativePaths: [],
+          root: "/repo",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        scopeKind="files"
+        currentScopeKind={undefined}
+        candidateRelativePaths={["src/new.ts"]}
+        chat={chat}
+        updateScope={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button")).toHaveTextContent("Update connected scope");
+  });
+
   it("allows repository scope with an empty relativePaths array", async () => {
     const updated = makeChat({
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 100 },
@@ -151,7 +175,7 @@ describe("ScopeConnectButton", () => {
         now={() => 200}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Connect folder" }));
+    await user.click(screen.getByRole("button", { name: "Update connected scope" }));
     await waitFor(() => {
       expect(updateScope).toHaveBeenCalledTimes(1);
     });
@@ -206,7 +230,7 @@ describe("ScopeConnectButton", () => {
         now={() => 200}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Connect folder" }));
+    await user.click(screen.getByRole("button", { name: "Update connected scope" }));
     await waitFor(() => {
       expect(updateScope).toHaveBeenCalledTimes(1);
     });
@@ -257,7 +281,7 @@ describe("ScopeConnectButton", () => {
         now={() => 200}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Connect folder" }));
+    await user.click(screen.getByRole("button", { name: "Update connected scope" }));
     await waitFor(() => {
       expect(updateScope).toHaveBeenCalledWith("chat-1", [otherScope, updatedScope]);
     });

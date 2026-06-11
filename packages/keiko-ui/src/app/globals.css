@@ -5689,7 +5689,7 @@ select.dlg-input {
 .scope-pill-detail {
   font-size: 11px;
   line-height: 1.35;
-  color: var(--fg-muted);
+  color: var(--fg-dim);
   max-width: min(560px, 100%);
 }
 
@@ -11065,8 +11065,8 @@ ul.integ {
   font-size: 12px;
 }
 .scope-grounding .mono {
-  /* --fg-dim is 3.89:1 on dark card surfaces (AA fail, cf. uiux-fix F012) */
-  color: var(--fg-muted);
+  /* WCAG 1.4.3 — 12px chat-scope label; --fg-dim is audited ≥4.5:1 on card surfaces. */
+  color: var(--fg-dim);
 }
 /* C178 — the grounding select was the shell's only raw UA <select>, next to the
    chip-styled .cmp-model-select. Pattern: .qi-select; the

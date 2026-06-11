@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createInMemoryUiStore, createNodeUiStore, UiStoreError, type UiStore } from "./index.js";
-import type { ChatLocalKnowledgeScope } from "./types.js";
+import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "./types.js";
 
 let tmp: string;
 let proj: string;
@@ -209,6 +209,26 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
     ).toThrow(UiStoreError);
   });
 
+  it("rejects credential-shaped connectedScope metadata before persistence", () => {
+    const c = store.createChat(proj, "t", "m");
+    const tokenPath = `sk-${"a".repeat(20)}.txt`;
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScope: { kind: "files", relativePaths: [tokenPath], connectedAtMs: 1 },
+      }),
+    ).toThrow(UiStoreError);
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScope: {
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: 1,
+          root: join(tmp, `sk-${"b".repeat(20)}`, "work"),
+        },
+      }),
+    ).toThrow(UiStoreError);
+  });
+
   it("collapses a tampered row whose persisted connectedScope.root is deny-listed", () => {
     const dbPath = join(tmp, "ui.db");
     const diskStore = createNodeUiStore(dbPath, { now: () => 100 });
@@ -239,6 +259,53 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
       const fetched = reopened.findChatById(chat.id);
       expect(fetched?.connectedScope).toBeUndefined();
       expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("collapses tampered rows with credential-shaped connectedScope metadata", () => {
+    const dbPath = join(tmp, "ui.db");
+    const diskStore = createNodeUiStore(dbPath, { now: () => 100 });
+    const diskProject = diskStore.createProject(proj);
+    const relativeSecret = `src/sk-${"a".repeat(20)}.ts`;
+    const rootSecret = join(tmp, `sk-${"b".repeat(20)}`, "root");
+    const relativeChat = diskStore.createChat(diskProject.path, "relative", "m");
+    const rootChat = diskStore.createChat(diskProject.path, "root", "m");
+    diskStore.close();
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const update = db.prepare(
+        "UPDATE chats SET connected_scope_paths = ?, connected_scope_at = ? WHERE id = ?",
+      );
+      update.run(
+        JSON.stringify({
+          kind: "files",
+          relativePaths: [relativeSecret],
+          connectedAtMs: 1,
+        }),
+        1,
+        relativeChat.id,
+      );
+      update.run(
+        JSON.stringify({
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: 1,
+          root: rootSecret,
+        }),
+        1,
+        rootChat.id,
+      );
+    } finally {
+      db.close();
+    }
+
+    const reopened = createNodeUiStore(dbPath);
+    try {
+      expect(reopened.findChatById(relativeChat.id)?.connectedScope).toBeUndefined();
+      expect(reopened.findChatById(rootChat.id)?.connectedScope).toBeUndefined();
     } finally {
       reopened.close();
     }
@@ -341,6 +408,72 @@ describe("updateChat — connectedScopes list round-trip (#532)", () => {
     expect(fetched?.connectedScope).toEqual(scopes[0]);
   });
 
+  it("rejects credential-shaped connectedScopes metadata before persistence", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScopes: [
+          { kind: "files", relativePaths: ["src/safe.ts"], connectedAtMs: 1 },
+          {
+            kind: "files",
+            relativePaths: [`src/sk-${"a".repeat(20)}.ts`],
+            connectedAtMs: 2,
+          },
+        ],
+      }),
+    ).toThrow(UiStoreError);
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScopes: [
+          { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
+          {
+            kind: "workspace-root",
+            relativePaths: [],
+            connectedAtMs: 2,
+            root: join(tmp, `sk-${"b".repeat(20)}`, "root"),
+          },
+        ],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("collapses tampered connectedScopes arrays with credential-shaped metadata", () => {
+    const dbPath = join(tmp, "ui.db");
+    const diskStore = createNodeUiStore(dbPath, { now: () => 100 });
+    const diskProject = diskStore.createProject(proj);
+    const chat = diskStore.createChat(diskProject.path, "multi", "m");
+    diskStore.close();
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(
+        "UPDATE chats SET connected_scope_paths = ?, connected_scope_at = ? WHERE id = ?",
+      ).run(
+        JSON.stringify([
+          { kind: "files", relativePaths: ["src/safe.ts"], connectedAtMs: 1 },
+          {
+            kind: "files",
+            relativePaths: [`src/sk-${"a".repeat(20)}.ts`],
+            connectedAtMs: 2,
+          },
+        ]),
+        2,
+        chat.id,
+      );
+    } finally {
+      db.close();
+    }
+
+    const reopened = createNodeUiStore(dbPath);
+    try {
+      const fetched = reopened.findChatById(chat.id);
+      expect(fetched?.connectedScope).toBeUndefined();
+      expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("decodes a legacy single-object row as a 1-element connectedScopes list", () => {
     const c = store.createChat(proj, "t", "m");
     // Write via the single-field path (legacy encoding = one object, not an array).
@@ -387,6 +520,25 @@ describe("updateChat — connectedScopes list round-trip (#532)", () => {
       connectedAtMs: 1,
     }));
     expect(() => store.updateChat(c.id, { connectedScopes: tooMany })).toThrow(UiStoreError);
+  });
+
+  it("round-trips a list above the default when the caller supplies a higher resolved limit", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scopes: ChatConnectedScope[] = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "files",
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: i + 1,
+    }));
+    const updated = store.updateChat(
+      c.id,
+      { connectedScopes: scopes },
+      { maxConnectedSources: 17 },
+    );
+    expect(updated.connectedScopes).toHaveLength(17);
+    expect(updated.connectedScope).toEqual(scopes[0]);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes).toHaveLength(17);
+    expect(fetched?.connectedScopes?.[16]).toEqual(scopes[16]);
   });
 
   it("rejects a list whose entry has an invalid (absolute) relative path", () => {

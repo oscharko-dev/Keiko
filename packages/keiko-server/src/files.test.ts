@@ -130,6 +130,48 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("refuses credential-shaped roots and entry metadata before returning Files-window labels", async () => {
+    const tokenSegment = `sk-${"a".repeat(20)}`;
+    const sensitiveRoot = join(root, tokenSegment);
+    await mkdir(sensitiveRoot);
+    await mkdir(join(root, "safe-dir"));
+    await mkdir(join(root, "safe-dir", tokenSegment));
+    await writeFile(join(root, "safe-dir", `${tokenSegment}.txt`), "hidden\n", "utf8");
+    await writeFile(join(root, "safe-dir", "visible.txt"), "hello\n", "utf8");
+
+    await expect(listFilesDirectories(store, sensitiveRoot)).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    const directories = await listFilesDirectories(store, root, root);
+    expect(directories.entries.map((entry) => entry.name)).not.toContain(tokenSegment);
+
+    const tree = await readFilesTree(store, root, "safe-dir");
+    expect(tree.entries.map((entry) => entry.name)).toEqual(["visible.txt"]);
+
+    await expect(
+      readFilesPreview(store, root, `safe-dir/${tokenSegment}.txt`, buildRedactor({})),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
+  it("refuses a registered project whose root path contains credential-shaped metadata", async () => {
+    const sensitiveProject = join(root, `sk-${"c".repeat(20)}`, "project");
+    await mkdir(sensitiveProject, { recursive: true });
+    store.createProject(sensitiveProject, "sensitive-project");
+
+    await expect(listFilesDirectories(store, sensitiveProject)).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesTree(store, sensitiveProject, "")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
   it("denies a registered project nested under a credential location", async () => {
     const nestedProject = join(root, ".aws", "sub");
     await mkdir(nestedProject, { recursive: true });

@@ -108,6 +108,26 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Folder: lib");
   });
 
+  it("renders canonical list-only folder and file boundary copy", () => {
+    const chat = makeChat({
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["src/lib"], connectedAtMs: 1 },
+        { kind: "files", relativePaths: ["README.md"], connectedAtMs: 2 },
+      ],
+    });
+    render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
+    const statuses = screen.getAllByRole("status");
+    expect(statuses).toHaveLength(2);
+    expect(statuses[0]).toHaveTextContent("Folder: lib");
+    expect(statuses[1]).toHaveTextContent("File: README.md");
+    expect(screen.getByText(/Keiko may inspect only the connected folder/i)).toHaveTextContent(
+      /safe-read exclusions and context budget limits apply/i,
+    );
+    expect(screen.getByText(/Keiko may inspect only the connected file scope/i)).toHaveTextContent(
+      /safe-read exclusions and context budget limits apply/i,
+    );
+  });
+
   it("labels an external connected folder by its root basename (#532)", () => {
     const chat = makeChat({
       connectedScope: {

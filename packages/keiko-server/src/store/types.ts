@@ -52,7 +52,7 @@ export interface UiStore {
     selectedModel: string,
     opts?: CreateChatOptions,
   ) => Chat;
-  readonly updateChat: (id: string, patch: UpdateChatPatch) => Chat;
+  readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
   readonly deleteChat: (id: string) => void;
 
   readonly listMessages: (chatId: string, limit?: number) => readonly ChatMessage[];
@@ -62,6 +62,11 @@ export interface UiStore {
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
 
   readonly close: () => void;
+}
+
+export interface UpdateChatOptions {
+  readonly maxConnectedSources?: number;
+  readonly maxLocalKnowledgeSources?: number;
 }
 
 // Factory options shared by the in-memory test factory and the node adapter so timestamps and

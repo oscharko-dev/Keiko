@@ -567,6 +567,68 @@ describe("handleGroundedAsk", () => {
     );
   });
 
+  it("returns a safe error when a connected file is removed before grounded ask", async () => {
+    const project = store.createProject(tmp, "demo");
+    seedScopedRepo(project.path);
+    const chat = store.createChat(project.path, "Stale file", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/foo.ts"], connectedAtMs: NOW },
+    });
+    rmSync(join(project.path, "src", "foo.ts"));
+    const seenRequests: GatewayRequest[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("should not run", seenRequests)),
+    );
+
+    expect(result.status).toBe(400);
+    expect(seenRequests).toHaveLength(0);
+    const body = result.body as { error: { message: string } };
+    expect(body.error.message).toContain("not accessible");
+    expect(JSON.stringify(result)).not.toContain("src/foo.ts");
+    expect(JSON.stringify(result)).not.toContain(project.path);
+  });
+
+  it("returns a safe error when one connected source in a multi-source ask is stale", async () => {
+    const project = store.createProject(tmp, "demo");
+    seedScopedRepo(project.path);
+    writeFileSync(join(project.path, "src", "bar.ts"), "export const Bar = 1;\n", "utf8");
+    const chat = store.createChat(project.path, "Stale multi-source", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScopes: [
+        { kind: "files", relativePaths: ["src/foo.ts"], connectedAtMs: NOW },
+        { kind: "files", relativePaths: ["src/bar.ts"], connectedAtMs: NOW + 1 },
+      ],
+    });
+    rmSync(join(project.path, "src", "foo.ts"));
+    const seenRequests: GatewayRequest[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("should not run", seenRequests)),
+    );
+
+    expect(result.status).toBe(400);
+    expect(seenRequests).toHaveLength(0);
+    const body = result.body as { error: { message: string } };
+    expect(body.error.message).toContain("not accessible");
+    expect(JSON.stringify(result)).not.toContain("src/foo.ts");
+    expect(JSON.stringify(result)).not.toContain(project.path);
+  });
+
   it("neutralizes excerpt fence markers before sending repository evidence to the model", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);

@@ -1252,6 +1252,35 @@ describe("PATCH /api/chats", () => {
     expect(body.error.message).toContain("2");
   });
 
+  it("persists and round-trips a connectedScopes list allowed by a raised maxConnectedSources", async () => {
+    const raisedCapConfig = {
+      ...customModelConfig(CHAT_MODEL),
+      grounding: { maxConnectedSources: 17 },
+    };
+    await restartWithDeps({ config: raisedCapConfig });
+
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const scopes = Array.from({ length: 17 }, (_unused, i) => {
+      const file = `src/f${String(i)}.ts`;
+      writeFileSync(join(projDir, file), `export const f${String(i)} = ${String(i)};\n`);
+      return { kind: "files" as const, relativePaths: [file], connectedAtMs: i + 1 };
+    });
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScopes: scopes }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScopes: { kind: string; relativePaths: string[]; connectedAtMs: number }[];
+      };
+    };
+    expect(body.chat.connectedScopes).toHaveLength(17);
+    expect(store.findChatById(c.id)?.connectedScopes).toHaveLength(17);
+  });
+
   it("missing-config uses default maxConnectedSources of 16 (rejects 17)", async () => {
     // Default config has maxConnectedSources = 16; 17 entries must be rejected.
     store.createProject(projDir);

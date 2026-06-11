@@ -9,15 +9,16 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   DEFAULT_GROUNDING_LIMITS,
-  MAX_CONNECTED_SOURCES,
-  MAX_LOCAL_KNOWLEDGE_SOURCES,
+  GROUNDING_LIMIT_CEILINGS,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { redact } from "@oscharko-dev/keiko-security";
 import { pathIsDenied } from "../files-deny.js";
 import type {
   Chat,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
   CreateChatOptions,
+  UpdateChatOptions,
   UpdateChatPatch,
 } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
@@ -97,6 +98,21 @@ function validateScopePathsForKind(
   return items;
 }
 
+function metadataIsSafe(value: string): boolean {
+  const redacted = redact(value);
+  return typeof redacted !== "string" || redacted === value;
+}
+
+function assertMetadataSafe(value: string, label: string): void {
+  if (!metadataIsSafe(value)) {
+    throw invalidRequest(`${label} must not contain credential-shaped metadata.`);
+  }
+}
+
+function allMetadataSafe(values: readonly string[]): boolean {
+  return values.every(metadataIsSafe);
+}
+
 // Epic #532 — the connected_scope_paths column now holds EITHER a single scope object (legacy)
 // OR a JSON array of scope objects (multi-source). The Issue #184 legacy form (a bare array of
 // path strings) is still tolerated as a single files scope. Disambiguation: an array whose first
@@ -109,7 +125,13 @@ function validateScopePathsForKind(
 // silently grounding against an attacker-chosen relative location.
 function decodeScopeRoot(raw: unknown): { readonly ok: boolean; readonly root?: string } {
   if (raw === undefined) return { ok: true };
-  if (typeof raw === "string" && raw.length > 0 && isAbsolute(raw) && !pathIsDenied(raw)) {
+  if (
+    typeof raw === "string" &&
+    raw.length > 0 &&
+    isAbsolute(raw) &&
+    !pathIsDenied(raw) &&
+    metadataIsSafe(raw)
+  ) {
     return { ok: true, root: raw };
   }
   return { ok: false };
@@ -119,6 +141,7 @@ function decodeSingleScopeObject(raw: Record<string, unknown>): DecodedScopePayl
   if (!isSelectedScopeKind(raw.kind) || !Array.isArray(raw.relativePaths)) return undefined;
   const relativePaths = validateScopePathsForKind(raw.kind, raw.relativePaths);
   if (relativePaths === undefined) return undefined;
+  if (!allMetadataSafe(relativePaths)) return undefined;
   const decodedRoot = decodeScopeRoot(raw.root);
   if (!decodedRoot.ok) return undefined;
   const root = decodedRoot.root;
@@ -136,13 +159,14 @@ function decodeSingleScopeObject(raw: Record<string, unknown>): DecodedScopePayl
 
 function decodeLegacyFilesArray(parsed: readonly unknown[]): DecodedScopePayload | undefined {
   const relativePaths = validateScopePathsForKind("files", parsed);
-  return relativePaths === undefined ? undefined : { kind: "files", relativePaths };
+  if (relativePaths === undefined || !allMetadataSafe(relativePaths)) return undefined;
+  return { kind: "files", relativePaths };
 }
 
 function decodeScopeObjectArray(
   entries: readonly unknown[],
 ): readonly DecodedScopePayload[] | undefined {
-  if (entries.length > MAX_CONNECTED_SOURCES) return undefined;
+  if (entries.length > GROUNDING_LIMIT_CEILINGS.maxConnectedSources) return undefined;
   const payloads: DecodedScopePayload[] = [];
   for (const entry of entries) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
@@ -231,7 +255,9 @@ function decodeLocalKnowledgeScopes(
 function decodeLocalKnowledgeScopeArray(
   entries: readonly unknown[],
 ): readonly ChatLocalKnowledgeScope[] | undefined {
-  if (entries.length === 0 || entries.length > MAX_LOCAL_KNOWLEDGE_SOURCES) return undefined;
+  if (entries.length === 0 || entries.length > GROUNDING_LIMIT_CEILINGS.maxLocalKnowledgeSources) {
+    return undefined;
+  }
   const scopes: ChatLocalKnowledgeScope[] = [];
   for (const entry of entries) {
     const decoded = decodeLocalKnowledgeScopeObject(entry);
@@ -421,20 +447,38 @@ function validateConnectedScopeShape(scope: ChatConnectedScope): void {
   if (!Array.isArray(scope.relativePaths)) {
     throw invalidRequest("connectedScope.relativePaths must be an array.");
   }
-  if (validateScopePathsForKind(scope.kind, scope.relativePaths) === undefined) {
+  const relativePaths = validateScopePathsForKind(scope.kind, scope.relativePaths);
+  if (relativePaths === undefined) {
     throw invalidRequest(
       "connectedScope.relativePaths must match connectedScope.kind and contain valid workspace-relative paths.",
     );
   }
+  validateConnectedScopeTimestamp(scope);
+  validateConnectedScopeMetadata(relativePaths, scope.root);
+}
+
+function validateConnectedScopeMetadata(
+  relativePaths: readonly string[],
+  root: string | undefined,
+): void {
+  if (root !== undefined && pathIsDenied(root)) {
+    throw invalidRequest("connectedScope.root must not reference a deny-listed path.");
+  }
+  for (const relativePath of relativePaths) {
+    assertMetadataSafe(relativePath, "connectedScope.relativePaths");
+  }
+  if (root !== undefined) {
+    assertMetadataSafe(root, "connectedScope.root");
+  }
+}
+
+function validateConnectedScopeTimestamp(scope: ChatConnectedScope): void {
   if (
     typeof scope.connectedAtMs !== "number" ||
     !Number.isInteger(scope.connectedAtMs) ||
     scope.connectedAtMs < 0
   ) {
     throw invalidRequest("connectedScope.connectedAtMs must be a finite non-negative integer.");
-  }
-  if (scope.root !== undefined && pathIsDenied(scope.root)) {
-    throw invalidRequest("connectedScope.root must not reference a deny-listed path.");
   }
 }
 
@@ -530,12 +574,7 @@ function validatePatchLocalKnowledgeScopes(
   }
 }
 
-interface ChatPatchLimits {
-  readonly maxConnectedSources?: number;
-  readonly maxLocalKnowledgeSources?: number;
-}
-
-function validateChatPatch(patch: UpdateChatPatch, limits?: ChatPatchLimits): void {
+function validateChatPatch(patch: UpdateChatPatch, limits?: UpdateChatOptions): void {
   // Runtime defense: handlers may pass widened (unknown) input cast to UpdateChatPatch.
   const raw: unknown = patch.status;
   if (raw !== undefined && (typeof raw !== "string" || !VALID_CHAT_STATUSES.has(raw))) {
@@ -656,8 +695,9 @@ export function updateChat(
   id: string,
   patch: UpdateChatPatch,
   now: number,
+  options?: UpdateChatOptions,
 ): Chat {
-  validateChatPatch(patch);
+  validateChatPatch(patch, options);
   if (patch.selectedModel !== undefined) validateSelectedModel(patch.selectedModel);
   const titleParam = patch.title ?? null;
   const modelParam = patch.selectedModel ?? null;

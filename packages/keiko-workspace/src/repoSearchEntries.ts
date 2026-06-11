@@ -3,6 +3,7 @@ import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import { RepoSearchInvalidQueryError } from "./errors.js";
 
 interface ScopeShape {
   readonly workspace: WorkspaceInfo;
@@ -80,7 +81,12 @@ function handleDirectoryEntry(
   pushAllowedFile(walk, realRel, contained.path);
 }
 
-function walkEntryDirectory(walk: EntryWalk, absoluteDir: string, dirRel: string, depth: number): void {
+function walkEntryDirectory(
+  walk: EntryWalk,
+  absoluteDir: string,
+  dirRel: string,
+  depth: number,
+): void {
   if (depth > 12 || walk.truncated) {
     return;
   }
@@ -102,8 +108,18 @@ function handleScopeEntry(walk: EntryWalk, entry: string): void {
   if (isDenied(entryRel) || isDenied(realRel)) {
     return;
   }
-  const stat = walk.fs.stat(contained.path);
-  if (!allowedByFilters(walk, entryRel, stat.isDirectory) || !allowedByFilters(walk, realRel, stat.isDirectory)) {
+  let stat: ReturnType<WorkspaceFs["stat"]>;
+  try {
+    stat = walk.fs.stat(contained.path);
+  } catch {
+    throw new RepoSearchInvalidQueryError(
+      "Connected scope path is not accessible from the selected project.",
+    );
+  }
+  if (
+    !allowedByFilters(walk, entryRel, stat.isDirectory) ||
+    !allowedByFilters(walk, realRel, stat.isDirectory)
+  ) {
     return;
   }
   if (stat.isDirectory) {

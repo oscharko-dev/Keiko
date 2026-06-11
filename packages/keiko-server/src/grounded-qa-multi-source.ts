@@ -63,6 +63,7 @@ import {
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
+  mappedWorkspaceError,
   packBudgetSummary,
   persistGroundedExchange,
   redactString,
@@ -540,6 +541,8 @@ function isRouteResult(value: readonly RetrievedSource[] | RouteResult): value i
 
 function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof ClarificationNeededError) return badRequest(error.message);
+  const workspaceResult = mappedWorkspaceError(error);
+  if (workspaceResult !== undefined) return workspaceResult;
   const gatewayResult = mappedGatewayError(error, deps);
   if (gatewayResult !== undefined) return gatewayResult;
   throw error;

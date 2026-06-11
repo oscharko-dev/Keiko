@@ -85,7 +85,12 @@ export function ScopeConnectButton({
   const [error, setError] = useState<string | null>(null);
   const empty = scopeKind !== "workspace-root" && candidateRelativePaths.length === 0;
   const disabled = empty || busy;
-  const label = actionLabel(scopeKind, currentScopeKind);
+  // Epic #532 made connectedScopes the canonical source list. Some call sites
+  // still pass the legacy connectedScope kind for back-compat, so derive from
+  // the chat when available to keep #184's "already connected" affordance true
+  // for plural-only chats as well.
+  const existingScopeKind = currentScopeKind ?? effectiveScopes(chat ?? {})[0]?.kind;
+  const label = actionLabel(scopeKind, existingScopeKind);
   // Distinguishable accessible name per target (WCAG 2.4.6, audit C214); the
   // visible label stays generic — the row itself shows the folder name.
   const accessibleLabel = targetName !== undefined ? `${label}: ${targetName}` : label;

@@ -19,6 +19,11 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
+import {
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
+} from "@oscharko-dev/keiko-workspace";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -142,6 +147,17 @@ function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResu
 
 export function mappedGatewayError(error: unknown, deps: UiHandlerDeps): RouteResult | undefined {
   return error instanceof GatewayError ? gatewayErrorResult(error, deps) : undefined;
+}
+
+export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
+  if (
+    error instanceof RepoSearchInvalidQueryError ||
+    error instanceof RepoSearchInvalidRangeError ||
+    error instanceof RepoSearchUnsupportedFileError
+  ) {
+    return badRequest(error.message);
+  }
+  return undefined;
 }
 
 export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
@@ -729,6 +745,8 @@ async function runGroundedRunner(
     if (error instanceof ClarificationNeededError) {
       return badRequest(error.message);
     }
+    const workspaceResult = mappedWorkspaceError(error);
+    if (workspaceResult !== undefined) return workspaceResult;
     const gatewayResult = mappedGatewayError(error, workerCtx.deps);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;

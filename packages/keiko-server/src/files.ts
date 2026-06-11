@@ -16,6 +16,7 @@ import {
   resolve,
 } from "node:path";
 import { compileIgnore, isIgnored, type IgnoreMatcher } from "@oscharko-dev/keiko-workspace";
+import { redact } from "@oscharko-dev/keiko-security";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -25,6 +26,10 @@ const MAX_DIRECTORY_ENTRIES = 1_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
 const MAX_IGNORED_SCAN_ENTRIES = 10_000;
+type FilesMetadataRedactor = UiHandlerDeps["redactor"];
+
+const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
+  typeof value === "string" ? redact(value) : value;
 
 export interface FilesDirectoryRoot {
   readonly label: string;
@@ -154,11 +159,28 @@ function rootPathIsDenied(rootPath: string): boolean {
   return pathIsDenied(rootPath);
 }
 
-async function resolveRegisteredRoot(project: Project): Promise<ResolvedProjectRoot> {
+function assertMetadataSafe(value: string, redactor: FilesMetadataRedactor): void {
+  const redacted = redactor(value);
+  if (typeof redacted === "string" && redacted !== value) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
+function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): boolean {
+  const redacted = redactor(value);
+  return typeof redacted !== "string" || redacted === value;
+}
+
+async function resolveRegisteredRoot(
+  project: Project,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedProjectRoot> {
+  assertMetadataSafe(project.path, redactor);
   if (rootPathIsDenied(project.path)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(project.path);
+  assertMetadataSafe(realRoot, redactor);
   if (rootPathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
@@ -172,28 +194,37 @@ async function resolveRegisteredRoot(project: Project): Promise<ResolvedProjectR
 // innocuous). Browse and connect therefore accept the identical set of roots. The deny check runs
 // once on the raw input and again on the realpath, so a symlink whose target lands in a denied
 // location is caught after resolution.
-async function resolveArbitraryRoot(rootInput: string): Promise<ResolvedProjectRoot> {
+async function resolveArbitraryRoot(
+  rootInput: string,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedProjectRoot> {
   if (!isAbsolute(rootInput)) {
     throw new FilesError(400, "BAD_ROOT", "The root must be an absolute directory path.");
   }
+  assertMetadataSafe(rootInput, redactor);
   if (pathIsDenied(rootInput)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   const realRoot = await resolveDirectory(rootInput);
+  assertMetadataSafe(realRoot, redactor);
   if (pathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return { root: rootInput, realRoot };
 }
 
-async function resolveRoot(store: UiStore, rootInput: string | null): Promise<ResolvedProjectRoot> {
+async function resolveRoot(
+  store: UiStore,
+  rootInput: string | null,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedProjectRoot> {
   if (rootInput === null || rootInput.trim().length === 0) {
     throw new FilesError(400, "BAD_REQUEST", "The root query parameter is required.");
   }
   const project = projectFor(store, rootInput);
   return project === undefined
-    ? resolveArbitraryRoot(rootInput.trim())
-    : resolveRegisteredRoot(project);
+    ? resolveArbitraryRoot(rootInput.trim(), redactor)
+    : resolveRegisteredRoot(project, redactor);
 }
 
 function directoryRoots(projectRoot: string): readonly FilesDirectoryRoot[] {
@@ -257,14 +288,17 @@ async function resolveDirectoryInsideRoot(
   store: UiStore,
   rootInput: string | null,
   pathInput: string | undefined,
+  redactor: FilesMetadataRedactor,
 ): Promise<ResolvedProjectRoot & { readonly path: string; readonly relativePath: string }> {
-  const root = await resolveRoot(store, rootInput);
+  const root = await resolveRoot(store, rootInput, redactor);
   const candidate = normalizeDirectoryPath(pathInput, root.root, root.realRoot);
   const pathValue = await resolveDirectory(candidate);
+  assertMetadataSafe(pathValue, redactor);
   if (!isContained(root.realRoot, pathValue)) {
     throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected project.");
   }
   const relativePath = rootRelativePosixPath(root.realRoot, pathValue);
+  assertMetadataSafe(relativePath, redactor);
   if (pathIsDenied(relativePath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
@@ -275,9 +309,11 @@ async function resolveInsideRoot(
   store: UiStore,
   rootInput: string | null,
   pathInput: string | null,
+  redactor: FilesMetadataRedactor,
 ): Promise<ResolvedTarget> {
-  const root = await resolveRoot(store, rootInput);
+  const root = await resolveRoot(store, rootInput, redactor);
   const relativePath = normalizeRelativePath(pathInput);
+  assertMetadataSafe(relativePath, redactor);
   // Deny check runs BEFORE realpath so existence of a denied path is not
   // observable via the 403/404 status-code difference. A non-existent denied
   // path returns 403, identical to an existing denied path.
@@ -295,6 +331,7 @@ async function resolveInsideRoot(
     throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
   }
   const targetRelativePath = rootRelativePosixPath(root.realRoot, target);
+  assertMetadataSafe(targetRelativePath, redactor);
   if (pathIsDenied(targetRelativePath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
@@ -313,6 +350,7 @@ async function resolveInsideRoot(
 async function directoryEntries(
   root: string,
   pathValue: string,
+  redactor: FilesMetadataRedactor,
 ): Promise<readonly FilesDirectoryEntry[]> {
   const entries: FilesDirectoryEntry[] = [];
   const dir = await opendir(pathValue);
@@ -321,6 +359,7 @@ async function directoryEntries(
       if (!entry.isDirectory()) continue;
       const entryPath = join(pathValue, entry.name);
       const relativePath = rootRelativePosixPath(root, entryPath);
+      if (!metadataIsSafe(relativePath, redactor)) continue;
       if (pathIsDenied(relativePath)) continue;
       entries.push({ name: entry.name, path: entryPath });
     }
@@ -334,12 +373,13 @@ export async function listFilesDirectories(
   store: UiStore,
   rootInput: string | null,
   pathInput?: string,
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
 ): Promise<FilesDirectoryListing> {
-  const target = await resolveDirectoryInsideRoot(store, rootInput, pathInput);
+  const target = await resolveDirectoryInsideRoot(store, rootInput, pathInput, redactor);
   return {
     path: target.path,
     parent: parentPath(target.path, target.realRoot),
-    entries: await directoryEntries(target.realRoot, target.path),
+    entries: await directoryEntries(target.realRoot, target.path, redactor),
     roots: directoryRoots(target.root),
   };
 }
@@ -357,9 +397,11 @@ async function classifyEntry(
   parentRelativePath: string,
   parentNativePath: string,
   entry: Dirent,
+  redactor: FilesMetadataRedactor,
 ): Promise<FilesTreeEntry> {
   const childRelativePath =
     parentRelativePath.length === 0 ? entry.name : `${parentRelativePath}/${entry.name}`;
+  assertMetadataSafe(childRelativePath, redactor);
   const entryPath = join(parentNativePath, entry.name);
   const linkStats = await lstat(entryPath);
   const symlink = linkStats.isSymbolicLink();
@@ -430,6 +472,7 @@ async function listTreeEntries(
   relativePath: string,
   pathValue: string,
   matcher: IgnoreMatcher | null,
+  redactor: FilesMetadataRedactor,
 ): Promise<{
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
@@ -448,6 +491,7 @@ async function listTreeEntries(
       // denied even if its target does not — matches the workspace-layer
       // semantics.
       const rel = childRelative(relativePath, entry.name);
+      if (!metadataIsSafe(rel, redactor)) continue;
       const skipReason = skipEntry(matcher, rel, entry.isDirectory());
       if (skipReason === "denied") continue;
       if (skipReason === "ignored") {
@@ -462,7 +506,7 @@ async function listTreeEntries(
         truncated = true;
         break;
       }
-      entries.push(await classifyEntry(root, relativePath, pathValue, entry));
+      entries.push(await classifyEntry(root, relativePath, pathValue, entry, redactor));
     }
   } finally {
     await dir.close().catch(() => undefined);
@@ -475,8 +519,9 @@ export async function readFilesTree(
   store: UiStore,
   rootInput: string | null,
   pathInput: string | null,
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
 ): Promise<FilesTreeResponse> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput);
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
   if (!target.stats.isDirectory()) {
     throw new FilesError(400, "NOT_DIRECTORY", "The requested path is not a directory.");
   }
@@ -489,6 +534,7 @@ export async function readFilesTree(
     target.relativePath,
     target.path,
     ignoreMatcher,
+    redactor,
   );
   return {
     root: target.root,
@@ -645,9 +691,9 @@ export async function readFilesPreview(
   store: UiStore,
   rootInput: string | null,
   pathInput: string | null,
-  redactor: UiHandlerDeps["redactor"],
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
 ): Promise<FilesPreviewResponse> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput);
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
@@ -669,7 +715,7 @@ export async function handleFilesDirectories(
     const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
     return {
       status: 200,
-      body: await listFilesDirectories(deps.store, requestedRoot, requestedPath),
+      body: await listFilesDirectories(deps.store, requestedRoot, requestedPath, deps.redactor),
     };
   });
 }
@@ -684,6 +730,7 @@ export async function handleFilesTree(
       deps.store,
       ctx.url.searchParams.get("root"),
       ctx.url.searchParams.get("path"),
+      deps.redactor,
     ),
   }));
 }

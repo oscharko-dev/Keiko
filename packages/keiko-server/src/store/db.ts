@@ -14,6 +14,7 @@ import type {
   Project,
   UiStore,
   UiStoreFactoryOptions,
+  UpdateChatOptions,
   UpdateChatMessagePatch,
   UpdateChatPatch,
   UpdateProjectPatch,
@@ -167,7 +168,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       deleteProjectRecord(db, path);
     },
     listChats: (projectPath: string, limit?: number) =>
-      limit === undefined ? sqlListChats(db, projectPath) : sqlListChatsLimited(db, projectPath, limit),
+      limit === undefined
+        ? sqlListChats(db, projectPath)
+        : sqlListChatsLimited(db, projectPath, limit),
     findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
     createChat: (
       projectPath: string,
@@ -175,8 +178,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       selectedModel: string,
       opts?: CreateChatOptions,
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
-    updateChat: (id: string, patch: UpdateChatPatch): Chat =>
-      sqlUpdateChat(db, id, patch, options.now()),
+    updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
+      sqlUpdateChat(db, id, patch, options.now(), updateOptions),
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },

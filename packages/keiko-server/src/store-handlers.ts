@@ -915,7 +915,11 @@ export async function handleUpdateChat(
       if (existing === undefined) return notFoundResult("Chat not found.");
       safePatch = canonicalizeConnectedScopePatch(deps, existing, patch);
     }
-    const chat = deps.store.updateChat(id, safePatch);
+    const limits = currentGroundingLimits(deps);
+    const chat = deps.store.updateChat(id, safePatch, {
+      maxConnectedSources: limits.maxConnectedSources,
+      maxLocalKnowledgeSources: limits.maxLocalKnowledgeSources,
+    });
     if (patchTouchesGroundingScope(safePatch) || safePatch.status === "closed") {
       clearGroundedContextIndexesForConversation(id);
       clearGroundedTurnsForConversation(id);
