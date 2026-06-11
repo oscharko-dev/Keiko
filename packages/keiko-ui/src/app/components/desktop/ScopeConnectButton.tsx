@@ -9,11 +9,16 @@
 // visible ring (focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent), min
 // 24×24 target via min-w/min-h utilities, disabled state announced via aria-disabled.
 
-import { useId, useState, type ReactNode } from "react";
-import { updateChatConnectedScopes } from "@/lib/api";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { fetchConfig, updateChatConnectedScopes } from "@/lib/api";
 import { formatUserError } from "./format-error";
-import type { Chat, ChatConnectedScope, SelectedScopeKind } from "@/lib/types";
-import { effectiveScopes } from "./hooks/workspaceActions";
+import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
+import type { Chat, ChatConnectedScope, GroundingLimits, SelectedScopeKind } from "@/lib/types";
+import {
+  effectiveLocalKnowledgeScopes,
+  effectiveScopes,
+  totalSourceCap,
+} from "./hooks/workspaceActions";
 
 export interface ScopeConnectButtonProps {
   readonly chatId: string;
@@ -31,6 +36,9 @@ export interface ScopeConnectButtonProps {
   readonly chat?: Chat;
   // Injectable wire seam for tests. Defaults to the real BFF helper.
   readonly updateScope?: typeof updateChatConnectedScopes;
+  // Injectable config seam for tests (Release 0.2.0 — operator-tuned source limits for the
+  // at-limit affordance). Defaults to the real /api/config helper.
+  readonly limitsSource?: typeof fetchConfig;
   // Injectable clock seam for tests. Defaults to Date.now.
   readonly now?: () => number;
   // Human-readable name of the bind target (e.g. the folder name). Folded into the
@@ -77,24 +85,56 @@ export function ScopeConnectButton({
   onConnected,
   chat,
   updateScope = updateChatConnectedScopes,
+  limitsSource = fetchConfig,
   now = Date.now,
   targetName,
 }: ScopeConnectButtonProps): ReactNode {
   const hintId = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Release 0.2.0 — operator-tuned source caps for the at-limit affordance. Compile-time
+  // defaults apply until /api/config resolves (same pattern as AppShell).
+  const [groundingLimits, setGroundingLimits] = useState<GroundingLimits>(DEFAULT_GROUNDING_LIMITS);
+  useEffect(() => {
+    let cancelled = false;
+    limitsSource()
+      .then((res) => {
+        if (!cancelled) setGroundingLimits(res.effectiveGroundingLimits);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [limitsSource]);
   const empty = scopeKind !== "workspace-root" && candidateRelativePaths.length === 0;
-  const disabled = empty || busy;
   // Epic #532 made connectedScopes the canonical source list. Some call sites
   // still pass the legacy connectedScope kind for back-compat, so derive from
   // the chat when available to keep #184's "already connected" affordance true
   // for plural-only chats as well.
-  const existingScopeKind = currentScopeKind ?? effectiveScopes(chat ?? {})[0]?.kind;
+  const currentScopes = effectiveScopes(chat ?? {});
+  const candidateScope: ChatConnectedScope = {
+    kind: scopeKind,
+    relativePaths: [...candidateRelativePaths],
+    connectedAtMs: 0,
+    ...(scopeRoot !== undefined && scopeRoot.length > 0 ? { root: scopeRoot } : {}),
+  };
+  // Release 0.2.0 — at-limit affordance: clicking would ADD a source (not update an existing
+  // identity) while the chat is at the combined or the per-list cap. Mirrors the store-side
+  // validateTotalSourceCap so the user learns about the limit BEFORE a doomed round-trip.
+  const isUpdate = currentScopes.some((s) => sameScopeIdentity(s, candidateScope));
+  const connectedTotal = currentScopes.length + effectiveLocalKnowledgeScopes(chat ?? {}).length;
+  const cap = totalSourceCap(groundingLimits);
+  const atLimit =
+    !isUpdate &&
+    (connectedTotal >= cap || currentScopes.length >= groundingLimits.maxConnectedSources);
+  const limitHint = `Source limit reached (${String(connectedTotal)}/${String(cap)}). Disconnect a source first.`;
+  const disabled = empty || busy || atLimit;
+  const existingScopeKind = currentScopeKind ?? currentScopes[0]?.kind;
   const label = actionLabel(scopeKind, existingScopeKind);
   // Distinguishable accessible name per target (WCAG 2.4.6, audit C214); the
   // visible label stays generic — the row itself shows the folder name.
   const accessibleLabel = targetName !== undefined ? `${label}: ${targetName}` : label;
-  const tooltip = empty ? "Select a folder or file first" : accessibleLabel;
+  const tooltip = empty ? "Select a folder or file first" : atLimit ? limitHint : accessibleLabel;
 
   async function handleClick(): Promise<void> {
     if (disabled) return;
@@ -103,15 +143,9 @@ export function ScopeConnectButton({
     try {
       // Epic #532 / #189 — additive bind: append the new scope to the existing list
       // so connectedScopes grows (N+1 model) and localKnowledgeScopes is never touched.
-      const newScope: ChatConnectedScope = {
-        kind: scopeKind,
-        relativePaths: [...candidateRelativePaths],
-        connectedAtMs: now(),
-        ...(scopeRoot !== undefined && scopeRoot.length > 0 ? { root: scopeRoot } : {}),
-      };
-      const current = effectiveScopes(chat ?? {});
+      const newScope: ChatConnectedScope = { ...candidateScope, connectedAtMs: now() };
       // De-dupe by full scope identity: root is part of the key for external-folder binds.
-      const filtered = current.filter((s) => !sameScopeIdentity(s, newScope));
+      const filtered = currentScopes.filter((s) => !sameScopeIdentity(s, newScope));
       const next = [...filtered, newScope];
       const response = await updateScope(chatId, next);
       onConnected?.(response.chat);
@@ -123,13 +157,14 @@ export function ScopeConnectButton({
   }
 
   // Use aria-disabled + onClick guard rather than the native `disabled` attribute when the
-  // button is empty-state. Native `disabled` removes the button from the focus order, so the
-  // hint text ("Select a folder or file first") becomes unreachable for keyboard users
-  // (Copilot PR #254 finding). aria-disabled keeps the button focusable so the screen reader
-  // announces the action AND the disabled state, while the onClick guard short-circuits
-  // activation. Loading (`busy`) is still a native disabled because the same button is the
-  // one in flight — activation while a request is in flight is genuinely incoherent.
-  const ariaDisabled = empty;
+  // button is empty-state or at the source limit. Native `disabled` removes the button from
+  // the focus order, so the hint text ("Select a folder or file first" / the limit hint)
+  // becomes unreachable for keyboard users (Copilot PR #254 finding). aria-disabled keeps the
+  // button focusable so the screen reader announces the action AND the disabled state, while
+  // the onClick guard short-circuits activation. Loading (`busy`) is still a native disabled
+  // because the same button is the one in flight — activation while a request is in flight is
+  // genuinely incoherent.
+  const ariaDisabled = empty || atLimit;
   return (
     <>
       <button
@@ -138,7 +173,7 @@ export function ScopeConnectButton({
         disabled={busy}
         aria-disabled={ariaDisabled}
         aria-label={empty ? "Connect to chat (no selection)" : accessibleLabel}
-        aria-describedby={empty ? hintId : undefined}
+        aria-describedby={ariaDisabled ? hintId : undefined}
         title={tooltip}
         onClick={() => {
           if (ariaDisabled) {
@@ -149,9 +184,9 @@ export function ScopeConnectButton({
       >
         {busy ? "Connecting…" : label}
       </button>
-      {empty ? (
+      {ariaDisabled ? (
         <span id={hintId} className="scope-connect-hint">
-          Select a folder or file first.
+          {empty ? "Select a folder or file first." : limitHint}
         </span>
       ) : null}
       {error !== null ? (

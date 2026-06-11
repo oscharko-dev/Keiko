@@ -166,4 +166,42 @@ describe("workspace-persistence", () => {
       { id: "c-1", a: "review-1", b: "files-1" },
     ]);
   });
+
+  // Release 0.2.0 — bind-time snapshot fields must survive persistence so unbind-after-reload
+  // still removes the source the edge actually bound (not whatever the window cfg says then).
+  it("carries valid bind-time snapshot fields through sanitization", () => {
+    const wins = [
+      win({ id: "files-1", type: "files", cfg: { root: "/repo" } }),
+      win({ id: "chat-1", type: "chat", cfg: {} }),
+    ];
+    const conns: Connection[] = [
+      { id: "c-1", a: "files-1", b: "chat-1", boundRoot: "/data/docs" },
+      {
+        id: "c-2",
+        a: "files-1",
+        b: "chat-1",
+        boundConnectorKind: "capsule",
+        boundConnectorId: "cap-a",
+      },
+    ];
+    expect(sanitizePersistedConnections(conns, wins)).toEqual(conns);
+  });
+
+  it("strips malformed snapshot fields instead of trusting the persisted blob", () => {
+    const wins = [
+      win({ id: "files-1", type: "files", cfg: { root: "/repo" } }),
+      win({ id: "chat-1", type: "chat", cfg: {} }),
+    ];
+    const raw = JSON.stringify([
+      // boundRoot wrong type; connector kind not in the union; connector id empty.
+      { id: "c-1", a: "files-1", b: "chat-1", boundRoot: 42 },
+      { id: "c-2", a: "files-1", b: "chat-1", boundConnectorKind: "weird", boundConnectorId: "x" },
+      { id: "c-3", a: "files-1", b: "chat-1", boundConnectorKind: "capsule", boundConnectorId: "" },
+    ]);
+    expect(parsePersistedConnections(raw, wins)).toEqual([
+      { id: "c-1", a: "files-1", b: "chat-1" },
+      { id: "c-2", a: "files-1", b: "chat-1" },
+      { id: "c-3", a: "files-1", b: "chat-1" },
+    ]);
+  });
 });

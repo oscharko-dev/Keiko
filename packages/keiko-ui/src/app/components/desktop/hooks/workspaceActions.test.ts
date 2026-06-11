@@ -67,12 +67,19 @@ describe("appendScope", () => {
     expect(appendScope([], "", 1)).toBeNull();
   });
 
-  it("caps the list at MAX_SCOPES, dropping the oldest", () => {
+  // Release 0.2.0 — the 17th source must be PREVENTED, not swapped in: at the cap the list
+  // is returned unchanged (same reference) so callers can surface the limit to the user.
+  // (Pre-0.2.0 behaviour silently evicted the oldest source, leaving a dangling edge.)
+  it("returns the list unchanged at the MAX_SCOPES cap (no silent eviction)", () => {
     const full = Array.from({ length: MAX_SCOPES }, (_unused, i) => scope(`/d${String(i)}`));
     const next = appendScope(full, "/new", 1);
-    expect(next).toHaveLength(MAX_SCOPES);
-    expect(next?.some((s) => s.root === "/new")).toBe(true);
-    expect(next?.some((s) => s.root === "/d0")).toBe(false);
+    expect(next).toBe(full);
+    expect(full.some((s) => s.root === "/d0")).toBe(true);
+  });
+
+  it("still de-dupes an already-connected root while at the cap", () => {
+    const full = Array.from({ length: MAX_SCOPES }, (_unused, i) => scope(`/d${String(i)}`));
+    expect(appendScope(full, "/d3/", 1)).toBe(full);
   });
 
   // Audit finding (a): trailing-slash dedup — "/x" and "/x/" must be treated as the same root.
@@ -95,6 +102,13 @@ describe("removeScope", () => {
 
   it("is a no-op when the root is not present", () => {
     expect(removeScope([scope("/a")], "/x").map((s) => s.root)).toEqual(["/a"]);
+  });
+
+  // Release 0.2.0 — disconnect must match the bound root even when the unbind-time spelling
+  // differs by a trailing separator (the bind path normalises; remove must mirror it).
+  it("removes a root that differs only by a trailing slash", () => {
+    expect(removeScope([scope("/a"), scope("/b")], "/a/").map((s) => s.root)).toEqual(["/b"]);
+    expect(removeScope([scope("/a/")], "/a")).toEqual([]);
   });
 });
 
@@ -201,12 +215,18 @@ describe("appendConnectorScope", () => {
     expect(next).toHaveLength(2);
   });
 
-  it("caps the list at max, dropping the oldest", () => {
+  // Release 0.2.0 — the over-limit connector must be PREVENTED, not swapped in: at the cap
+  // the list is returned unchanged (same reference) so callers can surface the limit.
+  it("returns the list unchanged at the cap (no silent eviction)", () => {
     const full = Array.from({ length: 4 }, (_, i) => lkCapsule(`c${String(i)}`));
     const next = appendConnectorScope(full, lkCapsule("cNew"), 4);
-    expect(next).toHaveLength(4);
-    expect(next.some((s) => s.kind === "capsule" && s.capsuleId === "cNew")).toBe(true);
-    expect(next.some((s) => s.kind === "capsule" && s.capsuleId === "c0")).toBe(false);
+    expect(next).toBe(full);
+    expect(full.some((s) => s.kind === "capsule" && s.capsuleId === "c0")).toBe(true);
+  });
+
+  it("still de-dupes an already-connected capsule while at the cap", () => {
+    const full = Array.from({ length: 4 }, (_, i) => lkCapsule(`c${String(i)}`));
+    expect(appendConnectorScope(full, lkCapsule("c2"), 4)).toBe(full);
   });
 });
 
@@ -282,9 +302,19 @@ function ref<T>(value: T): MutableRefObject<T> {
   return { current: value };
 }
 
+interface ConnectHarnessOverrides {
+  readonly connecting?: ConnectingState | null;
+  readonly setConns?: Dispatch<SetStateAction<Connection[]>>;
+  readonly onScopeBind?: (root: string) => boolean;
+  readonly onScopeUnbind?: (root: string) => void;
+  readonly onConnectorBind?: (scope: ChatLocalKnowledgeScope) => boolean;
+  readonly onConnectorUnbind?: (scope: ChatLocalKnowledgeScope) => void;
+}
+
 function makeConnectHarness(
   wins: AppWindow[],
   conns: Connection[],
+  overrides: ConnectHarnessOverrides = {},
 ): ReturnType<typeof makeConnectActions> {
   const winsRef = ref(wins);
   const connsRef = ref(conns);
@@ -293,11 +323,15 @@ function makeConnectHarness(
     viewRef: ref<View>({ zoom: 1, x: 0, y: 0 }),
     winsRef,
     connsRef,
-    connectingRef: ref<ConnectingState | null>(null),
+    connectingRef: ref<ConnectingState | null>(overrides.connecting ?? null),
     connectCleanupRef: ref<(() => void) | null>(null),
     focus: () => undefined,
-    setConns: (() => undefined) as Dispatch<SetStateAction<Connection[]>>,
+    setConns: overrides.setConns ?? ((() => undefined) as Dispatch<SetStateAction<Connection[]>>),
     setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
+    onScopeBind: overrides.onScopeBind,
+    onScopeUnbind: overrides.onScopeUnbind,
+    onConnectorBind: overrides.onConnectorBind,
+    onConnectorUnbind: overrides.onConnectorUnbind,
   });
 }
 
@@ -628,5 +662,166 @@ describe("linkedFilesRoot for quality window with rootless Files (audit finding 
     // A null linkedRoot means connectedRoot=null in buildConnectedRunSources, so rawRoots=[] and
     // no workspace source is added — the QI Generate request stays clean.
     expect(linkedFilesRoot("quality")).toBeNull();
+  });
+});
+
+// Release 0.2.0 — the bind callback may VETO the edge (source limit reached): no edge is drawn,
+// so the workspace never shows a connection that does not ground anything. Accepted binds snapshot
+// WHAT they bound onto the Connection so unbind paths survive later cfg changes.
+describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", () => {
+  const evt = {
+    preventDefault: () => undefined,
+    stopPropagation: () => undefined,
+  } as unknown as Parameters<ReturnType<typeof makeConnectActions>["confirmConnect"]>[1];
+
+  function collectingSetConns(store: { conns: Connection[] }): Dispatch<SetStateAction<Connection[]>> {
+    return (action) => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+  }
+
+  it("does not draw the edge when onScopeBind vetoes the bind", () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: () => false,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("draws the edge with a boundRoot snapshot when onScopeBind accepts", () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: () => true,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(1);
+    expect(store.conns[0]?.boundRoot).toBe("/data/docs");
+  });
+
+  it("does not draw the edge when onConnectorBind vetoes the bind", () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [
+        win("connector", { selectedKind: "capsule", selectedId: "cap-a" }, "conn-1"),
+        win("chat", {}, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "conn-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => false,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("draws the edge with a connector snapshot when onConnectorBind accepts", () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [
+        win("connector", { selectedKind: "capsule", selectedId: "cap-a" }, "conn-1"),
+        win("chat", {}, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "conn-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => true,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(1);
+    expect(store.conns[0]?.boundConnectorKind).toBe("capsule");
+    expect(store.conns[0]?.boundConnectorId).toBe("cap-a");
+  });
+
+  it("still draws non-binding edges when no callbacks are wired", () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("quality", {}, "quality")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+      },
+    );
+    harness.confirmConnect("quality", evt);
+    expect(store.conns).toHaveLength(1);
+  });
+});
+
+// Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
+// points at NOW (the user may have navigated the Files window / re-selected another capsule).
+describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it("unbinds the bound capsule even after the connector window selected another capsule", () => {
+    const unbound: ChatLocalKnowledgeScope[] = [];
+    const connector = win(
+      "connector",
+      // The window cfg has MOVED ON to cap-b since the bind.
+      { selectedKind: "capsule", selectedId: "cap-b" },
+      "conn-1",
+    );
+    const chat = win("chat", {}, "chat-1");
+    const edge: Connection = {
+      id: "conn-1~chat-1",
+      a: "conn-1",
+      b: "chat-1",
+      boundConnectorKind: "capsule",
+      boundConnectorId: "cap-a",
+    };
+    const harness = makeConnectHarness([connector, chat], [edge], {
+      onConnectorUnbind: (scope) => {
+        unbound.push(scope);
+      },
+    });
+    harness.removeConn("conn-1~chat-1");
+    expect(unbound).toHaveLength(1);
+    expect(unbound[0]).toMatchObject({ kind: "capsule", capsuleId: "cap-a" });
+  });
+
+  it("unbinds the bound root even after the Files window navigated elsewhere", () => {
+    const unbound: string[] = [];
+    const files = win("files", { resolvedRoot: "/data/other" }, "files-1");
+    const chat = win("chat", {}, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      onScopeUnbind: (root) => {
+        unbound.push(root);
+      },
+    });
+    harness.removeConn("files-1~chat-1");
+    expect(unbound).toEqual(["/data/docs"]);
+  });
+
+  it("falls back to cfg-derivation for pre-snapshot edges", () => {
+    const unbound: string[] = [];
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", {}, "chat-1");
+    const harness = makeConnectHarness([files, chat], [conn("files-1", "chat-1")], {
+      onScopeUnbind: (root) => {
+        unbound.push(root);
+      },
+    });
+    harness.removeConn("files-1~chat-1");
+    expect(unbound).toEqual(["/data/docs"]);
   });
 });

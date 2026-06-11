@@ -23,8 +23,11 @@ import {
   appendScope,
   effectiveLocalKnowledgeScopes,
   effectiveScopes,
+  isConnectorScopeConnected,
+  isRootConnected,
   removeConnectorScope,
   removeScope,
+  totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -247,15 +250,43 @@ function AppShellInner(): ReactNode {
       .then((res) => setGroundingLimits(res.effectiveGroundingLimits))
       .catch(() => undefined);
   }, []);
+  // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
+  // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
+  const [sourceLimitNotice, setSourceLimitNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (sourceLimitNotice === null) return undefined;
+    const timer = window.setTimeout(() => setSourceLimitNotice(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [sourceLimitNotice]);
+  const rejectForLimit = useCallback((connectedCount: number, cap: number): false => {
+    setSourceLimitNotice(
+      `Source limit reached — this chat already has ${String(connectedCount)} of ${String(cap)} connected sources. Disconnect a source before connecting another.`,
+    );
+    return false;
+  }, []);
   // Epic #532 — a Files↔Chat relationship edge binds/unbinds the folder on the active chat's
   // connectedScopes (1+N), so the gesture actually grounds the chat against the connected folder(s).
+  // Release 0.2.0 — returns whether the bind was accepted: at the source limit the bind is
+  // REJECTED (with a visible notice) instead of silently evicting the oldest source, and the
+  // caller skips drawing the edge so no dangling ungrounded edge appears.
   const handleScopeBind = useCallback(
-    (filesRoot: string): void => {
+    (filesRoot: string): boolean => {
       const chat = session.activeChat;
-      if (chat === undefined) return;
+      if (chat === undefined) return true;
       const current = effectiveScopes(chat);
+      const lkScopes = effectiveLocalKnowledgeScopes(chat);
+      if (isRootConnected(current, filesRoot)) return true;
+      const cap = totalSourceCap(groundingLimits);
+      if (current.length + lkScopes.length >= cap) {
+        return rejectForLimit(current.length + lkScopes.length, cap);
+      }
       const next = appendScope(current, filesRoot, Date.now(), groundingLimits.maxConnectedSources);
-      if (next === null || next === current) return;
+      if (next === null) return false;
+      if (next === current) {
+        // Not a duplicate (checked above) → the per-list folder cap rejected the append.
+        return rejectForLimit(current.length + lkScopes.length, cap);
+      }
+      setSourceLimitNotice(null);
       void updateChatConnectedScopes(chat.id, next)
         .then((res) => {
           session.replaceChat(res.chat);
@@ -268,8 +299,9 @@ function AppShellInner(): ReactNode {
           // uiux-fix F008 C074 — a failed bind silently left the edge visible but ungrounded.
           console.warn("[keiko] connected-scope bind failed", error);
         });
+      return true;
     },
-    [session, groundingLimits.maxConnectedSources],
+    [session, groundingLimits, rejectForLimit],
   );
   const handleScopeUnbind = useCallback(
     (filesRoot: string): void => {
@@ -289,20 +321,33 @@ function AppShellInner(): ReactNode {
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
+  // Release 0.2.0 — same accepted/veto contract as handleScopeBind: at the source limit the
+  // bind is rejected with a visible notice instead of silently evicting the oldest source.
   const handleConnectorBind = useCallback(
-    (scope: ChatLocalKnowledgeScope): void => {
+    (scope: ChatLocalKnowledgeScope): boolean => {
       const chat = session.activeChat;
-      if (chat === undefined) return;
+      if (chat === undefined) return true;
       const current = effectiveLocalKnowledgeScopes(chat);
+      const folderScopes = effectiveScopes(chat);
+      if (isConnectorScopeConnected(current, scope)) return true;
+      const cap = totalSourceCap(groundingLimits);
+      if (folderScopes.length + current.length >= cap) {
+        return rejectForLimit(folderScopes.length + current.length, cap);
+      }
       const next = appendConnectorScope(current, scope, groundingLimits.maxLocalKnowledgeSources);
-      if (next === current) return;
+      if (next === current) {
+        // Not a duplicate (checked above) → the per-list connector cap rejected the append.
+        return rejectForLimit(folderScopes.length + current.length, cap);
+      }
+      setSourceLimitNotice(null);
       void updateChatLocalKnowledgeScopes(chat.id, next)
         .then((res) => {
           session.replaceChat(res.chat);
         })
         .catch(() => undefined);
+      return true;
     },
-    [session, groundingLimits.maxLocalKnowledgeSources],
+    [session, groundingLimits, rejectForLimit],
   );
   const handleConnectorUnbind = useCallback(
     (scope: ChatLocalKnowledgeScope): void => {
@@ -531,6 +576,21 @@ function AppShellInner(): ReactNode {
             />
             <div className="stage">
               <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+              {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
+                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
+              {sourceLimitNotice !== null && (
+                <div className="source-limit-alert" role="alert">
+                  <span>{sourceLimitNotice}</span>
+                  <button
+                    type="button"
+                    className="source-limit-alert-dismiss"
+                    aria-label="Dismiss source limit notice"
+                    onClick={() => setSourceLimitNotice(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
             </div>
             <RightRail openTools={openTools} onTool={onTool} />
           </div>

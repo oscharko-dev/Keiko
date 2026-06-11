@@ -305,4 +305,112 @@ describe("ScopeConnectButton", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("network down");
     });
   });
+
+  // Release 0.2.0 — at-limit affordance: when clicking would ADD a source while the chat is at
+  // the combined source cap, the button is aria-disabled with a hint instead of firing a doomed
+  // PATCH that only surfaces a backend 400.
+  describe("source-limit affordance (Release 0.2.0)", () => {
+    const sixteenScopes: ChatConnectedScope[] = Array.from({ length: 16 }, (_unused, i) => ({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: `/d${String(i)}`,
+      connectedAtMs: 1,
+    }));
+
+    it("is aria-disabled with a limit hint when the chat is at the cap", () => {
+      const updateScope = vi.fn();
+      render(
+        <ScopeConnectButton
+          chatId="chat-1"
+          scopeKind="directory"
+          scopeRoot="/new-folder"
+          currentScopeKind={undefined}
+          candidateRelativePaths={["docs"]}
+          chat={makeChat({ connectedScopes: sixteenScopes })}
+          updateScope={updateScope}
+        />,
+      );
+      const btn = screen.getByRole("button");
+      expect(btn).toHaveAttribute("aria-disabled", "true");
+      expect(btn).not.toBeDisabled();
+      expect(btn).toHaveAccessibleDescription(
+        "Source limit reached (16/16). Disconnect a source first.",
+      );
+    });
+
+    it("does not fire the PATCH when clicked at the cap", async () => {
+      const updateScope = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ScopeConnectButton
+          chatId="chat-1"
+          scopeKind="directory"
+          scopeRoot="/new-folder"
+          currentScopeKind={undefined}
+          candidateRelativePaths={["docs"]}
+          chat={makeChat({ connectedScopes: sixteenScopes })}
+          updateScope={updateScope}
+        />,
+      );
+      await user.click(screen.getByRole("button"));
+      expect(updateScope).not.toHaveBeenCalled();
+    });
+
+    it("stays clickable at the cap when the click would UPDATE an existing scope identity", async () => {
+      const existing = sixteenScopes[0] as ChatConnectedScope;
+      const updateScope = vi.fn().mockResolvedValue({ chat: makeChat() });
+      const user = userEvent.setup();
+      render(
+        <ScopeConnectButton
+          chatId="chat-1"
+          scopeKind={existing.kind}
+          scopeRoot={existing.root}
+          currentScopeKind={existing.kind}
+          candidateRelativePaths={existing.relativePaths}
+          chat={makeChat({ connectedScopes: sixteenScopes })}
+          updateScope={updateScope}
+        />,
+      );
+      const btn = screen.getByRole("button");
+      expect(btn).toHaveAttribute("aria-disabled", "false");
+      await user.click(btn);
+      await waitFor(() => {
+        expect(updateScope).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("honours operator-raised limits from the injected config source", async () => {
+      const updateScope = vi.fn().mockResolvedValue({ chat: makeChat() });
+      const limitsSource = vi.fn().mockResolvedValue({
+        config: null,
+        configPresent: false,
+        effectiveGroundingLimits: {
+          maxConnectedSources: 32,
+          maxLocalKnowledgeSources: 16,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 24,
+          hybridMaxExcerptBytes: 131072,
+        },
+      });
+      render(
+        <ScopeConnectButton
+          chatId="chat-1"
+          scopeKind="directory"
+          scopeRoot="/new-folder"
+          currentScopeKind={undefined}
+          candidateRelativePaths={["docs"]}
+          chat={makeChat({ connectedScopes: sixteenScopes })}
+          updateScope={updateScope}
+          limitsSource={limitsSource}
+        />,
+      );
+      // 16 connected with a 32-source operator cap → the button must become enabled once the
+      // config resolves.
+      await waitFor(() => {
+        expect(screen.getByRole("button")).toHaveAttribute("aria-disabled", "false");
+      });
+    });
+  });
 });

@@ -23,6 +23,7 @@ import {
   sanitizePersistedWindows,
 } from "./workspace-persistence";
 import {
+  boundConnectorScopeOf,
   connectorChatBind,
   filesChatBindRoot,
   makeConnectActions,
@@ -409,10 +410,12 @@ function useConnectionPrune(
 // these to the active chat's connectedScopes so a relationship edge grounds the chat against a folder.
 // Epic #189 Slice 3 M3 — optional Connector↔Chat scope-binding callbacks. The composition root
 // (AppShell) wires these to the active chat's localKnowledgeScopes.
+// Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
+// reached) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
-  readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
+  readonly onScopeBind?: ((filesRoot: string) => boolean) | undefined;
   readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
-  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => boolean) | undefined;
   readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
@@ -511,9 +514,13 @@ export function useWorkspace(
         if (otherId === null) continue;
         const other = winsRef.current.find((w) => w.id === otherId);
         if (other === undefined) continue;
-        const root = filesChatBindRoot(win, other);
+        // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
+        // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
+        // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
+        // for edges persisted before the snapshot fields existed.
+        const root = c.boundRoot ?? filesChatBindRoot(win, other);
         if (root !== null) opts.onScopeUnbind?.(root);
-        const scope = connectorChatBind(win, other);
+        const scope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
         if (scope !== null) opts.onConnectorUnbind?.(scope);
       }
     }

@@ -299,12 +299,14 @@ interface ConnectArgs {
   // Epic #532 — invoked when a Files↔Chat relationship edge is created/removed, with the Files
   // window's resolved absolute root. The composition root (AppShell) binds it to the active chat's
   // connectedScopes so the relationship gesture actually grounds the chat against the folder.
-  readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
+  // Release 0.2.0 — the bind callback returns whether the bind was ACCEPTED; `false` (e.g. the
+  // per-chat source limit is reached) vetoes the edge so no dangling ungrounded edge is drawn.
+  readonly onScopeBind?: ((filesRoot: string) => boolean) | undefined;
   readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
-  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => boolean) | undefined;
   readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
@@ -369,20 +371,50 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const from = list.find((w) => w.id === c.from);
     const to = list.find((w) => w.id === toId);
     if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
-      setConns((cs) =>
-        isDuplicate(cs, c.from, toId)
-          ? cs
-          : [...cs, { id: `${c.from}~${toId}`, a: c.from, b: toId }],
-      );
-      focus(toId);
       // Epic #532 — a Files↔Chat edge also binds the folder to the chat's connectedScopes so the
-      // relationship gesture grounds the chat. No-op for any other window pairing.
+      // relationship gesture grounds the chat. Epic #189 Slice 3 M3 — a Connector↔Chat edge binds
+      // the selected connector scope to the chat's localKnowledgeScopes. Both are no-ops for any
+      // other window pairing. Release 0.2.0 — the bind callback now VETOES the edge: when the
+      // source limit rejects the bind, drawing the edge anyway would show a connection that does
+      // not ground anything (dangling-edge inconsistency).
       const boundRoot = filesChatBindRoot(from, to);
-      if (boundRoot !== null) onScopeBind?.(boundRoot);
-      // Epic #189 Slice 3 M3 — a Connector↔Chat edge binds the selected connector scope to the
-      // chat's localKnowledgeScopes. No-op for any other window pairing.
-      const connectorScope = connectorChatBind(from, to);
-      if (connectorScope !== null) onConnectorBind?.(connectorScope);
+      const connectorScope = boundRoot === null ? connectorChatBind(from, to) : null;
+      const accepted =
+        boundRoot !== null
+          ? (onScopeBind?.(boundRoot) ?? true)
+          : connectorScope !== null
+            ? (onConnectorBind?.(connectorScope) ?? true)
+            : true;
+      if (accepted) {
+        // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown)
+        // must use this snapshot: re-deriving from the window's current cfg unbinds the wrong
+        // source after the user navigated the Files window or re-selected another capsule.
+        setConns((cs) =>
+          isDuplicate(cs, c.from, toId)
+            ? cs
+            : [
+                ...cs,
+                {
+                  id: `${c.from}~${toId}`,
+                  a: c.from,
+                  b: toId,
+                  ...(boundRoot !== null ? { boundRoot } : {}),
+                  ...(connectorScope !== null
+                    ? connectorScope.kind === "capsule"
+                      ? {
+                          boundConnectorKind: "capsule" as const,
+                          boundConnectorId: connectorScope.capsuleId as string,
+                        }
+                      : {
+                          boundConnectorKind: "capsule-set" as const,
+                          boundConnectorId: connectorScope.capsuleSetId as string,
+                        }
+                    : {}),
+                },
+              ],
+        );
+      }
+      focus(toId);
     }
     cancelConnect();
   };
@@ -424,16 +456,21 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const removeConn: WorkspaceApi["removeConn"] = (id) => {
     // Epic #532 — if the removed edge was a Files↔Chat binding, unbind that folder from the chat.
     // Epic #189 Slice 3 M3 — if the removed edge was a Connector↔Chat binding, unbind that scope.
+    // Release 0.2.0 — prefer the bind-time snapshot stored on the Connection: the window's
+    // current cfg may have moved on (Files window navigated elsewhere, another capsule selected),
+    // and re-deriving from it would unbind the WRONG source. Falls back to cfg-derivation for
+    // edges persisted before the snapshot fields existed.
     const conn = connsRef.current.find((c) => c.id === id);
     setConns((cs) => cs.filter((c) => c.id !== id));
     if (conn === undefined) return;
     const list = winsRef.current;
     const a = list.find((w) => w.id === conn.a);
     const b = list.find((w) => w.id === conn.b);
-    if (a === undefined || b === undefined) return;
-    const boundRoot = filesChatBindRoot(a, b);
+    const bothLive = a !== undefined && b !== undefined;
+    const boundRoot = conn.boundRoot ?? (bothLive ? filesChatBindRoot(a, b) : null);
     if (boundRoot !== null) onScopeUnbind?.(boundRoot);
-    const connectorScope = connectorChatBind(a, b);
+    const connectorScope =
+      boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
     if (connectorScope !== null) onConnectorUnbind?.(connectorScope);
   };
 
@@ -643,10 +680,31 @@ export function filesChatBindRoot(a: AppWindow, b: AppWindow): string | null {
   return resolvedFilesRoot(files);
 }
 
+/** True when `root` (after trailing-separator normalisation) is already in the scopes list. */
+export function isRootConnected(current: readonly ChatConnectedScope[], root: string): boolean {
+  const normRoot = normaliseRoot(root);
+  return current.some((s) => s.root !== undefined && normaliseRoot(s.root) === normRoot);
+}
+
+/**
+ * Release 0.2.0 — the combined per-chat source cap. "Up to 16 sources" is a TOTAL across
+ * folder/file/repo scopes AND knowledge-connector scopes; the cap is the larger of the two
+ * per-list limits so each list's own limit stays reachable. Mirrors validateTotalSourceCap
+ * in keiko-server/src/store/chats.ts — keep both in sync.
+ */
+export function totalSourceCap(limits: {
+  readonly maxConnectedSources: number;
+  readonly maxLocalKnowledgeSources: number;
+}): number {
+  return Math.max(limits.maxConnectedSources, limits.maxLocalKnowledgeSources);
+}
+
 /**
  * Appends a new source to the current scopes list (de-duped by root, capped at
  * `maxScopes` — defaults to MAX_SCOPES). Returns null when the root is empty/not
- * absolute (caller should surface "browse/choose a folder first").
+ * absolute (caller should surface "browse/choose a folder first"). At the cap the
+ * list is returned UNCHANGED (no silent eviction of the oldest source — the 17th
+ * source must be prevented, not swapped in; callers surface the limit to the user).
  */
 export function appendScope(
   current: readonly ChatConnectedScope[],
@@ -659,25 +717,28 @@ export function appendScope(
   if (!isAbsoluteRoot(normRoot)) return null;
   if (current.some((s) => s.root !== undefined && normaliseRoot(s.root) === normRoot))
     return current;
+  if (current.length >= maxScopes) return current;
   const next: ChatConnectedScope = {
     kind: "workspace-root",
     relativePaths: [],
     root: normRoot,
     connectedAtMs: now,
   };
-  const combined = [...current, next];
-  return combined.length > maxScopes ? combined.slice(-maxScopes) : combined;
+  return [...current, next];
 }
 
 /**
  * Removes the source with the given root from the scopes list. Returns an
  * empty array (not null) when the list becomes empty so callers can PATCH null.
+ * Compares normalised roots (trailing separators folded) so a disconnect still
+ * matches when bind-time and unbind-time spellings differ (e.g. "/foo" vs "/foo/").
  */
 export function removeScope(
   current: readonly ChatConnectedScope[],
   root: string,
 ): readonly ChatConnectedScope[] {
-  return current.filter((s) => s.root !== root);
+  const normRoot = normaliseRoot(root);
+  return current.filter((s) => s.root === undefined || normaliseRoot(s.root) !== normRoot);
 }
 
 /** Canonical reader: derive effective scopes from Chat fields. */
@@ -710,9 +771,19 @@ function lkScopeKey(scope: ChatLocalKnowledgeScope): string {
   return scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
 }
 
+/** True when the connector scope (same capsule / capsule-set) is already in the list. */
+export function isConnectorScopeConnected(
+  current: readonly ChatLocalKnowledgeScope[],
+  scope: ChatLocalKnowledgeScope,
+): boolean {
+  const key = lkScopeKey(scope);
+  return current.some((s) => lkScopeKey(s) === key);
+}
+
 /**
  * Appends a connector scope to the list (de-duped by capsuleId / capsuleSetId, capped at
- * MAX_SCOPES). Returns the same list reference when the scope is already present.
+ * `max`). Returns the same list reference when the scope is already present. At the cap
+ * the list is returned UNCHANGED (no silent eviction — callers surface the limit).
  */
 export function appendConnectorScope(
   current: readonly ChatLocalKnowledgeScope[],
@@ -721,8 +792,8 @@ export function appendConnectorScope(
 ): readonly ChatLocalKnowledgeScope[] {
   const key = lkScopeKey(scope);
   if (current.some((s) => lkScopeKey(s) === key)) return current;
-  const combined = [...current, scope];
-  return combined.length > max ? combined.slice(-max) : combined;
+  if (current.length >= max) return current;
+  return [...current, scope];
 }
 
 /**
@@ -734,6 +805,33 @@ export function removeConnectorScope(
   key: string,
 ): readonly ChatLocalKnowledgeScope[] {
   return current.filter((s) => lkScopeKey(s) !== key);
+}
+
+/**
+ * Reconstructs the connector scope from a Connection's bind-time snapshot fields.
+ * Returns null when the edge carries no snapshot (pre-0.2.0 persisted edges).
+ * `connectedAtMs: 0` is fine — unbind paths only match on kind + id.
+ */
+export function boundConnectorScopeOf(conn: {
+  readonly boundConnectorKind?: "capsule" | "capsule-set";
+  readonly boundConnectorId?: string;
+}): ChatLocalKnowledgeScope | null {
+  if (typeof conn.boundConnectorId !== "string" || conn.boundConnectorId.length === 0) return null;
+  if (conn.boundConnectorKind === "capsule") {
+    return {
+      kind: "capsule",
+      capsuleId: conn.boundConnectorId as KnowledgeCapsuleId,
+      connectedAtMs: 0,
+    };
+  }
+  if (conn.boundConnectorKind === "capsule-set") {
+    return {
+      kind: "capsule-set",
+      capsuleSetId: conn.boundConnectorId as CapsuleSetId,
+      connectedAtMs: 0,
+    };
+  }
+  return null;
 }
 
 /**

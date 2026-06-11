@@ -260,7 +260,22 @@ export function sanitizePersistedConnections(
     ) {
       continue;
     }
-    out.push({ id: conn.id, a: conn.a, b: conn.b });
+    // Release 0.2.0 — carry the bind-time snapshot fields through persistence (typed-checked,
+    // never trusted blindly) so unbind-after-reload still removes the source the edge bound.
+    const boundRoot = typeof conn.boundRoot === "string" && conn.boundRoot.length > 0;
+    const boundConnector =
+      (conn.boundConnectorKind === "capsule" || conn.boundConnectorKind === "capsule-set") &&
+      typeof conn.boundConnectorId === "string" &&
+      conn.boundConnectorId.length > 0;
+    out.push({
+      id: conn.id,
+      a: conn.a,
+      b: conn.b,
+      ...(boundRoot ? { boundRoot: conn.boundRoot } : {}),
+      ...(boundConnector
+        ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
+        : {}),
+    });
   }
   return out;
 }

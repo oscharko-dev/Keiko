@@ -1419,6 +1419,53 @@ button {
   line-height: 1.45;
 }
 
+/* Release 0.2.0 — rejected connect gesture (per-chat source limit reached). Same visual
+   language as .attach-rejection-alert; floats over the workspace stage near the widget
+   area where the connect gesture originates. */
+.source-limit-alert {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(520px, calc(100% - 28px));
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
+  background: color-mix(in oklch, var(--danger) 22%, var(--card));
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--bg) 55%, transparent);
+}
+.source-limit-alert-dismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.source-limit-alert-dismiss:hover {
+  border-color: var(--line);
+  color: var(--fg);
+}
+.source-limit-alert-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .cmp-context {
   display: flex;
   flex-wrap: wrap;
