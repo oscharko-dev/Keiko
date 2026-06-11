@@ -74,7 +74,12 @@ import {
   handleTerminalEvents,
   handleTerminalPolicy,
 } from "./terminal-routes.js";
-import { handleFilesDirectories, handleFilesPreview, handleFilesTree } from "./files.js";
+import {
+  handleFilesContent,
+  handleFilesDirectories,
+  handleFilesPreview,
+  handleFilesTree,
+} from "./files.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -233,10 +238,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleDeleteTerminalExecution,
   },
   { method: "GET", pattern: "/api/terminal/events", handler: handleTerminalEvents },
-  // Desktop files — read-only selected-root browser and preview control plane.
+  // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
+  { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
+  { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
     method: "GET",

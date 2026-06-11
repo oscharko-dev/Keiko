@@ -124,9 +124,13 @@ export {
   type TerminalEvidenceEntry,
 } from "./terminal-evidence.js";
 export {
+  handleFilesContent,
   listFilesDirectories,
+  readFilesContent,
   readFilesPreview,
   readFilesTree,
+  writeFilesContent,
+  type FilesContentResponse,
   type FilesDirectoryEntry,
   type FilesDirectoryListing,
   type FilesDirectoryRoot,

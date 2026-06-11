@@ -5,11 +5,13 @@ import {
   clearProjectRequestForTests,
   deleteChat,
   deleteProject,
+  fetchFilesContent,
   fetchFilesDirectories,
   fetchFilesPreview,
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  saveFilesContent,
   startGroundedWorkflowHandoff,
   fetchWorkspaceSummary,
 } from "./api";
@@ -67,7 +69,7 @@ describe("files API helpers", () => {
     vi.unstubAllGlobals();
   });
 
-  it("encodes directory picker, tree, and preview query parameters", async () => {
+  it("encodes directory picker, tree, preview, and editor requests", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -91,12 +93,47 @@ describe("files API helpers", () => {
           truncated: false,
           maxBytes: 1_000_000,
         }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          root: "/repo space",
+          path: "src/app.ts",
+          name: "app.ts",
+          sizeBytes: 10,
+          modifiedAt: 1,
+          extension: "ts",
+          mime: "text/plain",
+          symlink: false,
+          content: "const x = 1;\n",
+          maxBytes: 1_000_000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          root: "/repo space",
+          path: "src/app.ts",
+          name: "app.ts",
+          sizeBytes: 10,
+          modifiedAt: 2,
+          extension: "ts",
+          mime: "text/plain",
+          symlink: false,
+          content: "const x = 2;\n",
+          maxBytes: 1_000_000,
+        }),
       );
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchFilesDirectories("/repo space");
     await fetchFilesTree("/repo space", "src/app.ts");
     await fetchFilesPreview("/repo space", "src/app.ts");
+    await fetchFilesContent("/repo space", "src/app.ts");
+    await saveFilesContent({
+      root: "/repo space",
+      path: "src/app.ts",
+      content: "const x = 2;\n",
+      expectedModifiedAt: 1,
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -117,6 +154,31 @@ describe("files API helpers", () => {
       "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/files/content?root=%2Frepo+space&path=src%2Fapp.ts",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/files/content",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          root: "/repo space",
+          path: "src/app.ts",
+          content: "const x = 2;\n",
+          expectedModifiedAt: 1,
+        }),
       }),
     );
   });

@@ -24,6 +24,7 @@ import type {
   GroundedWorkflowHandoffRequest,
   GroundedWorkflowHandoffResponse,
   FilesDirectoryListing,
+  FilesContentResponse,
   FilesPreviewResponse,
   FilesTreeResponse,
   GroundingLimits,
@@ -768,7 +769,7 @@ export async function sendDesktopChatStream(
 // ./terminal-api.ts. The PTY routes (/api/terminal/shells, /sessions, WS upgrade) are removed.
 
 // ---------------------------------------------------------------------------
-// Desktop files — read-only selected-root browser and preview control plane
+// Desktop files — selected-root browser, preview, and editor control plane
 // ---------------------------------------------------------------------------
 
 export async function fetchFilesDirectories(
@@ -793,6 +794,25 @@ export async function fetchFilesPreview(root: string, path: string): Promise<Fil
   params.set("root", root);
   params.set("path", path);
   return fetchJson(`/api/files/preview?${params.toString()}`);
+}
+
+export async function fetchFilesContent(root: string, path: string): Promise<FilesContentResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  params.set("path", path);
+  return fetchJson(`/api/files/content?${params.toString()}`);
+}
+
+export async function saveFilesContent(input: {
+  readonly root: string;
+  readonly path: string;
+  readonly content: string;
+  readonly expectedModifiedAt?: number | undefined;
+}): Promise<FilesContentResponse> {
+  return fetchJson("/api/files/content", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
 }
 
 // ---------------------------------------------------------------------------

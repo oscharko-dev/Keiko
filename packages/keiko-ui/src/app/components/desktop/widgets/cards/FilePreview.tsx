@@ -14,6 +14,7 @@ interface FilePreviewProps {
   readonly root: string;
   readonly path: string;
   readonly onClose: () => void;
+  readonly onOpenInEditor?: ((root: string, path: string) => void) | undefined;
 }
 
 // Server-defined deny is a safety invariant the user must not be able to probe.
@@ -88,7 +89,12 @@ function MetadataRow({
   );
 }
 
-export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNode {
+export function FilePreview({
+  root,
+  path,
+  onClose,
+  onOpenInEditor,
+}: FilePreviewProps): ReactNode {
   // Issue #184 — the connector binds the currently-previewed file (workspace-relative path)
   // onto the active chat. The chat session is consulted optionally: if no chat is active the
   // connector is hidden. The candidate is always a single-file scope (length 1) because the
@@ -157,6 +163,8 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
     : (preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview"));
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
+  const canOpenInEditor =
+    onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
   const lines: readonly (readonly Token[])[] =
     preview?.kind === "text"
       ? shouldHighlight
@@ -186,6 +194,17 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
         </span>
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
+        {canOpenInEditor ? (
+          <button
+            className="fpv-back"
+            type="button"
+            onClick={() => onOpenInEditor(root, path)}
+            title="Open in editor"
+            aria-label="Open in editor"
+          >
+            <Icons.editor size={15} />
+          </button>
+        ) : null}
         {activeChat !== undefined && session !== null ? (
           <ScopeConnectButton
             chatId={activeChat.id}
@@ -232,8 +251,6 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
       {preview?.kind === "text" ? (
         <>
           {preview.truncated ? (
-            // Copy must not point at the Editor window: it is a static mock that cannot open
-            // files, so "open it in the editor" would send the user into a dead end (audit C198).
             <div className="fpv-banner">
               Preview truncated at {formatBytes(preview.maxBytes)}. Larger files can&apos;t be shown
               in full here.

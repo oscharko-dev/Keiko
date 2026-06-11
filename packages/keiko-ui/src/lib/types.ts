@@ -158,6 +158,8 @@ export type {
   FilesTreeResponse,
   FilesPreviewBase,
   FilesPreviewResponse,
+  FilesContentResponse,
+  FilesWriteRequest,
   BrowserViewportPx,
   CdpReachability,
   BrowserSessionMeta,

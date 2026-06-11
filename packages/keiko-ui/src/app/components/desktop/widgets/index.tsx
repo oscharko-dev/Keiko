@@ -179,18 +179,31 @@ registerWindowRender("files", (cfg, ctx) => {
   const onRootChange = (nextRoot: string): void => {
     ctx.updateCfg({ root: nextRoot, activeFilePath: undefined, resolvedRoot: undefined });
   };
+  const onOpenFile = (fileRoot: string, path: string): void => {
+    ctx.openWindow("editor", { root: fileRoot, file: path });
+  };
   return root !== undefined ? (
-    <FilesWidget root={root} onActiveFileChange={onActiveFileChange} onRootChange={onRootChange} />
+    <FilesWidget
+      root={root}
+      onActiveFileChange={onActiveFileChange}
+      onRootChange={onRootChange}
+      onOpenFile={onOpenFile}
+    />
   ) : (
-    <FilesWidget onActiveFileChange={onActiveFileChange} onRootChange={onRootChange} />
+    <FilesWidget
+      onActiveFileChange={onActiveFileChange}
+      onRootChange={onRootChange}
+      onOpenFile={onOpenFile}
+    />
   );
 });
-// Audit C302 — the config defaults are empty now (the old prototype values leaked
-// into the header badge); treat "" like absent so the widgets fall back to their
-// own demo/display defaults instead of rendering an empty tab label / URL input.
 registerWindowRender("editor", (cfg) => {
+  const root = str(cfg, "root");
   const file = str(cfg, "file");
-  return file !== undefined && file !== "" ? <EditorWidget file={file} /> : <EditorWidget />;
+  const props: { root?: string; file?: string } = {};
+  if (root !== undefined) props.root = root;
+  if (file !== undefined) props.file = file;
+  return <EditorWidget {...props} />;
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");

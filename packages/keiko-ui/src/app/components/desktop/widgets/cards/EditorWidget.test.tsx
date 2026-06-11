@@ -1,34 +1,68 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { fetchFilesContent, saveFilesContent } from "../../../../../lib/api";
 import { EditorWidget } from "./EditorWidget";
 
-// uiux-fix F020 C050/C352 — the editor card is an honest static demo: no dead
-// pseudo-tab, a visible placeholder note, and the file prop only labels the tab.
+vi.mock("../../../../../lib/api", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../../../../lib/api")>("../../../../../lib/api");
+  return {
+    ...actual,
+    fetchFilesContent: vi.fn(),
+    saveFilesContent: vi.fn(),
+  };
+});
+
 describe("EditorWidget", () => {
-  it("renders a visible static-demo note instead of impersonating a working editor", () => {
+  it("renders an honest empty state until a file is opened", () => {
     render(<EditorWidget />);
-    expect(screen.getByRole("note")).toHaveTextContent(/static demo/i);
-    expect(screen.getByRole("note")).toHaveTextContent(/file editing isn't available yet/i);
+    expect(screen.getByRole("note")).toHaveTextContent(/choose a file from the files window/i);
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("does not render the dead non-interactive styles.css pseudo-tab", () => {
-    render(<EditorWidget />);
-    expect(screen.queryByText("styles.css")).not.toBeInTheDocument();
-  });
+  it("loads an editable text file and saves changes", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce({
+      root: "/repo",
+      path: "src/app.ts",
+      name: "app.ts",
+      sizeBytes: 12,
+      modifiedAt: 1,
+      extension: "ts",
+      mime: "text/plain",
+      symlink: false,
+      content: "const value = 1;\n",
+      maxBytes: 1_000_000,
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce({
+      root: "/repo",
+      path: "src/app.ts",
+      name: "app.ts",
+      sizeBytes: 12,
+      modifiedAt: 2,
+      extension: "ts",
+      mime: "text/plain",
+      symlink: false,
+      content: "const value = 2;\n",
+      maxBytes: 1_000_000,
+    });
 
-  it("uses the file prop as the tab label", () => {
-    render(<EditorWidget file="api.ts" />);
-    expect(screen.getByText(/api\.ts/)).toBeInTheDocument();
-  });
+    render(<EditorWidget root="/repo" file="src/app.ts" />);
 
-  it("falls back to the default tab label", () => {
-    render(<EditorWidget />);
-    expect(screen.getByText(/windows\.jsx/)).toBeInTheDocument();
-  });
+    const textbox = await screen.findByRole("textbox", { name: "Editor: src/app.ts" });
+    expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts");
+    await userEvent.clear(textbox);
+    await userEvent.type(textbox, "const value = 2;{enter}");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
-  it("exposes the code pane as a focusable labelled region for keyboard scrolling (C194)", () => {
-    render(<EditorWidget file="api.ts" />);
-    const region = screen.getByRole("region", { name: "Code preview: api.ts" });
-    expect(region).toHaveAttribute("tabindex", "0");
+    await waitFor(() => {
+      expect(saveFilesContent).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "src/app.ts",
+        content: "const value = 2;\n",
+        expectedModifiedAt: 1,
+      });
+    });
+    expect(await screen.findByText(/saved/i)).toBeInTheDocument();
   });
 });
