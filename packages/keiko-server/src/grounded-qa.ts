@@ -48,6 +48,7 @@ import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets }
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
+  clarificationUserMessage,
   runGroundedExploration,
   type GroundedAnswerer,
   type OrchestratorInput,
@@ -863,7 +864,7 @@ async function runGroundedRunner(
     return output;
   } catch (error) {
     if (error instanceof ClarificationNeededError) {
-      return badRequest(error.message);
+      return badRequest(clarificationUserMessage(error));
     }
     const workspaceResult = mappedWorkspaceError(error);
     if (workspaceResult !== undefined) return workspaceResult;

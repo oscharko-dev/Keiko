@@ -41,6 +41,7 @@ import { currentRedactionSecrets } from "./deps.js";
 import type { Chat } from "./store/index.js";
 import {
   ClarificationNeededError,
+  clarificationUserMessage,
   retrieveConnectedContextPack,
   type OrchestratorInput,
   type RetrievalOnlyOutput,
@@ -644,7 +645,7 @@ function isRouteResult(value: RetrievalOutcome | RouteResult): value is RouteRes
 }
 
 function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {
-  if (error instanceof ClarificationNeededError) return badRequest(error.message);
+  if (error instanceof ClarificationNeededError) return badRequest(clarificationUserMessage(error));
   const workspaceResult = mappedWorkspaceError(error);
   if (workspaceResult !== undefined) return workspaceResult;
   const gatewayResult = mappedGatewayError(error, deps);

@@ -1300,7 +1300,7 @@ describe("handleGroundedAsk", () => {
     expect(auditKinds.map((row) => row.kind)).toEqual([]);
   });
 
-  it("maps ClarificationNeededError to a 400 BAD_REQUEST", async () => {
+  it("maps ClarificationNeededError to an actionable 400 BAD_REQUEST", async () => {
     const { chatId } = await setupChatWithScope();
     const failingRunner: GroundedRunner = async () => {
       const { ClarificationNeededError } = await import("./grounded-orchestrator.js");
@@ -1317,7 +1317,11 @@ describe("handleGroundedAsk", () => {
     );
     expect(result.status).toBe(400);
     const body = result.body as { error: { code: string; message: string } };
-    expect(body.error.message).toContain("clarification");
+    // Release 0.2.0 — the wire message must tell the user WHAT to do (mention an anchor) and
+    // surface the planner's own suggestions, not echo the raw "clarification needed: <reason>".
+    expect(body.error.message).toContain("too broad");
+    expect(body.error.message).toContain("file name, identifier, or exact phrase");
+    expect(body.error.message).toContain('"Which file?"');
   });
 
   // ─── Issue #187: contextPack summary on the wire ─────────────────────────────

@@ -107,12 +107,35 @@ export interface RetrievalOnlyOutput {
 }
 
 // Raised when the planner asks for clarification (no anchors, too-generic prompt, etc.). The
-// route maps this to a 400 BAD_REQUEST with the planner's clarification reason in the message.
+// route maps this to a 400 BAD_REQUEST via clarificationUserMessage below; the Error message
+// itself keeps the stable machine-ish form for logs and tests.
 export class ClarificationNeededError extends Error {
   public constructor(public readonly clarification: ClarificationPrompt) {
     super(`clarification needed: ${clarification.reason}`);
     this.name = "ClarificationNeededError";
   }
+}
+
+// Release 0.2.0 — user-facing mapping for a planner clarification. The raw reason string
+// ("clarification needed: too-generic") told the user nothing actionable; the HTTP message now
+// says what the planner needs and folds in the planner's own suggested questions. Static text
+// plus planner-built suggestions only — no user/file content, so nothing to redact.
+export function clarificationUserMessage(error: ClarificationNeededError): string {
+  const { reason, suggestedQuestions } = error.clarification;
+  const intro =
+    reason === "scope-empty"
+      ? "The connected source contains nothing searchable."
+      : reason === "scope-invalid"
+        ? "The connected source could not be searched."
+        : "Your question is too broad to search the connected sources.";
+  const anchorHint =
+    reason === "no-anchors" || reason === "too-generic"
+      ? " Mention a concrete file name, identifier, or exact phrase so Keiko knows where to look."
+      : "";
+  const examples = suggestedQuestions.slice(0, 2);
+  const exampleText =
+    examples.length > 0 ? ` For example: ${examples.map((q) => `"${q}"`).join(" or ")}` : "";
+  return `${intro}${anchorHint}${exampleText}`;
 }
 
 // ─── Default deterministic answerer ───────────────────────────────────────────
