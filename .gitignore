@@ -123,9 +123,14 @@ coverage/
 keiko.config.json
 keiko-live-start.png
 
-# Local release-smoke sandbox. Contains installed npm packages, copied runtime config, browser
-# state, and evidence from manual release verification; never commit it.
-/sandbox/
+# Versioned developer sandbox. Keep the sandbox sources committed, but never commit generated
+# installs, runtime state, logs, or ad-hoc local config from sandbox runs.
+/sandbox/node_modules/
+/sandbox/.keiko/
+/sandbox/*.log
+/sandbox/.env
+/sandbox/.env.*
+/sandbox/keiko.config.json
 
 # Generated CycloneDX SBOMs (root + per-workspace), emitted by
 # scripts/check-workspace-supply-chain.mjs. CI uploads them as a workflow artifact.

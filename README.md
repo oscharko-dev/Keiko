@@ -71,6 +71,28 @@ To stop Keiko: `keiko stop`.
 
 For a project-local install (adds `keiko:start`/`keiko:stop` npm scripts via `keiko init`), see [Install and start](#install-and-start) below; setup issues are covered in [Troubleshooting](#troubleshooting).
 
+## Development Start
+
+From the repository root, start the development UI:
+
+```bash
+npm run dev:start
+```
+
+This checks whether dependencies are installed, runs the root build needed by the Node BFF, starts
+the UI through `next dev`, and exposes the app through one loopback URL. If the default port
+`1983` is already in use and no port was explicitly configured, the script chooses the next free
+loopback port.
+
+Stop the development UI:
+
+```bash
+npm run dev:stop
+```
+
+For a versioned sandbox that installs the current root package through `file:..`, rebuilds the
+packaged UI on every start, and then runs the built artifact, use [`sandbox/`](sandbox/).
+
 ## What's New in 0.2.0
 
 ### Quality Intelligence
