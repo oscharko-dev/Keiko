@@ -4,6 +4,15 @@ import {
   HARNESS_CODES,
   DEFAULT_LIMITS,
   HARNESS_VERSION,
+  ORCHESTRATION_SCHEMA_VERSION,
+  ORCHESTRATION_RUN_KINDS,
+  ORCHESTRATION_EXECUTION_MODES,
+  ORCHESTRATION_STATES,
+  ORCHESTRATION_TERMINAL_STATES,
+  ORCHESTRATION_CHILD_ROLES,
+  ORCHESTRATION_CHILD_OUTCOMES,
+  isOrchestrationStateTransitionAllowed,
+  assertOrchestrationStateTransition,
   EVIDENCE_SCHEMA_VERSION,
   DEFAULT_RETENTION,
   DEFAULT_PATCH_LIMITS,
@@ -111,6 +120,18 @@ import type {
   CapsuleRowShape,
   RedactPathOptions,
   SelectedScope,
+  OrchestrationRunKind,
+  OrchestrationExecutionMode,
+  OrchestrationState,
+  OrchestrationChildRole,
+  OrchestrationChildOutcome,
+  OrchestrationStateTransition,
+  OrchestrationAuthorityBoundary,
+  OrchestrationRunIdentity,
+  OrchestrationChildPlan,
+  OrchestrationPlan,
+  OrchestrationChildSettlement,
+  OrchestrationInvalidTransition,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -128,6 +149,18 @@ describe("keiko-contracts package surface", () => {
 
   it("HARNESS_VERSION is the literal '0.1.7'", () => {
     expect(HARNESS_VERSION).toBe("0.1.7");
+  });
+
+  it("orchestration value re-exports are reachable through the barrel", () => {
+    expect(ORCHESTRATION_SCHEMA_VERSION).toBe("1");
+    expect(ORCHESTRATION_RUN_KINDS).toContain("parent-run");
+    expect(ORCHESTRATION_EXECUTION_MODES).toContain("parallel");
+    expect(ORCHESTRATION_STATES).toContain("conflicted");
+    expect(ORCHESTRATION_TERMINAL_STATES.has("completed")).toBe(true);
+    expect(ORCHESTRATION_CHILD_ROLES).toContain("implementer");
+    expect(ORCHESTRATION_CHILD_OUTCOMES).toContain("partial-success");
+    expect(isOrchestrationStateTransitionAllowed("planning", "ready")).toBe(true);
+    expect(assertOrchestrationStateTransition("completed", "running")).not.toBeNull();
   });
 
   it("EVIDENCE_SCHEMA_VERSION is the literal string '1'", () => {
@@ -165,6 +198,22 @@ describe("keiko-contracts package surface", () => {
     pin<ToolCallResult>();
     pin<ToolCallMetadata>();
     pin<SideFileWriteResult>();
+  });
+
+  it("orchestration type re-exports are reachable through the barrel", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<OrchestrationRunKind>();
+    pin<OrchestrationExecutionMode>();
+    pin<OrchestrationState>();
+    pin<OrchestrationChildRole>();
+    pin<OrchestrationChildOutcome>();
+    pin<OrchestrationStateTransition>();
+    pin<OrchestrationAuthorityBoundary>();
+    pin<OrchestrationRunIdentity>();
+    pin<OrchestrationChildPlan>();
+    pin<OrchestrationPlan>();
+    pin<OrchestrationChildSettlement>();
+    pin<OrchestrationInvalidTransition>();
   });
 
   it("workflow-handoff value re-exports are reachable through the barrel (#186)", () => {

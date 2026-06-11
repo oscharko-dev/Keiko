@@ -73,6 +73,34 @@ export type {
 } from "./harness.js";
 export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";
 
+// ─── Multi-agent orchestration ────────────────────────────────────────────────
+export type {
+  OrchestrationRunKind,
+  OrchestrationExecutionMode,
+  OrchestrationState,
+  OrchestrationChildRole,
+  OrchestrationChildOutcome,
+  OrchestrationStateTransition,
+  OrchestrationAuthorityBoundary,
+  OrchestrationRunIdentity,
+  OrchestrationChildPlan,
+  OrchestrationPlan,
+  OrchestrationChildSettlement,
+  OrchestrationInvalidTransition,
+} from "./orchestration.js";
+export {
+  ORCHESTRATION_SCHEMA_VERSION,
+  ORCHESTRATION_RUN_KINDS,
+  ORCHESTRATION_EXECUTION_MODES,
+  ORCHESTRATION_STATES,
+  ORCHESTRATION_TERMINAL_STATES,
+  ORCHESTRATION_CHILD_ROLES,
+  ORCHESTRATION_CHILD_OUTCOMES,
+  ORCHESTRATION_ALLOWED_STATE_TRANSITIONS,
+  isOrchestrationStateTransitionAllowed,
+  assertOrchestrationStateTransition,
+} from "./orchestration.js";
+
 // ─── Workflow descriptor ────────────────────────────────────────────────────────
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./workflow-descriptor.js";
 

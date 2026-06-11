@@ -34,6 +34,18 @@ import type {
   ModelCallFailedEvent,
   ModelCallStartedEvent,
   ModelPort,
+  OrchestrationAuthorityBoundary,
+  OrchestrationChildOutcome,
+  OrchestrationChildPlan,
+  OrchestrationChildRole,
+  OrchestrationChildSettlement,
+  OrchestrationExecutionMode,
+  OrchestrationInvalidTransition,
+  OrchestrationPlan,
+  OrchestrationRunIdentity,
+  OrchestrationRunKind,
+  OrchestrationState,
+  OrchestrationStateTransition,
   PatchProposedEvent,
   ReasoningTraceEvent,
   RecordedToolCall,
@@ -75,6 +87,16 @@ describe("keiko-harness public surface", () => {
     expect(harness.DEFAULT_LIMITS).toBeDefined();
     expect(harness.HARNESS_CODES).toBeDefined();
     expect(harness.TERMINAL_STATES).toBeDefined();
+    expect(harness.ORCHESTRATION_SCHEMA_VERSION).toBe("1");
+    expect(harness.ORCHESTRATION_RUN_KINDS).toContain("child-run");
+    expect(harness.ORCHESTRATION_EXECUTION_MODES).toContain("parallel");
+    expect(harness.ORCHESTRATION_STATES).toContain("dispatching");
+    expect(harness.ORCHESTRATION_TERMINAL_STATES.has("failed")).toBe(true);
+    expect(harness.ORCHESTRATION_CHILD_ROLES).toContain("reviewer");
+    expect(harness.ORCHESTRATION_CHILD_OUTCOMES).toContain("discarded");
+    expect(harness.ORCHESTRATION_ALLOWED_STATE_TRANSITIONS.running).toContain("merging");
+    expect(typeof harness.isOrchestrationStateTransitionAllowed).toBe("function");
+    expect(typeof harness.assertOrchestrationStateTransition).toBe("function");
     // Error taxonomy (re-exported from keiko-security):
     expect(typeof harness.HarnessError).toBe("function");
     expect(typeof harness.HarnessInternalError).toBe("function");
@@ -125,6 +147,18 @@ describe("keiko-harness public surface", () => {
     pin<ModelCallFailedEvent>();
     pin<ModelCallStartedEvent>();
     pin<ModelPort>();
+    pin<OrchestrationAuthorityBoundary>();
+    pin<OrchestrationChildOutcome>();
+    pin<OrchestrationChildPlan>();
+    pin<OrchestrationChildRole>();
+    pin<OrchestrationChildSettlement>();
+    pin<OrchestrationExecutionMode>();
+    pin<OrchestrationInvalidTransition>();
+    pin<OrchestrationPlan>();
+    pin<OrchestrationRunIdentity>();
+    pin<OrchestrationRunKind>();
+    pin<OrchestrationState>();
+    pin<OrchestrationStateTransition>();
     pin<PatchProposedEvent>();
     pin<ReasoningTraceEvent>();
     pin<RecordedToolCall>();
