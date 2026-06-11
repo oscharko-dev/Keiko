@@ -784,8 +784,9 @@ export async function readFilesContent(
   store: UiStore,
   rootInput: string | null,
   pathInput: string | null,
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
 ): Promise<FilesContentResponse> {
-  const target = await resolveInsideRoot(store, rootInput, pathInput);
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
@@ -803,8 +804,14 @@ export async function writeFilesContent(args: {
   readonly pathInput: string | null;
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
+  readonly redactor?: FilesMetadataRedactor | undefined;
 }): Promise<FilesContentResponse> {
-  const target = await resolveInsideRoot(args.store, args.rootInput, args.pathInput);
+  const target = await resolveInsideRoot(
+    args.store,
+    args.rootInput,
+    args.pathInput,
+    args.redactor ?? staticFilesMetadataRedactor,
+  );
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
@@ -916,6 +923,7 @@ export async function handleFilesContent(
           deps.store,
           ctx.url.searchParams.get("root"),
           ctx.url.searchParams.get("path"),
+          deps.redactor,
         ),
       };
     }
@@ -943,6 +951,7 @@ export async function handleFilesContent(
         pathInput,
         content,
         expectedModifiedAt,
+        redactor: deps.redactor,
       }),
     };
   });

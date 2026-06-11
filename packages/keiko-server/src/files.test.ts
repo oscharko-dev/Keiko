@@ -157,6 +157,24 @@ describe("desktop files browser", () => {
       status: 403,
       code: "DENIED",
     });
+    await expect(
+      readFilesContent(store, root, `safe-dir/${tokenSegment}.txt`, buildRedactor({})),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: `safe-dir/${tokenSegment}.txt`,
+        content: "updated\n",
+        redactor: buildRedactor({}),
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
   });
 
   it("refuses a registered project whose root path contains credential-shaped metadata", async () => {
