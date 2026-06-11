@@ -16,7 +16,7 @@
   "scripts": {
     "prebuild": "rm -rf dist",
     "build": "tsc -b tsconfig.json",
-    "typecheck": "tsc -b tsconfig.json --noEmit",
+    "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run"
   },
   "files": [
