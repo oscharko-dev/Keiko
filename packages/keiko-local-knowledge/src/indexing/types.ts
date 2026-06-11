@@ -110,6 +110,8 @@ export interface IndexingJobStartedEvent {
 export interface IndexingDocumentDiscoveredEvent {
   readonly kind: "document-discovered";
   readonly jobId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
   readonly relativePath: string;
   readonly sizeBytes: number;
 }
@@ -117,6 +119,8 @@ export interface IndexingDocumentDiscoveredEvent {
 export interface IndexingDocumentExtractedEvent {
   readonly kind: "document-extracted";
   readonly jobId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly relativePath: string;
 }
@@ -124,6 +128,8 @@ export interface IndexingDocumentExtractedEvent {
 export interface IndexingDocumentChunkedEvent {
   readonly kind: "document-chunked";
   readonly jobId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly chunkCount: number;
 }
@@ -131,6 +137,8 @@ export interface IndexingDocumentChunkedEvent {
 export interface IndexingDocumentEmbeddedEvent {
   readonly kind: "document-embedded";
   readonly jobId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly vectorCount: number;
   // Lexicographically-greatest chunk id embedded so far for this document. Persisted to
@@ -141,6 +149,8 @@ export interface IndexingDocumentEmbeddedEvent {
 export interface IndexingDocumentSkippedEvent {
   readonly kind: "document-skipped";
   readonly jobId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly reason: "unchanged" | "already-embedded" | "unsupported";
 }
@@ -148,6 +158,8 @@ export interface IndexingDocumentSkippedEvent {
 export interface IndexingDocumentFailedEvent {
   readonly kind: "document-failed";
   readonly jobId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
   readonly documentId?: DocumentId;
   readonly relativePath?: string;
   readonly error: IndexingJobError;

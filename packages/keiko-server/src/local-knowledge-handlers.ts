@@ -1000,6 +1000,22 @@ interface RunCapsuleIndexingJobOptions {
   readonly force: boolean;
 }
 
+type IndexingSourceSelection =
+  | { readonly shouldRun: true; readonly sourceIds?: readonly KnowledgeSourceId[] }
+  | { readonly shouldRun: false };
+
+function resolveIndexingSourceSelection(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  mode: RunCapsuleIndexingJobOptions["mode"],
+): IndexingSourceSelection {
+  if (mode !== "repair-failed") {
+    return { shouldRun: true };
+  }
+  const sourceIds = failedSourceIds(store, capsule.id);
+  return sourceIds.length === 0 ? { shouldRun: false } : { shouldRun: true, sourceIds };
+}
+
 // LK-001 (Epic #189): both the start and refresh handlers map a terminal IndexingTerminal
 // to the same 3-way response — cancelled → 409 cancelled, failed → 409 failed-message,
 // any other (completed or absent) → 200 ok. Extracted so each handler stays under the
@@ -1035,14 +1051,16 @@ async function runCapsuleIndexingJob(
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
-  const sourceIds =
-    options.mode === "repair-failed" ? failedSourceIds(store, capsule.id) : undefined;
+  const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
+  if (!sourceSelection.shouldRun) {
+    return undefined;
+  }
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   let terminal: IndexingTerminal | undefined;
   try {
     for await (const event of runIndexingJob({
       capsuleId: capsule.id,
-      ...(sourceIds !== undefined ? { sourceIds } : {}),
+      ...(sourceSelection.sourceIds !== undefined ? { sourceIds: sourceSelection.sourceIds } : {}),
       parserRegistry: createDefaultParserRegistry(),
       workspaceFs: nodeWorkspaceFs,
       embeddingAdapter: adapter,

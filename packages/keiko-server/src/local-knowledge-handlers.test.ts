@@ -653,7 +653,7 @@ describe("local-knowledge handlers", () => {
     });
   });
 
-  it("runs incremental refresh and records a skipped second pass for unchanged files", async () => {
+  it("runs incremental refresh and treats repair-failed with no failed sources as a no-op", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const docsRoot = join(tmp, "docs");
@@ -701,17 +701,10 @@ describe("local-knowledge handlers", () => {
       .all({ c: "cap-1" }) as unknown as readonly { readonly kind: string }[];
     inspect.close();
 
-    expect(jobs).toHaveLength(2);
+    expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ status: "succeeded", processed_documents: 1 });
-    expect(jobs[1]).toMatchObject({
-      status: "succeeded",
-      processed_documents: 0,
-      skipped_documents: 0,
-    });
     expect(auditKinds.map((row) => row.kind).sort()).toEqual([
       "indexing-job-completed",
-      "indexing-job-completed",
-      "indexing-job-started",
       "indexing-job-started",
     ]);
   });

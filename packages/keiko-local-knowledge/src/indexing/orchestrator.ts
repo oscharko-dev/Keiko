@@ -40,7 +40,11 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
-import { deleteChunksForDocument, hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
+import {
+  countChunksForDocument,
+  deleteChunksForDocument,
+  hasStaleChunksForDocument,
+} from "../chunking/chunker-persist.js";
 import { chunkingStrategyKey } from "../chunking/index.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
@@ -64,7 +68,6 @@ import {
 import { embedChunkBatch } from "./embedding-batcher.js";
 import {
   countVectorsForDocument,
-  deleteVectorsForCapsule,
   deleteVectorsForDocument,
   selectChunksForDocument,
 } from "./vector-persist.js";
@@ -133,7 +136,17 @@ function resolveSources(
   }
   if (options.sourceIds === undefined) return all;
   const allow = new Set(options.sourceIds.map((s) => String(s)));
-  return all.filter((s) => allow.has(String(s.id)));
+  if (allow.size === 0) {
+    throw new IndexingError("INVALID_OPTIONS", "sourceIds must contain at least one source id.");
+  }
+  const selected = all.filter((s) => allow.has(String(s.id)));
+  if (selected.length !== allow.size) {
+    throw new IndexingError(
+      "INVALID_OPTIONS",
+      "sourceIds must reference sources attached to the target capsule.",
+    );
+  }
+  return selected;
 }
 
 // ─── Mutable run state ────────────────────────────────────────────────────────
@@ -351,6 +364,16 @@ interface EmbedDocumentResult {
   readonly lastChunkId: ChunkId | null;
 }
 
+function cancellationError(): IndexingJobError {
+  return { code: "CANCELLED", message: "indexing aborted via AbortSignal" };
+}
+
+function recordCancellationIfRequested(state: RunState, errors: IndexingJobError[]): void {
+  if (cancellationRequested(state) && !errors.some((error) => error.code === "CANCELLED")) {
+    errors.push(cancellationError());
+  }
+}
+
 async function embedDocumentChunks(
   state: RunState,
   documentId: DocumentId,
@@ -392,6 +415,7 @@ async function embedDocumentChunks(
     }
     if (cancellationRequested(state)) break;
   }
+  recordCancellationIfRequested(state, errors);
   return { vectorCount, errors, lastChunkId };
 }
 
@@ -401,6 +425,8 @@ function handleExtractionSkipped(state: RunState, result: ExtractionResult): Ind
   return {
     kind: "document-skipped",
     jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId: result.sourceId,
     documentId: result.outcome.kind === "skipped" ? result.outcome.document.id : ("" as DocumentId),
     reason: "unchanged",
   };
@@ -420,6 +446,8 @@ function handleExtractionFailed(state: RunState, result: ExtractionResult): Inde
   return {
     kind: "document-failed",
     jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId: result.sourceId,
     ...(result.outcome.kind === "failed" ? { documentId: result.outcome.document.id } : {}),
     relativePath: result.relativePath,
     error,
@@ -444,6 +472,31 @@ function resolveChunkCount(
   // them so the chunked event still reports an accurate number.
   return selectChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId)
     .length;
+}
+
+interface EmbeddingCoverage {
+  readonly chunkCount: number;
+  readonly vectorCount: number;
+}
+
+function embeddingCoverage(state: RunState, documentId: DocumentId): EmbeddingCoverage {
+  return {
+    chunkCount: countChunksForDocument(
+      state.options.store._internal.db,
+      state.capsule.id,
+      documentId,
+    ),
+    vectorCount: countVectorsForDocument(
+      state.options.store._internal.db,
+      state.capsule.id,
+      documentId,
+    ),
+  };
+}
+
+function hasCompleteVectorCoverage(state: RunState, documentId: DocumentId): boolean {
+  const coverage = embeddingCoverage(state, documentId);
+  return coverage.chunkCount > 0 && coverage.vectorCount === coverage.chunkCount;
 }
 
 function chunkPersistedDocument(
@@ -474,7 +527,6 @@ function chunkPersistedDocument(
       sourceId: result.sourceId,
       documentId,
       sourceText,
-      force: state.options.force === true,
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     },
     state.options.chunkingOptions,
@@ -486,21 +538,42 @@ function chunkPersistedDocument(
     chunkResult.chunkIds,
   );
   return {
-    events: chunkedDocumentEvents(state.jobId, documentId, result.relativePath, chunkCount),
+    events: chunkedDocumentEvents(
+      state,
+      result.sourceId,
+      documentId,
+      result.relativePath,
+      chunkCount,
+    ),
     documentId,
     chunkCount,
   };
 }
 
 function chunkedDocumentEvents(
-  jobId: string,
+  state: RunState,
+  sourceId: KnowledgeSourceId,
   documentId: DocumentId,
   relativePath: string,
   chunkCount: number,
 ): readonly IndexingEvent[] {
   return [
-    { kind: "document-extracted", jobId, documentId, relativePath },
-    { kind: "document-chunked", jobId, documentId, chunkCount },
+    {
+      kind: "document-extracted",
+      jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId,
+      documentId,
+      relativePath,
+    },
+    {
+      kind: "document-chunked",
+      jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId,
+      documentId,
+      chunkCount,
+    },
   ];
 }
 
@@ -523,6 +596,7 @@ function sourceForResult(state: RunState, result: ExtractionResult): KnowledgeSo
 // Returns a PersistedHandling to short-circuit when already-embedded, undefined to continue.
 function applyIncrementalFastPath(
   state: RunState,
+  sourceId: KnowledgeSourceId,
   documentId: DocumentId,
 ): PersistedHandling | undefined {
   const staleChunks = hasStaleChunksForDocument(
@@ -532,28 +606,27 @@ function applyIncrementalFastPath(
     chunkingStrategyKey(state.options.chunkingOptions),
   );
   if (state.options.force !== true) {
-    // Incremental fast-path #2: if vectors already exist for this document AND not in force
-    // mode, skip the embedding step entirely. The chunker is also a no-op in this case.
-    const existing = countVectorsForDocument(
-      state.options.store._internal.db,
-      state.capsule.id,
-      documentId,
-    );
-    if (existing > 0 && !staleChunks) {
+    const coverage = embeddingCoverage(state, documentId);
+    if (coverage.chunkCount > 0 && coverage.vectorCount === coverage.chunkCount && !staleChunks) {
       state.skippedDocuments += 1;
       return {
         events: [
-          { kind: "document-skipped", jobId: state.jobId, documentId, reason: "already-embedded" },
+          {
+            kind: "document-skipped",
+            jobId: state.jobId,
+            capsuleId: state.capsule.id,
+            sourceId,
+            documentId,
+            reason: "already-embedded",
+          },
         ],
       };
     }
-    if (existing > 0 && staleChunks) {
+    if (coverage.vectorCount > 0) {
       deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
     }
     return undefined;
   }
-  // Force mode: tear down prior vectors so the re-embed is the only surviving set.
-  deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
   return undefined;
 }
 
@@ -583,6 +656,8 @@ function tryChunkDocument(
         {
           kind: "document-failed",
           jobId: state.jobId,
+          capsuleId: state.capsule.id,
+          sourceId: result.sourceId,
           documentId,
           relativePath: result.relativePath,
           error,
@@ -595,6 +670,7 @@ function tryChunkDocument(
 function appendDocumentFailure(
   state: RunState,
   events: IndexingEvent[],
+  sourceId: KnowledgeSourceId,
   documentId: DocumentId,
   relativePath: string,
   error: IndexingJobError,
@@ -607,6 +683,8 @@ function appendDocumentFailure(
   events.push({
     kind: "document-failed",
     jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId,
     documentId,
     relativePath,
     error,
@@ -617,6 +695,7 @@ function appendDocumentFailure(
 function completeEmbeddedDocument(
   state: RunState,
   events: IndexingEvent[],
+  sourceId: KnowledgeSourceId,
   documentId: DocumentId,
   embedResult: EmbedDocumentResult,
 ): PersistedHandling {
@@ -626,6 +705,8 @@ function completeEmbeddedDocument(
   events.push({
     kind: "document-embedded",
     jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId,
     documentId,
     vectorCount: embedResult.vectorCount,
     resumeToken: embedResult.lastChunkId ?? (`${String(documentId)}#empty` as ChunkId),
@@ -644,6 +725,7 @@ function isCancellationOnlyEmbedResult(state: RunState, embedResult: EmbedDocume
 // Maps an EmbedDocumentResult into PersistedHandling events, mutating run-state counters.
 function applyEmbedResult(
   state: RunState,
+  sourceId: KnowledgeSourceId,
   documentId: DocumentId,
   relativePath: string,
   priorEvents: readonly IndexingEvent[],
@@ -651,13 +733,12 @@ function applyEmbedResult(
 ): PersistedHandling {
   const events: IndexingEvent[] = [...priorEvents];
   if (isCancellationOnlyEmbedResult(state, embedResult)) {
-    clearDocumentArtifacts(state, documentId, { deleteChunks: false });
     return { events };
   }
   const identityErr = embedResult.errors.find((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY");
   if (identityErr !== undefined) {
     return {
-      ...appendDocumentFailure(state, events, documentId, relativePath, identityErr, {
+      ...appendDocumentFailure(state, events, sourceId, documentId, relativePath, identityErr, {
         deleteChunks: false,
       }),
       identityFailure: identityErr,
@@ -668,11 +749,11 @@ function applyEmbedResult(
       code: "EMBEDDING_ADAPTER_FAILED",
       message: "embedding adapter failed",
     };
-    return appendDocumentFailure(state, events, documentId, relativePath, firstErr, {
+    return appendDocumentFailure(state, events, sourceId, documentId, relativePath, firstErr, {
       deleteChunks: false,
     });
   }
-  return completeEmbeddedDocument(state, events, documentId, embedResult);
+  return completeEmbeddedDocument(state, events, sourceId, documentId, embedResult);
 }
 
 function* persistedEvents(handling: PersistedHandling): Generator<IndexingEvent> {
@@ -696,14 +777,23 @@ async function* handlePersistedDocument(
     yield {
       kind: "document-extracted",
       jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId: result.sourceId,
       documentId,
       relativePath: result.relativePath,
     };
-    yield { kind: "document-skipped", jobId: state.jobId, documentId, reason: "unsupported" };
+    yield {
+      kind: "document-skipped",
+      jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId: result.sourceId,
+      documentId,
+      reason: "unsupported",
+    };
     return;
   }
 
-  const fastPath = applyIncrementalFastPath(state, documentId);
+  const fastPath = applyIncrementalFastPath(state, result.sourceId, documentId);
   if (fastPath !== undefined) {
     yield* persistedEvents(fastPath);
     return;
@@ -724,7 +814,9 @@ async function* handlePersistedDocument(
     sourceForResult(state, result),
     result.relativePath,
   );
-  yield* persistedEvents(applyEmbedResult(state, documentId, result.relativePath, [], embedResult));
+  yield* persistedEvents(
+    applyEmbedResult(state, result.sourceId, documentId, result.relativePath, [], embedResult),
+  );
 }
 
 function* handleExtractionSkippedEvents(
@@ -749,16 +841,19 @@ async function* handleFileExtracted(
 ): AsyncGenerator<IndexingEvent> {
   if (result.outcome.kind === "skipped") {
     // In force mode, an "unchanged" document still needs chunk-and-embed because the
-    // orchestrator deleted the vector rows at job-started. Re-shape the skipped outcome
-    // as a persisted outcome (the document row exists and is valid) so the standard
-    // pipeline runs. Outside force mode, surface the skip as-is.
+    // caller explicitly requested a fresh embedding pass. Re-shape the skipped outcome as
+    // a persisted outcome (the document row exists and is valid) so the standard pipeline
+    // runs. Outside force/recovery mode, surface the skip as-is.
     const staleChunks = hasStaleChunksForDocument(
       state.options.store._internal.db,
       state.capsule.id,
       result.outcome.document.id,
       chunkingStrategyKey(state.options.chunkingOptions),
     );
-    if (state.options.force === true || staleChunks) {
+    const missingVectors =
+      result.outcome.document.status === "extracted" &&
+      !hasCompleteVectorCoverage(state, result.outcome.document.id);
+    if (state.options.force === true || staleChunks || missingVectors) {
       const synthetic: ExtractionResult = {
         capsuleId: result.capsuleId,
         sourceId: result.sourceId,
@@ -781,6 +876,7 @@ async function* handleFileExtracted(
 
 async function* handleDiscoveryEvent(
   state: RunState,
+  source: KnowledgeSource,
   evt: ExtractionEvent,
 ): AsyncGenerator<IndexingEvent> {
   if (evt.kind === "file-discovered") {
@@ -788,6 +884,8 @@ async function* handleDiscoveryEvent(
     yield {
       kind: "document-discovered",
       jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId: source.id,
       relativePath: evt.relativePath,
       sizeBytes: evt.sizeBytes,
     };
@@ -803,6 +901,8 @@ async function* handleDiscoveryEvent(
     yield {
       kind: "document-failed",
       jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId: source.id,
       ...(evt.error.relativePath !== undefined ? { relativePath: evt.error.relativePath } : {}),
       error: err,
     };
@@ -822,9 +922,10 @@ function shouldStopAfterEvent(event: IndexingEvent): boolean {
 
 async function* streamDiscoveryEvent(
   state: RunState,
+  source: KnowledgeSource,
   evt: ExtractionEvent,
 ): AsyncGenerator<IndexingEvent, boolean> {
-  for await (const event of handleDiscoveryEvent(state, evt)) {
+  for await (const event of handleDiscoveryEvent(state, source, evt)) {
     persistJobProgress(state);
     yield event;
     if (shouldStopAfterEvent(event)) {
@@ -860,7 +961,7 @@ async function* runOneSource(
       progress.cancelled = true;
       break;
     }
-    const shouldStop = yield* streamDiscoveryEvent(state, evt);
+    const shouldStop = yield* streamDiscoveryEvent(state, source, evt);
     if (shouldStop) {
       return;
     }
@@ -933,6 +1034,7 @@ function finalizeSourceRun(
 ): void {
   if (progress.cancelled) return;
   if (!progress.completed || progress.sawScopeError) return;
+  if (progress.discoveredPaths.size >= resolvedDiscoveryOptions(state).maxFiles) return;
   pruneDeletedSourceDocuments(state, source, progress.discoveredPaths);
 }
 
@@ -1113,11 +1215,6 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
     return;
   }
 
-  // Force mode: tear down ALL vectors for the capsule up front. Per-document teardown
-  // still runs in handlePersistedDocument as a defence-in-depth measure.
-  if (options.force === true) {
-    deleteVectorsForCapsule(state.options.store._internal.db, capsule.id);
-  }
   const identityFailure = yield* runSourcesWithProgress(state, sources);
   yield* finalize(state, identityFailure);
 }

@@ -375,8 +375,9 @@ export async function embedChunkBatch(
   if (identityFailure !== undefined) {
     return { vectors: [], errors };
   }
-  if (checkAbort(options.signal) !== undefined) {
-    return { vectors: [], errors };
+  const abortError = checkAbort(options.signal);
+  if (abortError !== undefined) {
+    return { vectors: [], errors: [...errors, abortError] };
   }
 
   const vectors = persistOutcomes(

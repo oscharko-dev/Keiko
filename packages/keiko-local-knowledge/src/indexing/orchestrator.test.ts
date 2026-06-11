@@ -35,7 +35,11 @@ import { documentIdFor } from "../discovery/types.js";
 
 import { runIndexingJob } from "./orchestrator.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
-import { countVectorsForCapsule } from "./vector-persist.js";
+import {
+  countVectorsForCapsule,
+  countVectorsForDocument,
+  selectChunksForDocument,
+} from "./vector-persist.js";
 import { deterministicVector, happyAdapter, scriptedAdapter } from "./_support.js";
 import type { IndexingEvent, IndexingOptions } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
@@ -74,6 +78,31 @@ function buildFixture(
   return { store, cleanup, capsuleId, sourceId, source, fs };
 }
 
+function buildTwoSourceFixture(): Fixture & { readonly otherSourceId: KnowledgeSourceId } {
+  const { store, cleanup } = freshStore();
+  const capsuleId = "cap-orch" as KnowledgeCapsuleId;
+  const sourceId = "src-orch" as KnowledgeSourceId;
+  createCapsule(store, sampleCapsuleInput({ id: capsuleId }));
+  const source = addSourceToCapsule(store, capsuleId, {
+    id: sourceId,
+    displayName: "alpha",
+    tags: [],
+    scope: { kind: "files", rootPath: ROOT, files: ["alpha.txt"] },
+  });
+  const otherSourceId = "src-other" as KnowledgeSourceId;
+  addSourceToCapsule(store, capsuleId, {
+    id: otherSourceId,
+    displayName: "beta",
+    tags: [],
+    scope: { kind: "files", rootPath: ROOT, files: ["beta.txt"] },
+  });
+  const fs = memoryFs(ROOT, [
+    { relativePath: "alpha.txt", content: "Alpha source text. ".repeat(64) },
+    { relativePath: "beta.txt", content: "Beta source text. ".repeat(64) },
+  ]);
+  return { store, cleanup, capsuleId, sourceId, source, fs, otherSourceId };
+}
+
 async function drain(stream: AsyncIterable<IndexingEvent>): Promise<readonly IndexingEvent[]> {
   const out: IndexingEvent[] = [];
   for await (const evt of stream) out.push(evt);
@@ -89,6 +118,13 @@ function buildOptions(fixture: Fixture, overrides: Partial<IndexingOptions> = {}
     store: fixture.store,
   };
   return { ...base, ...overrides };
+}
+
+function countVectorsForSource(fixture: Fixture, sourceId: KnowledgeSourceId): number {
+  const row = fixture.store._internal.db
+    .prepare("SELECT COUNT(*) AS n FROM vectors WHERE capsule_id = :c AND source_id = :s")
+    .get({ c: fixture.capsuleId, s: sourceId }) as { readonly n: number };
+  return row.n;
 }
 
 describe("runIndexingJob — source preconditions", () => {
@@ -117,6 +153,27 @@ describe("runIndexingJob — source preconditions", () => {
       expect(getCapsule(store, capsuleId)?.lifecycleState).toBe("draft");
     } finally {
       cleanup();
+    }
+  });
+
+  it("rejects a sourceIds filter that does not match attached capsule sources", async () => {
+    const fixture = buildFixture({ "alpha.txt": "alpha" });
+
+    try {
+      await expect(
+        drain(
+          runIndexingJob(
+            buildOptions(fixture, { sourceIds: ["src-missing" as KnowledgeSourceId] }),
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+
+      const jobs = fixture.store._internal.db
+        .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
+        .get({ c: fixture.capsuleId }) as { readonly n: number };
+      expect(jobs.n).toBe(0);
+    } finally {
+      fixture.cleanup();
     }
   });
 });
@@ -482,6 +539,7 @@ describe("runIndexingJob — cancellation", () => {
     if (terminal?.kind === "job-cancelled") {
       expect(terminal.result.status).toBe("cancelled");
     }
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(false);
     const started = events.find((e) => e.kind === "job-started");
     if (started?.kind !== "job-started") throw new Error("missing job-started");
     const row = selectJobById(fixture.store._internal.db, started.jobId);
@@ -567,6 +625,71 @@ describe("runIndexingJob — incremental", () => {
       .get({ c: fixture.capsuleId }) as { readonly n: number };
     expect(remainingDocuments.n).toBe(1);
   });
+
+  it("keeps persisted rows when a bounded discovery pass reaches the file cap", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const cappedOutDocumentId = documentIdFor({
+      capsuleId: fixture.capsuleId,
+      sourceId: fixture.sourceId,
+      relativePath: "beta.txt",
+    });
+
+    const secondEvents = await drain(
+      runIndexingJob(
+        buildOptions(fixture, {
+          discoveryOptions: { maxDepth: 12, maxFiles: 1 },
+        }),
+      ),
+    );
+
+    expect(secondEvents.filter((e) => e.kind === "document-discovered").length).toBe(1);
+    expect(
+      readExistingDocumentRow(fixture.store._internal.db, fixture.capsuleId, cappedOutDocumentId),
+    ).toBeDefined();
+    const remainingDocuments = fixture.store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c")
+      .get({ c: fixture.capsuleId }) as { readonly n: number };
+    expect(remainingDocuments.n).toBe(2);
+  });
+
+  it("re-embeds unchanged documents when persisted vector coverage is partial", async () => {
+    const single = buildFixture({
+      "alpha.txt": "Partial vector recovery sentence. ".repeat(240),
+    });
+    const documentId = documentIdFor({
+      capsuleId: single.capsuleId,
+      sourceId: single.sourceId,
+      relativePath: "alpha.txt",
+    });
+    const chunkingOptions = { maxTokens: 10, minTokens: 0, overlapTokens: 0 };
+
+    try {
+      await drain(runIndexingJob(buildOptions(single, { chunkingOptions })));
+      const chunks = selectChunksForDocument(
+        single.store._internal.db,
+        single.capsuleId,
+        documentId,
+      );
+      expect(chunks.length).toBeGreaterThan(1);
+      const removedChunk = chunks[0];
+      if (removedChunk === undefined) throw new Error("missing chunk");
+      single.store._internal.db
+        .prepare("DELETE FROM vectors WHERE capsule_id = :c AND chunk_id = :chunk_id")
+        .run({ c: single.capsuleId, chunk_id: removedChunk.id });
+      expect(countVectorsForDocument(single.store._internal.db, single.capsuleId, documentId)).toBe(
+        chunks.length - 1,
+      );
+
+      const secondEvents = await drain(runIndexingJob(buildOptions(single, { chunkingOptions })));
+
+      expect(secondEvents.some((event) => event.kind === "document-embedded")).toBe(true);
+      expect(countVectorsForDocument(single.store._internal.db, single.capsuleId, documentId)).toBe(
+        chunks.length,
+      );
+    } finally {
+      single.cleanup();
+    }
+  });
 });
 
 // ─── Test 4: force ────────────────────────────────────────────────────────────
@@ -594,6 +717,33 @@ describe("runIndexingJob — force", () => {
     // Force should NOT leave stale rows from the first pass.
     const secondVectorCount = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
     expect(secondVectorCount).toBe(firstVectorCount);
+  });
+
+  it("preserves other source vectors when force=true is scoped to one source", async () => {
+    const multi = buildTwoSourceFixture();
+
+    try {
+      await drain(runIndexingJob(buildOptions(multi)));
+      const firstSourceVectors = countVectorsForSource(multi, multi.sourceId);
+      const otherSourceVectors = countVectorsForSource(multi, multi.otherSourceId);
+      expect(firstSourceVectors).toBeGreaterThan(0);
+      expect(otherSourceVectors).toBeGreaterThan(0);
+
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(multi, {
+            force: true,
+            sourceIds: [multi.sourceId],
+          }),
+        ),
+      );
+
+      expect(events.filter((event) => event.kind === "document-embedded").length).toBe(1);
+      expect(countVectorsForSource(multi, multi.sourceId)).toBe(firstSourceVectors);
+      expect(countVectorsForSource(multi, multi.otherSourceId)).toBe(otherSourceVectors);
+    } finally {
+      multi.cleanup();
+    }
   });
 });
 

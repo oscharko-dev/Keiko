@@ -34,6 +34,15 @@ const INSERT_VECTOR_SQL = [
   "  :embedding, :provider, :model_id, :revision,",
   "  :dimensions, :metric, :storage_reference, :created_at",
   ")",
+  "ON CONFLICT(id) DO UPDATE SET",
+  "  embedding = excluded.embedding,",
+  "  embedding_model_provider = excluded.embedding_model_provider,",
+  "  embedding_model_id = excluded.embedding_model_id,",
+  "  embedding_model_revision = excluded.embedding_model_revision,",
+  "  vector_dimensions = excluded.vector_dimensions,",
+  "  vector_metric = excluded.vector_metric,",
+  "  storage_reference = excluded.storage_reference,",
+  "  created_at = excluded.created_at",
 ].join(" ");
 
 const DELETE_VECTORS_FOR_DOCUMENT_SQL =
