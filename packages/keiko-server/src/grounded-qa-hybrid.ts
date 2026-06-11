@@ -132,6 +132,9 @@ export interface HybridGroundedAskCtx {
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
+  // Upfront-skipped folder scopes (inaccessible/denied at canonicalization time). Merged into
+  // `skippedFolders` uncertainty entries alongside retrieval-time folder skips.
+  readonly preSkippedFolders?: readonly { readonly label: string; readonly reason: string; readonly message: string }[];
 }
 
 // ─── Retrieved-source records ─────────────────────────────────────────────────
@@ -964,12 +967,17 @@ async function runHybridWithStore(
   const resolved = resolveConnectorScopes(connectorScopes, store);
   if ("status" in resolved) return resolved;
   const query = buildQuery(ctx.content, () => Date.now());
-  const folderResult = await retrieveFolderPacks(
+  const rawFolderResult = await retrieveFolderPacks(
     ctx,
     folderScopes,
     query,
     ctx.folderRetriever ?? defaultRetriever(ctx.signal),
   );
+  // Merge upfront-skipped folders (inaccessible/denied at canonicalization) with retrieval-time
+  // folder skips so all omissions appear in the assembled uncertainty entries.
+  const folderResult: FolderRetrieval = ctx.preSkippedFolders !== undefined
+    ? { ...rawFolderResult, skipped: [...ctx.preSkippedFolders, ...rawFolderResult.skipped] }
+    : rawFolderResult;
   const connectorResult = await retrieveConnectors(ctx, store, connectorScopes, resolved);
   if ("status" in connectorResult) return connectorResult;
   return await answerAndAssemble(ctx, store, {

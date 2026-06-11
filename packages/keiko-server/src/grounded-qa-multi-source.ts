@@ -427,6 +427,9 @@ export interface MultiSourceAskInput {
   readonly retriever: GroundedRetriever;
   readonly answerer: MultiSourceAnswerer;
   readonly signal: AbortSignal;
+  // Upfront-skipped sources (inaccessible/denied at canonicalization time). Merged into the
+  // `source-skipped` uncertainty entries so the caller sees which folders were omitted.
+  readonly preSkipped?: readonly { readonly label: string; readonly message: string }[];
 }
 
 async function retrieveAllSources(
@@ -491,12 +494,17 @@ function mergedCitations(
 function mergedUncertainty(
   sources: readonly RetrievedSource[],
   skipped: readonly SkippedScope[],
+  preSkipped: readonly { readonly label: string; readonly message: string }[],
   redactor: Redactor,
 ): readonly GroundedUncertainty[] {
   const fromPacks = sources.flatMap((src) =>
     src.pack.uncertainty.map((u) => ({ kind: u.kind, claim: redactString(redactor, u.claim) })),
   );
-  const fromSkipped = skipped.map((entry) => ({
+  const allSkipped = [
+    ...preSkipped.map((s) => ({ label: s.label, message: s.message })),
+    ...skipped,
+  ];
+  const fromSkipped = allSkipped.map((entry) => ({
     kind: "source-skipped",
     claim: redactString(redactor, `Source ${entry.label} skipped: ${entry.message}`),
   }));
@@ -571,7 +579,7 @@ function assembleMultiSourceAnswer(
     evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
     citations,
-    uncertainty: mergedUncertainty(sources, skipped, redactor),
+    uncertainty: mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
     omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: {
