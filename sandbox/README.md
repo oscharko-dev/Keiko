@@ -25,6 +25,11 @@ You can pass `keiko ui` flags after `--`:
 npm start -- --port 1984
 ```
 
+Without an explicit port, the sandbox starts on `127.0.0.1:1983` when it is free. If that default
+port is already in use, it picks the next free loopback port before running the refresh/build work.
+When you pass `--port` or `KEIKO_UI_PORT`, that port is treated as intentional and the start script
+fails before the refresh if it is already occupied.
+
 Every start refreshes the sandbox first:
 
 1. installs root workspace dependencies,
