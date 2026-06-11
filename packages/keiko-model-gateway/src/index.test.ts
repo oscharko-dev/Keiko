@@ -23,6 +23,10 @@ import {
   toSafeObject,
   validateBaseUrl,
   Gateway,
+  StaticProviderRegistry,
+  asGatewayOpenAiCompatibleProviderConfig,
+  createDefaultProviderRegistry,
+  defaultAdapterFactories,
   isGatewayOpenAiCompatibleProviderConfig,
   isOpenAiCodexLocalSessionProviderConfig,
   assertConfiguredModel,
@@ -72,6 +76,10 @@ import type {
   NormalizedToolCall,
   OpenAiCodexLocalSessionProviderConfig,
   ProviderAdapter,
+  ProviderAdapterFactory,
+  ProviderAdapterFactoryContext,
+  ProviderRegistry,
+  ProviderRuntimeOperation,
   ResponseFormat,
   StreamDelta,
   StreamEvent,
@@ -104,8 +112,12 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof parseGatewayConfig).toBe("function");
     expect(typeof toSafeObject).toBe("function");
     expect(typeof validateBaseUrl).toBe("function");
+    expect(typeof createDefaultProviderRegistry).toBe("function");
+    expect(typeof defaultAdapterFactories).toBe("function");
+    expect(typeof asGatewayOpenAiCompatibleProviderConfig).toBe("function");
     expect(typeof isGatewayOpenAiCompatibleProviderConfig).toBe("function");
     expect(typeof isOpenAiCodexLocalSessionProviderConfig).toBe("function");
+    expect(typeof StaticProviderRegistry).toBe("function");
   });
 
   it("exposes the default API key header name as the canonical string", () => {
@@ -197,6 +209,10 @@ describe("keiko-model-gateway package surface", () => {
     pin<NormalizedToolCall>();
     pin<OpenAiCodexLocalSessionProviderConfig>();
     pin<ProviderAdapter>();
+    pin<ProviderAdapterFactory>();
+    pin<ProviderAdapterFactoryContext>();
+    pin<ProviderRegistry>();
+    pin<ProviderRuntimeOperation>();
     pin<ResponseFormat>();
     pin<StreamDelta>();
     pin<StreamEvent>();

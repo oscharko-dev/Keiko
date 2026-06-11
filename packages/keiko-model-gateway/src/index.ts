@@ -34,6 +34,10 @@ export type {
   NormalizedToolCall,
   OpenAiCodexLocalSessionProviderConfig,
   ProviderAdapter,
+  ProviderAdapterFactory,
+  ProviderAdapterFactoryContext,
+  ProviderRegistry,
+  ProviderRuntimeOperation,
   ResponseFormat,
   StreamDelta,
   StreamEvent,
@@ -45,6 +49,12 @@ export {
   isGatewayOpenAiCompatibleProviderConfig,
   isOpenAiCodexLocalSessionProviderConfig,
 } from "./types.js";
+export {
+  StaticProviderRegistry,
+  asGatewayOpenAiCompatibleProviderConfig,
+  createDefaultProviderRegistry,
+  defaultAdapterFactories,
+} from "./provider-registry.js";
 
 export {
   CAPABILITY_REGISTRY,

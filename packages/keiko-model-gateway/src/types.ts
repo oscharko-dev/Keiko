@@ -5,9 +5,11 @@
 // `verbatimModuleSyntax` is on, so type-only names use `export type`.
 
 import type {
+  CostClass,
+  GatewayRequest,
   ModelCapability,
   NormalizedResponse,
-  GatewayRequest,
+  ProviderType,
   ProviderValidationState,
 } from "@oscharko-dev/keiko-contracts";
 import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -107,6 +109,19 @@ export type GatewayStreamChunk =
   | { readonly type: "done"; readonly response: NormalizedResponse };
 
 export interface ProviderAdapter {
+  readonly providerType?: ProviderType | undefined;
+  readonly validateConfig?:
+    | ((config: ModelProviderConfig) => void)
+    | undefined;
+  readonly discoverModels?:
+    | ((config: ModelProviderConfig) => Promise<readonly string[]>)
+    | undefined;
+  readonly probeCapabilities?:
+    | ((config: ModelProviderConfig) => Promise<readonly ModelCapability[]>)
+    | undefined;
+  readonly normalizeError?:
+    | ((error: unknown, config: ModelProviderConfig, operation: ProviderRuntimeOperation) => Error)
+    | undefined;
   readonly call: (
     request: GatewayRequest,
     config: ModelProviderConfig,
@@ -117,6 +132,31 @@ export interface ProviderAdapter {
     request: GatewayRequest,
     config: ModelProviderConfig,
   ) => AsyncIterable<GatewayStreamChunk>;
+}
+
+export type ProviderRuntimeOperation =
+  | "validate-config"
+  | "discover-models"
+  | "probe-capabilities"
+  | "call"
+  | "call-stream";
+
+export interface ProviderAdapterFactoryContext {
+  readonly requestId: string;
+  readonly costClass: CostClass;
+  readonly now?: (() => number) | undefined;
+  readonly fetchImpl?: typeof fetch | undefined;
+}
+
+export type ProviderAdapterFactory = (
+  context: ProviderAdapterFactoryContext,
+) => ProviderAdapter;
+
+export interface ProviderRegistry {
+  readonly resolve: (
+    config: ModelProviderConfig,
+    context: ProviderAdapterFactoryContext,
+  ) => ProviderAdapter;
 }
 
 // ─── Clock interface (injectable for deterministic tests — STAYS local) ───────

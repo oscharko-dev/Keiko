@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { findConfiguredCapability } from "./model-selection.js";
-import { OpenAiAdapter } from "./openai-adapter.js";
+import { createDefaultProviderRegistry } from "./provider-registry.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import type {
   Clock,
@@ -18,10 +18,12 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  ProviderRegistry,
 } from "./types.js";
 
 export interface GatewayDeps {
-  readonly adapter?: ProviderAdapter | undefined;
+  readonly providerRegistry?: ProviderRegistry | undefined;
+  readonly fetchImpl?: typeof fetch | undefined;
   readonly clock?: Clock | undefined;
 }
 
@@ -32,7 +34,8 @@ interface RoutedCall {
 
 export class Gateway {
   private readonly clock: Clock;
-  private readonly adapter: ProviderAdapter | undefined;
+  private readonly fetchImpl: typeof fetch | undefined;
+  private readonly providerRegistry: ProviderRegistry;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
 
@@ -41,7 +44,9 @@ export class Gateway {
     deps: GatewayDeps = {},
   ) {
     this.clock = deps.clock ?? systemClock;
-    this.adapter = deps.adapter;
+    this.fetchImpl = deps.fetchImpl;
+    this.providerRegistry =
+      deps.providerRegistry ?? createDefaultProviderRegistry({ fetchImpl: deps.fetchImpl });
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
   }
 
@@ -50,7 +55,7 @@ export class Gateway {
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const start = this.clock.now();
-    const adapter = this.adapterFor(requestId, route.capability);
+    const adapter = this.adapterFor(requestId, route.capability, route.provider);
     const result = await executeWithRetry(
       (attemptTimeoutMs) =>
         this.invoke(breaker, adapter, request, {
@@ -82,7 +87,7 @@ export class Gateway {
     breaker.assertAllowed();
     const requestId = randomUUID();
     const start = this.clock.now();
-    const adapter = this.adapterFor(requestId, route.capability);
+    const adapter = this.adapterFor(requestId, route.capability, route.provider);
     try {
       for await (const chunk of this.streamFrom(adapter, request, route.provider)) {
         yield chunk.type === "done"
@@ -183,14 +188,16 @@ export class Gateway {
     return breaker;
   }
 
-  private adapterFor(requestId: string, capability: ModelCapability): ProviderAdapter {
-    return (
-      this.adapter ??
-      new OpenAiAdapter({
-        requestId,
-        costClass: capability.costClass,
-        now: this.clock.now,
-      })
-    );
+  private adapterFor(
+    requestId: string,
+    capability: ModelCapability,
+    provider: ModelProviderConfig,
+  ): ProviderAdapter {
+    return this.providerRegistry.resolve(provider, {
+      requestId,
+      costClass: capability.costClass,
+      now: this.clock.now,
+      ...(this.fetchImpl === undefined ? {} : { fetchImpl: this.fetchImpl }),
+    });
   }
 }

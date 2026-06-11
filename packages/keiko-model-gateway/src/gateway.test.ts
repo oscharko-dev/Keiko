@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
+import { StaticProviderRegistry } from "./provider-registry.js";
 import {
   CircuitOpenError,
+  ConfigInvalidError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -13,6 +15,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  ProviderRegistry,
 } from "./types.js";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -59,6 +62,15 @@ function fakeAdapter(impl: ProviderAdapter["call"]): ProviderAdapter {
   return { call: impl };
 }
 
+function registryFor(adapter: ProviderAdapter): ProviderRegistry {
+  return new StaticProviderRegistry({
+    adapters: new Map([
+      ["gateway-openai-compatible", () => adapter],
+      ["openai-codex-local-session", () => adapter],
+    ]),
+  });
+}
+
 const REQUEST: GatewayRequest = {
   modelId: "example-chat-model",
   messages: [{ role: "user", content: "q" }],
@@ -74,7 +86,9 @@ describe("Gateway.chat", () => {
       sleep: (): Promise<void> => Promise.resolve(),
     };
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() => Promise.resolve(okResponse("example-chat-model"))),
+      providerRegistry: registryFor(
+        fakeAdapter(() => Promise.resolve(okResponse("example-chat-model"))),
+      ),
       clock: deterministicClock,
     });
     const result = await gateway.chat(REQUEST);
@@ -84,7 +98,9 @@ describe("Gateway.chat", () => {
 
   it("stamps usage.costClass from the runtime default for an undeclared model", async () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
+      providerRegistry: registryFor(
+        fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
+      ),
       clock: stubClock(),
     });
     const result = await gateway.chat(REQUEST);
@@ -117,7 +133,9 @@ describe("Gateway.chat", () => {
         ],
       },
       {
-        adapter: fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
+        providerRegistry: registryFor(
+          fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
+        ),
         clock: stubClock(),
       },
     );
@@ -128,7 +146,7 @@ describe("Gateway.chat", () => {
 
   it("throws UnknownModelError when the model is not configured", async () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
+      providerRegistry: registryFor(fakeAdapter(() => Promise.resolve(okResponse("x")))),
       clock: stubClock(),
     });
     await expect(gateway.chat({ modelId: "not-configured", messages: [] })).rejects.toBeInstanceOf(
@@ -162,7 +180,7 @@ describe("Gateway.chat", () => {
         ],
       },
       {
-        adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
+        providerRegistry: registryFor(fakeAdapter(() => Promise.resolve(okResponse("x")))),
         clock: stubClock(),
       },
     );
@@ -178,8 +196,8 @@ describe("Gateway.chat", () => {
   it("never leaks the configured apiKey in a thrown error", async () => {
     const upstreamKey = ["sk-", "config-secret-key-1234567890ab"].join("");
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() =>
-        Promise.reject(new TransportError(`upstream ${upstreamKey} failed`)),
+      providerRegistry: registryFor(
+        fakeAdapter(() => Promise.reject(new TransportError(`upstream ${upstreamKey} failed`))),
       ),
       clock: stubClock(),
     });
@@ -194,12 +212,14 @@ describe("Gateway.chat", () => {
   it("retries a transient failure then succeeds", async () => {
     let calls = 0;
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() => {
-        calls += 1;
-        return calls < 2
-          ? Promise.reject(new TransportError("boom"))
-          : Promise.resolve(okResponse("example-chat-model"));
-      }),
+      providerRegistry: registryFor(
+        fakeAdapter(() => {
+          calls += 1;
+          return calls < 2
+            ? Promise.reject(new TransportError("boom"))
+            : Promise.resolve(okResponse("example-chat-model"));
+        }),
+      ),
       clock: stubClock(),
     });
     const result = await gateway.chat(REQUEST);
@@ -219,14 +239,16 @@ describe("Gateway.chat", () => {
     };
     let calls = 0;
     const gateway = new Gateway(config([provider({ timeoutMs: 1000, retryBaseDelayMs: 100 })]), {
-      adapter: fakeAdapter((_request, cfg) => {
-        calls += 1;
-        seenTimeouts.push(cfg.timeoutMs);
-        current += calls === 1 ? 700 : 0;
-        return calls === 1
-          ? Promise.reject(new TransportError("transient"))
-          : Promise.resolve(okResponse("example-chat-model"));
-      }),
+      providerRegistry: registryFor(
+        fakeAdapter((_request, cfg) => {
+          calls += 1;
+          seenTimeouts.push(cfg.timeoutMs);
+          current += calls === 1 ? 700 : 0;
+          return calls === 1
+            ? Promise.reject(new TransportError("transient"))
+            : Promise.resolve(okResponse("example-chat-model"));
+        }),
+      ),
       clock,
     });
     await gateway.chat(REQUEST);
@@ -236,10 +258,12 @@ describe("Gateway.chat", () => {
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {
     let calls = 0;
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
-      adapter: fakeAdapter(() => {
-        calls += 1;
-        return Promise.reject(new TransportError("down"));
-      }),
+      providerRegistry: registryFor(
+        fakeAdapter(() => {
+          calls += 1;
+          return Promise.reject(new TransportError("down"));
+        }),
+      ),
       clock: stubClock(),
     });
     for (let i = 0; i < 3; i += 1) {
@@ -248,6 +272,70 @@ describe("Gateway.chat", () => {
     const callsBeforeOpen = calls;
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(CircuitOpenError);
     expect(calls).toBe(callsBeforeOpen);
+  });
+
+  it("uses the provider registry as the only productive dispatch path", async () => {
+    let resolves = 0;
+    const registry: ProviderRegistry = {
+      resolve: () => {
+        resolves += 1;
+        return fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId)));
+      },
+    };
+    const gateway = new Gateway(config([provider()]), {
+      providerRegistry: registry,
+      clock: stubClock(),
+    });
+    const result = await gateway.chat(REQUEST);
+    expect(result.modelId).toBe("example-chat-model");
+    expect(resolves).toBe(1);
+  });
+
+  it("passes request metadata and injected fetch through the provider registry context", async () => {
+    const fetchImpl: typeof fetch = () => Promise.reject(new Error("should not be called"));
+    let seenContext:
+      | {
+          readonly requestId: string;
+          readonly costClass: string;
+          readonly now: (() => number) | undefined;
+          readonly fetchImpl: typeof fetch | undefined;
+        }
+      | undefined;
+    const registry: ProviderRegistry = {
+      resolve: (_config, context) => {
+        seenContext = context;
+        return fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId)));
+      },
+    };
+    const gateway = new Gateway(config([provider()]), {
+      providerRegistry: registry,
+      fetchImpl,
+      clock: stubClock(),
+    });
+    await gateway.chat(REQUEST);
+    expect(seenContext?.requestId).toMatch(UUID_V4);
+    expect(seenContext?.costClass).toBe("medium");
+    expect(typeof seenContext?.now).toBe("function");
+    expect(seenContext?.fetchImpl).toBe(fetchImpl);
+  });
+
+  it("fails closed for a configured local-session provider until a runtime adapter is registered", async () => {
+    const gateway = new Gateway(
+      config([
+        {
+          providerType: "openai-codex-local-session",
+          modelId: "gpt-5-codex",
+          credentialResolver: { kind: "codex-cli" },
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ]),
+      { clock: stubClock() },
+    );
+    await expect(gateway.chat({ modelId: "gpt-5-codex", messages: REQUEST.messages })).rejects.toBeInstanceOf(
+      ConfigInvalidError,
+    );
   });
 });
 
@@ -286,7 +374,7 @@ function streamingAdapter(tokens: readonly string[]): ProviderAdapter {
 describe("Gateway.chatStream", () => {
   it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: streamingAdapter(["Hel", "lo"]),
+      providerRegistry: registryFor(streamingAdapter(["Hel", "lo"])),
       clock: stubClock(),
     });
     const chunks = await collectStream(gateway.chatStream(REQUEST));
@@ -305,8 +393,8 @@ describe("Gateway.chatStream", () => {
 
   it("falls back to a single delta+done synthesised from call() when callStream is absent", async () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() =>
-        Promise.resolve({ ...okResponse("example-chat-model"), content: "buffered" }),
+      providerRegistry: registryFor(
+        fakeAdapter(() => Promise.resolve({ ...okResponse("example-chat-model"), content: "buffered" })),
       ),
       clock: stubClock(),
     });
@@ -329,7 +417,7 @@ describe("Gateway.chatStream", () => {
       },
     };
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
-      adapter: failing,
+      providerRegistry: registryFor(failing),
       clock: stubClock(),
     });
     await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(TransportError);
@@ -338,7 +426,7 @@ describe("Gateway.chatStream", () => {
 
   it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: streamingAdapter(["x"]),
+      providerRegistry: registryFor(streamingAdapter(["x"])),
       clock: stubClock(),
     });
     await expect(
@@ -350,7 +438,7 @@ describe("Gateway.chatStream", () => {
 describe("Gateway.circuitStatus", () => {
   it("reports closed before any failures", () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
+      providerRegistry: registryFor(fakeAdapter(() => Promise.resolve(okResponse("x")))),
       clock: stubClock(),
     });
     expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
@@ -358,7 +446,7 @@ describe("Gateway.circuitStatus", () => {
 
   it("reports closed for an unconfigured model id", () => {
     const gateway = new Gateway(config([provider()]), {
-      adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
+      providerRegistry: registryFor(fakeAdapter(() => Promise.resolve(okResponse("x")))),
       clock: stubClock(),
     });
     expect(gateway.circuitStatus("nope").state).toBe("closed");
