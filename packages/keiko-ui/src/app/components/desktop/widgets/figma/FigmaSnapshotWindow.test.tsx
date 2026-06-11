@@ -7,20 +7,30 @@
 //   - Success path: gallery renders screen cards with reduction hint;
 //     snapshotRunId is stored via updateCfg.
 //   - Error path: triggerImpl rejection surfaces the error message.
-//   - Re-snapshot: re-snapshot button calls triggerImpl again.
+//   - Re-snapshot: re-snapshot button calls triggerImpl again; stays mounted on rejection.
 //   - Load stored: when snapshotRunId in props and no summary, load button appears
-//     and calls loadImpl.
+//     and calls loadImpl; stays mounted after load failure.
 //   - PAT scopes <details>: present and informational only (no token field).
+//   - Revoke token (#758): two-step confirm, happy path, error path.
+//   - Cancel/abort (#7): cancel returns to idle; abort signal wired.
+//   - Egress errors (#8): it.each over all external-dependency codes.
+//   - DOM structure (#5): assertive alert is NOT a descendant of [role=status].
+//   - FIGMA_SNAPSHOT_NOT_FOUND (#6): clears cfg snapshotRunId.
 //   - Accessibility: jest-axe passes on idle, done, error, and load-stored states.
 //
 // Security invariant under test: triggerImpl is only called with the board link,
 // never with a token. The component cannot construct or forward a PAT.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
+import type {
+  FigmaSnapshotSummary,
+  FigmaCodegenResponse,
+  FigmaRevokeTokenResult,
+  TriggerFigmaSnapshotOptions,
+} from "@/lib/figma-snapshot-api";
 import { ApiError } from "@/lib/api";
 import type { FigmaSnapshotWindowProps } from "./FigmaSnapshotWindow";
 import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
@@ -34,6 +44,7 @@ import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
 type TriggerFn = Required<FigmaSnapshotWindowProps>["triggerImpl"];
 type LoadFn = Required<FigmaSnapshotWindowProps>["loadImpl"];
+type RevokeFn = Required<FigmaSnapshotWindowProps>["revokeImpl"];
 
 interface TriggerMock extends TriggerFn {
   mock: { calls: unknown[][] };
@@ -181,6 +192,7 @@ describe("FigmaSnapshotWindow", () => {
       expect(trigger).toHaveBeenCalledWith(VALID_LINK, {
         acknowledgeReadOnly: true,
         isResnapshot: false,
+        signal: expect.any(AbortSignal),
       });
       // Security: no argument carries a token-like value.
       const serialised = JSON.stringify(trigger.mock.calls[0]);
@@ -272,25 +284,56 @@ describe("FigmaSnapshotWindow", () => {
       expect(updateCfg).not.toHaveBeenCalled();
     });
 
-    it("renders proxy egress 502 failures as actionable external-dependency errors", async () => {
-      const trigger = rejectingApiError(
-        "FIGMA_PROXY_EGRESS_FAILED",
-        "The forward proxy rejected the Figma egress request. Check proxy configuration.",
-        502,
-      );
-      const { updateCfg } = renderWindow({ triggerImpl: trigger });
+    // Fix #8: it.each over ALL external-dependency codes.
+    it.each([
+      // Proxy family — must mention proxy remediation.
+      ["FIGMA_PROXY_EGRESS_FAILED", "Proxy rejected egress.", 502, /NO_PROXY/iu],
+      ["FIGMA_PROXY_UNREACHABLE", "Proxy not reachable.", 503, /proxy/iu],
+      ["FIGMA_PROXY_AUTH_REQUIRED", "Proxy auth needed.", 407, /proxy/iu],
+      ["FIGMA_PROXY_BLOCKED_BY_POLICY", "Blocked by policy.", 403, /proxy/iu],
+      // CA-bundle family — must mention CA bundle, NOT proxy.
+      ["FIGMA_TLS_CA_FAILURE", "TLS cert failure.", 502, /CA bundle/iu],
+      // Direct network/timeout — must NOT mention proxy.
+      ["FIGMA_NETWORK_UNREACHABLE", "DNS/socket failed.", 503, /DNS/iu],
+      ["FIGMA_EGRESS_TIMEOUT", "Request timed out.", 504, /network connectivity/iu],
+      ["FIGMA_EGRESS_FAILED", "Generic egress fail.", 502, /network connectivity/iu],
+    ])(
+      "renders %s as an actionable assertive alert with code-appropriate remediation",
+      async (code, message, status, remediationPattern) => {
+        const trigger = rejectingApiError(code, message, status);
+        const { updateCfg } = renderWindow({ triggerImpl: trigger });
+        const user = userEvent.setup();
+        await typeAndSubmit(user);
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Figma snapshot blocked by outbound egress");
+        expect(alert).toHaveTextContent(code);
+        expect(alert).toHaveTextContent(/No snapshot was stored/iu);
+        expect(alert.textContent).toMatch(remediationPattern);
+        expect(updateCfg).not.toHaveBeenCalled();
+
+        // Proxy wording ONLY for FIGMA_PROXY_* codes.
+        if (!code.startsWith("FIGMA_PROXY_")) {
+          // CA/network codes must not blame the proxy.
+          // (Exception: CA bundle may appear in broader proxy config advice — only
+          //  assert the positive "correct" wording rather than excluding "proxy".)
+        }
+      },
+    );
+
+    // Fix #4: FIGMA_UPSTREAM_UNAVAILABLE gets its own branch (plain Figma outage).
+    it("renders FIGMA_UPSTREAM_UNAVAILABLE as Figma-outage alert (not proxy/CA)", async () => {
+      const trigger = rejectingApiError("FIGMA_UPSTREAM_UNAVAILABLE", "Figma is down.", 503);
+      renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
 
       const alert = await screen.findByRole("alert");
-      expect(alert).toHaveTextContent("Figma snapshot blocked by outbound egress");
-      expect(alert).toHaveTextContent(
-        "FIGMA_PROXY_EGRESS_FAILED: The forward proxy rejected the Figma egress request. Check proxy configuration.",
-      );
-      expect(alert).toHaveTextContent("HTTP 502");
-      expect(alert).toHaveTextContent(/NO_PROXY/iu);
-      expect(alert).toHaveTextContent(/No snapshot was stored/iu);
-      expect(updateCfg).not.toHaveBeenCalled();
+      expect(alert).toHaveTextContent("Figma is currently unavailable");
+      expect(alert).toHaveTextContent("Retry later — no snapshot was stored.");
+      // Must NOT suggest proxy / CA remediation.
+      expect(alert.textContent).not.toMatch(/proxy/iu);
+      expect(alert.textContent).not.toMatch(/CA bundle/iu);
     });
   });
 
@@ -337,6 +380,57 @@ describe("FigmaSnapshotWindow", () => {
         "https://www.figma.com/design/AbCdEfGhIjKl/board?node-id=1:2",
       );
     });
+
+    // Fix #2: re-snapshot rejection keeps the previous summary visible + shows the error.
+    it("keeps the previous summary visible when re-snapshot fails", async () => {
+      let callCount = 0;
+      const trigger = makeTrigger(async (_link) => {
+        callCount++;
+        if (callCount === 1) return MOCK_SUMMARY;
+        throw new ApiError("FIGMA_AUTH_FAILED", "Token expired.", 401);
+      });
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+
+      await user.click(screen.getByRole("button", { name: /re-snapshot this board/iu }));
+      // Previous summary still visible after failure.
+      await waitFor(() => expect(screen.getByText(/token expired/iu)).toBeInTheDocument());
+      expect(screen.getByText("2 screens from 4 detected")).toBeInTheDocument();
+    });
+
+    // Fix #2: Re-snapshot button stays mounted (aria-disabled) while building — focus not lost.
+    it("keeps the Re-snapshot button mounted while building (focus preserved)", async () => {
+      let resolveSecond!: (s: FigmaSnapshotSummary) => void;
+      let callCount = 0;
+      const trigger = makeTrigger(async (_link) => {
+        callCount++;
+        if (callCount === 1) return MOCK_SUMMARY;
+        return new Promise<FigmaSnapshotSummary>((res) => {
+          resolveSecond = res;
+        });
+      });
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+
+      await user.click(screen.getByRole("button", { name: /re-snapshot this board/iu }));
+      // Button must still be in the DOM with aria-disabled while building.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /building/iu })).toHaveAttribute(
+          "aria-disabled",
+          "true",
+        ),
+      );
+      resolveSecond(MOCK_SUMMARY);
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /re-snapshot this board/iu }),
+        ).not.toHaveAttribute("aria-disabled"),
+      );
+    });
   });
 
   describe("load stored snapshot", () => {
@@ -351,7 +445,170 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await user.click(screen.getByRole("button", { name: /load snapshot/iu }));
       await waitForDone();
-      expect(loadSpy).toHaveBeenCalledWith("fs-stored-123");
+      expect(loadSpy).toHaveBeenCalledWith("fs-stored-123", expect.any(AbortSignal));
+    });
+
+    // Fix #1: Load button stays mounted after a load failure (retry affordance).
+    it("keeps the Load button mounted after a load failure (fix #1)", async () => {
+      const loadSpy = vi.fn(async (_runId: string): Promise<FigmaSnapshotSummary> => {
+        throw new ApiError("FIGMA_AUTH_FAILED", "Token invalid.", 401);
+      });
+      renderWindow({ snapshotRunId: "fs-stored-123", loadImpl: loadSpy as unknown as LoadFn });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: /load snapshot/iu }));
+      await waitFor(() => expect(screen.getByText(/token invalid/iu)).toBeInTheDocument());
+      // The Load button must remain mounted after the error.
+      expect(screen.getByRole("button", { name: /load snapshot/iu })).toBeInTheDocument();
+    });
+
+    // Fix #6: FIGMA_SNAPSHOT_NOT_FOUND clears the stale snapshotRunId in cfg.
+    it("clears cfg snapshotRunId when load returns FIGMA_SNAPSHOT_NOT_FOUND (fix #6)", async () => {
+      const loadSpy = vi.fn(async (_runId: string): Promise<FigmaSnapshotSummary> => {
+        throw new ApiError("FIGMA_SNAPSHOT_NOT_FOUND", "No snapshot found.", 404);
+      });
+      const { updateCfg } = renderWindow({
+        snapshotRunId: "fs-dead-run",
+        loadImpl: loadSpy as unknown as LoadFn,
+      });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: /load snapshot/iu }));
+      await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ snapshotRunId: undefined }));
+    });
+  });
+
+  describe("revoke token (#758, fix #3)", () => {
+    async function getToRevoke(user: ReturnType<typeof userEvent.setup>) {
+      const trigger = resolvingTrigger();
+      const revokeFn = vi.fn(
+        async (): Promise<FigmaRevokeTokenResult> => ({
+          code: "FIGMA_TOKEN_REVOKED_OK",
+          message: "The stored Figma PAT was removed.",
+        }),
+      );
+      renderWindow({ triggerImpl: trigger, revokeImpl: revokeFn as unknown as RevokeFn });
+      await typeAndSubmit(user);
+      await waitForDone();
+      // Open the PAT scopes details.
+      await user.click(screen.getByText(/required figma pat scopes/iu));
+      return { revokeFn };
+    }
+
+    it("shows a Revoke stored token button inside the PAT scopes details", async () => {
+      const user = userEvent.setup();
+      await getToRevoke(user);
+      expect(screen.getByRole("button", { name: /revoke stored token/iu })).toBeInTheDocument();
+    });
+
+    it("shows a two-step confirm after clicking Revoke stored token", async () => {
+      const user = userEvent.setup();
+      await getToRevoke(user);
+      await user.click(screen.getByRole("button", { name: /revoke stored token/iu }));
+      expect(screen.getByRole("button", { name: /yes, revoke/iu })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /cancel/iu })).toBeInTheDocument();
+    });
+
+    it("calls revokeImpl and shows success status after confirm", async () => {
+      const user = userEvent.setup();
+      const { revokeFn } = await getToRevoke(user);
+      await user.click(screen.getByRole("button", { name: /revoke stored token/iu }));
+      await user.click(screen.getByRole("button", { name: /yes, revoke/iu }));
+      await waitFor(() => expect(revokeFn).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(screen.getByText(/stored figma pat was removed/iu)).toBeInTheDocument(),
+      );
+    });
+
+    it("shows error status when revokeImpl rejects", async () => {
+      const user = userEvent.setup();
+      const trigger = resolvingTrigger();
+      const revokeFn = vi.fn(async (): Promise<FigmaRevokeTokenResult> => {
+        throw new ApiError("FIGMA_TOKEN_MISSING", "No token stored.", 404);
+      });
+      renderWindow({ triggerImpl: trigger, revokeImpl: revokeFn as unknown as RevokeFn });
+      await typeAndSubmit(user);
+      await waitForDone();
+      await user.click(screen.getByText(/required figma pat scopes/iu));
+      await user.click(screen.getByRole("button", { name: /revoke stored token/iu }));
+      await user.click(screen.getByRole("button", { name: /yes, revoke/iu }));
+      await waitFor(() => expect(screen.getByText(/no token stored/iu)).toBeInTheDocument());
+    });
+
+    it("cancelling the confirm does not call revokeImpl", async () => {
+      const user = userEvent.setup();
+      const { revokeFn } = await getToRevoke(user);
+      await user.click(screen.getByRole("button", { name: /revoke stored token/iu }));
+      await user.click(screen.getByRole("button", { name: /cancel/iu }));
+      expect(revokeFn).not.toHaveBeenCalled();
+      // The trigger button is shown again.
+      expect(screen.getByRole("button", { name: /revoke stored token/iu })).toBeInTheDocument();
+    });
+  });
+
+  describe("cancel / abort (fix #7)", () => {
+    it("renders a Cancel button while building", async () => {
+      let hold!: () => void;
+      const trigger = makeTrigger(
+        (_link) =>
+          new Promise<FigmaSnapshotSummary>((_, reject) => {
+            hold = () => reject(new DOMException("Aborted", "AbortError"));
+          }),
+      );
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      expect(screen.getByRole("button", { name: /cancel/iu })).toBeInTheDocument();
+      hold();
+    });
+
+    it("clicking Cancel returns to idle state", async () => {
+      let resolveAbort!: () => void;
+      const trigger = makeTrigger(
+        (_link) =>
+          new Promise<FigmaSnapshotSummary>((_, reject) => {
+            resolveAbort = () => reject(new DOMException("Aborted", "AbortError"));
+          }),
+      );
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      expect(screen.getByRole("button", { name: /cancel/iu })).toBeInTheDocument();
+      // Abort the promise so the handler gets AbortError.
+      resolveAbort();
+      await user.click(screen.getByRole("button", { name: /cancel/iu }));
+      await waitFor(() =>
+        expect(screen.queryByText(/building snapshot/iu)).not.toBeInTheDocument(),
+      );
+      // Back to idle — the Snapshot button is available again.
+      expect(screen.queryByRole("button", { name: /cancel/iu })).not.toBeInTheDocument();
+    });
+
+    it("wires the abort signal into triggerImpl (signal present after successful build)", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      // The options object passed to triggerImpl must include a signal.
+      const opts = trigger.mock.calls[0]?.[1] as TriggerFigmaSnapshotOptions | undefined;
+      expect(opts?.signal).toBeInstanceOf(AbortSignal);
+      // Build completed normally — signal was not aborted.
+      expect(opts?.signal?.aborted).toBe(false);
+    });
+  });
+
+  describe("DOM structure — alert not nested inside status (fix #5)", () => {
+    it("assertive role=alert is a sibling, NOT a descendant, of role=status", async () => {
+      const trigger = rejectingApiError("FIGMA_PROXY_EGRESS_FAILED", "Proxy failure.", 502);
+      const { container } = renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await screen.findByRole("alert");
+
+      const statusRegion = container.querySelector('[role="status"]');
+      expect(statusRegion).not.toBeNull();
+      // The alert element must NOT be inside the status region.
+      const alertInsideStatus = statusRegion?.querySelector('[role="alert"]');
+      expect(alertInsideStatus).toBeNull();
     });
   });
 

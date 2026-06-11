@@ -91,6 +91,12 @@ export interface TriggerFigmaSnapshotOptions {
   readonly acknowledgeReadOnly?: boolean;
   /** Audits the build as a re-snapshot — a fresh, explicit, full scoped re-fetch (#759). */
   readonly isResnapshot?: boolean;
+  /**
+   * Optional abort signal threaded from the component's unmount cleanup.
+   * Aborting cancels the in-flight fetch; the server-side build continues
+   * (on-demand snapshot model) — no partial state is persisted by the client.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export async function triggerFigmaSnapshot(
@@ -99,6 +105,8 @@ export async function triggerFigmaSnapshot(
 ): Promise<FigmaSnapshotSummary> {
   return fetchJson<FigmaSnapshotSummary>("/api/figma/snapshots", {
     method: "POST",
+    // exactOptionalPropertyTypes: RequestInit.signal is AbortSignal|null, not |undefined.
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
     body: JSON.stringify({
       boardLink,
       ...(options.acknowledgeReadOnly === true ? { acknowledgeReadOnly: true } : {}),
@@ -112,9 +120,16 @@ export async function triggerFigmaSnapshot(
 /**
  * Loads a stored snapshot summary by run id. No contact with Figma; reads the
  * immutable evidence record written by the snapshot-build.
+ *
+ * @param signal Optional abort signal for unmount cleanup.
  */
-export async function loadFigmaSnapshotSummary(runId: string): Promise<FigmaSnapshotSummary> {
-  return fetchJson<FigmaSnapshotSummary>(`/api/figma/snapshots/${encodeURIComponent(runId)}`);
+export async function loadFigmaSnapshotSummary(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<FigmaSnapshotSummary> {
+  return fetchJson<FigmaSnapshotSummary>(`/api/figma/snapshots/${encodeURIComponent(runId)}`, {
+    ...(signal !== undefined ? { signal } : {}),
+  });
 }
 
 // ─── POST /api/figma/snapshots/:runId/code (design-to-code #755) ────────────────
@@ -139,10 +154,34 @@ export interface FigmaCodegenResponse {
  * Generate reviewable frontend code (semantic HTML/CSS + design tokens) from a stored snapshot.
  * Deterministic + model-free server-side: reads ONLY the stored snapshot, never Figma. The result is
  * a proposal for review, never auto-applied.
+ *
+ * @param signal Optional abort signal for unmount cleanup.
  */
-export async function generateFigmaCode(runId: string): Promise<FigmaCodegenResponse> {
+export async function generateFigmaCode(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<FigmaCodegenResponse> {
   return fetchJson<FigmaCodegenResponse>(`/api/figma/snapshots/${encodeURIComponent(runId)}/code`, {
     method: "POST",
+    ...(signal !== undefined ? { signal } : {}),
     body: JSON.stringify({}),
+  });
+}
+
+// ─── DELETE /api/figma/token (#758) ───────────────────────────────────────────
+
+export interface FigmaRevokeTokenResult {
+  /** Server-side success code — always "FIGMA_TOKEN_REVOKED_OK" on 200. */
+  readonly code: string;
+  readonly message: string;
+}
+
+/**
+ * Revokes the stored Figma PAT from the server vault (audited key removal, #758).
+ * The token itself is never returned; the response is a success envelope only.
+ */
+export async function revokeFigmaToken(): Promise<FigmaRevokeTokenResult> {
+  return fetchJson<FigmaRevokeTokenResult>("/api/figma/token", {
+    method: "DELETE",
   });
 }

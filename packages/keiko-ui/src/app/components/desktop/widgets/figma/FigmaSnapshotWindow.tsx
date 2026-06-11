@@ -37,8 +37,13 @@ import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
   generateFigmaCode,
+  revokeFigmaToken,
 } from "@/lib/figma-snapshot-api";
-import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
+import type {
+  FigmaSnapshotSummary,
+  FigmaCodegenResponse,
+  FigmaRevokeTokenResult,
+} from "@/lib/figma-snapshot-api";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,22 +76,72 @@ interface SnapshotErrorNotice {
   readonly assertive?: boolean | undefined;
 }
 
-const FIGMA_EXTERNAL_DEPENDENCY_ERRORS: ReadonlySet<string> = new Set([
+// ── Fix #8: full external-dependency error taxonomy (including new codes from the
+// parallel agent landing FIGMA_NETWORK_UNREACHABLE / FIGMA_EGRESS_TIMEOUT /
+// FIGMA_EGRESS_FAILED / FIGMA_PROXY_AUTH_REQUIRED / FIGMA_PROXY_BLOCKED_BY_POLICY).
+// FIGMA_UPSTREAM_UNAVAILABLE is intentionally NOT in this set (fix #4 below).
+const FIGMA_PROXY_ERRORS: ReadonlySet<string> = new Set([
   "FIGMA_PROXY_EGRESS_FAILED",
   "FIGMA_PROXY_UNREACHABLE",
-  "FIGMA_TLS_CA_FAILURE",
-  "FIGMA_UPSTREAM_UNAVAILABLE",
+  "FIGMA_PROXY_AUTH_REQUIRED",
+  "FIGMA_PROXY_BLOCKED_BY_POLICY",
+]);
+
+const FIGMA_CA_ERRORS: ReadonlySet<string> = new Set(["FIGMA_TLS_CA_FAILURE"]);
+
+// Direct network/timeout errors — no proxy involvement.
+const FIGMA_NETWORK_ERRORS: ReadonlySet<string> = new Set([
+  "FIGMA_NETWORK_UNREACHABLE",
+  "FIGMA_EGRESS_TIMEOUT",
+  "FIGMA_EGRESS_FAILED",
+]);
+
+// Full set for FIGMA_EXTERNAL_DEPENDENCY_ERRORS — used by the egress-alert gate.
+const FIGMA_EXTERNAL_DEPENDENCY_ERRORS: ReadonlySet<string> = new Set([
+  ...FIGMA_PROXY_ERRORS,
+  ...FIGMA_CA_ERRORS,
+  ...FIGMA_NETWORK_ERRORS,
 ]);
 
 function formatSnapshotError(err: unknown): SnapshotErrorNotice {
   if (err instanceof ApiError) {
-    if (FIGMA_EXTERNAL_DEPENDENCY_ERRORS.has(err.code)) {
+    // Fix #4: FIGMA_UPSTREAM_UNAVAILABLE is a plain Figma outage — not a proxy/CA issue.
+    if (err.code === "FIGMA_UPSTREAM_UNAVAILABLE") {
+      return {
+        title: "Figma is currently unavailable",
+        detail: `${err.code}: ${err.message}`,
+        status: `HTTP ${err.status.toString()}`,
+        remediation: "Retry later — no snapshot was stored.",
+        assertive: true,
+      };
+    }
+    if (FIGMA_PROXY_ERRORS.has(err.code)) {
       return {
         title: "Figma snapshot blocked by outbound egress",
         detail: `${err.code}: ${err.message}`,
         status: `HTTP ${err.status.toString()}`,
         remediation:
           "Check the configured proxy, NO_PROXY rules, and CA bundle, then retry. No snapshot was stored.",
+        assertive: true,
+      };
+    }
+    if (FIGMA_CA_ERRORS.has(err.code)) {
+      return {
+        title: "Figma snapshot blocked by outbound egress",
+        detail: `${err.code}: ${err.message}`,
+        status: `HTTP ${err.status.toString()}`,
+        remediation:
+          "A TLS certificate verification failure blocked the request. Check the CA bundle configuration, then retry. No snapshot was stored.",
+        assertive: true,
+      };
+    }
+    if (FIGMA_NETWORK_ERRORS.has(err.code)) {
+      return {
+        title: "Figma snapshot blocked by outbound egress",
+        detail: `${err.code}: ${err.message}`,
+        status: `HTTP ${err.status.toString()}`,
+        remediation:
+          "The outbound network request to Figma failed. Check DNS resolution and network connectivity, then retry. No snapshot was stored.",
         assertive: true,
       };
     }
@@ -197,6 +252,8 @@ export interface FigmaSnapshotWindowProps {
   readonly loadImpl?: typeof loadFigmaSnapshotSummary;
   /** Injectable for tests — defaults to the real design-to-code BFF call (#755). */
   readonly codegenImpl?: typeof generateFigmaCode;
+  /** Injectable for tests — defaults to the real PAT revoke call (#758). */
+  readonly revokeImpl?: typeof revokeFigmaToken;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -211,6 +268,7 @@ export function FigmaSnapshotWindow({
   triggerImpl = triggerFigmaSnapshot,
   loadImpl = loadFigmaSnapshotSummary,
   codegenImpl = generateFigmaCode,
+  revokeImpl = revokeFigmaToken,
 }: FigmaSnapshotWindowProps): ReactNode {
   const inputId = useId();
   const statusId = useId();
@@ -228,13 +286,24 @@ export function FigmaSnapshotWindow({
   const [consentInvalid, setConsentInvalid] = useState(false);
   const consentRef = useRef<HTMLInputElement | null>(null);
 
+  // Fix #7: AbortController for the active build/load fetch.
+  const abortRef = useRef<AbortController | null>(null);
+
   const flagConsentRequired = useCallback((): void => {
     setConsentInvalid(true);
   }, []);
+
   // Design-to-code (#755) state — a reviewable artifact generated from the stored snapshot.
   const [codeState, setCodeState] = useState<"idle" | "generating" | "done" | "error">("idle");
   const [code, setCode] = useState<FigmaCodegenResponse | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
+
+  // Fix #3: PAT revoke state — two-step inline confirm (mirrors ContextBudget pattern).
+  const [revokeConfirming, setRevokeConfirming] = useState(false);
+  const [revokeStatus, setRevokeStatus] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const revokeConfirmRef = useRef<HTMLButtonElement | null>(null);
+  const revokeTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const linkValid = isValidFigmaLink(boardLink);
   const linkError = figmaLinkValidationMessage(boardLink);
@@ -250,8 +319,25 @@ export function FigmaSnapshotWindow({
     if (consentInvalid && buildState === "error") consentRef.current?.focus();
   }, [consentInvalid, buildState]);
 
+  // Fix #3: focus the confirm button when the revoke confirm step opens.
+  useEffect(() => {
+    if (revokeConfirming) revokeConfirmRef.current?.focus();
+  }, [revokeConfirming]);
+
+  // Fix #7: abort in-flight fetch on unmount.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   const runBuild = useCallback(
     async (link: string, isResnapshot: boolean): Promise<void> => {
+      // Abort any previous in-flight request before starting a new one.
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       setBuildState("building");
       setErrorNotice(null);
       setCodeState("idle");
@@ -260,11 +346,14 @@ export function FigmaSnapshotWindow({
         const result = await triggerImpl(link, {
           acknowledgeReadOnly: consentChecked,
           isResnapshot,
+          signal: controller.signal,
         });
         setSummary(result);
         updateCfg({ snapshotRunId: result.runId });
         setBuildState("done");
       } catch (err) {
+        // Ignore abort — user clicked Cancel or component unmounted.
+        if (err instanceof DOMException && err.name === "AbortError") return;
         // uiux-fix F038 C210: the server's 428 message names the policy but not the control —
         // extend it with an instruction that points at the checkbox, and highlight + focus it.
         if (err instanceof ApiError && err.code === "FIGMA_CONSENT_REQUIRED") {
@@ -307,7 +396,9 @@ export function FigmaSnapshotWindow({
   );
 
   const handleResnapshot = useCallback((): void => {
-    if (busy || summary === null) return;
+    // Fix #2: aria-disabled guard — the button stays mounted so focus is never dropped.
+    if (busy) return;
+    if (summary === null) return;
     // uiux-fix F045 C249: "Re-snapshot this board" means THIS board — always rebuild the
     // link from the stored summary instead of trusting whatever currently sits in the
     // input (which may be invalid or point at a different board, bypassing the
@@ -315,6 +406,14 @@ export function FigmaSnapshotWindow({
     const link = `https://www.figma.com/design/${summary.fileKey}/board?node-id=${summary.nodeId}`;
     void runBuild(link, true);
   }, [busy, runBuild, summary]);
+
+  // Fix #7: Cancel the in-flight build and return to idle with a status note.
+  const handleCancel = useCallback((): void => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setBuildState("idle");
+    setErrorNotice(null);
+  }, []);
 
   const handleGenerateCode = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
@@ -336,28 +435,65 @@ export function FigmaSnapshotWindow({
   // in-memory summary is present.
   const handleLoadStored = useCallback((): void => {
     if (snapshotRunId === undefined || snapshotRunId.length === 0 || busy) return;
+    // Abort any previous in-flight request.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     // Distinct "loading" state — this path reads the locally stored evidence record
     // only and never contacts Figma, so it must not show the "building" copy.
     setBuildState("loading");
     setErrorNotice(null);
-    loadImpl(snapshotRunId)
+    loadImpl(snapshotRunId, controller.signal)
       .then((result) => {
         setSummary(result);
         setBuildState("done");
       })
       .catch((err: unknown) => {
-        setErrorNotice(formatSnapshotError(err));
+        // Ignore abort.
+        if (err instanceof DOMException && (err as DOMException).name === "AbortError") return;
+        // Fix #6: FIGMA_SNAPSHOT_NOT_FOUND on load — the stored runId is stale; clear it so
+        // the connected QI hub stops feeding a dead run id.
+        if (err instanceof ApiError && err.code === "FIGMA_SNAPSHOT_NOT_FOUND") {
+          updateCfg({ snapshotRunId: undefined });
+          setErrorNotice({
+            ...formatSnapshotError(err),
+            detail: `${err.message} The stored run ID has been cleared.`,
+          });
+        } else {
+          setErrorNotice(formatSnapshotError(err));
+        }
         setBuildState("error");
       });
-  }, [busy, loadImpl, snapshotRunId]);
+  }, [busy, loadImpl, snapshotRunId, updateCfg]);
 
-  // Keep the notice (and its button) mounted while loading — unmounting the just-
-  // activated button would drop keyboard/SR focus to <body>.
+  const handleRevokeConfirmed = useCallback((): void => {
+    setRevokeConfirming(false);
+    setRevokeError(null);
+    setRevokeStatus(null);
+    revokeImpl()
+      .then((result: FigmaRevokeTokenResult) => {
+        setRevokeStatus(result.message);
+        requestAnimationFrame(() => revokeTriggerRef.current?.focus());
+      })
+      .catch((err: unknown) => {
+        setRevokeError(formatError(err));
+        requestAnimationFrame(() => revokeTriggerRef.current?.focus());
+      });
+  }, [revokeImpl]);
+
+  const handleRevokeCancel = useCallback((): void => {
+    setRevokeConfirming(false);
+    requestAnimationFrame(() => revokeTriggerRef.current?.focus());
+  }, []);
+
+  // Fix #1: keep the Load button mounted when buildState==="error" && summary===null so
+  // it acts as a retry affordance. The original condition excluded "error" state.
   const showLoadStored =
     snapshotRunId !== undefined &&
     snapshotRunId.length > 0 &&
     summary === null &&
-    (buildState === "idle" || buildState === "loading");
+    (buildState === "idle" || buildState === "loading" || buildState === "error");
 
   return (
     <section className="figma-snapshot-window" aria-label="Figma Snapshot">
@@ -438,6 +574,26 @@ export function FigmaSnapshotWindow({
         </p>
       </form>
 
+      {/* ── Fix #5: assertive egress alert is a SIBLING of the status region, not nested ── */}
+      {buildState === "error" && errorNotice !== null && errorNotice.assertive === true && (
+        <div
+          className="figma-snapshot-error-card"
+          role="alert"
+          aria-labelledby={`${statusId}-error-title`}
+        >
+          <p id={`${statusId}-error-title`} className="figma-snapshot-error-title">
+            {errorNotice.title}
+          </p>
+          <p className="figma-snapshot-error-detail">{errorNotice.detail}</p>
+          {errorNotice.status !== undefined && (
+            <p className="figma-snapshot-error-status">{errorNotice.status}</p>
+          )}
+          {errorNotice.remediation !== undefined && (
+            <p className="figma-snapshot-error-remediation">{errorNotice.remediation}</p>
+          )}
+        </div>
+      )}
+
       {/* ── Status / progress ─────────────────────────────────────────────── */}
       <div
         id={statusId}
@@ -463,32 +619,31 @@ export function FigmaSnapshotWindow({
             for review.
           </p>
         )}
-        {buildState === "error" && errorNotice !== null && errorNotice.assertive === true && (
-          <div
-            className="figma-snapshot-error-card"
-            role="alert"
-            aria-labelledby={`${statusId}-error-title`}
-          >
-            <p id={`${statusId}-error-title`} className="figma-snapshot-error-title">
-              {errorNotice.title}
-            </p>
-            <p className="figma-snapshot-error-detail">{errorNotice.detail}</p>
-            {errorNotice.status !== undefined && (
-              <p className="figma-snapshot-error-status">{errorNotice.status}</p>
-            )}
-            {errorNotice.remediation !== undefined && (
-              <p className="figma-snapshot-error-remediation">{errorNotice.remediation}</p>
-            )}
-          </div>
+        {/* Fix #7: status note when a cancel brings us back to idle. */}
+        {buildState === "idle" && (
+          <p className="sr-only" aria-live="polite">
+            {/* intentionally empty when idle — screen reader sees nothing */}
+          </p>
         )}
-        {/* uiux-fix F045 C375: no role="alert" inside this polite atomic live region — the
-            region itself announces its content; a nested assertive alert caused double or
-            competing announcements depending on the screen reader. External dependency failures
-            intentionally use the structured alert above because they require operator action. */}
+        {/* uiux-fix F045 C375 / Fix #5: no role="alert" inside this polite atomic live region —
+            the assertive egress card was moved above as a sibling. Non-assertive errors render
+            here as plain text; the live region itself announces them. */}
         {buildState === "error" && errorNotice !== null && errorNotice.assertive !== true && (
           <p className="figma-snapshot-error">{errorNotice.detail}</p>
         )}
       </div>
+
+      {/* ── Fix #7: Cancel button during build ────────────────────────────── */}
+      {isBuilding && (
+        <div className="figma-snapshot-cancel-row">
+          <button type="button" className="figma-snapshot-cancel-btn" onClick={handleCancel}>
+            Cancel
+          </button>
+          <p className="figma-snapshot-cancel-note" role="status" aria-live="polite">
+            Cancelling stops this window from waiting — the server-side build continues on demand.
+          </p>
+        </div>
+      )}
 
       {/* ── First-run guidance (nothing captured or stored yet) ───────────── */}
       {buildState === "idle" && summary === null && !showLoadStored && (
@@ -508,6 +663,8 @@ export function FigmaSnapshotWindow({
       )}
 
       {/* ── Load stored snapshot ──────────────────────────────────────────── */}
+      {/* Fix #1: showLoadStored now includes buildState==="error" so the Load button
+          stays mounted after a load failure — it is the retry affordance. */}
       {showLoadStored && (
         <div className="figma-snapshot-stored-notice">
           <p className="figma-snapshot-stored-text">A stored snapshot is available.</p>
@@ -524,7 +681,10 @@ export function FigmaSnapshotWindow({
       )}
 
       {/* ── Snapshot summary ──────────────────────────────────────────────── */}
-      {summary !== null && buildState === "done" && (
+      {/* Fix #2: render the result section whenever summary !== null (not only when
+          buildState==="done") so a failed re-snapshot does not orphan the previous result.
+          Building/error overlay status is shown inside the result section itself. */}
+      {summary !== null && (
         <div className="figma-snapshot-result">
           {/* Reduction info */}
           <div className="figma-snapshot-reduction">
@@ -540,15 +700,16 @@ export function FigmaSnapshotWindow({
             )}
           </div>
 
-          {/* Re-snapshot action */}
+          {/* Fix #2: Re-snapshot uses aria-disabled + guard so it never unmounts mid-action. */}
           <button
             type="button"
             className="figma-snapshot-resnapshot-btn"
             onClick={handleResnapshot}
-            disabled={isBuilding}
+            aria-disabled={busy ? "true" : undefined}
+            aria-busy={isBuilding}
             aria-label="Re-snapshot this board"
           >
-            Re-snapshot
+            {isBuilding ? "Building…" : "Re-snapshot"}
           </button>
 
           {/* Design-to-code (#755): generate reviewable HTML/CSS + design tokens from the stored
@@ -587,7 +748,7 @@ export function FigmaSnapshotWindow({
             )}
           </div>
 
-          {/* PAT scopes info — informational only, operator-facing */}
+          {/* PAT scopes info + Fix #3: revoke action ─ operator-facing */}
           <details className="figma-snapshot-scopes">
             <summary className="figma-snapshot-scopes-summary">Required Figma PAT scopes</summary>
             <ul className="figma-snapshot-scopes-list">
@@ -602,6 +763,54 @@ export function FigmaSnapshotWindow({
               The token is read server-side from the <code>FIGMA_ACCESS_TOKEN</code> environment
               variable or vault. This window never holds or transmits the token.
             </p>
+            {/* Fix #3: two-step inline confirm for PAT revoke (mirrors ContextBudget pattern).
+                Revoke removes the stored encrypted PAT from the server vault (#758). */}
+            <div className="figma-snapshot-revoke-row">
+              {revokeConfirming ? (
+                <span className="figma-snapshot-revoke-confirm">
+                  <span className="figma-snapshot-revoke-confirm-label">
+                    Really revoke the stored token?
+                  </span>
+                  <button
+                    ref={revokeConfirmRef}
+                    type="button"
+                    className="figma-snapshot-revoke-confirm-btn"
+                    onClick={handleRevokeConfirmed}
+                  >
+                    Yes, revoke
+                  </button>
+                  <button
+                    type="button"
+                    className="figma-snapshot-revoke-cancel-btn"
+                    onClick={handleRevokeCancel}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  ref={revokeTriggerRef}
+                  type="button"
+                  className="figma-snapshot-revoke-btn"
+                  onClick={() => {
+                    setRevokeConfirming(true);
+                    setRevokeStatus(null);
+                    setRevokeError(null);
+                  }}
+                >
+                  Revoke stored token
+                </button>
+              )}
+              {/* aria-live status region for revoke outcome */}
+              <p
+                className="figma-snapshot-revoke-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                {revokeStatus ?? revokeError ?? ""}
+              </p>
+            </div>
           </details>
 
           {/* Screen gallery */}
