@@ -36,19 +36,28 @@ import type {
   ModelPort,
   OrchestrationAuthorityBoundary,
   OrchestrationChildOutcome,
+  OrchestrationChildRequest,
+  OrchestrationChildResult,
   OrchestrationChildPlan,
   OrchestrationChildRole,
   OrchestrationChildSettlement,
+  OrchestrationConfig,
+  OrchestrationDeps,
   OrchestrationExecutionMode,
   OrchestrationInvalidTransition,
+  OrchestrationLimits,
   OrchestrationPlan,
   OrchestrationRunIdentity,
   OrchestrationRunKind,
+  OrchestrationSchedulerHooks,
+  OrchestrationSession,
+  OrchestrationSessionResult,
   OrchestrationState,
   OrchestrationStateTransition,
   PatchProposedEvent,
   ReasoningTraceEvent,
   RecordedToolCall,
+  RolePolicy,
   RunCancelledEvent,
   RunCompletedEvent,
   RunCounters,
@@ -82,6 +91,7 @@ describe("keiko-harness public surface", () => {
     expect(typeof harness.createSession).toBe("function");
     expect(typeof harness.runAgent).toBe("function");
     expect(harness.runAgent).toBe(harness.createSession);
+    expect(typeof harness.createOrchestrationSession).toBe("function");
     expect(typeof harness.HARNESS_VERSION).toBe("string");
     // Frozen tables (re-exported from keiko-contracts):
     expect(harness.DEFAULT_LIMITS).toBeDefined();
@@ -97,6 +107,8 @@ describe("keiko-harness public surface", () => {
     expect(harness.ORCHESTRATION_ALLOWED_STATE_TRANSITIONS.running).toContain("merging");
     expect(typeof harness.isOrchestrationStateTransitionAllowed).toBe("function");
     expect(typeof harness.assertOrchestrationStateTransition).toBe("function");
+    expect(harness.DEFAULT_ORCHESTRATION_LIMITS.maxConcurrentChildren).toBeGreaterThan(0);
+    expect(harness.DEFAULT_ROLE_POLICIES.implementer.allowsParallel).toBe(true);
     // Error taxonomy (re-exported from keiko-security):
     expect(typeof harness.HarnessError).toBe("function");
     expect(typeof harness.HarnessInternalError).toBe("function");
@@ -149,14 +161,22 @@ describe("keiko-harness public surface", () => {
     pin<ModelPort>();
     pin<OrchestrationAuthorityBoundary>();
     pin<OrchestrationChildOutcome>();
+    pin<OrchestrationChildRequest>();
+    pin<OrchestrationChildResult>();
     pin<OrchestrationChildPlan>();
     pin<OrchestrationChildRole>();
     pin<OrchestrationChildSettlement>();
+    pin<OrchestrationConfig>();
+    pin<OrchestrationDeps>();
     pin<OrchestrationExecutionMode>();
     pin<OrchestrationInvalidTransition>();
+    pin<OrchestrationLimits>();
     pin<OrchestrationPlan>();
     pin<OrchestrationRunIdentity>();
     pin<OrchestrationRunKind>();
+    pin<OrchestrationSchedulerHooks>();
+    pin<OrchestrationSession>();
+    pin<OrchestrationSessionResult>();
     pin<OrchestrationState>();
     pin<OrchestrationStateTransition>();
     pin<PatchProposedEvent>();
@@ -184,5 +204,6 @@ describe("keiko-harness public surface", () => {
     pin<ToolCallStartedEvent>();
     pin<ToolPort>();
     pin<VerificationResultEvent>();
+    pin<RolePolicy>();
   });
 });

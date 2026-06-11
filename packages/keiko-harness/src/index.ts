@@ -12,6 +12,20 @@ export {
   type AgentSession,
   type HarnessDeps,
 } from "./session.js";
+export {
+  createOrchestrationSession,
+  DEFAULT_ORCHESTRATION_LIMITS,
+  DEFAULT_ROLE_POLICIES,
+  type OrchestrationChildRequest,
+  type OrchestrationChildResult,
+  type OrchestrationConfig,
+  type OrchestrationDeps,
+  type OrchestrationLimits,
+  type OrchestrationSchedulerHooks,
+  type OrchestrationSession,
+  type OrchestrationSessionResult,
+  type RolePolicy,
+} from "./orchestration.js";
 
 // runAgent is the ergonomic SDK alias of createSession; both start a bounded run.
 export { createSession as runAgent } from "./session.js";
