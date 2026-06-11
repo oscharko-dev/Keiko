@@ -53,12 +53,13 @@ function perSourceAtomBudget(total: number, sourceCount: number): number {
   return Math.max(1, Math.floor(total / sourceCount));
 }
 
-// Global per-run evidence byte budget. Each source kind (workspace / file / capsule) was previously
-// allowed ~192KB INDEPENDENTLY, so N large sources summed to N×192KB and blew the model prompt cap
-// (MAX_PROMPT_BYTES = 256KB) — failing the entire N+1 run with QI_PROMPT_TOO_LARGE (Epic #729
-// headline). The byte budget is now a single global pool split fairly across sources, mirroring the
-// atom-budget split, so the merged evidence text stays bounded regardless of N. A single source keeps
-// the full budget (identical to the prior single-source behaviour).
+// Global per-run evidence byte budget. Each source kind (workspace / file / capsule /
+// figma-snapshot) was previously allowed ~192KB INDEPENDENTLY, so N large sources summed to N×192KB
+// and blew the model prompt cap (MAX_PROMPT_BYTES = 256KB) — failing the entire N+1 run with
+// QI_PROMPT_TOO_LARGE (Epic #729 headline). The byte budget is now a single global pool split fairly
+// across sources, mirroring the atom-budget split, so the merged evidence text stays bounded
+// regardless of N. A single source keeps the full budget (identical to the prior single-source
+// behaviour). figma-snapshot uses the same split via figmaScreenDocs (mirrors processCapsuleDocs).
 const EVIDENCE_BUDGET_BYTES = 196_608;
 // Never starve a source below this many bytes — a tiny share is still usable context.
 const MIN_SOURCE_BUDGET_BYTES = 4_096;
@@ -769,10 +770,18 @@ function a11yItemsByScreen(
 // items (#811) AND its accessibility test items (#812) — concatenated, neither replacing the other —
 // through the `extraItems` seam, then optionally with vision hints. The per-run byte budget bounds
 // the cumulative corpus so an oversized board never hard-fails on QI_PROMPT_TOO_LARGE.
+// The byteBudget is the caller's fair share of the global evidence pool (Epic #729 N+1 split)
+// so a figma-snapshot source never consumes more than its fair slice alongside other sources.
 function figmaScreenDocs(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
 ): readonly CorpusDoc[] {
+  // Mirror processCapsuleDocs (:558-563): the per-run corpus budget is the smaller of the capsule's
+  // own ceiling and this source's fair share of the global evidence byte budget (Epic #729 N+1
+  // split). The per-document cap is likewise never larger than the per-run budget.
+  const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
+  const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
   const parsed = parseScreens(record);
   const navItems = navItemsByScreen(parsed, record.links ?? []);
   const a11yItems = a11yItemsByScreen(parsed);
@@ -782,10 +791,10 @@ function figmaScreenDocs(
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
     const augmented = visionAugmentedScreenText(baseline, row, vision);
-    const capped = truncateToUtf8Bytes(redact(augmented), CAPSULE_MAX_BYTES_PER_DOCUMENT);
+    const capped = truncateToUtf8Bytes(redact(augmented), perDocBudget);
     if (capped.trim().length === 0) continue;
     const bytes = utf8ByteLength(capped);
-    if (docs.length > 0 && totalBytes + bytes > CAPSULE_BUDGET_BYTES) break;
+    if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
     docs.push({ documentId: `${row.screenId} (${ir.name})`, text: capped });
     totalBytes += bytes;
   }
@@ -798,6 +807,7 @@ function ingestFigmaSnapshot(
   registeredAt: string,
   loader: FigmaSnapshotLoader,
   vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
   const record = loader(source.snapshotRunId);
@@ -810,7 +820,7 @@ function ingestFigmaSnapshot(
   if (record.screens.length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
   }
-  const docs = figmaScreenDocs(record, vision);
+  const docs = figmaScreenDocs(record, vision, byteBudget);
   if (docs.length === 0) {
     throw new QiIngestionError(
       "QI_SOURCE_EMPTY",
@@ -873,7 +883,14 @@ function ingestOne(
           "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
         );
       }
-      return ingestFigmaSnapshot(source, index, registeredAt, figmaSnapshotLoader, figmaVision);
+      return ingestFigmaSnapshot(
+        source,
+        index,
+        registeredAt,
+        figmaSnapshotLoader,
+        figmaVision,
+        byteBudget,
+      );
   }
 }
 

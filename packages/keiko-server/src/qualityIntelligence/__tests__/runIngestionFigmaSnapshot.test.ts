@@ -279,6 +279,38 @@ describe("figma-snapshot ingestion — redaction", () => {
 });
 
 // ─── Composition with multi-source (#729) ────────────────────────────────────────
+//
+// These tests are MUTATION-ROBUST: they would fail against the pre-fix code where
+// ingestFigmaSnapshot called figmaScreenDocs without a byteBudget and the function
+// used the hardcoded CAPSULE_BUDGET_BYTES (196 608) instead of the fair per-source
+// share. The key assertion is that summed figma-atom bytes ≤ perSourceByteBudget(2)
+// = 98 304. Under the old code a large-enough figma snapshot would produce
+// >98 304 bytes, violating this bound and causing QI_PROMPT_TOO_LARGE in real runs.
+
+// EVIDENCE_BUDGET_BYTES / 2 = 196 608 / 2 = 98 304.
+const PER_SOURCE_BUDGET_2 = 98_304;
+
+/** UTF-8 byte length (mirrors the implementation's truncateToUtf8Bytes counter). */
+function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** Build a snapshot record with `n` screens each containing a large padded text. */
+function bigMultiScreenRecord(n: number, textPerScreen: string): FigmaSnapshotRecord {
+  const screens = Array.from({ length: n }, (_, i) =>
+    screenRow(
+      `s-${String(i)}`,
+      screenIr(
+        `s-${String(i)}`,
+        `Screen${String(i)}`,
+        irNode("root", "container", {
+          children: [irNode("btn", "button", { text: textPerScreen })],
+        }),
+      ),
+    ),
+  );
+  return record(screens);
+}
 
 describe("figma-snapshot ingestion — multi-source composition", () => {
   it("composes a figma-snapshot source alongside a requirements source with a fair budget", () => {
@@ -304,6 +336,63 @@ describe("figma-snapshot ingestion — multi-source composition", () => {
     expect(kinds).toContain("figma-snapshot");
     expect(kinds).toContain("requirements");
     expect(result.envelopes).toHaveLength(2);
+  });
+
+  it(
+    "figma-snapshot atoms stay within perSourceByteBudget(2) when composed with a second source " +
+      "(mutation-proof: fails against pre-fix code that ignores the budget)",
+    () => {
+      // Build a snapshot large enough that, without the budget, the raw corpus would exceed
+      // perSourceByteBudget(2) = 98 304. 20 screens × ~6 000 chars > 98 304.
+      const bigPad = "A".repeat(6_000);
+      const rec = bigMultiScreenRecord(20, bigPad);
+      const requirements = {
+        kind: "requirements" as const,
+        label: "Reqs",
+        text: "The system shall allow login.\nThe system shall lock after five attempts.",
+      };
+
+      // Must not throw QI_PROMPT_TOO_LARGE (was the production failure mode pre-fix).
+      const result = ingestInlineSources(
+        input([requirements, figmaSource()], { figmaSnapshotLoader: loaderFor(rec) }),
+      );
+
+      const figmaAtoms = result.ingestedAtoms.filter((a) => {
+        const envId = a.atom.sourceEnvelopeId;
+        const env = result.envelopes.find((e) => e.id === envId);
+        return env?.provenance.origin.startsWith("figma-snapshot");
+      });
+
+      const figmaTotalBytes = figmaAtoms.reduce((sum, a) => sum + utf8Bytes(a.canonicalText), 0);
+      // The figma source's combined atom text must not exceed its fair share (98 304).
+      // Under the pre-fix code figmaScreenDocs used CAPSULE_BUDGET_BYTES (196 608), so
+      // figmaTotalBytes would be ~120 000 and this assertion would FAIL — confirming mutation
+      // sensitivity. With the fix, figmaScreenDocs caps at perRunBudget = min(196608, 98304) = 98304.
+      expect(figmaTotalBytes).toBeLessThanOrEqual(PER_SOURCE_BUDGET_2);
+      // Sanity: both sources produced atoms.
+      const kinds = result.sourceSummaries.map((s) => s.kind);
+      expect(kinds).toContain("figma-snapshot");
+      expect(kinds).toContain("requirements");
+    },
+  );
+
+  it("single figma-snapshot source keeps full EVIDENCE_BUDGET_BYTES (196 608) — single-source unchanged", () => {
+    // With sources.length = 1, perSourceByteBudget returns EVIDENCE_BUDGET_BYTES = 196 608.
+    // A large-but-not-overwhelming snapshot should produce atoms without truncation.
+    const bigPad = "A".repeat(6_000);
+    const rec = bigMultiScreenRecord(5, bigPad);
+
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(rec) }),
+    );
+
+    // Should ingest all 5 screens (each ~6 000 bytes × 5 = ~30 000 << 196 608).
+    expect(result.ingestedAtoms).toHaveLength(5);
+    const totalBytes = result.ingestedAtoms.reduce((sum, a) => sum + utf8Bytes(a.canonicalText), 0);
+    // Under the single-source budget (196 608) all 5 screens fit; none should be truncated away.
+    expect(totalBytes).toBeGreaterThan(0);
+    // And the total is well within the full budget (sanity: not starved by a wrongly halved budget).
+    expect(totalBytes).toBeLessThanOrEqual(196_608);
   });
 });
 
