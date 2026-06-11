@@ -715,16 +715,52 @@ function mergeLineWindows(windows: readonly LineWindow[]): readonly LineWindow[]
   return merged;
 }
 
+function windowContainsAtom(window: LineWindow, atom: EvidenceAtom): boolean {
+  const range = atom.lineRange;
+  return (
+    range === undefined || (window.startLine <= range.startLine && window.endLine >= range.endLine)
+  );
+}
+
+function strongestAtomScoreForWindow(
+  window: LineWindow,
+  atomsForPath: readonly EvidenceAtom[],
+): number {
+  let score = 0;
+  for (const atom of atomsForPath) {
+    if (windowContainsAtom(window, atom) && atom.score > score) {
+      score = atom.score;
+    }
+  }
+  return score;
+}
+
+interface ExcerptWindowSelection {
+  readonly windows: readonly LineWindow[];
+  readonly omittedWindowCount: number;
+}
+
 function excerptLineWindows(
   atomsForPath: readonly EvidenceAtom[] | undefined,
-): readonly LineWindow[] {
+): ExcerptWindowSelection {
   if (atomsForPath === undefined || atomsForPath.length === 0) {
-    return [DEFAULT_EXCERPT_WINDOW];
+    return { windows: [DEFAULT_EXCERPT_WINDOW], omittedWindowCount: 0 };
   }
-  return mergeLineWindows(atomsForPath.map(lineWindowForAtom)).slice(
-    0,
-    MAX_EXCERPT_WINDOWS_PER_FILE,
-  );
+  const merged = mergeLineWindows(atomsForPath.map(lineWindowForAtom));
+  const selected = [...merged]
+    .sort((a, b) => {
+      const scoreDelta =
+        strongestAtomScoreForWindow(b, atomsForPath) - strongestAtomScoreForWindow(a, atomsForPath);
+      return scoreDelta === 0 ? a.startLine - b.startLine : scoreDelta;
+    })
+    .slice(0, MAX_EXCERPT_WINDOWS_PER_FILE)
+    .sort((a, b) =>
+      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+    );
+  return {
+    windows: selected,
+    omittedWindowCount: Math.max(0, merged.length - selected.length),
+  };
 }
 
 function exhaustedDimensions(remainingFiles: number, remainingBytes: number): string {
@@ -737,6 +773,7 @@ function exhaustedDimensions(remainingFiles: number, remainingBytes: number): st
 interface ReadPathExcerptWindowsResult {
   readonly windows: readonly ExcerptWindow[];
   readonly bytesConsumed: number;
+  readonly omittedWindowCount: number;
 }
 
 async function readPathExcerptWindows(
@@ -746,7 +783,8 @@ async function readPathExcerptWindows(
 ): Promise<ReadPathExcerptWindowsResult> {
   const windows: ExcerptWindow[] = [];
   let bytesConsumed = 0;
-  for (const window of excerptLineWindows(inputs.atomsByPath.get(scopePath))) {
+  const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
+  for (const window of selection.windows) {
     throwIfCancelled(inputs.signal);
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0) {
@@ -762,7 +800,7 @@ async function readPathExcerptWindows(
     windows.push({ ...window, content: result.content });
     bytesConsumed += utf8ByteLength(result.content);
   }
-  return { windows, bytesConsumed };
+  return { windows, bytesConsumed, omittedWindowCount: selection.omittedWindowCount };
 }
 
 async function readKeptExcerpts(
@@ -788,6 +826,14 @@ async function readKeptExcerpts(
       const { windows } = result;
       if (windows.length > 0) {
         excerpts.set(scopePath, windows);
+        if (result.omittedWindowCount > 0) {
+          uncertainty.push({
+            kind: "scope-incomplete",
+            claim: `excerpt window limit omitted ${String(result.omittedWindowCount)} additional matching range(s) in ${scopePath}`,
+            impactedAtomIds: [],
+            emittedAtMs: inputs.nowMs(),
+          });
+        }
         remainingFiles -= 1;
         remainingBytes -= result.bytesConsumed;
       }

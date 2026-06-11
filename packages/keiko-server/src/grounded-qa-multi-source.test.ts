@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -197,6 +197,12 @@ function makeChat(scopes: readonly ChatConnectedScope[]): string {
   return chat.id;
 }
 
+function tempRoot(name: string): string {
+  const root = join(tmp, name);
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
 beforeEach(() => {
   store = createInMemoryUiStore();
   tmp = mkdtempSync(join(tmpdir(), "keiko-grounded-multi-"));
@@ -291,13 +297,13 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       kind: "directory",
       relativePaths: ["src/a.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/api",
+      root: tempRoot("api"),
     };
     const scopeB: ChatConnectedScope = {
       kind: "directory",
       relativePaths: ["src/b.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/web",
+      root: tempRoot("web"),
     };
     const chatId = makeChat([scopeA, scopeB]);
     const byPath = new Map<string, ConnectedContextPack>([
@@ -337,13 +343,13 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       kind: "directory",
       relativePaths: ["src/a.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/api",
+      root: tempRoot("api"),
     };
     const scopeB: ChatConnectedScope = {
       kind: "directory",
       relativePaths: ["src/b.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/web",
+      root: tempRoot("web"),
     };
     const chatId = makeChat([scopeA, scopeB]);
     const byPath = new Map<string, ConnectedContextPack>([
@@ -359,7 +365,10 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     );
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(puts).toHaveLength(2);
-    expect(puts.map((p) => p.workspaceRoot)).toStrictEqual(["/home/u/api", "/home/u/web"]);
+    expect(puts.map((p) => p.workspaceRoot)).toStrictEqual([
+      realpathSync(scopeA.root ?? ""),
+      realpathSync(scopeB.root ?? ""),
+    ]);
     expect(answer.evidenceRunId).toBe(puts[0]?.runId);
   });
 
@@ -368,13 +377,13 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       kind: "directory",
       relativePaths: ["src/a.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/api",
+      root: tempRoot("api"),
     };
     const scopeB: ChatConnectedScope = {
       kind: "directory",
       relativePaths: ["src/b.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/web",
+      root: tempRoot("web"),
     };
     const chatId = makeChat([scopeA, scopeB]);
     const byPath = new Map<string, ConnectedContextPack>([
@@ -412,7 +421,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       kind: "directory" as const,
       relativePaths: [`src/s${String(i)}.ts`],
       connectedAtMs: NOW,
-      root: `/home/u/src${String(i)}`,
+      root: tempRoot(`src${String(i)}`),
     }));
     const chatId = makeChat(scopes);
     const byPath = new Map<string, ConnectedContextPack>(
@@ -439,7 +448,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       kind: "directory",
       relativePaths: ["src/a.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/api",
+      root: tempRoot("api"),
     };
     const chatId = makeChat([scope]);
     const pack = scopePack("src/a.ts", 0.5, "solo");

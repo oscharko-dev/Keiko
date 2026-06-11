@@ -12,6 +12,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
   type ConnectedContextPack,
+  type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -719,6 +720,66 @@ describe("runGroundedExploration", () => {
       lateFile?.excerpts.some((excerpt) => excerpt.content.includes("MyClass late target")),
     ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("surfaces when same-file evidence exceeds the excerpt-window cap", async () => {
+    const lines = Array.from({ length: 96 }, (_unused, i) =>
+      i % 10 === 0
+        ? `export const hit${String(i)} = 'MyClass repeated target';`
+        : `// filler ${String(i)}`,
+    );
+    writeFileSync(join(ROOT, "src/repeated.ts"), `${lines.join("\n")}\n`);
+    const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const originalLookup = adapter.lookup;
+    adapter.lookup = (): ReturnType<typeof originalLookup> =>
+      Promise.resolve(
+        Array.from(
+          { length: 10 },
+          (_unused, i) =>
+            ({
+              schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+              stableId: `structural-src/repeated.ts-${String(i)}`,
+              scopePath: "src/repeated.ts",
+              lineRange: { startLine: i * 10 + 1, endLine: i * 10 + 1 },
+              score: i === 9 ? 1 : 0.5,
+              provenance: {
+                kind: "structural",
+                tool: "import-graph",
+                queryFingerprint: "fp-repeated",
+              },
+              redactionState: "redacted",
+              emittedAtMs: NOW,
+              ledgerRef: undefined,
+            }) satisfies EvidenceAtom,
+        ),
+      );
+    try {
+      const out = await runGroundedExploration(
+        input({
+          query: happyQuery({ text: "Investigate src/repeated.ts MyClass repeated target" }),
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      const repeatedFile = out.pack.files.find((file) => file.scopePath === "src/repeated.ts");
+      expect(repeatedFile?.excerpts.some((excerpt) => excerpt.content.includes("hit90"))).toBe(
+        true,
+      );
+      expect(
+        out.pack.uncertainty.some(
+          (marker) =>
+            marker.kind === "scope-incomplete" &&
+            marker.claim.includes("additional matching range") &&
+            marker.claim.includes("src/repeated.ts"),
+        ),
+      ).toBe(true);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      adapter.lookup = originalLookup;
+    }
   });
 
   it("reuses an injected micro-index for repeated context-pack assembly", async () => {

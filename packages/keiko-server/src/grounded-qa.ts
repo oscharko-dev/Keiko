@@ -6,6 +6,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import {
   CancelledError,
   GatewayError,
@@ -260,6 +261,45 @@ function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   const cs = chat.connectedScope;
   if (cs === undefined) return undefined;
   return buildSelectedScopeFrom(chat, cs, deriveScopeId(chat));
+}
+
+function canonicalGroundedRoot(rootInput: string, deps: UiHandlerDeps): string | RouteResult {
+  if (pathIsDenied(rootInput)) {
+    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
+  }
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(rootInput);
+  } catch {
+    return badRequest("Connected scope root is not accessible.");
+  }
+  if (pathIsDenied(realRoot)) {
+    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
+  }
+  const redacted = deps.redactor(realRoot);
+  if (typeof redacted === "string" && redacted !== realRoot) {
+    return badRequest("Connected scope root contains credential-shaped metadata.");
+  }
+  return realRoot;
+}
+
+function canonicalizeGroundedFolderScopes(
+  chat: Chat,
+  deps: UiHandlerDeps,
+  scopes: readonly ChatConnectedScope[],
+): readonly ChatConnectedScope[] | RouteResult {
+  const canonical: ChatConnectedScope[] = [];
+  for (const scope of scopes) {
+    const realRoot = canonicalGroundedRoot(scope.root ?? chat.projectPath, deps);
+    if (typeof realRoot !== "string") return realRoot;
+    canonical.push({ ...scope, root: realRoot });
+  }
+  return canonical;
+}
+
+function withCanonicalFolderScopes(chat: Chat, scopes: readonly ChatConnectedScope[]): Chat {
+  if (scopes.length === 0) return chat;
+  return { ...chat, connectedScopes: scopes, connectedScope: scopes[0] };
 }
 
 export function buildQuery(content: string, nowMs: () => number): RetrievalQuery {
@@ -654,8 +694,8 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   return { status: 200, body: answer };
 }
 
-function isRouteResult(value: OrchestratorOutput | RouteResult): value is RouteResult {
-  return "status" in value;
+function isRouteResult(value: unknown): value is RouteResult {
+  return typeof value === "object" && value !== null && "status" in value;
 }
 
 function ensureRouteNotCancelled(
@@ -903,15 +943,27 @@ export async function handleGroundedAsk(
   // EXISTING single-connector path (#189, byte-identical). Everything else (folders+connector, or
   // 2+ connectors) is the hybrid merge.
   const folderScopes = buildConnectedScopes(chat);
+  const canonicalFolderScopes = canonicalizeGroundedFolderScopes(chat, deps, folderScopes);
+  if (isRouteResult(canonicalFolderScopes)) return canonicalFolderScopes;
+  const preparedWithCanonicalFolders: PreparedGroundedAsk = {
+    ...prepared,
+    chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),
+  };
   const connectorCount = buildLocalKnowledgeScopes(chat).length;
   if (folderScopes.length === 0 && connectorCount === 0) {
     return badRequest("Chat has no connected scope.");
   }
   if (connectorCount === 0) {
-    return dispatchFolderAsk(prepared, deps, folderScopes, runner, multiSource);
+    return dispatchFolderAsk(
+      preparedWithCanonicalFolders,
+      deps,
+      canonicalFolderScopes,
+      runner,
+      multiSource,
+    );
   }
   if (folderScopes.length === 0 && connectorCount === 1) {
     return handleLocalKnowledgeGroundedAsk(chat, prepared.input, deps, prepared.signal);
   }
-  return dispatchHybridAsk(prepared, deps, hybrid);
+  return dispatchHybridAsk(preparedWithCanonicalFolders, deps, hybrid);
 }

@@ -94,10 +94,29 @@ describe("extractSignals", () => {
     expect(result.generatedHint).toBe(true);
   });
 
+  it("detects snapshot folders as generated context", () => {
+    const result = extractSignals(
+      [atom("src/__snapshots__/foo.test.ts.snap", 0.5)],
+      [],
+      REQUIRED_HINTS,
+    );
+    expect(result.generatedHint).toBe(true);
+  });
+
   it("stacktrace-position-bonus fires when a quoted anchor mentions the path", () => {
     const result = extractSignals(
       [atom("src/foo.ts", 0.3)],
       [anchor("at runFoo (src/foo.ts:42:5)", "quoted")],
+      REQUIRED_HINTS,
+    );
+    const bonus = result.signals.find((s) => s.name === "stacktrace-position-bonus");
+    expect(bonus?.value).toBe(1);
+  });
+
+  it("stacktrace-position-bonus fires for anonymous stack frames", () => {
+    const result = extractSignals(
+      [atom("src/foo.ts", 0.3)],
+      [anchor("at src/foo.ts:42:5", "quoted")],
       REQUIRED_HINTS,
     );
     const bonus = result.signals.find((s) => s.name === "stacktrace-position-bonus");

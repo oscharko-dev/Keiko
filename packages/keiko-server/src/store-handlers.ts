@@ -642,15 +642,18 @@ function validateConnectedScopeAccess(
   deps: UiHandlerDeps,
   chat: Chat,
   scope: ChatConnectedScope,
-): void {
+): ChatConnectedScope {
   const realRoot =
     scope.root !== undefined
       ? validateConnectedScopeRoot(deps, scope.root)
       : validateFallbackProjectRoot(deps, chat.projectPath);
-  if (scope.kind === "workspace-root") return;
+  if (scope.kind === "workspace-root") {
+    return scope.root === undefined ? scope : { ...scope, root: realRoot };
+  }
   for (const entry of scope.relativePaths) {
     validateScopePathAccess(deps, realRoot, scope.kind, entry);
   }
+  return scope.root === undefined ? scope : { ...scope, root: realRoot };
 }
 
 function validateScopeConnectedAtMs(value: unknown): number {
@@ -858,6 +861,29 @@ function scopesRequiringAccessValidation(patch: UpdateChatPatch): readonly ChatC
   return [];
 }
 
+function canonicalizeConnectedScopePatch(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  patch: UpdateChatPatch,
+): UpdateChatPatch {
+  if (patch.connectedScopes !== undefined) {
+    return {
+      ...patch,
+      connectedScopes:
+        patch.connectedScopes === null
+          ? null
+          : patch.connectedScopes.map((scope) => validateConnectedScopeAccess(deps, chat, scope)),
+    };
+  }
+  if (patch.connectedScope !== undefined && patch.connectedScope !== null) {
+    return {
+      ...patch,
+      connectedScope: validateConnectedScopeAccess(deps, chat, patch.connectedScope),
+    };
+  }
+  return patch;
+}
+
 // Epic #189 — the grounded index is invalidated when ANY grounding source changes: a connected
 // folder scope (#532) OR a local-knowledge connector scope. The hybrid path reads both.
 function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
@@ -878,15 +904,14 @@ export async function handleUpdateChat(
     const body = await readJsonObject(ctx.req);
     const patch = buildChatPatch(deps, body);
     const scopesToCheck = scopesRequiringAccessValidation(patch);
+    let safePatch = patch;
     if (scopesToCheck.length > 0) {
       const existing = findChatById(deps, id);
       if (existing === undefined) return notFoundResult("Chat not found.");
-      for (const scope of scopesToCheck) {
-        validateConnectedScopeAccess(deps, existing, scope);
-      }
+      safePatch = canonicalizeConnectedScopePatch(deps, existing, patch);
     }
-    const chat = deps.store.updateChat(id, patch);
-    if (patchTouchesGroundingScope(patch) || patch.status === "closed") {
+    const chat = deps.store.updateChat(id, safePatch);
+    if (patchTouchesGroundingScope(safePatch) || safePatch.status === "closed") {
       clearGroundedContextIndexesForConversation(id);
       clearGroundedTurnsForConversation(id);
     }

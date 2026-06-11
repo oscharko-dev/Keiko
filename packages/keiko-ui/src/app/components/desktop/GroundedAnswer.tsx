@@ -342,8 +342,6 @@ const COVERAGE_GAP_REASONS: ReadonlyArray<{
 }> = [
   { reason: "size-exceeded", label: "larger than 2 MB" },
   { reason: "binary", label: "binary or an unsupported format" },
-  { reason: "generated", label: "generated artifacts" },
-  { reason: "budget-exhausted", label: "skipped after the exploration budget was reached" },
   { reason: "tool-unavailable", label: "unreadable" },
 ];
 

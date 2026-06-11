@@ -50,6 +50,8 @@ interface ValidationSplit {
   readonly invalidPaths: readonly string[];
 }
 
+const AUTO_DUPLICATE_CLUSTER_MIN = 3;
+
 function resolveHints(hints: RankingHints | undefined): Required<RankingHints> {
   return {
     generatedPathPatterns: hints?.generatedPathPatterns ?? DEFAULT_GENERATED_PATTERNS,
@@ -87,6 +89,63 @@ function groupAtomsByPath(atoms: readonly EvidenceAtom[]): ValidationSplit {
     }
   }
   return { valid, invalidPaths: [...invalidPaths] };
+}
+
+function basename(scopePath: string): string {
+  const index = scopePath.lastIndexOf("/");
+  return index >= 0 ? scopePath.slice(index + 1) : scopePath;
+}
+
+function bestAtomScore(atoms: readonly EvidenceAtom[]): number {
+  return atoms.reduce((best, atom) => Math.max(best, atom.score), 0);
+}
+
+function compareCanonicalCandidate(
+  a: readonly [string, readonly EvidenceAtom[]],
+  b: readonly [string, readonly EvidenceAtom[]],
+): number {
+  const scoreDelta = bestAtomScore(b[1]) - bestAtomScore(a[1]);
+  if (scoreDelta !== 0) {
+    return scoreDelta;
+  }
+  if (a[0].length !== b[0].length) {
+    return a[0].length - b[0].length;
+  }
+  return a[0].localeCompare(b[0]);
+}
+
+function deriveDuplicateHints(
+  group: ReadonlyMap<string, readonly EvidenceAtom[]>,
+  explicit: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const derived = new Map(explicit);
+  const clusters = new Map<string, (readonly [string, readonly EvidenceAtom[]])[]>();
+  for (const entry of group.entries()) {
+    const [scopePath] = entry;
+    if (derived.has(scopePath)) {
+      continue;
+    }
+    const key = basename(scopePath).toLowerCase();
+    const existing = clusters.get(key);
+    if (existing === undefined) {
+      clusters.set(key, [entry]);
+    } else {
+      existing.push(entry);
+    }
+  }
+  for (const entries of clusters.values()) {
+    if (entries.length < AUTO_DUPLICATE_CLUSTER_MIN) {
+      continue;
+    }
+    const [canonical, ...duplicates] = [...entries].sort(compareCanonicalCandidate);
+    if (canonical === undefined) {
+      continue;
+    }
+    for (const [scopePath] of duplicates) {
+      derived.set(scopePath, canonical[0]);
+    }
+  }
+  return derived;
 }
 
 function buildAnnotated(
@@ -143,7 +202,8 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
   const hints = resolveHints(input.hints);
   const weights = options.weights ?? DEFAULT_SCORING_WEIGHTS;
   const { valid, invalidPaths } = groupAtomsByPath(input.atoms);
-  const annotated = buildAnnotated(valid, input, hints, weights);
+  const rankingHints = { ...hints, duplicateOf: deriveDuplicateHints(valid, hints.duplicateOf) };
+  const annotated = buildAnnotated(valid, input, rankingHints, weights);
   const filterOptions = resolveFilterOptions(options.filter, frozenStartMs);
   const filterResult = filterCandidates(annotated, filterOptions);
   // Invalid paths cannot be represented as OmittedContextEntry values without breaking

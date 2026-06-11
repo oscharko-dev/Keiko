@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -478,6 +478,46 @@ describe("handleGroundedAsk", () => {
     const body = result.body as { error: { code: string; message: string } };
     expect(body.error.message).toContain("safe read surface");
     expect(JSON.stringify(result)).not.toContain(".aws");
+  });
+
+  it("rejects a grounded ask when a persisted symlink root is repointed into a denied directory", async () => {
+    const safeRoot = join(tmp, "safe-root");
+    const deniedRoot = join(tmp, ".ssh");
+    const linkedRoot = join(tmp, "linked-root");
+    mkdirSync(safeRoot, { recursive: true });
+    mkdirSync(deniedRoot, { recursive: true });
+    symlinkSync(safeRoot, linkedRoot, "dir");
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Linked root", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: NOW,
+        root: linkedRoot,
+      },
+    });
+    rmSync(linkedRoot, { force: true });
+    symlinkSync(deniedRoot, linkedRoot, "dir");
+
+    let runnerCalled = false;
+    const spyRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
+      void input;
+      runnerCalled = true;
+      return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "Inspect leak.txt", modelId: CHAT_MODEL })),
+      deps(),
+      spyRunner,
+    );
+
+    expect(result.status).toBe(400);
+    expect(runnerCalled).toBe(false);
+    const body = result.body as { error: { message: string } };
+    expect(body.error.message).toContain("safe read surface");
+    expect(JSON.stringify(result)).not.toContain(".ssh");
   });
 
   it("passes repository-root connectedScope kind through to the grounded runner", async () => {

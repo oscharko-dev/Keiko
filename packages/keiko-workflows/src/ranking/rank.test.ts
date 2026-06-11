@@ -90,6 +90,36 @@ describe("rankCandidates", () => {
     expect(reasons.includes("near-duplicate")).toBe(true);
   });
 
+  it("derives near-duplicate hints for larger same-filename clusters", () => {
+    const result = rankCandidates(
+      {
+        atoms: [
+          atom("packages/a/src/client.ts", 0.5),
+          atom("packages/b/src/client.ts", 0.95),
+          atom("packages/c/src/client.ts", 0.6),
+          atom("packages/d/src/client.ts", 0.7),
+        ],
+        anchors: [anchor("client", "identifier")],
+      },
+      BASE_OPTIONS,
+    );
+    expect(result.kept.map((candidate) => candidate.scopePath)).toContain(
+      "packages/b/src/client.ts",
+    );
+    expect(result.diagnostics.omittedCounts["near-duplicate"]).toBe(3);
+  });
+
+  it("does not infer near-duplicates for a two-file same-name pair", () => {
+    const result = rankCandidates(
+      {
+        atoms: [atom("packages/a/src/client.ts", 0.8), atom("packages/b/src/client.ts", 0.7)],
+        anchors: [anchor("client", "identifier")],
+      },
+      BASE_OPTIONS,
+    );
+    expect(result.diagnostics.omittedCounts["near-duplicate"]).toBe(0);
+  });
+
   it("moves maxKept overflow to budget-exhausted", () => {
     const result = rankCandidates(
       {

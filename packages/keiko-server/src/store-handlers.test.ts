@@ -998,13 +998,37 @@ describe("PATCH /api/chats", () => {
       };
     };
     expect(body.chat.connectedScopes).toHaveLength(2);
-    // The BFF validates access via realpath but persists the caller-supplied root verbatim
-    // (matching the single-source #532 behavior); realpathSync here only proves the dirs exist.
-    expect(realpathSync(alpha)).toContain("alpha");
-    expect(body.chat.connectedScopes[0]?.root).toBe(alpha);
-    expect(body.chat.connectedScopes[1]?.root).toBe(beta);
+    expect(body.chat.connectedScopes[0]?.root).toBe(realpathSync(alpha));
+    expect(body.chat.connectedScopes[1]?.root).toBe(realpathSync(beta));
     // Back-compat single field reflects the first source.
     expect(body.chat.connectedScope?.kind).toBe("directory");
+  });
+
+  it("canonicalizes a symlinked connectedScopes root before persistence", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const realRoot = join(tmp, "real-docs-root");
+    const linkedRoot = join(tmp, "linked-docs-root");
+    mkdirSync(join(realRoot, "docs"), { recursive: true });
+    symlinkSync(realRoot, linkedRoot, "dir");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScopes: [
+          { kind: "directory", relativePaths: ["docs"], connectedAtMs: 12, root: linkedRoot },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScopes: { root?: string }[];
+        connectedScope: { root?: string } | undefined;
+      };
+    };
+    expect(body.chat.connectedScopes[0]?.root).toBe(realpathSync(realRoot));
+    expect(body.chat.connectedScope?.root).toBe(realpathSync(realRoot));
   });
 
   it("rejects a connectedScopes list whose entry has a deny-listed root (.ssh)", async () => {

@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -71,6 +71,12 @@ afterEach(() => {
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });
+
+function tempRoot(name: string): string {
+  const root = join(tmp, name);
+  mkdirSync(root, { recursive: true });
+  return root;
+}
 
 // ─── Request / route helpers ──────────────────────────────────────────────────
 
@@ -365,7 +371,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       kind: "directory",
       relativePaths: ["src/alpha.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/alpha-repo",
+      root: tempRoot("alpha-repo"),
     };
     const connectorScope: ChatLocalKnowledgeScope = {
       kind: "capsule",
@@ -462,7 +468,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       kind: "directory",
       relativePaths: ["src/alpha.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/alpha-repo",
+      root: tempRoot("alpha-repo"),
     };
     const connectorScope: ChatLocalKnowledgeScope = {
       kind: "capsule",
@@ -715,7 +721,7 @@ describe("AC5 routing — folders-only must not invoke hybrid.answer", () => {
       kind: "directory",
       relativePaths: ["src/app.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/myapp",
+      root: tempRoot("myapp"),
     };
     const chatId = makeHybridChat([folderScope], []);
 
@@ -880,7 +886,7 @@ describe("RRF anti-dominance — connector selected above folder at equal fused 
       kind: "directory",
       relativePaths: ["src/tie.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/tie-repo",
+      root: tempRoot("tie-repo"),
     };
     const connectorScope: ChatLocalKnowledgeScope = {
       kind: "capsule",
@@ -943,7 +949,7 @@ describe("shared byte budget — oversized folder excerpt excluded in favour of 
       kind: "directory",
       relativePaths: ["src/big.ts"],
       connectedAtMs: NOW,
-      root: "/home/u/budget-repo",
+      root: tempRoot("budget-repo"),
     };
     const connectorScope: ChatLocalKnowledgeScope = {
       kind: "capsule",
