@@ -17,7 +17,9 @@ import {
   groundedContextIndexRegistry,
   microIndexForGroundedScope,
 } from "./grounded-context-index.js";
+import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -108,12 +110,12 @@ async function restartWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void>
   await new Promise<void>((res) => server.listen(port, UI_HOST, res));
 }
 
-function openGroundedIndex(chatId: string): void {
+function openGroundedIndex(chatId: string, workspaceRoot = projDir): void {
   microIndexForGroundedScope(
     {
       schemaVersion: "1",
       scopeId: `scope-${chatId}`,
-      workspaceRoot: projDir,
+      workspaceRoot,
       kind: "files",
       relativePaths: ["src"],
       conversationId: chatId,
@@ -123,8 +125,21 @@ function openGroundedIndex(chatId: string): void {
   );
 }
 
+function rememberGroundedTurn(chatId: string, workspaceRoot = projDir): void {
+  groundedTurnRegistry.remember(
+    {
+      assistantMessageId: `assistant-${chatId}`,
+      chatId,
+      workspaceRoot,
+      packs: [{ files: [] } as unknown as ConnectedContextPack],
+    },
+    () => 1,
+  );
+}
+
 beforeEach(async () => {
   clearAllGroundedContextIndexes();
+  clearAllGroundedTurns();
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-static-"));
   tmp = mkdtempSync(join(tmpdir(), "keiko-store-handlers-"));
   projDir = join(tmp, "proj");
@@ -152,6 +167,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await closeServer();
   clearAllGroundedContextIndexes();
+  clearAllGroundedTurns();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
   rmSync(staticRoot, { recursive: true, force: true });
@@ -410,6 +426,26 @@ describe("DELETE /api/projects", () => {
     });
     expect(res.status).toBe(204);
     expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
+  it("clears external-root grounded state for chats cascaded by project deletion", async () => {
+    const externalRoot = join(tmp, "external-connected-root");
+    mkdirSync(externalRoot);
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    openGroundedIndex(chat.id, externalRoot);
+    rememberGroundedTurn(chat.id, externalRoot);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    expect(groundedTurnRegistry.lookup(`assistant-${chat.id}`, () => 2)).not.toBeUndefined();
+
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+
+    expect(res.status).toBe(204);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+    expect(groundedTurnRegistry.lookup(`assistant-${chat.id}`, () => 3)).toBeUndefined();
   });
 
   it("returns 404 for unknown project", async () => {

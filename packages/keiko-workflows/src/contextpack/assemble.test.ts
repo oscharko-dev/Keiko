@@ -261,6 +261,58 @@ describe("assembleContextPack", () => {
     expect(second.pack.files[0]?.excerpts[0]?.content).toBe("export const a = 42;");
   });
 
+  it("stable ID changes when selected excerpt content changes", async () => {
+    const first = await assembleContextPack(baseInput(), { nowMs: fixedNow });
+    const updated: AssembleInput = {
+      ...baseInput(),
+      excerpts: new Map([
+        ["a.ts", "export const a = 42;"],
+        ["b.ts", "export const b = 2;"],
+      ]),
+    };
+    const second = await assembleContextPack(updated, { nowMs: fixedNow });
+    expect(second.pack.files[0]?.excerpts[0]?.content).toBe("export const a = 42;");
+    expect(second.pack.stableId).not.toBe(first.pack.stableId);
+  });
+
+  it("stable ID ignores volatile emitted timestamps", async () => {
+    const first: AssembleInput = {
+      ...baseInput(),
+      query: { ...query(), emittedAtMs: FIXED_NOW },
+      atoms: baseInput().atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW })),
+      omittedFromRanking: [
+        { scopePath: "skipped.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+      ],
+      initialUncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "no direct evidence",
+          impactedAtomIds: [],
+          emittedAtMs: FIXED_NOW,
+        },
+      ],
+    };
+    const second: AssembleInput = {
+      ...first,
+      query: { ...query(), emittedAtMs: FIXED_NOW + 1_000 },
+      atoms: first.atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW + 1_000 })),
+      omittedFromRanking: [
+        { scopePath: "skipped.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW + 1_000 },
+      ],
+      initialUncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "no direct evidence",
+          impactedAtomIds: [],
+          emittedAtMs: FIXED_NOW + 1_000,
+        },
+      ],
+    };
+    const r1 = await assembleContextPack(first, { nowMs: fixedNow });
+    const r2 = await assembleContextPack(second, { nowMs: fixedNow });
+    expect(r2.pack.stableId).toBe(r1.pack.stableId);
+  });
+
   it("micro-index key is sensitive to candidate and omitted metadata", async () => {
     const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
     const first: AssembleInput = {
@@ -295,7 +347,7 @@ describe("assembleContextPack", () => {
     ]);
   });
 
-  it("micro-index key changes when elapsed usage changes", async () => {
+  it("micro-index key ignores elapsed usage changes", async () => {
     const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
     const first: AssembleInput = {
       ...baseInput(),
@@ -328,9 +380,9 @@ describe("assembleContextPack", () => {
     const r1 = await assembleContextPack(first, { nowMs: fixedNow, microIndex: idx });
     const r2 = await assembleContextPack(second, { nowMs: fixedNow, microIndex: idx });
     expect(r1.fromIndex).toBe(false);
-    expect(r2.fromIndex).toBe(false);
-    expect(r2.pack).not.toBe(r1.pack);
-    expect(r2.pack.usage.elapsedMs).toBe(99);
+    expect(r2.fromIndex).toBe(true);
+    expect(r2.pack).toBe(r1.pack);
+    expect(r2.pack.usage.elapsedMs).toBe(7);
   });
 
   it("produces an empty pack when there are no atoms or candidates", async () => {

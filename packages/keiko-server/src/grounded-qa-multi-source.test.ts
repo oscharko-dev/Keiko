@@ -443,6 +443,45 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(puts).toHaveLength(16);
   });
 
+  it("retrieves connected sources with bounded concurrency", async () => {
+    const scopes: ChatConnectedScope[] = Array.from({ length: 4 }, (_unused, i) => ({
+      kind: "directory" as const,
+      relativePaths: [`src/c${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`concurrent${String(i)}`),
+    }));
+    const chatId = makeChat(scopes);
+    const byPath = new Map<string, ConnectedContextPack>(
+      scopes.map((s, i) => [
+        s.relativePaths[0] ?? "",
+        scopePack(s.relativePaths[0] ?? "", i / 100, `concurrent-${String(i)}`),
+      ]),
+    );
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const retriever: GroundedRetriever = async (input) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      const key = input.scope.relativePaths[0] ?? "";
+      const pack = byPath.get(key);
+      if (pack === undefined) throw new Error(`no fixture pack for ${key}`);
+      return { pack, elapsedMs: 20, plan: { state: "ready" } as never };
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "scan concurrently" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("done", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+  });
+
   it("AC5: a single connected scope routes through the legacy single-source runner, NOT the merge", async () => {
     const scope: ChatConnectedScope = {
       kind: "directory",

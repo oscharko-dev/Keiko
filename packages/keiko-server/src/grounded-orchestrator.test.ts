@@ -3,7 +3,16 @@
 // the budget-exhaustion → uncertainty-marker propagation produced by #183.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +30,9 @@ import {
   importGraphAdapter,
   testSourcePairingAdapter,
   type WorkspaceFs,
+  type WorkspaceDirEntry,
   type WorkspaceInfo,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import type { MicroIndex } from "@oscharko-dev/keiko-workflows";
 
@@ -214,6 +225,47 @@ function throwingReadFs(): WorkspaceFs {
     exists: (): boolean => true,
     readFileBytes: (): Promise<Uint8Array> =>
       Promise.reject(new Error("readFileBytes should not be called")),
+  };
+}
+
+function countingNodeFs(): { readonly fs: WorkspaceFs; readonly readFileBytes: () => number } {
+  let readFileBytesCalls = 0;
+  return {
+    fs: {
+      readFileUtf8: (absolutePath): string => readFileSync(absolutePath, "utf8"),
+      stat: (absolutePath): WorkspaceStat => {
+        const stat = statSync(absolutePath);
+        return {
+          size: stat.size,
+          isFile: stat.isFile(),
+          isDirectory: stat.isDirectory(),
+          isSymbolicLink: false,
+          hardLinkCount: stat.nlink,
+          mtimeMs: stat.mtimeMs,
+        };
+      },
+      readDir: (absolutePath): readonly WorkspaceDirEntry[] =>
+        readdirSync(absolutePath, { withFileTypes: true }).map((entry) => ({
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+          isFile: entry.isFile(),
+          isSymbolicLink: entry.isSymbolicLink(),
+        })),
+      realPath: (absolutePath): string => realpathSync(absolutePath),
+      exists: (absolutePath): boolean => {
+        try {
+          statSync(absolutePath);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+        readFileBytesCalls += 1;
+        return Promise.resolve(readFileSync(absolutePath).subarray(0, maxBytes));
+      },
+    },
+    readFileBytes: () => readFileBytesCalls,
   };
 }
 
@@ -797,8 +849,40 @@ describe("runGroundedExploration", () => {
       microIndex: microIndex.index,
     });
     expect(microIndex.sets()).toBe(1);
-    expect(microIndex.gets()).toBe(2);
+    expect(microIndex.gets()).toBe(3);
     expect(second.pack).toStrictEqual(first.pack);
+  });
+
+  it("hits the micro-index before excerpt assembly when elapsed time changes", async () => {
+    const microIndex = recordingMicroIndex();
+    const counted = countingNodeFs();
+    let now = NOW;
+    const nowMs = (): number => {
+      now += 10;
+      return now;
+    };
+
+    const first = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs,
+      fs: counted.fs,
+      detectWorkspace: () => fakeWorkspace(),
+      microIndex: microIndex.index,
+    });
+    expect(microIndex.gets()).toBe(2);
+
+    const second = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs,
+      fs: counted.fs,
+      detectWorkspace: () => fakeWorkspace(),
+      microIndex: microIndex.index,
+    });
+
+    expect(microIndex.sets()).toBe(1);
+    expect(microIndex.gets()).toBe(3);
+    expect(second.pack.stableId).toBe(first.pack.stableId);
+    expect(second.pack.files).toStrictEqual(first.pack.files);
   });
 
   it("does not touch workspace file IO when read budgets are zero", async () => {
@@ -810,7 +894,6 @@ describe("runGroundedExploration", () => {
         answerer: echoAnswerer,
         nowMs: () => NOW,
         fs: throwingReadFs(),
-        detectWorkspace: () => fakeWorkspace(),
       },
     );
     expect(out.pack.files).toEqual([]);

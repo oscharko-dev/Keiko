@@ -396,7 +396,12 @@ export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): Rou
   return runHandlerSync(() => {
     const targetPath = requireQuery(ctx, "path");
     const normalizedPath = validateProjectPath(targetPath, { mustExist: false });
+    const deletedChats = deps.store.listChats(normalizedPath);
     deps.store.deleteProject(normalizedPath);
+    for (const chat of deletedChats) {
+      clearGroundedContextIndexesForConversation(chat.id);
+      clearGroundedTurnsForConversation(chat.id);
+    }
     clearGroundedContextIndexesForWorkspace(normalizedPath);
     clearGroundedTurnsForWorkspace(normalizedPath);
     return { status: 204, body: null };

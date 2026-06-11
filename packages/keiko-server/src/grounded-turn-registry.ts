@@ -16,6 +16,27 @@ interface MutableEntry extends GroundedTurnRecord {
   touchedAtMs: number;
 }
 
+function packForHandoffRegistry(pack: ConnectedContextPack): ConnectedContextPack {
+  return {
+    ...pack,
+    files: pack.files.map((file) => ({
+      ...file,
+      excerpts: file.excerpts.map((excerpt) => ({
+        ...excerpt,
+        content: "",
+        contentBytes: 0,
+      })),
+    })),
+  };
+}
+
+function recordForHandoffRegistry(record: GroundedTurnRecord): GroundedTurnRecord {
+  return {
+    ...record,
+    packs: record.packs.map(packForHandoffRegistry),
+  };
+}
+
 export interface GroundedTurnRegistry {
   remember: (record: GroundedTurnRecord, nowMs?: () => number) => void;
   lookup: (assistantMessageId: string, nowMs?: () => number) => GroundedTurnRecord | undefined;
@@ -57,8 +78,9 @@ export function createGroundedTurnRegistry(
       const now = nowMs();
       sweepExpired(entries, now);
       evictOldest(entries, maxEntries);
+      const safeRecord = recordForHandoffRegistry(record);
       entries.set(record.assistantMessageId, {
-        ...record,
+        ...safeRecord,
         touchedAtMs: now,
         expiresAtMs: now + ttlMs,
       });
@@ -96,10 +118,7 @@ export function createGroundedTurnRegistry(
 
 export const groundedTurnRegistry = createGroundedTurnRegistry();
 
-export function rememberGroundedTurn(
-  record: GroundedTurnRecord,
-  nowMs?: () => number,
-): void {
+export function rememberGroundedTurn(record: GroundedTurnRecord, nowMs?: () => number): void {
   groundedTurnRegistry.remember(record, nowMs);
 }
 
