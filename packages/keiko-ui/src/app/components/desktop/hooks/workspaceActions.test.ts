@@ -74,6 +74,14 @@ describe("appendScope", () => {
     expect(next?.some((s) => s.root === "/new")).toBe(true);
     expect(next?.some((s) => s.root === "/d0")).toBe(false);
   });
+
+  // Audit finding (a): trailing-slash dedup — "/x" and "/x/" must be treated as the same root.
+  it("de-dupes a root that differs from the stored root only by a trailing slash", () => {
+    const current = [scope("/x")];
+    expect(appendScope(current, "/x/", 9)).toBe(current);
+    const current2 = [scope("/x/")];
+    expect(appendScope(current2, "/x", 9)).toBe(current2);
+  });
 });
 
 describe("removeScope", () => {
@@ -596,5 +604,29 @@ describe("linkedFilesContext (Epic #709 #714)", () => {
     const ctx = linkedFilesContext("quality");
     expect(ctx?.root).toBe("/work/b");
     expect(ctx?.activeFilePath).toBeUndefined();
+  });
+
+  // Audit finding (b): a Files window with no configured root must not fabricate "src" as root.
+  it("returns null when the connected Files window has no real root (no 'src' sentinel)", () => {
+    const { linkedFilesContext, linkedFilesRoot } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", {}, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedFilesContext("quality")).toBeNull();
+    expect(linkedFilesRoot("quality")).toBeNull();
+  });
+});
+
+// Audit finding (c): QI Generate path — quality window linked to a rootless Files window must not
+// produce a "src" workspace source (which would cause a server-side 400 or stale-CWD ingest).
+describe("linkedFilesRoot for quality window with rootless Files (audit finding c)", () => {
+  it("returns null so buildConnectedRunSources receives no workspace source", () => {
+    const { linkedFilesRoot } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", {}, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    // A null linkedRoot means connectedRoot=null in buildConnectedRunSources, so rawRoots=[] and
+    // no workspace source is added — the QI Generate request stays clean.
+    expect(linkedFilesRoot("quality")).toBeNull();
   });
 });
