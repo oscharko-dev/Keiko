@@ -141,6 +141,7 @@ export function CapsuleSetComposeDialog({
 }: CapsuleSetComposeDialogProps): ReactNode {
   const titleId = useId();
   const nameId = useId();
+  const errorId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<ReadonlySet<KnowledgeCapsuleId>>(new Set());
@@ -177,6 +178,9 @@ export function CapsuleSetComposeDialog({
     }
   }
 
+  const nameInvalid = error === "Set name is required.";
+  const selectionInvalid = error === "Select at least one capsule to combine.";
+
   return createPortal(
     <div className="mc-dialog-backdrop" role="presentation">
       <div
@@ -199,13 +203,20 @@ export function CapsuleSetComposeDialog({
               value={name}
               disabled={busy}
               autoComplete="off"
+              aria-invalid={nameInvalid}
+              aria-describedby={nameInvalid ? errorId : undefined}
               onChange={(event) => {
                 setName(event.target.value);
                 if (error !== null) setError(null);
               }}
             />
           </label>
-          <fieldset className="lk-compose-fieldset" disabled={busy}>
+          <fieldset
+            className="lk-compose-fieldset"
+            disabled={busy}
+            aria-invalid={selectionInvalid}
+            aria-describedby={selectionInvalid ? errorId : undefined}
+          >
             <legend className="mc-dialog-label">
               Capsules ({selected.size.toString()}/{CAPSULE_SET_MAX_MEMBERS.toString()})
             </legend>
@@ -226,7 +237,7 @@ export function CapsuleSetComposeDialog({
             )}
           </fieldset>
           {error !== null ? (
-            <div role="alert" aria-live="assertive" className="mc-dialog-error">
+            <div id={errorId} role="alert" aria-live="assertive" className="mc-dialog-error">
               {error}
             </div>
           ) : null}

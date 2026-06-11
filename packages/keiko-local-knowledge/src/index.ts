@@ -1,4 +1,4 @@
-// Public surface of @oscharko-dev/keiko-local-knowledge (Epic #189, Issues #193, #266,
+// Public surface of @oscharko-dev/keiko-local-knowledge (Epic #189, Issues #193, #263, #266,
 // #194, #196, #199). Composes the #265 schema with a node:sqlite runtime, exposes typed
 // CRUD for capsules/sources/sets, the parser registry (#266), the discovery +
 // extraction bridge (#194), the indexing orchestrator (#196), and the retrieval
@@ -108,8 +108,33 @@ export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 export * from "./privacy/index.js";
 // Slice 4 (Issue #189) — non-destructive capsule-set composition exposed to the BFF.
-export { composeCapsules, CompositionError } from "./composition.js";
-export type { ComposeCapsulesOptions } from "./composition.js";
+export {
+  addSourcesToCapsule,
+  buildComposedRetrievalScope,
+  composeCapsules,
+  CompositionError,
+  describeRetrievalScope,
+  listCapsuleMembershipChanges,
+} from "./composition.js";
+export type {
+  AddSourcesToCapsuleResult,
+  CapsuleMembershipChange,
+  CapsuleMembershipChangeKind,
+  ComposedRetrievalScope,
+  ComposeCapsulesOptions,
+  CompositionErrorCode,
+  RetrievalCapsuleSummary,
+  RetrievalScopeDisclosure,
+  RetrievalSourceSummary,
+} from "./composition.js";
+export {
+  SourceRoutingValidationError,
+  validateAlwaysQuery,
+  validateGlobPatterns,
+  validateRoutingInstructionsScope,
+  validateSourceRoutingForCapsule,
+} from "./source-routing-validation.js";
+export type { SourceRoutingValidationCode } from "./source-routing-validation.js";
 
 // ─── Quality Intelligence handoff (Issue #278) ─────────────────────────────────
 // Pure adapter that converts a local-knowledge RetrievalReference list into a list of

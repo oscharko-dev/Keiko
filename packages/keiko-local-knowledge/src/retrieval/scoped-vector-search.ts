@@ -475,7 +475,7 @@ export async function searchVectorsForScope(
       store,
       embeddingAdapter,
       capsule,
-      scope.sourceFilter,
+      sourceFilterForCapsule(scope.sourceFilter, capsule),
       query,
       options,
       cache,
@@ -485,6 +485,15 @@ export async function searchVectorsForScope(
   const selection = selectTopCandidates(state, options);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
   return { references: buildReferences(store, selection.top, query, options.topK) };
+}
+
+function sourceFilterForCapsule(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  capsule: KnowledgeCapsule,
+): readonly KnowledgeSourceId[] | undefined {
+  if (sourceFilter === undefined) return undefined;
+  const capsuleSourceIds = new Set(capsule.sourceIds.map(String));
+  return sourceFilter.filter((sourceId) => capsuleSourceIds.has(String(sourceId)));
 }
 
 function loadCapsules(

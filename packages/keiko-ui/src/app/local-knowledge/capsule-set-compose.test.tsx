@@ -71,7 +71,11 @@ describe("CapsuleSetComposeDialog — validation", () => {
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
     await user.click(screen.getByRole("button", { name: /^combine$/i }));
-    expect(screen.getByRole("alert")).toHaveTextContent(/set name is required/i);
+    const alert = screen.getByRole("alert");
+    const input = screen.getByLabelText(/set name/i);
+    expect(alert).toHaveTextContent(/set name is required/i);
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(input).toHaveAccessibleDescription(/set name is required/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
 
@@ -81,7 +85,11 @@ describe("CapsuleSetComposeDialog — validation", () => {
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
     await user.type(screen.getByLabelText(/set name/i), "My Set");
     await user.click(screen.getByRole("button", { name: /^combine$/i }));
-    expect(screen.getByRole("alert")).toHaveTextContent(/at least one capsule/i);
+    const alert = screen.getByRole("alert");
+    const group = screen.getByRole("group", { name: /capsules/i });
+    expect(alert).toHaveTextContent(/at least one capsule/i);
+    expect(group).toHaveAttribute("aria-invalid", "true");
+    expect(group).toHaveAccessibleDescription(/at least one capsule/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
 });

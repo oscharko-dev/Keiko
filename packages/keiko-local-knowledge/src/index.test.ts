@@ -33,6 +33,18 @@ const PUBLIC_EXPORTS = [
   "deleteCapsuleSet",
   "getCapsuleSet",
   "listCapsuleSets",
+  // Composition + source routing (#263)
+  "addSourcesToCapsule",
+  "buildComposedRetrievalScope",
+  "composeCapsules",
+  "CompositionError",
+  "describeRetrievalScope",
+  "listCapsuleMembershipChanges",
+  "SourceRoutingValidationError",
+  "validateAlwaysQuery",
+  "validateGlobPatterns",
+  "validateRoutingInstructionsScope",
+  "validateSourceRoutingForCapsule",
   // Discovery + extraction (#194)
   "discoverAndExtract",
   "documentIdFor",
