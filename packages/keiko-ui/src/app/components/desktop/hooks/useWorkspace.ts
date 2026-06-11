@@ -411,11 +411,13 @@ function useConnectionPrune(
 // Epic #189 Slice 3 M3 — optional Connector↔Chat scope-binding callbacks. The composition root
 // (AppShell) wires these to the active chat's localKnowledgeScopes.
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
-// reached) vetoes the edge so no dangling ungrounded edge is drawn.
+// reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
-  readonly onScopeBind?: ((filesRoot: string) => boolean) | undefined;
+  readonly onScopeBind?: ((filesRoot: string) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
-  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => boolean) | undefined;
+  readonly onConnectorBind?:
+    | ((scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+    | undefined;
   readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 

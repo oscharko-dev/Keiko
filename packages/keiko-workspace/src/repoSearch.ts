@@ -31,6 +31,7 @@ import {
   elapsed,
   gatherCandidates,
   hitLimit,
+  isImageScopePath,
   isIoError,
   probeBinary,
   scanFile,
@@ -411,6 +412,12 @@ export async function readExcerpt(
   assertExcerptRange(request);
   assertWorkspaceRoot(scope.workspace);
   assertExcerptWithinSelectedScope(scope, request.scopePath);
+  if (isImageScopePath(request.scopePath)) {
+    throw new RepoSearchUnsupportedFileError(
+      `cannot read excerpt of image file: ${request.scopePath}`,
+      "binary",
+    );
+  }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
   const target = resolveExcerptTarget(scope, request.scopePath, fs);

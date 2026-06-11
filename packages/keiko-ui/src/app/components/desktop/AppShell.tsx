@@ -252,16 +252,20 @@ function AppShellInner(): ReactNode {
   }, []);
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
-  const [sourceLimitNotice, setSourceLimitNotice] = useState<string | null>(null);
+  const [sourceConnectionNotice, setSourceConnectionNotice] = useState<string | null>(null);
   useEffect(() => {
-    if (sourceLimitNotice === null) return undefined;
-    const timer = window.setTimeout(() => setSourceLimitNotice(null), 10_000);
+    if (sourceConnectionNotice === null) return undefined;
+    const timer = window.setTimeout(() => setSourceConnectionNotice(null), 10_000);
     return () => window.clearTimeout(timer);
-  }, [sourceLimitNotice]);
+  }, [sourceConnectionNotice]);
   const rejectForLimit = useCallback((connectedCount: number, cap: number): false => {
-    setSourceLimitNotice(
+    setSourceConnectionNotice(
       `Source limit reached — this chat already has ${String(connectedCount)} of ${String(cap)} connected sources. Disconnect a source before connecting another.`,
     );
+    return false;
+  }, []);
+  const rejectForConnectionFailure = useCallback((message: string): false => {
+    setSourceConnectionNotice(message);
     return false;
   }, []);
   // Epic #532 — a Files↔Chat relationship edge binds/unbinds the folder on the active chat's
@@ -270,9 +274,11 @@ function AppShellInner(): ReactNode {
   // REJECTED (with a visible notice) instead of silently evicting the oldest source, and the
   // caller skips drawing the edge so no dangling ungrounded edge appears.
   const handleScopeBind = useCallback(
-    (filesRoot: string): boolean => {
+    async (filesRoot: string): Promise<boolean> => {
       const chat = session.activeChat;
-      if (chat === undefined) return true;
+      if (chat === undefined) {
+        return rejectForConnectionFailure("Open a chat before connecting a source.");
+      }
       const current = effectiveScopes(chat);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isRootConnected(current, filesRoot)) return true;
@@ -281,27 +287,29 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
       const next = appendScope(current, filesRoot, Date.now(), groundingLimits.maxConnectedSources);
-      if (next === null) return false;
+      if (next === null) {
+        return rejectForConnectionFailure("Choose a local folder before connecting it to chat.");
+      }
       if (next === current) {
         // Not a duplicate (checked above) → the per-list folder cap rejected the append.
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
-      setSourceLimitNotice(null);
-      void updateChatConnectedScopes(chat.id, next)
-        .then((res) => {
-          session.replaceChat(res.chat);
-          // Epic #532 unification — also record the green edge as a governed reads-context
-          // relationship so the connection is validated, audited, and visible in the relationship
-          // graph. Best-effort: never blocks or breaks the grounding scope bind above.
-          recordReadsContextRelationship(chat.id, filesRoot);
-        })
-        .catch((error: unknown) => {
-          // uiux-fix F008 C074 — a failed bind silently left the edge visible but ungrounded.
-          console.warn("[keiko] connected-scope bind failed", error);
-        });
-      return true;
+      try {
+        const res = await updateChatConnectedScopes(chat.id, next);
+        session.replaceChat(res.chat);
+        setSourceConnectionNotice(null);
+        // Epic #532 unification — also record the green edge as a governed reads-context
+        // relationship so the connection is validated, audited, and visible in the relationship
+        // graph. Best-effort: never blocks or breaks the grounding scope bind above.
+        recordReadsContextRelationship(chat.id, filesRoot);
+        return true;
+      } catch {
+        return rejectForConnectionFailure(
+          "Keiko could not connect that source. Check that it is still available and try again.",
+        );
+      }
     },
-    [session, groundingLimits, rejectForLimit],
+    [session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
   );
   const handleScopeUnbind = useCallback(
     (filesRoot: string): void => {
@@ -324,9 +332,11 @@ function AppShellInner(): ReactNode {
   // Release 0.2.0 — same accepted/veto contract as handleScopeBind: at the source limit the
   // bind is rejected with a visible notice instead of silently evicting the oldest source.
   const handleConnectorBind = useCallback(
-    (scope: ChatLocalKnowledgeScope): boolean => {
+    async (scope: ChatLocalKnowledgeScope): Promise<boolean> => {
       const chat = session.activeChat;
-      if (chat === undefined) return true;
+      if (chat === undefined) {
+        return rejectForConnectionFailure("Open a chat before connecting a source.");
+      }
       const current = effectiveLocalKnowledgeScopes(chat);
       const folderScopes = effectiveScopes(chat);
       if (isConnectorScopeConnected(current, scope)) return true;
@@ -339,15 +349,18 @@ function AppShellInner(): ReactNode {
         // Not a duplicate (checked above) → the per-list connector cap rejected the append.
         return rejectForLimit(folderScopes.length + current.length, cap);
       }
-      setSourceLimitNotice(null);
-      void updateChatLocalKnowledgeScopes(chat.id, next)
-        .then((res) => {
-          session.replaceChat(res.chat);
-        })
-        .catch(() => undefined);
-      return true;
+      try {
+        const res = await updateChatLocalKnowledgeScopes(chat.id, next);
+        session.replaceChat(res.chat);
+        setSourceConnectionNotice(null);
+        return true;
+      } catch {
+        return rejectForConnectionFailure(
+          "Keiko could not connect that knowledge source. Check that it is still available and try again.",
+        );
+      }
     },
-    [session, groundingLimits, rejectForLimit],
+    [session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
   );
   const handleConnectorUnbind = useCallback(
     (scope: ChatLocalKnowledgeScope): void => {
@@ -519,7 +532,8 @@ function AppShellInner(): ReactNode {
     () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack),
     [ws.api, onTool, pick, theme, toggleTheme, undoStack],
   );
-  const needsGatewaySetup = !session.loading && session.models.length === 0;
+  const needsGatewaySetup =
+    !session.loading && session.error === undefined && session.models.length === 0;
   const projectName = projectNameOrFallback(session.activeProject?.name, session.loading);
   const hasProject = session.activeProject !== undefined;
   const projectAvailable = session.activeProject?.available === true;
@@ -578,14 +592,14 @@ function AppShellInner(): ReactNode {
               <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-              {sourceLimitNotice !== null && (
+              {sourceConnectionNotice !== null && (
                 <div className="source-limit-alert" role="alert">
-                  <span>{sourceLimitNotice}</span>
+                  <span>{sourceConnectionNotice}</span>
                   <button
                     type="button"
                     className="source-limit-alert-dismiss"
-                    aria-label="Dismiss source limit notice"
-                    onClick={() => setSourceLimitNotice(null)}
+                    aria-label="Dismiss source connection notice"
+                    onClick={() => setSourceConnectionNotice(null)}
                   >
                     ×
                   </button>

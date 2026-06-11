@@ -41,7 +41,7 @@ const THEME_BOOTSTRAP = `try{var t=localStorage.getItem("keiko.theme");if(t==="l
 
 export default function RootLayout({ children }: { children: ReactNode }): ReactNode {
   return (
-    <html lang="en">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
       <body>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
         {children}

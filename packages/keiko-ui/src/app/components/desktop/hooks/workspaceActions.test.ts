@@ -305,9 +305,9 @@ function ref<T>(value: T): MutableRefObject<T> {
 interface ConnectHarnessOverrides {
   readonly connecting?: ConnectingState | null;
   readonly setConns?: Dispatch<SetStateAction<Connection[]>>;
-  readonly onScopeBind?: (root: string) => boolean;
+  readonly onScopeBind?: (root: string) => boolean | Promise<boolean>;
   readonly onScopeUnbind?: (root: string) => void;
-  readonly onConnectorBind?: (scope: ChatLocalKnowledgeScope) => boolean;
+  readonly onConnectorBind?: (scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (scope: ChatLocalKnowledgeScope) => void;
 }
 
@@ -674,13 +674,19 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     stopPropagation: () => undefined,
   } as unknown as Parameters<ReturnType<typeof makeConnectActions>["confirmConnect"]>[1];
 
-  function collectingSetConns(store: { conns: Connection[] }): Dispatch<SetStateAction<Connection[]>> {
+  function collectingSetConns(store: {
+    conns: Connection[];
+  }): Dispatch<SetStateAction<Connection[]>> {
     return (action) => {
       store.conns = typeof action === "function" ? action(store.conns) : action;
     };
   }
 
-  it("does not draw the edge when onScopeBind vetoes the bind", () => {
+  async function flushAsyncBind(): Promise<void> {
+    await Promise.resolve();
+  }
+
+  it("does not draw the edge when onScopeBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
       [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
@@ -692,10 +698,11 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     );
     harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
     expect(store.conns).toHaveLength(0);
   });
 
-  it("draws the edge with a boundRoot snapshot when onScopeBind accepts", () => {
+  it("draws the edge with a boundRoot snapshot when onScopeBind accepts", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
       [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
@@ -707,11 +714,46 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     );
     harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
     expect(store.conns[0]?.boundRoot).toBe("/data/docs");
   });
 
-  it("does not draw the edge when onConnectorBind vetoes the bind", () => {
+  it("does not draw the edge when onScopeBind resolves false after persistence failure", async () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: async () => false,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("draws the edge after onScopeBind resolves true", async () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: async () => true,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(0);
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(1);
+    expect(store.conns[0]?.boundRoot).toBe("/data/docs");
+  });
+
+  it("does not draw the edge when onConnectorBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
       [
@@ -726,10 +768,11 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     );
     harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
     expect(store.conns).toHaveLength(0);
   });
 
-  it("draws the edge with a connector snapshot when onConnectorBind accepts", () => {
+  it("draws the edge with a connector snapshot when onConnectorBind accepts", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
       [
@@ -744,12 +787,13 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     );
     harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
     expect(store.conns[0]?.boundConnectorKind).toBe("capsule");
     expect(store.conns[0]?.boundConnectorId).toBe("cap-a");
   });
 
-  it("still draws non-binding edges when no callbacks are wired", () => {
+  it("still draws non-binding edges when no callbacks are wired", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
       [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("quality", {}, "quality")],
@@ -760,6 +804,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     );
     harness.confirmConnect("quality", evt);
+    await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
   });
 });

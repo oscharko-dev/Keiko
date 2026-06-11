@@ -332,7 +332,7 @@ describe("FilesWidget", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("retargets a restored stale root to the launch project once", async () => {
+  it("keeps an explicitly restored external root instead of retargeting to the project", async () => {
     vi.mocked(fetchProjects).mockResolvedValueOnce({
       projects: [
         {
@@ -364,9 +364,9 @@ describe("FilesWidget", () => {
     render(<FilesWidget root="/old-keiko" onRootChange={onRootChange} />);
 
     await waitFor(() => {
-      expect(onRootChange).toHaveBeenCalledWith("/sandbox");
+      expect(fetchFilesTree).toHaveBeenCalledWith("/old-keiko", "");
     });
-    expect(onRootChange).toHaveBeenCalledTimes(1);
+    expect(onRootChange).not.toHaveBeenCalled();
   });
 
   it("renders tree loading errors", async () => {

@@ -907,6 +907,21 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
     expect(view.result.current.models.every((m) => m.kind === "chat")).toBe(true);
   });
 
+  it("surfaces model bootstrap failures instead of treating them as an empty configured gateway", async () => {
+    vi.spyOn(api, "fetchModels").mockRejectedValue(
+      new api.ApiError("FORBIDDEN_HOST", "Request host is not the local interface.", 403),
+    );
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({ projects: [] });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+    });
+
+    expect(view.result.current.models).toEqual([]);
+    expect(view.result.current.error).toContain("Request host is not the local interface.");
+  });
+
   it("prefers the most recently opened available project during bootstrap", async () => {
     vi.spyOn(api, "fetchModels").mockResolvedValue({
       models: [chatModelCapability("test-chat-eligible")],

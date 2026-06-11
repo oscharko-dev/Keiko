@@ -111,8 +111,6 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
   gl.compileShader(s);
   if (!(gl.getShaderParameter(s, gl.COMPILE_STATUS) as boolean)) {
     // Allowed per spec: graceful fallback when compile fails. Canvas stays transparent.
-    // eslint-disable-next-line no-console
-    console.warn("[keiko-shader]", gl.getShaderInfoLog(s));
     gl.deleteShader(s);
     return null;
   }
@@ -173,8 +171,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   gl.attachShader(prog, fs);
   gl.linkProgram(prog);
   if (!(gl.getProgramParameter(prog, gl.LINK_STATUS) as boolean)) {
-    // eslint-disable-next-line no-console
-    console.warn("[keiko-shader]", gl.getProgramInfoLog(prog));
     return () => {
       window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
     };

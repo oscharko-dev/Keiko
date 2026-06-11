@@ -391,7 +391,7 @@ const INITIAL_STATE: SessionState = {
 };
 
 async function bootstrapSession(): Promise<Partial<SessionState>> {
-  const modelPayload = await fetchModels().catch(() => ({ models: [] }));
+  const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
   const chatModels = modelPayload.models.filter(isConversationEligibleModel);

@@ -27,9 +27,30 @@ import type { LineMatcher } from "./repoSearchMatchers.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 
 const BINARY_PROBE_BYTES = 512;
+const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".tif",
+  ".tiff",
+  ".webp",
+]);
 
 function normalizeScopePath(scopePath: string): string {
   return scopePath.split("\\").join("/");
+}
+
+export function isImageScopePath(scopePath: string): boolean {
+  const lastSlash = Math.max(scopePath.lastIndexOf("/"), scopePath.lastIndexOf("\\"));
+  const basename = scopePath.slice(lastSlash + 1).toLowerCase();
+  const dot = basename.lastIndexOf(".");
+  return dot >= 0 && IMAGE_EXTENSIONS.has(basename.slice(dot));
 }
 
 export interface ScopeShape {
@@ -281,6 +302,10 @@ export async function scanFile(
   atoms: EvidenceAtom[],
   candidates: CandidateFile[],
 ): Promise<void> {
+  if (isImageScopePath(file.relativePath)) {
+    candidates.push(buildCandidate(file.relativePath, "binary"));
+    return;
+  }
   if (isDenied(file.relativePath) || isIgnored(runner.ignoreMatcher, file.relativePath, false)) {
     candidates.push(buildCandidate(file.relativePath, "ignored"));
     return;

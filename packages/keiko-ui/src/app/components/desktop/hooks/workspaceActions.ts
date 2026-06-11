@@ -301,12 +301,14 @@ interface ConnectArgs {
   // connectedScopes so the relationship gesture actually grounds the chat against the folder.
   // Release 0.2.0 — the bind callback returns whether the bind was ACCEPTED; `false` (e.g. the
   // per-chat source limit is reached) vetoes the edge so no dangling ungrounded edge is drawn.
-  readonly onScopeBind?: ((filesRoot: string) => boolean) | undefined;
+  readonly onScopeBind?: ((filesRoot: string) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
-  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => boolean) | undefined;
+  readonly onConnectorBind?:
+    | ((scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+    | undefined;
   readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
@@ -379,42 +381,54 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       // not ground anything (dangling-edge inconsistency).
       const boundRoot = filesChatBindRoot(from, to);
       const connectorScope = boundRoot === null ? connectorChatBind(from, to) : null;
-      const accepted =
-        boundRoot !== null
-          ? (onScopeBind?.(boundRoot) ?? true)
-          : connectorScope !== null
-            ? (onConnectorBind?.(connectorScope) ?? true)
-            : true;
-      if (accepted) {
-        // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown)
-        // must use this snapshot: re-deriving from the window's current cfg unbinds the wrong
-        // source after the user navigated the Files window or re-selected another capsule.
-        setConns((cs) =>
-          isDuplicate(cs, c.from, toId)
-            ? cs
-            : [
-                ...cs,
-                {
-                  id: `${c.from}~${toId}`,
-                  a: c.from,
-                  b: toId,
-                  ...(boundRoot !== null ? { boundRoot } : {}),
-                  ...(connectorScope !== null
-                    ? connectorScope.kind === "capsule"
-                      ? {
-                          boundConnectorKind: "capsule" as const,
-                          boundConnectorId: connectorScope.capsuleId as string,
-                        }
-                      : {
-                          boundConnectorKind: "capsule-set" as const,
-                          boundConnectorId: connectorScope.capsuleSetId as string,
-                        }
-                    : {}),
-                },
-              ],
-        );
+      let accepted: boolean | Promise<boolean>;
+      try {
+        accepted =
+          boundRoot !== null
+            ? (onScopeBind?.(boundRoot) ?? true)
+            : connectorScope !== null
+              ? (onConnectorBind?.(connectorScope) ?? true)
+              : true;
+      } catch {
+        accepted = false;
       }
-      focus(toId);
+      void Promise.resolve(accepted)
+        .then((wasAccepted) => {
+          if (!wasAccepted) return;
+          const stillLive =
+            winsRef.current.some((w) => w.id === c.from) &&
+            winsRef.current.some((w) => w.id === toId);
+          if (!stillLive) return;
+          // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown)
+          // must use this snapshot: re-deriving from the window's current cfg unbinds the wrong
+          // source after the user navigated the Files window or re-selected another capsule.
+          setConns((cs) =>
+            isDuplicate(cs, c.from, toId)
+              ? cs
+              : [
+                  ...cs,
+                  {
+                    id: `${c.from}~${toId}`,
+                    a: c.from,
+                    b: toId,
+                    ...(boundRoot !== null ? { boundRoot } : {}),
+                    ...(connectorScope !== null
+                      ? connectorScope.kind === "capsule"
+                        ? {
+                            boundConnectorKind: "capsule" as const,
+                            boundConnectorId: connectorScope.capsuleId as string,
+                          }
+                        : {
+                            boundConnectorKind: "capsule-set" as const,
+                            boundConnectorId: connectorScope.capsuleSetId as string,
+                          }
+                      : {}),
+                  },
+                ],
+          );
+          focus(toId);
+        })
+        .catch(() => undefined);
     }
     cancelConnect();
   };

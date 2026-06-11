@@ -1046,6 +1046,28 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     );
   });
 
+  it("drops text-looking image extensions before scanning content", async () => {
+    file("img.png", "needle hidden in a fake image payload\n");
+    file("src/a.ts", "needle\n");
+
+    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      nowMs: FIXED_NOW,
+    });
+
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+    expect(r.candidates.some((c) => c.scopePath === "img.png" && c.omitted === "binary")).toBe(
+      true,
+    );
+  });
+
+  it("refuses to read excerpts from image extensions even when bytes look textual", async () => {
+    file("img.png", "looks like text but must not be processed\n");
+
+    await expect(
+      readExcerpt(scope, { scopePath: "img.png", startLine: 1, endLine: 1, maxBytes: 64 }),
+    ).rejects.toBeInstanceOf(RepoSearchUnsupportedFileError);
+  });
+
   it("does not drop a long UTF-8 file with multi-byte characters", async () => {
     const body = `${"héllo ".repeat(200)}\nneedle\n`;
     file("src/a.ts", body);
