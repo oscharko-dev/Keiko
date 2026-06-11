@@ -1,5 +1,6 @@
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { sandboxRoot } from "./refresh.mjs";
 
 const pidFile = join(sandboxRoot, ".keiko", "ui.pid.json");
@@ -21,12 +22,6 @@ function isProcessRunning(pid) {
   } catch {
     return false;
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 const pid = readPid();

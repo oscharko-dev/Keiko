@@ -1,5 +1,6 @@
 import { readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,10 +33,6 @@ function killPid(pid, signal) {
   } catch {
     // Process ended between the liveness check and the signal.
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
 const state = readState();

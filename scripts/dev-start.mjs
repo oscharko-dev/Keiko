@@ -10,6 +10,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -102,13 +103,13 @@ async function waitForHealth(port, child) {
       throw new Error(`development server exited early; see ${logFile}`);
     }
     try {
-      const response = await fetch(url);
+      const response = await globalThis.fetch(url);
       if (response.ok) return;
       lastError = `HTTP ${String(response.status)}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
+    await sleep(500);
   }
   throw new Error(`development server did not become healthy: ${lastError}; see ${logFile}`);
 }

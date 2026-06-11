@@ -4,7 +4,8 @@ import { connect } from "node:net";
 import { createRequire } from "node:module";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { setTimeout } from "node:timers";
+import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");

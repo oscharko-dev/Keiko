@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout } from "node:timers";
 import { fileURLToPath } from "node:url";
 import {
   buildCspHeader,
