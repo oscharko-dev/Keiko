@@ -1301,3 +1301,350 @@ describe("shared byte budget — oversized folder excerpt excluded in favour of 
     );
   });
 });
+
+// ─── Case 7: Ask-path source cap (defense-in-depth, #963) ────────────────────
+//
+// A chat row with more sources than maxConnectedSources / maxLocalKnowledgeSources (e.g. legacy
+// Altbestand after operator lowered the limit, or a direct DB edit) must be capped in the ask path
+// before any retrieval loop. These tests verify:
+//   (a) Folder scopes beyond maxConnectedSources are never explored.
+//   (b) Connector scopes beyond maxLocalKnowledgeSources are never retrieved.
+//   (c) At-limit counts pass through unmodified (no regression for normal chats).
+//   (d) Over-cap sources produce "source-skipped" uncertainty entries.
+
+describe("ask-path source cap — folders capped at maxConnectedSources", () => {
+  it("explores only limit-many folder scopes when the chat carries more than maxConnectedSources", async () => {
+    // Arrange: limit=2 folders; chat carries 3. Only the first 2 should be retrieved.
+    const { capsuleId: capId } = await seedReadyCapsule("Cap Folder Connector");
+
+    const folderA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("cap-a"),
+    };
+    const folderB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("cap-b"),
+    };
+    const folderC: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/c.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("cap-c"),
+    };
+    const chatId = makeHybridChat(
+      [folderA, folderB, folderC],
+      [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+    );
+
+    // Track which pack keys the retriever was asked for
+    const retrievedKeys: string[] = [];
+    const packMap = new Map([
+      ["src/a.ts", folderPack("src/a.ts", 0.9, "a-atom")],
+      ["src/b.ts", folderPack("src/b.ts", 0.8, "b-atom")],
+      ["src/c.ts", folderPack("src/c.ts", 0.7, "c-atom")],
+    ]);
+    const trackingRetriever: GroundedRetriever = (input: OrchestratorInput) => {
+      const key = input.scope.relativePaths[0] ?? "";
+      retrievedKeys.push(key);
+      const pack = packMap.get(key);
+      if (pack === undefined) throw new Error(`No fixture pack for path: ${key}`);
+      return Promise.resolve({ pack, elapsedMs: 5, plan: { state: "ready" } as never });
+    };
+
+    // Set maxConnectedSources=2 via config.grounding
+    const capDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 2,
+          maxLocalKnowledgeSources: 16,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 20,
+          hybridMaxExcerptBytes: 100_000,
+        },
+      },
+      configPresent: true,
+    });
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What are a, b, c?" })),
+      capDeps,
+      undefined,
+      undefined,
+      {
+        folderRetriever: trackingRetriever,
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    // Assert
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    // Only folder A and B were explored — folder C is beyond the cap of 2
+    // mutation: removing the slice → retrievedKeys would contain "src/c.ts"
+    expect(retrievedKeys).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(retrievedKeys).not.toContain("src/c.ts");
+
+    // The over-cap folder must appear as a "source-skipped" uncertainty entry
+    // mutation: removing overCapFolderSkipped merging → no source-skipped entry for cap-c
+    const answer = result.body as { uncertainty?: readonly { kind: string }[] };
+    const skipped = (answer.uncertainty ?? []).filter((u) => u.kind === "source-skipped");
+    expect(skipped.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("passes through exactly limit-many folder scopes unmodified (no regression at limit)", async () => {
+    // Arrange: limit=2 folders; chat carries exactly 2. Both should be retrieved.
+    const { capsuleId: capId } = await seedReadyCapsule("At Limit Connector");
+
+    const folderA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/at-a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("at-limit-a"),
+    };
+    const folderB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/at-b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("at-limit-b"),
+    };
+    const chatId = makeHybridChat(
+      [folderA, folderB],
+      [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+    );
+
+    const retrievedKeys: string[] = [];
+    const packMap = new Map([
+      ["src/at-a.ts", folderPack("src/at-a.ts", 0.9, "at-a-atom")],
+      ["src/at-b.ts", folderPack("src/at-b.ts", 0.8, "at-b-atom")],
+    ]);
+    const trackingRetriever: GroundedRetriever = (input: OrchestratorInput) => {
+      const key = input.scope.relativePaths[0] ?? "";
+      retrievedKeys.push(key);
+      const pack = packMap.get(key);
+      if (pack === undefined) throw new Error(`No fixture pack for path: ${key}`);
+      return Promise.resolve({ pack, elapsedMs: 5, plan: { state: "ready" } as never });
+    };
+
+    const capDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 2,
+          maxLocalKnowledgeSources: 16,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 20,
+          hybridMaxExcerptBytes: 100_000,
+        },
+      },
+      configPresent: true,
+    });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "At limit?" })),
+      capDeps,
+      undefined,
+      undefined,
+      {
+        folderRetriever: trackingRetriever,
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    // Both folders retrieved — no over-cap pruning at exactly the limit
+    // mutation: off-by-one in the slice → one folder would be dropped
+    expect(retrievedKeys).toEqual(["src/at-a.ts", "src/at-b.ts"]);
+  });
+});
+
+describe("ask-path source cap — connectors capped at maxLocalKnowledgeSources", () => {
+  it("retrieves only limit-many connectors when the chat carries more than maxLocalKnowledgeSources", async () => {
+    // Arrange: limit=2 connectors; chat carries 3. Only the first 2 should be retrieved.
+    const { capsuleId: capA, label: labelA } = await seedReadyCapsule("Cap Con A");
+    const { capsuleId: capB, label: labelB } = await seedReadyCapsule("Cap Con B");
+    const { capsuleId: capC } = await seedReadyCapsule("Cap Con C");
+
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/cap-con.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("cap-con-repo"),
+    };
+    const chatId = makeHybridChat(
+      [folderScope],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capC, connectedAtMs: NOW },
+      ],
+    );
+
+    const packMap = new Map([
+      ["src/cap-con.ts", folderPack("src/cap-con.ts", 0.5, "cap-con-atom")],
+    ]);
+
+    // Track which capsules were retrieved
+    const retrievedCapsules: string[] = [];
+    const trackingConnectorRetrieve: ConnectorRetrieve = (
+      _store,
+      scope,
+    ): Promise<RetrievalResult> => {
+      const cid = scope.kind === "capsule" ? String(scope.capsuleId) : "?";
+      retrievedCapsules.push(cid);
+      return Promise.resolve({
+        references: [
+          connectorReference(
+            scope.kind === "capsule" ? scope.capsuleId : capA,
+            1,
+            `doc-from-${cid}`,
+          ),
+        ],
+        noEvidence: false,
+      });
+    };
+
+    const capDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 16,
+          maxLocalKnowledgeSources: 2,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 20,
+          hybridMaxExcerptBytes: 100_000,
+        },
+      },
+      configPresent: true,
+    });
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What do A, B, C say?" })),
+      capDeps,
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: trackingConnectorRetrieve,
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    // Assert
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    // Capsule C must NOT have been retrieved — it is beyond the connector cap of 2
+    // mutation: removing the connector slice → capC would appear in retrievedCapsules
+    expect(retrievedCapsules).not.toContain(String(capC));
+    expect(retrievedCapsules).toHaveLength(2);
+
+    // Both A and B citations present; C must not appear
+    const answer = result.body as HybridGroundedAnswer;
+    const kciLabels = answer.knowledgeCitations.map((kc) => kc.source ?? "");
+    expect(kciLabels.some((l) => l.startsWith(`${labelA} / `))).toBe(true);
+    expect(kciLabels.some((l) => l.startsWith(`${labelB} / `))).toBe(true);
+    expect(kciLabels.some((l) => l.includes("Cap Con C"))).toBe(false);
+
+    // Over-cap connector must appear as a "source-skipped" uncertainty entry
+    // mutation: removing overCapConnectorSkipped merging → no source-skipped entry for connector-2
+    const skipped = answer.uncertainty.filter((u) => u.kind === "source-skipped");
+    expect(skipped.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("passes through exactly limit-many connectors unmodified (no regression at limit)", async () => {
+    // Arrange: limit=2 connectors; chat carries exactly 2. Both should be retrieved.
+    const { capsuleId: capA, label: labelA } = await seedReadyCapsule("At Lim Con A");
+    const { capsuleId: capB, label: labelB } = await seedReadyCapsule("At Lim Con B");
+
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/at-lim.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("at-lim-repo"),
+    };
+    const chatId = makeHybridChat(
+      [folderScope],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+
+    const packMap = new Map([["src/at-lim.ts", folderPack("src/at-lim.ts", 0.5, "at-lim-atom")]]);
+    const retrievedCapsules: string[] = [];
+    const trackingConnectorRetrieve: ConnectorRetrieve = (
+      _store,
+      scope,
+    ): Promise<RetrievalResult> => {
+      const cid = scope.kind === "capsule" ? String(scope.capsuleId) : "?";
+      retrievedCapsules.push(cid);
+      return Promise.resolve({
+        references: [
+          connectorReference(
+            scope.kind === "capsule" ? scope.capsuleId : capA,
+            1,
+            `doc-from-${cid}`,
+          ),
+        ],
+        noEvidence: false,
+      });
+    };
+
+    const capDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 16,
+          maxLocalKnowledgeSources: 2,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 20,
+          hybridMaxExcerptBytes: 100_000,
+        },
+      },
+      configPresent: true,
+    });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "At connector limit?" })),
+      capDeps,
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: trackingConnectorRetrieve,
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    // Both connectors retrieved — no over-cap pruning at exactly the limit
+    // mutation: off-by-one in the slice → one connector dropped
+    expect(retrievedCapsules).toHaveLength(2);
+    const answer = result.body as HybridGroundedAnswer;
+    const kciLabels = answer.knowledgeCitations.map((kc) => kc.source ?? "");
+    expect(kciLabels.some((l) => l.startsWith(`${labelA} / `))).toBe(true);
+    expect(kciLabels.some((l) => l.startsWith(`${labelB} / `))).toBe(true);
+  });
+});

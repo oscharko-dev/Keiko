@@ -134,7 +134,11 @@ export interface HybridGroundedAskCtx {
   readonly answer?: HybridAnswerer;
   // Upfront-skipped folder scopes (inaccessible/denied at canonicalization time). Merged into
   // `skippedFolders` uncertainty entries alongside retrieval-time folder skips.
-  readonly preSkippedFolders?: readonly { readonly label: string; readonly reason: string; readonly message: string }[];
+  readonly preSkippedFolders?: readonly {
+    readonly label: string;
+    readonly reason: string;
+    readonly message: string;
+  }[];
 }
 
 // ─── Retrieved-source records ─────────────────────────────────────────────────
@@ -958,33 +962,87 @@ export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<R
   }
 }
 
+interface CappedSources {
+  readonly folderScopes: readonly ChatConnectedScope[];
+  readonly connectorScopes: readonly ChatLocalKnowledgeScope[];
+  readonly allFolderCount: number;
+  readonly allConnectorCount: number;
+  readonly overCapFolderSkipped: readonly SkippedConnector[];
+  readonly overCapConnectorSkipped: readonly SkippedConnector[];
+}
+
+// Cap both source lists at their respective operator limits before any budget-split or retrieval
+// loop. A chat row may carry legacy over-limit sources (e.g. operator lowered maxConnectedSources
+// after connection, or a direct DB edit). Capping here is the single choke-point: all loops
+// downstream derive their iteration counts from these sliced lists. Over-cap entries are tagged as
+// "source-skipped" uncertainties so callers can observe the omission without path information.
+function capSourcesToLimits(
+  ctx: HybridGroundedAskCtx,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): CappedSources {
+  const all = buildConnectedScopes(ctx.chat);
+  const allConnectors = buildLocalKnowledgeScopes(ctx.chat);
+  return {
+    folderScopes: all.slice(0, limits.maxConnectedSources),
+    connectorScopes: allConnectors.slice(0, limits.maxLocalKnowledgeSources),
+    allFolderCount: all.length,
+    allConnectorCount: allConnectors.length,
+    overCapFolderSkipped: all.slice(limits.maxConnectedSources).map(
+      (cs, i): SkippedConnector => ({
+        label: sourceLabels([cs])[0] ?? `folder-${String(limits.maxConnectedSources + i)}`,
+        reason: "source-skipped",
+        message: "Exceeded maxConnectedSources limit.",
+      }),
+    ),
+    overCapConnectorSkipped: allConnectors.slice(limits.maxLocalKnowledgeSources).map(
+      (_cs, i): SkippedConnector => ({
+        label: `connector-${String(limits.maxLocalKnowledgeSources + i)}`,
+        reason: "source-skipped",
+        message: "Exceeded maxLocalKnowledgeSources limit.",
+      }),
+    ),
+  };
+}
+
 async function runHybridWithStore(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
 ): Promise<RouteResult> {
-  const folderScopes = buildConnectedScopes(ctx.chat);
-  const connectorScopes = buildLocalKnowledgeScopes(ctx.chat);
-  const resolved = resolveConnectorScopes(connectorScopes, store);
+  const limits = currentGroundingLimits(ctx.deps);
+  const capped = capSourcesToLimits(ctx, limits);
+  const resolved = resolveConnectorScopes(capped.connectorScopes, store);
   if ("status" in resolved) return resolved;
   const query = buildQuery(ctx.content, () => Date.now());
   const rawFolderResult = await retrieveFolderPacks(
     ctx,
-    folderScopes,
+    capped.folderScopes,
     query,
     ctx.folderRetriever ?? defaultRetriever(ctx.signal),
   );
-  // Merge upfront-skipped folders (inaccessible/denied at canonicalization) with retrieval-time
-  // folder skips so all omissions appear in the assembled uncertainty entries.
-  const folderResult: FolderRetrieval = ctx.preSkippedFolders !== undefined
-    ? { ...rawFolderResult, skipped: [...ctx.preSkippedFolders, ...rawFolderResult.skipped] }
-    : rawFolderResult;
-  const connectorResult = await retrieveConnectors(ctx, store, connectorScopes, resolved);
+  // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
+  // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.
+  const folderResult: FolderRetrieval = {
+    ...rawFolderResult,
+    skipped: [
+      ...(ctx.preSkippedFolders ?? []),
+      ...capped.overCapFolderSkipped,
+      ...rawFolderResult.skipped,
+    ],
+  };
+  const connectorResult = await retrieveConnectors(ctx, store, capped.connectorScopes, resolved);
   if ("status" in connectorResult) return connectorResult;
+  const connectorResultWithOverCap: ConnectorRetrieval =
+    capped.overCapConnectorSkipped.length > 0
+      ? {
+          ...connectorResult,
+          skipped: [...capped.overCapConnectorSkipped, ...connectorResult.skipped],
+        }
+      : connectorResult;
   return await answerAndAssemble(ctx, store, {
-    folderScopeCount: folderScopes.length,
-    connectorScopeCount: connectorScopes.length,
+    folderScopeCount: capped.allFolderCount,
+    connectorScopeCount: capped.allConnectorCount,
     folderResult,
-    connectorResult,
+    connectorResult: connectorResultWithOverCap,
   });
 }
 

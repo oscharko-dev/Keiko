@@ -725,3 +725,84 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answererCalled).toBe(false);
   });
 });
+
+// Release 0.2.0 — ask-path defense-in-depth: a stored over-cap chat (legacy rows, or an operator
+// who raised maxConnectedSources and later lowered it) must not fan out unboundedly. The first
+// 16 folders (connection order) stay live; the rest surface as source-skipped uncertainty.
+describe("handleGroundedAsk folder ask-path source cap (Release 0.2.0)", () => {
+  it("explores at most maxConnectedSources folders and skips the rest with a notice", async () => {
+    const scopes: ChatConnectedScope[] = Array.from({ length: 18 }, (_unused, i) => ({
+      kind: "directory",
+      relativePaths: [`src/f${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`d${String(i)}`),
+    }));
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Multi", CHAT_MODEL);
+    // Build the over-cap row under a temporarily raised operator limit (the store's combined
+    // source cap rejects growth past the default 16 otherwise).
+    store.updateChat(chat.id, { connectedScopes: scopes }, { maxConnectedSources: 18 });
+    const retrieved: string[] = [];
+    const answered = { count: 0 };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam((input) => {
+        const key = input.scope.relativePaths[0] ?? "";
+        retrieved.push(key);
+        return Promise.resolve({
+          pack: scopePack(key, 0.5, `body ${key}`),
+          elapsedMs: 1,
+          plan: { state: "ready" } as never,
+        });
+      }, constAnswerer("capped answer", answered)),
+    );
+    expect(result.status).toBe(200);
+    // Only the first 16 folders (connection order) are explored.
+    expect(retrieved).toHaveLength(16);
+    expect(retrieved).not.toContain("src/f16.ts");
+    expect(retrieved).not.toContain("src/f17.ts");
+    expect(answered.count).toBe(16);
+    // The two over-cap folders surface as source-skipped uncertainty (basename label only).
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    const overCap = answer.uncertainty.filter(
+      (u) => u.kind === "source-skipped" && u.claim.includes("over the connected-source limit"),
+    );
+    expect(overCap).toHaveLength(2);
+    expect(overCap.some((u) => u.claim.includes("d16"))).toBe(true);
+    expect(overCap.some((u) => u.claim.includes("d17"))).toBe(true);
+  });
+
+  it("leaves an exactly-at-cap chat untouched (16 folders, no skip notice)", async () => {
+    const scopes: ChatConnectedScope[] = Array.from({ length: 16 }, (_unused, i) => ({
+      kind: "directory",
+      relativePaths: [`src/f${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`e${String(i)}`),
+    }));
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Multi", CHAT_MODEL);
+    store.updateChat(chat.id, { connectedScopes: scopes });
+    const retrieved: string[] = [];
+    const answered = { count: 0 };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam((input) => {
+        const key = input.scope.relativePaths[0] ?? "";
+        retrieved.push(key);
+        return Promise.resolve({
+          pack: scopePack(key, 0.5, `body ${key}`),
+          elapsedMs: 1,
+          plan: { state: "ready" } as never,
+        });
+      }, constAnswerer("full answer", answered)),
+    );
+    expect(result.status).toBe(200);
+    expect(retrieved).toHaveLength(16);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.uncertainty.some((u) => u.kind === "source-skipped")).toBe(false);
+  });
+});

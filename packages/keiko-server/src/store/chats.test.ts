@@ -561,6 +561,94 @@ describe("updateChat — connectedScopes list round-trip (#532)", () => {
     expect(updated.connectedScopes).toHaveLength(16);
   });
 
+  // Release 0.2.0 — "up to 16 sources" is a combined total across folder/file/repo scopes AND
+  // knowledge-connector scopes. The 17th source must be prevented regardless of which list it
+  // would land in; shrinking a pre-existing over-cap chat must stay possible.
+  describe("combined source cap (connectedScopes + localKnowledgeScopes)", () => {
+    const folderScopes = (n: number): ChatConnectedScope[] =>
+      Array.from({ length: n }, (_unused, i) => ({
+        kind: "files" as const,
+        relativePaths: [`src/f${String(i)}`],
+        connectedAtMs: 1,
+      }));
+    const capsuleScopes = (n: number): ChatLocalKnowledgeScope[] =>
+      Array.from({ length: n }, (_unused, i) => ({
+        kind: "capsule" as const,
+        capsuleId: `cap-${String(i)}`,
+        connectedAtMs: 1,
+      })) as ChatLocalKnowledgeScope[];
+
+    it("accepts a mixed total of exactly 16 (8 folders + 8 connectors)", () => {
+      const c = store.createChat(proj, "t", "m");
+      store.updateChat(c.id, { connectedScopes: folderScopes(8) });
+      const updated = store.updateChat(c.id, { localKnowledgeScopes: capsuleScopes(8) });
+      expect(updated.connectedScopes).toHaveLength(8);
+      expect(updated.localKnowledgeScopes).toHaveLength(8);
+    });
+
+    it("rejects the 17th source when it would land in connectedScopes", () => {
+      const c = store.createChat(proj, "t", "m");
+      store.updateChat(c.id, { connectedScopes: folderScopes(8) });
+      store.updateChat(c.id, { localKnowledgeScopes: capsuleScopes(8) });
+      expect(() => store.updateChat(c.id, { connectedScopes: folderScopes(9) })).toThrow(
+        /at most 16 sources in total/,
+      );
+    });
+
+    it("rejects the 17th source when it would land in localKnowledgeScopes", () => {
+      const c = store.createChat(proj, "t", "m");
+      store.updateChat(c.id, { connectedScopes: folderScopes(16) });
+      expect(() => store.updateChat(c.id, { localKnowledgeScopes: capsuleScopes(1) })).toThrow(
+        /at most 16 sources in total/,
+      );
+    });
+
+    it("frees capacity after removal (remove one folder, then connect one connector)", () => {
+      const c = store.createChat(proj, "t", "m");
+      store.updateChat(c.id, { connectedScopes: folderScopes(16) });
+      store.updateChat(c.id, { connectedScopes: folderScopes(15) });
+      const updated = store.updateChat(c.id, { localKnowledgeScopes: capsuleScopes(1) });
+      expect(updated.connectedScopes).toHaveLength(15);
+      expect(updated.localKnowledgeScopes).toHaveLength(1);
+    });
+
+    it("lets a pre-existing over-cap chat shrink but not grow (operator lowered limits)", () => {
+      const c = store.createChat(proj, "t", "m");
+      // Build a 12+8=20 total under temporarily raised operator limits.
+      store.updateChat(c.id, { connectedScopes: folderScopes(12) }, { maxConnectedSources: 20 });
+      store.updateChat(
+        c.id,
+        { localKnowledgeScopes: capsuleScopes(8) },
+        { maxConnectedSources: 20, maxLocalKnowledgeSources: 20 },
+      );
+      // Back on default limits: shrinking the total (20 → 19) must work…
+      const shrunk = store.updateChat(c.id, { connectedScopes: folderScopes(11) });
+      expect(shrunk.connectedScopes).toHaveLength(11);
+      // …but growing it again (19 → 20) must not, even though 12 ≤ 16 per-list.
+      expect(() => store.updateChat(c.id, { connectedScopes: folderScopes(12) })).toThrow(
+        /at most 16 sources in total/,
+      );
+    });
+
+    it("keeps the combined cap at the larger per-list limit when an operator raises one list", () => {
+      const c = store.createChat(proj, "t", "m");
+      const updated = store.updateChat(
+        c.id,
+        { connectedScopes: folderScopes(17) },
+        { maxConnectedSources: 17 },
+      );
+      expect(updated.connectedScopes).toHaveLength(17);
+      // 17 folders + 1 connector = 18 > max(17, 16) → rejected.
+      expect(() =>
+        store.updateChat(
+          c.id,
+          { localKnowledgeScopes: capsuleScopes(1) },
+          { maxConnectedSources: 17 },
+        ),
+      ).toThrow(/at most 17 sources in total/);
+    });
+  });
+
   it("prefers connectedScopes over connectedScope when both are present in a patch", () => {
     const c = store.createChat(proj, "t", "m");
     const updated = store.updateChat(c.id, {

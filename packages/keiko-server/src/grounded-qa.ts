@@ -44,7 +44,7 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -984,15 +984,39 @@ function singleScopeFromList(
 // Epic #532 — the folder-only branch (0 handled by caller; 1 → single-source runner unless
 // there are pre-skipped folders, in which case multi-source carries the skip notice; 2+ → the
 // multi-source merge). Extracted so handleGroundedAsk stays the thin count-based dispatcher.
-async function dispatchFolderAsk(
-  prepared: PreparedGroundedAsk,
+// Release 0.2.0 — ask-path defense-in-depth (mirror of the hybrid path's capSourcesToLimits):
+// a stored over-cap chat (legacy rows, or an operator who later lowered the limits) must not
+// fan out unboundedly at ask time. The first `cap` folders (connection order) stay live; the
+// rest surface as source-skipped notices (basename label only — no path leak).
+function capFolderScopesForAsk(
   deps: UiHandlerDeps,
   scopes: ReturnType<typeof buildConnectedScopes>,
   skippedFolders: readonly SkippedFolderScope[],
+): { scopes: ReturnType<typeof buildConnectedScopes>; skipped: readonly SkippedFolderScope[] } {
+  const cap = currentGroundingLimits(deps).maxConnectedSources;
+  if (scopes.length <= cap) return { scopes, skipped: skippedFolders };
+  const overCap = scopes.slice(cap).map((scope): SkippedFolderScope => {
+    const label = scope.root !== undefined ? basename(scope.root) : "project";
+    const message = "skipped: over the connected-source limit";
+    return { label, message, reason: badRequest(`Source "${label}" ${message}.`) };
+  });
+  return { scopes: scopes.slice(0, cap), skipped: [...skippedFolders, ...overCap] };
+}
+
+async function dispatchFolderAsk(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  allScopes: ReturnType<typeof buildConnectedScopes>,
+  allSkippedFolders: readonly SkippedFolderScope[],
   runner: GroundedRunner | undefined,
   multiSource: MultiSourceSeam | undefined,
 ): Promise<RouteResult> {
   const { chat, input, signal } = prepared;
+  const { scopes, skipped: skippedFolders } = capFolderScopesForAsk(
+    deps,
+    allScopes,
+    allSkippedFolders,
+  );
   // 2+ healthy folders or 1 healthy + some skipped → multi-source (carries skip-notice).
   if (scopes.length >= 2 || (scopes.length === 1 && skippedFolders.length > 0)) {
     return dispatchMultiSourceAsk(prepared, deps, scopes, skippedFolders, multiSource);

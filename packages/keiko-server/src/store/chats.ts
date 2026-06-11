@@ -690,6 +690,54 @@ function localKnowledgeScopesUpdateParams(
   return { apply: 1, json: JSON.stringify(value.map(encodeLocalKnowledgeScopeObject)) };
 }
 
+// Release 0.2.0 — combined source cap. "Up to 16 sources" is a TOTAL across both lists
+// (folders/files/repos in connectedScopes + knowledge connectors in localKnowledgeScopes),
+// mirroring the QI ingestion total cap (MAX_QI_SOURCES = 16) so "16 sources" means the same
+// thing everywhere. The cap is max(maxConnectedSources, maxLocalKnowledgeSources): never
+// smaller than either per-list limit, so each list's own cap stays reachable. Growth-only:
+// a pre-existing over-cap chat may shrink or hold its lists (no migration lock-out), but no
+// patch may grow the combined total past the cap.
+// Effective count after applying a resolved list patch: undefined = unchanged, null = cleared.
+function patchedCount(resolved: readonly unknown[] | null | undefined, prev: number): number {
+  if (resolved === undefined) return prev;
+  return resolved === null ? 0 : resolved.length;
+}
+
+function combinedSourceCap(options?: UpdateChatOptions): number {
+  return Math.max(
+    options?.maxConnectedSources ?? DEFAULT_GROUNDING_LIMITS.maxConnectedSources,
+    options?.maxLocalKnowledgeSources ?? DEFAULT_GROUNDING_LIMITS.maxLocalKnowledgeSources,
+  );
+}
+
+function validateTotalSourceCap(
+  db: DatabaseSync,
+  id: string,
+  patch: UpdateChatPatch,
+  options?: UpdateChatOptions,
+): void {
+  const nextConnected = resolveScopePatch(patch);
+  const nextLk = resolveLocalKnowledgeScopePatch(patch);
+  if (nextConnected === undefined && nextLk === undefined) return;
+  const existing = findChatById(db, id);
+  if (existing === undefined) return; // the UPDATE below raises notFound
+  const prevConnected =
+    existing.connectedScopes ??
+    (existing.connectedScope !== undefined ? [existing.connectedScope] : []);
+  const prevLk =
+    existing.localKnowledgeScopes ??
+    (existing.localKnowledgeScope !== undefined ? [existing.localKnowledgeScope] : []);
+  const total =
+    patchedCount(nextConnected, prevConnected.length) + patchedCount(nextLk, prevLk.length);
+  const prevTotal = prevConnected.length + prevLk.length;
+  const cap = combinedSourceCap(options);
+  if (total > cap && total > prevTotal) {
+    throw invalidRequest(
+      `A chat may connect at most ${String(cap)} sources in total (folders, files, repositories, and knowledge connectors combined).`,
+    );
+  }
+}
+
 export function updateChat(
   db: DatabaseSync,
   id: string,
@@ -698,6 +746,7 @@ export function updateChat(
   options?: UpdateChatOptions,
 ): Chat {
   validateChatPatch(patch, options);
+  validateTotalSourceCap(db, id, patch, options);
   if (patch.selectedModel !== undefined) validateSelectedModel(patch.selectedModel);
   const titleParam = patch.title ?? null;
   const modelParam = patch.selectedModel ?? null;
