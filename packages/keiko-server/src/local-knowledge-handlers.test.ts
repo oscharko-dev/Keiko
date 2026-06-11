@@ -12,7 +12,7 @@ import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
 } from "@oscharko-dev/keiko-local-knowledge";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -282,6 +282,33 @@ describe("local-knowledge handlers", () => {
         }),
         params: { capsuleId: "cap-1" },
       },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("denied");
+  });
+
+  it("re-validates the deny list at index time, not only at connect time (#189 audit)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    // A source whose canonical root resolves into a denied location is attached directly to the
+    // store, bypassing the connect-time guard (the TOCTOU case: a folder moved/symlink-swapped
+    // into a denied path after it was connected). Starting indexing must refuse it.
+    const seeded = seedStore(tmp);
+    const deniedRoot = join(tmp, ".aws");
+    mkdirSync(deniedRoot, { recursive: true });
+    writeFileSync(join(deniedRoot, "credentials"), "[default]\n", "utf8");
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-denied" as KnowledgeSourceId,
+      displayName: "denied",
+      tags: [],
+      scope: { kind: "folder", rootPath: deniedRoot, recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       depsFor(tmp),
     );
 

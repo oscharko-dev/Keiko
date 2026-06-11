@@ -136,17 +136,7 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
          id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
          safe_excerpt_hash, chunking_strategy_version
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      chunkId,
-      capsuleId,
-      sourceId,
-      documentId,
-      parsedUnitId,
-      0,
-      256,
-      "abc",
-      "issue-195-v1",
-    );
+    ).run(chunkId, capsuleId, sourceId, documentId, parsedUnitId, 0, 256, "abc", "issue-195-v1");
   } else {
     db.prepare(
       `INSERT INTO chunks (
@@ -194,8 +184,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 7 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(7);
+  it("is the integer 8 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(8);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -271,6 +261,26 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       const byName = new Map(columns.map((c) => [c.name ?? "", c]));
       expect(byName.get("chunking_strategy_version")?.type).toBe("TEXT");
       expect(byName.has("chunking_strategy_version")).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists per-chunk character offsets (v8) so each chunk embeds its own sub-span", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('chunks')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      // Nullable INTEGER columns: chunks indexed before the v8 migration carry NULL and fall
+      // back to the parsed_unit span, so a NOT NULL constraint would break backward compat.
+      expect(byName.get("character_start")?.type).toBe("INTEGER");
+      expect(byName.get("character_start")?.notnull).toBe(0);
+      expect(byName.get("character_end")?.type).toBe("INTEGER");
+      expect(byName.get("character_end")?.notnull).toBe(0);
     } finally {
       db.close();
     }

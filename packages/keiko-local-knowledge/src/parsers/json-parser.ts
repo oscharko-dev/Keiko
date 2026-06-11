@@ -135,7 +135,10 @@ function parseJsonValue(
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "JSON parse error" };
+    // Return only the error TYPE name, never the raw parser message. Modern Node embeds a
+    // fragment of the surrounding document text in JSON.parse error messages, which would
+    // leak indexed content into the persisted diagnostic surfaced in the capsule detail UI.
+    return { ok: false, error: error instanceof Error ? error.name : "SyntaxError" };
   }
 }
 

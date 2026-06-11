@@ -697,6 +697,14 @@ function canonicalizeCapsuleSourceRoots(
   const now = store._internal.now();
   for (const source of listCapsuleSources(store, capsule.id)) {
     const canonicalScope = canonicalizeScopeRoot(source.scope);
+    // Re-validate the deny-list against the canonical (realpath-resolved) root at index time,
+    // not only at connect time. A folder that was safe when connected can later be moved or
+    // symlink-swapped so its realpath resolves into a denied location (e.g. ~/.ssh); refuse to
+    // index it rather than walking credential files inside it. Runs for every source, including
+    // already-canonical ones, so it must precede the no-op skip below.
+    if (isDenied(connectScopeRootPath(canonicalScope))) {
+      throw new InvalidRequest("Source path is in a denied location and cannot be indexed.");
+    }
     if (JSON.stringify(canonicalScope) === JSON.stringify(source.scope)) {
       continue;
     }

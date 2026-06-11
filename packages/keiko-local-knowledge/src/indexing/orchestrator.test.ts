@@ -113,6 +113,56 @@ describe("runIndexingJob — source preconditions", () => {
   });
 });
 
+// ─── Epic #189 audit: per-chunk embedding spans ──────────────────────────────
+// A plain-text file emits a single section parsed unit spanning the whole document, which the
+// chunker then splits into multiple chunks. Each chunk must embed its OWN character sub-span,
+// not the full parsed-unit span. Before schema v8 persisted per-chunk offsets the orchestrator
+// re-derived the unit span for every chunk, so each chunk of a multi-chunk unit embedded an
+// identical, duplicate vector and an unbounded embedding input (a dense PDF/manual page). This
+// guard pins the chunk-level projection.
+describe("runIndexingJob — per-chunk embedding spans (Epic #189 audit)", () => {
+  it("embeds each chunk's own sub-span, not the duplicated full parsed-unit text", async () => {
+    const sourceText = Array.from(
+      { length: 300 },
+      (_unused, i) =>
+        `Sentence number ${String(i)} documents the unique topic ${String(i)} in depth.`,
+    ).join(" ");
+    const fixture = buildFixture({ "manual.txt": sourceText });
+    try {
+      const inputs: string[] = [];
+      const adapter = scriptedAdapter({
+        responder: (req) => {
+          inputs.push(req.input);
+          return {
+            ok: true,
+            value: {
+              vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+              modelId: DEFAULT_EMBEDDING.modelId,
+            },
+          };
+        },
+      });
+
+      const events = await drain(
+        runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+      );
+      expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+      expect(events.some((event) => event.kind === "job-failed")).toBe(false);
+
+      // The single large unit must have split into multiple chunks.
+      expect(inputs.length).toBeGreaterThan(1);
+      // Each chunk embeds a distinct sub-span; pre-fix every input was the identical full text.
+      expect(new Set(inputs).size).toBe(inputs.length);
+      // No chunk embeds the whole document — each input is a bounded slice strictly shorter.
+      for (const input of inputs) {
+        expect(input.length).toBeLessThan(sourceText.length);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
 // ─── Test 1: full happy path ─────────────────────────────────────────────────
 describe("runIndexingJob — happy path", () => {
   let fixture: Fixture;

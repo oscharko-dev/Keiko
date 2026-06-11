@@ -179,10 +179,12 @@ function markDocumentFailed(state: RunState, documentId: DocumentId): void {
 }
 
 // ─── Per-chunk text projection ────────────────────────────────────────────────
-// Slices the document source text by the chunk's parsed_unit (character_start,
-// character_end). We re-query parsed_units here rather than join in SQL because the joined
-// row is wider than what we need and keeps the chunking and indexing layers decoupled at
-// the SQL boundary.
+// Slices the document source text by the chunk's OWN (character_start, character_end) span
+// so each chunk embeds a bounded sub-span. A multi-chunk parsed unit (e.g. a dense PDF page)
+// would otherwise re-derive the full parsed-unit span for every chunk, emitting duplicate
+// vectors and an unbounded embedding input. Chunks indexed before the v8 migration carry no
+// chunk span (NULL), so COALESCE falls back to the parsed_unit span — byte-identical to the
+// pre-fix behaviour until the capsule is reindexed.
 interface ChunkProjectionRow {
   readonly id: string;
   readonly capsule_id: string;
@@ -196,7 +198,8 @@ interface ChunkProjectionRow {
 
 const SELECT_CHUNKS_WITH_OFFSETS_SQL = [
   "SELECT c.id, c.capsule_id, c.source_id, c.document_id, c.parsed_unit_id, c.order_index,",
-  "  pu.character_start AS char_start, pu.character_end AS char_end",
+  "  COALESCE(c.character_start, pu.character_start) AS char_start,",
+  "  COALESCE(c.character_end, pu.character_end) AS char_end",
   "FROM chunks AS c",
   "JOIN parsed_units AS pu ON pu.capsule_id = c.capsule_id AND pu.id = c.parsed_unit_id",
   "WHERE c.capsule_id = :c AND c.document_id = :d",

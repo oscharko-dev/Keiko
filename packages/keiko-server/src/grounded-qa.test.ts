@@ -754,6 +754,43 @@ describe("handleGroundedAsk", () => {
     ]);
   });
 
+  it("redacts secret-shaped excerpt text out of the single-connector model prompt (#189 audit)", async () => {
+    const secret = "sk-LIVE-AUDIT-9f8e7d6c5b4a3210ZZ";
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
+    const uiDbPath = join(tmp, "keiko-ui.db");
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      capsuleId: "cap-secret",
+      text: `alpha beta ${secret} gamma delta epsilon`,
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    store.updateChat(chat.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const model = fakeModel("Grounded answer from indexed knowledge [1].", requests);
+    const adapter = scriptedAdapter();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "What is alpha?" })),
+      // The configured secret is injected via env so buildRedactor treats it as a secret to mask.
+      deps(
+        model,
+        { OPENAI_API_KEY: secret },
+        { uiDbPath, localKnowledgeEmbeddingRequest: adapter.request },
+      ),
+    );
+    expect(result.status).toBe(200);
+    const prompt = firstGatewayRequest(requests).messages[1]?.content ?? "";
+    // The excerpt still reaches the prompt (proving the path), but the secret is masked —
+    // matching the redaction the hybrid path already applies.
+    expect(prompt).toContain("alpha");
+    expect(prompt).not.toContain(secret);
+  });
+
   it("does not record model-context-sent when the model call fails", async () => {
     const project = store.createProject(tmp, "demo");
     const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);

@@ -84,7 +84,10 @@ function seedSource(
   });
 }
 
-function composeParsedUnit(documentId: string, unit: EvalDocumentSpec["parsedUnits"][number]): ParsedUnit {
+function composeParsedUnit(
+  documentId: string,
+  unit: EvalDocumentSpec["parsedUnits"][number],
+): ParsedUnit {
   return { ...unit.unit, documentId: documentId as ParsedUnit["documentId"] };
 }
 
@@ -161,6 +164,10 @@ function seedChunks(
       tokenCount: chunk.text.length,
       safeExcerptHash: "b".repeat(64),
       chunkingStrategyVersion: "issue-195-v1",
+      // Synthetic span over the chunk's own text. Inert for the eval harness (it retrieves
+      // pre-seeded vectors rather than re-slicing source text) but satisfies the v8 columns.
+      characterStart: 0,
+      characterEnd: chunk.text.length,
     });
     chunkUnitKinds.set(String(chunk.id), citationRequirementForUnit(composedUnit));
     chunkTokenCounts.set(String(chunk.id), chunk.text.length);

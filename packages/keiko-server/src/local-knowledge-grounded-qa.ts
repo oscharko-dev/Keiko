@@ -291,6 +291,7 @@ export function projectLocalKnowledgeCitation(
 function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
+  redactExcerpt: (value: string) => string,
 ): readonly string[] {
   const lines: string[] = [];
   const references = input.references.slice(0, MAX_PROMPT_REFERENCES);
@@ -298,11 +299,12 @@ function buildReferenceLines(
     const reference = references[i];
     if (reference === undefined) continue;
     const label = renderCitationLabel(reference.citation);
-    const excerpt = readCitationExcerpt(
-      store,
-      reference.capsuleId,
-      reference.citation,
-      MAX_EXCERPT_CHARS,
+    // Redact secret-shaped strings out of document excerpts before they reach the model,
+    // matching the hybrid grounded-ask path (grounded-qa-hybrid.ts). Without this the
+    // single-connector path would forward raw document content (e.g. an embedded API key)
+    // verbatim to the configured gateway.
+    const excerpt = redactExcerpt(
+      readCitationExcerpt(store, reference.capsuleId, reference.citation, MAX_EXCERPT_CHARS),
     );
     lines.push(`[${String(i + 1)}] ${label}`);
     if (excerpt.length > 0) {
@@ -327,8 +329,9 @@ function buildLocalKnowledgeMessages(
   question: string,
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
+  redactExcerpt: (value: string) => string,
 ): readonly { readonly role: "system" | "user"; readonly content: string }[] {
-  const lines = buildReferenceLines(input, store);
+  const lines = buildReferenceLines(input, store, redactExcerpt);
   return [
     {
       role: "system",
@@ -357,13 +360,19 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly modelId: string,
     private readonly store: KnowledgeStore,
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
+    private readonly redactExcerpt: (value: string) => string,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
     const response = await this.model.call(
       {
         modelId: this.modelId,
-        messages: buildLocalKnowledgeMessages(input.query.text, input, this.store),
+        messages: buildLocalKnowledgeMessages(
+          input.query.text,
+          input,
+          this.store,
+          this.redactExcerpt,
+        ),
         stream: false,
       },
       input.signal ?? new AbortController().signal,
@@ -693,7 +702,8 @@ async function runScopedGroundedAnswer(
   const model = resolveModel(deps, modelId);
   if ("status" in model) return model;
   const auditSink = createSqliteAuditSink(env.store);
-  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store, auditSink);
+  const redact = (value: string): string => redactText(deps, value);
+  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store, auditSink, redact);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {
@@ -712,8 +722,8 @@ async function runScopedGroundedAnswer(
     noEvidenceReason === undefined
       ? result.answer.trim()
       : "No evidence found in the selected knowledge scope.";
-  const redactedUserContent = redactText(deps, input.content);
-  const redactedAssistantContent = redactText(deps, assistantContent);
+  const redactedUserContent = redact(input.content);
+  const redactedAssistantContent = redact(assistantContent);
   const answer = buildLocalKnowledgeAnswer(
     chat,
     env.store,

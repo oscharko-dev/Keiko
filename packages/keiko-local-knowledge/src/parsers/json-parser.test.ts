@@ -123,6 +123,18 @@ describe("jsonParser", () => {
     expect(result.diagnostics[0]?.severity).toBe("error");
   });
 
+  it("does not echo document content in the parse-error diagnostic (#189 audit)", () => {
+    // Modern Node embeds a fragment of the surrounding text in JSON.parse error messages. A
+    // secret near the parse error must not leak into the persisted, UI-surfaced diagnostic.
+    const secret = "AKIA-LIVE-SECRET-9F8E7D6C";
+    const result = jsonParser.parse(
+      selectionFromText(`{ "token": "${secret}" broken`, { extension: "json" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+    expect(result.diagnostics[0]?.message ?? "").not.toContain(secret);
+  });
+
   it("refuses oversize files", () => {
     const big = encode("0".repeat(100));
     const result = jsonParser.parse(
