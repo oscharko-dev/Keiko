@@ -13,6 +13,7 @@ import {
 
 interface RawProvider {
   modelId: string;
+  providerType?: "gateway-openai-compatible";
   baseUrl: string;
   apiKey: string;
   timeoutMs: number;
@@ -51,8 +52,37 @@ describe("parseGatewayConfig", () => {
     const config = parseGatewayConfig(validRaw());
     expect(config.providers).toHaveLength(1);
     expect(config.providers[0]?.modelId).toBe("example-chat-model");
+    expect(config.providers[0]?.providerType).toBe("gateway-openai-compatible");
     expect(config.providers[0]?.apiKeyHeaderName).toBe("authorization");
     expect(config.circuitBreaker.failureThreshold).toBe(5);
+  });
+
+  it("parses a local-session provider without fake baseUrl or apiKey fields", () => {
+    const config = parseGatewayConfig({
+      providers: [
+        {
+          providerType: "openai-codex-local-session",
+          modelId: "gpt-5-codex",
+          credentialResolver: { kind: "codex-cli", command: "codex" },
+          timeoutMs: 30000,
+          maxRetries: 2,
+          retryBaseDelayMs: 500,
+          capability: {
+            kind: "chat",
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    });
+    expect(config.providers[0]).toMatchObject({
+      providerType: "openai-codex-local-session",
+      modelId: "gpt-5-codex",
+      credentialResolver: { kind: "codex-cli", command: "codex" },
+    });
+    expect("baseUrl" in (config.providers[0] ?? {})).toBe(false);
+    expect("apiKey" in (config.providers[0] ?? {})).toBe(false);
   });
 
   it("parses explicit enterprise egress settings and applies them to providers", () => {
@@ -447,7 +477,10 @@ describe("toSafeObject", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
     expect(safe.providers[0]?.modelId).toBe("example-chat-model");
-    expect(safe.providers[0]?.credentialHeaderName).toBe("authorization");
+    expect(safe.providers[0]).toMatchObject({
+      providerType: "gateway-openai-compatible",
+      credentialHeaderName: "authorization",
+    });
     expect(safe.providers[0]?.timeoutMs).toBe(30000);
   });
 
@@ -472,6 +505,29 @@ describe("toSafeObject", () => {
     });
     expect(JSON.stringify(safe)).not.toContain("example-test-token-1234567890");
     expect(JSON.stringify(safe)).not.toContain("https://host.example/v1");
+  });
+
+  it("redacts local-session credential-resolver details from the safe object", () => {
+    const config = parseGatewayConfig({
+      providers: [
+        {
+          providerType: "openai-codex-local-session",
+          modelId: "gpt-5-codex",
+          credentialResolver: { kind: "codex-cli", command: "/opt/bin/codex" },
+          timeoutMs: 30000,
+          maxRetries: 2,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    });
+    const safe = toSafeObject(config);
+    expect(safe.providers[0]).toMatchObject({
+      providerType: "openai-codex-local-session",
+      modelId: "gpt-5-codex",
+    });
+    expect(JSON.stringify(safe)).not.toContain("/opt/bin/codex");
+    expect(JSON.stringify(safe)).not.toContain("credentialResolver");
   });
 });
 

@@ -17,11 +17,13 @@ export type {
   CircuitBreakerConfig,
   CircuitBreakerStatus,
   CircuitState,
+  CodexCliCredentialResolverConfig,
   ChatMessage,
   Clock,
   CostClass,
   FinishReason,
   GatewayConfig,
+  GatewayOpenAiCompatibleProviderConfig,
   GatewayRequest,
   GatewayStreamChunk,
   LatencyClass,
@@ -30,12 +32,18 @@ export type {
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
+  OpenAiCodexLocalSessionProviderConfig,
   ProviderAdapter,
   ResponseFormat,
   StreamDelta,
   StreamEvent,
   ToolDefinition,
   UsageMetadata,
+} from "./types.js";
+export type { SafeGatewayConfig, SafeProviderConfig } from "@oscharko-dev/keiko-contracts/bff-wire";
+export {
+  isGatewayOpenAiCompatibleProviderConfig,
+  isOpenAiCodexLocalSessionProviderConfig,
 } from "./types.js";
 
 export {
@@ -62,8 +70,6 @@ export {
   toSafeObject,
   validateBaseUrl,
   type EnvSource,
-  type SafeGatewayConfig,
-  type SafeProviderConfig,
 } from "./config.js";
 
 export { Gateway, type GatewayDeps } from "./gateway.js";

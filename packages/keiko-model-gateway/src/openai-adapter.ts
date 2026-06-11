@@ -6,6 +6,7 @@
 import {
   AuthenticationError,
   CancelledError,
+  ConfigInvalidError,
   ContextOverflowError,
   ModelRefusalError,
   ProviderError,
@@ -20,6 +21,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type {
   CostClass,
   FinishReason,
+  GatewayOpenAiCompatibleProviderConfig,
   GatewayRequest,
   GatewayStreamChunk,
   ModelProviderConfig,
@@ -28,6 +30,7 @@ import type {
   ProviderAdapter,
   UsageMetadata,
 } from "./types.js";
+import { isGatewayOpenAiCompatibleProviderConfig } from "./types.js";
 
 export interface AdapterDeps {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -263,8 +266,20 @@ function mapHttpError(
 }
 
 function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
-  const headerName = config.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
-  return { [headerName]: apiKeyHeaderValue(headerName, config.apiKey) };
+  const gatewayConfig = requireGatewayProviderConfig(config);
+  const headerName = gatewayConfig.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return { [headerName]: apiKeyHeaderValue(headerName, gatewayConfig.apiKey) };
+}
+
+function requireGatewayProviderConfig(
+  config: ModelProviderConfig,
+): GatewayOpenAiCompatibleProviderConfig {
+  if (!isGatewayOpenAiCompatibleProviderConfig(config)) {
+    throw new ConfigInvalidError(
+      `provider '${config.modelId}' uses '${config.providerType}' and cannot execute through the OpenAI-compatible HTTP adapter`,
+    );
+  }
+  return config;
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
@@ -278,24 +293,25 @@ export class OpenAiAdapter implements ProviderAdapter {
     request: GatewayRequest,
     config: ModelProviderConfig,
   ): Promise<NormalizedResponse> => {
-    const secrets = [config.apiKey, config.baseUrl];
+    const gatewayConfig = requireGatewayProviderConfig(config);
+    const secrets = [gatewayConfig.apiKey, gatewayConfig.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
       throw new CancelledError(
-        `request for '${config.modelId}' cancelled before dispatch`,
+        `request for '${gatewayConfig.modelId}' cancelled before dispatch`,
         secrets,
       );
     }
     const start = this.now();
-    const response = await this.dispatch(request, config, secrets);
+    const response = await this.dispatch(request, gatewayConfig, secrets);
     if (!response.ok) {
       const errorPayload = await this.readErrorBody(response);
-      mapHttpError(response, config.modelId, secrets, errorPayload);
+      mapHttpError(response, gatewayConfig.modelId, secrets, errorPayload);
     }
-    const payload = await this.readBody(response, config, secrets);
+    const payload = await this.readBody(response, gatewayConfig, secrets);
     return redactResponse(
       normalizeChatResponse(
         payload,
-        config.modelId,
+        gatewayConfig.modelId,
         {
           requestId: this.deps.requestId,
           latencyMs: this.now() - start,
@@ -315,24 +331,25 @@ export class OpenAiAdapter implements ProviderAdapter {
     request: GatewayRequest,
     config: ModelProviderConfig,
   ): AsyncGenerator<GatewayStreamChunk> {
-    const secrets = [config.apiKey, config.baseUrl];
+    const gatewayConfig = requireGatewayProviderConfig(config);
+    const secrets = [gatewayConfig.apiKey, gatewayConfig.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
       throw new CancelledError(
-        `request for '${config.modelId}' cancelled before dispatch`,
+        `request for '${gatewayConfig.modelId}' cancelled before dispatch`,
         secrets,
       );
     }
     const start = this.now();
-    const response = await this.dispatch(request, config, secrets, true);
+    const response = await this.dispatch(request, gatewayConfig, secrets, true);
     if (!response.ok) {
       const errorPayload = await this.readErrorBody(response);
-      mapHttpError(response, config.modelId, secrets, errorPayload);
+      mapHttpError(response, gatewayConfig.modelId, secrets, errorPayload);
     }
     const acc = { content: "", finishReason: "stop" as FinishReason, prompt: 0, completion: 0 };
-    for await (const token of this.streamDeltas(response, config, secrets, acc)) {
+    for await (const token of this.streamDeltas(response, gatewayConfig, secrets, acc)) {
       yield { type: "delta", token };
     }
-    const assembled = this.assembleResponse(config, start, acc);
+    const assembled = this.assembleResponse(gatewayConfig, start, acc);
     yield { type: "done", response: redactResponse(assembled, secrets) };
   };
 
@@ -401,7 +418,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private async dispatch(
     request: GatewayRequest,
-    config: ModelProviderConfig,
+    config: GatewayOpenAiCompatibleProviderConfig,
     secrets: readonly string[],
     stream = false,
   ): Promise<Response> {
@@ -430,7 +447,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private mapDispatchError(
     error: unknown,
-    config: ModelProviderConfig,
+    config: GatewayOpenAiCompatibleProviderConfig,
     cancel: AbortSignal | undefined,
     timeout: AbortSignal,
     secrets: readonly string[],
@@ -449,7 +466,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private async readBody(
     response: Response,
-    config: ModelProviderConfig,
+    config: GatewayOpenAiCompatibleProviderConfig,
     secrets: readonly string[],
   ): Promise<unknown> {
     try {

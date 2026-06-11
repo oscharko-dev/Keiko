@@ -29,6 +29,7 @@ This page keeps only the product decisions needed by reviewers. It is not an imp
 | Workspace security, evidence, and trust boundaries | [ADR-0030](ADR-0030-workspace-security-evidence.md) records the current workspace trust-boundary rules and durable-state restrictions.                                                                                                                                                                  |
 | Memory vault encryption-at-rest                    | [ADR-0035](ADR-0035-memory-vault-encryption-at-rest.md) seals local memory CONTENT columns with AES-256-GCM (zero new deps), keeps index/scope metadata cleartext, and resolves the key via `KEIKO_MEMORY_KEY` > macOS Keychain > `0600` keyfile.                                                       |
 | Hybrid grounding evidence budget                   | [ADR-0036](ADR-0036-hybrid-grounding-reciprocal-rank-fusion.md) replaces the structurally folder-biased dual budgets in `runHybridGroundedAsk` with a single shared evidence pool ranked by Reciprocal Rank Fusion (`k=60`) across both lexical and vector engines.                                     |
+| Provider runtime contract boundary                 | [ADR-0037](ADR-0037-provider-runtime-contract-boundary.md) introduces an explicit provider-type contract, a runtime-only local-session resolver seam, and a separate safe provider projection that omits secrets, endpoints, and resolver details from browser-visible payloads.                       |
 
 ## Historical Records
 

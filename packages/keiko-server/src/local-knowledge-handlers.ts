@@ -43,6 +43,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
+  isGatewayOpenAiCompatibleProviderConfig,
   requestOpenAIEmbedding,
   type GatewayConfig,
   type ModelProviderConfig,
@@ -294,6 +295,7 @@ function configuredEmbeddingProvider(
   if (config === undefined) return undefined;
   const provider = config.providers.find((entry) => entry.modelId === modelId);
   if (provider === undefined) return undefined;
+  if (!isGatewayOpenAiCompatibleProviderConfig(provider)) return undefined;
   return isConfiguredEmbeddingModel(config, provider.modelId) ? provider : undefined;
 }
 
@@ -650,6 +652,11 @@ function createEmbeddingAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
 ): OpenAIEmbeddingAdapter {
+  if (!isGatewayOpenAiCompatibleProviderConfig(provider)) {
+    throw new Error(
+      `embedding adapter requires a gateway-openai-compatible provider for '${provider.modelId}'`,
+    );
+  }
   return {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,

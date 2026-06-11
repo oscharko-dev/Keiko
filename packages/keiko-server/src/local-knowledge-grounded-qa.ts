@@ -31,6 +31,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   findConfiguredCapability,
+  isGatewayOpenAiCompatibleProviderConfig,
   requestOpenAIEmbedding,
   type GatewayConfig,
   type OpenAIEmbeddingAdapter,
@@ -148,6 +149,9 @@ export function createEmbeddingAdapter(
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
       if (provider === undefined) {
+        return { ok: false, kind: "unsupported-model" };
+      }
+      if (!isGatewayOpenAiCompatibleProviderConfig(provider)) {
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({

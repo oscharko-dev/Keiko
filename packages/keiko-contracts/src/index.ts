@@ -25,6 +25,16 @@ export const KEIKO_CONTRACTS_VERSION = "0.8.0" as const;
 // with the root package.json "version" field as part of every release.
 export const KEIKO_PRODUCT_VERSION = "0.2.0-beta.3" as const;
 
+// ─── Provider runtime contracts ───────────────────────────────────────────────
+export type {
+  ProviderIdentity,
+  ProviderSelection,
+  ProviderType,
+  ProviderValidationState,
+  ProviderValidationStatus,
+} from "./provider.js";
+export { PROVIDER_TYPES, PROVIDER_VALIDATION_STATUSES } from "./provider.js";
+
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
   HarnessStateName,

@@ -10,6 +10,7 @@ import type { VerificationAuditSummary } from "./verification-summary.js";
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
 import type { ModelCapability } from "./gateway.js";
+import type { ProviderType, ProviderValidationState } from "./provider.js";
 // GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
@@ -425,17 +426,31 @@ export interface DesktopChatSendRequestWire {
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
-// Sanitised mirror of GatewayConfig with NO apiKey / NO baseUrl / NO additionalHeaders.
+// Sanitised mirror of GatewayConfig with NO apiKey / NO baseUrl / NO credential-resolver details.
 // Authored here (not in gateway.ts) because the credential-bearing GatewayConfig in
 // gateway.ts is server-only; this wire projection is what the UI receives.
 
-export interface SafeProviderConfig {
+interface SafeProviderConfigBase {
+  readonly providerType: ProviderType;
   readonly modelId: string;
-  readonly credentialHeaderName: string;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
+  readonly validationState?: ProviderValidationState | undefined;
 }
+
+export interface SafeGatewayOpenAiCompatibleProviderConfig extends SafeProviderConfigBase {
+  readonly providerType: "gateway-openai-compatible";
+  readonly credentialHeaderName: string;
+}
+
+export interface SafeOpenAiCodexLocalSessionProviderConfig extends SafeProviderConfigBase {
+  readonly providerType: "openai-codex-local-session";
+}
+
+export type SafeProviderConfig =
+  | SafeGatewayOpenAiCompatibleProviderConfig
+  | SafeOpenAiCodexLocalSessionProviderConfig;
 
 export interface SafeCircuitBreakerConfig {
   readonly failureThreshold: number;

@@ -23,6 +23,8 @@ import {
   toSafeObject,
   validateBaseUrl,
   Gateway,
+  isGatewayOpenAiCompatibleProviderConfig,
+  isOpenAiCodexLocalSessionProviderConfig,
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
@@ -54,11 +56,13 @@ import type {
   CircuitBreakerConfig,
   CircuitBreakerStatus,
   CircuitState,
+  CodexCliCredentialResolverConfig,
   ChatMessage,
   Clock,
   CostClass,
   FinishReason,
   GatewayConfig,
+  GatewayOpenAiCompatibleProviderConfig,
   GatewayRequest,
   LatencyClass,
   ModelCapability,
@@ -66,6 +70,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
+  OpenAiCodexLocalSessionProviderConfig,
   ProviderAdapter,
   ResponseFormat,
   StreamDelta,
@@ -99,6 +104,8 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof parseGatewayConfig).toBe("function");
     expect(typeof toSafeObject).toBe("function");
     expect(typeof validateBaseUrl).toBe("function");
+    expect(typeof isGatewayOpenAiCompatibleProviderConfig).toBe("function");
+    expect(typeof isOpenAiCodexLocalSessionProviderConfig).toBe("function");
   });
 
   it("exposes the default API key header name as the canonical string", () => {
@@ -174,11 +181,13 @@ describe("keiko-model-gateway package surface", () => {
     pin<CircuitBreakerConfig>();
     pin<CircuitBreakerStatus>();
     pin<CircuitState>();
+    pin<CodexCliCredentialResolverConfig>();
     pin<ChatMessage>();
     pin<Clock>();
     pin<CostClass>();
     pin<FinishReason>();
     pin<GatewayConfig>();
+    pin<GatewayOpenAiCompatibleProviderConfig>();
     pin<GatewayRequest>();
     pin<LatencyClass>();
     pin<ModelCapability>();
@@ -186,6 +195,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<ModelProviderConfig>();
     pin<NormalizedResponse>();
     pin<NormalizedToolCall>();
+    pin<OpenAiCodexLocalSessionProviderConfig>();
     pin<ProviderAdapter>();
     pin<ResponseFormat>();
     pin<StreamDelta>();

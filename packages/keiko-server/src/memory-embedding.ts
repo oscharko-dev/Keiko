@@ -15,6 +15,7 @@
 // its pre-semantic behaviour byte-for-byte.
 
 import {
+  isGatewayOpenAiCompatibleProviderConfig,
   requestOpenAIEmbedding,
   type GatewayConfig,
   type ModelProviderConfig,
@@ -52,6 +53,11 @@ function buildAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
 ): OpenAIEmbeddingAdapter {
+  if (!isGatewayOpenAiCompatibleProviderConfig(provider)) {
+    throw new Error(
+      `memory embedding requires a gateway-openai-compatible provider for '${provider.modelId}'`,
+    );
+  }
   return {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
@@ -102,6 +108,7 @@ export function createMemoryEmbedder(
   if (modelId === undefined) return null;
   const provider = providerForModel(config, modelId);
   if (provider === undefined) return null;
+  if (!isGatewayOpenAiCompatibleProviderConfig(provider)) return null;
   const adapter = buildAdapter(provider, requestImpl);
   return async (text: string): Promise<MemoryEmbeddingInput | null> => {
     if (text.length === 0) return null;

@@ -29,6 +29,8 @@ import {
   CAPSULE_OUTPUT_MODES,
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CONNECTOR_NODE_KINDS,
+  PROVIDER_TYPES,
+  PROVIDER_VALIDATION_STATUSES,
   DOCUMENT_STATUSES,
   PARSED_UNIT_KINDS,
   PARSER_DIAGNOSTIC_SEVERITIES,
@@ -111,6 +113,11 @@ import type {
   CapsuleRowShape,
   RedactPathOptions,
   SelectedScope,
+  ProviderIdentity,
+  ProviderSelection,
+  ProviderType,
+  ProviderValidationState,
+  ProviderValidationStatus,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -178,6 +185,13 @@ describe("keiko-contracts package surface", () => {
     expect(typeof checkPatchAgainstScope).toBe("function");
   });
 
+  it("provider-runtime value re-exports are reachable through the barrel (#460)", () => {
+    expect(PROVIDER_TYPES).toContain("gateway-openai-compatible");
+    expect(PROVIDER_TYPES).toContain("openai-codex-local-session");
+    expect(PROVIDER_VALIDATION_STATUSES).toContain("ready");
+    expect(PROVIDER_VALIDATION_STATUSES).toContain("unsupported");
+  });
+
   it("workflow-handoff type re-exports are reachable through the barrel (#186)", () => {
     // Phantom generic keeps verbatimModuleSyntax happy without producing runtime values; if a
     // future refactor drops one of the names from the package surface, this test stops
@@ -192,6 +206,11 @@ describe("keiko-contracts package surface", () => {
     pin<WorkflowHandoffRequest>();
     pin<UserApprovalTokenInput>();
     pin<ExpectedCheck>();
+    pin<ProviderIdentity>();
+    pin<ProviderSelection>();
+    pin<ProviderType>();
+    pin<ProviderValidationState>();
+    pin<ProviderValidationStatus>();
   });
 
   it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {

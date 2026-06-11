@@ -8,6 +8,7 @@
 
 import {
   createDefaultChatCapability,
+  isGatewayOpenAiCompatibleProviderConfig,
   loadConfigFromFile,
   parseGatewayConfig,
   type EnvSource,
@@ -380,8 +381,10 @@ function configSecretValues(config: GatewayConfig | undefined): readonly string[
   };
   addEgressTopology(config.egress);
   for (const provider of config.providers) {
-    out.push(provider.apiKey, provider.baseUrl);
-    addEgressTopology(provider.egress);
+    if (isGatewayOpenAiCompatibleProviderConfig(provider)) {
+      out.push(provider.apiKey, provider.baseUrl);
+      addEgressTopology(provider.egress);
+    }
   }
   return out;
 }

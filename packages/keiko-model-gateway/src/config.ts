@@ -10,17 +10,23 @@ import {
   DEFAULT_GROUNDING_LIMITS,
   resolveGroundingLimits,
   type GroundingLimits,
+  type SafeGatewayConfig,
+  type SafeProviderConfig,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   CircuitBreakerConfig,
+  CodexCliCredentialResolverConfig,
   CostClass,
   GatewayConfig,
+  GatewayOpenAiCompatibleProviderConfig,
   LatencyClass,
   ModelCapability,
   ModelKind,
   ModelProviderConfig,
+  OpenAiCodexLocalSessionProviderConfig,
   OutboundHttpEgressConfig,
 } from "./types.js";
+import { isGatewayOpenAiCompatibleProviderConfig } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
@@ -44,21 +50,6 @@ const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
 ]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
-
-export interface SafeProviderConfig {
-  readonly modelId: string;
-  readonly credentialHeaderName: string;
-  readonly timeoutMs: number;
-  readonly maxRetries: number;
-  readonly retryBaseDelayMs: number;
-}
-
-export interface SafeGatewayConfig {
-  readonly providers: readonly SafeProviderConfig[];
-  readonly circuitBreaker: CircuitBreakerConfig;
-  readonly capabilities?: readonly ModelCapability[] | undefined;
-  readonly grounding?: Partial<GroundingLimits> | undefined;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -366,6 +357,20 @@ interface ProviderConnection {
   readonly apiKey: string;
 }
 
+function parseProviderType(
+  raw: Record<string, unknown>,
+  path: string,
+): "gateway-openai-compatible" | "openai-codex-local-session" {
+  const providerType = raw.providerType;
+  if (providerType === undefined) {
+    return "gateway-openai-compatible";
+  }
+  return requireEnum(providerType, `${path}.providerType`, [
+    "gateway-openai-compatible",
+    "openai-codex-local-session",
+  ]);
+}
+
 // Modality + determinism capability flags, defaulted to false (lenient provider-inline form).
 function providerCapabilityFlags(
   raw: Record<string, unknown>,
@@ -632,9 +637,10 @@ function parseProviderConfig(
   path: string,
   modelId: string,
   env: EnvSource,
-): ModelProviderConfig {
+): GatewayOpenAiCompatibleProviderConfig {
   const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env);
   return {
+    providerType: "gateway-openai-compatible",
     modelId,
     baseUrl,
     apiKey,
@@ -653,6 +659,45 @@ function parseProviderConfig(
   };
 }
 
+function parseCodexCliCredentialResolver(
+  raw: unknown,
+  path: string,
+): CodexCliCredentialResolverConfig {
+  if (raw === undefined) {
+    return { kind: "codex-cli" };
+  }
+  if (!isRecord(raw)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  const kind = requireEnum(raw.kind ?? "codex-cli", `${path}.kind`, ["codex-cli"]);
+  const command = optionalTrimmedString(raw.command, `${path}.command`);
+  return {
+    kind,
+    ...(command === undefined ? {} : { command }),
+  };
+}
+
+function parseLocalSessionProviderConfig(
+  raw: Record<string, unknown>,
+  path: string,
+  modelId: string,
+): OpenAiCodexLocalSessionProviderConfig {
+  return {
+    providerType: "openai-codex-local-session",
+    modelId,
+    credentialResolver: parseCodexCliCredentialResolver(
+      raw.credentialResolver,
+      `${path}.credentialResolver`,
+    ),
+    timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
+    retryBaseDelayMs: requirePositiveInt(
+      raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
+      `${path}.retryBaseDelayMs`,
+    ),
+  };
+}
+
 function parseProvider(raw: unknown, index: number, env: EnvSource): ParsedProvider {
   const path = `providers[${String(index)}]`;
   if (!isRecord(raw)) {
@@ -660,8 +705,12 @@ function parseProvider(raw: unknown, index: number, env: EnvSource): ParsedProvi
   }
   const modelId = requireNonEmptyString(raw.modelId, `${path}.modelId`);
   const capability = parseProviderCapability(raw.capability, `${path}.capability`, modelId);
+  const providerType = parseProviderType(raw, path);
   return {
-    provider: parseProviderConfig(raw, path, modelId, env),
+    provider:
+      providerType === "gateway-openai-compatible"
+        ? parseProviderConfig(raw, path, modelId, env)
+        : parseLocalSessionProviderConfig(raw, path, modelId),
     ...(capability === undefined ? {} : { capability }),
   };
 }
@@ -724,7 +773,11 @@ function providersWithEgress(
   if (egress === undefined) {
     return parsed.map((item) => item.provider);
   }
-  return parsed.map((item) => ({ ...item.provider, egress }));
+  return parsed.map((item) =>
+    isGatewayOpenAiCompatibleProviderConfig(item.provider)
+      ? { ...item.provider, egress }
+      : item.provider,
+  );
 }
 
 function inlineCapabilities(parsed: readonly ParsedProvider[]): readonly ModelCapability[] {
@@ -807,13 +860,27 @@ export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayCo
 // Credential- and endpoint-free projection for logging, CLI output, and serialisation.
 export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
   return {
-    providers: config.providers.map((provider) => ({
-      modelId: provider.modelId,
-      credentialHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-      timeoutMs: provider.timeoutMs,
-      maxRetries: provider.maxRetries,
-      retryBaseDelayMs: provider.retryBaseDelayMs,
-    })),
+    providers: config.providers.map<SafeProviderConfig>((provider) =>
+      isGatewayOpenAiCompatibleProviderConfig(provider)
+        ? {
+            providerType: "gateway-openai-compatible",
+            modelId: provider.modelId,
+            credentialHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+            timeoutMs: provider.timeoutMs,
+            maxRetries: provider.maxRetries,
+            retryBaseDelayMs: provider.retryBaseDelayMs,
+          }
+        : {
+            providerType: "openai-codex-local-session",
+            modelId: provider.modelId,
+            timeoutMs: provider.timeoutMs,
+            maxRetries: provider.maxRetries,
+            retryBaseDelayMs: provider.retryBaseDelayMs,
+            ...(provider.validationState === undefined
+              ? {}
+              : { validationState: provider.validationState }),
+          },
+    ),
     circuitBreaker: config.circuitBreaker,
     ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
     ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
