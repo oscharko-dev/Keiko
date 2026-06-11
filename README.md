@@ -57,6 +57,20 @@ If you find a defect while using Keiko, open a GitHub issue with the structured 
 The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
 
 ## Quickstart
+
+Install Keiko globally and start the local UI:
+
+```bash
+npm install -g @oscharko-dev/keiko
+keiko start --open
+```
+
+The UI runs at `http://127.0.0.1:1983`. Configure a chat model in Settings, add a local project path, and start working with chat, test generation, bug investigation, or verification workflows.
+
+To stop Keiko: `keiko stop`.
+
+For a project-local install (adds `keiko:start`/`keiko:stop` npm scripts via `keiko init`), see [Install and start](#install-and-start) below; setup issues are covered in [Troubleshooting](#troubleshooting).
+
 ## What's New in 0.2.0
 
 ### Quality Intelligence
@@ -241,7 +255,6 @@ Read the full contracts and decisions:
 
 - [Connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md)
 - [ADR-0022: Connected context privacy](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md)
-
 
 ## Troubleshooting
 

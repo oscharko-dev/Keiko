@@ -24,13 +24,14 @@ The verification job runs the current release gates in a conservative order:
 9. `npm run build`
 10. `npm run prepare:bin`
 11. `npm run build:ui`
-12. `npm run check:package-surface`
-13. `npm run smoke:install`
-14. `npm run smoke:install:memory`
-15. `npm audit --audit-level=high`
-16. `npm sbom --sbom-format cyclonedx --omit dev`
-17. `npm run check:workspace-supply-chain`
-18. `npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui`
+12. `npm run prune:package-native-optionals`
+13. `npm run check:package-surface`
+14. `npm run smoke:install`
+15. `npm run smoke:install:memory`
+16. `npm audit --audit-level=high`
+17. `npm sbom --sbom-format cyclonedx --omit dev`
+18. `npm run check:workspace-supply-chain`
+19. `npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui`
 
 The workflow uploads the root and UI CycloneDX SBOMs as artifacts so release evidence stays attached to the run.
 
