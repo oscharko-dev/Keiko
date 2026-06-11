@@ -62,6 +62,7 @@ const BASE_CAPSULE: KnowledgeCapsule = {
 
 const BASE_HEALTH: CapsuleHealth = {
   capsuleId: makeCapsuleId("test-1"),
+  sourceIds: BASE_CAPSULE.sourceIds,
   lifecycleState: "ready",
   storageSizeBytes: 1_048_576,
   documentCount: 10,
