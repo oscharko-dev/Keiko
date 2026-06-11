@@ -539,6 +539,10 @@ function scopeTargetPath(realProjectRoot: string, relativePath: string): string 
   return resolve(realProjectRoot, ...relativePath.split("/").filter((part) => part.length > 0));
 }
 
+function scopeRelativePath(realProjectRoot: string, absolutePath: string): string {
+  return relative(realProjectRoot, absolutePath).split("\\").join("/");
+}
+
 function assertScopePathMetadataSafe(deps: UiHandlerDeps, relativePath: string): void {
   if (pathIsDenied(relativePath)) {
     throw new InvalidRequest("Connected scope is excluded from Keiko's safe read surface.");
@@ -565,6 +569,9 @@ function validateScopePathAccess(
   }
   if (!isContainedPath(realProjectRoot, targetReal)) {
     throw new InvalidRequest("Connected scope path must stay inside the selected project.");
+  }
+  if (pathIsDenied(scopeRelativePath(realProjectRoot, targetReal))) {
+    throw new InvalidRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   let info: ReturnType<typeof statSync>;
   try {

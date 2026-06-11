@@ -23,7 +23,7 @@ import {
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { compileIgnore, isDenied, isIgnored } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
+import { containedRealPathInfo } from "./realpath.js";
 import { buildMatcher, compileGlob, fingerprintFor } from "./repoSearchMatchers.js";
 import {
   buildAtom,
@@ -276,6 +276,10 @@ function isWithinSelectedScope(scope: SearchScope, scopePath: string): boolean {
   );
 }
 
+function normalizeScopePath(scopePath: string): string {
+  return scopePath.split("\\").join("/");
+}
+
 function assertExcerptWithinSelectedScope(scope: SearchScope, scopePath: string): void {
   if (isWithinSelectedScope(scope, scopePath)) {
     return;
@@ -284,6 +288,38 @@ function assertExcerptWithinSelectedScope(scope: SearchScope, scopePath: string)
     `cannot read excerpt outside selected scope: ${scopePath}`,
     "outside-scope",
   );
+}
+
+function resolveExcerptTarget(
+  scope: SearchScope,
+  scopePath: string,
+  fs: WorkspaceFs,
+): { readonly path: string; readonly realScopePath: string } {
+  const abs = resolveWithinWorkspace(scope.workspace.root, scopePath);
+  const contained = containedRealPathInfo(fs, scope.workspace.root, abs);
+  const realScopePath = normalizeScopePath(contained.realRelative);
+  return { path: contained.path, realScopePath };
+}
+
+function assertExcerptReadableByPolicy(
+  scope: SearchScope,
+  requestPath: string,
+  realScopePath: string,
+): void {
+  // Deny/ignore gates must fire BEFORE any byte read (incl. the binary probe) so that a
+  // denied path such as .env is never read at all, including through an in-workspace symlink.
+  const ignoreMatcher = compileIgnore(scope.workspace.ignoreLines);
+  if (
+    isDenied(requestPath) ||
+    isDenied(realScopePath) ||
+    isIgnored(ignoreMatcher, requestPath, false) ||
+    isIgnored(ignoreMatcher, realScopePath, false)
+  ) {
+    throw new RepoSearchUnsupportedFileError(
+      `cannot read excerpt of denied or ignored path: ${requestPath}`,
+      "denied",
+    );
+  }
 }
 
 function assertExcerptRange(request: ReadExcerptRequest): void {
@@ -321,19 +357,11 @@ export async function readExcerpt(
   assertExcerptWithinSelectedScope(scope, request.scopePath);
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
-  const abs = resolveWithinWorkspace(scope.workspace.root, request.scopePath);
-  assertContainedRealPath(fs, scope.workspace.root, abs, "scope");
-  // Deny/ignore gates must fire BEFORE any byte read (incl. the binary probe) so that a
-  // denied path such as .env is never read at all (Finding 4).
-  const ignoreMatcher = compileIgnore(scope.workspace.ignoreLines);
-  if (isDenied(request.scopePath) || isIgnored(ignoreMatcher, request.scopePath, false)) {
-    throw new RepoSearchUnsupportedFileError(
-      `cannot read excerpt of denied or ignored path: ${request.scopePath}`,
-      "denied",
-    );
-  }
-  const stat = fs.stat(abs);
-  if (await probeBinary(fs, abs, stat.size)) {
+  const target = resolveExcerptTarget(scope, request.scopePath, fs);
+  assertExcerptReadableByPolicy(scope, request.scopePath, target.realScopePath);
+  assertExcerptWithinSelectedScope(scope, target.realScopePath);
+  const stat = fs.stat(target.path);
+  if (await probeBinary(fs, target.path, stat.size)) {
     throw new RepoSearchUnsupportedFileError(
       `cannot read excerpt of binary file: ${request.scopePath}`,
       "binary",

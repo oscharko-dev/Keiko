@@ -3,7 +3,6 @@
 // Every file system touch goes through the injected WorkspaceFs port; nothing here calls
 // node:fs directly.
 
-import { relative } from "node:path";
 import type {
   CandidateFile,
   CandidateOmissionReason,
@@ -19,24 +18,18 @@ import { FileTooLargeError, RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
+import { containedRealPathInfo } from "./realpath.js";
 import { looksBinary } from "./binaryDetect.js";
+import { collectFromEntries } from "./repoSearchEntries.js";
+import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
 import type { LineMatcher } from "./repoSearchMatchers.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 
 const BINARY_PROBE_BYTES = 512;
 
-// Per-file cap on emitted lexical matches (Epic #177 retrieval fix). A connected-scope question
-// carries several content tokens, so a prose-heavy file can match many low-signal lines. Emitting
-// all of them let one alphabetically-early file exhaust the global match budget before the scan
-// ever reached the file the question was actually about. Keeping only each file's best lines makes
-// the evidence diverse across the scope while still surfacing every file's strongest signal for the
-// downstream ranker.
-const MAX_MATCHES_PER_FILE = 3;
-
-function toRelative(root: string, absolutePath: string): string {
-  return relative(root, absolutePath).split("\\").join("/");
+function normalizeScopePath(scopePath: string): string {
+  return scopePath.split("\\").join("/");
 }
 
 export interface ScopeShape {
@@ -100,62 +93,16 @@ function collectFromDirectory(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): readonly DiscoveredFile[] {
-  return discoverFiles(
+): { files: readonly DiscoveredFile[]; truncated: boolean } {
+  const files = discoverFiles(
     scope.workspace,
-    { maxDepth: 12, maxFiles: limits.maxFilesScanned, applyGitignore: true },
+    { maxDepth: 12, maxFiles: limits.maxFilesScanned + 1, applyGitignore: true },
     fs,
   );
-}
-
-function collectFromEntries(
-  scope: ScopeShape,
-  limits: LimitsShape,
-  fs: WorkspaceFs,
-): { files: readonly DiscoveredFile[]; truncated: boolean } {
-  const out: DiscoveredFile[] = [];
-  const root = scope.workspace.root;
-  let scannedSoFar = 0;
-  let truncated = false;
-  for (const entry of scope.relativePaths) {
-    if (scannedSoFar >= limits.maxFilesScanned) {
-      truncated = true;
-      break;
-    }
-    const abs = resolveWithinWorkspace(root, entry);
-    assertContainedRealPath(fs, root, abs, "scope");
-    const entryRel = toRelative(root, abs);
-    // Deny the directory entry itself before recursing so that a denied dir (e.g.
-    // node_modules) listed explicitly in scope.relativePaths is never expanded (Finding 5).
-    if (isDenied(entryRel)) {
-      continue;
-    }
-    const stat = fs.stat(abs);
-    if (stat.isDirectory) {
-      const remaining = limits.maxFilesScanned - scannedSoFar;
-      const nested = discoverFiles(
-        { ...scope.workspace, root: abs },
-        { maxDepth: 12, maxFiles: remaining, applyGitignore: true },
-        fs,
-      );
-      for (const file of nested) {
-        out.push({
-          relativePath: toRelative(root, resolveWithinWorkspace(abs, file.relativePath)),
-          sizeBytes: file.sizeBytes,
-        });
-        scannedSoFar += 1;
-      }
-      if (nested.length >= remaining) {
-        truncated = true;
-      }
-      continue;
-    }
-    if (stat.isFile) {
-      out.push({ relativePath: entryRel, sizeBytes: stat.size });
-      scannedSoFar += 1;
-    }
-  }
-  return { files: out, truncated };
+  return {
+    files: files.slice(0, limits.maxFilesScanned),
+    truncated: files.length > limits.maxFilesScanned,
+  };
 }
 
 export interface CandidateSet {
@@ -179,10 +126,10 @@ export function gatherCandidates(
     }
   }
   if (scope.relativePaths.length === 0) {
-    const files = collectFromDirectory(scope, limits, fs);
+    const result = collectFromDirectory(scope, limits, fs);
     return {
-      files: [...files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1)),
-      truncated: false,
+      files: [...result.files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1)),
+      truncated: result.truncated,
     };
   }
   const result = collectFromEntries(scope, limits, fs);
@@ -241,6 +188,18 @@ export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
   return false;
 }
 
+function hitEmissionLimit(runner: SearchTextRunner, state: RunState): boolean {
+  if (state.matchesReturned >= runner.limits.maxMatchesReturned) {
+    state.truncated = true;
+    return true;
+  }
+  if (elapsed(runner) > runner.limits.elapsedMsMax) {
+    state.truncated = true;
+    return true;
+  }
+  return false;
+}
+
 function readForScan(
   runner: SearchTextRunner,
   relativePath: string,
@@ -262,28 +221,15 @@ function readForScan(
   }
 }
 
-function scanLines(
+function emitBestLines(
   runner: SearchTextRunner,
   relativePath: string,
-  text: string,
   state: RunState,
   atoms: EvidenceAtom[],
+  best: readonly ScoredLine[],
 ): void {
-  const lines = text.split("\n");
-  // Score every line, then keep only this file's best-scoring lines (ties broken by earliest
-  // line). This bounds each file's contribution to MAX_MATCHES_PER_FILE and surfaces the file's
-  // strongest evidence rather than whichever lines happen to appear first.
-  const scored: { readonly line: number; readonly score: number }[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const score = runner.matcher.match(lines[i] ?? "");
-    if (score > 0) {
-      scored.push({ line: i + 1, score });
-    }
-  }
-  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.line - b.line));
-  const best = scored.slice(0, MAX_MATCHES_PER_FILE).sort((a, b) => a.line - b.line);
   for (const match of best) {
-    if (hitLimit(runner, state)) {
+    if (hitEmissionLimit(runner, state)) {
       return;
     }
     atoms.push(
@@ -302,6 +248,16 @@ function scanLines(
   }
 }
 
+function scanLines(
+  runner: SearchTextRunner,
+  relativePath: string,
+  text: string,
+  state: RunState,
+  atoms: EvidenceAtom[],
+): void {
+  emitBestLines(runner, relativePath, state, atoms, collectBestLines(runner, text, state));
+}
+
 export async function scanFile(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -314,8 +270,13 @@ export async function scanFile(
     return;
   }
   const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
-  assertContainedRealPath(runner.fs, runner.scope.workspace.root, abs, "scope");
-  if (await probeBinary(runner.fs, abs, file.sizeBytes)) {
+  const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
+  const realRel = normalizeScopePath(contained.realRelative);
+  if (isDenied(realRel) || isIgnored(runner.ignoreMatcher, realRel, false)) {
+    candidates.push(buildCandidate(file.relativePath, "ignored"));
+    return;
+  }
+  if (await probeBinary(runner.fs, contained.path, file.sizeBytes)) {
     candidates.push(buildCandidate(file.relativePath, "binary"));
     return;
   }

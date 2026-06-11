@@ -894,6 +894,24 @@ describe("PATCH /api/chats", () => {
     expect(bodyText).toContain("safe read surface");
   });
 
+  it("rejects connectedScope when a symlink resolves to a deny-listed path", async () => {
+    symlinkSync(join(projDir, ".env"), join(projDir, "src", "env-link"));
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: ["src/env-link"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain("env-link");
+    expect(bodyText).not.toContain(".env");
+    expect(bodyText).toContain("safe read surface");
+  });
+
   it("rejects connectedScope for secret-shaped path metadata", async () => {
     const secretShapedName = `sk-${"a".repeat(20)}`;
     writeFileSync(join(projDir, secretShapedName), "not a real token\n");

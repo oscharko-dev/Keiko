@@ -13,6 +13,7 @@ import {
 } from "./errors.js";
 import { PathEscapeError, WorkspaceError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import {
   DEFAULT_SEARCH_LIMITS,
   findFiles,
@@ -284,6 +285,13 @@ describe("searchText (memFs)", () => {
     ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
   });
 
+  it("rejects adjacent quantified atoms as a ReDoS guard", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "aaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" });
+    await expect(
+      searchText(scope, rxq("^(a*a*a*a*a*b)$"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+  });
+
   it("rejects a regex longer than the safety cap", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
     const tooLong = "x".repeat(201);
@@ -449,7 +457,49 @@ describe("searchText (memFs)", () => {
     const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
     const r = await searchText(scope, nlq("match"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.filesScanned).toBeLessThanOrEqual(1);
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/f0.ts"]);
     expect(r.truncated).toBe(true);
+  });
+
+  it("reports truncated when whole-workspace discovery hits maxFilesScanned without matches", async () => {
+    const { scope, fs } = memScope({
+      "src/f0.ts": "alpha\n",
+      "src/f1.ts": "alpha\n",
+      "src/f2.ts": "alpha\n",
+    });
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const r = await searchText(scope, nlq("absent"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms).toHaveLength(0);
+    expect(r.filesScanned).toBe(1);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("uses workspace-root ignore rules before counting explicit-scope candidates", async () => {
+    const { scope, fs } = memScope(
+      {
+        "packages/a/generated/0.ts": "match\n",
+        "packages/a/generated/1.ts": "match\n",
+        "packages/a/generated/2.ts": "match\n",
+        "packages/a/src/ok.ts": "match\n",
+      },
+      {
+        workspace: {
+          root: MEM_ROOT,
+          name: "demo",
+          version: "1.0.0",
+          testFramework: "vitest",
+          sourceDirs: ["packages/a/src"],
+          testDirs: ["packages/a/tests"],
+          languages: ["typescript"],
+          ignoreLines: ["/packages/a/generated/"],
+        },
+        relativePaths: ["packages/a"],
+      },
+    );
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+    const r = await searchText(scope, nlq("match"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["packages/a/src/ok.ts"]);
+    expect(r.truncated).toBe(false);
   });
 
   it("respects elapsedMsMax via injected nowMs (truncated=true)", async () => {
@@ -612,6 +662,46 @@ describe("findFiles (memFs)", () => {
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(2);
     expect(r.truncated).toBe(true);
+  });
+
+  it("reports truncated when whole-workspace file discovery hits maxFilesScanned", async () => {
+    const { scope, fs } = memScope({
+      "src/f0.ts": "",
+      "src/f1.ts": "",
+      "src/f2.ts": "",
+    });
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/f0.ts"]);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("uses workspace-root ignore rules before counting explicit-scope file candidates", async () => {
+    const { scope, fs } = memScope(
+      {
+        "packages/a/generated/0.ts": "",
+        "packages/a/generated/1.ts": "",
+        "packages/a/generated/2.ts": "",
+        "packages/a/src/ok.ts": "",
+      },
+      {
+        workspace: {
+          root: MEM_ROOT,
+          name: "demo",
+          version: "1.0.0",
+          testFramework: "vitest",
+          sourceDirs: ["packages/a/src"],
+          testDirs: ["packages/a/tests"],
+          languages: ["typescript"],
+          ignoreLines: ["/packages/a/generated/"],
+        },
+        relativePaths: ["packages/a"],
+      },
+    );
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+    const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["packages/a/src/ok.ts"]);
+    expect(r.truncated).toBe(false);
   });
 
   it("omits node_modules from candidates", async () => {
@@ -980,6 +1070,90 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("readExcerpt rejects a symlink whose resolved target is outside scope.relativePaths", async () => {
+    file("docs/b.md", "secret\n");
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    symlinkSync(join(tmp, "docs/b.md"), join(tmp, "src/link.md"));
+    scope = { ...scope, relativePaths: ["src"] };
+
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/link.md", startLine: 1, endLine: 1, maxBytes: 64 },
+        { nowMs: FIXED_NOW },
+      ),
+    ).rejects.toMatchObject({ reason: "outside-scope" });
+  });
+
+  it("readExcerpt denies a symlink resolved target before the binary probe reads bytes", async () => {
+    file(".env", "SECRET=value\n");
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    symlinkSync(join(tmp, ".env"), join(tmp, "src/link.txt"));
+    let byteProbeCalls = 0;
+    const readFileBytes = nodeWorkspaceFs.readFileBytes;
+    if (readFileBytes === undefined) {
+      throw new Error("nodeWorkspaceFs.readFileBytes is required for this test");
+    }
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        byteProbeCalls += 1;
+        return await readFileBytes(absolutePath, maxBytes);
+      },
+    };
+
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/link.txt", startLine: 1, endLine: 1, maxBytes: 64 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toMatchObject({ reason: "denied" });
+    expect(byteProbeCalls).toBe(0);
+  });
+
+  it("readExcerpt reports a denied symlink target before outside-scope for narrowed scopes", async () => {
+    file(".env", "SECRET=value\n");
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    symlinkSync(join(tmp, ".env"), join(tmp, "src/link.txt"));
+    scope = { ...scope, relativePaths: ["src"] };
+
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/link.txt", startLine: 1, endLine: 1, maxBytes: 64 },
+        { nowMs: FIXED_NOW },
+      ),
+    ).rejects.toMatchObject({ reason: "denied" });
+  });
+
+  it("searchText skips a symlink resolved target before the binary probe reads bytes", async () => {
+    file(".env", "SECRET=1\n");
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    symlinkSync(join(tmp, ".env"), join(tmp, "src/link.txt"));
+    scope = { ...scope, relativePaths: ["src/link.txt"] };
+    let byteProbeCalls = 0;
+    const readFileBytes = nodeWorkspaceFs.readFileBytes;
+    if (readFileBytes === undefined) {
+      throw new Error("nodeWorkspaceFs.readFileBytes is required for this test");
+    }
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        byteProbeCalls += 1;
+        return await readFileBytes(absolutePath, maxBytes);
+      },
+    };
+
+    const result = await searchText(scope, nlq("SECRET"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms).toHaveLength(0);
+    expect(result.candidates).toHaveLength(0);
+    expect(byteProbeCalls).toBe(0);
   });
 
   it("readExcerpt refuses a binary file with RepoSearchUnsupportedFileError", async () => {
