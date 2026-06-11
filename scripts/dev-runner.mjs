@@ -111,7 +111,12 @@ function proxyUpgrade(req, socket, head, targetPort) {
     socket.pipe(upstream);
     upstream.pipe(socket);
   });
-  upstream.on("error", () => socket.destroy());
+  const destroyTunnel = () => {
+    upstream.destroy();
+    socket.destroy();
+  };
+  upstream.on("error", destroyTunnel);
+  socket.on("error", destroyTunnel);
 }
 
 function targetPortFor(pathname) {
