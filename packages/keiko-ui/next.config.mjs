@@ -5,9 +5,10 @@
  * server at runtime to optimize them.
  */
 import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, "../..");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -15,9 +16,9 @@ const nextConfig = {
   productionBrowserSourceMaps: false,
   images: { unoptimized: true },
   reactStrictMode: true,
-  // Pin the file-tracing root to this package so Next does not climb to the repo root and pull
-  // unrelated workspace files into its trace.
-  outputFileTracingRoot: here,
+  turbopack: {
+    root: repoRoot,
+  },
 };
 
 export default nextConfig;
