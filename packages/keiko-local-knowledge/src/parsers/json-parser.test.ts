@@ -18,6 +18,14 @@ function pointers(units: readonly ParsedUnit[]): readonly string[] {
   });
 }
 
+function nestedJson(depth: number): string {
+  let value: unknown = "leaf";
+  for (let i = 0; i < depth; i += 1) {
+    value = { child: value };
+  }
+  return JSON.stringify(value);
+}
+
 describe("jsonParser", () => {
   it("matches by extension and media type", () => {
     expect(jsonParser.capability.matches(selectionFromText("{}", { extension: "json" }))).toBe(
@@ -153,6 +161,18 @@ describe("jsonParser", () => {
     );
     expect(result.units.length).toBeLessThanOrEqual(2);
     expect(result.diagnostics.some((d) => d.code === "UNIT_LIMIT_REACHED")).toBe(true);
+  });
+
+  it("fails deep JSON traversal before exceeding the nesting limit", () => {
+    const result = jsonParser.parse(
+      selectionFromText(nestedJson(5), { extension: "json" }),
+      buildParserOptions({ now: () => 0, maxNestingDepth: 3 }),
+    );
+    expect(result.units).toEqual([]);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "NESTING_LIMIT_REACHED",
+      severity: "error",
+    });
   });
 
   it("emits PARSER_CANCELLED when the signal is already aborted", () => {

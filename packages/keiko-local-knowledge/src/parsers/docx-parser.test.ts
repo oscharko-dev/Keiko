@@ -60,6 +60,10 @@ function zipDocumentXml(xml: string): Uint8Array {
   );
 }
 
+function headingParagraphXml(text: string, level = 1): string {
+  return `<w:p><w:pPr><w:pStyle w:val="Heading${String(level)}"/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+}
+
 describe("docxParser", () => {
   it("extracts heading-based sections from DOCX", async () => {
     const result = await docxParser.parseAsync(
@@ -126,6 +130,25 @@ describe("docxParser", () => {
       buildParserOptions({ maxBytes: 4096 }),
     );
     expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
-    expect(result.diagnostics[0]?.message).toMatch(/inflated|compression ratio/i);
+    expect(result.diagnostics[0]?.message).toBe(
+      "docx parser rejected malformed or unsupported document",
+    );
+  });
+
+  it("stops section emission at maxUnitsPerDocument", async () => {
+    const xml = `<w:document>${Array.from({ length: 5 }, (_, index) =>
+      headingParagraphXml(`Section ${String(index + 1)}`),
+    ).join("")}</w:document>`;
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocumentXml(xml), {
+        extension: "docx",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+      buildParserOptions({ maxUnitsPerDocument: 2, now: () => 0 }),
+    );
+    expect(result.units).toHaveLength(2);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.code === "UNIT_LIMIT_REACHED")).toBe(
+      true,
+    );
   });
 });

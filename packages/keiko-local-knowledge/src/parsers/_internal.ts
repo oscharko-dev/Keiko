@@ -83,6 +83,18 @@ export function oversizeDiagnostic(
   );
 }
 
+export function objectLimitDiagnostic(
+  documentId: DocumentId,
+  maxObjectsPerDocument: number,
+): ParserDiagnostic {
+  return diagnostic(
+    "OBJECT_LIMIT_REACHED",
+    `reached maxObjectsPerDocument=${String(maxObjectsPerDocument)}`,
+    documentId,
+    "error",
+  );
+}
+
 // Decode bytes to a UTF-8 string. Centralised so every adapter handles BOM identically. A
 // leading BOM is dropped from the returned string so subsequent character offsets line up
 // with the visible text. The returned `bomBytes` lets adapters that need byte offsets keep

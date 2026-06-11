@@ -52,6 +52,7 @@ import {
   documentIdFor,
   type DiscoveredFile,
   type DiscoveryError,
+  type DiscoveryErrorCode,
   type ExtractionOutcome,
   type ExtractionResult,
 } from "./types.js";
@@ -372,8 +373,49 @@ function isUnsupportedResult(result: ParserResult): boolean {
   );
 }
 
+const FAILED_PARSER_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
+  "OVERSIZED_FILE",
+  "PARSER_TIMEOUT",
+  "PARSER_CANCELLED",
+  "MALFORMED_INPUT",
+  "OBJECT_LIMIT_REACHED",
+]);
+
+function firstParserFailureDiagnostic(result: ParserResult): ParserDiagnostic | undefined {
+  return result.diagnostics.find(
+    (diagnostic) =>
+      diagnostic.severity === "error" || FAILED_PARSER_DIAGNOSTIC_CODES.has(diagnostic.code),
+  );
+}
+
 function statusForResult(result: ParserResult): DocumentRecord["status"] {
-  return isUnsupportedResult(result) ? "unsupported" : "extracted";
+  if (isUnsupportedResult(result)) return "unsupported";
+  if (firstParserFailureDiagnostic(result) !== undefined) return "failed";
+  return "extracted";
+}
+
+function discoveryErrorCodeForParserDiagnostic(diagnostic: ParserDiagnostic): DiscoveryErrorCode {
+  if (diagnostic.code === "OVERSIZED_FILE") return "OVERSIZED_FILE";
+  if (diagnostic.code === "PARSER_CANCELLED") return "CANCELLED";
+  if (diagnostic.code === "MALFORMED_INPUT") return "MALFORMED_INPUT";
+  if (diagnostic.code === "PARSER_TIMEOUT") return "PARSER_TIMEOUT";
+  return "PARSER_FAILED";
+}
+
+function parserFailureOutcome(
+  document: DocumentRecord,
+  diagnostic: ParserDiagnostic,
+  relativePath: string,
+): ExtractionOutcome {
+  return {
+    kind: "failed",
+    document,
+    error: {
+      code: discoveryErrorCodeForParserDiagnostic(diagnostic),
+      message: diagnostic.message,
+      relativePath,
+    },
+  };
 }
 
 const SOURCE_TEXT_PARSER_IDS: ReadonlySet<string> = new Set(["text", "json", "csv", "html"]);
@@ -455,6 +497,42 @@ function persistExtractedDocument(
   );
 }
 
+async function readBoundedDocumentBytes(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  absolutePath: string,
+  options: ParserOptions,
+): Promise<Uint8Array | ExtractionResult> {
+  const bytes = await readBytes(deps, absolutePath, options.maxBytes + 1);
+  if (!(bytes instanceof Uint8Array)) {
+    return buildFailureResult(params, documentId, bytes);
+  }
+  if (bytes.byteLength > options.maxBytes) {
+    return buildOversizedFailure(deps, params, documentId, options, bytes.byteLength);
+  }
+  return bytes;
+}
+
+function parserExtractionResult(
+  params: ExtractDocumentParams,
+  document: DocumentRecord,
+  parserResult: InternalParserResult,
+  status: DocumentRecord["status"],
+): ExtractionResult {
+  const failureDiagnostic = firstParserFailureDiagnostic(parserResult);
+  return {
+    capsuleId: params.capsuleId,
+    sourceId: params.source.id,
+    relativePath: params.file.relativePath,
+    outcome:
+      status === "failed" && failureDiagnostic !== undefined
+        ? parserFailureOutcome(document, failureDiagnostic, params.file.relativePath)
+        : { kind: "persisted", document },
+    diagnostics: parserResult.diagnostics,
+  };
+}
+
 export async function extractDocument(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -472,9 +550,15 @@ export async function extractDocument(
   if (params.file.sizeBytes > options.maxBytes) {
     return buildOversizedFailure(deps, params, documentId, options);
   }
-  const bytes = await readBytes(deps, resolved.absolutePath, options.maxBytes);
+  const bytes = await readBoundedDocumentBytes(
+    deps,
+    params,
+    documentId,
+    resolved.absolutePath,
+    options,
+  );
   if (!(bytes instanceof Uint8Array)) {
-    return buildFailureResult(params, documentId, bytes);
+    return bytes;
   }
   const contentHash = hashBytes(bytes);
   const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
@@ -491,26 +575,25 @@ export async function extractDocument(
     status,
   });
   persistExtractedDocument(deps, params, documentId, document, redactedParserResult);
-  return {
-    capsuleId: params.capsuleId,
-    sourceId: params.source.id,
-    relativePath: params.file.relativePath,
-    outcome: { kind: "persisted", document },
-    diagnostics: redactedParserResult.diagnostics,
-  };
+  return parserExtractionResult(params, document, redactedParserResult, status);
 }
 
 function oversizedDocumentRecord(
   params: ExtractDocumentParams,
   documentId: DocumentId,
   lastExtractedAt: number,
+  observedSizeBytes?: number,
 ): DocumentRecord {
+  const sizeBytes =
+    observedSizeBytes === undefined
+      ? params.file.sizeBytes
+      : Math.max(params.file.sizeBytes, observedSizeBytes);
   return {
     id: documentId,
     capsuleId: params.capsuleId,
     sourceId: params.source.id,
     documentPath: params.file.relativePath,
-    sizeBytes: params.file.sizeBytes,
+    sizeBytes,
     mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
     contentHash: "",
     parser: { parserId: "none", parserVersion: "0" },
@@ -564,10 +647,15 @@ function buildOversizedFailure(
   params: ExtractDocumentParams,
   documentId: DocumentId,
   options: ParserOptions,
+  observedSizeBytes?: number,
 ): ExtractionResult {
   const now = deps.store._internal.now;
+  const sizeBytes =
+    observedSizeBytes === undefined
+      ? params.file.sizeBytes
+      : Math.max(params.file.sizeBytes, observedSizeBytes);
   const message = redactMessage(
-    `file size ${String(params.file.sizeBytes)} exceeds maxBytes=${String(options.maxBytes)}`,
+    `file size ${String(sizeBytes)} exceeds maxBytes=${String(options.maxBytes)}`,
     params.source,
   );
   const diagnostic: ParserDiagnostic = {
@@ -576,7 +664,7 @@ function buildOversizedFailure(
     message,
     documentId,
   };
-  const document = oversizedDocumentRecord(params, documentId, now());
+  const document = oversizedDocumentRecord(params, documentId, now(), observedSizeBytes);
   persistOversizedRow(deps, params, documentId, document, diagnostic, now);
   return {
     capsuleId: params.capsuleId,

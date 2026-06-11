@@ -7,6 +7,8 @@
 import { unsupportedParser } from "./unsupported-parser.js";
 import {
   DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_NESTING_DEPTH,
+  DEFAULT_MAX_OBJECTS,
   DEFAULT_MAX_UNITS,
   DEFAULT_TIMEOUT_MS,
   type ParserAdapter,
@@ -72,6 +74,8 @@ export function buildParserOptions(overrides: Partial<ParserOptions> = {}): Pars
   const base = {
     maxBytes: overrides.maxBytes ?? DEFAULT_MAX_BYTES,
     maxUnitsPerDocument: overrides.maxUnitsPerDocument ?? DEFAULT_MAX_UNITS,
+    maxNestingDepth: overrides.maxNestingDepth ?? DEFAULT_MAX_NESTING_DEPTH,
+    maxObjectsPerDocument: overrides.maxObjectsPerDocument ?? DEFAULT_MAX_OBJECTS,
     timeoutMs: overrides.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     now: overrides.now ?? ((): number => Date.now()),
   };

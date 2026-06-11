@@ -18,7 +18,12 @@ import {
   nullOcrAdapter,
   registerParser,
 } from "../parsers/index.js";
-import type { ParserAdapter, ParserOptions, ParserRegistry, ParserSelectionInput } from "../parsers/index.js";
+import type {
+  ParserAdapter,
+  ParserOptions,
+  ParserRegistry,
+  ParserSelectionInput,
+} from "../parsers/index.js";
 import { PDF_NO_TEXT_LAYER, PDF_TEXT_LAYER, PNG_MAGIC } from "../parsers/parser-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
@@ -145,6 +150,34 @@ describe("extractDocument — unsupported format", () => {
   });
 });
 
+describe("extractDocument — parser failure", () => {
+  it("marks malformed parser output as failed instead of extracted", async () => {
+    const content = new TextEncoder().encode("{ not json");
+    const fs = memoryFs(ROOT, [{ relativePath: "broken.json", content }]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "broken.json", sizeBytes: content.byteLength },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("MALFORMED_INPUT");
+    expect(result.outcome.document.status).toBe("failed");
+    expect(result.outcome.document.parser.parserId).toBe("json");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "MALFORMED_INPUT", severity: "error" }),
+    );
+    expect(count("documents")).toBe(1);
+    expect(count("parser_diagnostics")).toBe(1);
+    expect(count("parsed_units")).toBe(0);
+  });
+});
+
 describe("extractDocument — normalized binary text", () => {
   it("persists extracted text for binary parsers that emit normalized content", async () => {
     const fs = memoryFs(ROOT, [{ relativePath: "policy.pdf", content: PDF_TEXT_LAYER }]);
@@ -233,6 +266,27 @@ describe("extractDocument — oversized file", () => {
     expect(result.outcome.error.code).toBe("OVERSIZED_FILE");
     expect(count("documents")).toBe(1);
     expect(count("parser_diagnostics")).toBe(1);
+    expect(count("parsed_units")).toBe(0);
+  });
+
+  it("detects oversized reads when discovered size metadata is stale", async () => {
+    const content = "x".repeat(5);
+    const fs = memoryFs(ROOT, [{ relativePath: "stale.txt", content }]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "stale.txt", sizeBytes: 1 },
+        parserOptions: buildParserOptions({ maxBytes: 4 }),
+      },
+    );
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("OVERSIZED_FILE");
+    expect(result.outcome.document.status).toBe("failed");
+    expect(result.outcome.document.sizeBytes).toBe(5);
     expect(count("parsed_units")).toBe(0);
   });
 });
@@ -341,7 +395,9 @@ describe("extractDocument — path containment", () => {
         file: { relativePath: "secret.txt", sizeBytes: 6 },
       },
     );
-    expect(result.outcome.kind).toBe("persisted");
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.document.status).toBe("failed");
     expect(result.diagnostics[0]?.message).not.toContain(privateRoot);
     expect(result.diagnostics[0]?.message).toContain("~/secret.txt");
 

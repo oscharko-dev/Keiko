@@ -44,13 +44,17 @@ export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
 // ─── Error code surface ──────────────────────────────────────────────────────
 // Closed union. PATH_ESCAPE is the realpath-containment gate; UNSUPPORTED_FORMAT mirrors
 // the parser-registry sentinel; OVERSIZED_FILE mirrors the parser limit; CANCELLED is the
-// AbortSignal path; READ_FAILED captures any other IO surface error from WorkspaceFs.
+// AbortSignal path; MALFORMED_INPUT / PARSER_TIMEOUT / PARSER_FAILED mirror parser-level
+// failures; READ_FAILED captures any other IO surface error from WorkspaceFs.
 export type DiscoveryErrorCode =
   | "PATH_ESCAPE"
   | "READ_FAILED"
   | "OVERSIZED_FILE"
   | "UNSUPPORTED_FORMAT"
   | "CANCELLED"
+  | "MALFORMED_INPUT"
+  | "PARSER_TIMEOUT"
+  | "PARSER_FAILED"
   | "STAT_FAILED"
   | "INVALID_SCOPE";
 
@@ -63,8 +67,8 @@ export interface DiscoveryError {
 // ─── Extraction result (per file) ────────────────────────────────────────────
 export type ExtractionOutcome =
   // Document parsed and persisted; pages/sections/parsed_units rows were written. The
-  // returned `document.status` is either "extracted" or "unsupported" depending on which
-  // parser matched. `skipped` is reserved for the incremental fast-path.
+  // returned `document.status` is either "extracted" or "unsupported" depending on the
+  // parser result. `skipped` is reserved for the incremental fast-path.
   | { readonly kind: "persisted"; readonly document: DocumentRecord }
   // Content hash matched an existing extracted document — no re-parse.
   | { readonly kind: "skipped"; readonly document: DocumentRecord; readonly reason: "unchanged" }

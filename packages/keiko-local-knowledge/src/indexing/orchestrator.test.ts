@@ -18,7 +18,14 @@ import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { createCapsule, getCapsule } from "../capsule-lifecycle.js";
-import { createDefaultParserRegistry } from "../parsers/index.js";
+import {
+  createDefaultParserRegistry,
+  createParserRegistry,
+  registerParser,
+  type ParserAdapter,
+  type ParserOptions,
+  type ParserSelectionInput,
+} from "../parsers/index.js";
 import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 import { readExistingDocumentRow } from "../discovery/persist.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
@@ -245,6 +252,80 @@ describe("runIndexingJob — happy path", () => {
 
     expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
     expect(inputs.join("\n")).toContain("Lorem ipsum");
+  });
+
+  it("persists a fixed safe message when fallback source-text reads fail", async () => {
+    const single = buildFixture({ "alpha.custom": "alpha beta gamma" });
+    const privatePath = "/Users/victim/private/alpha.custom";
+    const parser: ParserAdapter = Object.freeze({
+      capability: Object.freeze({
+        parserId: "custom-section",
+        parserVersion: "1",
+        matches: (input: ParserSelectionInput) => input.extension === "custom",
+      }),
+      parse: (input: ParserSelectionInput, options: ParserOptions) => {
+        const sectionPath: readonly string[] = [];
+        return {
+          documentId: input.documentId,
+          parser: { parserId: "custom-section", parserVersion: "1" },
+          pages: [],
+          sections: [
+            {
+              documentId: input.documentId,
+              sectionPath,
+              characterStart: 0,
+              characterEnd: input.bytes.byteLength,
+            },
+          ],
+          units: [
+            {
+              kind: "section" as const,
+              documentId: input.documentId,
+              sectionPath,
+              characterStart: 0,
+              characterEnd: input.bytes.byteLength,
+            },
+          ],
+          diagnostics: [],
+          extractedAt: options.now(),
+        };
+      },
+    });
+    let registry = createParserRegistry();
+    registry = registerParser(registry, parser);
+    const failingFs: WorkspaceFs = {
+      ...single.fs,
+      readFileUtf8: (absolutePath: string): string => {
+        throw new Error(`EACCES: ${privatePath} while reading ${absolutePath}`);
+      },
+    };
+
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(single, {
+            workspaceFs: failingFs,
+            parserRegistry: registry,
+            idSource: () => "job-source-read",
+          }),
+        ),
+      );
+
+      const failed = events.find((event) => event.kind === "document-failed");
+      expect(failed?.kind).toBe("document-failed");
+      if (failed?.kind === "document-failed") {
+        expect(failed.error).toStrictEqual({
+          code: "CHUNKING_FAILED",
+          message: "document chunking failed",
+        });
+      }
+      const row = selectJobById(single.store._internal.db, "job-source-read");
+      expect(row?.last_error_message).toBe("document chunking failed");
+      expect(row?.last_error_message).not.toContain(privatePath);
+      expect(row?.last_error_message).not.toContain(ROOT);
+    } finally {
+      single.cleanup();
+    }
   });
 
   it("persists live job counters while discovery and embedding are still in progress", async () => {

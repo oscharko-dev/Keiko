@@ -35,8 +35,12 @@ describe("parsers barrel", () => {
   it("exposes the documented limit constants", () => {
     expect(parsers.DEFAULT_MAX_BYTES).toBeGreaterThan(0);
     expect(parsers.DEFAULT_MAX_UNITS).toBeGreaterThan(0);
+    expect(parsers.DEFAULT_MAX_NESTING_DEPTH).toBeGreaterThan(0);
+    expect(parsers.DEFAULT_MAX_OBJECTS).toBeGreaterThan(0);
     expect(parsers.DEFAULT_TIMEOUT_MS).toBeGreaterThan(0);
     expect(parsers.PARSER_ERROR_CODES).toContain("OVERSIZED_FILE");
+    expect(parsers.PARSER_ERROR_CODES).toContain("NESTING_LIMIT_REACHED");
+    expect(parsers.PARSER_ERROR_CODES).toContain("OBJECT_LIMIT_REACHED");
   });
 });
 

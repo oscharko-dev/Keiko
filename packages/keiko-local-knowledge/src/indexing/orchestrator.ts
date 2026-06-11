@@ -279,9 +279,7 @@ function readSourceText(state: RunState, source: KnowledgeSource, relativePath: 
   } catch (cause) {
     throw new IndexingError(
       "PERSISTENCE_FAILED",
-      `source realPath failed before embedding: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
+      "source text could not be read before embedding",
       { cause },
     );
   }
@@ -291,7 +289,15 @@ function readSourceText(state: RunState, source: KnowledgeSource, relativePath: 
       `source realpath escapes scope root before embedding: ${relativePath}`,
     );
   }
-  return state.options.workspaceFs.readFileUtf8(normaliseSep(real));
+  try {
+    return state.options.workspaceFs.readFileUtf8(normaliseSep(real));
+  } catch (cause) {
+    throw new IndexingError(
+      "PERSISTENCE_FAILED",
+      "source text could not be read before embedding",
+      { cause },
+    );
+  }
 }
 
 function resolveChunkSourceText(
@@ -541,7 +547,7 @@ function tryChunkDocument(
 ): { readonly chunked: ReturnType<typeof chunkPersistedDocument> } | PersistedHandling {
   try {
     return { chunked: chunkPersistedDocument(state, result) };
-  } catch (cause) {
+  } catch {
     if (cancellationRequested(state)) {
       clearDocumentArtifacts(state, documentId, { deleteChunks: true });
       return { events: [] };
@@ -551,7 +557,7 @@ function tryChunkDocument(
     markDocumentFailed(state, documentId);
     const error: IndexingJobError = {
       code: "CHUNKING_FAILED",
-      message: cause instanceof Error ? cause.message : String(cause),
+      message: "document chunking failed",
     };
     state.lastError = error;
     return {

@@ -1,9 +1,9 @@
 // Public types for the parser registry + format adapters (Epic #189, Issue #266).
 //
 // Adapters are pure: `(input, options) -> ParserResult`. No FS, no clock beyond a single
-// injected `now()`, no randomness, no new runtime deps (still `@oscharko-dev/keiko-contracts`
-// only). The runtime layer at #194 reads bytes from disk and hands them to a parser; that
-// keeps parsers trivially testable with synthetic strings.
+// injected `now()`, no randomness, and no implicit runtime services. The runtime layer at
+// #194 reads bytes from disk and hands them to a parser; that keeps parsers trivially
+// testable with synthetic strings.
 
 import type {
   DocumentId,
@@ -20,6 +20,12 @@ export interface ParserOptions {
   readonly maxBytes: number;
   // Truncate the unit stream with a `UNIT_LIMIT_REACHED` diagnostic. Default 50_000.
   readonly maxUnitsPerDocument: number;
+  // Refuse nested structured inputs that exceed this depth with a `NESTING_LIMIT_REACHED`
+  // diagnostic. Default 128.
+  readonly maxNestingDepth: number;
+  // Refuse structured parser object streams that exceed this count with an
+  // `OBJECT_LIMIT_REACHED` diagnostic. Default 200_000.
+  readonly maxObjectsPerDocument: number;
   // Wall-clock deadline checked at unit emission boundaries. Default 30_000 ms.
   readonly timeoutMs: number;
   // Optional caller cancellation. Adapters check `signal.aborted` at the same boundaries as
@@ -32,6 +38,8 @@ export interface ParserOptions {
 
 export const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_MAX_UNITS = 50_000;
+export const DEFAULT_MAX_NESTING_DEPTH = 128;
+export const DEFAULT_MAX_OBJECTS = 200_000;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
 // ─── Input + capability ──────────────────────────────────────────────────────
@@ -110,6 +118,8 @@ export type ParserErrorCode =
   | "UNIT_LIMIT_REACHED"
   | "PARSER_TIMEOUT"
   | "PARSER_CANCELLED"
+  | "NESTING_LIMIT_REACHED"
+  | "OBJECT_LIMIT_REACHED"
   | "MALFORMED_INPUT"
   | "UNSUPPORTED_FORMAT";
 
@@ -118,6 +128,8 @@ export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
   "UNIT_LIMIT_REACHED",
   "PARSER_TIMEOUT",
   "PARSER_CANCELLED",
+  "NESTING_LIMIT_REACHED",
+  "OBJECT_LIMIT_REACHED",
   "MALFORMED_INPUT",
   "UNSUPPORTED_FORMAT",
 ] as const;

@@ -5,7 +5,13 @@ import type {
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
 
-import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
+import {
+  diagnostic,
+  emptyResult,
+  objectLimitDiagnostic,
+  oversizeDiagnostic,
+  shouldStop,
+} from "./_internal.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
@@ -19,19 +25,19 @@ const PARSER_ID = "pdf";
 const PARSER_VERSION = "1";
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
 
-interface PdfTextItem {
+export interface PdfTextItem {
   readonly str?: string;
 }
 
-interface PdfTextContent {
+export interface PdfTextContentChunk {
   readonly items: readonly PdfTextItem[];
 }
 
-interface PdfPageLike {
-  readonly getTextContent: () => Promise<PdfTextContent>;
+export interface PdfPageLike {
+  readonly streamTextContent: () => ReadableStream<PdfTextContentChunk>;
 }
 
-interface PdfDocumentLike {
+export interface PdfDocumentLike {
   readonly numPages: number;
   readonly getPage: (pageNumber: number) => Promise<PdfPageLike>;
 }
@@ -133,15 +139,107 @@ function pageUnit(page: PageRecord): ParsedUnit {
       };
 }
 
-function normalisePageText(items: readonly PdfTextItem[]): string {
-  const tokens: string[] = [];
+interface PageTextReadState {
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly startedAt: number;
+  readonly emittedUnits: number;
+  readonly scannedObjects: number;
+}
+
+interface PageTextReadResult {
+  readonly text: string;
+  readonly scannedObjects: number;
+  readonly diagnostic?: ParserDiagnostic;
+}
+
+function limitDiagnostic(
+  input: ParserSelectionInput,
+  limit: ReturnType<typeof shouldStop>,
+): ParserDiagnostic | undefined {
+  if (!limit.stop || limit.code === undefined || limit.message === undefined) {
+    return undefined;
+  }
+  return diagnostic(limit.code, limit.message, input.documentId, "info");
+}
+
+function pageTextStopDiagnostic(state: PageTextReadState): ParserDiagnostic | undefined {
+  if (state.scannedObjects >= state.options.maxObjectsPerDocument) {
+    return objectLimitDiagnostic(state.input.documentId, state.options.maxObjectsPerDocument);
+  }
+  return limitDiagnostic(
+    state.input,
+    shouldStop(state.startedAt, state.options, state.emittedUnits),
+  );
+}
+
+function appendPdfTextItems(
+  tokens: string[],
+  items: readonly PdfTextItem[],
+  state: PageTextReadState,
+): { readonly state: PageTextReadState; readonly diagnostic?: ParserDiagnostic } {
+  let next = state;
   for (const item of items) {
+    const stopped = pageTextStopDiagnostic(next);
+    if (stopped !== undefined) {
+      return { state: next, diagnostic: stopped };
+    }
+    next = { ...next, scannedObjects: next.scannedObjects + 1 };
     const value = item.str?.trim();
     if (value !== undefined && value.length > 0) {
       tokens.push(value);
     }
   }
-  return tokens.join(" ").trim();
+  return { state: next };
+}
+
+async function cancelTextReader(
+  reader: ReadableStreamDefaultReader<PdfTextContentChunk>,
+): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // Stream cancellation is best-effort cleanup after parser limits have already fired.
+  }
+}
+
+async function readPageText(
+  page: PdfPageLike,
+  state: PageTextReadState,
+): Promise<PageTextReadResult> {
+  const reader = page.streamTextContent().getReader();
+  const tokens: string[] = [];
+  let next = state;
+  try {
+    for (;;) {
+      const stopped = pageTextStopDiagnostic(next);
+      if (stopped !== undefined) {
+        await cancelTextReader(reader);
+        return {
+          text: tokens.join(" ").trim(),
+          scannedObjects: next.scannedObjects,
+          diagnostic: stopped,
+        };
+      }
+      const read = await reader.read();
+      if (read.done) {
+        return { text: tokens.join(" ").trim(), scannedObjects: next.scannedObjects };
+      }
+      const chunk = read.value;
+      const appended = appendPdfTextItems(tokens, chunk.items, next);
+      next = appended.state;
+      if (appended.diagnostic !== undefined) {
+        await cancelTextReader(reader);
+        return {
+          text: tokens.join(" ").trim(),
+          scannedObjects: next.scannedObjects,
+          diagnostic: appended.diagnostic,
+        };
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function appendPageRecord(
@@ -192,7 +290,7 @@ function noTextResult(
   );
 }
 
-async function extractPages(
+export async function extractPages(
   doc: PdfDocumentLike,
   input: ParserSelectionInput,
   options: ParserOptions,
@@ -208,6 +306,7 @@ async function extractPages(
   const units: ParsedUnit[] = [];
   const pageTexts: string[] = [];
   let cursor = 0;
+  let scannedObjects = 0;
 
   for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
     const limit = shouldStop(startedAt, options, units.length);
@@ -219,13 +318,23 @@ async function extractPages(
     }
 
     const page = await doc.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const text = normalisePageText(content.items);
-    if (text.length === 0) {
+    const textResult = await readPageText(page, {
+      input,
+      options,
+      startedAt,
+      emittedUnits: units.length,
+      scannedObjects,
+    });
+    scannedObjects = textResult.scannedObjects;
+    if (textResult.diagnostic !== undefined) {
+      diagnostics.push(textResult.diagnostic);
+      break;
+    }
+    if (textResult.text.length === 0) {
       continue;
     }
-    pageTexts.push(text);
-    cursor = appendPageRecord(pages, units, input, pageNumber, text, cursor);
+    pageTexts.push(textResult.text);
+    cursor = appendPageRecord(pages, units, input, pageNumber, textResult.text, cursor);
   }
 
   return { diagnostics, pages, units, pageTexts };
@@ -272,11 +381,11 @@ async function asyncParse(
       extractedAt: options.now(),
       normalizedText: pageTexts.join("\n\n"),
     } satisfies InternalParserResult;
-  } catch (error) {
+  } catch {
     return emptyResult(capability, input.documentId, options, [
       diagnostic(
         "MALFORMED_INPUT",
-        error instanceof Error ? error.message : "failed to parse pdf",
+        "pdf parser rejected malformed or unsupported document",
         input.documentId,
         "error",
       ),

@@ -132,13 +132,23 @@ describe("buildParserOptions", () => {
     const options = buildParserOptions();
     expect(options.maxBytes).toBeGreaterThan(0);
     expect(options.maxUnitsPerDocument).toBeGreaterThan(0);
+    expect(options.maxNestingDepth).toBeGreaterThan(0);
+    expect(options.maxObjectsPerDocument).toBeGreaterThan(0);
     expect(options.timeoutMs).toBeGreaterThan(0);
     expect(typeof options.now()).toBe("number");
   });
 
   it("respects overrides", () => {
-    const options = buildParserOptions({ maxBytes: 10, timeoutMs: 5, now: () => 42 });
+    const options = buildParserOptions({
+      maxBytes: 10,
+      maxNestingDepth: 3,
+      maxObjectsPerDocument: 7,
+      timeoutMs: 5,
+      now: () => 42,
+    });
     expect(options.maxBytes).toBe(10);
+    expect(options.maxNestingDepth).toBe(3);
+    expect(options.maxObjectsPerDocument).toBe(7);
     expect(options.timeoutMs).toBe(5);
     expect(options.now()).toBe(42);
   });

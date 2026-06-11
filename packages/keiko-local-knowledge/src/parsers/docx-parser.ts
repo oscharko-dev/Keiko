@@ -8,7 +8,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import yauzl from "yauzl";
 
-import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
+import {
+  diagnostic,
+  emptyResult,
+  objectLimitDiagnostic,
+  oversizeDiagnostic,
+  shouldStop,
+} from "./_internal.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
@@ -270,6 +276,27 @@ interface Paragraph {
   readonly headingLevel?: number;
 }
 
+interface ParagraphParseResult {
+  readonly paragraphs: readonly Paragraph[];
+  readonly diagnostics: readonly ParserDiagnostic[];
+}
+
+interface SectionBuildResult {
+  readonly sections: readonly SectionRecord[];
+  readonly units: readonly ParsedUnit[];
+  readonly diagnostics: readonly ParserDiagnostic[];
+}
+
+function limitDiagnostic(
+  input: ParserSelectionInput,
+  limit: ReturnType<typeof shouldStop>,
+): ParserDiagnostic | undefined {
+  if (!limit.stop || limit.code === undefined || limit.message === undefined) {
+    return undefined;
+  }
+  return diagnostic(limit.code, limit.message, input.documentId, "info");
+}
+
 function headingLevelOf(paragraphXml: string): number | undefined {
   const match = HEADING_STYLE_PATTERN.exec(paragraphXml);
   return match?.[1] === undefined ? undefined : Number(match[1]);
@@ -286,16 +313,34 @@ function paragraphText(paragraphXml: string): string {
   return parts.join("").trim();
 }
 
-function parseParagraphs(xml: string): readonly Paragraph[] {
+function parseParagraphs(
+  xml: string,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+): ParagraphParseResult {
   const out: Paragraph[] = [];
+  const diagnostics: ParserDiagnostic[] = [];
+  let scannedParagraphs = 0;
   for (const match of xml.matchAll(PARAGRAPH_PATTERN)) {
+    if (scannedParagraphs >= options.maxObjectsPerDocument) {
+      diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
+      break;
+    }
+    const limit = shouldStop(startedAt, options, scannedParagraphs);
+    const stopped = limitDiagnostic(input, limit);
+    if (stopped !== undefined) {
+      diagnostics.push(stopped);
+      break;
+    }
+    scannedParagraphs += 1;
     const paragraphXml = match[0];
     const text = paragraphText(paragraphXml);
     if (text.length === 0) continue;
     const headingLevel = headingLevelOf(paragraphXml);
     out.push(headingLevel === undefined ? { text } : { text, headingLevel });
   }
-  return out;
+  return { paragraphs: out, diagnostics };
 }
 
 interface HeadingParagraph extends Paragraph {
@@ -348,22 +393,6 @@ function sectionUnit(section: SectionRecord): ParsedUnit {
   };
 }
 
-function unsectionedRecords(
-  input: ParserSelectionInput,
-  end: number,
-): { readonly sections: readonly SectionRecord[]; readonly units: readonly ParsedUnit[] } {
-  const sectionRecord: SectionRecord = {
-    documentId: input.documentId,
-    sectionPath: [],
-    characterStart: 0,
-    characterEnd: end,
-  };
-  return {
-    sections: [sectionRecord],
-    units: [sectionUnit(sectionRecord)],
-  };
-}
-
 function appendSectionRecord(
   sections: SectionRecord[],
   units: ParsedUnit[],
@@ -382,53 +411,155 @@ function appendSectionRecord(
   units.push(sectionUnit(sectionRecord));
 }
 
+function appendLimitedSectionRecord(
+  sections: SectionRecord[],
+  units: ParsedUnit[],
+  diagnostics: ParserDiagnostic[],
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+  sectionPath: readonly string[],
+  start: number,
+  end: number,
+): boolean {
+  const limit = shouldStop(startedAt, options, units.length);
+  const stopped = limitDiagnostic(input, limit);
+  if (stopped !== undefined) {
+    diagnostics.push(stopped);
+    return false;
+  }
+  appendSectionRecord(sections, units, input, sectionPath, start, end);
+  return true;
+}
+
+function buildUnsectionedSections(
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+  end: number,
+): SectionBuildResult {
+  const sections: SectionRecord[] = [];
+  const units: ParsedUnit[] = [];
+  const diagnostics: ParserDiagnostic[] = [];
+  appendLimitedSectionRecord(sections, units, diagnostics, input, options, startedAt, [], 0, end);
+  return { sections, units, diagnostics };
+}
+
 function appendLeadingPreambleSection(
   sections: SectionRecord[],
   units: ParsedUnit[],
+  diagnostics: ParserDiagnostic[],
   input: ParserSelectionInput,
   headings: readonly HeadingEntry[],
   offsets: { readonly starts: readonly number[]; readonly end: number },
-): void {
+  options: ParserOptions,
+  startedAt: number,
+): boolean {
   const firstHeading = headings[0];
   if (firstHeading === undefined) {
-    return;
+    return true;
   }
   const firstHeadingStart = offsets.starts[firstHeading.index] ?? 0;
   if (firstHeadingStart > 0) {
-    appendSectionRecord(sections, units, input, [], 0, firstHeadingStart);
+    return appendLimitedSectionRecord(
+      sections,
+      units,
+      diagnostics,
+      input,
+      options,
+      startedAt,
+      [],
+      0,
+      firstHeadingStart,
+    );
+  }
+  return true;
+}
+
+interface HeadingSectionState {
+  readonly sections: SectionRecord[];
+  readonly units: ParsedUnit[];
+  readonly diagnostics: ParserDiagnostic[];
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly startedAt: number;
+  readonly offsets: { readonly starts: readonly number[]; readonly end: number };
+  readonly stack: string[];
+}
+
+function appendHeadingSection(
+  state: HeadingSectionState,
+  current: HeadingEntry,
+  next: HeadingEntry | undefined,
+): boolean {
+  const level = current.paragraph.headingLevel;
+  while (state.stack.length >= level) state.stack.pop();
+  state.stack.push(current.paragraph.text);
+  const start = state.offsets.starts[current.index] ?? 0;
+  const end =
+    next === undefined
+      ? state.offsets.end
+      : (state.offsets.starts[next.index] ?? state.offsets.end);
+  return appendLimitedSectionRecord(
+    state.sections,
+    state.units,
+    state.diagnostics,
+    state.input,
+    state.options,
+    state.startedAt,
+    [...state.stack],
+    start,
+    end,
+  );
+}
+
+function appendHeadingSections(
+  state: HeadingSectionState,
+  headings: readonly HeadingEntry[],
+): void {
+  for (const [i, current] of headings.entries()) {
+    if (!appendHeadingSection(state, current, headings[i + 1])) {
+      return;
+    }
   }
 }
 
 function buildSections(
   paragraphs: readonly Paragraph[],
   input: ParserSelectionInput,
-): { readonly sections: readonly SectionRecord[]; readonly units: readonly ParsedUnit[] } {
+  options: ParserOptions,
+  startedAt: number,
+): SectionBuildResult {
   const stack: string[] = [];
   const sections: SectionRecord[] = [];
   const units: ParsedUnit[] = [];
+  const diagnostics: ParserDiagnostic[] = [];
   const offsets = paragraphStarts(paragraphs);
   const headings = collectHeadings(paragraphs);
 
   if (headings.length === 0) {
-    return unsectionedRecords(input, offsets.end);
+    return buildUnsectionedSections(input, options, startedAt, offsets.end);
   }
-  appendLeadingPreambleSection(sections, units, input, headings, offsets);
-
-  for (let i = 0; i < headings.length; i += 1) {
-    const current = headings[i];
-    if (current === undefined) {
-      continue;
-    }
-    const next = headings[i + 1];
-    const level = current.paragraph.headingLevel;
-    while (stack.length >= level) stack.pop();
-    stack.push(current.paragraph.text);
-    const start = offsets.starts[current.index] ?? 0;
-    const end = next === undefined ? offsets.end : (offsets.starts[next.index] ?? offsets.end);
-    appendSectionRecord(sections, units, input, [...stack], start, end);
+  if (
+    !appendLeadingPreambleSection(
+      sections,
+      units,
+      diagnostics,
+      input,
+      headings,
+      offsets,
+      options,
+      startedAt,
+    )
+  ) {
+    return { sections, units, diagnostics };
   }
 
-  return { sections, units };
+  appendHeadingSections(
+    { sections, units, diagnostics, input, options, startedAt, offsets, stack },
+    headings,
+  );
+  return { sections, units, diagnostics };
 }
 
 function docxNoTextResult(
@@ -457,16 +588,18 @@ function docxParseResult(
   input: ParserSelectionInput,
   options: ParserOptions,
   paragraphs: readonly Paragraph[],
+  diagnostics: readonly ParserDiagnostic[],
+  startedAt: number,
 ): InternalParserResult {
-  const { sections, units } = buildSections(paragraphs, input);
+  const built = buildSections(paragraphs, input, options, startedAt);
   const normalizedText = paragraphs.map((paragraph) => paragraph.text).join("\n");
   return {
     documentId: input.documentId,
     parser: { parserId: capability.parserId, parserVersion: capability.parserVersion },
     pages: [],
-    sections,
-    units,
-    diagnostics: [] satisfies ParserDiagnostic[],
+    sections: built.sections,
+    units: built.units,
+    diagnostics: [...diagnostics, ...built.diagnostics],
     extractedAt: options.now(),
     normalizedText,
   };
@@ -495,16 +628,26 @@ async function asyncParse(
         diagnostic(limit.code, limit.message, input.documentId, "info"),
       ]);
     }
-    const paragraphs = parseParagraphs(xml);
-    if (paragraphs.length === 0) {
+    const parsed = parseParagraphs(xml, input, options, startedAt);
+    if (parsed.paragraphs.length === 0) {
+      if (parsed.diagnostics.length > 0) {
+        return emptyResult(capability, input.documentId, options, parsed.diagnostics);
+      }
       return docxNoTextResult(capability, input, options);
     }
-    return docxParseResult(capability, input, options, paragraphs);
-  } catch (error) {
+    return docxParseResult(
+      capability,
+      input,
+      options,
+      parsed.paragraphs,
+      parsed.diagnostics,
+      startedAt,
+    );
+  } catch {
     return emptyResult(capability, input.documentId, options, [
       diagnostic(
         "MALFORMED_INPUT",
-        error instanceof Error ? error.message : "failed to parse docx",
+        "docx parser rejected malformed or unsupported document",
         input.documentId,
         "error",
       ),

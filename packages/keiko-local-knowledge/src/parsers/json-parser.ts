@@ -102,31 +102,58 @@ function isLeaf(value: unknown): boolean {
   return true;
 }
 
-function descendArray(ctx: ScanContext, value: readonly unknown[], pointer: string): void {
+function pushNestingLimit(ctx: ScanContext, pointer: string): void {
+  const displayPointer = pointer.length === 0 ? "/" : pointer;
+  ctx.diagnostics.push(
+    diagnostic(
+      "NESTING_LIMIT_REACHED",
+      `JSON nesting depth exceeds maxNestingDepth=${String(ctx.options.maxNestingDepth)} at ${displayPointer}`,
+      ctx.input.documentId,
+      "error",
+    ),
+  );
+  ctx.stopped = true;
+}
+
+function descendArray(
+  ctx: ScanContext,
+  value: readonly unknown[],
+  pointer: string,
+  depth: number,
+): void {
   for (let i = 0; i < value.length; i += 1) {
     if (ctx.stopped) return;
-    walk(ctx, value[i], joinPointer(pointer, String(i)));
+    walk(ctx, value[i], joinPointer(pointer, String(i)), depth + 1);
   }
 }
 
-function descendObject(ctx: ScanContext, value: Record<string, unknown>, pointer: string): void {
+function descendObject(
+  ctx: ScanContext,
+  value: Record<string, unknown>,
+  pointer: string,
+  depth: number,
+): void {
   for (const key of Object.keys(value)) {
     if (ctx.stopped) return;
-    walk(ctx, value[key], joinPointer(pointer, encodePointerSegment(key)));
+    walk(ctx, value[key], joinPointer(pointer, encodePointerSegment(key)), depth + 1);
   }
 }
 
-function walk(ctx: ScanContext, value: unknown, pointer: string): void {
+function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number): void {
   if (ctx.stopped) return;
   if (isLeaf(value)) {
     pushLeaf(ctx, pointer, value);
     return;
   }
-  if (Array.isArray(value)) {
-    descendArray(ctx, value, pointer);
+  if (depth >= ctx.options.maxNestingDepth) {
+    pushNestingLimit(ctx, pointer);
     return;
   }
-  descendObject(ctx, value as Record<string, unknown>, pointer);
+  if (Array.isArray(value)) {
+    descendArray(ctx, value, pointer, depth);
+    return;
+  }
+  descendObject(ctx, value as Record<string, unknown>, pointer, depth);
 }
 
 function parseJsonValue(
@@ -177,7 +204,10 @@ export const jsonParser: ParserAdapter = Object.freeze({
       normalizedLength: 0,
       stopped: false,
     };
-    walk(ctx, parsed.value, "");
+    walk(ctx, parsed.value, "", 0);
+    if (ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")) {
+      return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
+    }
     return {
       ...emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics, ctx.units),
       normalizedText: ctx.normalizedParts.join(""),
