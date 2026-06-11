@@ -150,6 +150,16 @@ describe("connected-context evidence", () => {
         modelId: "example-chat-model",
         workspaceRoot: `/repo/${SK_FAKE}`,
         chatId: "chat-1",
+        plan: {
+          planId: `plan-${SK_FAKE}`,
+          state: "ready",
+          createdAtMs: NOW - 1,
+          anchors: [
+            { term: `src/${SK_FAKE}.ts`, kind: "path" },
+            { term: `My${GHP_FAKE}Class`, kind: "identifier" },
+          ],
+          rings: [{ kind: "lexical" }, { kind: "structural" }],
+        },
         pack: pack(),
         citationCount: 1,
         elapsedMs: 42,
@@ -167,6 +177,17 @@ describe("connected-context evidence", () => {
     expect(manifest.run.fingerprint).toBe(sha256Hex("pack-[REDACTED]"));
     expect(audit.scope.scopeIdHash).toBe(sha256Hex("scope-[REDACTED]"));
     expect(audit.query.queryTextHash).toBe(sha256Hex("explain [REDACTED]"));
+    expect(audit.plan).toMatchObject({
+      planIdHash: sha256Hex("plan-[REDACTED]"),
+      state: "ready",
+      createdAtMs: NOW - 1,
+      anchorCount: 2,
+      anchorKinds: { path: 1, identifier: 1 },
+      ringKinds: ["lexical", "structural"],
+    });
+    expect(audit.plan?.anchorTermHashes).toEqual(
+      [sha256Hex("My[REDACTED]Class"), sha256Hex("src/[REDACTED].ts")].sort(),
+    );
     expect(audit.files[0]?.excerpts[0]?.contentSha256).toBe(sha256Hex("[REDACTED]"));
     expect(audit.files[0]?.excerpts[0]?.contentSha256).not.toBe(sha256Hex(PEM_FAKE));
   });

@@ -176,6 +176,94 @@ describe("ScopeConnectButton", () => {
     expect(updateScope.mock.calls[0]).toHaveLength(2);
   });
 
+  it("keeps scopes from different roots distinct even when their relative paths match", async () => {
+    const existingFolderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src"],
+      root: "/workspace-a",
+      connectedAtMs: 50,
+    };
+    const chatWithConnector = makeChat({
+      connectedScopes: [existingFolderScope],
+    });
+    const updated = makeChat({
+      connectedScopes: [
+        existingFolderScope,
+        { kind: "directory", relativePaths: ["src"], root: "/workspace-b", connectedAtMs: 200 },
+      ],
+    });
+    const updateScope = vi.fn().mockResolvedValue({ chat: updated } satisfies ChatResponse);
+    const user = userEvent.setup();
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        scopeKind="directory"
+        scopeRoot="/workspace-b"
+        currentScopeKind={undefined}
+        candidateRelativePaths={["src"]}
+        chat={chatWithConnector}
+        updateScope={updateScope}
+        now={() => 200}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Connect folder" }));
+    await waitFor(() => {
+      expect(updateScope).toHaveBeenCalledTimes(1);
+    });
+    const [, calledScopes] = updateScope.mock.calls[0] as [string, readonly ChatConnectedScope[]];
+    expect(calledScopes).toEqual([
+      existingFolderScope,
+      { kind: "directory", relativePaths: ["src"], root: "/workspace-b", connectedAtMs: 200 },
+    ]);
+    expect(updateScope.mock.calls[0]).toHaveLength(2);
+  });
+
+  it("replaces an existing scope when kind, paths, and root all match", async () => {
+    const existingScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src"],
+      root: "/repo-a",
+      connectedAtMs: 50,
+    };
+    const otherScope: ChatConnectedScope = {
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/repo-b",
+      connectedAtMs: 60,
+    };
+    const updatedScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src"],
+      root: "/repo-a",
+      connectedAtMs: 200,
+    };
+    const chatWithScope = makeChat({
+      connectedScopes: [existingScope, otherScope],
+    });
+    const updated = makeChat({
+      connectedScopes: [otherScope, updatedScope],
+    });
+    const updateScope = vi.fn().mockResolvedValue({ chat: updated } satisfies ChatResponse);
+    const user = userEvent.setup();
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        scopeKind="directory"
+        currentScopeKind={undefined}
+        candidateRelativePaths={["src"]}
+        chat={chatWithScope}
+        scopeRoot="/repo-a"
+        updateScope={updateScope}
+        now={() => 200}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Connect folder" }));
+    await waitFor(() => {
+      expect(updateScope).toHaveBeenCalledWith("chat-1", [otherScope, updatedScope]);
+    });
+    expect(updateScope.mock.calls[0]).toHaveLength(2);
+  });
+
   it("surfaces wire-error messages via role=alert", async () => {
     const updateScope = vi.fn().mockRejectedValue(new Error("network down"));
     const user = userEvent.setup();

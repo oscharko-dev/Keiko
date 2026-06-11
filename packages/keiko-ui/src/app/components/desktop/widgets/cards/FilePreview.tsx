@@ -190,6 +190,7 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
           <ScopeConnectButton
             chatId={activeChat.id}
             scopeKind="files"
+            scopeRoot={root}
             currentScopeKind={activeChat.connectedScope?.kind}
             candidateRelativePaths={candidatePaths}
             chat={activeChat}

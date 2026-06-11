@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 7 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 8 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -191,6 +191,8 @@ CREATE TABLE chunks (
   token_count INTEGER NOT NULL,
   safe_excerpt_hash TEXT NOT NULL,
   chunking_strategy_version TEXT,
+  character_start INTEGER,
+  character_end INTEGER,
   FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
@@ -512,6 +514,18 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "DROP TABLE capsule_audit_events;",
       "ALTER TABLE capsule_audit_events_v7 RENAME TO capsule_audit_events;",
       CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+    ],
+  },
+  {
+    version: 8,
+    reason:
+      "Persist per-chunk character offsets so each chunk embeds its own bounded sub-span " +
+      "instead of re-deriving the full parsed-unit span at index time (Epic #189, Issue #195). " +
+      "Columns are nullable; chunks indexed before this migration fall back to the parsed-unit " +
+      "span until the capsule is reindexed.",
+    up: [
+      "ALTER TABLE chunks ADD COLUMN character_start INTEGER;",
+      "ALTER TABLE chunks ADD COLUMN character_end INTEGER;",
     ],
   },
 ] as const;

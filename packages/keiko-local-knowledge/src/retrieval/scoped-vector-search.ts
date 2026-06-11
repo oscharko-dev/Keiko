@@ -52,7 +52,7 @@ export function toScopeInput(
   if ("capsuleId" in scope) {
     return { capsuleIds: [scope.capsuleId] };
   }
-  return { capsuleIds: scope.capsuleIds };
+  return { capsuleIds: scope.capsuleIds, sourceFilter: scope.sourceIds };
 }
 
 // ─── Vector row reader ───────────────────────────────────────────────────────
@@ -76,10 +76,22 @@ const SELECT_VECTORS_FOR_CAPSULE_SQL = [
 function readVectorsForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
+  sourceFilter?: readonly KnowledgeSourceId[],
 ): readonly VectorRow[] {
+  if (sourceFilter?.length === 0) return [];
+  const params: Record<string, string> = { c: String(capsuleId) };
+  const sourceClause =
+    sourceFilter === undefined
+      ? ""
+      : ` AND source_id IN (${sourceFilter.map((_, i) => `:s${String(i)}`).join(", ")})`;
+  if (sourceFilter !== undefined) {
+    for (let i = 0; i < sourceFilter.length; i += 1) {
+      params[`s${String(i)}`] = String(sourceFilter[i]);
+    }
+  }
   const rows = store._internal.db
-    .prepare(SELECT_VECTORS_FOR_CAPSULE_SQL)
-    .all({ c: String(capsuleId) });
+    .prepare(`${SELECT_VECTORS_FOR_CAPSULE_SQL}${sourceClause}`)
+    .all(params);
   return rows as unknown as readonly VectorRow[];
 }
 
@@ -365,12 +377,13 @@ async function processCapsule(
   store: KnowledgeStore,
   embeddingAdapter: OpenAIEmbeddingAdapter,
   capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
   query: string,
   options: SearchOptions,
   cache: Map<string, EmbeddedQuery>,
   state: SearchState,
 ): Promise<void> {
-  const rows = readVectorsForCapsule(store, capsule.id);
+  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter);
   if (rows.length === 0) return;
   state.anyVectorSeen = true;
 
@@ -457,7 +470,16 @@ export async function searchVectorsForScope(
   const cache = new Map<string, EmbeddedQuery>();
   const state = emptyState();
   for (const capsule of capsules) {
-    await processCapsule(store, embeddingAdapter, capsule, query, options, cache, state);
+    await processCapsule(
+      store,
+      embeddingAdapter,
+      capsule,
+      scope.sourceFilter,
+      query,
+      options,
+      cache,
+      state,
+    );
   }
   const selection = selectTopCandidates(state, options);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };

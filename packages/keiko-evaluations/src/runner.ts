@@ -7,6 +7,7 @@
 // network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
 
 import { createHash, randomUUID } from "node:crypto";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
 import { generateUnitTests } from "@oscharko-dev/keiko-workflows";
 import { investigateBug } from "@oscharko-dev/keiko-workflows";
 import {
@@ -79,6 +80,15 @@ function fixtureModelId(fixture: EvaluationFixture, override: string | undefined
   }
   const fromInput = fixture.workflowInput.modelId;
   return typeof fromInput === "string" ? fromInput : "eval-model";
+}
+
+function requireLiveModelId(override: string | undefined): string {
+  if (override !== undefined) {
+    return override;
+  }
+  throw new ConfigInvalidError(
+    "no live model selected; pass --model MODEL_ID or provide a workflow-capable configured model",
+  );
 }
 
 function resolveModelPort(
@@ -217,7 +227,10 @@ async function runFixture(
   deps: EvalRunnerDeps,
   store: EvidenceStore,
 ): Promise<{ readonly result: FixtureRunResult; readonly evidenceRef: string }> {
-  const modelId = fixtureModelId(fixture, options.modelIdOverride);
+  const modelId =
+    options.mode === "live"
+      ? requireLiveModelId(options.modelIdOverride)
+      : fixtureModelId(fixture, options.modelIdOverride);
   const workspace = materializeFixture(fixture);
   const writer = recordingWriter();
   const sink = recordingSink();
@@ -270,9 +283,8 @@ function liveContext(
   if (options.mode !== "live") {
     return undefined;
   }
-  const modelId = options.modelIdOverride ?? options.fixtures[0]?.workflowInput.modelId;
   return {
-    modelId: typeof modelId === "string" ? modelId : "live-model",
+    modelId: requireLiveModelId(options.modelIdOverride),
     // No secrets: identifies the run by model only; apiKey/baseUrl are NEVER serialized here.
     configDescriptor: `live evaluation (${String(options.fixtures.length)} fixtures)`,
     evidenceRefs,

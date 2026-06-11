@@ -28,11 +28,34 @@ export interface ConnectedContextEvidenceInput {
   readonly modelId: string;
   readonly workspaceRoot: string;
   readonly chatId?: string | undefined;
+  readonly plan?: ConnectedContextEvidencePlanInput | undefined;
   readonly pack: ConnectedContextPack;
   readonly citationCount: number;
   readonly elapsedMs: number;
   readonly startedAt: number;
   readonly finishedAt: number;
+}
+
+export interface ConnectedContextEvidencePlanInput {
+  readonly planId: string;
+  readonly state: string;
+  readonly createdAtMs?: number | undefined;
+  readonly anchors?: readonly ConnectedContextEvidencePlanAnchorInput[] | undefined;
+  readonly rings?: readonly ConnectedContextEvidencePlanRingInput[] | undefined;
+  readonly clarification?:
+    | {
+        readonly reason?: string | undefined;
+      }
+    | undefined;
+}
+
+export interface ConnectedContextEvidencePlanAnchorInput {
+  readonly term: string;
+  readonly kind: string;
+}
+
+export interface ConnectedContextEvidencePlanRingInput {
+  readonly kind: string;
 }
 
 export interface ConnectedContextEvidenceContext {
@@ -153,6 +176,38 @@ function queryOf(
   };
 }
 
+function planOf(
+  input: ConnectedContextEvidenceInput,
+  redact: Redactor,
+): EvidenceConnectedContextAudit["plan"] {
+  if (input.plan === undefined || typeof input.plan.planId !== "string") {
+    return undefined;
+  }
+  const anchors = input.plan.anchors ?? [];
+  const rings = input.plan.rings ?? [];
+  const anchorKinds: Record<string, number> = {};
+  const anchorTermHashes = anchors
+    .map((anchor) => {
+      anchorKinds[anchor.kind] = (anchorKinds[anchor.kind] ?? 0) + 1;
+      return sha256Hex(redactString(redact, anchor.term));
+    })
+    .sort();
+  return {
+    planIdHash: sha256Hex(redactString(redact, input.plan.planId)),
+    state: input.plan.state,
+    createdAtMs:
+      typeof input.plan.createdAtMs === "number" ? Math.max(0, input.plan.createdAtMs) : undefined,
+    anchorCount: anchorTermHashes.length,
+    anchorKinds,
+    anchorTermHashes,
+    ringKinds: rings.map((ring) => ring.kind).sort(),
+    clarificationReason:
+      typeof input.plan.clarification?.reason === "string"
+        ? input.plan.clarification.reason
+        : undefined,
+  };
+}
+
 function summaryOf(input: ConnectedContextEvidenceInput): EvidenceConnectedContextAudit["summary"] {
   return {
     fileCount: input.pack.files.length,
@@ -178,6 +233,7 @@ function connectedContextOf(
     },
     scope: scopeOf(input, redact),
     query: queryOf(input, redact),
+    plan: planOf(input, redact),
     budget: {
       usage: numberRecord(input.pack.usage),
       limits: numberRecord(input.pack.budget),

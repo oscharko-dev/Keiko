@@ -331,6 +331,7 @@ interface RetrievedSource {
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
   readonly scope: SelectedScope;
+  readonly plan: RetrievalOnlyOutput["plan"];
 }
 
 export interface MultiSourceAskInput {
@@ -366,7 +367,7 @@ async function retrieveAllSources(
     if (!isValidGroundedPack(out.pack)) {
       return internalError("Grounded answer context pack failed validation.");
     }
-    retrieved.push({ label, pack: out.pack, elapsedMs: out.elapsedMs, scope });
+    retrieved.push({ label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan });
   }
   return retrieved;
 }
@@ -410,6 +411,7 @@ function persistPerSourceEvidence(
         modelId: ctx.modelId,
         workspaceRoot: src.scope.workspaceRoot,
         chatId: ctx.chat.id,
+        plan: src.plan,
         pack: src.pack,
         citationCount: buildCitations(src.pack, ctx.deps.redactor).length,
         elapsedMs: src.elapsedMs,
@@ -460,8 +462,7 @@ function assembleMultiSourceAnswer(
       usage: {
         ...mergedSummary.usage,
         modelInputTokens: mergedSummary.usage.modelInputTokens + assistant.usage.promptTokens,
-        modelOutputTokens:
-          mergedSummary.usage.modelOutputTokens + assistant.usage.completionTokens,
+        modelOutputTokens: mergedSummary.usage.modelOutputTokens + assistant.usage.completionTokens,
       },
     },
   };

@@ -153,6 +153,24 @@ async function seedIndexingCapsule(displayName: string): Promise<KnowledgeCapsul
   return seeded.capsuleId;
 }
 
+function auditKindsFor(capsuleId: KnowledgeCapsuleId): readonly string[] {
+  const knowledgeStore = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+  });
+  try {
+    const rows = knowledgeStore._internal.db
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = :capsuleId ORDER BY occurred_at ASC, kind ASC",
+      )
+      .all({ capsuleId: String(capsuleId) }) as unknown as readonly {
+      readonly kind: string;
+    }[];
+    return rows.map((row) => row.kind);
+  } finally {
+    knowledgeStore.close();
+  }
+}
+
 // ─── Chat builders ────────────────────────────────────────────────────────────
 
 function makeHybridChat(
@@ -431,6 +449,11 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
 
     // Answerer invoked exactly once
     expect(answererSeen.count).toBe(1);
+    expect([...auditKindsFor(capId)].sort()).toEqual([
+      "answer-context-assembled",
+      "model-context-sent",
+      "retrieval-performed",
+    ]);
   });
 
   it("strips planner scaffolding from hybrid answers and carries final model usage", async () => {
@@ -538,6 +561,37 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     const uniqueLabels = new Set(kciLabels);
     expect(uniqueLabels.size).toBe(2);
   });
+
+  it("returns no evidence without calling the model when connector retrieval returns zero references", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const connectorRetrieve: ConnectorRetrieve = () =>
+      Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What evidence exists?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      { connectorRetrieve, answer: throwingHybridAnswerer() },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.knowledgeCitations).toHaveLength(0);
+    expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
+    expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
+  });
 });
 
 // ─── Case 3: Not-ready connector skipped, others answer ──────────────────────
@@ -612,6 +666,42 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
     // Retrieval was called exactly once (only the ready connector)
     // mutation: removing the skip check → retrievalCallCount would be 2
     expect(retrievalCallCount).toBe(1);
+  });
+
+  it("returns no evidence without calling the model when every connector is skipped", async () => {
+    const indexingA = await seedIndexingCapsule("Indexing A Docs");
+    const indexingB = await seedIndexingCapsule("Indexing B Docs");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: indexingA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: indexingB, connectedAtMs: NOW },
+      ],
+    );
+    let retrievalCallCount = 0;
+    const connectorRetrieve: ConnectorRetrieve = () => {
+      retrievalCallCount += 1;
+      return Promise.resolve({ references: [], noEvidence: true });
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What do the skipped sources say?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      { connectorRetrieve, answer: throwingHybridAnswerer() },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.knowledgeCitations).toHaveLength(0);
+    expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(answer.uncertainty.filter((u) => u.claim.includes("Indexing")).length).toBe(2);
+    expect(retrievalCallCount).toBe(0);
+    expect(auditKindsFor(indexingA)).toEqual([]);
+    expect(auditKindsFor(indexingB)).toEqual([]);
   });
 });
 

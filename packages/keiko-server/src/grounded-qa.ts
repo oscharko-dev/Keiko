@@ -47,6 +47,7 @@ import {
 } from "./grounded-orchestrator.js";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -324,6 +325,10 @@ function redactedString(redactor: Redactor, value: string): string {
   return typeof redacted === "string" ? redacted : value;
 }
 
+export function promptSafeExcerptText(value: string): string {
+  return value.split("```").join("` ` `");
+}
+
 export function packBudgetSummary(pack: ConnectedContextPack): string {
   const { usage, budget } = pack;
   return [
@@ -356,7 +361,7 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
         `- Evidence ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
       );
       lines.push("```");
-      lines.push(redactedString(redactor, excerpt.content));
+      lines.push(promptSafeExcerptText(redactedString(redactor, excerpt.content)));
       lines.push("```");
     }
   }
@@ -582,6 +587,7 @@ function persistGroundedAuditEvidence(
       // the real grounding root so the audit trail is honest about which tree produced the answer.
       workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
+      plan: output.plan,
       pack: output.pack,
       citationCount,
       elapsedMs: output.elapsedMs,
@@ -812,6 +818,14 @@ async function dispatchFolderAsk(
   const scope = buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
+  }
+  // Epic #177 audit (GAP-B) — mirror the PATCH-route deny-list check for the grounded-ask hot
+  // path. The PATCH route validates via validateFallbackProjectRoot before persisting a scope;
+  // a chat whose projectPath was created before the deny-list was added (or via the test store)
+  // could otherwise reach the orchestrator with a credential-dir workspaceRoot. Reject before
+  // calling the runner so no filesystem access occurs against a denied path.
+  if (pathIsDenied(scope.workspaceRoot)) {
+    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   const resolved = resolveGroundedRunner(deps, chat, input.modelId, signal, runner);
   if ("status" in resolved) return resolved;

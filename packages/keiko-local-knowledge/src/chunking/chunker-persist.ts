@@ -17,10 +17,12 @@ import { CHUNKING_STRATEGY_VERSION } from "./types.js";
 const INSERT_CHUNK_SQL = [
   "INSERT INTO chunks (",
   "  id, capsule_id, source_id, document_id, parsed_unit_id,",
-  "  order_index, token_count, safe_excerpt_hash, chunking_strategy_version",
+  "  order_index, token_count, safe_excerpt_hash, chunking_strategy_version,",
+  "  character_start, character_end",
   ") VALUES (",
   "  :id, :capsule_id, :source_id, :document_id, :parsed_unit_id,",
-  "  :order_index, :token_count, :safe_excerpt_hash, :chunking_strategy_version",
+  "  :order_index, :token_count, :safe_excerpt_hash, :chunking_strategy_version,",
+  "  :character_start, :character_end",
   ")",
 ].join(" ");
 
@@ -55,6 +57,11 @@ export interface ChunkInsertRow {
   readonly tokenCount: number;
   readonly safeExcerptHash: string;
   readonly chunkingStrategyVersion: string;
+  // Document-relative span of this chunk (not its parsed unit). Persisting it lets the
+  // indexing orchestrator embed each chunk's own bounded sub-span instead of re-deriving
+  // the full parsed-unit span, which would emit duplicate vectors for multi-chunk units.
+  readonly characterStart: number;
+  readonly characterEnd: number;
 }
 
 export function insertChunkRow(db: DatabaseSync, row: ChunkInsertRow): void {
@@ -68,6 +75,8 @@ export function insertChunkRow(db: DatabaseSync, row: ChunkInsertRow): void {
     token_count: row.tokenCount,
     safe_excerpt_hash: row.safeExcerptHash,
     chunking_strategy_version: row.chunkingStrategyVersion,
+    character_start: row.characterStart,
+    character_end: row.characterEnd,
   });
 }
 

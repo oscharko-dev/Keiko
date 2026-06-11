@@ -7,7 +7,7 @@
 // any executable path or port that has not been validated by `validateExecPath` /
 // `validatePort`. The validators are deliberately strict allow-lists: a `keiko` executable
 // path that contains a space, a shell metacharacter, or any character outside
-// `[A-Za-z0-9_\-./\\:]` is rejected. Spaces in the bin location are a documented
+// `[A-Za-z0-9_@\-./\\:]` is rejected. Spaces in the bin location are a documented
 // unsupported edge case for this release (ADR-0024 D8 / spec §"Per-platform content rules").
 //
 // PLATFORMS:
@@ -25,7 +25,7 @@ import { posix as posixPath, win32 as win32Path } from "node:path";
 // `&`, `|`, `(`, `)`, `<`, `>`, `*`, `?`, `~`, `#`, `!`, `,`, `=`, `+`, control chars —
 // is rejected. The intent is defense-in-depth even though XDG `.desktop` and `.bat`
 // have their own quoting rules: no metacharacter ever reaches the file content.
-const EXEC_PATH_RE = /^[A-Za-z0-9_\-./\\:]+$/;
+const EXEC_PATH_RE = /^[A-Za-z0-9_@\-./\\:]+$/;
 
 export const MIN_PORT = 1024;
 export const MAX_PORT = 65535;
@@ -57,7 +57,7 @@ export function validateExecPath(path: string): string {
   if (!EXEC_PATH_RE.test(path)) {
     throw new LauncherError(
       "EXEC_PATH_UNSAFE",
-      `keiko launcher: resolved executable path contains disallowed characters: ${path}\nOnly [A-Za-z0-9_\\-./\\\\:] are permitted. Re-install keiko under a path without spaces or shell metacharacters.`,
+      `keiko launcher: resolved executable path contains disallowed characters: ${path}\nOnly [A-Za-z0-9_@\\-./\\\\:] are permitted. Re-install keiko under a path without spaces or shell metacharacters.`,
     );
   }
   return path;

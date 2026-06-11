@@ -84,6 +84,26 @@ describe("jsonParser", () => {
     expect(pointers(result.units)).toEqual([""]);
   });
 
+  it("aligns leaf offsets to bounded normalized leaf text", () => {
+    const result = jsonParser.parse(
+      selectionFromText(JSON.stringify({ a: "first", b: "second" }), { extension: "json" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText = (result as { readonly normalizedText?: string }).normalizedText;
+    expect(normalizedText).toBe('/a: "first"\n/b: "second"\n');
+    expect(result.units).toHaveLength(2);
+    const first = result.units[0];
+    const second = result.units[1];
+    if (first === undefined || second === undefined) throw new Error("expected two JSON leaves");
+    if (first.kind !== "json-path" || second.kind !== "json-path") {
+      throw new Error("expected JSON path units");
+    }
+    expect(first.characterStart).toBe(0);
+    expect(first.characterEnd).toBe('/a: "first"\n'.length);
+    expect(second.characterStart).toBe(first.characterEnd);
+    expect(second.characterEnd).toBe(normalizedText?.length);
+  });
+
   it("treats empty arrays and empty objects as leaves", () => {
     const obj = JSON.stringify({ empties: [], empty: {} });
     const result = jsonParser.parse(
@@ -101,6 +121,18 @@ describe("jsonParser", () => {
     expect(result.units).toEqual([]);
     expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
     expect(result.diagnostics[0]?.severity).toBe("error");
+  });
+
+  it("does not echo document content in the parse-error diagnostic (#189 audit)", () => {
+    // Modern Node embeds a fragment of the surrounding text in JSON.parse error messages. A
+    // secret near the parse error must not leak into the persisted, UI-surfaced diagnostic.
+    const secret = "AKIA-LIVE-SECRET-9F8E7D6C";
+    const result = jsonParser.parse(
+      selectionFromText(`{ "token": "${secret}" broken`, { extension: "json" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+    expect(result.diagnostics[0]?.message ?? "").not.toContain(secret);
   });
 
   it("refuses oversize files", () => {

@@ -7,7 +7,15 @@
 // fire BEFORE publish so a broken bundle can never reach users.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -293,6 +301,22 @@ async function stopChild(child) {
   ]);
 }
 
+async function assertUiLaunchProject(baseUrl, tmp) {
+  const expectedProjectPath = realpathSync(tmp);
+  const projectsRes = await globalThis.fetch(`${baseUrl}/api/projects`);
+  if (!projectsRes.ok) {
+    fail(`keiko ui GET /api/projects exited with HTTP ${String(projectsRes.status)}`);
+  }
+  const projectsPayload = await projectsRes.json();
+  const launchProject = projectsPayload.projects?.[0];
+  if (launchProject?.path !== expectedProjectPath) {
+    fail(`keiko ui did not select launch cwd; first project was ${String(launchProject?.path)}`);
+  }
+  if (launchProject.available !== true) {
+    fail("keiko ui launch cwd project is not available");
+  }
+}
+
 async function assertPackagedUi(tmp) {
   const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
   const staticRoot = join(packageRoot, "dist", "ui", "static");
@@ -319,6 +343,7 @@ async function assertPackagedUi(tmp) {
   child.stderr?.on("data", (chunk) => stderrChunks.push(String(chunk)));
   try {
     await waitForHealth(baseUrl, child, stdoutChunks, stderrChunks);
+    await assertUiLaunchProject(baseUrl, tmp);
     const home = await globalThis.fetch(`${baseUrl}/`);
     if (!home.ok) {
       fail(`keiko ui GET / exited with HTTP ${String(home.status)}`);

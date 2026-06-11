@@ -35,6 +35,7 @@ import {
   type GovernorState,
   type MicroIndex,
   type RetrievalRing,
+  type SearchAnchor,
 } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
@@ -132,6 +133,7 @@ export const echoAnswerer: GroundedAnswerer = {
 interface SearchInputs {
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
+  readonly anchors: readonly SearchAnchor[];
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
@@ -140,6 +142,7 @@ interface SearchInputs {
 interface RingResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
+  readonly uncertainty: readonly UncertaintyMarker[];
   readonly usage: ExplorationUsage;
 }
 
@@ -189,10 +192,28 @@ function budgetClipped(stopReason: string, nowMs: number): UncertaintyMarker {
   };
 }
 
+function answerBudgetClipped(dimensions: readonly string[], nowMs: number): UncertaintyMarker {
+  return {
+    kind: "budget-clipped",
+    claim: `grounded answer exceeded budget: ${dimensions.join(", ")}`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 function noEvidence(nowMs: number): UncertaintyMarker {
   return {
     kind: "no-evidence",
     claim: "No repository evidence matched the connected scope for this question.",
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+function toolUnavailable(claim: string, nowMs: number): UncertaintyMarker {
+  return {
+    kind: "tool-unavailable",
+    claim,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -230,6 +251,133 @@ function omittedFromSearchCandidates(
   return omitted;
 }
 
+function safeAdapterName(name: string): string {
+  const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, "");
+  return cleaned.length === 0 ? "structural-adapter" : cleaned;
+}
+
+function adapterDiagnostics(
+  result: {
+    readonly unavailable: readonly string[];
+    readonly errored: readonly { readonly name: string }[];
+  },
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  const markers: UncertaintyMarker[] = [];
+  const seen = new Set<string>();
+  for (const name of result.unavailable) {
+    const safeName = safeAdapterName(name);
+    if (seen.has(`unavailable:${safeName}`)) {
+      continue;
+    }
+    seen.add(`unavailable:${safeName}`);
+    markers.push(toolUnavailable(`structural adapter unavailable: ${safeName}`, nowMs));
+  }
+  for (const error of result.errored) {
+    const safeName = safeAdapterName(error.name);
+    if (seen.has(`errored:${safeName}`)) {
+      continue;
+    }
+    seen.add(`errored:${safeName}`);
+    markers.push(toolUnavailable(`structural adapter failed safely: ${safeName}`, nowMs));
+  }
+  return markers;
+}
+
+function dedupeUncertainty(markers: readonly UncertaintyMarker[]): readonly UncertaintyMarker[] {
+  const seen = new Set<string>();
+  const out: UncertaintyMarker[] = [];
+  for (const marker of markers) {
+    const key = `${marker.kind}:${marker.claim}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(marker);
+  }
+  return out;
+}
+
+function anchorKindForTerm(
+  term: string,
+  anchors: readonly SearchAnchor[],
+): SearchAnchor["kind"] | undefined {
+  return anchors.find((anchor) => anchor.term === term)?.kind;
+}
+
+function looksPathAnchor(term: string): boolean {
+  return term.includes("/") || /\.[a-z0-9]+$/i.test(term);
+}
+
+function queryForStructuralAnchor(
+  term: string,
+  kind: SearchAnchor["kind"] | undefined,
+  base: RetrievalQuery,
+): RetrievalQuery {
+  return {
+    ...base,
+    kind:
+      kind === "identifier" || (!looksPathAnchor(term) && kind !== "path")
+        ? "exact-symbol"
+        : "natural-language",
+    text: term,
+  };
+}
+
+function structuralQueriesForRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): readonly RetrievalQuery[] {
+  const queries: RetrievalQuery[] = [];
+  const seen = new Set<string>();
+  for (const term of ring.anchorTerms) {
+    const anchorKind = anchorKindForTerm(term, inputs.anchors);
+    if (anchorKind !== "path" && anchorKind !== "identifier" && anchorKind !== "quoted") {
+      continue;
+    }
+    const query = queryForStructuralAnchor(term, anchorKind, inputs.query);
+    const key = `${query.kind}:${query.text}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    queries.push(query);
+  }
+  return queries.length === 0 ? [inputs.query] : queries;
+}
+
+function plannedSearchCallsForRing(ring: RetrievalRing, inputs: SearchInputs): number {
+  return ring.kind === "structural" ? structuralQueriesForRing(ring, inputs).length : 1;
+}
+
+function mergeAtomsByStableId(
+  results: readonly RunRingStructuralResult[],
+  cap: number,
+): readonly EvidenceAtom[] {
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const result of results) {
+    for (const atom of result.atoms) {
+      if (atoms.length >= cap) {
+        return atoms;
+      }
+      if (seen.has(atom.stableId)) {
+        continue;
+      }
+      seen.add(atom.stableId);
+      atoms.push(atom);
+    }
+  }
+  return atoms;
+}
+
+interface RunRingStructuralResult {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly unavailable: readonly string[];
+  readonly errored: readonly { readonly name: string }[];
+  readonly elapsedMs: number;
+}
+
 async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
   if (ring.kind === "lexical") {
     const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
@@ -245,6 +393,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     return {
       atoms: result.atoms,
       omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
+      uncertainty: [],
       usage: usageDelta({ elapsedMs: result.elapsedMs }),
     };
   }
@@ -256,18 +405,26 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     ring.kind === "structural"
       ? { adapters: [testSourcePairingAdapter, importGraphAdapter] }
       : { adapters: [gitHistoryAdapter] };
-  const result = await runStructuralAdapters(
-    registry,
-    inputs.searchScope,
-    inputs.query,
-    ring.searchLimits,
-    inputs.fs,
-    { nowMs: inputs.nowMs },
+  const queries =
+    ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
+  const results = await Promise.all(
+    queries.map((query) =>
+      runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
+        nowMs: inputs.nowMs,
+      }),
+    ),
+  );
+  const elapsedMs = results.reduce((sum, result) => sum + result.elapsedMs, 0);
+  const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
+  const atoms = ring.kind === "git-history" ? [] : mergeAtomsByStableId(results, cap);
+  const uncertainty = dedupeUncertainty(
+    results.flatMap((result) => adapterDiagnostics(result, inputs.nowMs())),
   );
   return {
-    atoms: result.atoms,
+    atoms,
     omitted: [],
-    usage: usageDelta({ elapsedMs: result.elapsedMs }),
+    uncertainty,
+    usage: usageDelta({ elapsedMs }),
   };
 }
 
@@ -276,6 +433,29 @@ interface RingRunSummary {
   readonly omitted: readonly OmittedContextEntry[];
   readonly governor: GovernorState;
   readonly uncertainty: readonly UncertaintyMarker[];
+}
+
+interface RingReservation {
+  readonly governor: GovernorState;
+  readonly marker?: UncertaintyMarker | undefined;
+}
+
+function reserveRingSearchCalls(
+  governor: GovernorState,
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): RingReservation {
+  const reserved = applyUsage(
+    governor,
+    usageDelta({ searchCalls: plannedSearchCallsForRing(ring, inputs) }),
+  );
+  if (reserved.status !== "budget-exhausted") {
+    return { governor: reserved };
+  }
+  return {
+    governor: reserved,
+    marker: budgetClipped(reserved.stopReason ?? "budget exhausted", inputs.nowMs()),
+  };
 }
 
 async function runAllRings(
@@ -301,21 +481,18 @@ async function runAllRings(
     if (!canContinue(governor)) {
       break;
     }
-    const reservedSearchCall = applyUsage(governor, usageDelta({ searchCalls: 1 }));
-    if (reservedSearchCall.status === "budget-exhausted") {
-      governor = reservedSearchCall;
-      uncertainty.push(
-        budgetClipped(reservedSearchCall.stopReason ?? "budget exhausted", inputs.nowMs()),
-      );
+    const reservation = reserveRingSearchCalls(governor, ring, inputs);
+    governor = reservation.governor;
+    if (reservation.marker !== undefined) {
+      uncertainty.push(reservation.marker);
       break;
     }
-    governor = reservedSearchCall;
     const result = await runRing(ring, inputs);
     throwIfCancelled(inputs.signal);
     const afterRing = applyUsage(governor, result.usage);
-    const ringAtoms = result.atoms;
-    atoms.push(...ringAtoms);
+    atoms.push(...result.atoms);
     omitted.push(...result.omitted);
+    uncertainty.push(...result.uncertainty);
     if (afterRing.status === "budget-exhausted") {
       governor = afterRing;
       uncertainty.push(budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()));
@@ -344,6 +521,11 @@ interface ExcerptReadSummary {
   readonly uncertainty: readonly UncertaintyMarker[];
 }
 
+interface CandidateOrdering {
+  readonly kept: readonly CandidateFile[];
+  readonly omitted: readonly OmittedContextEntry[];
+}
+
 interface LineWindow {
   readonly startLine: number;
   readonly endLine: number;
@@ -352,6 +534,141 @@ interface LineWindow {
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
 const EXCERPT_CONTEXT_LINES = 2;
 const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
+const LOCKFILE_NAMES = new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+  "cargo.lock",
+  "composer.lock",
+  "gemfile.lock",
+]);
+
+function basename(scopePath: string): string {
+  const index = scopePath.lastIndexOf("/");
+  return index >= 0 ? scopePath.slice(index + 1) : scopePath;
+}
+
+function compareByScopePath(a: OmittedContextEntry, b: OmittedContextEntry): number {
+  return a.scopePath.localeCompare(b.scopePath);
+}
+
+function isKeikoEvidenceArtifact(scopePath: string): boolean {
+  return scopePath.toLowerCase().startsWith(".keiko/evidence/");
+}
+
+function isLockfilePath(scopePath: string): boolean {
+  return LOCKFILE_NAMES.has(basename(scopePath).toLowerCase());
+}
+
+function queryTerms(queryText: string, anchors: readonly SearchAnchor[]): readonly string[] {
+  const terms = new Set<string>();
+  const loweredQuery = queryText.toLowerCase();
+  for (const token of loweredQuery.split(/[^a-z0-9._/-]+/)) {
+    if (token.length > 0) {
+      terms.add(token);
+    }
+  }
+  for (const anchor of anchors) {
+    const lowered = anchor.term.toLowerCase();
+    if (lowered.length > 0) {
+      terms.add(lowered);
+    }
+    for (const token of lowered.split(/[^a-z0-9._/-]+/)) {
+      if (token.length > 0) {
+        terms.add(token);
+      }
+    }
+  }
+  return [...terms];
+}
+
+function explicitlyTargetsRuntimeArtifact(
+  scopePath: string,
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  if (!isKeikoEvidenceArtifact(scopePath)) {
+    return false;
+  }
+  const loweredQuery = queryText.toLowerCase();
+  if (loweredQuery.includes(".keiko") || loweredQuery.includes("evidence artifact")) {
+    return true;
+  }
+  return queryTerms(queryText, anchors).some((term) => scopePath.toLowerCase().includes(term));
+}
+
+function explicitlyTargetsLockfile(
+  scopePath: string,
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  if (!isLockfilePath(scopePath)) {
+    return false;
+  }
+  const loweredQuery = queryText.toLowerCase();
+  if (
+    loweredQuery.includes("lockfile") ||
+    loweredQuery.includes("package manager") ||
+    loweredQuery.includes("packagemanager") ||
+    loweredQuery.includes("dependency version") ||
+    loweredQuery.includes("dependency versions") ||
+    loweredQuery.includes("resolved version") ||
+    loweredQuery.includes("resolved versions")
+  ) {
+    return true;
+  }
+  const path = scopePath.toLowerCase();
+  const name = basename(scopePath).toLowerCase();
+  return queryTerms(queryText, anchors).some((term) => path.includes(term) || name === term);
+}
+
+function refineCandidateOrdering(
+  kept: readonly CandidateFile[],
+  omitted: readonly OmittedContextEntry[],
+  queryText: string,
+  anchors: readonly SearchAnchor[],
+  nowMs: number,
+): CandidateOrdering {
+  const preferred: CandidateFile[] = [];
+  const lockfiles: CandidateFile[] = [];
+  const runtimeArtifacts: CandidateFile[] = [];
+
+  for (const candidate of kept) {
+    const scopePath = candidate.scopePath;
+    if (
+      isKeikoEvidenceArtifact(scopePath) &&
+      !explicitlyTargetsRuntimeArtifact(scopePath, queryText, anchors)
+    ) {
+      runtimeArtifacts.push(candidate);
+      continue;
+    }
+    if (isLockfilePath(scopePath) && !explicitlyTargetsLockfile(scopePath, queryText, anchors)) {
+      lockfiles.push(candidate);
+      continue;
+    }
+    preferred.push(candidate);
+  }
+
+  if (preferred.length === 0) {
+    return { kept, omitted };
+  }
+
+  const nextOmitted = [...omitted];
+  for (const candidate of runtimeArtifacts) {
+    nextOmitted.push({
+      scopePath: candidate.scopePath,
+      reason: "low-relevance",
+      omittedAtMs: nowMs,
+    });
+  }
+  nextOmitted.sort(compareByScopePath);
+  return {
+    kept: [...preferred, ...lockfiles],
+    omitted: nextOmitted,
+  };
+}
 
 function groupEvidenceAtomsByPath(
   atoms: readonly EvidenceAtom[],
@@ -546,11 +863,18 @@ async function assembleGroundedPack({
   const atoms = rings.atoms;
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
+  const ordered = refineCandidateOrdering(
+    ranking.kept,
+    ranking.omitted,
+    input.query.text,
+    plan.anchors,
+    nowMs(),
+  );
   const atomsByPath = groupEvidenceAtomsByPath(atoms);
   const evidenceUncertainty =
-    atoms.length === 0 || ranking.kept.length === 0 ? [noEvidence(nowMs())] : [];
+    atoms.length === 0 || ordered.kept.length === 0 ? [noEvidence(nowMs())] : [];
   const excerptReads = await readKeptExcerpts(
-    ranking.kept.map((c) => c.scopePath),
+    ordered.kept.map((c) => c.scopePath),
     { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs, signal: deps.signal },
   );
   const assembleOptions =
@@ -561,8 +885,8 @@ async function assembleGroundedPack({
       query: input.query,
       budget: plan.budget,
       atoms,
-      ranked: ranking.kept,
-      omittedFromRanking: [...rings.omitted, ...ranking.omitted],
+      ranked: ordered.kept,
+      omittedFromRanking: [...rings.omitted, ...ordered.omitted],
       excerpts: excerptReads.excerpts,
       initialUsage,
       initialUncertainty: [
@@ -600,7 +924,7 @@ export async function retrieveConnectedContextPack(
   const searchScope = buildSearchScope(input.scope, workspace);
   const rings = await runAllRings(
     plan.rings,
-    { searchScope, query: input.query, fs, nowMs, signal: deps.signal },
+    { searchScope, query: input.query, anchors: plan.anchors, fs, nowMs, signal: deps.signal },
     governor,
   );
   throwIfCancelled(deps.signal);
@@ -620,15 +944,27 @@ export async function runGroundedExploration(
   const start = nowMs();
   const { pack, plan } = await retrieveConnectedContextPack(input, deps);
   const answer = normalizeGroundedAnswerPayload(await deps.answerer.answer(input.query.text, pack));
+  const elapsedMs = Math.max(0, nowMs() - start);
+  const exhaustedAnswerDimensions = [
+    ...(answer.usage.promptTokens > pack.budget.modelInputTokensMax ? ["modelInputTokens"] : []),
+    ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
+      ? ["modelOutputTokens"]
+      : []),
+    ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
+  ];
   const groundedPack: ConnectedContextPack = {
     ...pack,
     usage: {
       ...pack.usage,
-      modelInputTokens: answer.usage.promptTokens,
-      modelOutputTokens: answer.usage.completionTokens,
+      modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
+      modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
+      elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
     },
+    uncertainty:
+      exhaustedAnswerDimensions.length === 0
+        ? pack.uncertainty
+        : [...pack.uncertainty, answerBudgetClipped(exhaustedAnswerDimensions, nowMs())],
   };
-  const elapsedMs = Math.max(0, nowMs() - start);
   return { pack: groundedPack, assistantContent: answer.content, elapsedMs, plan };
 }
 

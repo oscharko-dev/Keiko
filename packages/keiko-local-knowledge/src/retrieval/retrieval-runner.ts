@@ -138,7 +138,7 @@ function resolveCapsuleSetScope(store: KnowledgeStore, setId: CapsuleSetId): Res
   const policy = strictestPolicy(store, scope.capsuleIds);
   return {
     ok: true,
-    scope: { capsuleIds: scope.capsuleIds },
+    scope: { capsuleIds: scope.capsuleIds, sourceFilter: scope.sourceIds },
     policy,
   };
 }

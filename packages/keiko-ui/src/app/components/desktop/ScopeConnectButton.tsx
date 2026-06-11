@@ -18,6 +18,7 @@ import { effectiveScopes } from "./hooks/workspaceActions";
 export interface ScopeConnectButtonProps {
   readonly chatId: string;
   readonly scopeKind: SelectedScopeKind;
+  readonly scopeRoot?: string | undefined;
   // The chat's currently-bound kind (used to render the "Update connected scope" label when the
   // chat already has a binding). Repository-root bindings intentionally have an empty path array.
   readonly currentScopeKind: SelectedScopeKind | undefined;
@@ -55,9 +56,22 @@ function formatErrorMessage(error: unknown): string {
   return formatUserError(error, "Unable to connect scope.");
 }
 
+function sameRelativePaths(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
+function sameScopeIdentity(left: ChatConnectedScope, right: ChatConnectedScope): boolean {
+  return (
+    left.kind === right.kind &&
+    (left.root ?? null) === (right.root ?? null) &&
+    sameRelativePaths(left.relativePaths, right.relativePaths)
+  );
+}
+
 export function ScopeConnectButton({
   chatId,
   scopeKind,
+  scopeRoot,
   currentScopeKind,
   candidateRelativePaths,
   onConnected,
@@ -88,16 +102,11 @@ export function ScopeConnectButton({
         kind: scopeKind,
         relativePaths: [...candidateRelativePaths],
         connectedAtMs: now(),
+        ...(scopeRoot !== undefined && scopeRoot.length > 0 ? { root: scopeRoot } : {}),
       };
       const current = effectiveScopes(chat ?? {});
-      // De-dupe: replace an existing scope with the same kind+paths rather than duplicating.
-      const filtered = current.filter(
-        (s) =>
-          !(
-            s.kind === newScope.kind &&
-            JSON.stringify(s.relativePaths) === JSON.stringify(newScope.relativePaths)
-          ),
-      );
+      // De-dupe by full scope identity: root is part of the key for external-folder binds.
+      const filtered = current.filter((s) => !sameScopeIdentity(s, newScope));
       const next = [...filtered, newScope];
       const response = await updateScope(chatId, next);
       onConnected?.(response.chat);

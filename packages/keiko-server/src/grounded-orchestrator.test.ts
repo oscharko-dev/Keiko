@@ -93,6 +93,47 @@ function seedIssue672Repo(): void {
   );
 }
 
+function seedIssue876Repo(): void {
+  mkdirSync(join(ROOT, "src"), { recursive: true });
+  mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });
+  writeFileSync(
+    join(ROOT, "src/grounded-qa.ts"),
+    "export async function handleGroundedAsk() {\n" +
+      "  return 'real route handler';\n" +
+      "}\n" +
+      "export const GROUNDED_HANDLER_NAME = 'handleGroundedAsk';\n",
+  );
+  writeFileSync(
+    join(ROOT, "src/zod-config.ts"),
+    "import { z } from 'zod';\n" +
+      "export const ZodConfigSchema = z.object({ PORT: z.string() });\n" +
+      "export function parseZodConfig(input: unknown) {\n" +
+      "  return ZodConfigSchema.parse(input);\n" +
+      "}\n",
+  );
+  writeFileSync(
+    join(ROOT, "pnpm-lock.yaml"),
+    "lockfileVersion: '9.0'\n" +
+      "packages:\n" +
+      "  zod@3.23.8:\n" +
+      "    resolution: {integrity: sha512-zod}\n" +
+      "importers:\n" +
+      "  .:\n" +
+      "    dependencies:\n" +
+      "      zod:\n" +
+      "        specifier: ^3.23.8\n" +
+      "        version: 3.23.8\n",
+  );
+  writeFileSync(
+    join(ROOT, ".keiko/evidence/qi/run.candidates.json"),
+    JSON.stringify({
+      finding: "handleGroundedAsk grounded route handler",
+      summary: "handleGroundedAsk appears in cached evidence only",
+      packageName: "zod",
+    }) + "\n",
+  );
+}
+
 beforeEach(() => {
   ROOT = mkdtempSync(join(tmpdir(), "keiko-grounded-orch-"));
   seedRepo();
@@ -220,6 +261,49 @@ describe("runGroundedExploration", () => {
     expect(Array.isArray(out.pack.omitted)).toBe(true);
   });
 
+  it("runs structural adapters over planner anchors instead of the full natural-language prompt", async () => {
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "tests/foo.test.ts")).toBe(true);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "tests/foo.test.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes("MyClass")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("surfaces structural adapter unavailability through sanitized uncertainty", async () => {
+    const adapter = importGraphAdapter as {
+      isAvailable: typeof importGraphAdapter.isAvailable;
+    };
+    const originalIsAvailable = adapter.isAvailable;
+    adapter.isAvailable = (): Promise<boolean> => Promise.resolve(false);
+    try {
+      const out = await retrieveConnectedContextPack(input(), {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      });
+      const marker = out.pack.uncertainty.find(
+        (entry) => entry.kind === "tool-unavailable" && entry.claim.includes("import-graph"),
+      );
+      expect(marker?.claim).toBe("structural adapter unavailable: import-graph");
+      expect(marker?.claim).not.toContain(ROOT);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      adapter.isAvailable = originalIsAvailable;
+    }
+  });
+
   it("records the exploration plan before workspace detection or repository exploration", async () => {
     const events: string[] = [];
     const out = await runGroundedExploration(input(), {
@@ -332,6 +416,56 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("omits .keiko evidence artifacts when real source files answer a normal repository question", async () => {
+    seedIssue876Repo();
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Where is handleGroundedAsk implemented? Cite the source file.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/grounded-qa.ts");
+    expect(out.pack.files.every((file) => !file.scopePath.startsWith(".keiko/evidence/"))).toBe(
+      true,
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("demotes lockfiles behind ordinary repository files for code-usage questions", async () => {
+    seedIssue876Repo();
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "How is ZodConfigSchema used in this repository? Cite the relevant code.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/zod-config.ts");
+    const lockfileIndex = out.pack.files.findIndex((file) => file.scopePath === "pnpm-lock.yaml");
+    expect(lockfileIndex).not.toBe(0);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("ZodConfigSchema")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("adds a no-evidence uncertainty marker when retrieval finds no matching atoms", async () => {
     const out = await runGroundedExploration(
       input({
@@ -430,9 +564,32 @@ describe("runGroundedExploration", () => {
       importAdapter.lookup = originalImportLookup;
       gitAdapter.lookup = originalGitLookup;
     }
-    expect(pairCalls).toBe(1);
-    expect(importCalls).toBe(1);
+    expect(pairCalls).toBeGreaterThan(0);
+    expect(importCalls).toBeGreaterThan(0);
     expect(gitCalls).toBe(1);
+  });
+
+  it("does not send git-history metadata paths into excerpt selection", async () => {
+    mkdirSync(join(ROOT, ".git", "logs"), { recursive: true });
+    writeFileSync(join(ROOT, ".git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(
+      join(ROOT, ".git", "logs", "HEAD"),
+      "0000000000000000000000000000000000000000 abc123def456 Alice <alice@example.com> 1700000000 +0000\tcommit: seed\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and recent git history" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.every((file) => !file.scopePath.startsWith(".git/"))).toBe(true);
+    expect(out.pack.uncertainty.every((marker) => !marker.claim.includes(".git/HEAD"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
@@ -451,6 +608,80 @@ describe("runGroundedExploration", () => {
     expect(out.pack.usage.searchCalls).toBe(1);
     expect(out.pack.uncertainty.some((u) => u.kind === "budget-clipped")).toBe(true);
     expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("charges structural fan-out before running adapters", async () => {
+    const pairAdapter = testSourcePairingAdapter as {
+      lookup: typeof testSourcePairingAdapter.lookup;
+    };
+    const importAdapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const originalPairLookup = pairAdapter.lookup;
+    const originalImportLookup = importAdapter.lookup;
+    let pairCalls = 0;
+    let importCalls = 0;
+    pairAdapter.lookup = (...args): ReturnType<typeof originalPairLookup> => {
+      pairCalls += 1;
+      return originalPairLookup(...args);
+    };
+    importAdapter.lookup = (...args): ReturnType<typeof originalImportLookup> => {
+      importCalls += 1;
+      return originalImportLookup(...args);
+    };
+    try {
+      const out = await retrieveConnectedContextPack(
+        input({
+          query: happyQuery({
+            text: "Investigate src/foo.ts tests/foo.test.ts `MyClass`",
+          }),
+          budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 2 },
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      expect(out.pack.usage.searchCalls).toBe(2);
+      expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      pairAdapter.lookup = originalPairLookup;
+      importAdapter.lookup = originalImportLookup;
+    }
+    expect(pairCalls).toBe(0);
+    expect(importCalls).toBe(0);
+  });
+
+  it("clips answer-phase budget overages into a valid pack", async () => {
+    let now = NOW;
+    const budget: OrchestratorInput["budget"] = {
+      ...DEFAULT_EXPLORATION_BUDGET,
+      modelInputTokensMax: 10,
+      modelOutputTokensMax: 5,
+      elapsedMsMax: 100,
+    };
+    const answerer: GroundedAnswerer = {
+      answer: () => {
+        now += 250;
+        return Promise.resolve({
+          content: "answer",
+          usage: { promptTokens: 999, completionTokens: 777 },
+        });
+      },
+    };
+    const out = await runGroundedExploration(input({ budget }), {
+      answerer,
+      nowMs: () => now,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(out.elapsedMs).toBe(250);
+    expect(out.pack.usage.modelInputTokens).toBe(10);
+    expect(out.pack.usage.modelOutputTokens).toBe(5);
+    expect(out.pack.usage.elapsedMs).toBe(100);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("modelInputTokens"))).toBe(true);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("modelOutputTokens"))).toBe(true);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("elapsedMs"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

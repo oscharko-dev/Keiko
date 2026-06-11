@@ -497,6 +497,7 @@ function IndexOrCancelBtn({
   onCancel,
 }: Pick<RowActionProps, "capsule" | "busy" | "busyKind" | "onStart" | "onCancel">): ReactNode {
   const { id, displayName, lifecycleState, sourceCount } = capsule;
+  const noSourceHintId = useId();
   if (lifecycleState === "indexing") {
     return (
       <button
@@ -515,24 +516,29 @@ function IndexOrCancelBtn({
   }
   const hasSources = sourceCount > 0;
   return (
-    <button
-      type="button"
-      disabled={busy || !hasSources}
-      aria-busy={busyKind === "index"}
-      aria-label={
-        hasSources
-          ? `Start indexing capsule ${displayName}`
-          : `Attach a source before indexing capsule ${displayName}`
-      }
-      title={hasSources ? undefined : "Attach a source before indexing this capsule."}
-      onClick={() => {
-        if (!hasSources) return;
-        onStart(id);
-      }}
-      className="lk-btn lk-btn-primary"
-    >
-      {busyKind === "index" ? "Indexing…" : "Index"}
-    </button>
+    <>
+      <button
+        type="button"
+        disabled={busy}
+        aria-disabled={hasSources ? undefined : true}
+        aria-busy={busyKind === "index"}
+        aria-label={`Start indexing capsule ${displayName}`}
+        aria-describedby={hasSources ? undefined : noSourceHintId}
+        title={hasSources ? undefined : "Attach a source before indexing this capsule."}
+        onClick={() => {
+          if (!hasSources) return;
+          onStart(id);
+        }}
+        className="lk-btn lk-btn-primary"
+      >
+        {busyKind === "index" ? "Indexing…" : "Index"}
+      </button>
+      {!hasSources ? (
+        <span id={noSourceHintId} className="visually-hidden">
+          Attach a source before indexing.
+        </span>
+      ) : null}
+    </>
   );
 }
 

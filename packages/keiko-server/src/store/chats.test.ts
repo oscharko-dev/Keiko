@@ -4,7 +4,8 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInMemoryUiStore, UiStoreError, type UiStore } from "./index.js";
+import { DatabaseSync } from "node:sqlite";
+import { createInMemoryUiStore, createNodeUiStore, UiStoreError, type UiStore } from "./index.js";
 import type { ChatLocalKnowledgeScope } from "./types.js";
 
 let tmp: string;
@@ -192,6 +193,55 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
     // The root must survive the JSON column encode/decode — a connected folder outside the chat's
     // project is otherwise silently lost and the grounded path falls back to the wrong root.
     expect(fetched?.connectedScope?.root).toBe(externalRoot);
+  });
+
+  it("rejects a deny-listed connectedScope.root before persistence", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScope: {
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: 1,
+          root: join(tmp, ".ssh", "work"),
+        },
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("collapses a tampered row whose persisted connectedScope.root is deny-listed", () => {
+    const dbPath = join(tmp, "ui.db");
+    const diskStore = createNodeUiStore(dbPath, { now: () => 100 });
+    const diskProject = diskStore.createProject(proj);
+    const chat = diskStore.createChat(diskProject.path, "t", "m");
+    diskStore.close();
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(
+        "UPDATE chats SET connected_scope_paths = ?, connected_scope_at = ? WHERE id = ?",
+      ).run(
+        JSON.stringify({
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: 1,
+          root: join(tmp, ".ssh", "work"),
+        }),
+        1,
+        chat.id,
+      );
+    } finally {
+      db.close();
+    }
+
+    const reopened = createNodeUiStore(dbPath);
+    try {
+      const fetched = reopened.findChatById(chat.id);
+      expect(fetched?.connectedScope).toBeUndefined();
+      expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+    } finally {
+      reopened.close();
+    }
   });
 
   it("leaves connectedScope.root undefined when not provided (#532)", () => {

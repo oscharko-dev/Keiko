@@ -183,7 +183,14 @@ function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): st
   if (supplied !== undefined) {
     return validateProjectPath(supplied, { mustExist: true });
   }
-  const available = deps.store.listProjects().find((project) => isProjectAvailable(project));
+  const projects = deps.store.listProjects();
+  const preferred = projects.find(
+    (project) => project.path === deps.preferredProjectPath && isProjectAvailable(project),
+  );
+  if (preferred !== undefined) {
+    return preferred.path;
+  }
+  const available = projects.find((project) => isProjectAvailable(project));
   if (available !== undefined) {
     return available.path;
   }

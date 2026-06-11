@@ -71,6 +71,7 @@ export interface SeedVectorsOptions {
   readonly contentHash?: string;
   readonly safeDisplayName?: string;
   readonly chunkingOptions?: ChunkingOptions;
+  readonly unitId?: string;
 }
 
 // ─── Scripted adapter (deterministic vectors keyed to text input) ─────────────
@@ -174,7 +175,7 @@ function seedRows(store: KnowledgeStore, options: SeedVectorsOptions, seed: Reso
     seed.capsuleId,
     // Unit ids must be globally unique (parsed_units.id is the PK; the composite
     // UNIQUE (capsule_id, id) is a *secondary* constraint), so we namespace by capsule id.
-    `unit-${String(seed.capsuleId)}`,
+    options.unitId ?? `unit-${String(seed.capsuleId)}`,
     composeUnit(options.unit, seed),
   );
 }

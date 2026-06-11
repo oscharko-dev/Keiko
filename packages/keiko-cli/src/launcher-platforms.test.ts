@@ -46,6 +46,11 @@ describe("validateExecPath", () => {
     expect(validateExecPath("C:\\Program\\keiko.exe")).toBe("C:\\Program\\keiko.exe");
   });
 
+  it("accepts a scoped npm install path containing @", () => {
+    const scopedPath = "/workspace/node_modules/@oscharko-dev/keiko/bin/keiko";
+    expect(validateExecPath(scopedPath)).toBe(scopedPath);
+  });
+
   it("rejects an empty path", () => {
     expect(() => validateExecPath("")).toThrow(LauncherError);
   });

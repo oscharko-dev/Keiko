@@ -197,6 +197,8 @@ function persistAllChunks(
         tokenCount: chunk.tokenCount,
         safeExcerptHash: chunk.safeExcerptHash,
         chunkingStrategyVersion: CHUNKING_STRATEGY_VERSION,
+        characterStart: chunk.characterStart,
+        characterEnd: chunk.characterEnd,
       });
       chunkIds.push(id);
       orderIndex += 1;

@@ -25,6 +25,7 @@ const GITHUB_TOKEN_PATTERN = /\bgh[pousr]_[A-Za-z0-9]{20,}/g;
 const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
+const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
 const PEM_PRIVATE_KEY_BLOCK_PATTERN =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
@@ -38,9 +39,9 @@ const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]
 // ("client_secret": "x"), INI/env (db_password=x), or YAML (secret: x) shape — keeping the key and
 // separator, dropping the value. ReDoS-safe: alternation of literals + one linear value class.
 const SECRET_KEY_NAMES =
-  "passwd|password|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential";
+  "passwd|password|secret_key|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential";
 const SECRET_KEY_VALUE_PATTERN = new RegExp(
-  `\\b(${SECRET_KEY_NAMES})(["']?\\s*[:=]\\s*["']?)[^\\s"'\`,;&]+`,
+  `(?<![A-Za-z0-9])(${SECRET_KEY_NAMES})(["']?\\s*[:=]\\s*["']?)[^\\s"'\`,;&]+`,
   "gi",
 );
 
@@ -53,6 +54,7 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
   AWS_ACCESS_KEY_PATTERN,
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
+  STRIPE_KEY_PATTERN,
   PEM_PRIVATE_KEY_BLOCK_PATTERN,
   PEM_PRIVATE_KEY_HEADER_PATTERN,
 ];

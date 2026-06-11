@@ -207,7 +207,7 @@ async function waitForHealth(baseUrl) {
 }
 
 // eslint-disable-next-line max-lines-per-function
-function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
+function startInstalledUi(tmp, configPath, uiDbPath, evidenceDir, memoryDir) {
   const bin = join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   const portServer = createServer((_, res) => res.end("reserved"));
   // eslint-disable-next-line max-lines-per-function
@@ -218,7 +218,18 @@ function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
     );
     const child = spawn(
       "node",
-      [bin, "ui", "--port", String(port), "--config", configPath, "--ui-db", uiDbPath],
+      [
+        bin,
+        "ui",
+        "--port",
+        String(port),
+        "--config",
+        configPath,
+        "--ui-db",
+        uiDbPath,
+        "--evidence-dir",
+        evidenceDir,
+      ],
       {
         cwd: tmp,
         env: {
@@ -385,6 +396,24 @@ async function fetchMemory(baseUrl, memoryId) {
   return { status: res.status, body };
 }
 
+function assertNoFreshMemories(body, label) {
+  assert(body !== undefined && typeof body === "object", `${label} did not return an object body`);
+  assert(Array.isArray(body.memories), `${label} did not return a memories array`);
+  assert(
+    body.memories.length === 0,
+    `${label} returned ${String(body.memories.length)} memories before user action`,
+  );
+  assert(body.total === 0, `${label} returned total=${String(body.total)} before user action`);
+}
+
+async function assertFreshMemoryState(baseUrl) {
+  assertNoFreshMemories(await api(baseUrl, "/api/memory?limit=10"), "fresh /api/memory");
+  assertNoFreshMemories(
+    await api(baseUrl, "/api/memory/review-queue"),
+    "fresh /api/memory/review-queue",
+  );
+}
+
 // eslint-disable-next-line complexity, max-lines-per-function
 async function main() {
   const tarballPath = packRoot();
@@ -396,19 +425,22 @@ async function main() {
     installInto(installRoot, tarballPath);
     const configPath = join(smokeRoot, "keiko.config.json");
     const uiDbPath = join(smokeRoot, "keiko-ui.db");
+    const evidenceDir = join(smokeRoot, "evidence");
     const memoryDir = join(smokeRoot, "memory");
     const projectA = join(smokeRoot, "project-a");
     const projectB = join(smokeRoot, "project-b");
     writeFileSync(configPath, gatewayConfig(provider.baseUrl), "utf8");
+    mkdirSync(evidenceDir, { recursive: true });
     mkdirSync(memoryDir, { recursive: true });
     mkdirSync(projectA, { recursive: true });
     mkdirSync(projectB, { recursive: true });
 
-    ui = await startInstalledUi(installRoot, configPath, uiDbPath, memoryDir);
+    ui = await startInstalledUi(installRoot, configPath, uiDbPath, evidenceDir, memoryDir);
     const homeHtml = await fetchText(`${ui.baseUrl}/`);
     assert(homeHtml.includes("Keiko"), "home page did not contain the Keiko shell marker");
     const memoryHtml = await fetchText(`${ui.baseUrl}/memoriaviva`);
     assert(memoryHtml.includes("MemoriaViva"), "/memoriaviva did not render the MemoriaViva route");
+    await assertFreshMemoryState(ui.baseUrl);
 
     const rememberChatId = await createChat(ui.baseUrl, projectA);
     const remember = await sendChat(
@@ -453,7 +485,7 @@ async function main() {
     );
 
     await ui.stop();
-    ui = await startInstalledUi(installRoot, configPath, uiDbPath, memoryDir);
+    ui = await startInstalledUi(installRoot, configPath, uiDbPath, evidenceDir, memoryDir);
     const restartChatId = await createChat(ui.baseUrl, projectA);
     const afterRestart = await memoryContext(
       ui.baseUrl,

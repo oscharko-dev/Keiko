@@ -312,6 +312,11 @@ describe("validateSelectedScope", () => {
     expect(validateSelectedScope(happyScope())).toEqual({ ok: true });
   });
 
+  it("rejects a malformed runtime object instead of throwing", () => {
+    const result = validateSelectedScope({ bogus: true } as unknown as SelectedScope);
+    expectInvalidWithReason(result, "schemaVersion");
+  });
+
   // Issue #188 Case 5: unsupported scope kind — a kind that doesn't exist in
   // SELECTED_SCOPE_KINDS must be rejected. Mutation guard: if the kind guard is
   // removed or widened, expectInvalidWithReason fails because the validator returns ok:true.
@@ -449,6 +454,11 @@ describe("validateSelectedScope", () => {
 describe("validateEvidenceAtom", () => {
   it("accepts the happy path with no ledgerRef", () => {
     expect(validateEvidenceAtom(happyAtom())).toEqual({ ok: true });
+  });
+
+  it("rejects a malformed runtime object instead of throwing", () => {
+    const result = validateEvidenceAtom({ bogus: true } as unknown as EvidenceAtom);
+    expectInvalidWithReason(result, "provenance");
   });
 
   it("accepts the happy path with a valid ledgerRef", () => {
@@ -595,8 +605,17 @@ describe("validateRetrievalQuery", () => {
     });
   }
 
+  it("rejects a malformed runtime object instead of throwing", () => {
+    const result = validateRetrievalQuery({ bogus: true } as unknown as RetrievalQuery);
+    expectInvalidWithReason(result, "text");
+  });
+
   it("rejects empty text", () => {
     expectInvalidWithReason(validateRetrievalQuery({ ...happyQuery(), text: "" }), "text");
+  });
+
+  it("rejects whitespace-only text", () => {
+    expectInvalidWithReason(validateRetrievalQuery({ ...happyQuery(), text: "   " }), "text");
   });
 
   it("rejects maxResults 0", () => {
@@ -630,6 +649,16 @@ describe("validateRetrievalQuery", () => {
 describe("validateConnectedContextPack", () => {
   it("accepts the happy path", () => {
     expect(validateConnectedContextPack(happyPack())).toEqual({ ok: true });
+  });
+
+  it("rejects a malformed runtime object instead of throwing", () => {
+    const result = validateConnectedContextPack({ bogus: true } as unknown as ConnectedContextPack);
+    expectInvalidWithReason(result, "scope");
+  });
+
+  it("rejects a pack with a missing runtime scope instead of throwing", () => {
+    const pack = { ...happyPack(), scope: undefined as unknown as ConnectedContextPack["scope"] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "scope invalid");
   });
 
   it("rejects schemaVersion mismatch", () => {
@@ -893,6 +922,23 @@ describe("validateConnectedContextPack", () => {
     expectInvalidWithReason(validateConnectedContextPack(pack), "duplicate scopePath");
   });
 
+  it("rejects ancestor/descendant connected file scopePath overlaps", () => {
+    const first: ConnectedFileEntry = {
+      scopePath: "src",
+      role: "read-only",
+      selectionReason: "folder-summary",
+      excerpts: [],
+    };
+    const second: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [first, second] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "overlapping scopePath");
+  });
+
   it("rejects a ledgerRef on the pack with empty runId", () => {
     const pack: ConnectedContextPack = {
       ...happyPack(),
@@ -948,6 +994,32 @@ describe("validateConnectedContextPack", () => {
       omitted: [{ scopePath: "src/index.ts", reason: "ignored", omittedAtMs: 1 }],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "overlaps selected scopePath");
+  });
+
+  it("rejects omitted entries that are descendants of selected file scopePaths", () => {
+    const file: ConnectedFileEntry = {
+      scopePath: "src",
+      role: "read-only",
+      selectionReason: "folder-summary",
+      excerpts: [],
+    };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      files: [file],
+      omitted: [{ scopePath: "src/index.ts", reason: "ignored", omittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "overlaps selected scopePath");
+  });
+
+  it("rejects ancestor/descendant omitted scopePath overlaps", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      omitted: [
+        { scopePath: "src", reason: "low-relevance", omittedAtMs: 1 },
+        { scopePath: "src/index.ts", reason: "ignored", omittedAtMs: 2 },
+      ],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "overlapping scopePath");
   });
 
   it("rejects omitted entries outside the selected scope", () => {
@@ -1032,6 +1104,20 @@ describe("validateConnectedContextPack", () => {
     const pack: ConnectedContextPack = {
       ...happyPack(),
       uncertainty: [{ kind: "no-evidence", claim: "missing proof", impactedAtomIds: [""], emittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds invalid");
+  });
+
+  it("rejects a pack with a missing runtime impactedAtomIds array instead of throwing", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      uncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "missing proof",
+          emittedAtMs: 1,
+        } as unknown as ConnectedContextPack["uncertainty"][number],
+      ],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds invalid");
   });

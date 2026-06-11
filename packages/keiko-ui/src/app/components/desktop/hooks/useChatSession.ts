@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
+import { sortProjects } from "@/lib/sidebar-sort";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
@@ -388,8 +389,8 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));
-  const project =
-    projectPayload.projects.find((item) => item.available) ?? projectPayload.projects[0];
+  const projects = sortProjects(projectPayload.projects);
+  const project = projects.find((item) => item.available) ?? projects[0];
 
   if (project !== undefined) {
     const chatPayload = await fetchChats(project.path).catch(() => ({ chats: [] }));
@@ -401,7 +402,7 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
       return {
         models: chatModels,
         selectedModel,
-        projects: Array.from(projectPayload.projects),
+        projects: Array.from(projects),
         activeProject: project,
         chats: sortedChats,
         activeChat: latestChat,
@@ -416,7 +417,7 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
     return {
       models: chatModels,
       selectedModel: undefined,
-      projects: Array.from(projectPayload.projects),
+      projects: Array.from(projects),
       activeProject: project,
       chats: [],
       activeChat: undefined,
@@ -1129,8 +1130,8 @@ export function useChatSession(): UseChatSessionResult {
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
         // re-sorts the active chat to the top after the assistant reply lands.
         const [messagePayload, chatsPayload] = await Promise.all([
-          fetchChatMessages(chat.id, project.path),
-          fetchChats(project.path),
+          fetchChatMessages(chat.id, chat.projectPath),
+          fetchChats(chat.projectPath),
         ]);
         const refreshedActive = chatsPayload.chats.find((c) => c.id === chat.id);
         setState((previous) => ({

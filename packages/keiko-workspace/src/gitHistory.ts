@@ -10,6 +10,7 @@
 // sub-folder.
 
 import { createHash } from "node:crypto";
+import { isAbsolute, normalize } from "node:path";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { WorkspaceFs } from "./fs.js";
@@ -26,11 +27,16 @@ function queryFingerprint(query: RetrievalQuery): string {
 
 const GIT_DIR_PREFIX = "gitdir:";
 const HEAD_MAX_BYTES = 256;
+const GIT_POINTER_MAX_BYTES = 4096;
 const REFLOG_MAX_BYTES = 1_048_576;
 const REFLOG_MAX_LINES = 10_000;
 
 function isAllowedExternalGitdir(candidate: string): boolean {
   return candidate.replace(/\\/g, "/").includes("/.git/worktrees/");
+}
+
+function containsParentTraversal(candidate: string): boolean {
+  return candidate.split(/[\\/]+/).includes("..");
 }
 
 async function readGuardedAbsolute(
@@ -81,20 +87,58 @@ async function readGuardedAbsolute(
 function statOrUndefined(
   fs: WorkspaceFs,
   abs: string,
-): { isFile: boolean; isDirectory: boolean } | undefined {
+):
+  | { size: number; isFile: boolean; isDirectory: boolean; hardLinkCount?: number | undefined }
+  | undefined {
   try {
     const stat = fs.stat(abs);
-    return { isFile: stat.isFile, isDirectory: stat.isDirectory };
+    return {
+      size: stat.size,
+      isFile: stat.isFile,
+      isDirectory: stat.isDirectory,
+      hardLinkCount: stat.hardLinkCount,
+    };
   } catch {
     return undefined;
   }
 }
 
-function readWorktreePointerTarget(fs: WorkspaceFs, dotGit: string): string | undefined {
-  let raw: string;
+async function readSmallUtf8File(
+  fs: WorkspaceFs,
+  abs: string,
+  maxBytes: number,
+): Promise<string | undefined> {
+  const stat = statOrUndefined(fs, abs);
+  if (!stat?.isFile) {
+    return undefined;
+  }
+  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
+    return undefined;
+  }
+  if (stat.size > maxBytes) {
+    return undefined;
+  }
+  if (fs.readFileBytes !== undefined) {
+    try {
+      const bytes = await fs.readFileBytes(abs, maxBytes);
+      return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    } catch {
+      return undefined;
+    }
+  }
   try {
-    raw = fs.readFileUtf8(dotGit);
+    return fs.readFileUtf8(abs);
   } catch {
+    return undefined;
+  }
+}
+
+async function readWorktreePointerTarget(
+  fs: WorkspaceFs,
+  dotGit: string,
+): Promise<string | undefined> {
+  const raw = await readSmallUtf8File(fs, dotGit, GIT_POINTER_MAX_BYTES);
+  if (raw === undefined) {
     return undefined;
   }
   const trimmed = raw.trim();
@@ -108,28 +152,54 @@ function readWorktreePointerTarget(fs: WorkspaceFs, dotGit: string): string | un
   return target;
 }
 
-function isContainedAndPresent(fs: WorkspaceFs, base: string, abs: string, label: string): boolean {
+function containedPathIfPresent(
+  fs: WorkspaceFs,
+  base: string,
+  abs: string,
+  label: string,
+): string | undefined {
   try {
-    assertContainedRealPath(fs, base, abs, label);
+    const contained = assertContainedRealPath(fs, base, abs, label);
+    if (!fs.exists(contained)) {
+      return undefined;
+    }
+    return contained;
   } catch {
-    return false;
+    return undefined;
   }
-  return fs.exists(abs);
 }
 
-function acceptsPointedGitdir(
+function isContainedAndPresent(fs: WorkspaceFs, base: string, abs: string, label: string): boolean {
+  return containedPathIfPresent(fs, base, abs, label) !== undefined;
+}
+
+function resolvePointedGitdir(
   fs: WorkspaceFs,
   root: string,
   target: string,
   candidate: string,
-): boolean {
-  if (!target.startsWith("/")) {
-    return true;
+): string | undefined {
+  if (!isAbsolute(target)) {
+    try {
+      return assertContainedRealPath(fs, root, candidate, ".git pointer");
+    } catch {
+      return undefined;
+    }
   }
-  if (isContainedAndPresent(fs, root, candidate, ".git pointer")) {
-    return true;
+  if (containsParentTraversal(target)) {
+    return undefined;
   }
-  return isAllowedExternalGitdir(candidate);
+  const contained = containedPathIfPresent(fs, root, candidate, ".git pointer");
+  if (contained !== undefined) {
+    return contained;
+  }
+  let canonical: string;
+  try {
+    canonical = fs.realPath(candidate);
+  } catch {
+    return undefined;
+  }
+  return isAllowedExternalGitdir(canonical) ? canonical : undefined;
 }
 
 // Find the first 10-digit run that is not preceded by '<'. Avoids regex backtracking.
@@ -194,7 +264,7 @@ function gitHeadAtom(scope: SearchScope, fingerprint: string, nowMs: number): Ev
 // Strategy: check whether HEAD lives directly at `.git/HEAD` first (covers the normal case AND
 // the memFs directory simulation where only child keys are recorded); fall back to treating
 // `.git` as a worktree-pointer file only when that leaf check fails.
-function resolveGitdir(fs: WorkspaceFs, root: string): string | undefined {
+async function resolveGitdir(fs: WorkspaceFs, root: string): Promise<string | undefined> {
   const dotGit = resolveWithinWorkspace(root, ".git");
   const headDirect = `${dotGit}/HEAD`;
   // Fast path: HEAD exists directly under .git — this is the standard directory layout.
@@ -212,32 +282,33 @@ function resolveGitdir(fs: WorkspaceFs, root: string): string | undefined {
     return undefined;
   }
   // Worktree-pointer: read the `gitdir: <path>` value, validate containment once.
-  const target = readWorktreePointerTarget(fs, dotGit);
+  const target = await readWorktreePointerTarget(fs, dotGit);
   if (target === undefined) {
     return undefined;
   }
-  const candidate = target.startsWith("/") ? target : resolveWithinWorkspace(root, target);
+  const candidate = isAbsolute(target) ? normalize(target) : resolveWithinWorkspace(root, target);
   // Real git worktrees usually point outside the checkout root to `.git/worktrees/<name>`.
   // Allow that one narrow shape, but still constrain the actual reads to files whose realpaths
   // stay inside the resolved gitdir itself.
-  if (!acceptsPointedGitdir(fs, root, target, candidate)) {
+  const gitdir = resolvePointedGitdir(fs, root, target, candidate);
+  if (gitdir === undefined) {
     return undefined;
   }
-  const pointedHead = `${candidate}/HEAD`;
-  if (!isContainedAndPresent(fs, candidate, pointedHead, ".git-pointer/HEAD")) {
+  const pointedHead = `${gitdir}/HEAD`;
+  if (!isContainedAndPresent(fs, gitdir, pointedHead, ".git-pointer/HEAD")) {
     return undefined;
   }
-  return candidate;
+  return gitdir;
 }
 
-function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): boolean {
+async function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): Promise<boolean> {
   // Finding 8: git-history is a repo-level signal; sub-folder scoping is meaningless and
   // would require reading outside the user-selected boundary.
   if (scope.relativePaths.length > 0) {
     return false;
   }
   const root = scope.workspace.root;
-  const gitdir = resolveGitdir(fs, root);
+  const gitdir = await resolveGitdir(fs, root);
   if (gitdir === undefined) {
     return false;
   }
@@ -248,11 +319,11 @@ function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): boolean {
 
 export const gitHistoryAdapter: StructuralAdapter = {
   name: "git-history",
-  isAvailable: (scope: SearchScope, fs: WorkspaceFs): Promise<boolean> => {
+  isAvailable: async (scope: SearchScope, fs: WorkspaceFs): Promise<boolean> => {
     try {
-      return Promise.resolve(isAvailableForScope(scope, fs));
+      return await isAvailableForScope(scope, fs);
     } catch {
-      return Promise.resolve(false);
+      return false;
     }
   },
   lookup: async (
@@ -270,11 +341,17 @@ export const gitHistoryAdapter: StructuralAdapter = {
     }
     const root = scope.workspace.root;
     // Finding 7: resolve the real gitdir so worktree-pointer layouts work end-to-end.
-    const gitdir = resolveGitdir(fs, root);
+    const gitdir = await resolveGitdir(fs, root);
     if (gitdir === undefined) {
       return [];
     }
-    const head = await readGuardedAbsolute(fs, gitdir, `${gitdir}/HEAD`, ".git/HEAD", HEAD_MAX_BYTES);
+    const head = await readGuardedAbsolute(
+      fs,
+      gitdir,
+      `${gitdir}/HEAD`,
+      ".git/HEAD",
+      HEAD_MAX_BYTES,
+    );
     if (head === undefined) {
       return [];
     }

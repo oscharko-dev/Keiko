@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "./_memfs.js";
-import { nodeWorkspaceFs } from "./fs.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
@@ -130,7 +130,6 @@ describe("gitHistoryAdapter.lookup", () => {
   });
 });
 
-
 describe("gitHistoryAdapter.isAvailable — scope.relativePaths (Finding 8)", () => {
   it("returns false when scope.relativePaths is non-empty", async () => {
     const { scope: base, fs } = makeScope({
@@ -147,9 +146,15 @@ describe("gitHistoryAdapter.isAvailable — scope.relativePaths (Finding 8)", ()
       ".git/logs/HEAD": SAMPLE_REFLOG,
     });
     const scopeRestricted = { ...base, relativePaths: ["src"] };
-    const atoms = await gitHistoryAdapter.lookup(scopeRestricted, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
-      nowMs: FIXED_NOW,
-    });
+    const atoms = await gitHistoryAdapter.lookup(
+      scopeRestricted,
+      nlq("recent"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      {
+        nowMs: FIXED_NOW,
+      },
+    );
     expect(atoms).toEqual([]);
   });
 });
@@ -223,6 +228,69 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
     expect(atoms.length).toBe(1);
     expect(atoms[0]?.scopePath).toBe(".git/HEAD");
   });
+
+  it("rejects external worktree pointers that traverse out after the allowlisted segment", async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-git-worktree-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "keiko-git-repo-"));
+    tempDirs.push(workspaceRoot, repoRoot);
+    const gitdir = join(repoRoot, ".git", "worktrees", "demo");
+    const victim = join(repoRoot, "victim");
+    mkdirSync(join(gitdir, "logs"), { recursive: true });
+    mkdirSync(join(victim, "logs"), { recursive: true });
+    writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${gitdir}/../../../victim\n`, "utf8");
+    writeFileSync(join(victim, "HEAD"), "ref: refs/heads/main\n", "utf8");
+    writeFileSync(join(victim, "logs", "HEAD"), SAMPLE_REFLOG, "utf8");
+    const workspace: WorkspaceInfo = {
+      root: workspaceRoot,
+      name: "demo",
+      version: "1.0.0",
+      testFramework: "vitest",
+      sourceDirs: ["src"],
+      testDirs: ["tests"],
+      languages: ["typescript", "javascript"],
+      ignoreLines: [],
+    };
+    const scope: SearchScope = { workspace, scopeId: "scope-traversal", relativePaths: [] };
+    await expect(gitHistoryAdapter.isAvailable(scope, nodeWorkspaceFs)).resolves.toBe(false);
+  });
+
+  it("does not read oversized .git pointer files", async () => {
+    const { scope, fs: baseFs } = makeScope({
+      ".git": `gitdir: .git-real\n`,
+      ".git-real/HEAD": "ref: refs/heads/feat\n",
+      ".git-real/logs/HEAD": SAMPLE_REFLOG,
+    });
+    let utf8Reads = 0;
+    let byteReads = 0;
+    const cappedFs: WorkspaceFs = {
+      ...baseFs,
+      stat: (abs) => {
+        const stat = baseFs.stat(abs);
+        return abs.endsWith("/.git") ? { ...stat, size: 50_000 } : stat;
+      },
+      readFileUtf8: (abs) => {
+        utf8Reads += 1;
+        return baseFs.readFileUtf8(abs);
+      },
+      readFileBytes: async (abs, maxBytes) => {
+        byteReads += 1;
+        return baseFs.readFileBytes?.(abs, maxBytes) ?? new Uint8Array();
+      },
+    };
+    await expect(gitHistoryAdapter.isAvailable(scope, cappedFs)).resolves.toBe(false);
+    const atoms = await gitHistoryAdapter.lookup(
+      scope,
+      nlq("recent"),
+      DEFAULT_SEARCH_LIMITS,
+      cappedFs,
+      {
+        nowMs: FIXED_NOW,
+      },
+    );
+    expect(atoms).toEqual([]);
+    expect(utf8Reads).toBe(0);
+    expect(byteReads).toBe(0);
+  });
 });
 
 describe("gitHistoryAdapter — size cap before read (Finding 6)", () => {
@@ -238,7 +306,9 @@ describe("gitHistoryAdapter — size cap before read (Finding 6)", () => {
     // (exactOptionalPropertyTypes forbids `readFileBytes: undefined`; destructure-to-exclude instead).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { readFileBytes: _dropped, ...baseWithoutBytes } = baseFs;
-    const hugeStatFs: typeof baseWithoutBytes & { stat: (abs: string) => ReturnType<typeof baseFs.stat> } = {
+    const hugeStatFs: typeof baseWithoutBytes & {
+      stat: (abs: string) => ReturnType<typeof baseFs.stat>;
+    } = {
       ...baseWithoutBytes,
       stat: (abs: string) => {
         const s = baseFs.stat(abs);
