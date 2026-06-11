@@ -26,6 +26,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.0",
     "@oscharko-dev/keiko-contracts": "*",
     "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-workspace": "*",

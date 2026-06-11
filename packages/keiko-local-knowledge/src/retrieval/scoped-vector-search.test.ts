@@ -284,7 +284,7 @@ describe("searchVectorsForScope — embedding dim mismatch", () => {
 describe("searchVectorsForScope — citation fields", () => {
   it("populates pageNumber + characterStart + characterEnd on every reference (page unit)", async () => {
     const { store } = getFixture();
-    await seedCapsuleWithVectors(store, {
+    const seeded = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-a",
       unit: {
         kind: "page",
@@ -305,12 +305,28 @@ describe("searchVectorsForScope — citation fields", () => {
     );
     expect(outcome.references.length).toBeGreaterThan(0);
     for (const ref of outcome.references) {
+      const chunkRow = store._internal.db
+        .prepare(
+          "SELECT character_start, character_end FROM chunks WHERE capsule_id = :c AND id = :id",
+        )
+        .get({ c: String(seeded.capsuleId), id: String(ref.citation.chunkId) }) as
+        | { readonly character_start: number; readonly character_end: number }
+        | undefined;
+      expect(chunkRow).toBeDefined();
       expect(ref.citation.pageNumber).toBe(42);
       expect(ref.citation.pageLabel).toBe("xlii");
-      expect(ref.citation.characterStart).toBe(100);
-      expect(ref.citation.characterEnd).toBe(500);
+      expect(ref.citation.characterStart).toBe(chunkRow?.character_start);
+      expect(ref.citation.characterEnd).toBe(chunkRow?.character_end);
+      expect(ref.citation.characterStart).toBeGreaterThanOrEqual(100);
+      expect(ref.citation.characterEnd).toBeLessThanOrEqual(500);
       expect(ref.citation.safeDisplayName).toBe("sample.txt");
     }
+    expect(
+      outcome.references.some(
+        (ref) => ref.citation.characterStart !== 100 || ref.citation.characterEnd !== 500,
+      ),
+    ).toBe(true);
+    expect(seeded.chunkIds.length).toBeGreaterThan(1);
   });
 
   it("populates sectionPath when the parsed unit is a section", async () => {

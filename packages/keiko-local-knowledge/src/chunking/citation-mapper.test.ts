@@ -96,6 +96,44 @@ describe("mapChunkToCitation", () => {
     expect(citation?.safeDisplayName).toBe("sample.txt");
   });
 
+  it("returns the chunk span instead of the full parsed-unit span", () => {
+    const text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "page",
+      documentId: "doc-1" as never,
+      pageNumber: 7,
+      pageLabel: "vii",
+      characterStart: 0,
+      characterEnd: text.length,
+    });
+    const result = chunkDocument(
+      fixture.store,
+      {
+        capsuleId: fixture.capsuleId,
+        sourceId: "src-1" as never,
+        documentId: "doc-1" as never,
+        sourceText: text,
+      },
+      { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    );
+    expect(result.chunkIds.length).toBeGreaterThan(1);
+    const chunkId = result.chunkIds[1] ?? ("" as never);
+    const chunkRow = fixture.store._internal.db
+      .prepare("SELECT character_start, character_end FROM chunks WHERE id = :id")
+      .get({ id: String(chunkId) }) as
+      | { readonly character_start: number; readonly character_end: number }
+      | undefined;
+
+    const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
+
+    expect(citation).not.toBeNull();
+    expect(citation?.pageNumber).toBe(7);
+    expect(citation?.characterStart).toBe(chunkRow?.character_start);
+    expect(citation?.characterEnd).toBe(chunkRow?.character_end);
+    expect(citation?.characterStart).not.toBe(0);
+    expect(citation?.characterEnd).not.toBe(text.length);
+  });
+
   it("returns sectionPath plus a containing page hop for a section parsed-unit chunk", () => {
     // Document with two pages and one section that lives on page 2.
     const text = "AAAA".repeat(50) + "BBBB".repeat(50); // 400 chars

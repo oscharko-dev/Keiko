@@ -37,6 +37,8 @@ interface ChunkRow {
   readonly source_id: string;
   readonly document_id: string;
   readonly parsed_unit_id: string;
+  readonly character_start: number | null;
+  readonly character_end: number | null;
 }
 
 interface ParsedUnitHopRow {
@@ -60,7 +62,7 @@ interface PageHopRow {
 }
 
 const SELECT_CHUNK_SQL =
-  "SELECT id, capsule_id, source_id, document_id, parsed_unit_id FROM chunks WHERE capsule_id = :c AND id = :id";
+  "SELECT id, capsule_id, source_id, document_id, parsed_unit_id, character_start, character_end FROM chunks WHERE capsule_id = :c AND id = :id";
 
 const SELECT_PARSED_UNIT_SQL = [
   "SELECT kind, page_number, page_label, section_path_json,",
@@ -179,6 +181,14 @@ function hopFieldsForUnit(unit: ParsedUnitHopRow): HopFields {
   };
 }
 
+function applyChunkSpan(hop: HopFields, chunk: ChunkRow): HopFields {
+  return {
+    ...hop,
+    characterStart: chunk.character_start ?? hop.characterStart,
+    characterEnd: chunk.character_end ?? hop.characterEnd,
+  };
+}
+
 function attachPageHop(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
@@ -239,7 +249,7 @@ export function mapChunkToCitation(
   const document = fetchDocumentRow(db, capsuleId, chunk.document_id as DocumentId);
   if (document === undefined) return null;
 
-  const baseHop = hopFieldsForUnit(unit);
+  const baseHop = applyChunkSpan(hopFieldsForUnit(unit), chunk);
   const hop = attachPageHop(db, capsuleId, chunk.document_id as DocumentId, baseHop);
   return buildCitation(chunk, document, hop, chunkId, capsuleId);
 }

@@ -17,6 +17,9 @@ export { KnowledgeStoreError, KnowledgePathError, KnowledgeNotFoundError } from 
 export { resolveKnowledgeStorePath, type ResolveKnowledgeStorePathOptions } from "./store-paths.js";
 export {
   openKnowledgeStore,
+  type KnowledgeStoreKeyProvider,
+  type KnowledgeStoreKeyProviderContext,
+  type KnowledgeStoreProtectionOptions,
   type KnowledgeStore,
   type OpenKnowledgeStoreOptions,
 } from "./store.js";

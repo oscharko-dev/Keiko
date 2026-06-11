@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 8 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 9 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -360,12 +360,20 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
 export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_documents_capsule_source ON documents(capsule_id, source_id, status);",
+  "CREATE INDEX idx_documents_capsule_status ON documents(capsule_id, status);",
   "CREATE INDEX idx_documents_content_hash ON documents(capsule_id, content_hash);",
+  "CREATE INDEX idx_documents_capsule_last_extracted ON documents(capsule_id, last_extracted_at);",
   "CREATE INDEX idx_chunks_capsule_document_order ON chunks(capsule_id, document_id, order_index);",
   "CREATE INDEX idx_vectors_capsule ON vectors(capsule_id);",
+  "CREATE INDEX idx_vectors_capsule_source ON vectors(capsule_id, source_id);",
+  "CREATE INDEX idx_vectors_capsule_document ON vectors(capsule_id, document_id);",
+  "CREATE INDEX idx_vectors_capsule_created ON vectors(capsule_id, created_at);",
   "CREATE INDEX idx_vectors_capsule_identity ON vectors(capsule_id, embedding_model_provider, embedding_model_id, vector_dimensions);",
+  "CREATE INDEX idx_parsed_units_capsule_document ON parsed_units(capsule_id, document_id);",
   "CREATE INDEX idx_parser_diagnostics_capsule_doc ON parser_diagnostics(capsule_id, document_id);",
+  "CREATE INDEX idx_parser_diagnostics_capsule_created ON parser_diagnostics(capsule_id, created_at DESC, id DESC);",
   "CREATE INDEX idx_indexing_jobs_capsule_status ON indexing_jobs(capsule_id, status);",
+  "CREATE INDEX idx_indexing_jobs_capsule_started ON indexing_jobs(capsule_id, started_at DESC, id DESC);",
   CREATE_CAPSULE_MEMBERSHIP_CHANGES_INDEX,
   CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
 ] as const;
@@ -412,6 +420,17 @@ const V1_INDEXES_WITHOUT_V2: readonly string[] = [
   "CREATE INDEX idx_vectors_capsule_identity ON vectors(capsule_id, embedding_model_provider, embedding_model_id, vector_dimensions);",
   "CREATE INDEX idx_parser_diagnostics_capsule_doc ON parser_diagnostics(capsule_id, document_id);",
   "CREATE INDEX idx_indexing_jobs_capsule_status ON indexing_jobs(capsule_id, status);",
+] as const;
+
+const V9_PERFORMANCE_INDEXES: readonly string[] = [
+  "CREATE INDEX idx_documents_capsule_status ON documents(capsule_id, status);",
+  "CREATE INDEX idx_documents_capsule_last_extracted ON documents(capsule_id, last_extracted_at);",
+  "CREATE INDEX idx_vectors_capsule_source ON vectors(capsule_id, source_id);",
+  "CREATE INDEX idx_vectors_capsule_document ON vectors(capsule_id, document_id);",
+  "CREATE INDEX idx_vectors_capsule_created ON vectors(capsule_id, created_at);",
+  "CREATE INDEX idx_parsed_units_capsule_document ON parsed_units(capsule_id, document_id);",
+  "CREATE INDEX idx_parser_diagnostics_capsule_created ON parser_diagnostics(capsule_id, created_at DESC, id DESC);",
+  "CREATE INDEX idx_indexing_jobs_capsule_started ON indexing_jobs(capsule_id, started_at DESC, id DESC);",
 ] as const;
 
 const CREATE_CAPSULE_MEMBERSHIP_CHANGES_V5 = CREATE_CAPSULE_MEMBERSHIP_CHANGES.replace(
@@ -528,6 +547,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "ALTER TABLE chunks ADD COLUMN character_end INTEGER;",
     ],
   },
+  {
+    version: 9,
+    reason:
+      "Add large-capsule scoped indexes for retrieval filters, health counts, bounded history reads, and retention cleanup (Issue #265 audit).",
+    up: V9_PERFORMANCE_INDEXES,
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -561,12 +586,20 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_documents_capsule_source",
+  "idx_documents_capsule_status",
   "idx_documents_content_hash",
+  "idx_documents_capsule_last_extracted",
   "idx_chunks_capsule_document_order",
   "idx_vectors_capsule",
+  "idx_vectors_capsule_source",
+  "idx_vectors_capsule_document",
+  "idx_vectors_capsule_created",
   "idx_vectors_capsule_identity",
+  "idx_parsed_units_capsule_document",
   "idx_parser_diagnostics_capsule_doc",
+  "idx_parser_diagnostics_capsule_created",
   "idx_indexing_jobs_capsule_status",
+  "idx_indexing_jobs_capsule_started",
   "idx_capsule_membership_changes_capsule_time",
   "idx_capsule_audit_events_capsule_time",
 ] as const;

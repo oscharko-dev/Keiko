@@ -8,6 +8,11 @@
 import { describe, expect, it } from "vitest";
 
 import * as api from "./index.js";
+import type {
+  KnowledgeStoreKeyProvider,
+  KnowledgeStoreKeyProviderContext,
+  KnowledgeStoreProtectionOptions,
+} from "./index.js";
 
 const PUBLIC_EXPORTS = [
   "KEIKO_LOCAL_KNOWLEDGE_VERSION",
@@ -55,18 +60,16 @@ describe("barrel surface", () => {
   // setup without reaching into internals.
   it("does not expose unscoped chunk/vector readers", () => {
     const names = Object.keys(api);
-    const offenders = names.filter(
-      (name) => {
-        if (name === "seedCapsuleWithVectors") return false;
-        return (
-          /^list(All|Every)/.test(name) ||
-          /Vectors?$/.test(name) ||
-          /Chunks?$/.test(name) ||
-          name === "listVectors" ||
-          name === "listChunks"
-        );
-      },
-    );
+    const offenders = names.filter((name) => {
+      if (name === "seedCapsuleWithVectors") return false;
+      return (
+        /^list(All|Every)/.test(name) ||
+        /Vectors?$/.test(name) ||
+        /Chunks?$/.test(name) ||
+        name === "listVectors" ||
+        name === "listChunks"
+      );
+    });
     expect(offenders, `unscoped reader exports leaked: ${offenders.join(", ")}`).toStrictEqual([]);
   });
 
@@ -86,5 +89,12 @@ describe("barrel surface", () => {
         expect(fn.length, `${name} should take store + scope arg`).toBeGreaterThanOrEqual(2);
       }
     }
+  });
+
+  it("exposes local-store protection seam types", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<KnowledgeStoreKeyProvider>();
+    pin<KnowledgeStoreKeyProviderContext>();
+    pin<KnowledgeStoreProtectionOptions>();
   });
 });

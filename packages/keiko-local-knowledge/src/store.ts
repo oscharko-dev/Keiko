@@ -11,7 +11,7 @@
 //
 // Crash-safe write tradeoffs documented inline next to each PRAGMA call.
 
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -26,6 +26,22 @@ import { KnowledgeStoreError } from "./errors.js";
 export interface OpenKnowledgeStoreOptions {
   readonly dbPath: string;
   readonly clock?: () => number;
+  readonly protection?: KnowledgeStoreProtectionOptions;
+}
+
+export interface KnowledgeStoreKeyProviderContext {
+  readonly dbPath: string;
+  readonly schemaVersion: number;
+}
+
+export interface KnowledgeStoreKeyProvider {
+  readonly providerId: string;
+  readonly resolveKey: (context: KnowledgeStoreKeyProviderContext) => Uint8Array;
+}
+
+export interface KnowledgeStoreProtectionOptions {
+  readonly mode?: "plaintext-local-file-permissions" | "encrypted-key-provider";
+  readonly keyProvider?: KnowledgeStoreKeyProvider;
 }
 
 // `_internal.db` is exposed so the lifecycle helpers in this package can issue prepared
@@ -61,6 +77,17 @@ function applyDurabilityPragmas(db: DatabaseSync): void {
   // the host process; matches keiko-server's #62 store.
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
+}
+
+function rejectUnsupportedProtection(opts: OpenKnowledgeStoreOptions): void {
+  if (
+    opts.protection?.mode === "encrypted-key-provider" ||
+    opts.protection?.keyProvider !== undefined
+  ) {
+    throw new KnowledgeStoreError(
+      "Encrypted local-knowledge stores are not enabled in this build; refusing to open with a key provider.",
+    );
+  }
 }
 
 function currentUserVersion(db: DatabaseSync): number {
@@ -140,7 +167,10 @@ function quarantineFile(target: string): void {
   }
 }
 
-function tryOpenAndMigrate(dbPath: string, onError?: (cause: unknown) => void): DatabaseSync | undefined {
+function tryOpenAndMigrate(
+  dbPath: string,
+  onError?: (cause: unknown) => void,
+): DatabaseSync | undefined {
   // Returns the opened, migrated handle on success; undefined when the file is unusable
   // (open threw OR the post-migrate schema is missing expected tables OR the file held
   // foreign content that we refuse to coexist with). Callers handle quarantine + retry.
@@ -183,9 +213,22 @@ function ensureParentDir(dbPath: string): void {
     // 0o700: best-effort on POSIX; ignored on win32.
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
+  restrictPathPermissions(dir, 0o700);
+}
+
+function restrictPathPermissions(target: string, mode: number): void {
+  if (process.platform === "win32" || !existsSync(target)) return;
+  chmodSync(target, mode);
+}
+
+function restrictStoreFilePermissions(dbPath: string): void {
+  restrictPathPermissions(dbPath, 0o600);
+  restrictPathPermissions(`${dbPath}-wal`, 0o600);
+  restrictPathPermissions(`${dbPath}-shm`, 0o600);
 }
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
+  rejectUnsupportedProtection(opts);
   ensureParentDir(opts.dbPath);
   let db = tryOpenAndMigrate(opts.dbPath);
   let lastError: unknown;
@@ -201,6 +244,7 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
       lastError !== undefined ? { cause: lastError } : undefined,
     );
   }
+  restrictStoreFilePermissions(opts.dbPath);
   const now = opts.clock ?? defaultClock;
   const handle = db;
   return {

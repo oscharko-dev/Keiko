@@ -1,7 +1,7 @@
 // store.test.ts — integration coverage for openKnowledgeStore: schema apply, restart
 // safety, corrupted-DB quarantine, migration runner, durability pragmas.
 
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -60,11 +60,46 @@ describe("openKnowledgeStore — fresh install", () => {
       const db = store._internal.db;
       const journal = db.prepare("PRAGMA journal_mode").get() as unknown as JournalRow;
       expect(journal.journal_mode).toBe("wal");
-      const fk = db.prepare("PRAGMA foreign_keys").get() as unknown as { readonly foreign_keys: number };
+      const fk = db.prepare("PRAGMA foreign_keys").get() as unknown as {
+        readonly foreign_keys: number;
+      };
       expect(fk.foreign_keys).toBe(1);
     } finally {
       store.close();
     }
+  });
+
+  it("restricts the store directory and SQLite files on POSIX", () => {
+    if (process.platform === "win32") return;
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({ dbPath });
+    try {
+      const dbMode = statSync(dbPath).mode & 0o777;
+      const dirMode = statSync(tmp).mode & 0o777;
+      expect(dbMode).toBe(0o600);
+      expect(dirMode).toBe(0o700);
+      for (const sidecar of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+        const sidecarMode = statSync(sidecar).mode & 0o777;
+        expect(sidecarMode).toBe(0o600);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("refuses key-provider encryption mode until encrypted stores are implemented", () => {
+    expect(() =>
+      openKnowledgeStore({
+        dbPath: join(tmp, "capsules.db"),
+        protection: {
+          mode: "encrypted-key-provider",
+          keyProvider: {
+            providerId: "test-provider",
+            resolveKey: () => new Uint8Array(32),
+          },
+        },
+      }),
+    ).toThrow(/Encrypted local-knowledge stores are not enabled/);
   });
 });
 
@@ -138,7 +173,9 @@ describe("openKnowledgeStore — corrupted-DB quarantine", () => {
     const store = openKnowledgeStore({ dbPath });
     try {
       // Quarantined → fresh DB → capsules table present.
-      const ok = store._internal.db.prepare("SELECT COUNT(*) AS n FROM capsules").get() as unknown as CountRow;
+      const ok = store._internal.db
+        .prepare("SELECT COUNT(*) AS n FROM capsules")
+        .get() as unknown as CountRow;
       expect(ok.n).toBe(0);
       // Quarantine file present alongside the new db.
       const moved = readdirSync(tmp).find((n) =>
@@ -166,7 +203,9 @@ describe("openKnowledgeStore — migration runner", () => {
 
     const store = openKnowledgeStore({ dbPath });
     try {
-      const version = store._internal.db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      const version = store._internal.db
+        .prepare("PRAGMA user_version")
+        .get() as unknown as VersionRow;
       expect(version.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
       const row = store._internal.db
         .prepare("SELECT COUNT(*) AS n FROM capsules")
@@ -274,4 +313,3 @@ describe("openKnowledgeStore — sidecar quarantine", () => {
     expect(corruptShm).toBe(true);
   });
 });
-

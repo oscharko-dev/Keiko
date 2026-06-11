@@ -18,7 +18,22 @@
 import { redactPathInDiagnostic } from "@oscharko-dev/keiko-contracts";
 
 const HARD_CAP_CHARS = 1024;
-const PATH_BREAK_CHARS = new Set([" ", "\n", "\r", "\t", "\"", "'", "<", ">", "|"]);
+const PATH_BREAK_CHARS = new Set([" ", "\n", "\r", "\t", '"', "'", "<", ">", "|"]);
+const PATH_BOUNDARY_CHARS = new Set([
+  " ",
+  "\n",
+  "\r",
+  "\t",
+  '"',
+  "'",
+  "(",
+  "[",
+  "{",
+  ",",
+  ";",
+  ":",
+  "=",
+]);
 const TRAILING_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", ")", "]"]);
 
 export function redactDiagnosticMessage(message: string, homePrefix: string): string {
@@ -138,17 +153,7 @@ function isPrefixedPath(value: string, prefix: string): boolean {
 function hasPathBoundary(message: string, index: number): boolean {
   if (index === 0) return true;
   const previous = message[index - 1];
-  return (
-    previous === " " ||
-    previous === "\n" ||
-    previous === "\r" ||
-    previous === "\t" ||
-    previous === "(" ||
-    previous === "[" ||
-    previous === "{" ||
-    previous === ":" ||
-    previous === "="
-  );
+  return previous !== undefined && PATH_BOUNDARY_CHARS.has(previous);
 }
 
 function stripTrailingSlash(value: string): string {

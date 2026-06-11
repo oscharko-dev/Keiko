@@ -962,7 +962,7 @@ async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobErr
     }
     return {
       code: "EMBEDDING_ADAPTER_FAILED",
-      message: cause instanceof Error ? cause.message : String(cause),
+      message: "embedding capability preflight failed before indexing started",
     };
   }
 }

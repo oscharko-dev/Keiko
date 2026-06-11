@@ -14,6 +14,7 @@ import type {
   KnowledgeSource,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { createCapsule, getCapsule } from "../capsule-lifecycle.js";
@@ -669,6 +670,37 @@ describe("runIndexingJob — embedding capability preflight", () => {
         "embedding model is not available on the configured gateway",
       );
     }
+  });
+
+  it("persists a fixed safe message when embedding preflight throws", async () => {
+    const adapter = {
+      endpoint: "https://private-gateway.internal/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: (): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.reject(
+          new Error("dial https://private-gateway.internal/v1 from /Users/victim/.config/key"),
+        ),
+    };
+
+    const events = await drain(
+      runIndexingJob(
+        buildOptions(fixture, { embeddingAdapter: adapter, idSource: () => "job-preflight" }),
+      ),
+    );
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("EMBEDDING_ADAPTER_FAILED");
+      expect(terminal.error.message).toBe(
+        "embedding capability preflight failed before indexing started",
+      );
+    }
+    const row = selectJobById(fixture.store._internal.db, "job-preflight");
+    expect(row?.last_error_message).toBe(
+      "embedding capability preflight failed before indexing started",
+    );
+    expect(row?.last_error_message).not.toContain("private-gateway");
+    expect(row?.last_error_message).not.toContain("/Users/victim");
   });
 });
 
