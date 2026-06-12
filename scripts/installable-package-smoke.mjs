@@ -38,8 +38,15 @@ function fail(message) {
   process.exit(1);
 }
 
-function run(cmd, args, options) {
-  const result = spawnSync(cmd, args, { encoding: "utf8", ...options });
+function run(cmd, args, options = {}) {
+  // `npm` resolves to `npm.cmd` on Windows, which modern Node refuses to spawn without a shell
+  // (CVE-2024-27980 hardening); route npm — and only npm — through the shell so the packaged-artifact
+  // smoke is cross-platform (the #284 OS matrix surfaced this). `node` is a real executable and is
+  // spawned directly (no shell) so absolute bin paths never pass through shell word-splitting. The
+  // npm arguments are tool-internal literals plus a tarball path under a controlled directory — no
+  // untrusted shell input. POSIX is unaffected: the shell runs the same `npm …` invocation.
+  const needsShell = cmd === "npm";
+  const result = spawnSync(cmd, args, { encoding: "utf8", shell: needsShell, ...options });
   if (result.error) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }

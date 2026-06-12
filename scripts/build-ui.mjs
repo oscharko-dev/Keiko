@@ -21,7 +21,15 @@ const staticDir = join(repoRoot, "dist", "ui", "static");
 const hashesFile = join(repoRoot, "dist", "ui", "csp-hashes.json");
 
 function run(command, args) {
-  const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit" });
+  // `npm` resolves to `npm.cmd` on Windows, and modern Node refuses to spawn a `.cmd`/`.bat` without
+  // a shell (CVE-2024-27980 hardening) — without `shell: true` the spawn fails immediately with a
+  // null status, which is exactly the Windows-only failure the #284 cross-platform CI surfaced. The
+  // arguments are hardcoded literals (no untrusted input), so the shell carries no injection surface.
+  // POSIX (Linux/macOS) is unaffected: the shell runs the same `npm …` invocation.
+  const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit", shell: true });
+  if (result.error) {
+    throw new Error(`${command} ${args.join(" ")} failed to spawn: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} exited with ${String(result.status)}`);
   }
