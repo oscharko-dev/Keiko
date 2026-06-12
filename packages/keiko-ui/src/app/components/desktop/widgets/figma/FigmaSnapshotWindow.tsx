@@ -96,13 +96,6 @@ const FIGMA_NETWORK_ERRORS: ReadonlySet<string> = new Set([
   "FIGMA_EGRESS_FAILED",
 ]);
 
-// Full set for FIGMA_EXTERNAL_DEPENDENCY_ERRORS — used by the egress-alert gate.
-const FIGMA_EXTERNAL_DEPENDENCY_ERRORS: ReadonlySet<string> = new Set([
-  ...FIGMA_PROXY_ERRORS,
-  ...FIGMA_CA_ERRORS,
-  ...FIGMA_NETWORK_ERRORS,
-]);
-
 function formatSnapshotError(err: unknown): SnapshotErrorNotice {
   if (err instanceof ApiError) {
     // Fix #4: FIGMA_UPSTREAM_UNAVAILABLE is a plain Figma outage — not a proxy/CA issue.
