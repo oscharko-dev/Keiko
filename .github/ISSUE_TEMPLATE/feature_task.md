@@ -12,6 +12,20 @@ Parent Epic: #<epic_number>
 
 Describe the goal of this issue and the user, developer, platform, or governance outcome it must create.
 
+## Feature Categories
+
+Select every category that applies to this issue. If none of the listed categories fit, add a short note in `Scope` explaining the missing category.
+
+- [ ] UI/UX
+- [ ] Workflow
+- [ ] Backend / API
+- [ ] Documentation
+- [ ] Infrastructure / DevEx
+- [ ] Security / Privacy
+- [ ] Performance
+- [ ] Accessibility
+- [ ] Other: describe in `Scope`
+
 ## Epic And Board Placement
 
 - [ ] `Parent Epic: #<epic_number>` is present and points to the governing open epic.
