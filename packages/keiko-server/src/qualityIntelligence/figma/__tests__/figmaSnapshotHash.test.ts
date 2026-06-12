@@ -63,3 +63,49 @@ describe("hashScreen — a11y colour fields are hash-neutral (#812)", () => {
     expect(hashScreen(ir.id, ir, "a".repeat(64))).not.toBe(hashScreen(ir.id, ir, "b".repeat(64)));
   });
 });
+
+describe("hashScreen — layout/sizing/cornerRadius/typography fields are hash-neutral", () => {
+  // Mirrors the a11y-colour neutrality test above: the new codegen-metadata fields must NOT change
+  // the drift identity when added to an otherwise identical design. A snapshot built before these
+  // fields shipped and one built after must compare as NOT-drifted.
+
+  it("yields the same hash whether or not layout/sizing/cornerRadius/typography are present", () => {
+    const without = screen(
+      leaf("root", {
+        interactionHint: "container",
+        type: "FRAME",
+        children: [leaf("t", { text: "Hi" })],
+      }),
+    );
+    const withLayout: IrNode = {
+      ...leaf("root", {
+        interactionHint: "container",
+        type: "FRAME",
+        children: [
+          {
+            ...leaf("t", { text: "Hi" }),
+            typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+          },
+        ],
+      }),
+      layout: { mode: "row", itemSpacing: 8, padding: [16, 16, 16, 16] },
+      sizing: { horizontal: "fill" },
+      cornerRadius: 8,
+    };
+
+    expect(hashScreen("s1", screen(withLayout), SHA)).toBe(hashScreen(without.id, without, SHA));
+  });
+
+  it("still changes the hash for a genuine structural change even when layout fields are present", () => {
+    const a: IrNode = {
+      ...leaf("root", { interactionHint: "container", children: [leaf("t1")] }),
+      layout: { mode: "row" },
+    };
+    const b: IrNode = {
+      ...leaf("root", { interactionHint: "container", children: [leaf("t2")] }),
+      layout: { mode: "row" },
+    };
+
+    expect(hashScreen("s1", screen(a), SHA)).not.toBe(hashScreen("s1", screen(b), SHA));
+  });
+});

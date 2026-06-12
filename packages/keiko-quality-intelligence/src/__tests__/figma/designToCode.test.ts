@@ -514,3 +514,138 @@ describe("htmlCssAdapter — CSS value sanitization (Fix #8)", () => {
     expect(css).toContain("#aabbcc");
   });
 });
+
+// ─── Layout / sizing / cornerRadius / typography CSS emission ────────────────
+//
+// Verifies that htmlCssAdapter consumes the additive IrNode layout fields threaded through
+// EmissionElement: a flex container emits display:flex + flex-direction + gap + padding, a
+// token-matching TEXT emits var(--font-N), fill sizing emits width:100% / flex:1, and a node
+// with no layout fields emits no class or per-screen <style> block.
+
+describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive IR fields)", () => {
+  // A container node carrying auto-layout: HORIZONTAL, 8px gap, 16px padding all round.
+  const flexContainer = (): IrNode =>
+    node("flex-root", "container", {
+      name: "flex-root",
+      layout: { mode: "row", itemSpacing: 8, padding: [16, 16, 16, 16] },
+      children: [node("child-a", "text", { text: "A" }), node("child-b", "text", { text: "B" })],
+    });
+
+  it("emits display:flex, flex-direction:row, gap, and padding for an auto-layout container", () => {
+    const s = screen("s-f", "Flex", flexContainer());
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-f.html");
+    expect(html).toContain("display: flex;");
+    expect(html).toContain("flex-direction: row;");
+    expect(html).toContain("gap: 8px;");
+    expect(html).toContain("padding: 16px 16px 16px 16px;");
+  });
+
+  it("emits the layout CSS class on the element carrying layout", () => {
+    const s = screen("s-f", "Flex", flexContainer());
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-f.html");
+    // The CSS class name is "n-" + sanitized node id ("flex-root" → "flex-root").
+    expect(html).toContain('class="n-flex-root"');
+    // The matching rule must appear in a <style> block.
+    expect(html).toContain("<style>");
+    expect(html).toContain(".n-flex-root {");
+  });
+
+  it("emits border-radius when cornerRadius is set", () => {
+    const s = screen("s-r", "Radius", node("card", "container", { name: "card", cornerRadius: 8 }));
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-r.html");
+    expect(html).toContain("border-radius: 8px;");
+  });
+
+  it("emits flex:1 for a fill-sized node (vertical fill)", () => {
+    const s = screen(
+      "s-fill",
+      "Fill",
+      node("fill-node", "container", {
+        layout: { mode: "column" },
+        sizing: { vertical: "fill" },
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-fill.html");
+    expect(html).toContain("flex: 1;");
+  });
+
+  it("emits width:100% for a horizontal fill-sized node", () => {
+    const s = screen(
+      "s-hfill",
+      "HFill",
+      node("hfill-node", "container", {
+        layout: { mode: "row" },
+        sizing: { horizontal: "fill" },
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-hfill.html");
+    expect(html).toContain("width: 100%;");
+  });
+
+  it("emits var(--font-N) when TEXT typography matches a token in tokens.css", () => {
+    // The typography token matches fontFamily+fontSize+fontWeight of the node.
+    const typographyTokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typography:Inter|16|400|24",
+          kind: "typography",
+          fontFamily: "Inter",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const s = screen(
+      "s-typo",
+      "Typo",
+      node("label", "text", {
+        text: "Hello",
+        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+      }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: typographyTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-typo.html");
+    // The first (only) typography token maps to --font-1.
+    expect(html).toContain("font: var(--font-1);");
+    // The var(--font-1) must actually be declared in tokens.css.
+    const css = fileByPath(artifact, "tokens.css");
+    expect(css).toContain("--font-1:");
+  });
+
+  it("emits no <style> block and no class attribute when no layout fields are present", () => {
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-login.html");
+    // The login screen fixture carries no layout/sizing/cornerRadius/typography fields.
+    expect(html).not.toContain("<style>");
+    expect(html).not.toContain("class=");
+  });
+
+  it("is byte-identical on a re-run even with layout fields (deterministic)", () => {
+    const input = {
+      screens: [screen("s-f", "Flex", flexContainer())],
+      tokens: NO_TOKENS,
+      hints: [],
+    };
+    const a = emitCode(input, htmlCssAdapter);
+    const b = emitCode(
+      { screens: [screen("s-f", "Flex", flexContainer())], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});

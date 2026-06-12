@@ -21,6 +21,54 @@ export interface ImageFillRef {
   readonly imageRef: string;
 }
 
+/** Auto-layout direction for a flex container. */
+export type LayoutMode = "row" | "column";
+
+/** Simplified alignment shorthand for a flex axis. */
+export type AlignItems = "start" | "center" | "end" | "space-between";
+
+/**
+ * Auto-layout properties for a FRAME/COMPONENT/INSTANCE that has `layoutMode` set. Optional and
+ * additive: absent when the node has no auto-layout. NEVER folded into the snapshot integrity hash
+ * (#753/#735) — it is codegen metadata, not structural drift identity.
+ */
+export interface IrLayout {
+  /** Flex direction derived from Figma `layoutMode` (HORIZONTAL → row, VERTICAL → column). */
+  readonly mode: LayoutMode;
+  /** Gap between children, from `itemSpacing`. */
+  readonly itemSpacing?: number;
+  /** Padding: [top, right, bottom, left]. Absent when all four are zero/absent. */
+  readonly padding?: readonly [number, number, number, number];
+  /** Primary-axis alignment (Figma `primaryAxisAlignItems`). */
+  readonly primaryAlign?: AlignItems;
+  /** Cross-axis alignment (Figma `counterAxisAlignItems`). */
+  readonly counterAlign?: AlignItems;
+}
+
+/** Whether a dimension is fixed, fills available space, or hugs content. */
+export type LayoutSizing = "fixed" | "hug" | "fill";
+
+/**
+ * Per-axis sizing mode (Figma `layoutSizingHorizontal` / `layoutSizingVertical`). Optional and
+ * additive; absent when the node has no auto-layout parent or when sizing is not explicitly set.
+ * Hash-neutral like {@link IrLayout}.
+ */
+export interface IrSizing {
+  readonly horizontal?: LayoutSizing;
+  readonly vertical?: LayoutSizing;
+}
+
+/**
+ * Per-TEXT-node typography properties, only present on TEXT nodes. Matches what `tokens.ts`
+ * already extracts globally (fontFamily, fontSize, fontWeight). Optional and additive; absent for
+ * non-TEXT nodes or when the `style` block is missing. Hash-neutral like {@link IrLayout}.
+ */
+export interface IrTypography {
+  readonly fontFamily: string;
+  readonly fontSize: number;
+  readonly fontWeight: number;
+}
+
 /** A kept node in a screen's normalized structural tree. */
 export interface IrNode {
   readonly id: string;
@@ -41,6 +89,26 @@ export interface IrNode {
    * additive, and hash-neutral like {@link IrNode.textColor}.
    */
   readonly backgroundColor?: string;
+  /**
+   * Auto-layout properties (direction, gap, padding, alignment). Optional and additive: absent when
+   * the node has no auto-layout. Hash-neutral — codegen metadata, not structural drift identity.
+   */
+  readonly layout?: IrLayout;
+  /**
+   * Per-axis sizing mode. Optional and additive: absent when no sizing context exists.
+   * Hash-neutral like {@link IrNode.layout}.
+   */
+  readonly sizing?: IrSizing;
+  /**
+   * Corner radius in pixels. Optional and additive: absent when zero or absent from source.
+   * Hash-neutral like {@link IrNode.layout}.
+   */
+  readonly cornerRadius?: number;
+  /**
+   * Per-TEXT typography (fontFamily, fontSize, fontWeight). Optional and additive: absent for
+   * non-TEXT nodes or when the style block is missing. Hash-neutral like {@link IrNode.layout}.
+   */
+  readonly typography?: IrTypography;
   readonly imageFills: readonly ImageFillRef[];
   readonly children: readonly IrNode[];
 }

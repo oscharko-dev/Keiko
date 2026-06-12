@@ -691,3 +691,172 @@ describe("cleanScopedNodesToScreenIr — 5000-deep chain degrades, no RangeError
     expect(result.reduction.inputNodeCount).toBeGreaterThan(result.reduction.keptNodeCount);
   });
 });
+
+// ─── Layout / sizing / cornerRadius / typography fields on the IR node ────────────────
+
+describe("cleanScopedNodesToScreenIr — layout/sizing/cornerRadius/typography projection", () => {
+  const findById = (node: IrNode | undefined, id: string): IrNode | undefined => {
+    if (node === undefined) return undefined;
+    if (node.id === id) return node;
+    for (const child of node.children) {
+      const hit = findById(child, id);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  };
+
+  it("projects HORIZONTAL layoutMode to layout.mode row with gap and padding", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      itemSpacing: 8,
+      paddingTop: 4,
+      paddingRight: 8,
+      paddingBottom: 4,
+      paddingLeft: 8,
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+    const root = findById(result.screens[0]?.root, "1:1");
+
+    expect(root?.layout?.mode).toBe("row");
+    expect(root?.layout?.itemSpacing).toBe(8);
+    expect(root?.layout?.padding).toEqual([4, 8, 4, 8]);
+  });
+
+  it("projects VERTICAL layoutMode to layout.mode column", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
+      layoutMode: "VERTICAL",
+      itemSpacing: 12,
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+    const root = findById(result.screens[0]?.root, "1:1");
+
+    expect(root?.layout?.mode).toBe("column");
+    expect(root?.layout?.itemSpacing).toBe(12);
+  });
+
+  it("projects primaryAxisAlignItems and counterAxisAlignItems to layout", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      primaryAxisAlignItems: "CENTER",
+      counterAxisAlignItems: "MIN",
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+    const root = findById(result.screens[0]?.root, "1:1");
+
+    expect(root?.layout?.primaryAlign).toBe("center");
+    expect(root?.layout?.counterAlign).toBe("start");
+  });
+
+  it("omits layout when layoutMode is absent", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "S", [text("1:2", "x")])]),
+    );
+    const root = result.screens[0]?.root;
+
+    expect(root?.layout).toBeUndefined();
+  });
+
+  it("omits layout.padding when all padding values are zero or absent", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      paddingTop: 0,
+      paddingLeft: 0,
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+    const root = findById(result.screens[0]?.root, "1:1");
+
+    expect(root?.layout?.padding).toBeUndefined();
+  });
+
+  it("projects layoutSizingHorizontal FILL and FIXED to sizing", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      layoutSizingHorizontal: "FILL",
+      layoutSizingVertical: "FIXED",
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+    const root = findById(result.screens[0]?.root, "1:1");
+
+    expect(root?.sizing?.horizontal).toBe("fill");
+    expect(root?.sizing?.vertical).toBe("fixed");
+  });
+
+  it("omits sizing when neither axis has a sizing value", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "S", [text("1:2", "x")])]),
+    );
+    expect(result.screens[0]?.root.sizing).toBeUndefined();
+  });
+
+  it("projects cornerRadius when positive", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], { cornerRadius: 8 });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+
+    expect(result.screens[0]?.root.cornerRadius).toBe(8);
+  });
+
+  it("omits cornerRadius when zero", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], { cornerRadius: 0 });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+
+    expect(result.screens[0]?.root.cornerRadius).toBeUndefined();
+  });
+
+  it("omits cornerRadius when absent", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "S", [text("1:2", "x")])]),
+    );
+    expect(result.screens[0]?.root.cornerRadius).toBeUndefined();
+  });
+
+  it("projects per-TEXT typography (fontFamily/fontSize/fontWeight)", () => {
+    const t = text("1:2", "Hello", { fontFamily: "Roboto", fontSize: 14, fontWeight: 700 });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "S", [t])]));
+    const textNode = findById(result.screens[0]?.root, "1:2");
+
+    expect(textNode?.typography).toEqual({ fontFamily: "Roboto", fontSize: 14, fontWeight: 700 });
+  });
+
+  it("omits typography for non-TEXT nodes", () => {
+    const rect: FigmaSourceNode = {
+      id: "1:2",
+      name: "Box",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "S", [rect])]));
+    const rectNode = findById(result.screens[0]?.root, "1:2");
+
+    expect(rectNode?.typography).toBeUndefined();
+  });
+
+  it("omits typography when the style block is absent from a TEXT node", () => {
+    const t: FigmaSourceNode = {
+      id: "1:2",
+      name: "label",
+      type: "TEXT",
+      characters: "label",
+      absoluteBoundingBox: bbox(0, 0, 100, 20),
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "S", [t])]));
+    const textNode = findById(result.screens[0]?.root, "1:2");
+
+    expect(textNode?.typography).toBeUndefined();
+  });
+
+  it("clamps absurd (negative/NaN) numeric values to absent", () => {
+    const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      itemSpacing: -5,
+      cornerRadius: -1,
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
+    const root = result.screens[0]?.root;
+
+    // Negative itemSpacing → omitted (treated as absent).
+    expect(root?.layout?.itemSpacing).toBeUndefined();
+    // Negative cornerRadius → omitted.
+    expect(root?.cornerRadius).toBeUndefined();
+  });
+});

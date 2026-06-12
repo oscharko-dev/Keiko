@@ -28,27 +28,42 @@ const canonical = (value: unknown): string => {
   return `{${entries.join(",")}}`;
 };
 
-// Hash-neutral IR projection (Issue #812): the a11y-derivation colour fields `textColor` /
-// `backgroundColor` are additive metadata on every IrNode, NOT structural identity — folding them
+// Hash-neutral IR projection (Issue #812 + layout/sizing/typography additive fields): several
+// optional IrNode fields are codegen/a11y metadata, NOT structural drift identity — folding them
 // into the integrity hash would change the drift identity (#735) of an unchanged design the first
-// time a snapshot is rebuilt with the colour-aware normalizer. We therefore strip them recursively
-// before canonicalising, mirroring how `links` is excluded from the snapshot hash. Every other IR
-// field still participates, so a genuine structural change still surfaces as drift.
+// time a snapshot is rebuilt with the field-aware normalizer. We therefore strip all of them
+// recursively before canonicalising, mirroring how `links` is excluded from the snapshot hash.
+// Every other IR field still participates, so a genuine structural change still surfaces as drift.
+//
+// Stripped fields and their rationale:
+//   textColor / backgroundColor — a11y-derivation colour metadata (#812)
+//   layout / sizing / cornerRadius / typography — codegen layout metadata (additive, this PR)
 type IrNode = ScreenIr["root"];
 
-const stripA11yColors = (node: IrNode): Record<string, unknown> => {
-  const projected: Record<string, unknown> = {
-    ...node,
-    children: node.children.map(stripA11yColors),
+// Keys excluded from the integrity hash. Using a static Set + Object.entries filter avoids both
+// dynamic-delete (no-dynamic-delete) and unused-var issues while keeping the whitelist explicit.
+const HASH_NEUTRAL_KEYS = new Set([
+  "textColor",
+  "backgroundColor",
+  "layout",
+  "sizing",
+  "cornerRadius",
+  "typography",
+]);
+
+const stripHashNeutralFields = (node: IrNode): Record<string, unknown> => {
+  const entries = Object.entries(node as unknown as Record<string, unknown>).filter(
+    ([key]) => key !== "children" && !HASH_NEUTRAL_KEYS.has(key),
+  );
+  return {
+    ...Object.fromEntries(entries),
+    children: node.children.map(stripHashNeutralFields),
   };
-  delete projected.textColor;
-  delete projected.backgroundColor;
-  return projected;
 };
 
 const hashStableIr = (ir: ScreenIr): Record<string, unknown> => ({
   ...ir,
-  root: stripA11yColors(ir.root),
+  root: stripHashNeutralFields(ir.root),
 });
 
 /** sha256 over the canonical per-screen identity: {screenId, ir, imageSha256}. */

@@ -23,6 +23,17 @@
 // numeric suffix. All relative hrefs inside screen HTML are prefixed with './' so they are relative
 // to the screens/ directory, not ambiguous URI-scheme fragments. The raw screen id is preserved in
 // the data-screen-id attribute.
+//
+// Layout / sizing / cornerRadius / typography (from IrNode, threaded through EmissionElement):
+// For nodes with auto-layout, a deterministic CSS class is emitted (name = "n-" + sanitized node id)
+// carrying display:flex, flex-direction, gap, padding, and border-radius. TEXT nodes with typography
+// matching a tokens.css entry reference var(--font-N). fill-sized nodes emit flex:1 / width:100% on
+// the relevant axis; hug is the default (no output).
+//
+// What IS reproduced: auto-layout direction, gap, padding, border-radius, font (via token var or
+// inline).
+// What is NOT reproduced: absolute positioning, constraints, effects (shadows/blur), image fills
+// beyond refs, grid layout, overflow, z-ordering, component variants.
 
 import type { CodeArtifact, CodeFile, CodeTargetAdapter } from "./codeTargetAdapter.js";
 import type {
@@ -33,8 +44,12 @@ import type {
   ScreenEmission,
 } from "./emissionPlan.js";
 import type {
+  AlignItems,
   ColorToken,
   DesignTokens,
+  IrLayout,
+  IrSizing,
+  IrTypography,
   RadiusToken,
   SpacingToken,
   TypographyToken,
@@ -108,28 +123,164 @@ const TAG_BY_ROLE: Readonly<Record<EmissionRole, string>> = {
 // Roles that render as void (self-closing) elements with no children/text.
 const VOID_ROLES = new Set<EmissionRole>(["input", "image"]);
 
+// ─── Token lookup maps (built once per emit call) ─────────────────────────────
+//
+// Maps token canonical value → CSS variable name so the adapter can reference var(--color-N) /
+// var(--font-N) by value without scanning the array on every element.
+
+interface TokenLookups {
+  /** hex color value → CSS var name, e.g. "#112233" → "--color-1" */
+  readonly colorVar: ReadonlyMap<string, string>;
+  /** typography key → CSS var name, e.g. "Inter|16|400" → "--font-1" */
+  readonly fontVar: ReadonlyMap<string, string>;
+}
+
+const colorVar = (index: number): string => `--color-${String(index + 1)}`;
+const spaceVar = (index: number): string => `--space-${String(index + 1)}`;
+const radiusVar = (index: number): string => `--radius-${String(index + 1)}`;
+const fontVar = (index: number): string => `--font-${String(index + 1)}`;
+
+// Typography key used to match per-node typography against the global token table.
+const typographyKey = (t: IrTypography): string =>
+  `${t.fontFamily}|${String(t.fontSize)}|${String(t.fontWeight)}`;
+const typographyTokenKey = (t: TypographyToken): string =>
+  `${t.fontFamily}|${String(t.fontSize)}|${String(t.fontWeight)}`;
+
+const buildTokenLookups = (tokens: DesignTokens): TokenLookups => {
+  const colorMap = new Map<string, string>();
+  tokens.colors.forEach((token, i) => {
+    colorMap.set(token.value, colorVar(i));
+  });
+  const fontMap = new Map<string, string>();
+  tokens.typography.forEach((token, i) => {
+    fontMap.set(typographyTokenKey(token), fontVar(i));
+  });
+  return { colorVar: colorMap, fontVar: fontMap };
+};
+
+// ─── Per-node CSS class generation ───────────────────────────────────────────
+//
+// A deterministic class name is derived from the node id by replacing non-alphanumeric characters
+// with "-" and prefixing "n-". This is stable: same id → same class name every run.
+
+const sanitizeIdForClass = (id: string): string => id.replace(/[^a-zA-Z0-9]/gu, "-");
+const nodeClass = (id: string): string => `n-${sanitizeIdForClass(id)}`;
+
+const ALIGN_CSS: Readonly<Record<AlignItems, string>> = {
+  start: "flex-start",
+  center: "center",
+  end: "flex-end",
+  "space-between": "space-between",
+};
+
+// Build CSS declarations for a layout node. Returns undefined when nothing would be emitted.
+const layoutDeclarations = (layout: IrLayout): readonly string[] => {
+  const decls: string[] = ["display: flex;", `flex-direction: ${layout.mode};`];
+  if (layout.itemSpacing !== undefined && Number.isFinite(layout.itemSpacing)) {
+    decls.push(`gap: ${String(layout.itemSpacing)}px;`);
+  }
+  if (layout.padding !== undefined) {
+    const [top, right, bottom, left] = layout.padding;
+    decls.push(
+      `padding: ${String(top)}px ${String(right)}px ${String(bottom)}px ${String(left)}px;`,
+    );
+  }
+  if (layout.primaryAlign !== undefined) {
+    decls.push(`justify-content: ${ALIGN_CSS[layout.primaryAlign]};`);
+  }
+  if (layout.counterAlign !== undefined) {
+    decls.push(`align-items: ${ALIGN_CSS[layout.counterAlign]};`);
+  }
+  return decls;
+};
+
+// Build CSS declarations for sizing (fill = flex:1, hug = nothing [default], fixed = nothing here).
+const sizingDeclarations = (sizing: IrSizing): readonly string[] => {
+  const decls: string[] = [];
+  if (sizing.horizontal === "fill") decls.push("width: 100%;");
+  if (sizing.vertical === "fill") decls.push("flex: 1;");
+  return decls;
+};
+
+// Build CSS declarations for typography. Prefer token var when matched; inline otherwise.
+const typographyDeclarations = (typo: IrTypography, lookups: TokenLookups): readonly string[] => {
+  const fontVarName = lookups.fontVar.get(typographyKey(typo));
+  if (fontVarName !== undefined) {
+    return [`font: var(${fontVarName});`];
+  }
+  // Inline fallback: validate each value before emitting.
+  const decls: string[] = [];
+  if (Number.isFinite(typo.fontWeight)) decls.push(`font-weight: ${String(typo.fontWeight)};`);
+  if (Number.isFinite(typo.fontSize)) decls.push(`font-size: ${String(typo.fontSize)}px;`);
+  if (typo.fontFamily.length > 0) decls.push(`font-family: ${safeFontFamily(typo.fontFamily)};`);
+  return decls;
+};
+
+interface ScreenStyleContext {
+  readonly lookups: TokenLookups;
+  /** Map from node id to CSS class name — populated while building; used when rendering attributes. */
+  readonly classMap: Map<string, string>;
+  /** Accumulated CSS rules for the screen, in element-tree order. */
+  readonly rules: string[];
+}
+
+// Walk the element tree, collect CSS rules, populate classMap.
+const collectStyles = (element: EmissionElement, ctx: ScreenStyleContext): void => {
+  const decls: string[] = [
+    ...(element.layout !== undefined ? layoutDeclarations(element.layout) : []),
+    ...(element.sizing !== undefined ? sizingDeclarations(element.sizing) : []),
+    ...(element.cornerRadius !== undefined && Number.isFinite(element.cornerRadius)
+      ? [`border-radius: ${String(element.cornerRadius)}px;`]
+      : []),
+    ...(element.typography !== undefined
+      ? typographyDeclarations(element.typography, ctx.lookups)
+      : []),
+  ];
+
+  if (decls.length > 0) {
+    const cls = nodeClass(element.id);
+    ctx.classMap.set(element.id, cls);
+    ctx.rules.push(`.${cls} {`);
+    for (const decl of decls) ctx.rules.push(`  ${decl}`);
+    ctx.rules.push("}");
+  }
+
+  for (const child of element.children) collectStyles(child, ctx);
+};
+
+// ─── HTML element rendering ───────────────────────────────────────────────────
+
 // Fix #6: additionally emit data-node-id so the element's IR origin is traceable in the HTML output.
-function elementAttributes(element: EmissionElement): string {
+function elementAttributes(
+  element: EmissionElement,
+  classMap: ReadonlyMap<string, string>,
+): string {
   const parts = [
     `data-role="${escapeHtml(element.role)}"`,
     `data-name="${escapeHtml(element.displayName)}"`,
     `data-node-id="${escapeHtml(element.id)}"`,
   ];
+  const cls = classMap.get(element.id);
+  if (cls !== undefined) parts.push(`class="${escapeHtml(cls)}"`);
   if (element.role === "link") parts.push('href="#"');
   if (element.role === "input") parts.push(`aria-label="${escapeHtml(element.displayName)}"`);
   if (element.role === "image") parts.push(`alt="${escapeHtml(element.displayName)}"`);
   return parts.join(" ");
 }
 
-function renderElement(element: EmissionElement, depth: number): readonly string[] {
+function renderElement(
+  element: EmissionElement,
+  depth: number,
+  classMap: ReadonlyMap<string, string>,
+): readonly string[] {
   const tag = TAG_BY_ROLE[element.role];
-  const attributes = elementAttributes(element);
+  const attributes = elementAttributes(element, classMap);
   if (VOID_ROLES.has(element.role)) {
     return [`${indent(depth)}<${tag} ${attributes} />`];
   }
   const lines: string[] = [`${indent(depth)}<${tag} ${attributes}>`];
   if (element.text !== undefined) lines.push(`${indent(depth + 1)}${escapeHtml(element.text)}`);
-  for (const child of element.children) lines.push(...renderElement(child, depth + 1));
+  for (const child of element.children) lines.push(...renderElement(child, depth + 1, classMap));
   lines.push(`${indent(depth)}</${tag}>`);
   return lines;
 }
@@ -155,12 +306,29 @@ function renderNav(
 }
 
 // Fix #7: screen file uses safe name; raw id is preserved in data-screen-id for traceability.
-function renderScreenHtml(screen: ScreenEmission, safeNames: ReadonlyMap<string, string>): string {
+function renderScreenHtml(
+  screen: ScreenEmission,
+  safeNames: ReadonlyMap<string, string>,
+  lookups: TokenLookups,
+): string {
+  // Collect per-node styles first so classMap is populated before HTML rendering.
+  const ctx: ScreenStyleContext = { lookups, classMap: new Map(), rules: [] };
+  collectStyles(screen.root, ctx);
+
+  const styleBlock: string[] =
+    ctx.rules.length > 0
+      ? [
+          `${indent(2)}<style>`,
+          ...ctx.rules.map((line) => `${indent(2)}${line}`),
+          `${indent(2)}</style>`,
+        ]
+      : [];
+
   const title = escapeHtml(screen.screenName);
   const body = [
     ...renderNav(screen.navTargets, safeNames, 3),
     `${indent(3)}<main data-screen-id="${escapeHtml(screen.screenId)}">`,
-    ...renderElement(screen.root, 4),
+    ...renderElement(screen.root, 4, ctx.classMap),
     `${indent(3)}</main>`,
   ];
   return [
@@ -170,6 +338,7 @@ function renderScreenHtml(screen: ScreenEmission, safeNames: ReadonlyMap<string,
     `${indent(2)}<meta charset="utf-8" />`,
     `${indent(2)}<title>${title}</title>`,
     `${indent(2)}<link rel="stylesheet" href="../tokens.css" />`,
+    ...styleBlock,
     `${indent(1)}</head>`,
     `${indent(1)}<body>`,
     ...body,
@@ -210,11 +379,6 @@ function renderIndexHtml(
     "",
   ].join("\n");
 }
-
-const colorVar = (index: number): string => `--color-${String(index + 1)}`;
-const spaceVar = (index: number): string => `--space-${String(index + 1)}`;
-const radiusVar = (index: number): string => `--radius-${String(index + 1)}`;
-const fontVar = (index: number): string => `--font-${String(index + 1)}`;
 
 // Fix #8: validate color before emit; drop invalid tokens rather than emitting them.
 const colorLine = (token: ColorToken, index: number): string | undefined =>
@@ -264,6 +428,7 @@ function renderTokensCss(tokens: DesignTokens): string {
 
 function emitHtmlCss(plan: CodeEmissionPlan): CodeArtifact {
   const safeNames = buildSafeNameIndex(plan.screens);
+  const lookups = buildTokenLookups(plan.tokens);
   const files: CodeFile[] = [
     { path: "index.html", contents: renderIndexHtml(plan.screens, safeNames) },
     { path: "tokens.css", contents: renderTokensCss(plan.tokens) },
@@ -271,7 +436,7 @@ function emitHtmlCss(plan: CodeEmissionPlan): CodeArtifact {
       const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
       return {
         path: `screens/${safeName}.html`,
-        contents: renderScreenHtml(screen, safeNames),
+        contents: renderScreenHtml(screen, safeNames, lookups),
       };
     }),
   ];
@@ -282,6 +447,11 @@ function emitHtmlCss(plan: CodeEmissionPlan): CodeArtifact {
  * The framework-agnostic HTML/CSS adapter — the only adapter shipped in the first slice. Renders the
  * target-neutral plan to semantic HTML per screen, a `tokens.css` custom-property table, and an
  * `index.html`. Pure and deterministic: a given plan yields a byte-identical artifact.
+ *
+ * Layout fidelity: nodes with auto-layout emit display:flex + direction + gap + padding + radius in a
+ * per-screen `<style>` block; TEXT nodes with matching typography tokens emit var(--font-N); fill-sized
+ * nodes emit flex:1 / width:100%. Absolute positioning, constraints, effects, and image content are
+ * not reproduced.
  */
 export const htmlCssAdapter: CodeTargetAdapter = {
   name: ADAPTER_NAME,

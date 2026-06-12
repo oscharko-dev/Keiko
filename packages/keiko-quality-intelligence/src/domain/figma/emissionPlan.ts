@@ -9,11 +9,23 @@
 // changing this module.
 //
 // Generic by construction: the only structural signal read is `interactionHint` (a #752 role hint)
-// and the node's own `name`/`text`. No screen name, layout, mask style, or copy is special-cased.
+// and the node's own `name`/`text`. No screen name, mask style, or copy is special-cased.
 // Deterministic: the plan carries no timestamp and preserves the IR's stable order, so the same
 // input yields a byte-identical plan (and thus byte-identical emitted code).
+//
+// Layout / sizing / cornerRadius / typography fields from the IR are threaded through unchanged so
+// that concrete adapters (htmlCssAdapter) can emit visual-fidelity CSS without re-reading the IR.
+// They are carried verbatim and never reinterpreted here.
 
-import type { DesignTokens, IrNode, InteractionHint, ScreenIr } from "./irTypes.js";
+import type {
+  DesignTokens,
+  IrLayout,
+  IrNode,
+  IrSizing,
+  IrTypography,
+  InteractionHint,
+  ScreenIr,
+} from "./irTypes.js";
 import type { RoutingHint } from "./navGraph.js";
 
 /** The target-neutral role of an element — mirrors the IR `interactionHint`; no framework tag. */
@@ -26,6 +38,14 @@ export interface EmissionElement {
   /** Semantic display name — a structural default here; the naming port may override it (never structure). */
   readonly displayName: string;
   readonly text?: string;
+  /** Auto-layout properties threaded from the IR node; absent when the node has no auto-layout. */
+  readonly layout?: IrLayout;
+  /** Per-axis sizing mode threaded from the IR node; absent when not set. */
+  readonly sizing?: IrSizing;
+  /** Corner radius in pixels threaded from the IR node; absent when zero or absent. */
+  readonly cornerRadius?: number;
+  /** Per-TEXT typography threaded from the IR node; absent for non-TEXT nodes. */
+  readonly typography?: IrTypography;
   readonly children: readonly EmissionElement[];
 }
 
@@ -74,6 +94,10 @@ function toElement(node: IrNode): EmissionElement {
     role: node.interactionHint,
     displayName: structuralDisplayName(node),
     ...(text !== undefined && text.length > 0 ? { text } : {}),
+    ...(node.layout !== undefined ? { layout: node.layout } : {}),
+    ...(node.sizing !== undefined ? { sizing: node.sizing } : {}),
+    ...(node.cornerRadius !== undefined ? { cornerRadius: node.cornerRadius } : {}),
+    ...(node.typography !== undefined ? { typography: node.typography } : {}),
     children: node.children.map(toElement),
   };
 }
