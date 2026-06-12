@@ -309,6 +309,14 @@ export function QiRunCard({
   const [reviewerLabelLoaded, setReviewerLabelLoaded] = useState(false);
   const reviewerHelpId = useId();
   const reviewerWarningId = useId();
+  // Issue #282 A11y-1 (WCAG 4.1.3): dedicated live region for review-outcome announcements.
+  // The existing "Run loaded: N test cases" region de-dupes when the text is byte-identical across
+  // successive reviews (AT suppresses repeated identical strings). This separate region carries a
+  // varying announcement (candidate title + resulting state label) so AT always re-announces even
+  // when the same action is applied twice in a row (e.g. reopening the same candidate twice).
+  const [reviewAnnounce, setReviewAnnounce] = useState("");
+  // Monotonic nonce appended to the message guarantees uniqueness on identical repeat actions.
+  const announceNonceRef = useRef(0);
 
   // Drop stale responses when the same card re-fetches after a review (request-of-record guard).
   const seqRef = useRef(0);
@@ -358,6 +366,29 @@ export function QiRunCard({
         try {
           await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
           await loadDetail();
+          // Issue #282 A11y-1: announce the review outcome via a dedicated live region.
+          // The label map maps the action to the resulting visible state ("reopen" → "Open").
+          // A monotonic nonce guarantees the string differs on identical repeat actions so AT
+          // always re-reads it (AT suppresses byte-identical repeated announcements).
+          const resultLabel =
+            REVIEW_LABEL[
+              action === "approve"
+                ? "approved"
+                : action === "reject"
+                  ? "rejected"
+                  : action === "request-changes"
+                    ? "changes-requested"
+                    : "open" // reopen → open
+            ];
+          // Look up the candidate title from the last-loaded detail snapshot (best effort: the
+          // reload above may have updated state but setDetail is async; use the snapshot we had
+          // at the time of the call — the title is immutable so this is always correct).
+          const candidateTitle =
+            detail?.candidates.find((c) => c.id === candidateId)?.title ?? candidateId;
+          announceNonceRef.current += 1;
+          setReviewAnnounce(
+            `Candidate "${candidateTitle}" marked ${resultLabel}. (${announceNonceRef.current.toString()})`,
+          );
         } catch (err) {
           setActionError(formatError(err));
         } finally {
@@ -365,7 +396,9 @@ export function QiRunCard({
         }
       })();
     },
-    [governanceEnabled, pendingReview, reviewImpl, runId, trimmedReviewerLabel, loadDetail],
+    // detail is included so the announcement always resolves the candidate title from the current
+    // loaded snapshot (title is immutable per run so the lookup is always correct).
+    [governanceEnabled, pendingReview, reviewImpl, runId, trimmedReviewerLabel, loadDetail, detail],
   );
 
   const handleEdit = useCallback(
@@ -408,6 +441,14 @@ export function QiRunCard({
           : error === null && detail !== null
             ? `Run loaded: ${detail.totals.candidates.toString()} test case${detail.totals.candidates === 1 ? "" : "s"}.`
             : ""}
+      </p>
+      {/* Issue #282 A11y-1 (WCAG 4.1.3): dedicated review-outcome live region, separate from the
+          load-status region above. The load region announces "Run loaded: N test cases" on every
+          reload — byte-identical across review actions — so AT de-duplicates → silence. This
+          region carries a unique string (candidate title + resulting state label + nonce) so AT
+          always re-announces the outcome. sr-only: no visible change, purely for AT users. */}
+      <p className="sr-only" role="status" aria-live="polite" data-testid="qi-review-announce">
+        {reviewAnnounce}
       </p>
       <div className="qi-run-card-body" aria-busy={loading}>
         {loading && detail === null ? (

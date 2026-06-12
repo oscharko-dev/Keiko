@@ -280,6 +280,109 @@ describe("CandidatesPane — aria-pressed on review buttons", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — terminal-state controls + Reopen (Issue #282 FIX A-UI / A11y-4)
+// ---------------------------------------------------------------------------
+//
+// When a candidate is in a terminal state (approved | rejected | withdrawn), the server will reject
+// any Approve / Reject / Request-changes action with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED. The UI
+// pre-empts the error by aria-disabling those three buttons and surfacing a Reopen button instead.
+// Non-terminal states (open | changes-requested) keep the original behaviour: three actions enabled,
+// no Reopen button.
+
+describe("CandidatesPane — terminal-state controls (Issue #282)", () => {
+  it.each(["approved", "rejected", "withdrawn"] as const)(
+    "aria-disables Approve when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      const approveBtn = screen.getByRole("button", { name: /^approve$/i });
+      expect(approveBtn).toHaveAttribute("aria-disabled", "true");
+    },
+  );
+
+  it.each(["approved", "rejected", "withdrawn"] as const)(
+    "aria-disables Reject when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      // Reject and Request-changes may share the same accessible name pattern; target by exact name.
+      const rejectBtn = screen.getByRole("button", { name: /^reject$/i });
+      expect(rejectBtn).toHaveAttribute("aria-disabled", "true");
+    },
+  );
+
+  it.each(["approved", "rejected", "withdrawn"] as const)(
+    "renders a Reopen button when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.getByRole("button", { name: /^reopen$/i })).toBeInTheDocument();
+    },
+  );
+
+  it("calls onReview(id, 'reopen') when the Reopen button is clicked", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ reviewState: "approved" });
+    const onReview = vi.fn();
+    render(<CandidatesPane candidates={[c]} onReview={onReview} />);
+    await user.click(screen.getByRole("button", { name: /^reopen$/i }));
+    expect(onReview).toHaveBeenCalledWith(c.id, "reopen");
+  });
+
+  it("Approve/Reject/Request-changes have an aria-describedby pointing to the final-note in terminal state", () => {
+    const c = makeCandidate({ reviewState: "approved" });
+    render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+    const approveBtn = screen.getByRole("button", { name: /^approve$/i });
+    const describedById = approveBtn.getAttribute("aria-describedby");
+    expect(describedById).not.toBeNull();
+    // The referenced element must exist in the DOM and contain the final-note text.
+    const note = document.getElementById(describedById!);
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toMatch(/reopen to change it/i);
+  });
+
+  it.each(["open", "changes-requested"] as const)(
+    "does NOT render a Reopen button when reviewState is '%s' (non-terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: /^reopen$/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["open", "changes-requested"] as const)(
+    "Approve is NOT aria-disabled when reviewState is '%s' (non-terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.getByRole("button", { name: /^approve$/i })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+    },
+  );
+
+  it("Reopen is aria-disabled while a review is in flight (busy lock)", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ reviewState: "approved" });
+    let resolveReopen: (() => void) | undefined;
+    const onReview = vi.fn();
+    // Render with a pending review for a *different* action to simulate in-flight state.
+    render(
+      <CandidatesPane
+        candidates={[c]}
+        onReview={onReview}
+        pendingReview={{ candidateId: c.id, action: "reopen" }}
+      />,
+    );
+    const reopenBtn = screen.getByRole("button", { name: /saving…/i });
+    expect(reopenBtn).toHaveAttribute("aria-disabled", "true");
+    void resolveReopen;
+    await user.click(reopenBtn); // must no-op (aria-disabled guard)
+    expect(onReview).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — progressive rendering (>25 candidates)
 // ---------------------------------------------------------------------------
 

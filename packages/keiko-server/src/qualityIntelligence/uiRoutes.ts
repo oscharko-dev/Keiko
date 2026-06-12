@@ -55,6 +55,7 @@ function resolveEvidenceDir(deps: UiHandlerDeps): string | undefined {
 
 function projectRunSummary(
   manifest: ReturnType<typeof loadQualityIntelligenceRun>,
+  reviewState: QualityIntelligenceUiRunSummary["reviewState"],
 ): QualityIntelligenceUiRunSummary | null {
   if (manifest === undefined) return null;
   return {
@@ -67,7 +68,20 @@ function projectRunSummary(
       findings: manifest.totals.findings,
       exports: manifest.totals.exports,
     },
+    reviewState,
   };
+}
+
+// FIX A11y-2 (Issue #282) — resolve the run's overall review state for the list item so the hub list
+// can show a per-run lifecycle badge (AC1). Loads the small `.review.json` companion per listed run;
+// this is acceptable because the list path already loads a per-run manifest and the list is bounded
+// by the route limit. Defaults to "open" when no companion exists or no evidence dir is configured.
+function listReviewStateFor(
+  runId: string,
+  evidenceDir: string | undefined,
+): QualityIntelligenceUiRunSummary["reviewState"] {
+  if (evidenceDir === undefined) return "open";
+  return runReviewStateOf(loadRunReviewState(runId, evidenceDir));
 }
 
 interface RunDetailInputs {
@@ -260,7 +274,7 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
       if (runs.length >= limit) break;
       try {
         const manifest = loadQualityIntelligenceRun(id, { evidenceDir });
-        const summary = projectRunSummary(manifest);
+        const summary = projectRunSummary(manifest, listReviewStateFor(id, evidenceDir));
         if (summary !== null) runs.push(summary);
       } catch {
         // A single corrupt manifest must not prevent listing other runs: skip and continue. The

@@ -45,6 +45,8 @@ export interface QualityIntelligenceUiRunSummary {
   /** ISO 8601 timestamp, or null when the run has not yet completed. */
   readonly completedAt: string | null;
   readonly totals: QualityIntelligenceUiRunTotals;
+  /** Overall human-review state for the run (Issue #282); "open" until a reviewer acts. */
+  readonly reviewState: QualityIntelligenceReviewState;
 }
 
 /**

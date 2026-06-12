@@ -10,7 +10,11 @@ import type { IncomingMessage } from "node:http";
 import { loadQualityIntelligenceRun } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { applyReviewDecision, type QiReviewAction } from "./reviewStore.js";
+import {
+  applyReviewDecision,
+  QualityIntelligenceReviewTransitionRejected,
+  type QiReviewAction,
+} from "./reviewStore.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const ACTIONS: ReadonlySet<string> = new Set<QiReviewAction>([
@@ -134,6 +138,7 @@ export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Pr
       scope: decision.scope,
       reviewerLabel: decision.reviewerLabel,
       now: new Date().toISOString(),
+      redact: deps.redactor,
       ...(decision.candidateId ? { candidateId: decision.candidateId } : {}),
     });
     return {
@@ -144,7 +149,14 @@ export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Pr
         auditCount: next.auditLog.length,
       },
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof QualityIntelligenceReviewTransitionRejected) {
+      return errorResult(
+        409,
+        "QI_REVIEW_TRANSITION_NOT_ALLOWED",
+        `Review transition not permitted: cannot ${error.action} a run/candidate in state "${error.from}".`,
+      );
+    }
     return errorResult(500, "QI_REVIEW_FAILED", "Failed to record the review decision.");
   }
 }

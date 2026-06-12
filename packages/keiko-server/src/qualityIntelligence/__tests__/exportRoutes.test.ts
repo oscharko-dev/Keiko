@@ -382,6 +382,7 @@ describe("handleQiExport — TMS adapter live export disabled", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: new Date().toISOString(),
+      redact: (v: unknown): unknown => v,
     });
 
     const result = asResult(
@@ -426,8 +427,67 @@ describe("handleQiExport — TMS dryRun with approved candidate", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: new Date().toISOString(),
+      redact: (v: unknown): unknown => v,
     });
 
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { dryRun: boolean; candidateCount: number };
+    expect(body.dryRun).toBe(true);
+    expect(body.candidateCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── FIX E (Issue #282) — export honors RUN-scope approval ───────────────────
+//
+// A reviewer can approve the whole RUN (runState = approved) instead of each candidate. The
+// approvedOnly gate (incl. every TMS adapter, which forces approvedOnly) must treat a run-approved
+// run's candidates as approved — not 409 QI_NOTHING_TO_EXPORT.
+
+describe("handleQiExport — run-scope approval gates the approvedOnly filter", () => {
+  const approveRun = (): void => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "run",
+      reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+  };
+
+  it("returns all candidates for an approvedOnly local export when the RUN is approved (no per-candidate approval)", async () => {
+    approveRun();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false, approvedOnly: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    // The single seeded candidate is present in the serialised body (its id round-trips).
+    expect((result.body as { body: string }).body).toContain("cand-001");
+  });
+
+  it("still returns 409 for an approvedOnly export when the run is NOT approved and no candidate is approved", async () => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false, approvedOnly: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
+
+  it("permits a TMS dry-run (forces approvedOnly) once the RUN is approved", async () => {
+    approveRun();
     const result = asResult(
       await handleQiExport(
         ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
@@ -547,6 +607,7 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
     });
   };
 

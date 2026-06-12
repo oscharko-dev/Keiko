@@ -556,6 +556,7 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
       candidateId: "tc-1",
       reviewerLabel: "Alice",
       now: "2026-06-09T10:00:00.000Z",
+      redact: (v: unknown): unknown => v,
     });
     const result = asResult(
       await handleQiEditCandidate(

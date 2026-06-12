@@ -106,6 +106,7 @@ beforeEach(() => {
     scope: "run",
     reviewerLabel: "alice",
     now: "2026-06-01T10:02:00.000Z",
+    redact: (value: unknown): unknown => value,
   });
 });
 
