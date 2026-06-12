@@ -5,18 +5,19 @@
 // pure modules cannot accidentally write something raw.
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const QI_SRC_DIR = new URL("..", import.meta.url).pathname;
 
-// Files that are *expected* to import node:fs/* primitives — the store seam, the retention
-// orchestrator (which removes side-file dirs + quarantines corrupt manifests). Every other file
-// under `qualityIntelligence/` is pure.
+// Files that are *expected* to import node:fs/* primitives — keyed by path RELATIVE to
+// QI_SRC_DIR so that `figmaSnapshot/store.ts` and the top-level `store.ts` are distinct
+// entries (basename matching would conflate them).
 const IO_ALLOWED_FILES: ReadonlySet<string> = new Set<string>([
   "store.ts",
   "retention.ts",
   "companionStore.ts",
+  "figmaSnapshot/store.ts",
 ]);
 
 // Provider SDKs we never want pulled into the QI sub-module (defence against accidental
@@ -43,10 +44,20 @@ const FORBIDDEN_NODE_IO_PATTERNS: readonly RegExp[] = [
   /from\s+["']node:process["']/,
 ];
 
+// Recursively collects all production `.ts` files under `dir`, skipping any directory named
+// `__tests__`. Returns paths relative to `QI_SRC_DIR` so that `figmaSnapshot/store.ts` and
+// the top-level `store.ts` remain distinct entries in IO_ALLOWED_FILES. Mirrors the
+// `listAllFiles` recursion pattern in `independenceGuard.test.ts`.
 async function listProductionSources(dir: string): Promise<readonly string[]> {
   const out: string[] = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
+      if (entry.name === "__tests__") {
+        continue;
+      }
+      for (const nested of await listProductionSources(join(dir, entry.name))) {
+        out.push(nested);
+      }
       continue;
     }
     if (!entry.name.endsWith(".ts")) {
@@ -55,7 +66,7 @@ async function listProductionSources(dir: string): Promise<readonly string[]> {
     if (entry.name.endsWith(".test.ts")) {
       continue;
     }
-    out.push(entry.name);
+    out.push(relative(QI_SRC_DIR, join(dir, entry.name)));
   }
   return out.sort();
 }
@@ -65,9 +76,13 @@ describe("purity guard for packages/keiko-evidence/src/qualityIntelligence/", ()
     const dirStat = await stat(QI_SRC_DIR);
     expect(dirStat.isDirectory()).toBe(true);
     const files = await listProductionSources(QI_SRC_DIR);
+    // Completeness assertion: if a file is added or moved, this explicit enumeration must be
+    // updated. "figmaSnapshot/" subdirectory files are distinct from same-named top-level files.
     expect(files).toEqual([
       "candidatesArtifact.ts",
       "companionStore.ts",
+      "figmaSnapshot/schema.ts",
+      "figmaSnapshot/store.ts",
       "index.ts",
       "manifestSchema.ts",
       "redaction.ts",
@@ -79,10 +94,10 @@ describe("purity guard for packages/keiko-evidence/src/qualityIntelligence/", ()
 
   it("no production file imports a provider SDK", async () => {
     const files = await listProductionSources(QI_SRC_DIR);
-    for (const name of files) {
-      const source = await readFile(join(QI_SRC_DIR, name), "utf8");
+    for (const relPath of files) {
+      const source = await readFile(join(QI_SRC_DIR, relPath), "utf8");
       for (const pattern of FORBIDDEN_SDK_PATTERNS) {
-        expect(pattern.test(source), `${name} imports a forbidden SDK (${pattern.source})`).toBe(
+        expect(pattern.test(source), `${relPath} imports a forbidden SDK (${pattern.source})`).toBe(
           false,
         );
       }
@@ -91,15 +106,16 @@ describe("purity guard for packages/keiko-evidence/src/qualityIntelligence/", ()
 
   it("pure modules do not import any node:fs|net|http|tls|dns|child_process|https|os|process surface", async () => {
     const files = await listProductionSources(QI_SRC_DIR);
-    for (const name of files) {
-      if (IO_ALLOWED_FILES.has(name)) {
+    for (const relPath of files) {
+      // IO_ALLOWED_FILES uses relative paths so figmaSnapshot/store.ts and store.ts are distinct.
+      if (IO_ALLOWED_FILES.has(relPath)) {
         continue;
       }
-      const source = await readFile(join(QI_SRC_DIR, name), "utf8");
+      const source = await readFile(join(QI_SRC_DIR, relPath), "utf8");
       for (const pattern of FORBIDDEN_NODE_IO_PATTERNS) {
         expect(
           pattern.test(source),
-          `${name} reaches Node IO directly (${pattern.source}); route through the store seam`,
+          `${relPath} reaches Node IO directly (${pattern.source}); route through the store seam`,
         ).toBe(false);
       }
     }
@@ -111,15 +127,15 @@ describe("purity guard for packages/keiko-evidence/src/qualityIntelligence/", ()
     // delegate to `redact()` from `@oscharko-dev/keiko-security`. The CodeQL polynomial-redos
     // gate is the second line of defence.
     const files = await listProductionSources(QI_SRC_DIR);
-    for (const name of files) {
-      if (name === "redaction.ts") {
+    for (const relPath of files) {
+      if (relPath === "redaction.ts") {
         continue;
       }
-      const source = await readFile(join(QI_SRC_DIR, name), "utf8");
+      const source = await readFile(join(QI_SRC_DIR, relPath), "utf8");
       // Heuristic: a global-flagged regex on `Bearer`/`sk-`/`gh[a-z]_` is a secret-shape pattern.
       expect(
         /\/(Bearer|sk-|gh[a-z]_)[^/]*\/[gimsuy]+/.test(source),
-        `${name} appears to define its own secret-shape regex; reuse redact() from keiko-security`,
+        `${relPath} appears to define its own secret-shape regex; reuse redact() from keiko-security`,
       ).toBe(false);
     }
   });

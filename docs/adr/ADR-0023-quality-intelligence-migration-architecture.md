@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded (2026-06-06). Retained as the historical Epic #270 migration record.
+Superseded by ADR-0025 (2026-06-06). Retained as the historical Epic #270 migration record.
 Use ADR-0025, `docs/PUBLIC_API_SURFACE.md`, `docs/security-and-audit-boundaries.md`,
 and current package manifests for active repository guidance.
 
@@ -134,7 +134,7 @@ or event bus may be introduced.
 
 Quality Intelligence runtime state (run ID, progress, resource counters, cancellation, dry-run
 gates) is managed by the Keiko local runtime state contract established in issue #175
-(`docs/historical/quality-intelligence-keiko-baseline.md` §5). New QI state categories must be
+(`docs/local-runtime-state-contract.md`). New QI state categories must be
 registered in the same contract. State MUST NOT live in a separate `.test-intelligence/`
 directory or a new standalone SQLite database outside the approved stores.
 

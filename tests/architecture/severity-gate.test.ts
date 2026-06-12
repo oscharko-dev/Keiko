@@ -1,6 +1,7 @@
 // Severity-gate test (Issue #169 D5). Loads `.dependency-cruiser.cjs` and asserts every strict
-// per-package direction variant (1, 2, 3a, 3b, 3c, 3d, 4a, 5a, 6a, 7a), the extracted UI/root
-// direction rules (8, 9), and the hard trust-boundary rules are at `severity: "error"`. This
+// per-package direction variant (1, 2, 3a, 3b, 3c, 3d, 3e, 3f, 3g, 3h, 3i, 3j, 3k, 3l, 4a,
+// 5a, 6a, 7a), the extracted UI/root direction rules (8, 9), the quality-intelligence leaf
+// direction rule (10a), and the hard trust-boundary rules are at `severity: "error"`. This
 // guards against a silent warn-only softening in a future PR — the codebase-wide memory pattern is
 // to add a NEW strict variant when extracting a package, not to weaken an existing one.
 
@@ -34,12 +35,21 @@ const STRICT_DIRECTION_VARIANTS = [
   "3b",
   "3c",
   "3d",
+  "3e",
+  "3f",
+  "3g",
+  "3h",
+  "3i",
+  "3j",
+  "3k",
+  "3l",
   "4a",
   "5a",
   "6a",
   "7a",
   "8",
   "9",
+  "10a",
 ];
 const REQUIRED_TRUST_RULES = [
   "adr-0019-trust-1-provider-sdk-isolation",

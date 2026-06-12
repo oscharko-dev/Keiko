@@ -1,5 +1,7 @@
 # Quality Intelligence Migration Parity Matrix
 
+_Point-in-time record: reflects the Epic #270 closure gate as of PR #490 (merged 2026-06-06), with delivery notes for rows 12–13 added after the closure gate. For the full release-gate record with per-child commit SHAs, see [the historical parity matrix](../historical/quality-intelligence-parity-matrix.md)._
+
 > Release-gate artifact for **Epic #270 — Integrate Test Intelligence as native Keiko Quality
 > Intelligence** (Issue #285). It records, for every migrated Test Intelligence capability, an
 > explicit **reuse decision** and the Keiko-owned location that delivers it — proving the behavior
@@ -76,8 +78,8 @@ Workbench build output, or the standalone dependency graph (enforced by `check:q
 ## Release gate
 
 **Static gates (all green):** `typecheck`, `lint`, `arch:check`, `arch:check:negative`,
-`check:qi-supply-chain`, `check:package-surface`, `check:version-consistency`; root test suite
-(5905 passing) + `keiko-ui` suite (1067 passing).
+`check:qi-supply-chain`, `check:package-surface`, `check:version-consistency`; at the closure gate:
+root test suite (5905 passing) + `keiko-ui` suite (1067 passing).
 
 **Live proof (real Azure `gpt-oss-120b`, no mocks):**
 
