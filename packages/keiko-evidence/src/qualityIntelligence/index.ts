@@ -10,9 +10,11 @@ export {
   validateQualityIntelligenceEvidenceManifest,
 } from "./manifestSchema.js";
 export type {
+  QualityIntelligenceBinaryExportMode,
   QualityIntelligenceEvidenceManifest,
   QualityIntelligenceEvidenceRefRow,
   QualityIntelligenceExportRow,
+  QualityIntelligenceExportTarget,
   QualityIntelligenceFindingRow,
   QualityIntelligenceIntegrityHashes,
   QualityIntelligenceManifestTotals,
@@ -41,6 +43,7 @@ export type { QualityIntelligenceRetentionProfile } from "./retentionPolicy.js";
 
 // ─── Local-state store + CRUD (M2) ─────────────────────────────────────────────────
 export {
+  appendQualityIntelligenceExportRow,
   createInMemoryQualityIntelligenceLocalStore,
   createNodeQualityIntelligenceLocalStore,
   listQualityIntelligenceRuns,
@@ -49,6 +52,7 @@ export {
   QI_SUBDIR,
 } from "./store.js";
 export type {
+  QualityIntelligenceExportEvidenceInput,
   QualityIntelligenceLoadOptions,
   QualityIntelligenceLocalStore,
   QualityIntelligenceNodeStoreOptions,

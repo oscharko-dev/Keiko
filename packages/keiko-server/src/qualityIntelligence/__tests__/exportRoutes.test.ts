@@ -14,6 +14,7 @@ import {
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
   applyQualityIntelligenceCandidateEdit,
+  loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import type {
   EvidenceStore,
@@ -671,5 +672,161 @@ describe("handleQiExport — reflects an inline candidate edit", () => {
     expect(body).toContain("Curated login title");
     expect(body).toContain("Authenticate");
     expect(body).not.toContain("User can log in with valid credentials");
+  });
+});
+
+// ─── Issue #283 AC4 — export evidence emission ───────────────────────────────────────
+
+describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
+  const exportAdapter = async (
+    adapter: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter, dryRun: false, ...extra })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+  };
+
+  const exportsOf = (): QualityIntelligenceEvidenceManifest["exports"] => {
+    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+    if (manifest === undefined) throw new Error("run manifest missing");
+    return manifest.exports;
+  };
+
+  const approveSeeded = (): void => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "cand-001",
+      reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
+    });
+  };
+
+  it("records a row for a materialised local export (csv): target + attestation + dryRun=false", async () => {
+    await exportAdapter("csv");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("csv");
+    expect(rows[0]?.redactionAttested).toBe(true);
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+    expect(rows[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("keeps totals.exports in lockstep and the manifest re-loads (integrity holds)", async () => {
+    await exportAdapter("csv");
+    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+    expect(manifest?.totals.exports).toBe(1);
+    expect(manifest?.exports.length).toBe(1);
+    // A second load must not throw — the recomputed exports hash + totals invariant survive a round-trip.
+    expect(() => loadQualityIntelligenceRun(RUN_ID, { evidenceDir })).not.toThrow();
+  });
+
+  it("deduplicates a repeated identical export (csv twice → one row)", async () => {
+    await exportAdapter("csv");
+    await exportAdapter("csv");
+    expect(exportsOf()).toHaveLength(1);
+  });
+
+  it("records distinct rows for distinct adapters (csv then json → two rows)", async () => {
+    await exportAdapter("csv");
+    await exportAdapter("json");
+    expect(
+      exportsOf()
+        .map((r) => r.targetAdapter)
+        .sort(),
+    ).toEqual(["csv", "json"]);
+  });
+
+  it("records a binary export target faithfully (pdf)", async () => {
+    await exportAdapter("pdf");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("pdf");
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+  });
+
+  it("records a TMS dry-run preview with dryRun=true (jira-issues, approved)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("jira-issues");
+    expect(rows[0]?.dryRun).toBe(true);
+  });
+
+  it("records NO row for a disabled external TMS write (jira-issues live → 403)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(403);
+    expect(exportsOf()).toHaveLength(0);
+  });
+
+  it("records a dry-run AND a materialised row as distinct (csv dry-run then csv download)", async () => {
+    asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    await exportAdapter("csv");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.dryRun ?? false).sort()).toEqual([false, true]);
+  });
+});
+
+// ─── Issue #283 L1 + m3 — formula escape is explicit and whitespace-robust ────────────
+
+describe("handleQiExport — spreadsheet formula escape is explicit and whitespace-robust", () => {
+  const exportInjectedTitle = async (title: string): Promise<string> => {
+    const injDir = mkdtempSync(join(tmpdir(), "keiko-export-inj2-"));
+    try {
+      recordQualityIntelligenceRun(runRecordInput("run-inj2"), { evidenceDir: injDir });
+      recordQualityIntelligenceCandidates({
+        runId: "run-inj2",
+        generatedAt: "2026-06-01T10:01:00.000Z",
+        candidates: [makeCandidate(title, "cand-inj2")],
+        evidenceDir: injDir,
+        redact: (v: unknown): unknown => v,
+      });
+      const result = asResult(
+        await handleQiExport(
+          ctx("run-inj2", makeReq({ adapter: "spreadsheet-safe-csv", dryRun: false })),
+          deps(injDir),
+        ),
+      );
+      expect(result.status).toBe(200);
+      return (result.body as { body: string }).body;
+    } finally {
+      rmSync(injDir, { recursive: true, force: true });
+    }
+  };
+
+  it("prefixes a leading formula char with an explicit apostrophe (not just removing the bare char)", async () => {
+    const body = await exportInjectedTitle("=SUM(A1:B1)");
+    expect(body).toContain("'=SUM(A1:B1)");
+  });
+
+  it("guards a formula hidden behind leading whitespace (' =1+1' bypass)", async () => {
+    const body = await exportInjectedTitle(" =1+1");
+    expect(body).toContain("' =1+1");
   });
 });

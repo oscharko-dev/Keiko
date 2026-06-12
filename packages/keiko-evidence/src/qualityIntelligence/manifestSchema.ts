@@ -12,6 +12,19 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 type QualityIntelligenceExportAdapter = QualityIntelligence.QualityIntelligenceExportAdapter;
+
+/**
+ * Binary export modes assembled at the runtime/route level (Issue #283 + #711) rather than by a pure
+ * domain adapter — a paginated text PDF and a STORE ZIP bundle. They are not part of the contract
+ * `QualityIntelligenceExportAdapter` union (which drives the serialise dispatch + TMS classification),
+ * but an export-evidence row must be able to record them faithfully as the produced target type.
+ */
+export type QualityIntelligenceBinaryExportMode = "pdf" | "zip-bundle";
+
+/** Any target an export-evidence row may record: a domain adapter or a binary bundle mode. */
+export type QualityIntelligenceExportTarget =
+  | QualityIntelligenceExportAdapter
+  | QualityIntelligenceBinaryExportMode;
 type QualityIntelligenceLifecycleStatus = QualityIntelligence.QualityIntelligenceLifecycleStatus;
 type QualityIntelligenceRunId = QualityIntelligence.QualityIntelligenceRunId;
 type QualityIntelligenceValidationFindingKind =
@@ -85,9 +98,17 @@ export interface QualityIntelligenceFindingRow {
 
 export interface QualityIntelligenceExportRow {
   readonly id: string;
-  readonly targetAdapter: QualityIntelligenceExportAdapter;
+  readonly targetAdapter: QualityIntelligenceExportTarget;
   readonly integrityHash: string;
   readonly redactionAttested: boolean;
+  /**
+   * Whether this row records a dry-run preview rather than a materialised export (Issue #283, AC4).
+   * Absent/`false` means the export produced a downloadable artifact (local serialisation or a
+   * binary PDF/ZIP bundle); `true` means only a preview was rendered. Additive and optional:
+   * manifests written before #283 carry no export rows at all, and the strict-schema gate validates
+   * only top-level keys, so no schema-version bump is required.
+   */
+  readonly dryRun?: boolean;
 }
 
 export interface QualityIntelligenceEvidenceRefRow {

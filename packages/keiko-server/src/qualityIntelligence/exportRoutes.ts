@@ -15,9 +15,11 @@ import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-d
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import {
+  appendQualityIntelligenceExportRow,
   loadQualityIntelligenceRun,
   loadQualityIntelligenceCandidates,
   type QualityIntelligenceCandidateRow,
+  type QualityIntelligenceExportRow,
 } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -42,7 +44,10 @@ const LOCAL_META: Readonly<Record<string, { contentType: string; ext: string }>>
   json: { contentType: "application/json", ext: "json" },
   markdown: { contentType: "text/markdown", ext: "md" },
   "plain-text": { contentType: "text/plain", ext: "txt" },
-  "quality-center": { contentType: "text/plain", ext: "txt" },
+  // NOTE: no "quality-center" entry — it is a TMS adapter, so a non-dry-run request is rejected with
+  // 403 before LOCAL_META is consulted, and the dry-run path returns a preview object that never
+  // reads LOCAL_META. The `?? { text/plain, txt }` fallback at the materialised-response site covers
+  // any future non-TMS text adapter.
   pdf: { contentType: "application/pdf", ext: "pdf" },
   "zip-bundle": { contentType: "application/zip", ext: "zip" },
 };
@@ -126,6 +131,50 @@ interface ExportRequest {
   readonly approvedOnly: boolean;
 }
 
+interface ExportResponse {
+  readonly result: RouteResult;
+  /** The export-evidence row to append; present only when the response is a 200 export action. */
+  readonly evidence?: QualityIntelligenceExportRow;
+}
+
+/**
+ * Build the export-evidence row for an export action (Issue #283, AC4). Records the target type, a
+ * deterministic artifact id, an integrity hash over the exported candidate ids, the redaction
+ * attestation (candidates were redacted at persist time), and whether the action was a dry-run.
+ */
+function buildExportEvidenceRow(
+  runId: string,
+  target: Adapter | BinaryMode,
+  rows: readonly QualityIntelligenceCandidateRow[],
+  dryRun: boolean,
+): QualityIntelligenceExportRow {
+  return {
+    id: `qi-export-${sha256Hex(`${runId}|${target}`).slice(0, 24)}`,
+    targetAdapter: target,
+    integrityHash: sha256Hex(JSON.stringify(rows.map((r) => r.id))),
+    redactionAttested: true,
+    dryRun,
+  };
+}
+
+/**
+ * Best-effort append of an export-evidence row for a 200 export action (Issue #283, AC4). A failed
+ * audit write must NOT withhold an already-computed local export from the user: the artifact has no
+ * external side effect, the run already exists on disk, and the manifest write is atomic so this path
+ * is rare. Swallow on failure rather than turning a successful export into a 500. No-op for error
+ * responses and for the disabled external-TMS path (which produces no artifact).
+ */
+function recordExportEvidence(runId: string, outcome: ExportResponse, evidenceDir: string): void {
+  if (outcome.evidence === undefined || outcome.result.status !== 200) {
+    return;
+  }
+  try {
+    appendQualityIntelligenceExportRow({ runId, export: outcome.evidence }, { evidenceDir });
+  } catch {
+    // intentionally swallowed — see doc comment
+  }
+}
+
 function parseExportBody(body: Record<string, unknown>): ExportRequest | undefined {
   const adapter = body.adapter;
   if (typeof adapter !== "string" || !ADAPTERS.has(adapter)) return undefined;
@@ -205,7 +254,11 @@ export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Pr
     if (artifact === undefined || artifact.candidates.length === 0) {
       return errorResult(409, "QI_NO_CANDIDATES", "This run has no candidates to export.");
     }
-    return serialiseExport(id, parsed.request, artifact.candidates, evidenceDir);
+    const outcome = serialiseExport(id, parsed.request, artifact.candidates, evidenceDir);
+    // Emit audit evidence for every materialised export or dry-run preview (Issue #283, AC4). The
+    // append is best-effort and must not turn a successful export into a 500 — see recordExportEvidence.
+    recordExportEvidence(id, outcome, evidenceDir);
+    return outcome.result;
   } catch {
     return errorResult(500, "QI_EXPORT_FAILED", "Failed to build the export.");
   }
@@ -215,7 +268,7 @@ function binaryResponse(
   runId: string,
   mode: BinaryMode,
   rows: readonly QualityIntelligenceCandidateRow[],
-): RouteResult {
+): ExportResponse {
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
   const createdAt = new Date().toISOString();
@@ -241,16 +294,19 @@ function binaryResponse(
     bytes = assembleZipBundle(entries);
   }
   return {
-    status: 200,
-    body: {
-      dryRun: false,
-      adapter: mode,
-      filename: `${runId}.${meta.ext}`,
-      contentType: meta.contentType,
-      byteLen: bytes.length,
-      encoding: "base64" as const,
-      body: Buffer.from(bytes).toString("base64"),
+    result: {
+      status: 200,
+      body: {
+        dryRun: false,
+        adapter: mode,
+        filename: `${runId}.${meta.ext}`,
+        contentType: meta.contentType,
+        byteLen: bytes.length,
+        encoding: "base64" as const,
+        body: Buffer.from(bytes).toString("base64"),
+      },
     },
+    evidence: buildExportEvidenceRow(runId, mode, rows, false),
   };
 }
 
@@ -258,7 +314,7 @@ function serialisedResponse(
   runId: string,
   request: ExportRequest,
   rows: readonly QualityIntelligenceCandidateRow[],
-): RouteResult {
+): ExportResponse {
   const adapter = request.adapter;
   if (adapter === "pdf" || adapter === "zip-bundle") {
     return binaryResponse(runId, adapter, rows);
@@ -269,27 +325,33 @@ function serialisedResponse(
   const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
   if (request.dryRun) {
     return {
-      status: 200,
-      body: {
-        dryRun: true,
-        adapter,
-        candidateCount: rows.length,
-        byteLen: serialized.byteLen,
-        preview: serialized.body.slice(0, 1200),
+      result: {
+        status: 200,
+        body: {
+          dryRun: true,
+          adapter,
+          candidateCount: rows.length,
+          byteLen: serialized.byteLen,
+          preview: serialized.body.slice(0, 1200),
+        },
       },
+      evidence: buildExportEvidenceRow(runId, adapter, rows, true),
     };
   }
   const meta = LOCAL_META[adapter] ?? { contentType: "text/plain", ext: "txt" };
   return {
-    status: 200,
-    body: {
-      dryRun: false,
-      adapter,
-      filename: `${runId}.${meta.ext}`,
-      contentType: meta.contentType,
-      byteLen: serialized.byteLen,
-      body: serialized.body,
+    result: {
+      status: 200,
+      body: {
+        dryRun: false,
+        adapter,
+        filename: `${runId}.${meta.ext}`,
+        contentType: meta.contentType,
+        byteLen: serialized.byteLen,
+        body: serialized.body,
+      },
     },
+    evidence: buildExportEvidenceRow(runId, adapter, rows, false),
   };
 }
 
@@ -298,25 +360,31 @@ function serialiseExport(
   request: ExportRequest,
   allRows: readonly QualityIntelligenceCandidateRow[],
   evidenceDir: string,
-): RouteResult {
+): ExportResponse {
   const adapter = request.adapter;
   const isBinary = adapter === "pdf" || adapter === "zip-bundle";
   const isTms = !isBinary && QualityIntelligence.QUALITY_INTELLIGENCE_TMS_ADAPTERS.has(adapter);
   const approvedOnly = isTms ? true : request.approvedOnly;
   const rows = selectRows(allRows, approvedOnly, runId, evidenceDir);
   if (rows.length === 0) {
-    return errorResult(
-      409,
-      "QI_NOTHING_TO_EXPORT",
-      approvedOnly ? "No approved candidates to export." : "No candidates to export.",
-    );
+    return {
+      result: errorResult(
+        409,
+        "QI_NOTHING_TO_EXPORT",
+        approvedOnly ? "No approved candidates to export." : "No candidates to export.",
+      ),
+    };
   }
   if (isTms && !request.dryRun) {
-    return errorResult(
-      403,
-      "QI_EXTERNAL_EXPORT_DISABLED",
-      "External TMS export is disabled. Configure the connector and use a dry-run preview.",
-    );
+    // External TMS write is disabled — no artifact is produced, so no export-evidence row is
+    // recorded for this rejected action.
+    return {
+      result: errorResult(
+        403,
+        "QI_EXTERNAL_EXPORT_DISABLED",
+        "External TMS export is disabled. Configure the connector and use a dry-run preview.",
+      ),
+    };
   }
   return serialisedResponse(runId, request, rows);
 }

@@ -623,6 +623,99 @@ export function recordQualityIntelligenceRun(
   return { manifest, location: store.record(manifest) };
 }
 
+// ─── Export-evidence append (Issue #283, AC4) ────────────────────────────────────────
+
+export interface QualityIntelligenceExportEvidenceInput {
+  readonly runId: string;
+  /** The export row to append: target adapter, artifact id, integrity hash, attestation, mode. */
+  readonly export: QualityIntelligenceEvidenceManifest["exports"][number];
+}
+
+// Fold a second redaction summary into a base one so the manifest's counts-only redaction summary
+// stays internally consistent after an export row is appended (the run summary + the row's scan).
+function foldRedactionSummary(
+  base: QualityIntelligenceEvidenceManifest["redactionSummary"],
+  add: QualityIntelligenceEvidenceManifest["redactionSummary"],
+): QualityIntelligenceEvidenceManifest["redactionSummary"] {
+  const patternsMatched: Record<string, number> = { ...base.patternsMatched };
+  for (const [key, count] of Object.entries(add.patternsMatched)) {
+    patternsMatched[key] = (patternsMatched[key] ?? 0) + count;
+  }
+  return {
+    totalStringsScanned: base.totalStringsScanned + add.totalStringsScanned,
+    stringsRedacted: base.stringsRedacted + add.stringsRedacted,
+    patternsMatched,
+  };
+}
+
+/**
+ * Append one export-evidence row to an already-recorded run manifest (Issue #283, AC4 — "export
+ * evidence records target type, artifact IDs, mapping profile, and result without leaking secrets";
+ * Audit Addendum — "audit evidence for every export action").
+ *
+ * Every QI export action — a local serialisation download, a binary PDF/ZIP bundle, or a dry-run
+ * preview — emits one audit row recording WHAT was exported (`targetAdapter`), the artifact id, its
+ * integrity hash, the redaction attestation, and whether it was a dry-run. The disabled external-TMS
+ * write path produces no artifact and therefore records nothing.
+ *
+ * Rows are deduplicated by `(id, dryRun)` so re-exporting the same adapter in the same mode is
+ * idempotent — the audit captures each distinct (artifact, mode) once rather than once per click,
+ * which also bounds manifest growth.
+ *
+ * Invariants preserved (mirrors {@link recordQualityIntelligenceRun}):
+ *  - the new row's string leaves pass the persist redactor before assembly (the row carries only
+ *    ids / an enum / a sha-256 hash / booleans, so this is a no-op in practice, but the persist
+ *    redactor is applied unconditionally to keep the fail-closed contract uniform);
+ *  - `integrityHashes.exports` is recomputed over the full new collection; the other hash groups are
+ *    carried over unchanged because their collections did not change;
+ *  - `totals.exports` stays equal to `exports.length` (asserted on read);
+ *  - the counts-only `redactionSummary` folds in the new row's scan;
+ *  - the manifest is rewritten through the same atomic O_EXCL temp + rename path.
+ *
+ * Throws `EvidenceReadError` when the run manifest does not exist (an export cannot precede its run)
+ * and `EvidenceWriteError` when neither `store` nor `evidenceDir` is supplied or the write fails.
+ */
+export function appendQualityIntelligenceExportRow(
+  input: QualityIntelligenceExportEvidenceInput,
+  options: QualityIntelligenceRecordOptions = {},
+): QualityIntelligenceRecordResult {
+  assertValidRunId(input.runId);
+  const store = resolveStore(options);
+  if (store === undefined) {
+    throw new EvidenceWriteError(
+      "appendQualityIntelligenceExportRow requires options.store or options.evidenceDir",
+    );
+  }
+  const existing = store.load(input.runId);
+  if (existing === undefined) {
+    throw new EvidenceReadError(
+      `cannot append export evidence: QI run "${input.runId}" was not found`,
+    );
+  }
+  const { redacted: redactedRow, summary: rowSummary } = redactQualityIntelligenceEvidence(
+    input.export,
+    options.redaction ?? {},
+  );
+  const isSameRow = (row: QualityIntelligenceEvidenceManifest["exports"][number]): boolean =>
+    row.id === redactedRow.id && (row.dryRun ?? false) === (redactedRow.dryRun ?? false);
+  if (existing.exports.some(isSameRow)) {
+    return { manifest: existing, location: store.location(input.runId) };
+  }
+  const exports = [...existing.exports, redactedRow];
+  const integrityHashes: QualityIntelligenceIntegrityHashes = {
+    ...existing.integrityHashes,
+    exports: sha256OfJson(exports),
+  };
+  const manifest: QualityIntelligenceEvidenceManifest = {
+    ...existing,
+    exports,
+    totals: { ...existing.totals, exports: exports.length },
+    integrityHashes,
+    redactionSummary: foldRedactionSummary(existing.redactionSummary, rowSummary),
+  };
+  return { manifest, location: store.record(manifest) };
+}
+
 export interface QualityIntelligenceLoadOptions {
   readonly store?: QualityIntelligenceLocalStore | undefined;
   readonly evidenceDir?: string | undefined;
