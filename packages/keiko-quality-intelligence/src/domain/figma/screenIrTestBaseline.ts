@@ -114,16 +114,83 @@ function parseIrChildren(value: unknown, depth: number): IrNode[] {
   return children;
 }
 
-// The optional, additive node fields (text, bounding box, a11y colours #812). Each is present only
-// when well-typed; a malformed value is dropped so a corrupt node degrades rather than crashing.
+// The optional, additive node fields (text, bounding box, a11y colours #812, layout fidelity).
+// Each is present only when well-typed; a malformed value is dropped so a corrupt node degrades
+// rather than crashing.
 function parseOptionalNodeFields(value: Record<string, unknown>): Partial<IrNode> {
   const boundingBox = parseBoundingBox(value.boundingBox);
+  const layout = parseIrLayout(value.layout);
+  const sizing = parseIrSizing(value.sizing);
+  const typography = parseIrTypography(value.typography);
+  const cornerRadius = isFiniteNumber(value.cornerRadius) ? value.cornerRadius : undefined;
   return {
     ...(isString(value.text) ? { text: value.text } : {}),
     ...(boundingBox !== undefined ? { boundingBox } : {}),
     ...(isString(value.textColor) ? { textColor: value.textColor } : {}),
     ...(isString(value.backgroundColor) ? { backgroundColor: value.backgroundColor } : {}),
+    ...(layout !== undefined ? { layout } : {}),
+    ...(sizing !== undefined ? { sizing } : {}),
+    ...(cornerRadius !== undefined ? { cornerRadius } : {}),
+    ...(typography !== undefined ? { typography } : {}),
   };
+}
+
+const LAYOUT_MODES = new Set(["row", "column"]);
+const ALIGN_VALUES = new Set(["start", "center", "end", "space-between"]);
+const SIZING_VALUES = new Set(["fixed", "hug", "fill"]);
+
+type IrAlign = NonNullable<NonNullable<IrNode["layout"]>["primaryAlign"]>;
+
+const parseAlign = (value: unknown): IrAlign | undefined =>
+  isString(value) && ALIGN_VALUES.has(value) ? (value as IrAlign) : undefined;
+
+// Re-hydrate the layout-fidelity fields persisted in irJson (codegen path). Persisted snapshots
+// from before these fields existed simply omit them — every branch is total and optional.
+function parseIrLayout(value: unknown): IrNode["layout"] | undefined {
+  if (!isObject(value) || !isString(value.mode) || !LAYOUT_MODES.has(value.mode)) return undefined;
+  const padding = parsePadding(value.padding);
+  const itemSpacing = isFiniteNumber(value.itemSpacing) ? value.itemSpacing : undefined;
+  const primaryAlign = parseAlign(value.primaryAlign);
+  const counterAlign = parseAlign(value.counterAlign);
+  return {
+    mode: value.mode as NonNullable<IrNode["layout"]>["mode"],
+    ...(itemSpacing !== undefined ? { itemSpacing } : {}),
+    ...(padding !== undefined ? { padding } : {}),
+    ...(primaryAlign !== undefined ? { primaryAlign } : {}),
+    ...(counterAlign !== undefined ? { counterAlign } : {}),
+  };
+}
+
+function parsePadding(value: unknown): readonly [number, number, number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 4) return undefined;
+  return value.every(isFiniteNumber)
+    ? (value as unknown as readonly [number, number, number, number])
+    : undefined;
+}
+
+type IrSizingValue = NonNullable<NonNullable<IrNode["sizing"]>["horizontal"]>;
+
+const parseSizingValue = (value: unknown): IrSizingValue | undefined =>
+  isString(value) && SIZING_VALUES.has(value) ? (value as IrSizingValue) : undefined;
+
+function parseIrSizing(value: unknown): IrNode["sizing"] | undefined {
+  if (!isObject(value)) return undefined;
+  const horizontal = parseSizingValue(value.horizontal);
+  const vertical = parseSizingValue(value.vertical);
+  if (horizontal === undefined && vertical === undefined) return undefined;
+  return {
+    ...(horizontal !== undefined ? { horizontal } : {}),
+    ...(vertical !== undefined ? { vertical } : {}),
+  };
+}
+
+function parseIrTypography(value: unknown): IrNode["typography"] | undefined {
+  if (!isObject(value)) return undefined;
+  const { fontFamily, fontSize, fontWeight } = value;
+  if (!isString(fontFamily) || !isFiniteNumber(fontSize) || !isFiniteNumber(fontWeight)) {
+    return undefined;
+  }
+  return { fontFamily, fontSize, fontWeight };
 }
 
 // Total, defensive IR-node parser: an opaque serialised node (from the snapshot's `irJson`) is

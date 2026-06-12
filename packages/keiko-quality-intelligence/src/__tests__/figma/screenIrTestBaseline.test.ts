@@ -389,3 +389,79 @@ describe("parseScreenIr — 5000-deep irJson chain degrades, no RangeError (Fix 
     expect(result?.root).toBeDefined();
   });
 });
+
+// ─── Layout-fidelity fields survive the persisted-irJson round trip ──────────
+//
+// The codegen route re-hydrates IrNode from the snapshot's opaque irJson via parseScreenIr. A
+// live integration pass caught these fields being DROPPED on parse (the in-memory emitCode tests
+// were blind to it), which silently disabled the per-screen <style> block on stored snapshots.
+
+describe("parseScreenIr — layout/sizing/cornerRadius/typography round trip", () => {
+  it("re-hydrates the layout-fidelity fields from persisted irJson", () => {
+    const json = JSON.parse(
+      JSON.stringify({
+        id: "s1",
+        name: "Login",
+        root: {
+          id: "s1-root",
+          name: "Root",
+          type: "FRAME",
+          interactionHint: "container",
+          layout: { mode: "column", itemSpacing: 12, padding: [16, 16, 16, 16] },
+          sizing: { horizontal: "fill" },
+          cornerRadius: 8,
+          imageFills: [],
+          children: [
+            {
+              id: "s1-t",
+              name: "Titel",
+              type: "TEXT",
+              interactionHint: "text",
+              text: "Hallo",
+              typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+              imageFills: [],
+              children: [],
+            },
+          ],
+        },
+      }),
+    ) as unknown;
+    const parsed = parseScreenIr(json);
+    expect(parsed?.root.layout).toEqual({
+      mode: "column",
+      itemSpacing: 12,
+      padding: [16, 16, 16, 16],
+    });
+    expect(parsed?.root.sizing).toEqual({ horizontal: "fill" });
+    expect(parsed?.root.cornerRadius).toBe(8);
+    expect(parsed?.root.children[0]?.typography).toEqual({
+      fontFamily: "Inter",
+      fontSize: 16,
+      fontWeight: 400,
+    });
+  });
+
+  it("drops malformed layout-fidelity values instead of failing the node", () => {
+    const json = {
+      id: "s1",
+      name: "X",
+      root: {
+        id: "r",
+        name: "r",
+        type: "FRAME",
+        interactionHint: "container",
+        layout: { mode: "diagonal" },
+        sizing: { horizontal: "stretch" },
+        cornerRadius: Number.NaN,
+        typography: { fontFamily: 7 },
+        imageFills: [],
+        children: [],
+      },
+    } as unknown;
+    const parsed = parseScreenIr(json);
+    expect(parsed?.root.layout).toBeUndefined();
+    expect(parsed?.root.sizing).toBeUndefined();
+    expect(parsed?.root.cornerRadius).toBeUndefined();
+    expect(parsed?.root.typography).toBeUndefined();
+  });
+});
