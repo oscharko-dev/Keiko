@@ -8667,7 +8667,8 @@ select.dlg-input {
   font-size: 12px;
   color: var(--danger);
 }
-.qi-cand-more {
+.qi-cand-more,
+.qi-show-more {
   margin: 12px 0 0;
   justify-self: start;
 }

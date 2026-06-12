@@ -1,7 +1,7 @@
 // Epic #270 — QiHubPanel tests. The hub lists past runs and opens a run as a result card via the
 // injected `openRun` callback; finishing a run from the launcher also opens its card.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QiHubPanel } from "./QiHubPanel";
@@ -124,5 +124,23 @@ describe("QiHubPanel", () => {
     render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={failing} />);
     expect(await screen.findByTestId("qi-error-state")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it("paginates the run list and reveals the rest on Show more (#280)", async () => {
+    const runs = Array.from({ length: 30 }, (_, i) =>
+      makeRun(`qi-run-${i.toString().padStart(4, "0")}`, "succeeded"),
+    );
+    render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fakeFetch(runs)} />);
+
+    const list = await screen.findByRole("list", { name: /run list/i });
+    // First page only: 25 of 30 rendered into the DOM.
+    expect(within(list).getAllByRole("listitem")).toHaveLength(25);
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /show more runs \(5 remaining\)/i }));
+
+    expect(within(list).getAllByRole("listitem")).toHaveLength(30);
+    expect(screen.queryByRole("button", { name: /show more runs/i })).not.toBeInTheDocument();
   });
 });

@@ -5,7 +5,7 @@
 // grid with per-candidate review), enterprise export, and any validation findings. Reuses the QI BFF
 // routes; never embeds raw prompts or secrets (the wire projection is already redacted upstream).
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceUiRunDetail,
@@ -114,16 +114,25 @@ const KIND_LABEL: Readonly<Record<string, string>> = {
   "test-quality": "Test quality",
 };
 
+// Findings, coverage gaps, and the run list can each grow to hundreds of rows (findings are capped
+// at 512 server-side; the coverage gap radar has NO server cap and scales with source-atom count).
+// Render the first page eagerly and reveal the rest on demand — the #280 "progressive rendering for
+// large artifact lists" Deliverable, mirroring CandidatesPane's INITIAL_VISIBLE pattern.
+const INITIAL_VISIBLE_ROWS = 20;
+
 function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
-  if (detail.findingRefs.length === 0) return null;
+  const [visible, setVisible] = useState(INITIAL_VISIBLE_ROWS);
+  const total = detail.findingRefs.length;
+  if (total === 0) return null;
+  const shown = detail.findingRefs.slice(0, visible);
   return (
     <section className="qi-run-findings" aria-label="Findings">
       <h3 className="qi-col-subtitle">
         Findings
-        <span className="qi-col-count">{detail.findingRefs.length.toString()}</span>
+        <span className="qi-col-count">{total.toString()}</span>
       </h3>
       <ul className="qi-finding-list" aria-label="Findings list">
-        {detail.findingRefs.map((f) => (
+        {shown.map((f) => (
           <li key={f.id} className="qi-finding-item">
             <div className="qi-finding-header">
               <span className="qi-finding-kind">{KIND_LABEL[f.kind] ?? f.kind}</span>
@@ -133,6 +142,17 @@ function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDet
           </li>
         ))}
       </ul>
+      {visible < total ? (
+        <button
+          type="button"
+          className="qi-btn qi-btn-secondary qi-show-more"
+          onClick={() => {
+            setVisible((v) => v + INITIAL_VISIBLE_ROWS);
+          }}
+        >
+          Show more findings ({(total - visible).toString()} remaining)
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -152,10 +172,19 @@ const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "unc
   };
 
 function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
-  if (detail.coverageByAtom.length === 0) return null;
-  const total = detail.coverageByAtom.length;
-  const coveredCount = detail.coverageByAtom.filter((r) => r.status === "covered").length;
-  const gaps = detail.coverageByAtom.filter((r) => r.status !== "covered");
+  const [visibleGaps, setVisibleGaps] = useState(INITIAL_VISIBLE_ROWS);
+  // Derive once per fetch — coverageByAtom only changes when `detail` is replaced, not on the
+  // show-more state change (the old code re-filtered the whole matrix on every render).
+  const { total, coveredCount, gaps } = useMemo(() => {
+    const rows = detail.coverageByAtom;
+    return {
+      total: rows.length,
+      coveredCount: rows.filter((r) => r.status === "covered").length,
+      gaps: rows.filter((r) => r.status !== "covered"),
+    };
+  }, [detail.coverageByAtom]);
+  if (total === 0) return null;
+  const shownGaps = gaps.slice(0, visibleGaps);
   return (
     <section className="qi-coverage-panel" aria-label="Coverage">
       <h3 className="qi-col-subtitle">
@@ -175,7 +204,7 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
         <section className="qi-coverage-gaps" aria-label="Gap radar">
           <h4 className="qi-col-subtitle">{`Gap radar (${gaps.length.toString()})`}</h4>
           <ul className="qi-coverage-gap-list" aria-label="Uncovered and weakly covered atoms">
-            {gaps.map((row) => {
+            {shownGaps.map((row) => {
               const label = COVERAGE_STATUS_LABEL[row.status];
               const cls = COVERAGE_STATUS_CLASS[row.status];
               const excerpt = row.requirementExcerptRedacted;
@@ -205,6 +234,17 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
               );
             })}
           </ul>
+          {visibleGaps < gaps.length ? (
+            <button
+              type="button"
+              className="qi-btn qi-btn-secondary qi-show-more"
+              onClick={() => {
+                setVisibleGaps((v) => v + INITIAL_VISIBLE_ROWS);
+              }}
+            >
+              Show more gaps ({(gaps.length - visibleGaps).toString()} remaining)
+            </button>
+          ) : null}
         </section>
       ) : null}
     </section>
