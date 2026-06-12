@@ -8,6 +8,7 @@ export {
   EVAL_EMBEDDING_IDENTITY,
   EVAL_TOPIC_BOOST,
   ambiguousQueryFixture,
+  broadQueryDiversityFixture,
   contextBudgetFixture,
   multiCapsuleFixture,
   multiPageFixture,
