@@ -4,8 +4,8 @@
 // the handler directly. Verifies local adapters, unknown adapter, TMS dry-run/live,
 // no-candidates, and formula-injection safety. Pure function + real fs.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -852,6 +852,44 @@ describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
     const rows = exportsOf();
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.dryRun ?? false).sort()).toEqual([false, true]);
+  });
+});
+
+// ─── Issue #283 AC4 — audit-evidence append is fail-open ──────────────────────────────
+//
+// A failed audit-evidence write must NOT turn a successful local export into a 500: the artifact has
+// no external side effect and the run already exists on disk (recordExportEvidence, exportRoutes.ts
+// :160-176). We provoke a write failure by making the qi/ directory read-only — the atomic manifest
+// re-persist cannot create its temp file — and assert the export still returns 200 with its body
+// intact. Without the fail-open swallow the append error would reach the handler's outer catch and
+// yield 500 QI_EXPORT_FAILED (verifier Gap 1).
+
+describe("handleQiExport — AC4 audit write is fail-open", () => {
+  it("returns 200 with the export body when the audit-evidence append fails", async () => {
+    if (platform() === "win32") return; // POSIX permission bits only
+    const qiDir = join(evidenceDir, "qi");
+    chmodSync(qiDir, 0o555); // read + traverse, but no new files → atomic manifest write fails
+    try {
+      const result = asResult(
+        await handleQiExport(
+          ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: false })),
+          deps(evidenceDir),
+        ),
+      );
+      // Fail-open contract: the export succeeds despite the swallowed audit-write error.
+      expect(result.status).toBe(200);
+      expect((result.body as { body: string }).body.length).toBeGreaterThan(0);
+
+      // When the chmod actually blocked the write (i.e. not running as root) no audit row was
+      // recorded — the error was swallowed, not surfaced. Under root, chmod is a no-op and the row
+      // is written; the 200 + body assertions above (the invariant under test) still hold.
+      if (process.getuid?.() !== 0) {
+        const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+        expect(manifest?.exports).toHaveLength(0);
+      }
+    } finally {
+      chmodSync(qiDir, 0o755); // restore so afterEach cleanup can remove the dir
+    }
   });
 });
 
