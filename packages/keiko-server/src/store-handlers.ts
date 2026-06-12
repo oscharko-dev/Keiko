@@ -35,6 +35,7 @@ import {
   clearGroundedTurnsForConversation,
   clearGroundedTurnsForWorkspace,
 } from "./grounded-turn-registry.js";
+import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
@@ -966,7 +967,9 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
     if (!chatBelongsToProject(deps, projectPath, chatId)) {
       return notFoundResult("Chat not found.");
     }
-    const messages = deps.store.listMessages(chatId, limit);
+    const messages = deps.store
+      .listMessages(chatId, limit)
+      .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
     return { status: 200, body: { messages } };
   });
 }

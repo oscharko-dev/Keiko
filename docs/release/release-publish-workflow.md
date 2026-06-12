@@ -9,6 +9,21 @@ This repository now has a dedicated automated release workflow at [`.github/work
 - Manual `workflow_dispatch` with `publish: true` enables the publish job, but only when the selected ref is a tag that starts with `v`.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 
+## Release-branch workflow
+
+The release stabilization flow uses a dedicated branch for release-only hardening:
+
+- Freeze features for `0.2` on `dev` and cut `release/0.2.0` from that point.
+- Keep feature development open on `dev`.
+- Land all beta/RC fixes through pull requests targeting `release/0.2.0`; direct commits to the
+  release branch are blocked by branch protection.
+- Require the same protected-branch quality gates as `dev` before release PRs can merge: strict
+  status checks, CodeQL, dependency review, pinned-action verification, UI/build/smoke gates, signed
+  commits, conversation resolution, and linear history.
+- Run beta and RC validation from that branch and tag prereleases as `v0.2.0-beta.N`.
+- When final verification is complete, merge `release/0.2.0` to `main` and tag `v0.2.0`.
+- Immediately back-merge `release/0.2.0` into `dev` so next-cycle work can continue with stable fixes included.
+
 ## Gates
 
 The verification job runs the current release gates in a conservative order:

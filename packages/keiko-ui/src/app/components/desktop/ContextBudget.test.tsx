@@ -11,6 +11,7 @@ import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
+  EMPTY_MODEL_RESPONSE_USER_MESSAGE,
   isBudgetExceeded,
   useChatSession,
   type ChatSessionApi,
@@ -417,6 +418,31 @@ describe("useChatSession context-overflow classification (CB-F2)", () => {
     });
 
     expect(view.result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
+  });
+
+  it("maps an empty assistant response ApiError to an actionable deployment message", async () => {
+    vi.spyOn(api, "sendDesktopChat").mockRejectedValue(
+      new ApiError(
+        "GATEWAY_PROVIDER_ERROR",
+        "model 'cb-model' returned an empty assistant response",
+        502,
+      ),
+    );
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    act(() => view.result.current.setDraft("hi"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.error).toBe(
+      `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (GATEWAY_PROVIDER_ERROR)`,
+    );
   });
 });
 

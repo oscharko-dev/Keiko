@@ -9,6 +9,7 @@
 // package's already-bounded WorkspaceFs port. Path validation is enforced by every composed
 // layer at its own boundary, so this file does not re-validate scope paths.
 
+import { createHash } from "node:crypto";
 import {
   isValidScopePath,
   type CandidateFile,
@@ -55,6 +56,7 @@ import {
   type WorkspaceFs,
   type WorkspaceInfo,
   containedRealPathInfo,
+  evidenceAtomStableId,
 } from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -137,22 +139,6 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
     examples.length > 0 ? ` For example: ${examples.map((q) => `"${q}"`).join(" or ")}` : "";
   return `${intro}${anchorHint}${exampleText}`;
 }
-
-// ─── Default deterministic answerer ───────────────────────────────────────────
-
-export const echoAnswerer: GroundedAnswerer = {
-  answer: (question, pack) => {
-    try {
-      const filePaths = pack.files.map((f) => f.scopePath).join(", ");
-      const summary =
-        `Inspected ${String(pack.files.length)} file(s) for: ${question}. ` +
-        `Findings include: ${filePaths.length === 0 ? "(no evidence)" : filePaths}.`;
-      return Promise.resolve(summary);
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-    }
-  },
-};
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -562,6 +548,59 @@ interface LineWindow {
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
 const EXCERPT_CONTEXT_LINES = 2;
 const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
+const PROJECT_METADATA_QUERY_TERMS = [
+  "abhängigkeit",
+  "abhängigkeiten",
+  "build",
+  "cypress",
+  "dependenc",
+  "framework",
+  "jest",
+  "npm",
+  "package",
+  "playwright",
+  "pnpm",
+  "react",
+  "script",
+  "stack",
+  "tech-stack",
+  "techstack",
+  "test",
+  "testing",
+  "testumgebung",
+  "typescript",
+  "vite",
+  "vitest",
+  "yarn",
+] as const;
+const PROJECT_METADATA_FILENAMES = [
+  "package.json",
+  "vitest.config.ts",
+  "vitest.config.mts",
+  "vitest.config.js",
+  "vitest.config.mjs",
+  "vitest.setup.ts",
+  "vite.config.ts",
+  "vite.config.mts",
+  "vite.config.js",
+  "vite.config.mjs",
+  "jest.config.ts",
+  "jest.config.js",
+  "jest.config.mjs",
+  "playwright.config.ts",
+  "playwright.config.js",
+  "cypress.config.ts",
+  "cypress.config.js",
+  "next.config.ts",
+  "next.config.js",
+  "next.config.mjs",
+  "tsconfig.json",
+  "eslint.config.ts",
+  "eslint.config.js",
+  "eslint.config.mjs",
+  "postcss.config.js",
+  "postcss.config.mjs",
+] as const;
 const LOCKFILE_NAMES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -588,6 +627,128 @@ function isKeikoEvidenceArtifact(scopePath: string): boolean {
 
 function isLockfilePath(scopePath: string): boolean {
   return LOCKFILE_NAMES.has(basename(scopePath).toLowerCase());
+}
+
+function dirname(scopePath: string): string {
+  const index = scopePath.lastIndexOf("/");
+  return index <= 0 ? "" : scopePath.slice(0, index);
+}
+
+function joinScopePath(base: string, filename: string): string {
+  return base.length === 0 ? filename : `${base}/${filename}`;
+}
+
+function projectMetadataQueryFingerprint(query: RetrievalQuery): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind: "project-metadata",
+        queryKind: query.kind,
+        text: query.text,
+        caseSensitive: query.caseSensitive,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function wantsProjectMetadata(queryText: string): boolean {
+  const lowered = queryText.toLowerCase();
+  return PROJECT_METADATA_QUERY_TERMS.some((term) => lowered.includes(term));
+}
+
+function metadataRootsForScope(scope: SelectedScope): readonly string[] {
+  if (scope.relativePaths.length === 0) {
+    return [""];
+  }
+  const roots = new Set<string>();
+  for (const entry of scope.relativePaths) {
+    if (!isValidScopePath(entry, { mustBeRelative: true })) {
+      continue;
+    }
+    roots.add(scope.kind === "files" ? dirname(entry) : entry);
+  }
+  return [...roots].sort();
+}
+
+function metadataAtom(
+  scope: SelectedScope,
+  scopePath: string,
+  queryFingerprint: string,
+  nowMs: () => number,
+): EvidenceAtom {
+  return {
+    schemaVersion: scope.schemaVersion,
+    stableId: evidenceAtomStableId({
+      scopeId: scope.scopeId,
+      scopePath,
+      lineRange: undefined,
+      provenanceKind: "file-listing",
+      provenanceTool: "repo.projectMetadata",
+      queryFingerprint,
+    }),
+    scopePath,
+    lineRange: undefined,
+    score: 1,
+    provenance: {
+      kind: "file-listing",
+      tool: "repo.projectMetadata",
+      queryFingerprint,
+    },
+    redactionState: "redacted",
+    emittedAtMs: nowMs(),
+    ledgerRef: undefined,
+  };
+}
+
+function fileExistsInSearchScope(searchScope: SearchScope, fs: WorkspaceFs, scopePath: string): boolean {
+  try {
+    const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
+    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
+    return fs.stat(contained.path).isFile;
+  } catch {
+    return false;
+  }
+}
+
+function projectMetadataAtoms(
+  input: OrchestratorInput,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+): readonly EvidenceAtom[] {
+  if (!wantsProjectMetadata(input.query.text)) {
+    return [];
+  }
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  const queryFingerprint = projectMetadataQueryFingerprint(input.query);
+  for (const root of metadataRootsForScope(input.scope)) {
+    for (const filename of PROJECT_METADATA_FILENAMES) {
+      const scopePath = joinScopePath(root, filename);
+      if (seen.has(scopePath) || !isValidScopePath(scopePath, { mustBeRelative: true })) {
+        continue;
+      }
+      seen.add(scopePath);
+      if (fileExistsInSearchScope(searchScope, fs, scopePath)) {
+        atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+      }
+    }
+  }
+  return atoms;
+}
+
+function withProjectMetadataAtoms(
+  rings: RingRunSummary,
+  input: OrchestratorInput,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+): RingRunSummary {
+  const metadataAtoms = projectMetadataAtoms(input, searchScope, fs, nowMs);
+  return metadataAtoms.length === 0
+    ? rings
+    : { ...rings, atoms: [...rings.atoms, ...metadataAtoms] };
 }
 
 function queryTerms(queryText: string, anchors: readonly SearchAnchor[]): readonly string[] {
@@ -1119,7 +1280,8 @@ async function assembleGroundedPack({
   fs,
   nowMs,
 }: AssembleGroundedPackInputs): Promise<ConnectedContextPack> {
-  const prepared = preparePackAssembly(input, plan, rings, nowMs);
+  const augmentedRings = withProjectMetadataAtoms(rings, input, searchScope, fs, nowMs);
+  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
   const cacheIdentity =
     deps.microIndex === undefined
       ? undefined
@@ -1130,7 +1292,7 @@ async function assembleGroundedPack({
     input,
     deps,
     plan,
-    rings,
+    rings: augmentedRings,
     ordered: prepared.ordered,
     cacheIdentity,
     initialUsage: prepared.initialUsage,
@@ -1151,7 +1313,7 @@ async function assembleGroundedPack({
   return await assemblePackFromReads({
     input,
     plan,
-    rings,
+    rings: augmentedRings,
     prepared,
     excerptReads,
     cacheIdentity,

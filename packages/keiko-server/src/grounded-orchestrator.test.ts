@@ -40,7 +40,6 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ClarificationNeededError,
-  echoAnswerer,
   retrieveConnectedContextPack,
   runGroundedExploration,
   type GroundedAnswerer,
@@ -49,6 +48,16 @@ import {
 
 const NOW = 1_700_000_000_000;
 let ROOT = "";
+
+const echoAnswerer: GroundedAnswerer = {
+  answer: (question, pack) => {
+    const filePaths = pack.files.map((f) => f.scopePath).join(", ");
+    const summary =
+      `Inspected ${String(pack.files.length)} file(s) for: ${question}. ` +
+      `Findings include: ${filePaths.length === 0 ? "(no evidence)" : filePaths}.`;
+    return Promise.resolve(summary);
+  },
+};
 
 function fakeWorkspace(): WorkspaceInfo {
   return {
@@ -466,6 +475,64 @@ describe("runGroundedExploration", () => {
     ).toBe(true);
     expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
     expect(JSON.stringify(out.pack)).not.toContain("stale-internal-value");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("includes package and test config metadata for connected-folder test-environment questions", async () => {
+    mkdirSync(join(ROOT, "packages/keiko-ui/src/app/components/desktop"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/package.json"),
+      JSON.stringify(
+        {
+          name: "@oscharko-dev/keiko-ui",
+          scripts: { test: "vitest run" },
+          devDependencies: { vitest: "4.1.8", vite: "8.0.16" },
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/vitest.config.ts"),
+      "import { defineConfig } from 'vitest/config';\n" +
+        "export default defineConfig({ test: { environment: 'jsdom' } });\n",
+    );
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/src/app/components/desktop/AppShell.tsx"),
+      "export function AppShell() {\n  return 'app shell';\n}\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "directory",
+          relativePaths: ["packages/keiko-ui"],
+          explicitConnection: true,
+        }),
+        query: happyQuery({
+          text: "Kannst du die App sehen und mir sagen welche Testumgebung genutzt wird?",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const paths = out.pack.files.map((file) => file.scopePath);
+    expect(paths).toContain("packages/keiko-ui/package.json");
+    expect(paths).toContain("packages/keiko-ui/vitest.config.ts");
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "packages/keiko-ui/package.json")
+        ?.excerpts.some((excerpt) => excerpt.content.includes('"test": "vitest run"')),
+    ).toBe(true);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "packages/keiko-ui/vitest.config.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes("environment: 'jsdom'")),
+    ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

@@ -109,7 +109,7 @@ function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
   // Issue #152 — the streaming path inserts an empty assistant bubble before the first token
   // arrives; while it is empty the pending turn is represented by the TypingBubble, so an empty
   // assistant turn is hidden here to avoid a duplicate "Keiko" bubble during the contacting wait.
-  // Persisted assistant turns are never empty (createAssistantMessage substitutes a placeholder).
+  // Persisted assistant turns are never empty; empty provider responses fail before persistence.
   return messages.filter(
     (m) =>
       m.role === "user" ||

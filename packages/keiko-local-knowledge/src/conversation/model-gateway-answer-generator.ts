@@ -24,6 +24,7 @@ import type {
   GatewayRequest,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { ProviderError } from "@oscharko-dev/keiko-model-gateway";
 
 import { validateAnswerGrounding } from "../retrieval/answer-grounding.js";
 import type { LocalKnowledgeGroundedContextPack } from "../retrieval/context-pack-assembler.js";
@@ -32,6 +33,7 @@ import type { AnswerGenerator, AnswerGeneratorInput } from "./types.js";
 
 const CITATION_METADATA_WHITESPACE_PATTERN = /\s+/gu;
 const MAX_PROMPT_CITATION_LABEL_CHARS = 240;
+const EMPTY_ASSISTANT_RESPONSE_STATUS = 200;
 
 type CitationMetadataRedactor = (value: string) => string;
 
@@ -90,7 +92,14 @@ export class ModelGatewayAnswerGenerator implements AnswerGenerator {
       ...(input.signal !== undefined ? { cancellationSignal: input.signal } : {}),
     };
     const response = await this.chatGateway.chat(request);
-    return response.content;
+    const content = response.content.trim();
+    if (content.length === 0) {
+      throw new ProviderError(
+        `model '${this.modelId}' returned an empty grounded answer`,
+        EMPTY_ASSISTANT_RESPONSE_STATUS,
+      );
+    }
+    return content;
   }
 }
 

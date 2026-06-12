@@ -2,25 +2,33 @@ name: CI
 
 on:
   push:
-    branches: [dev]
+    branches:
+      - dev
+      - "release/**"
   pull_request:
-    branches: [dev]
+    branches:
+      - dev
+      - "release/**"
 
 permissions: {}
 
 jobs:
-  main-dev-gate:
-    name: Only dev may merge to main
+  protected-branch-gate:
+    name: Protected branch gate
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Confirm dev branch gate
         run: |
-          if [ "${{ github.ref }}" != "refs/heads/dev" ] && [ "${{ github.base_ref }}" != "dev" ]; then
-            echo "This gate is only valid for the protected dev branch."
-            exit 1
-          fi
-          echo "Protected dev branch gate satisfied."
+          case "${{ github.ref }}:${{ github.base_ref }}" in
+            refs/heads/dev: | refs/heads/release/*: | *:dev | *:release/*)
+              echo "Protected branch gate satisfied."
+              ;;
+            *)
+              echo "This gate is only valid for protected dev and release branches."
+              exit 1
+              ;;
+          esac
 
   ci:
     runs-on: ubuntu-latest

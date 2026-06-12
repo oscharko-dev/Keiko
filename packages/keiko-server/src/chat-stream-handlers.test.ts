@@ -368,6 +368,29 @@ describe("desktop chat SSE streaming handler", () => {
     expect(payload.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   });
 
+  it("emits an error and does not persist a fake assistant when done content is empty", async () => {
+    const chatId = seedChat();
+    const { model } = streamingModel("");
+    const res = captureRes();
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        res.res,
+      ),
+      deps(model),
+    );
+
+    const records = parseSse(res.writes);
+    expect(records.some((record) => record.event === "done")).toBe(false);
+    const error = records.find((record) => record.event === "error");
+    expect(error).toBeDefined();
+    expect((error?.data as { code?: string }).code).toBe("GATEWAY_PROVIDER_ERROR");
+    const persisted = store.listMessages(chatId);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(JSON.stringify(persisted)).not.toContain("The model returned an empty response.");
+  });
+
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {
     const chatId = seedChat();
     const res = captureRes();

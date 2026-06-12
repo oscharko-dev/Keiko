@@ -77,6 +77,7 @@ import {
   type GroundedAnswerPayload,
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
+import { assertUsableAssistantContent } from "./assistant-response.js";
 import {
   buildCitations,
   buildQuery,
@@ -451,8 +452,9 @@ export function createHybridAnswerer(
       signal,
     );
     const content = response.content.trim();
+    assertUsableAssistantContent(content, modelId);
     return {
-      content: content.length > 0 ? content : "The model returned an empty response.",
+      content,
       usage: {
         promptTokens: response.usage.promptTokens,
         completionTokens: response.usage.completionTokens,

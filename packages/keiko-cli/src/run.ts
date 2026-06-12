@@ -1,15 +1,25 @@
-// `keiko run` — the dry-run task command. It builds an AgentSession wired to deterministic mocked
-// model/tool fixtures (no provider call, no real tools) and renders the HarnessEvent stream to
-// CliIo. Since ADR-0010 it ALSO writes a redacted evidence manifest by default (evidence is the
-// product value): a tee EventSink forwards every event to BOTH a MemoryEventSink (which retains raw
-// content to assemble the replay manifest) and the existing CliEventSink (whose summarisers never
-// print sensitive fields). After the run resolves, the audit layer builds + redacts + persists the
-// manifest and the EvidenceReport is printed. Writing is on by default; --no-evidence disables it,
-// --evidence-dir relocates it. Tests inject an in-memory EvidenceStore via deps so no write ever
-// touches the repository tree.
+// `keiko run` — the dry-run task command. It builds an AgentSession with the configured model
+// gateway and a dry-run tool port (provider call is real, tools are non-mutating) and renders the
+// HarnessEvent stream to CliIo. Since ADR-0010 it ALSO writes a redacted evidence manifest by
+// default (evidence is the product value): a tee EventSink forwards every event to BOTH a
+// MemoryEventSink (which retains raw content to assemble the replay manifest) and the existing
+// CliEventSink (whose summarisers never print sensitive fields). After the run resolves, the audit
+// layer builds + redacts + persists the manifest and the EvidenceReport is printed. Writing is on by
+// default; --no-evidence disables it, --evidence-dir relocates it. Tests inject an in-memory
+// EvidenceStore via deps so no write ever touches the repository tree.
 
-import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
-import { DryRunToolPort } from "@oscharko-dev/keiko-harness";
+import {
+  ConfigInvalidError,
+  Gateway,
+  GatewayError,
+  assertConfiguredModel,
+  loadConfigFromFile,
+  redact,
+  resolveCostClass,
+  selectConfiguredModel,
+  type EnvSource,
+} from "@oscharko-dev/keiko-model-gateway";
+import { DryRunToolPort, GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
 import { createSession, HARNESS_VERSION, type AgentConfig } from "@oscharko-dev/keiko-harness";
 import { CliEventSink, MemoryEventSink, type ManifestSeed } from "@oscharko-dev/keiko-harness";
 import type { EventSink } from "@oscharko-dev/keiko-harness";
@@ -23,9 +33,6 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { AuditError } from "@oscharko-dev/keiko-evidence";
-import { redact } from "@oscharko-dev/keiko-model-gateway";
-import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
-import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
@@ -44,13 +51,16 @@ const USAGE = `Usage:
     --evidence-dir PATH      Write evidence under PATH (default $KEIKO_EVIDENCE_DIR or ./.keiko/evidence).
     --include-reasoning      Include redacted reasoning entries in the manifest.
     --include-diff           Include the redacted proposed diff in the manifest.
+    --config PATH            Gateway config file (or set KEIKO_CONFIG_FILE).
+    --model MODEL_ID         Configured model id to use.
 
-All tasks run in dry-run mode: a patch is proposed as an event, never written to disk.
+All tasks run in dry-run mode for tools/files: a patch is proposed as an event, never written to disk.
 `;
 
 // Test seam: inject an in-memory EvidenceStore so CLI tests never write to the repo tree.
 export interface RunDeps {
   readonly store?: EvidenceStore | undefined;
+  readonly model?: ModelPort | undefined;
 }
 
 interface EvidenceFlags {
@@ -59,6 +69,8 @@ interface EvidenceFlags {
   readonly evidenceDirFlag: string | undefined;
   readonly includeReasoning: boolean;
   readonly includeDiff: boolean;
+  readonly model: string | undefined;
+  readonly config: string | undefined;
 }
 
 function flag(args: readonly string[], name: string): string | undefined {
@@ -76,25 +88,8 @@ function parseEvidenceFlags(args: readonly string[]): EvidenceFlags {
     evidenceDirFlag: flag(args, "--evidence-dir"),
     includeReasoning: args.includes("--include-reasoning"),
     includeDiff: args.includes("--include-diff"),
-  };
-}
-
-// A deterministic, dependency-free canned final response. It never requests tools, so the dry-run
-// path is reproducible regardless of task type.
-function cannedResponse(): NormalizedResponse {
-  return {
-    modelId: "mock-model",
-    content: "--- a/file\n+++ b/file\n+// dry-run proposed change\n",
-    finishReason: "stop",
-    toolCalls: [],
-    structuredOutput: null,
-    usage: {
-      requestId: "dry-run",
-      promptTokens: 0,
-      completionTokens: 0,
-      latencyMs: 1,
-      costClass: "low",
-    },
+    model: flag(args, "--model"),
+    config: flag(args, "--config"),
   };
 }
 
@@ -138,7 +133,7 @@ function teeSink(sinks: readonly EventSink[]): EventSink {
   };
 }
 
-function seedFor(task: TaskInput, result: RunResult): ManifestSeed {
+function seedFor(task: TaskInput, result: RunResult, modelId: string): ManifestSeed {
   return {
     runId: result.runId,
     fingerprint: result.fingerprint,
@@ -146,7 +141,7 @@ function seedFor(task: TaskInput, result: RunResult): ManifestSeed {
     taskType: task.taskType,
     taskInput: task,
     limits: DEFAULT_LIMITS,
-    modelId: "mock-model",
+    modelId,
     workingDirectory: ".",
     dryRun: true,
     startedAt: new Date(result.startedAt).toISOString(),
@@ -169,9 +164,10 @@ function writeEvidence(
   task: TaskInput,
   ctx: EvidenceContext,
   io: CliIo,
+  modelId: string,
 ): number | undefined {
   try {
-    const manifest = memory.collectManifest(seedFor(task, result));
+    const manifest = memory.collectManifest(seedFor(task, result, modelId));
     const store =
       ctx.deps.store ??
       createNodeEvidenceStore(resolveEvidenceDir(ctx.flags.evidenceDirFlag, ctx.env));
@@ -192,6 +188,60 @@ function writeEvidence(
     const detail = error instanceof AuditError ? error.message : redact(String(error));
     io.err(`keiko run: failed to write evidence: ${detail}\n`);
     return 1;
+  }
+}
+
+function configuredModelId(flags: EvidenceFlags, env: EnvSource): string | undefined {
+  const path = flags.config ?? env.KEIKO_CONFIG_FILE;
+  if (path === undefined) {
+    return flags.model;
+  }
+  const config = loadConfigFromFile(path, env);
+  if (flags.model !== undefined) {
+    assertConfiguredModel(config, flags.model);
+    return flags.model;
+  }
+  return selectConfiguredModel(config, { kind: "chat" });
+}
+
+function resolveModel(
+  flags: EvidenceFlags,
+  io: CliIo,
+  env: EnvSource,
+  deps: RunDeps,
+): { port: ModelPort; modelId: string } | number {
+  try {
+    if (deps.model !== undefined) {
+      const modelId = configuredModelId(flags, env);
+      if (modelId === undefined) {
+        io.err("Error: no model id available; pass --model MODEL_ID for injected test runs.\n");
+        return 1;
+      }
+      return { port: deps.model, modelId };
+    }
+    const path = flags.config ?? env.KEIKO_CONFIG_FILE;
+    if (path === undefined) {
+      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+    }
+    const config = loadConfigFromFile(path, env);
+    if (flags.model !== undefined) {
+      assertConfiguredModel(config, flags.model);
+    }
+    const modelId = flags.model ?? selectConfiguredModel(config, { kind: "chat" });
+    if (modelId === undefined) {
+      io.err("Error: no configured chat model is available.\n");
+      return 1;
+    }
+    return { port: new GatewayModelPort(new Gateway(config)), modelId };
+  } catch (error) {
+    if (error instanceof GatewayError) {
+      io.err(
+        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+          `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
+      );
+      return 1;
+    }
+    throw error;
   }
 }
 
@@ -226,20 +276,27 @@ export async function runAgentCli(
     return 2;
   }
   const flags = parseEvidenceFlags(args);
-  const response = cannedResponse();
+  const model = resolveModel(flags, io, env, deps);
+  if (typeof model === "number") {
+    return model;
+  }
   const memory = new MemoryEventSink();
-  const config: AgentConfig = { model: "mock-model", workingDirectory: ".", dryRun: true };
+  const config: AgentConfig = { model: model.modelId, workingDirectory: ".", dryRun: true };
   const session = createSession(task, config, {
-    model: {
-      call: (request: GatewayRequest): Promise<NormalizedResponse> =>
-        Promise.resolve({ ...response, modelId: request.modelId }),
-    },
+    model: model.port,
     tools: new DryRunToolPort(),
     sink: teeSink([memory, new CliEventSink(io)]),
   });
   const result = await session.result;
   if (flags.write) {
-    const evidenceFailure = writeEvidence(result, memory, task, { flags, env, deps }, io);
+    const evidenceFailure = writeEvidence(
+      result,
+      memory,
+      task,
+      { flags, env, deps },
+      io,
+      model.modelId,
+    );
     if (evidenceFailure !== undefined) {
       return evidenceFailure;
     }

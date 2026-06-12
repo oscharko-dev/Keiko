@@ -45,6 +45,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { assertUsableAssistantContent } from "./assistant-response.js";
 
 export const DEFAULT_REFERENCE_BUDGET = 16;
 export const MAX_EXCERPT_CHARS = 900;
@@ -505,7 +506,9 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         occurredAt,
       });
     }
-    return response.content.trim();
+    const content = response.content.trim();
+    assertUsableAssistantContent(content, this.modelId);
+    return content;
   }
 }
 

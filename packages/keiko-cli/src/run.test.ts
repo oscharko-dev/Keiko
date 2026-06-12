@@ -3,6 +3,8 @@ import { runAgentCli } from "./run.js";
 import { runCli, type CliIo } from "./runner.js";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { EvidenceWriteError } from "@oscharko-dev/keiko-evidence";
+import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 // Replace every filesystem write entry point with a throwing stub. With these mocked, any code path
 // that touched the disk would throw. The run command now writes evidence by DEFAULT, so the tests
@@ -53,15 +55,40 @@ function capture(): { io: CliIo; out: () => string; err: () => string } {
   };
 }
 
+function response(modelId: string): NormalizedResponse {
+  return {
+    modelId,
+    content: "--- a/file\n+++ b/file\n+// dry-run proposed change\n",
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: null,
+    usage: {
+      requestId: "test-run",
+      promptTokens: 0,
+      completionTokens: 1,
+      latencyMs: 1,
+      costClass: "low",
+    },
+  };
+}
+
+function testModel(): ModelPort {
+  return {
+    call: (request: GatewayRequest): Promise<NormalizedResponse> =>
+      Promise.resolve(response(request.modelId)),
+  };
+}
+
 describe("runAgentCli dry-run", () => {
   it("runs explain-plan to completion and exits 0", async () => {
     const c = capture();
     const code = await runAgentCli(
-      ["explain-plan", "--file", "src/foo.ts"],
+      ["explain-plan", "--file", "src/foo.ts", "--model", "test-model"],
       c.io,
       {},
       {
         store: createInMemoryEvidenceStore(),
+        model: testModel(),
       },
     );
     expect(code).toBe(0);
@@ -73,11 +100,12 @@ describe("runAgentCli dry-run", () => {
   it("runs generate-unit-tests and proposes a patch without applying it", async () => {
     const c = capture();
     const code = await runAgentCli(
-      ["generate-unit-tests", "--file", "src/foo.ts"],
+      ["generate-unit-tests", "--file", "src/foo.ts", "--model", "test-model"],
       c.io,
       {},
       {
         store: createInMemoryEvidenceStore(),
+        model: testModel(),
       },
     );
     expect(code).toBe(0);
@@ -100,11 +128,12 @@ describe("runAgentCli dry-run", () => {
     expect(c.err().toLowerCase()).toContain("missing required argument");
   });
 
-  it("dispatches through runCli's run branch with --no-evidence (no disk write)", async () => {
+  it("dispatches through runCli's run branch and surfaces missing gateway config", async () => {
     const c = capture();
     const result = runCli(["run", "explain-plan", "--file", "src/foo.ts", "--no-evidence"], c.io);
     expect(result).toBeInstanceOf(Promise);
-    expect(await result).toBe(0);
+    expect(await result).toBe(1);
+    expect(c.err()).toContain("model gateway configuration problem");
   });
 });
 
@@ -112,7 +141,12 @@ describe("runAgentCli evidence-by-default", () => {
   it("writes a redacted evidence manifest to the injected store and prints the report", async () => {
     const c = capture();
     const store = createInMemoryEvidenceStore();
-    const code = await runAgentCli(["explain-plan", "--file", "src/foo.ts"], c.io, {}, { store });
+    const code = await runAgentCli(
+      ["explain-plan", "--file", "src/foo.ts", "--model", "test-model"],
+      c.io,
+      {},
+      { store, model: testModel() },
+    );
     expect(code).toBe(0);
     expect(store.list()).toHaveLength(1);
     const runId = store.list()[0];
@@ -134,10 +168,10 @@ describe("runAgentCli evidence-by-default", () => {
     const c = capture();
     const store = createInMemoryEvidenceStore();
     const code = await runAgentCli(
-      ["generate-unit-tests", "--file", "src/foo.ts"],
+      ["generate-unit-tests", "--file", "src/foo.ts", "--model", "test-model"],
       c.io,
       {},
-      { store },
+      { store, model: testModel() },
     );
     expect(code).toBe(0);
     expect(c.out()).toContain("verification   passed");
@@ -146,8 +180,10 @@ describe("runAgentCli evidence-by-default", () => {
   it("makes zero filesystem writes when --no-evidence is passed (mocked writers throw)", async () => {
     const c = capture();
     const code = await runAgentCli(
-      ["generate-unit-tests", "--file", "src/foo.ts", "--no-evidence"],
+      ["generate-unit-tests", "--file", "src/foo.ts", "--no-evidence", "--model", "test-model"],
       c.io,
+      {},
+      { model: testModel() },
     );
     expect(code).toBe(0);
     expect(c.out()).not.toContain("Evidence:");
@@ -157,11 +193,12 @@ describe("runAgentCli evidence-by-default", () => {
     const c = capture();
     const store = createInMemoryEvidenceStore();
     const code = await runAgentCli(
-      ["generate-unit-tests", "--file", "src/foo.ts"],
+      ["generate-unit-tests", "--file", "src/foo.ts", "--model", "test-model"],
       c.io,
       {},
       {
         store,
+        model: testModel(),
       },
     );
     expect(code).toBe(0);
@@ -181,11 +218,12 @@ describe("runAgentCli evidence write failure (C3)", () => {
       delete: () => undefined,
     };
     const code = await runAgentCli(
-      ["explain-plan", "--file", "src/foo.ts"],
+      ["explain-plan", "--file", "src/foo.ts", "--model", "test-model"],
       c.io,
       {},
       {
         store: failingStore,
+        model: testModel(),
       },
     );
     expect(code).toBe(1);

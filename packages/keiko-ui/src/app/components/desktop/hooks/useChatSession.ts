@@ -164,6 +164,8 @@ export function isInFlight(status: SendStatus): boolean {
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
   "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
+export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
+  "The model request completed, but the provider did not return any answer text. Retry once; if it happens again, check the selected model deployment in Settings.";
 
 // A typed BFF overflow surfaces under the conversation-layer code; a raw provider
 // overflow surfaces under the gateway-layer code (CB-F2). Both map to the single
@@ -178,12 +180,23 @@ const CONTEXT_OVERSIZED_PHRASES = [
   "max_tokens",
   "too many tokens",
 ] as const;
+const EMPTY_MODEL_RESPONSE_PHRASES = [
+  "empty assistant response",
+  "empty grounded answer",
+  "without assistant content",
+] as const;
 
 function isContextOversizedError(error: unknown): boolean {
   if (error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code)) return true;
   const text = error instanceof Error ? error.message.toLowerCase() : "";
   if (text.length === 0) return false;
   return CONTEXT_OVERSIZED_PHRASES.some((phrase) => text.includes(phrase));
+}
+
+function isEmptyModelResponseError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message.toLowerCase() : "";
+  if (text.length === 0) return false;
+  return EMPTY_MODEL_RESPONSE_PHRASES.some((phrase) => text.includes(phrase));
 }
 
 // CB-F1 / CB-F3 — the single unknown-limits-safe "over budget" predicate. A
@@ -196,6 +209,11 @@ export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined)
 function errorMessage(error: unknown): string {
   // AC#3 — context-overflow provider errors map to a single actionable message.
   if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
+  if (isEmptyModelResponseError(error)) {
+    return error instanceof ApiError
+      ? `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (${error.code})`
+      : EMPTY_MODEL_RESPONSE_USER_MESSAGE;
+  }
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
   return formatUserError(error, "Something went wrong. Try again.");
 }
@@ -1001,8 +1019,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           if (payload.memory !== undefined) setLatestMemory(payload.memory);
           resolve("completed");
         },
-        onError: ({ message }: { message: string }): void => {
-          setError(message);
+        onError: ({ code, message }: { code: string; message: string }): void => {
+          setError(errorMessage(new ApiError(code, message, 0)));
           removeTempMessage(tempAssistantId);
           resolve("failed");
         },

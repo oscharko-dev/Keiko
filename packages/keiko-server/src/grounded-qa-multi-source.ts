@@ -49,6 +49,7 @@ import {
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
+import { assertUsableAssistantContent } from "./assistant-response.js";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -386,8 +387,9 @@ export function createMultiSourceAnswerer(
       signal,
     );
     const content = response.content.trim();
+    assertUsableAssistantContent(content, modelId);
     return {
-      content: content.length > 0 ? content : "The model returned an empty response.",
+      content,
       usage: {
         promptTokens: response.usage.promptTokens,
         completionTokens: response.usage.completionTokens,
