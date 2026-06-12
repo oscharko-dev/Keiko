@@ -760,11 +760,9 @@ describe("RunLauncher — cancel behaviour", () => {
 });
 
 describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
-  async function runToTerminal(
-    status: "failed" | "cancelled",
-    onRunCompleted: ReturnType<typeof vi.fn>,
-  ): Promise<void> {
+  async function runToTerminal(status: "failed" | "cancelled"): Promise<ReturnType<typeof vi.fn>> {
     const user = userEvent.setup();
+    const onRunCompleted = vi.fn();
     const { startImpl, done } = makeStreamingFake([
       {
         type: "accepted",
@@ -779,11 +777,11 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
     await done;
+    return onRunCompleted;
   }
 
   it("does NOT open a run card when the run completes with status failed, and shows a message", async () => {
-    const onRunCompleted = vi.fn();
-    await runToTerminal("failed", onRunCompleted);
+    const onRunCompleted = await runToTerminal("failed");
     await waitFor(() => {
       expect(screen.getByTestId("qi-launch-error")).toBeInTheDocument();
     });
@@ -791,8 +789,7 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
   });
 
   it("does NOT open a run card or show an error when the run completes with status cancelled", async () => {
-    const onRunCompleted = vi.fn();
-    await runToTerminal("cancelled", onRunCompleted);
+    const onRunCompleted = await runToTerminal("cancelled");
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /generate test cases/i })).toBeInTheDocument();
     });
