@@ -9,9 +9,10 @@
 //   1. schema-completeness — title/steps/expectedResults must be non-empty.
 //   2. step-acyclicity     — no canonical-line repeats in the step sequence.
 //   3. expected-presence    — at least one expected result must be present.
-//   4. trivial-contradiction — a precondition that is also negated in an
-//      expected result is a logic defect (e.g. precondition "user is logged
-//      in" and expected "user is not logged in").
+//   4. trivial-contradiction — a precondition and an expected result share the
+//      same negation-stripped core but have opposite negation parity (XOR):
+//      exactly one of the two contains a negation word. Both positive or both
+//      negated → consistent; one positive + one negated → contradiction.
 //
 // Structurally inspired by
 // Test Intelligence reference (TI) packages/core-engine/src/
@@ -144,21 +145,22 @@ const checkTrivialContradictions = (
   if (candidate.preconditions.length === 0 || candidate.expectedResults.length === 0) {
     return [];
   }
-  const preStripped = candidate.preconditions.map((line) => stripNegation(canonicaliseLine(line)));
   for (const result of candidate.expectedResults) {
     const resultCanonical = canonicaliseLine(result);
-    if (!NEGATION_PATTERN.test(resultCanonical)) {
+    const resultCore = stripNegation(resultCanonical);
+    if (resultCore.length === 0) {
       continue;
     }
-    const stripped = stripNegation(resultCanonical);
-    if (stripped.length === 0) {
-      continue;
-    }
-    for (const pre of preStripped) {
-      if (pre.length === 0) {
+    const negatedResult = NEGATION_PATTERN.test(resultCanonical);
+    for (const pre of candidate.preconditions) {
+      const preCanonical = canonicaliseLine(pre);
+      const preCore = stripNegation(preCanonical);
+      if (preCore.length === 0) {
         continue;
       }
-      if (pre === stripped) {
+      const negatedPre = NEGATION_PATTERN.test(preCanonical);
+      // Contradiction iff cores match AND exactly one side carries a negation (XOR parity).
+      if (preCore === resultCore && negatedPre !== negatedResult) {
         return [
           buildSemanticDefect(
             runId,

@@ -34,37 +34,104 @@ describe("validateCandidates", () => {
     expect(validateCandidates(RUN_ID, [])).toEqual([]);
   });
 
-  it("emits a logic-defect finding when the title is empty", () => {
+  // ─── Logic-defect severity assertions ─────────────────────────────────────
+  // Each assertion targets the exact severity so a "always emit 'low'" mutant
+  // is killed immediately (the current severities are high/high/high/medium).
+
+  it("emits a HIGH logic-defect when the title is empty after trim", () => {
+    // Kills: mutant that changes severity from "high" to anything else.
     const findings = validateCandidates(RUN_ID, [baseCandidate({ title: "   " })]);
-    const kinds = findings.map((finding) => finding.kind);
-    expect(kinds).toContain("logic-defect");
+    const defect = findings.find((f) => f.kind === "logic-defect" && f.summary.includes("title"));
+    expect(defect).toBeDefined();
+    expect(defect?.kind).toBe("logic-defect");
+    expect(defect?.severity).toBe("high");
   });
 
-  it("emits a logic-defect finding when there are no steps", () => {
+  it("emits a HIGH logic-defect when there are no steps", () => {
+    // Kills: mutant that changes "high" to "medium"/"low" for the no-steps rule.
     const findings = validateCandidates(RUN_ID, [baseCandidate({ steps: [] })]);
-    expect(findings.length).toBeGreaterThan(0);
-    expect(findings.every((finding) => finding.kind === "logic-defect")).toBe(true);
+    const defect = findings.find((f) => f.kind === "logic-defect" && f.summary.includes("steps"));
+    expect(defect).toBeDefined();
+    expect(defect?.severity).toBe("high");
   });
 
-  it("emits a logic-defect finding when there are no expected results", () => {
+  it("emits a HIGH logic-defect when there are no expected results", () => {
+    // Kills: mutant that changes "high" to "medium"/"low" for the no-results rule.
     const findings = validateCandidates(RUN_ID, [baseCandidate({ expectedResults: [] })]);
-    expect(findings.some((finding) => finding.kind === "logic-defect")).toBe(true);
+    const defect = findings.find(
+      (f) => f.kind === "logic-defect" && f.summary.includes("expected results"),
+    );
+    expect(defect).toBeDefined();
+    expect(defect?.severity).toBe("high");
   });
 
-  it("emits a logic-defect finding when the step sequence contains a canonical repeat", () => {
+  it("emits a MEDIUM logic-defect when the step sequence contains a canonical repeat", () => {
+    // Kills: mutant that changes "medium" to "high"/"low" for the step-repeat rule.
     const findings = validateCandidates(RUN_ID, [
       baseCandidate({ steps: ["Open login page", "OPEN login PAGE", "Submit"] }),
     ]);
-    expect(findings.some((finding) => finding.kind === "logic-defect")).toBe(true);
+    const defect = findings.find((f) => f.kind === "logic-defect" && f.summary.includes("repeat"));
+    expect(defect).toBeDefined();
+    expect(defect?.severity).toBe("medium");
   });
 
-  it("emits a semantic-defect finding on a trivial precondition-vs-result contradiction", () => {
+  // ─── Contradiction XOR parity — true-positive (strengthen existing test) ──
+
+  it("emits a MEDIUM semantic-defect on a trivial precondition-vs-result contradiction", () => {
+    // Kills: mutant that changes severity, OR that emits no finding on opposite parity.
+    // precondition positive "logged in" + expected negative "not logged in" → XOR = true → contradiction.
     const findings = validateCandidates(RUN_ID, [
       baseCandidate({
         preconditions: ["the user is logged in"],
         expectedResults: ["the user is not logged in"],
       }),
     ]);
-    expect(findings.some((finding) => finding.kind === "semantic-defect")).toBe(true);
+    const defect = findings.find((f) => f.kind === "semantic-defect");
+    expect(defect).toBeDefined();
+    expect(defect?.kind).toBe("semantic-defect");
+    expect(defect?.severity).toBe("medium");
+  });
+
+  // ─── XOR parity false-positive guard ──────────────────────────────────────
+
+  it("does NOT emit a semantic-defect when both precondition and expected-result are negated (consistent)", () => {
+    // Kills: mutant that removes the XOR check and emits a defect whenever cores match
+    // regardless of parity (i.e. the old broken XNOR/equality-only path).
+    // Both sides: "the user is not logged in" → negatedPre=true, negatedResult=true → XOR=false → no contradiction.
+    const findings = validateCandidates(RUN_ID, [
+      baseCandidate({
+        preconditions: ["the user is not logged in"],
+        expectedResults: ["the user is not logged in"],
+      }),
+    ]);
+    const semanticDefects = findings.filter((f) => f.kind === "semantic-defect");
+    expect(semanticDefects).toHaveLength(0);
+  });
+
+  it("emits a semantic-defect when precondition is negated and expected-result is positive (reverse contradiction)", () => {
+    // Kills: mutant that only fires when pre=positive AND result=negated (wrong directionality).
+    // precondition "not logged in" (negated) + expected "logged in" (positive) → XOR=true → contradiction.
+    const findings = validateCandidates(RUN_ID, [
+      baseCandidate({
+        preconditions: ["the user is not logged in"],
+        expectedResults: ["the user is logged in"],
+      }),
+    ]);
+    const defect = findings.find((f) => f.kind === "semantic-defect");
+    expect(defect).toBeDefined();
+    expect(defect?.severity).toBe("medium");
+  });
+
+  // ─── Additional baseline guard ─────────────────────────────────────────────
+
+  it("does NOT emit a semantic-defect when both precondition and expected-result are positive (consistent)", () => {
+    // Kills: mutant that treats any core-match (regardless of negation) as a contradiction.
+    const findings = validateCandidates(RUN_ID, [
+      baseCandidate({
+        preconditions: ["the user is logged in"],
+        expectedResults: ["the user is logged in"],
+      }),
+    ]);
+    expect(findings.filter((f) => f.kind === "semantic-defect")).toHaveLength(0);
   });
 });
