@@ -1,25 +1,37 @@
-// Quality Intelligence supply-chain gate (Issue #287, ADR-0023 D5/D11/D12).
+// Quality Intelligence supply-chain gate (Issue #287; ADR-0023 §D5/§D11/§D12 — ADR-0023 is the
+// historical Epic #270 migration record, superseded by ADR-0025, but D5/D11/D12 remain in force and
+// are enforced live by this script and by the `arch:check` provider-SDK-isolation rule).
 //
 // Retained separately from the workspace supply-chain gate because this script enforces the
 // QI-specific deny-list, lifecycle-hook, telemetry, and decision-matrix contract rather than SBOMs.
 //
 // Fail-closed checks that the native Quality Intelligence migration does not bloat Keiko's public
-// package surface or runtime dependency graph. Six checks, in order:
+// package surface or runtime dependency graph. Eight checks, in order:
 //
 //   1. No source under packages/*/src, packages/*/test, scripts, or src imports
 //      `@oscharko-dev/test-intelligence` or the `@oscharko-dev/ti-*` namespace. This also catches
 //      the dynamic-evasion form `import(`@oscharko-dev/${x}`)` / `require(`@oscharko-dev/ti-${x}`)`
 //      where the package name is built from a template literal so the forbidden substring never
 //      appears contiguously.
-//   2. The root package.json `dependencies`/`devDependencies`/`peerDependencies`/`bundleDependencies`
-//      does not list any test-intelligence or ti-* package.
-//   3. Every packages/*/package.json `dependencies`/`devDependencies`/`peerDependencies` is free of
-//      the same forbidden namespaces.
+//   2. The root package.json `dependencies`/`devDependencies`/`peerDependencies`/
+//      `optionalDependencies`/`bundleDependencies` does not list any test-intelligence or ti-*
+//      package.
+//   3. Every packages/*/package.json `dependencies`/`devDependencies`/`peerDependencies`/
+//      `optionalDependencies` is free of the same forbidden namespaces.
 //   4. The dependency decision matrix exists and is internally consistent against the live
 //      manifests: every `approved-runtime` row is present somewhere; every `denied` row is absent
-//      everywhere.
+//      everywhere; every `defer-to-decision` row is treated as denied (must be absent until promoted).
 //   5. No package manifest declares a `preinstall`/`install`/`postinstall` lifecycle hook.
-//   6. No manifest mentions a telemetry/analytics library substring.
+//   6. No manifest mentions a telemetry/analytics library substring (incl. `optionalDependencies`).
+//   7. Completeness (fail-closed on unapproved deps): every external dependency that SHIPS in the
+//      published `@oscharko-dev/keiko` runtime graph — i.e. the `dependencies`/`optionalDependencies`
+//      of the root manifest and of every bundleDependencies workspace package — maps to an
+//      `approved-runtime` matrix row. Workspace `@oscharko-dev/*` packages (governed by the bundle
+//      contract) and `@types/*` type-only stubs (no runtime code, install hook, or network) are
+//      exempt.
+//   8. Every `approved-runtime`/`approved-dev` matrix row declares a non-empty license (ADR-0023 /
+//      Issue #287 AC1: each governed dependency documents owner, purpose, license, risk, and a
+//      rejection alternative).
 //
 // Runs on Node 22+ with no new runtime dependency. Use:
 //   node scripts/check-quality-intelligence-supply-chain.mjs [--matrix=<path>] [--root=<path>]
@@ -53,6 +65,26 @@ const TELEMETRY_SUBSTRINGS = [
 ];
 
 const LIFECYCLE_HOOKS = ["preinstall", "install", "postinstall"];
+
+// Dependency manifest sections scanned by the deny-list, telemetry, and name-collection checks.
+// `optionalDependencies` is included because an optional dep is still installed by default and would
+// otherwise be a blind spot for the forbidden-namespace and telemetry scanners.
+const SCANNED_DEPENDENCY_SECTIONS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
+
+// Manifest sections that determine what ships in the published `@oscharko-dev/keiko` runtime graph.
+// `devDependencies`/`peerDependencies` are deliberately excluded — they do not ship in the tarball.
+const PUBLISHED_RUNTIME_SECTIONS = ["dependencies", "optionalDependencies"];
+
+// Namespaces exempt from the published-runtime completeness check (check 7). Workspace packages are
+// governed by the bundle contract (`check-package-surface.mjs`); `@types/*` packages are
+// declaration-only (no runtime JS, install hook, or network reach) so they carry no supply-chain
+// execution risk even when declared under `dependencies`.
+const COMPLETENESS_EXEMPT_PREFIXES = ["@oscharko-dev/", "@types/"];
 
 const SOURCE_SCAN_ROOTS = [
   { dir: "src", recurse: true },
@@ -220,11 +252,7 @@ function nameMatchesForbidden(name) {
 function checkRootManifestForbidden(rootManifestPath) {
   const manifest = readJson(rootManifestPath);
   const hits = [];
-  const sections = manifestDependencySections(manifest, [
-    "dependencies",
-    "devDependencies",
-    "peerDependencies",
-  ]);
+  const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
   for (const { section, names } of sections) {
     for (const name of names) {
       const match = nameMatchesForbidden(name);
@@ -247,11 +275,7 @@ function checkWorkspaceManifestForbidden(packagesDir) {
     const manifestPath = join(packagesDir, entry.name, "package.json");
     if (!safeStat(manifestPath)?.isFile()) continue;
     const manifest = readJson(manifestPath);
-    const sections = manifestDependencySections(manifest, [
-      "dependencies",
-      "devDependencies",
-      "peerDependencies",
-    ]);
+    const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
     for (const { section, names } of sections) {
       for (const name of names) {
         const match = nameMatchesForbidden(name);
@@ -307,11 +331,7 @@ function telemetryHitsForName(label, section, name) {
 
 function telemetryHitsForManifest(label, manifest) {
   const hits = [];
-  const sections = manifestDependencySections(manifest, [
-    "dependencies",
-    "devDependencies",
-    "peerDependencies",
-  ]);
+  const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
   for (const { section, names } of sections) {
     for (const name of names) {
       hits.push(...telemetryHitsForName(label, section, name));
@@ -328,8 +348,11 @@ function checkTelemetryStrings(rootManifestPath, packagesDir) {
   return hits;
 }
 
-// Matrix rows are markdown table lines with at least 4 pipe-delimited cells. We tolerate any
-// extra columns and ignore the header/separator rows.
+// Matrix rows are markdown table lines with at least 5 pipe-delimited cells. We tolerate any
+// extra columns and ignore the header/separator rows. Column order (ADR-0023 / Issue #287 AC1):
+// `package | namespace | runtime role | decision | license | owner | rationale | risk-class |
+// rejection alternative`. The decision token stays at index 3; license is captured at index 4 for
+// the AC1 license-declared check (check 8).
 function parseDecisionMatrix(markdown) {
   const rows = [];
   const lines = markdown.split(/\r?\n/);
@@ -352,13 +375,19 @@ function parseDecisionMatrix(markdown) {
     ) {
       continue;
     }
-    rows.push({ name: cells[0], namespace: cells[1], role: cells[2], decision });
+    rows.push({
+      name: cells[0],
+      namespace: cells[1],
+      role: cells[2],
+      decision,
+      license: cells.length > 4 ? cells[4] : "",
+    });
   }
   return rows;
 }
 
 function addDependencyNamesFromManifest(manifest, seen) {
-  for (const section of ["dependencies", "devDependencies", "peerDependencies"]) {
+  for (const section of SCANNED_DEPENDENCY_SECTIONS) {
     const value = manifest[section];
     if (value && typeof value === "object" && !Array.isArray(value)) {
       for (const name of Object.keys(value)) seen.add(name);
@@ -399,9 +428,13 @@ function mismatchForRow(row, names) {
     const hit = anyDependencyMatchesRow(row, names);
     return hit === null ? { kind: "approved-runtime-missing", row: row.name } : null;
   }
-  if (row.decision === "denied") {
+  // `defer-to-decision` is documented as "treat as denied until promoted by a follow-up PR", so it
+  // shares the denied enforcement: the package must be absent from every manifest.
+  if (row.decision === "denied" || row.decision === "defer-to-decision") {
     const hit = anyDependencyMatchesRow(row, names);
-    return hit === null ? null : { kind: "denied-present", row: row.name, present: hit };
+    if (hit === null) return null;
+    const kind = row.decision === "denied" ? "denied-present" : "deferred-present";
+    return { kind, row: row.name, present: hit };
   }
   return null;
 }
@@ -430,6 +463,85 @@ function checkMatrixConsistency(matrixPath, rootManifestPath, packagesDir) {
     if (mismatch) mismatches.push(mismatch);
   }
   return { mismatches, rowCounts: tallyRowCounts(rows) };
+}
+
+// --- Check 7: published-runtime completeness (fail-closed on unapproved dependencies) ---
+
+function isCompletenessExempt(name) {
+  for (const prefix of COMPLETENESS_EXEMPT_PREFIXES) {
+    if (name.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+function externalRuntimeNamesFromManifest(manifest) {
+  const entries = [];
+  for (const section of PUBLISHED_RUNTIME_SECTIONS) {
+    const value = manifest[section];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const name of Object.keys(value)) {
+        if (!isCompletenessExempt(name)) entries.push({ name, section });
+      }
+    }
+  }
+  return entries;
+}
+
+// The published runtime surface = the root manifest's runtime/optional deps plus the runtime/optional
+// deps of every `bundleDependencies` workspace package — those are the only manifests whose declared
+// externals are packed into the published tarball. Returns name -> { label, section } of the first
+// manifest that declared it.
+function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
+  const rootManifest = readJson(rootManifestPath);
+  const collected = new Map();
+  const add = (name, label, section) => {
+    if (!collected.has(name)) collected.set(name, { label, section });
+  };
+  for (const { name, section } of externalRuntimeNamesFromManifest(rootManifest)) {
+    add(name, "<root>", section);
+  }
+  const bundled = Array.isArray(rootManifest.bundleDependencies)
+    ? rootManifest.bundleDependencies
+    : [];
+  for (const fullName of bundled) {
+    const shortName = fullName.replace(/^@oscharko-dev\//, "");
+    const manifestPath = join(packagesDir, shortName, "package.json");
+    if (!safeStat(manifestPath)?.isFile()) continue;
+    for (const { name, section } of externalRuntimeNamesFromManifest(readJson(manifestPath))) {
+      add(name, shortName, section);
+    }
+  }
+  return collected;
+}
+
+function checkUnapprovedRuntimeDependencies(matrixPath, rootManifestPath, packagesDir) {
+  if (!safeStat(matrixPath)?.isFile()) return [];
+  const approved = parseDecisionMatrix(readFileSync(matrixPath, "utf8")).filter(
+    (row) => row.decision === "approved-runtime",
+  );
+  const published = collectPublishedRuntimeDependencies(rootManifestPath, packagesDir);
+  const hits = [];
+  for (const [name, { label, section }] of published) {
+    const covered = approved.some((row) => rowMatchesName(row, name));
+    if (!covered) hits.push({ name, label, section });
+  }
+  return hits;
+}
+
+// --- Check 8: every shipping / approved-dev row declares a license (Issue #287 AC1) ---
+
+function checkMatrixLicenses(matrixPath) {
+  if (!safeStat(matrixPath)?.isFile()) return [];
+  const rows = parseDecisionMatrix(readFileSync(matrixPath, "utf8"));
+  const hits = [];
+  for (const row of rows) {
+    if (row.decision !== "approved-runtime" && row.decision !== "approved-dev") continue;
+    const license = (row.license ?? "").trim();
+    if (license === "" || license.toLowerCase() === "n/a") {
+      hits.push({ row: row.name, decision: row.decision, license });
+    }
+  }
+  return hits;
 }
 
 function fail(message) {
@@ -471,6 +583,11 @@ function reportMatrixMismatch(m) {
     console.error(`  matrix row "${m.row}" is approved-runtime but no manifest declares it`);
   } else if (m.kind === "denied-present") {
     console.error(`  matrix row "${m.row}" is denied but a manifest declares ${m.present}`);
+  } else if (m.kind === "deferred-present") {
+    console.error(
+      `  matrix row "${m.row}" is defer-to-decision (treated as denied until promoted) but a ` +
+        `manifest declares ${m.present}`,
+    );
   }
 }
 
@@ -494,6 +611,34 @@ function reportTelemetryHits(hits) {
     );
   }
   fail("a manifest declares a telemetry/analytics dependency (forbidden).");
+}
+
+function reportMissingLicenseHits(hits) {
+  for (const hit of hits) {
+    console.error(
+      `  matrix row "${hit.row}" (${hit.decision}) declares no license ` +
+        `(found ${hit.license === "" ? "<empty>" : `"${hit.license}"`})`,
+    );
+  }
+  fail(
+    "an approved decision-matrix row omits a license. Issue #287 AC1 requires every governed " +
+      "dependency to document owner, purpose, license, risk, and rejection alternative.",
+  );
+}
+
+function reportUnapprovedRuntimeHits(hits) {
+  for (const hit of hits) {
+    console.error(
+      `  unapproved runtime dependency: ${hit.name} (declared in ${hit.label} ${hit.section}) ` +
+        "ships in the published package but has no approved-runtime decision-matrix row",
+    );
+  }
+  fail(
+    `${String(hits.length)} runtime dependency(ies) ship in the published package without an ` +
+      "approved-runtime row. Add a row to " +
+      "docs/release/quality-intelligence-dependency-decision-matrix.md (owner, license, risk, " +
+      "rejection alternative) before shipping. See ADR-0023 D11 / Issue #287 AC4.",
+  );
 }
 
 function formatSummary(rowCounts) {
@@ -522,11 +667,21 @@ function runChecksOrFail(root, rootManifestPath, packagesDir, matrixPath) {
   );
   if (mismatches.length > 0) reportMatrixMismatches(mismatches);
 
+  const licenseHits = checkMatrixLicenses(matrixPath);
+  if (licenseHits.length > 0) reportMissingLicenseHits(licenseHits);
+
   const lifecycleHits = checkLifecycleHooks(rootManifestPath, packagesDir);
   if (lifecycleHits.length > 0) reportLifecycleHits(lifecycleHits);
 
   const telemetryHits = checkTelemetryStrings(rootManifestPath, packagesDir);
   if (telemetryHits.length > 0) reportTelemetryHits(telemetryHits);
+
+  const unapprovedHits = checkUnapprovedRuntimeDependencies(
+    matrixPath,
+    rootManifestPath,
+    packagesDir,
+  );
+  if (unapprovedHits.length > 0) reportUnapprovedRuntimeHits(unapprovedHits);
 
   return rowCounts;
 }
@@ -555,6 +710,9 @@ if (invokedDirectly) {
 export {
   parseDecisionMatrix,
   checkMatrixConsistency,
+  checkUnapprovedRuntimeDependencies,
+  checkMatrixLicenses,
+  collectPublishedRuntimeDependencies,
   findForbiddenImportHits,
   checkRootManifestForbidden,
   checkWorkspaceManifestForbidden,

@@ -36,7 +36,10 @@ export default tseslint.config(
       "no-console": "warn",
     },
   },
-  { files: ["**/*.test.ts"], rules: { "max-lines-per-function": "off" } },
+  // Test files are exempt from max-lines-per-function: describe() blocks legitimately group many
+  // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
+  // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
+  { files: ["**/*.test.ts", "**/*.test.mjs"], rules: { "max-lines-per-function": "off" } },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
   {
     files: ["**/*.cjs"],

@@ -12,6 +12,7 @@ import ts from "typescript";
 // (@oscharko-dev/keiko-server) — the BFF folds the hashes into script-src at request time, and
 // this script audits the packed UI bundle against the same set.
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
+import { findForbiddenPaths } from "./package-surface-rules.mjs";
 
 const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
   [
@@ -310,29 +311,9 @@ if ((cliBin.mode & 0o111) === 0) {
   fail("dist/cli/index.js is not executable in the tarball (run `npm run prepare:bin`).");
 }
 
-const forbidden = [
-  // `.js.map` is the runtime source-map artifact (can leak absolute paths from the original
-  // sources). `.d.ts.map` is a declaration map — relative-only and used by editors to resolve
-  // "go to definition" across bundled workspace packages, so it stays.
-  { test: (p) => p.endsWith(".js.map"), label: "a JS source map" },
-  { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
-  {
-    test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),
-    label: "keiko-ui workspace source",
-  },
-  {
-    test: (p) => p.includes("node_modules/@napi-rs/canvas"),
-    label: "a platform-specific optional native canvas dependency",
-  },
-  { test: (p) => p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p), label: "an absolute local path" },
-];
-
-for (const path of paths) {
-  for (const rule of forbidden) {
-    if (rule.test(path)) {
-      fail(`tarball contains ${rule.label}: ${path}`);
-    }
-  }
+// Forbidden-path rule set lives in scripts/package-surface-rules.mjs (dependency-free, unit-tested).
+for (const hit of findForbiddenPaths(paths)) {
+  fail(`tarball contains ${hit.label}: ${hit.path}`);
 }
 
 assertCspHashesMatchStaticHtml();

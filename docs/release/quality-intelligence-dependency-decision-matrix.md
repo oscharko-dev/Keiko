@@ -28,42 +28,55 @@ Companion gates:
 
 Decision values:
 
-- `approved-runtime` — present in a published package's runtime dependency graph; ships in
-  the tarball.
+- `approved-runtime` — declared in a published package's runtime or optional dependency graph
+  (`dependencies` / `optionalDependencies`). Most approved-runtime deps ship in the tarball; a
+  declared optional native dependency may be pruned pre-pack (see
+  `scripts/prune-package-native-optionals.mjs`) and still requires a row so the governance decision
+  is recorded.
 - `approved-dev` — present in `devDependencies` only; does not ship in the tarball.
 - `denied` — must not appear in any manifest (`dependencies`, `devDependencies`,
-  `peerDependencies`, `bundleDependencies`) or in any source import.
-- `defer-to-decision` — under active review; treat as `denied` until promoted by a follow-up
-  PR.
+  `peerDependencies`, `optionalDependencies`, `bundleDependencies`) or in any source import.
+- `defer-to-decision` — under active review; **machine-enforced as `denied`** (must be absent from
+  every manifest) until promoted by a follow-up PR that flips the row to an approved decision.
 
 Namespace patterns end with `*` (for example `@oscharko-dev/ti-*`) and match any package
 whose name starts with the prefix. Risk classes (low / medium / high) reflect supply-chain
 exposure: native addons, install hooks, network reach, governance scrutiny.
 
+The `license` column is required for every `approved-runtime` and `approved-dev` row (Issue #287
+AC1) and is enforced by `scripts/check-quality-intelligence-supply-chain.mjs`. Every external
+dependency that ships in the published runtime graph (root `dependencies`/`optionalDependencies`
+plus those of each bundled workspace package) must have an `approved-runtime` row here, or the gate
+fails closed; `@oscharko-dev/*` workspace packages and `@types/*` declaration-only stubs are exempt
+from that completeness requirement.
+
 ### 2.1 Approved (already present in Keiko)
 
-| package            | namespace   | runtime role                                                    | decision         | owner               | rationale                                                                                                     | risk-class | rejection alternative  |
-| ------------------ | ----------- | --------------------------------------------------------------- | ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------- |
-| ws                 | (top-level) | local-loopback WebSocket transport for keiko-server BFF         | approved-runtime | platform-foundation | already shipped pre-epic; pure-JS, zero native addons, no install hook. Required by BFF surfaces #62/#66/#67. | low        | n/a (already approved) |
-| eslint             | (top-level) | static-analysis lint runner                                     | approved-dev     | platform-foundation | already shipped pre-epic; no runtime impact                                                                   | low        | n/a (dev-only)         |
-| vitest             | (top-level) | test runner                                                     | approved-dev     | platform-foundation | already shipped pre-epic; no runtime impact                                                                   | low        | n/a (dev-only)         |
-| prettier           | (top-level) | formatter                                                       | approved-dev     | platform-foundation | already shipped pre-epic; no runtime impact                                                                   | low        | n/a (dev-only)         |
-| dependency-cruiser | (top-level) | arch:check runner; enforces ADR-0019 dependency-direction rules | approved-dev     | platform-foundation | already shipped pre-epic; load-bearing for D14 dependency-direction enforcement                               | low        | n/a (dev-only)         |
-| typescript-eslint  | (top-level) | TS lint rules                                                   | approved-dev     | platform-foundation | already shipped pre-epic; no runtime impact                                                                   | low        | n/a (dev-only)         |
-| typescript         | (top-level) | compiler                                                        | approved-dev     | platform-foundation | already shipped pre-epic; no runtime impact                                                                   | low        | n/a (dev-only)         |
+| package            | namespace   | runtime role                                                    | decision         | license    | owner               | rationale                                                                                                                                                                                    | risk-class | rejection alternative                                            |
+| ------------------ | ----------- | --------------------------------------------------------------- | ---------------- | ---------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------- |
+| ws                 | (top-level) | local-loopback WebSocket transport for keiko-server BFF         | approved-runtime | MIT        | platform-foundation | already shipped pre-epic; pure-JS, zero native addons, no install hook. Required by BFF surfaces #62/#66/#67.                                                                                | low        | n/a (already approved)                                           |
+| pdfjs-dist         | (top-level) | PDF text extraction for Local Knowledge ingestion (#189)        | approved-runtime | Apache-2.0 | platform-foundation | pure-JS, no install hook; ships via the bundled keiko-local-knowledge package. Its optional native canvas backend is pruned pre-pack (see @napi-rs/canvas row).                              | medium     | n/a (already shipped via #189)                                   |
+| yauzl              | (top-level) | ZIP archive reader for Local Knowledge ingestion (#189)         | approved-runtime | MIT        | platform-foundation | reader-only, pure-JS; ships via the bundled keiko-local-knowledge package.                                                                                                                   | low        | n/a (reader-only; export ZIP writer is hand-rolled per #711, §5) |
+| @napi-rs/canvas    | (top-level) | optional native canvas backend for pdfjs-dist rasterization     | approved-runtime | MIT        | platform-foundation | declared as an optionalDependency of keiko-local-knowledge; lazy-loaded and REMOVED from the published tarball by scripts/prune-package-native-optionals.mjs (the native .node never ships). | medium     | pruned pre-pack; PDF text extraction works without it            |
+| eslint             | (top-level) | static-analysis lint runner                                     | approved-dev     | MIT        | platform-foundation | already shipped pre-epic; no runtime impact                                                                                                                                                  | low        | n/a (dev-only)                                                   |
+| vitest             | (top-level) | test runner                                                     | approved-dev     | MIT        | platform-foundation | already shipped pre-epic; no runtime impact                                                                                                                                                  | low        | n/a (dev-only)                                                   |
+| prettier           | (top-level) | formatter                                                       | approved-dev     | MIT        | platform-foundation | already shipped pre-epic; no runtime impact                                                                                                                                                  | low        | n/a (dev-only)                                                   |
+| dependency-cruiser | (top-level) | arch:check runner; enforces ADR-0019 dependency-direction rules | approved-dev     | MIT        | platform-foundation | already shipped pre-epic; load-bearing for D14 dependency-direction enforcement                                                                                                              | low        | n/a (dev-only)                                                   |
+| typescript-eslint  | (top-level) | TS lint rules                                                   | approved-dev     | MIT        | platform-foundation | already shipped pre-epic; no runtime impact                                                                                                                                                  | low        | n/a (dev-only)                                                   |
+| typescript         | (top-level) | compiler                                                        | approved-dev     | Apache-2.0 | platform-foundation | already shipped pre-epic; no runtime impact                                                                                                                                                  | low        | n/a (dev-only)                                                   |
 
 ### 2.2 Denied — explicit deny rows
 
-| package                         | namespace      | runtime role                                           | decision | owner             | rationale                                                                                                                         | risk-class | rejection alternative                                                             |
-| ------------------------------- | -------------- | ------------------------------------------------------ | -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
-| @oscharko-dev/test-intelligence | @oscharko-dev  | standalone Test Intelligence package and its dep graph | denied   | security-reviewer | ADR-0023 D12; importing the standalone package would copy its full Workbench dep graph into Keiko's published artifact. See #363. | high       | Native re-implementation under `@oscharko-dev/keiko-quality-intelligence` (#272). |
-| @oscharko-dev/ti-\*             | @oscharko-dev  | any internal Test Intelligence subpackage              | denied   | security-reviewer | ADR-0023 D12; same surface as above with namespace wildcard.                                                                      | high       | Same as above.                                                                    |
-| @sentry/\*                      | @sentry        | telemetry / crash-reporting                            | denied   | security-reviewer | Keiko is offline-by-default; outbound telemetry would violate the governance posture (#363 risk class).                           | high       | Local evidence ledger via `keiko-evidence` (#287, #285).                          |
-| @opentelemetry/\*               | @opentelemetry | tracing / metrics                                      | denied   | security-reviewer | Same as `@sentry/*`; no outbound telemetry is permitted from the published package.                                               | high       | Local evidence ledger via `keiko-evidence`.                                       |
-| posthog-js                      | (top-level)    | product analytics (browser)                            | denied   | security-reviewer | Telemetry — see above.                                                                                                            | high       | None; analytics surface is out of scope.                                          |
-| posthog-node                    | (top-level)    | product analytics (server)                             | denied   | security-reviewer | Telemetry — see above.                                                                                                            | high       | None; analytics surface is out of scope.                                          |
-| mixpanel                        | (top-level)    | product analytics                                      | denied   | security-reviewer | Telemetry — see above.                                                                                                            | high       | None.                                                                             |
-| analytics-node                  | (top-level)    | product analytics                                      | denied   | security-reviewer | Telemetry — see above.                                                                                                            | high       | None.                                                                             |
+| package                         | namespace      | runtime role                                           | decision | license      | owner             | rationale                                                                                                                         | risk-class | rejection alternative                                                             |
+| ------------------------------- | -------------- | ------------------------------------------------------ | -------- | ------------ | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| @oscharko-dev/test-intelligence | @oscharko-dev  | standalone Test Intelligence package and its dep graph | denied   | n/a (denied) | security-reviewer | ADR-0023 D12; importing the standalone package would copy its full Workbench dep graph into Keiko's published artifact. See #363. | high       | Native re-implementation under `@oscharko-dev/keiko-quality-intelligence` (#272). |
+| @oscharko-dev/ti-\*             | @oscharko-dev  | any internal Test Intelligence subpackage              | denied   | n/a (denied) | security-reviewer | ADR-0023 D12; same surface as above with namespace wildcard.                                                                      | high       | Same as above.                                                                    |
+| @sentry/\*                      | @sentry        | telemetry / crash-reporting                            | denied   | n/a (denied) | security-reviewer | Keiko is offline-by-default; outbound telemetry would violate the governance posture (#363 risk class).                           | high       | Local evidence ledger via `keiko-evidence` (#287, #285).                          |
+| @opentelemetry/\*               | @opentelemetry | tracing / metrics                                      | denied   | n/a (denied) | security-reviewer | Same as `@sentry/*`; no outbound telemetry is permitted from the published package.                                               | high       | Local evidence ledger via `keiko-evidence`.                                       |
+| posthog-js                      | (top-level)    | product analytics (browser)                            | denied   | n/a (denied) | security-reviewer | Telemetry — see above.                                                                                                            | high       | None; analytics surface is out of scope.                                          |
+| posthog-node                    | (top-level)    | product analytics (server)                             | denied   | n/a (denied) | security-reviewer | Telemetry — see above.                                                                                                            | high       | None; analytics surface is out of scope.                                          |
+| mixpanel                        | (top-level)    | product analytics                                      | denied   | n/a (denied) | security-reviewer | Telemetry — see above.                                                                                                            | high       | None.                                                                             |
+| analytics-node                  | (top-level)    | product analytics                                      | denied   | n/a (denied) | security-reviewer | Telemetry — see above.                                                                                                            | high       | None.                                                                             |
 
 ## 3. Decision lifecycle
 
@@ -83,10 +96,14 @@ exposure: native addons, install hooks, network reach, governance scrutiny.
 ## 4. Linked enforcement
 
 - Script: `scripts/check-quality-intelligence-supply-chain.mjs` — verifies every
-  `approved-runtime` row appears in some manifest and every `denied` row appears in none.
+  `approved-runtime` row appears in some manifest, every `denied` and `defer-to-decision` row
+  appears in none, every shipping/approved-dev row declares a license, and — fail-closed — that
+  every external dependency in the published runtime graph (root and bundled-package
+  `dependencies`/`optionalDependencies`) maps to an `approved-runtime` row.
 - Architecture decision: `docs/adr/ADR-0023-quality-intelligence-migration-architecture.md`
   §D5 (Model Gateway Exclusivity), §D11 (Single Published Package), §D12 (No Test
-  Intelligence Runtime Dependency).
+  Intelligence Runtime Dependency). ADR-0023 is the historical Epic #270 migration record
+  (superseded by ADR-0025); D5/D11/D12 remain in force and are enforced live by this script.
 - Release gate: parity matrix and final release gate are owned by issue #285. This matrix
   is one of the inputs to that gate.
 - Source-import isolation: enforced once the dependency-direction rule
