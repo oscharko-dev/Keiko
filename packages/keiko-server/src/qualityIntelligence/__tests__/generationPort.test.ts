@@ -406,6 +406,24 @@ describe("createQiGenerationPort.generate — evidence scrubbing", () => {
     expect(tagCount).toBe(1);
   });
 
+  it("strips zero-width and bidi-override format controls from evidence text", async () => {
+    const { deps, calls } = depsFor("chat-model-1");
+    const port = createPort(deps, "chat-model-1");
+    // ZWSP (U+200B), ZWJ (U+200D), RLO (U+202E), LRI (U+2066), and BOM (U+FEFF) are invisible /
+    // directional controls that NFKC does NOT remove — none may reach the model prompt (#278).
+    await port.generate(
+      args({
+        evidence: [{ index: 0, kind: "requirements", text: "ad\u200bmin\u200d \u202etxet\u2066 end\ufeff" }],
+      }),
+    );
+    const content = calls[0]?.request.messages[1]?.content ?? "";
+    for (const invisible of ["\u200b", "\u200d", "\u202e", "\u2066", "\ufeff"]) {
+      expect(content).not.toContain(invisible);
+    }
+    // The visible characters survive; the zero-width split inside "admin" is closed up.
+    expect(content).toContain("admin");
+  });
+
   it("strips C1 control chars (0x80-0x9F) from evidence text", async () => {
     const { deps, calls } = depsFor("chat-model-1");
     const port = createPort(deps, "chat-model-1");

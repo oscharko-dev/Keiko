@@ -120,9 +120,33 @@ export interface QiIngestionResult {
   readonly skippedSources: readonly QiSkippedSource[];
 }
 
+// Credential token shapes mirrored from keiko-contracts `fieldLooksUnsafe` so a connected
+// source's display label can never echo a secret back to the browser-surfaced envelope
+// (#277/#278 envelope display-surface invariant — the label is the only user-derived envelope
+// field; localRef/origin/integrityHash are server-built and hash-derived).
+const CREDENTIAL_LABEL_SHAPES: readonly RegExp[] = [
+  /AKIA[0-9A-Z]{12,}/gu,
+  /(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/gu,
+  /xox[baprs]-[A-Za-z0-9-]{10,}/gu,
+  /sk-[A-Za-z0-9]{16,}/gu,
+  /\bBearer\s+\S+/giu,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu,
+];
+
 const sanitiseLabel = (label: string): string => {
-  const trimmed = label.replace(/https?:\/\/\S+/giu, "").trim();
-  const safe = trimmed.length === 0 ? "Untitled source" : trimmed;
+  // Strip any URL authority — ANY scheme (http, file, s3, ftp, …), not just http(s) — plus the
+  // well-known credential token shapes, so a browser-supplied label never carries a URL or secret
+  // into the envelope display surface that is streamed back to the client (#277/#278).
+  let cleaned = label.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, " ");
+  for (const shape of CREDENTIAL_LABEL_SHAPES) cleaned = cleaned.replace(shape, " ");
+  cleaned = cleaned.trim();
+  // Collapse an absolute POSIX / Windows-drive / UNC path label to its final segment so the
+  // display label never leaks the filesystem layout (the basename is the useful display token).
+  if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(cleaned)) {
+    const segments = cleaned.split(/[\\/]/u).filter((s) => s.length > 0);
+    cleaned = (segments[segments.length - 1] ?? "").trim();
+  }
+  const safe = cleaned.length === 0 ? "Untitled source" : cleaned;
   return safe.length > MAX_LABEL_CHARS ? `${safe.slice(0, MAX_LABEL_CHARS - 1)}…` : safe;
 };
 
@@ -829,9 +853,13 @@ function ingestFigmaSnapshot(
   }
   const joinedText = docs.map((d) => d.text).join("\n");
   const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
+  // A stored Figma Snapshot is figma evidence, not repository context. Use the dedicated
+  // `figma-evidence` envelope kind (#278 AC2 "represented as an explicit connector-backed source"
+  // + AC4 citation/audit attribution) so the persisted envelope, source-mix priority, and any
+  // kind-grouped audit rollup classify it correctly instead of folding it into repo context.
   const envelope: QI.QualityIntelligenceSourceEnvelope = {
     id: envelopeId,
-    kind: "repository-context",
+    kind: "figma-evidence",
     displayLabel: label,
     provenance: {
       origin: `figma-snapshot:${source.snapshotRunId}`,

@@ -41,21 +41,30 @@ describe("normaliseUntrustedContent", () => {
     expect(result.normalisedFromControlChars).toBe(true);
   });
 
-  it("preserves printable whitespace (space, tab, newline)", () => {
-    // Tab (0x09) and newline (0x0A) are inside the C0 range and ARE stripped by
-    // this normaliser — verified to match the implementation contract.
-    const result = normaliseUntrustedContent("a b c");
-    expect(result.value).toBe("a b c");
+  it("preserves TAB, LF, and CR as legitimate text whitespace", () => {
+    // TAB (0x09), LF (0x0A), and CR (0x0D) are C0 code points but are ordinary
+    // text whitespace: stripping them would collapse multi-line content into a
+    // single run-on line. They must survive so a multi-line code block or
+    // document excerpt keeps its line structure.
+    const result = normaliseUntrustedContent("line1\n\tline2\r\nline3");
+    expect(result.value).toBe("line1\n\tline2\r\nline3");
     expect(result.normalisedFromControlChars).toBe(false);
+    expect(result.markdownInjectionEscapes).toBe(0);
   });
 
-  it("escapes Markdown heading lines", () => {
+  it("strips other C0 controls while keeping surrounding newlines", () => {
+    // BEL (0x07) is stripped; the LF separating the two lines is preserved.
+    const result = normaliseUntrustedContent("line1\x07\nline2");
+    expect(result.value).toBe("line1\nline2");
+    expect(result.normalisedFromControlChars).toBe(true);
+  });
+
+  it("escapes Markdown heading lines on every line", () => {
     const result = normaliseUntrustedContent("# heading\n## sub");
-    // Newline is a control char and gets stripped before escape — the heading
-    // regex is multiline so the second `#` cluster only matches if preceded by
-    // a newline; once the newline is stripped only the first `#` remains.
-    expect(result.value.startsWith("\\#")).toBe(true);
-    expect(result.markdownInjectionEscapes).toBeGreaterThanOrEqual(1);
+    // The LF is preserved (text whitespace) and the heading regex is multiline,
+    // so BOTH the first-line `#` and the second-line `##` are escaped.
+    expect(result.value).toBe("\\# heading\n\\## sub");
+    expect(result.markdownInjectionEscapes).toBe(2);
   });
 
   it("escapes fenced code blocks", () => {

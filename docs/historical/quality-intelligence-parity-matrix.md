@@ -64,6 +64,17 @@ The matrix below lists every Test Intelligence capability area referenced in `qu
 | Source-mix planning (recommendation engine)   | new-pure-domain-seam | keiko-quality-intelligence + keiko-model-gateway     | #278      | shipped |
 | Multi-source reconciliation and deduplication | new-pure-domain-seam | keiko-quality-intelligence                           | #278      | shipped |
 
+> **Note — "Jira ADF parser" is a reserved pure-domain seam, not a wired ingestion capability.**
+> The ADF parser (`adfParser.ts`) and `normaliseUntrustedContent` ship and are tested in
+> `keiko-quality-intelligence`, and the `connector-document` source-envelope kind is defined in
+> `keiko-contracts`, but none is wired to a productive ingestion entrypoint under #278:
+> `QualityIntelligenceInlineSource` has no `connector-document` member and `ingestInlineSources`
+> has no `connector-document` branch. The shipped, end-to-end #278 source kinds are
+> `requirements`, `workspace`, `file`, `capsule`, `capsule-set`, and `figma-snapshot`. Live
+> Jira/ADF ingestion as a QI source is deferred to **#283** (`deferred-to-followup`; see the
+> "Jira write and traceability" row later in this matrix). The `shipped` status above reflects the
+> pure-domain seam, not a live connector path.
+
 ### 2.3 Quality and Validation (from `@oscharko-dev/ti-quality`)
 
 | TI Capability Area                            | Disposition          | Keiko Owner                                      | Wave-3 PR | Status  |

@@ -44,20 +44,43 @@ function capabilityFor(deps: UiHandlerDeps, modelId: string): ModelCapability | 
     : findConfiguredCapability(deps.config, modelId);
 }
 
-// Strip C0/C1 control characters (keep tab/LF/CR) via a code-point scan so the `no-control-regex`
-// rule stays satisfied; then neutralise any literal evidence delimiter so untrusted text cannot
-// close the <qi-evidence> block early.
+// Invisible / directional format controls that NFKC does NOT remove: zero-width characters
+// (ZWSP/ZWNJ/ZWJ and the BOM/ZWNBSP) and bidirectional controls (LRM/RLM, the LRE…RLO embedding/
+// override block, and the isolate block). They carry no legitimate meaning in untrusted source
+// evidence but can smuggle homoglyph/bidi deception into the model prompt — and into any candidate
+// rendered or exported from it. Stripping them is content-preserving for real text (#278 Audit
+// Addendum: normalise untrusted content before model prompt construction, rendering, or export).
+function isInvisibleFormatControl(cp: number): boolean {
+  return (
+    (cp >= 0x200b && cp <= 0x200f) || // ZWSP, ZWNJ, ZWJ, LRM, RLM
+    (cp >= 0x202a && cp <= 0x202e) || // LRE, RLE, PDF, LRO, RLO
+    (cp >= 0x2066 && cp <= 0x2069) || // LRI, RLI, FSI, PDI
+    cp === 0xfeff // BOM / ZWNBSP
+  );
+}
+
+// A code point that must be stripped from evidence text: C0 controls (except tab/LF/CR), DEL, C1
+// controls, or an invisible zero-width/bidi format control. Tab/LF/CR survive as legitimate text
+// whitespace so multi-line evidence keeps its structure.
+function isStrippableEvidenceCodePoint(cp: number): boolean {
+  return (
+    (cp <= 0x1f && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) ||
+    cp === 0x7f ||
+    (cp >= 0x80 && cp <= 0x9f) ||
+    isInvisibleFormatControl(cp)
+  );
+}
+
+// Strip control / invisible format characters via a code-point scan so the `no-control-regex` rule
+// stays satisfied; then neutralise any literal evidence delimiter so untrusted text cannot close the
+// <qi-evidence> block early.
 function scrubEvidenceText(text: string): string {
   const normalised = text.normalize("NFKC");
   let out = "";
   for (const ch of normalised) {
     const cp = ch.codePointAt(0);
     if (cp === undefined) continue;
-    const isStrippable =
-      (cp <= 0x1f && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) ||
-      cp === 0x7f ||
-      (cp >= 0x80 && cp <= 0x9f);
-    if (!isStrippable) out += ch;
+    if (!isStrippableEvidenceCodePoint(cp)) out += ch;
   }
   return out.replace(/<\/?qi-evidence/giu, "[evidence]");
 }

@@ -115,6 +115,10 @@ describe("figma-snapshot ingestion — deterministic structural baseline", () =>
     expect(text).toContain("(control-action)");
     expect(text).toContain("(screen-render)");
     expect(text).toContain("(state)");
+    // The persisted envelope is classified as figma evidence (not repository-context) so citations
+    // and any kind-grouped audit rollup attribute it to its Figma origin (#278 AC2 explicit
+    // connector-backed source + AC4 citation/audit attribution).
+    expect(result.envelopes[0]?.kind).toBe("figma-evidence");
   });
 
   it("produces one atom per screen for a multi-screen snapshot (per-screen attribution)", () => {

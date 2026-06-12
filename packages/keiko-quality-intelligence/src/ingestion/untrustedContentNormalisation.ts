@@ -35,6 +35,13 @@ const IMAGE_OPEN = /!\[/gu;
 const LINK_OPEN = /(?<!!)\[([^\]]*)\]\(/gu;
 
 const isControlCodePoint = (code: number): boolean => {
+  // TAB (0x09), LF (0x0A), and CR (0x0D) are C0 code points but are legitimate
+  // text whitespace: stripping them would collapse multi-line content (e.g. a
+  // code block or a multi-line document excerpt) into a single run-on line. They
+  // must survive normalisation. This mirrors the prompt-boundary scrubber and the
+  // single-file binary guard (keiko-server isControlChar), so every layer treats
+  // the same code points as text.
+  if (code === 0x09 || code === 0x0a || code === 0x0d) return false;
   // C0 controls 0x00–0x1F, DEL 0x7F, C1 controls 0x80–0x9F.
   if (code <= 0x1f) return true;
   if (code === 0x7f) return true;
@@ -112,7 +119,7 @@ const clampToBytes = (value: string, maxBytes: number): { value: string; clamped
 /**
  * Normalise an untrusted free-text payload:
  *   1. NFKC normalise.
- *   2. Strip C0/C1/DEL control characters.
+ *   2. Strip C0/C1/DEL control characters (keeping TAB/LF/CR text whitespace).
  *   3. Escape Markdown-injection vectors (heading, fenced code, image, link).
  *   4. Clamp to `maxBytes` UTF-8 bytes (default 64 KiB).
  *
