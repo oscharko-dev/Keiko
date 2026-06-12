@@ -35,23 +35,26 @@ export const qiConnectorErrorBody = (code: QiConnectorErrorCode): QiConnectorErr
 /**
  * Defence-in-depth scrub: detect substrings that would indicate the caller is trying to
  * smuggle credentials or a header pair through a connector payload. Pure, no IO.
+ *
+ * Comparison is case-insensitive so that variants like "BEARER ", "API_KEY", or
+ * "AUTHORIZATION:" are detected regardless of casing (prior case-variant list was
+ * incomplete and bypassed by non-listed casings — Issue #281).
  */
 const FORBIDDEN_SUBSTRINGS: readonly string[] = [
-  "Authorization:",
-  "Bearer ",
-  "Basic ",
+  "authorization:",
+  "bearer ",
+  "basic ",
   "apikey",
-  "apiKey",
   "api_key",
-  "Cookie:",
-  "Set-Cookie",
+  "cookie:",
+  "set-cookie",
   "x-api-key",
-  "X-Api-Key",
 ];
 
 export const containsForbiddenSecretShape = (value: string): boolean => {
+  const lower = value.toLowerCase();
   for (const forbidden of FORBIDDEN_SUBSTRINGS) {
-    if (value.includes(forbidden)) return true;
+    if (lower.includes(forbidden)) return true;
   }
   return false;
 };
