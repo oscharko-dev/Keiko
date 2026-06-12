@@ -155,6 +155,27 @@ export async function startQiRun(
 }
 
 // ---------------------------------------------------------------------------
+// DELETE /api/quality-intelligence/runs/:id  (Issue #282 follow-up)
+// ---------------------------------------------------------------------------
+
+export interface QiDeleteResult {
+  readonly runId: string;
+  readonly status: string;
+  readonly removedCompanionSuffixes: readonly string[];
+}
+
+/**
+ * Permanently delete a QI run and its companion files. Returns the deletion receipt.
+ * 200 → receipt; 404 → ApiError("QI_NOT_FOUND"); 400/500 → ApiError(code).
+ * CSRF is injected automatically by fetchJson for non-GET methods.
+ */
+export async function deleteQiRun(id: string): Promise<QiDeleteResult> {
+  return fetchJson<QiDeleteResult>(`/api/quality-intelligence/runs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/quality-intelligence/runs/:id/cancel
 // ---------------------------------------------------------------------------
 

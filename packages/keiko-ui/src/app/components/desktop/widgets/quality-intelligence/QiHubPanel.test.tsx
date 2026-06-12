@@ -10,6 +10,7 @@ import type { QualityIntelligenceUiRunSummary } from "@oscharko-dev/keiko-contra
 function makeRun(
   id: string,
   status: QualityIntelligenceUiRunSummary["status"],
+  reviewState: QualityIntelligenceUiRunSummary["reviewState"] = "open",
 ): QualityIntelligenceUiRunSummary {
   return {
     id,
@@ -17,6 +18,8 @@ function makeRun(
     requestedAt: "2026-06-01T10:00:00.000Z",
     completedAt: status === "running" ? null : "2026-06-01T10:01:00.000Z",
     totals: { candidates: 3, findings: 0, exports: 0 },
+    // Issue #282 A11y-2: reviewState is now required on the wire summary (backend contract update).
+    reviewState,
   };
 }
 
@@ -142,5 +145,142 @@ describe("QiHubPanel", () => {
 
     expect(within(list).getAllByRole("listitem")).toHaveLength(30);
     expect(screen.queryByRole("button", { name: /show more runs/i })).not.toBeInTheDocument();
+  });
+
+  // ── Run deletion control (Issue #282 follow-up) ─────────────────────────────
+
+  const fakeDelete = (): typeof import("@/lib/quality-intelligence-api").deleteQiRun =>
+    vi.fn().mockResolvedValue({
+      runId: "qi-run-aaaa1111",
+      status: "deleted",
+      removedCompanionSuffixes: [".review.json"],
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").deleteQiRun;
+
+  it("requires an explicit confirm — a single Delete click does NOT call the delete API", async () => {
+    const user = userEvent.setup();
+    const deleteImpl = fakeDelete();
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-aaaa1111", "succeeded")])}
+        deleteImpl={deleteImpl}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /delete run/i }));
+    expect(deleteImpl).not.toHaveBeenCalled();
+    // The confirm affordance is revealed only after the first click.
+    expect(screen.getByRole("button", { name: /confirm delete/i })).toBeInTheDocument();
+  });
+
+  it("deletes a run on confirm and removes it from the list after the refetch", async () => {
+    const user = userEvent.setup();
+    const deleteImpl = fakeDelete();
+    // First load returns the run; the post-delete refetch returns an empty list.
+    const fetchRunsImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runs: [makeRun("qi-run-aaaa1111", "succeeded")],
+        limit: 50,
+        totalRunIds: 1,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        runs: [],
+        limit: 50,
+        totalRunIds: 0,
+        truncated: false,
+      }) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRuns;
+    render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fetchRunsImpl} deleteImpl={deleteImpl} />);
+    await user.click(await screen.findByRole("button", { name: /delete run/i }));
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+    expect(deleteImpl).toHaveBeenCalledWith("qi-run-aaaa1111");
+    // The refetch (2nd call) returns [], so the row is gone and the empty state shows.
+    expect(await screen.findByText(/no runs yet/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /open run qi-run-aaaa1111/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not call the delete API when the confirm is cancelled", async () => {
+    const user = userEvent.setup();
+    const deleteImpl = fakeDelete();
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-aaaa1111", "succeeded")])}
+        deleteImpl={deleteImpl}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /delete run/i }));
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(deleteImpl).not.toHaveBeenCalled();
+    // Cancel collapses the confirm strip and restores the Delete trigger.
+    expect(screen.getByRole("button", { name: /delete run/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirm delete/i })).not.toBeInTheDocument();
+  });
+
+  it("surfaces a retryable error (without crashing) when the delete fails", async () => {
+    const user = userEvent.setup();
+    const deleteImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("nope"),
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").deleteQiRun;
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-aaaa1111", "succeeded")])}
+        deleteImpl={deleteImpl}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /delete run/i }));
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+    expect(deleteImpl).toHaveBeenCalledWith("qi-run-aaaa1111");
+    // The reused panel error channel renders a retryable alert rather than throwing; the run data
+    // is preserved and returns via Retry → loadRuns.
+    expect(await screen.findByTestId("qi-error-state")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
+  // Issue #282 A11y-2: run rows must show a review badge next to the status badge, and the
+  // aria-label must include the review state so screen-reader list-navigation announces it.
+  it("renders a review badge for each run row defaulting to 'Open' (AC1 — Issue #282)", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-rev-badge-1", "succeeded")])}
+      />,
+    );
+    // Wait for the run list to appear, then assert the review badge is present.
+    await screen.findByRole("button", { name: /open run qi-run-rev-badge-1/i });
+    // ReviewBadge renders a sr-only "Review: " prefix followed by the label.
+    // The combined text node is "Review: Open".
+    expect(screen.getByText(/^Open$/i)).toBeInTheDocument();
+  });
+
+  it("renders the correct review badge when reviewState is 'approved'", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-rev-approved", "succeeded", "approved")])}
+      />,
+    );
+    await screen.findByRole("button", { name: /open run qi-run-rev-approved/i });
+    expect(screen.getByText(/^Approved$/i)).toBeInTheDocument();
+  });
+
+  it("includes the review state in the run-row aria-label (AC1 — Issue #282 A11y-2)", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-aria-rev", "succeeded", "rejected")])}
+      />,
+    );
+    // The aria-label must include "review Rejected" so SR list-navigation announces lifecycle.
+    expect(
+      await screen.findByRole("button", {
+        name: /open run qi-run-aria-rev.*review Rejected/i,
+      }),
+    ).toBeInTheDocument();
   });
 });

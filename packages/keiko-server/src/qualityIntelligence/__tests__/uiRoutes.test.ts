@@ -124,10 +124,15 @@ describe("handleListQiRuns", () => {
 
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
     expect(result.status).toBe(200);
-    const body = result.body as { runs: readonly { id: string; status: string }[] };
+    const body = result.body as {
+      runs: readonly { id: string; status: string; reviewState: string }[];
+    };
     expect(body.runs).toHaveLength(2);
     expect(body.runs.map((r) => r.id)).toEqual(["run-a", "run-b"]);
     expect(body.runs[0]?.status).toBe("succeeded");
+    // FIX A11y-2 (Issue #282): every list item carries a review state; "open" until a reviewer acts.
+    expect(body.runs[0]?.reviewState).toBe("open");
+    expect(body.runs[1]?.reviewState).toBe("open");
   });
 
   it("returns an empty list when the store reports no runs", () => {
@@ -473,6 +478,78 @@ describe("evidenceDir wiring (issue #620)", () => {
     expect(body.runs).toEqual([]);
     expect(body.truncated).toBe(false);
     expect(body.totalRunIds).toBe(0);
+  });
+
+  it("handleListQiRuns reflects a run-level approval in the list item's reviewState (FIX A11y-2)", async () => {
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+    actualRecord(
+      {
+        runId: "run-approved",
+        planAt: "2026-06-01T10:00:00.000Z",
+        completedAt: "2026-06-01T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: [],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 1,
+        totals: { candidates: 0, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: [],
+        provenanceRefs: {
+          envelopeIds: [],
+          auditSummaryId: "qi-audit-test" as Parameters<
+            typeof actualRecord
+          >[0]["provenanceRefs"]["auditSummaryId"],
+        },
+      },
+      { evidenceDir },
+    );
+    const { applyReviewDecision } = await import("../reviewStore.js");
+    applyReviewDecision({
+      runId: "run-approved",
+      evidenceDir,
+      action: "approve",
+      scope: "run",
+      reviewerLabel: "tester",
+      now: "2026-06-01T11:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
+    expect(result.status).toBe(200);
+    const body = result.body as { runs: readonly { id: string; reviewState: string }[] };
+    const item = body.runs.find((r) => r.id === "run-approved");
+    expect(item?.reviewState).toBe("approved");
+  });
+
+  it("handleListQiRuns defaults reviewState to 'open' for a run without a review companion", () => {
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+    actualRecord(
+      {
+        runId: "run-unreviewed",
+        planAt: "2026-06-01T10:00:00.000Z",
+        completedAt: "2026-06-01T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: [],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 1,
+        totals: { candidates: 0, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: [],
+        provenanceRefs: {
+          envelopeIds: [],
+          auditSummaryId: "qi-audit-test" as Parameters<
+            typeof actualRecord
+          >[0]["provenanceRefs"]["auditSummaryId"],
+        },
+      },
+      { evidenceDir },
+    );
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
+    expect(result.status).toBe(200);
+    const body = result.body as { runs: readonly { id: string; reviewState: string }[] };
+    expect(body.runs.find((r) => r.id === "run-unreviewed")?.reviewState).toBe("open");
   });
 
   it("handleGetQiRun returns 404 NOT_FOUND (not 500 INTERNAL) for an unknown id when evidenceDir is wired", () => {

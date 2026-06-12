@@ -89,6 +89,9 @@ export function ExportBar({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<string | null>(null);
+  // Issue #282 A11y-3 / AC3: "approvedOnly" defaults to false to preserve the existing export
+  // scope (all test cases). The user opts in explicitly via the checkbox below.
+  const [approvedOnly, setApprovedOnly] = useState(false);
   const selected = ADAPTERS.find((a) => a.id === adapter);
   const isTms = selected?.tms ?? false;
 
@@ -101,7 +104,9 @@ export function ExportBar({
       setDownloaded(res.filename);
       return;
     }
-    const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly: false });
+    // Pass the user-chosen approvedOnly value (default false = all test cases, preserving the
+    // prior behaviour). TMS adapters force approvedOnly server-side regardless of this value.
+    const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly });
     if (res.dryRun) {
       // "test case(s)", not the internal term "candidates" — the suite-wide object name
       // (uiux-fix F047 C388: ExportBar said "candidates", hub "cases", launcher "test cases").
@@ -114,7 +119,7 @@ export function ExportBar({
       triggerDownload(res.filename, res.contentType, res.body, res.encoding);
       setDownloaded(res.filename);
     }
-  }, [runId, adapter, isTms, exportImpl, traceabilityImpl]);
+  }, [runId, adapter, isTms, approvedOnly, exportImpl, traceabilityImpl]);
 
   const handleExport = useCallback(async (): Promise<void> => {
     setBusy(true);
@@ -152,6 +157,35 @@ export function ExportBar({
           ))}
         </select>
       </label>
+      {/* Issue #282 A11y-3 / AC3: "Approved only" scope control. Hidden for TMS adapters (TMS
+          forces approvedOnly server-side; the server owns that decision — showing a checkbox that
+          appears to control it would be misleading). Default unchecked = all test cases exported,
+          preserving the previous behaviour (no silent scope change). */}
+      {!isTms ? (
+        <label className="qi-field qi-field-inline qi-export-approved-label">
+          <input
+            type="checkbox"
+            className="qi-checkbox"
+            checked={approvedOnly}
+            disabled={busy}
+            onChange={(e) => {
+              setApprovedOnly(e.target.checked);
+            }}
+            data-testid="qi-export-approved-only"
+          />
+          <span>Approved only</span>
+        </label>
+      ) : null}
+      {/* Scope notice: always present for non-TMS adapters so users understand what they are
+          about to download (AC3 governance visibility). Reuses qi-export-hint — same role="note"
+          and padding token; no new CSS class needed. */}
+      {!isTms ? (
+        <p className="qi-export-hint" role="note" data-testid="qi-export-scope-notice">
+          {approvedOnly
+            ? "Exports approved test cases only."
+            : "Exports all test cases, including unapproved."}
+        </p>
+      ) : null}
       <button
         type="button"
         className="qi-btn qi-btn-secondary"

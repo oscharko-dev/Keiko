@@ -778,3 +778,100 @@ describe("ExportBar — traceability matrix export", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests — "Approved only" scope control (Issue #282 A11y-3 / AC3)
+// ---------------------------------------------------------------------------
+//
+// The ExportBar now shows an "Approved only" checkbox for local (non-TMS) adapters that controls
+// whether the export is scoped to approved candidates only. Default is unchecked (all test cases),
+// preserving the previous behaviour. TMS adapters hide the checkbox (server forces approvedOnly).
+//
+// Contract: approvedOnly is forwarded to exportImpl as the third argument's approvedOnly key.
+
+describe("ExportBar — approvedOnly scope control (Issue #282 A11y-3)", () => {
+  it("renders an 'Approved only' checkbox for local adapters", () => {
+    render(<ExportBar runId="run-001" />);
+    // csv is the default local adapter.
+    expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeInTheDocument();
+  });
+
+  it("defaults the 'Approved only' checkbox to unchecked (preserves previous scope)", () => {
+    render(<ExportBar runId="run-001" />);
+    expect(screen.getByRole("checkbox", { name: /approved only/i })).not.toBeChecked();
+  });
+
+  it("shows an 'all test cases' scope notice when unchecked", () => {
+    render(<ExportBar runId="run-001" />);
+    expect(screen.getByTestId("qi-export-scope-notice")).toHaveTextContent(
+      /all test cases.*unapproved/i,
+    );
+  });
+
+  it("shows an 'approved only' scope notice when checked", async () => {
+    const user = userEvent.setup();
+    render(<ExportBar runId="run-001" />);
+    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
+    expect(screen.getByTestId("qi-export-scope-notice")).toHaveTextContent(
+      /approved test cases only/i,
+    );
+  });
+
+  it("passes approvedOnly:false to exportImpl when checkbox is unchecked (default)", async () => {
+    const user = userEvent.setup();
+    const exportImpl = makeLocalExportFake();
+    render(<ExportBar runId="run-scope-off" exportImpl={exportImpl} />);
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(exportImpl).toHaveBeenCalledOnce();
+    });
+    const [, , opts] = (exportImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string,
+      { approvedOnly: boolean },
+    ];
+    expect(opts.approvedOnly).toBe(false);
+  });
+
+  it("passes approvedOnly:true to exportImpl when checkbox is checked", async () => {
+    const user = userEvent.setup();
+    const exportImpl = makeLocalExportFake();
+    render(<ExportBar runId="run-scope-on" exportImpl={exportImpl} />);
+    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(exportImpl).toHaveBeenCalledOnce();
+    });
+    const [, , opts] = (exportImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string,
+      { approvedOnly: boolean },
+    ];
+    expect(opts.approvedOnly).toBe(true);
+  });
+
+  it("hides the 'Approved only' checkbox for TMS adapters", async () => {
+    const user = userEvent.setup();
+    render(<ExportBar runId="run-001" />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "jira-issues",
+    );
+    expect(screen.queryByRole("checkbox", { name: /approved only/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the 'Approved only' checkbox again when switching back from TMS to a local adapter", async () => {
+    const user = userEvent.setup();
+    render(<ExportBar runId="run-001" />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "jira-issues",
+    );
+    expect(screen.queryByRole("checkbox", { name: /approved only/i })).not.toBeInTheDocument();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "csv",
+    );
+    expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeInTheDocument();
+  });
+});
