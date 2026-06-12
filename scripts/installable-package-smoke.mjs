@@ -362,6 +362,13 @@ async function assertQiRouteReachable(baseUrl) {
 // Compare two absolute paths for equality. On Windows paths are case-insensitive and may differ in
 // separator (`\` vs `/`) or drive-letter case between `realpathSync` and the server's resolved path,
 // so normalise both before comparing there; POSIX comparison stays exact (case-sensitive).
+//
+// Test layering for the cross-platform path helpers (this `samePath` and the forward-slash
+// `probeFile` above): they are deliberately covered by the CI matrix itself rather than a unit test.
+// This script IS the integration test, and each platform branch is exercised on its own runner —
+// the `win32` branches by `cross-platform-smoke (windows-latest)`, the POSIX branches by the
+// `(macos-latest)` leg and the gating Linux `build-scan-sbom-smoke` job. A unit test would mock the
+// platform/fs and assert against the harness, not the product, so it is intentionally not added.
 function samePath(a, b) {
   if (a === undefined || b === undefined) return false;
   if (process.platform !== "win32") return a === b;
