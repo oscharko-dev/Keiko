@@ -1,11 +1,11 @@
 // Epic #189 Slice 3 M2 — unit tests for the ConnectorPickerWidget.
 //
 // Tests cover: loading state, error state, empty state, capsule/capsule-set rendering,
-// selection dispatch (onSelect called with correct kind+id), "create connector" link presence.
+// selection dispatch (onSelect called with correct kind+id), "create connector" management action.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorPickerWidget } from "./ConnectorPickerWidget";
 import type { CapsulesResponse, CapsuleSetsResponse } from "@/lib/local-knowledge-api";
 
@@ -28,6 +28,11 @@ import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
 const mockFetchCapsules = vi.mocked(fetchCapsules);
 const mockFetchCapsuleSets = vi.mocked(fetchCapsuleSets);
+
+beforeEach(() => {
+  mockFetchCapsules.mockReset();
+  mockFetchCapsuleSets.mockReset();
+});
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +59,26 @@ function defaultMocks(): void {
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("ConnectorPickerWidget", () => {
+  it("renders a dragged capsule as a compact connector node without the picker", () => {
+    render(
+      <ConnectorPickerWidget
+        presentation="node"
+        selectedKind="capsule"
+        selectedId="cap-abc"
+        selectedLabel="First KC"
+        selectedState="ready"
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("knowledge-connector-node")).toBeInTheDocument();
+    expect(screen.getByText("First KC")).toBeInTheDocument();
+    expect(screen.getByText("Indexed")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(mockFetchCapsules).not.toHaveBeenCalled();
+    expect(mockFetchCapsuleSets).not.toHaveBeenCalled();
+  });
+
   it("shows a loading state initially", () => {
     mockFetchCapsules.mockReturnValue(new Promise(() => undefined));
     mockFetchCapsuleSets.mockReturnValue(new Promise(() => undefined));
@@ -104,22 +129,28 @@ describe("ConnectorPickerWidget", () => {
     expect(badge).not.toBeUndefined();
   });
 
-  it("shows an empty state with a 'Create' link when no connectors exist", async () => {
+  it("shows an empty state with a 'Create' action when no connectors exist", async () => {
     mockFetchCapsules.mockResolvedValue({ capsules: [] });
     mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
-    render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    const onManageConnectors = vi.fn();
+    const user = userEvent.setup();
+    render(<ConnectorPickerWidget onSelect={vi.fn()} onManageConnectors={onManageConnectors} />);
     await waitFor(() => {
       expect(screen.queryByRole("status", { name: /loading/i })).toBeNull();
     });
     expect(screen.getByText(/No ready connectors/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Create a connector/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Create a connector/i }));
+    expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });
 
-  it("shows a 'Create or manage connectors' link in normal state", async () => {
+  it("shows a 'Create or manage connectors' action in normal state", async () => {
     defaultMocks();
-    render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    const onManageConnectors = vi.fn();
+    const user = userEvent.setup();
+    render(<ConnectorPickerWidget onSelect={vi.fn()} onManageConnectors={onManageConnectors} />);
     await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
-    expect(screen.getByRole("link", { name: /Create or manage connectors/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Create or manage connectors/i }));
+    expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });
 
   it("shows an error message via role=alert when fetch fails", async () => {

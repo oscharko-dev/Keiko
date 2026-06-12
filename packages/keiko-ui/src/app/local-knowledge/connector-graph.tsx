@@ -9,12 +9,31 @@
 
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import type { CapsuleListEntry, ConnectorGraphProps, RowActionKind } from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
+import { CapsuleDetail } from "./[capsuleId]/capsule-detail";
+import {
+  LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+  type LocalKnowledgeConnectorDragPayload,
+  type LocalKnowledgeConnectorDropDetail,
+  serializeLocalKnowledgeConnectorDrag,
+} from "./connector-drag";
 
 // ---------------------------------------------------------------------------
 // AlertBanner
@@ -596,6 +615,36 @@ function CapsuleRowActions({
 // CapsuleRow
 // ---------------------------------------------------------------------------
 
+function isRowActionDragTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest(".lk-capsule-actions,a,input,select,textarea") !== null;
+}
+
+function isWorkspaceDropTarget(clientX: number, clientY: number): boolean {
+  const target = document.elementFromPoint(clientX, clientY);
+  if (!(target instanceof Element)) return false;
+  return target.closest("main.workspace") !== null && target.closest(".window") === null;
+}
+
+function dispatchConnectorDrop(
+  payload: LocalKnowledgeConnectorDragPayload,
+  event: { readonly clientX: number; readonly clientY: number },
+): void {
+  const detail: LocalKnowledgeConnectorDropDetail = {
+    payload,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  };
+  window.dispatchEvent(new CustomEvent(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, { detail }));
+}
+
+interface CapsuleDragGhost {
+  readonly x: number;
+  readonly y: number;
+  readonly label: string;
+  readonly state: CapsuleLifecycleState;
+}
+
 function CapsuleRow({
   capsule,
   busy,
@@ -605,27 +654,139 @@ function CapsuleRow({
   onDisconnect,
   onHealth,
 }: RowActionProps): ReactNode {
+  const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
+  const dragActiveRef = useRef(false);
+  const dropDispatchedRef = useRef(false);
+  const payload: LocalKnowledgeConnectorDragPayload = {
+    kind: "capsule",
+    id: capsule.id,
+    label: capsule.displayName,
+    lifecycleState: capsule.lifecycleState,
+  };
+  const emitDrop = (event: { readonly clientX: number; readonly clientY: number }): void => {
+    if (dropDispatchedRef.current) return;
+    dropDispatchedRef.current = true;
+    dispatchConnectorDrop(payload, event);
+    window.setTimeout(() => {
+      dropDispatchedRef.current = false;
+    }, 250);
+  };
+  const onDragStart = (event: DragEvent<HTMLElement>): void => {
+    if (isRowActionDragTarget(event.target)) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(
+      LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+      serializeLocalKnowledgeConnectorDrag(payload),
+    );
+    event.dataTransfer.setData("text/plain", capsule.displayName);
+  };
+  const onDragEnd = (event: DragEvent<HTMLElement>): void => {
+    if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
+      emitDrop(event);
+    }
+  };
+  const startDragOut = (startX: number, startY: number): void => {
+    dragActiveRef.current = true;
+    let dragging = false;
+    const move = (moveEvent: PointerEvent | MouseEvent): void => {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!dragging && Math.hypot(dx, dy) < 6) return;
+      dragging = true;
+      document.body.style.cursor = "grabbing";
+      setDragGhost({
+        x: moveEvent.clientX,
+        y: moveEvent.clientY,
+        label: capsule.displayName,
+        state: capsule.lifecycleState,
+      });
+    };
+    const up = (upEvent: PointerEvent | MouseEvent): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      dragActiveRef.current = false;
+      document.body.style.cursor = "";
+      setDragGhost(null);
+      if (dragging && isWorkspaceDropTarget(upEvent.clientX, upEvent.clientY)) {
+        emitDrop(upEvent);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
+    if (isRowActionDragTarget(event.target)) return;
+    event.stopPropagation();
+    if (event.button !== 0) return;
+    event.preventDefault();
+    startDragOut(event.clientX, event.clientY);
+  };
+  const onMouseDown = (event: ReactMouseEvent<HTMLElement>): void => {
+    if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
+    event.stopPropagation();
+    if (event.button !== 0) return;
+    event.preventDefault();
+    startDragOut(event.clientX, event.clientY);
+  };
+
   return (
-    <article aria-label={`Capsule: ${capsule.displayName}`} className="lk-capsule-row">
-      <span aria-hidden="true" className="lk-capsule-icon">
-        ⬡
-      </span>
-      <div className="lk-capsule-info">
-        <div className="lk-capsule-name" title={capsule.displayName}>
-          {capsule.displayName}
-        </div>
-        <StatusBadge state={capsule.lifecycleState} />
-      </div>
-      <CapsuleRowActions
-        capsule={capsule}
-        busy={busy}
-        busyKind={busyKind}
-        onStart={onStart}
-        onCancel={onCancel}
-        onDisconnect={onDisconnect}
-        onHealth={onHealth}
-      />
-    </article>
+    <>
+      <article aria-label={`Capsule: ${capsule.displayName}`} className="lk-capsule-row">
+        <button
+          type="button"
+          className="lk-capsule-drag-handle"
+          aria-label={`Drag capsule ${capsule.displayName} to workspace`}
+          title="Drag to the workspace to create a connector card"
+          onPointerDown={onPointerDown}
+          onMouseDown={onMouseDown}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          draggable
+        >
+          <span aria-hidden="true" className="lk-capsule-icon">
+            ⬡
+          </span>
+          <span className="lk-capsule-info">
+            <span className="lk-capsule-name" title={capsule.displayName}>
+              {capsule.displayName}
+            </span>
+            <StatusBadge state={capsule.lifecycleState} />
+          </span>
+        </button>
+        <CapsuleRowActions
+          capsule={capsule}
+          busy={busy}
+          busyKind={busyKind}
+          onStart={onStart}
+          onCancel={onCancel}
+          onDisconnect={onDisconnect}
+          onHealth={onHealth}
+        />
+      </article>
+      {dragGhost !== null
+        ? createPortal(
+            <div
+              className="lk-connector-drag-ghost"
+              style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}
+              aria-hidden="true"
+            >
+              <span className="lk-connector-drag-ghost-icon">▣</span>
+              <span className="lk-connector-drag-ghost-copy">
+                <span>{dragGhost.label}</span>
+                <small>{STATUS_LABELS[dragGhost.state]}</small>
+              </span>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
@@ -744,6 +905,7 @@ interface GraphPageHeaderProps {
   readonly createDialogOpen: boolean;
   readonly combineDialogOpen: boolean;
   readonly combineDisabled: boolean;
+  readonly showBackToWorkspace: boolean;
   readonly loadStatus: string;
   readonly loadError: string | null;
   readonly actionError: string | null;
@@ -760,6 +922,7 @@ function GraphPageHeader({
   createDialogOpen,
   combineDialogOpen,
   combineDisabled,
+  showBackToWorkspace,
   loadStatus,
   loadError,
   actionError,
@@ -776,11 +939,11 @@ function GraphPageHeader({
       <header className="lk-header">
         <h1 className="lk-title">Local Knowledge Connector</h1>
         <div className="lk-header-actions">
-          {/* Declared exit back to the desktop shell — the route is reachable
-              from the LeftRail but had no way back (uiux-fix F032, C056). */}
-          <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
-            Back to Workspace
-          </Link>
+          {showBackToWorkspace ? (
+            <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
+              Back to Workspace
+            </Link>
+          ) : null}
           {/* aria-disabled instead of native disabled: the button stays
               focusable, so keyboard/SR users can reach the reason why it is
               inactive (uiux-fix F032, C227). */}
@@ -848,6 +1011,18 @@ function capsuleAnnouncement(capsules: readonly CapsuleListEntry[]): string {
 }
 
 export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
+  const { onOpenCapsule: externalOpenCapsule, showBackToWorkspace = true } = props;
+  const [activeCapsuleId, setActiveCapsuleId] = useState<KnowledgeCapsuleId | null>(null);
+  const handleOpenCapsule = useCallback(
+    (id: KnowledgeCapsuleId): void => {
+      if (externalOpenCapsule !== undefined) {
+        externalOpenCapsule(id);
+        return;
+      }
+      setActiveCapsuleId(id);
+    },
+    [externalOpenCapsule],
+  );
   const {
     capsules,
     loadStatus,
@@ -865,7 +1040,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
     handleDisconnect,
     handleOpenHealth,
     handleCreateCapsule,
-  } = useConnectorGraph(props);
+  } = useConnectorGraph({ ...props, onOpenCapsule: handleOpenCapsule });
   const isLoading = loadStatus === "loading";
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [combineDialogOpen, setCombineDialogOpen] = useState(false);
@@ -887,6 +1062,30 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
     reload();
   }
 
+  if (activeCapsuleId !== null && externalOpenCapsule === undefined) {
+    return (
+      <div className="lk-page">
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost lk-btn-lg lk-back-inline"
+          onClick={() => {
+            setActiveCapsuleId(null);
+            reload();
+          }}
+        >
+          Back to capsules
+        </button>
+        <CapsuleDetail
+          capsuleId={activeCapsuleId}
+          onDeleted={() => {
+            setActiveCapsuleId(null);
+            reload();
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="lk-page">
       <GraphPageHeader
@@ -894,6 +1093,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         createDialogOpen={createDialogOpen}
         combineDialogOpen={combineDialogOpen}
         combineDisabled={isLoading || capsules.length === 0}
+        showBackToWorkspace={showBackToWorkspace}
         loadStatus={loadStatus}
         loadError={loadError}
         actionError={actionError}

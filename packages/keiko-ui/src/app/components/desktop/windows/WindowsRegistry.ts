@@ -24,6 +24,8 @@ export type WindowType =
   | "resources"
   // Epic #189 Slice 3 — Local Knowledge connector picker window.
   | "connector"
+  // Local Knowledge Connector hub. Singleton tool window: manages capsules inside the Workspace.
+  | "localKnowledge"
   // Epic #270 — Quality Intelligence: a singleton hub (start runs + run list) plus per-run result
   // cards. QI lives inside the Workspace like every other window, not as a full-page route.
   | "quality"
@@ -362,15 +364,27 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // Epic #189 Slice 3 — compact connector picker window. The user selects a ready capsule or
   // capsule-set; the selection is stored in cfg so the relationship-edge binding can read it.
   connector: {
-    title: "Connector",
-    icon: "plugins",
+    title: "Knowledge Connector",
+    icon: "server",
     accent: true,
     desc: "Pick a Local Knowledge connector",
     w: 320,
     h: 380,
-    min: { w: 280, h: 300 },
+    min: { w: 220, h: 180 },
     config: [],
     cta: "Select connector",
+  },
+  localKnowledge: {
+    title: "Local Knowledge",
+    icon: "localKnowledge",
+    accent: true,
+    desc: "Manage knowledge capsules",
+    w: 720,
+    h: 560,
+    min: { w: 360, h: 320 },
+    tiny: { w: 300, h: 220 },
+    tool: true,
+    singleton: true,
   },
   // Epic #270 — Quality Intelligence hub. Singleton tool window: start a run (requirements or
   // workspace folder) and browse past runs. Selecting/finishing a run opens a `qiRun` result card.
@@ -486,6 +500,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
   "chatHistory",
   "connector",
+  "localKnowledge",
   "figma",
   "files",
   "editor",

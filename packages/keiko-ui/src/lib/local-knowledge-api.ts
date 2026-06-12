@@ -255,7 +255,7 @@ export async function disconnectCapsule(
 export interface SourceIndexStats {
   readonly sourceId: string;
   readonly displayName: string;
-  readonly scope: { readonly kind: KnowledgeSourceScope["kind"] };
+  readonly scope: KnowledgeSourceScope;
   readonly indexedCount: number;
   readonly failedCount: number;
   readonly skippedCount: number;

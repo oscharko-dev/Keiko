@@ -5,11 +5,30 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CapsuleActions } from "./capsule-actions";
 import type { CapsuleActionsProps } from "./capsule-actions";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type { CapsuleActionResponse, CapsuleDetailResponse } from "@/lib/local-knowledge-api";
+
+vi.mock("@/lib/api", () => ({
+  ApiError: class ApiError extends Error {
+    constructor(
+      public readonly code: string,
+      message: string,
+      public readonly status: number,
+    ) {
+      super(message);
+    }
+  },
+  fetchProjects: vi.fn(),
+  fetchFilesTree: vi.fn(),
+}));
+
+import { fetchFilesTree, fetchProjects } from "@/lib/api";
+
+const mockFetchProjects = vi.mocked(fetchProjects);
+const mockFetchFilesTree = vi.mocked(fetchFilesTree);
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -25,6 +44,19 @@ function okAction(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse>
 
 const DEFAULT_ID = makeCapsuleId("42");
 const DEFAULT_NAME = "My Knowledge Base";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockFetchProjects.mockResolvedValue({ projects: [] });
+  mockFetchFilesTree.mockImplementation((root: string, path = "") =>
+    Promise.resolve({
+      root,
+      path,
+      entries: [],
+      truncated: false,
+    }),
+  );
+});
 
 function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActionsProps {
   return {
@@ -108,6 +140,132 @@ describe("CapsuleActions — connect source", () => {
         kind: "files",
         rootPath: "/repo",
         files: ["src/app.ts", "README.md"],
+      });
+    });
+  });
+
+  it("lets the user browse and select a folder instead of typing the path manually", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    mockFetchProjects.mockResolvedValue({
+      projects: [
+        {
+          path: "/repo",
+          name: "Repo",
+          available: true,
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+        },
+      ],
+    });
+    mockFetchFilesTree.mockImplementation((root: string, path = "") =>
+      Promise.resolve({
+        root,
+        path,
+        entries:
+          path.length === 0
+            ? [
+                {
+                  name: "docs",
+                  path: "docs",
+                  kind: "directory",
+                  sizeBytes: 0,
+                  modifiedAt: 1,
+                  extension: "",
+                  readable: true,
+                  symlink: false,
+                },
+              ]
+            : [],
+        truncated: false,
+      }),
+    );
+
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    await user.click(screen.getByRole("button", { name: /^browse$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
+    await user.click(within(dialog).getByRole("button", { name: "Repo" }));
+    await waitFor(() => {
+      expect(within(dialog).getByRole("button", { name: /docs/i })).toBeInTheDocument();
+    });
+    await user.click(within(dialog).getByRole("button", { name: /docs/i }));
+    await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
+
+    expect(screen.getByLabelText(/absolute folder path to connect/i)).toHaveValue("/repo/docs");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "folder",
+        rootPath: "/repo/docs",
+        recursive: true,
+      });
+    });
+  });
+
+  it("lets the user browse and select files while preserving the root-relative file list", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    mockFetchProjects.mockResolvedValue({
+      projects: [
+        {
+          path: "/repo",
+          name: "Repo",
+          available: true,
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+        },
+      ],
+    });
+    mockFetchFilesTree.mockImplementation((root: string, path = "") =>
+      Promise.resolve({
+        root,
+        path,
+        entries:
+          path.length === 0
+            ? [
+                {
+                  name: "README.md",
+                  path: "README.md",
+                  kind: "file",
+                  sizeBytes: 12,
+                  modifiedAt: 1,
+                  extension: ".md",
+                  readable: true,
+                  symlink: false,
+                },
+              ]
+            : [],
+        truncated: false,
+      }),
+    );
+
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    await user.selectOptions(screen.getByLabelText(/connect source/i), "files");
+    await user.click(screen.getByRole("button", { name: /^browse$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
+    await user.click(within(dialog).getByRole("button", { name: "Repo" }));
+    await waitFor(() => {
+      expect(within(dialog).getByLabelText(/README.md/i)).toBeInTheDocument();
+    });
+    await user.click(within(dialog).getByLabelText(/README.md/i));
+    await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
+
+    expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
+      "/repo",
+    );
+    expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue("README.md");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "files",
+        rootPath: "/repo",
+        files: ["README.md"],
       });
     });
   });
@@ -221,6 +379,35 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
       expect(deleteCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
     expect(onActionComplete).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("routes successful delete through onDeleted instead of reloading the deleted capsule", async () => {
+    const user = userEvent.setup();
+    const response: CapsuleActionResponse = {
+      ok: true,
+      capsuleId: DEFAULT_ID,
+      cleanupVerified: true,
+    };
+    const deleteCapsuleImpl = vi.fn().mockResolvedValue(response);
+    const onDeleted = vi.fn();
+    const onActionComplete = vi.fn();
+    render(
+      <CapsuleActions
+        {...defaultProps({ deleteCapsuleImpl, onActionComplete, onDeleted })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox"), DEFAULT_NAME);
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => {
+      expect(onDeleted).toHaveBeenCalledWith(response);
+    });
+    expect(onActionComplete).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

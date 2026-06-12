@@ -1,10 +1,15 @@
 import { createRef } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { Workspace } from "./Workspace";
+import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow } from "./windows/types";
+import {
+  LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+  serializeLocalKnowledgeConnectorDrag,
+} from "../../local-knowledge/connector-drag";
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -126,6 +131,19 @@ describe("Workspace card connections", () => {
     expect(screen.getByRole("main", { name: "Workspace surface" })).toBeInTheDocument();
   });
 
+  it("does not expose connection ports on the Local Knowledge management window", () => {
+    const wins = [appWindow({ id: "localKnowledge", type: "localKnowledge", z: 1 })];
+    render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" })).toBeNull();
+  });
+
   it("confirms a valid target even when a target child stops pointer bubbling", () => {
     const confirmConnect = vi.fn();
     const workspaceApi = api({ confirmConnect });
@@ -212,6 +230,141 @@ describe("Workspace card connections", () => {
     const style = (scene as HTMLElement).style;
     expect(style.zoom).toBe("1");
     expect(style.transform).not.toContain("scale(");
+  });
+
+  it("creates a preselected connector card when a Local Knowledge capsule is dropped", () => {
+    const add = vi.fn(() => "conn-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const dataTransfer = {
+      types: [LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE],
+      getData: vi.fn((type: string) =>
+        type === LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE
+          ? serializeLocalKnowledgeConnectorDrag({
+              kind: "capsule",
+              id: "cap-abc",
+              label: "First KC",
+              lifecycleState: "ready",
+            })
+          : "",
+      ),
+      dropEffect: "none",
+    };
+
+    const dropEvent = createEvent.drop(surface, { dataTransfer });
+    Object.defineProperties(dropEvent, {
+      clientX: { value: 450 },
+      clientY: { value: 260 },
+    });
+    fireEvent(surface, dropEvent);
+
+    expect(add).toHaveBeenCalledWith("connector", {
+      presentation: "node",
+      selectedKind: "capsule",
+      selectedId: "cap-abc",
+      selectedLabel: "First KC",
+      selectedState: "ready",
+    });
+    expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
+  });
+
+  it("creates the same connector node from the pointer drag-out event", () => {
+    const add = vi.fn(() => "conn-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, {
+        detail: {
+          payload: {
+            kind: "capsule",
+            id: "cap-abc",
+            label: "First KC",
+            lifecycleState: "ready",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("connector", {
+      presentation: "node",
+      selectedKind: "capsule",
+      selectedId: "cap-abc",
+      selectedLabel: "First KC",
+      selectedState: "ready",
+    });
+    expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
+  });
+
+  it("maps a workspace drop point through pan and zoom into connector window origin", () => {
+    const origin = workspaceDropPointToWindowOrigin({
+      clientX: 450,
+      clientY: 260,
+      rect: {
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect,
+      view: { x: 20, y: 30, zoom: 2 },
+    });
+
+    expect(origin).toEqual({ x: 80, y: 81 });
   });
 
   it("starts a connection from a port with Enter key activation", async () => {

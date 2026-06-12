@@ -85,7 +85,7 @@ const FULL_DETAIL: CapsuleDetailData = {
     {
       sourceId: "src-1",
       displayName: "Project Docs",
-      scope: { kind: "folder" },
+      scope: { kind: "folder", rootPath: "/tmp/project-docs", recursive: true },
       // Use distinct counts from the job below so getByText doesn't find duplicates
       indexedCount: 8,
       failedCount: 1,
@@ -141,6 +141,23 @@ describe("CapsuleDetail — overview section", () => {
         screen.getByRole("heading", { level: 1, name: "My Test Capsule" }),
       ).toBeInTheDocument();
     });
+  });
+
+  it("renders a stable back path when the selected capsule was deleted", async () => {
+    const fetchDetailImpl = vi
+      .fn()
+      .mockRejectedValue(new Error("Capsule not found: cap-test-1 (NOT_FOUND)"));
+    render(<CapsuleDetail fetchDetailImpl={fetchDetailImpl} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("This capsule no longer exists.");
+    });
+
+    expect(screen.getByRole("link", { name: /back to capsules/i })).toHaveAttribute(
+      "href",
+      "/local-knowledge",
+    );
+    expect(screen.queryByText(/Capsule not found: cap-test-1/i)).toBeNull();
   });
 
   it("renders capsule description in the overview", async () => {
@@ -231,6 +248,44 @@ describe("CapsuleDetail — overview section", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Index status section
+// ---------------------------------------------------------------------------
+
+describe("CapsuleDetail — index status section", () => {
+  it("renders indexed documents as successful documents over discovered documents", async () => {
+    const baseJob = FULL_DETAIL.indexingJobs[0];
+    if (baseJob === undefined) throw new Error("test fixture must include an indexing job");
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: {
+        ...BASE_HEALTH,
+        documentCount: 80,
+        failedDocuments: 0,
+        skippedDocuments: 4,
+        unsupportedDocuments: 4,
+      },
+      indexingJobs: [
+        {
+          ...baseJob,
+          totalDocuments: 80,
+          processedDocuments: 76,
+          failedDocuments: 0,
+          skippedDocuments: 4,
+        },
+      ],
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Indexed documents")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("76 / 80")).toBeInTheDocument();
+    expect(screen.getByText("0 failed, 4 skipped")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Sources section
 // ---------------------------------------------------------------------------
 
@@ -302,12 +357,12 @@ describe("CapsuleDetail — health diagnostics section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(withDiag)} />);
 
     await waitFor(() => {
-      expect(screen.getByText("PARSE_WARN_001")).toBeInTheDocument();
+      expect(screen.getAllByText("PARSE_WARN_001").length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByText("PARSE_ERR_002")).toBeInTheDocument();
-    expect(screen.getByText("Page layout could not be determined")).toBeInTheDocument();
-    expect(screen.getByText("Unsupported media type detected")).toBeInTheDocument();
+    expect(screen.getAllByText("PARSE_ERR_002").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Page layout could not be determined").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Unsupported media type detected").length).toBeGreaterThan(0);
     // Page number rendered
     expect(screen.getByText("p.3")).toBeInTheDocument();
   });
@@ -326,7 +381,7 @@ describe("CapsuleDetail — health diagnostics section", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Diagnostic 24")).toBeInTheDocument();
+      expect(screen.getAllByText("Diagnostic 24").length).toBeGreaterThan(0);
     });
 
     expect(screen.queryByText("Diagnostic 29")).toBeNull();
@@ -344,7 +399,7 @@ describe("CapsuleDetail — indexing jobs section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Succeeded")).toBeInTheDocument();
+      expect(screen.getAllByText("Succeeded").length).toBeGreaterThan(0);
     });
 
     // Counts are distinct from source counts (9/2/3 vs 8/1/1) so getByText is unambiguous
@@ -380,11 +435,11 @@ describe("CapsuleDetail — indexing jobs section", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByText("Succeeded")).toHaveLength(25);
+      expect(screen.getAllByText("Succeeded")).toHaveLength(26);
     });
 
     await user.click(screen.getByRole("button", { name: /show 3 more jobs/i }));
-    expect(screen.getAllByText("Succeeded")).toHaveLength(28);
+    expect(screen.getAllByText("Succeeded")).toHaveLength(29);
   });
 });
 

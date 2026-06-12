@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  CSSProperties,
+  DragEvent as ReactDragEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  RefObject,
+} from "react";
 import { Icons } from "./Icons";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
@@ -11,12 +17,49 @@ import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
+import {
+  LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  parseLocalKnowledgeConnectorDrag,
+  type LocalKnowledgeConnectorDragPayload,
+  type LocalKnowledgeConnectorDropDetail,
+} from "../../local-knowledge/connector-drag";
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
   readonly wsRef: RefObject<HTMLDivElement>;
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
+}
+
+export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
+
+export function workspaceDropPointToWindowOrigin({
+  clientX,
+  clientY,
+  rect,
+  view,
+}: {
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly rect: DOMRect;
+  readonly view: UseWorkspaceResult["view"];
+}): { x: number; y: number } {
+  return {
+    x: Math.round((clientX - rect.left - view.x) / view.zoom - KNOWLEDGE_CONNECTOR_NODE_SIZE.w / 2),
+    y: Math.round((clientY - rect.top - view.y) / view.zoom - 28),
+  };
+}
+
+function isLocalKnowledgeConnectorDropDetail(
+  detail: unknown,
+): detail is LocalKnowledgeConnectorDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return payloadRecord["kind"] === "capsule" && typeof payloadRecord["id"] === "string";
 }
 
 function isInteractive(target: EventTarget | null): boolean {
@@ -182,9 +225,71 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     }
   };
 
+  const addKnowledgeConnectorNode = useCallback(
+    (
+      payload: LocalKnowledgeConnectorDragPayload,
+      clientX: number,
+      clientY: number,
+      rect: DOMRect,
+    ): void => {
+      const id = api.add("connector", {
+        presentation: "node",
+        selectedKind: payload.kind,
+        selectedId: payload.id,
+        ...(payload.label !== undefined ? { selectedLabel: payload.label } : {}),
+        ...(payload.lifecycleState !== undefined ? { selectedState: payload.lifecycleState } : {}),
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+        }),
+        ...KNOWLEDGE_CONNECTOR_NODE_SIZE,
+      });
+    },
+    [api, view],
+  );
+
+  useEffect(() => {
+    const handleConnectorDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isLocalKnowledgeConnectorDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+        return;
+      }
+      addKnowledgeConnectorNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, handleConnectorDrop);
+    return () => {
+      window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, handleConnectorDrop);
+    };
+  }, [addKnowledgeConnectorNode, wsRef]);
+
+  const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
+    if (parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const onDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
+    const payload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
+    if (payload === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    addKnowledgeConnectorNode(payload, event.clientX, event.clientY, rect);
+  };
+
   const empty = wins !== null && wins.length === 0;
 
   return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the workspace landmark is also the OS-style drop target for connector payloads.
     <main
       className="workspace"
       ref={wsRef}
@@ -192,6 +297,8 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       data-connecting={connecting !== null ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />

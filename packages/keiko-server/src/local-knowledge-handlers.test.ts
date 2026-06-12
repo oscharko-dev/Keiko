@@ -231,8 +231,10 @@ describe("local-knowledge handlers", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(201);
     // The freshly attached source is surfaced in the capsule detail body.
     expect(JSON.stringify(result.body)).toContain("Manuals");
-    expect(JSON.stringify(result.body)).toContain('"scope":{"kind":"folder"}');
-    expect(JSON.stringify(result.body)).not.toContain(docsRoot);
+    expect(result.body).toMatchObject({
+      sources: [{ scope: { kind: "folder", recursive: true } }],
+    });
+    expect(JSON.stringify(result.body)).toContain("manuals");
   });
 
   it("connect is idempotent: the same folder connected twice yields exactly one source", async () => {
@@ -950,7 +952,7 @@ describe("local-knowledge handlers", () => {
               },
             });
           }
-          return Promise.resolve({ ok: false, kind: "rate-limited" });
+          return Promise.resolve({ ok: false, kind: "invalid-response" });
         },
       ),
     };

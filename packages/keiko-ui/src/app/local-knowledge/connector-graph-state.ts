@@ -63,6 +63,7 @@ function useCapsuleActions(
   startIndexingImpl: typeof startIndexing,
   cancelIndexingImpl: typeof cancelIndexing,
   disconnectCapsuleImpl: typeof disconnectCapsule,
+  onOpenCapsule: ((id: KnowledgeCapsuleId) => void) | undefined,
 ): {
   actionBusy: KnowledgeCapsuleId | null;
   actionKind: RowActionKind | null;
@@ -110,6 +111,10 @@ function useCapsuleActions(
     void runAction(id, "disconnect", () => disconnectCapsuleImpl(id));
   }
   function handleOpenHealth(id: KnowledgeCapsuleId): void {
+    if (onOpenCapsule !== undefined) {
+      onOpenCapsule(id);
+      return;
+    }
     router.push(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(id)}`);
   }
 
@@ -170,6 +175,7 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     startIndexingImpl = startIndexing,
     cancelIndexingImpl = cancelIndexing,
     disconnectCapsuleImpl = disconnectCapsule,
+    onOpenCapsule,
   } = props;
 
   const { capsules, loadStatus, loadError, reload } = useCapsuleLoader(fetchCapsulesImpl);
@@ -182,7 +188,13 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     handleCancelIndexing,
     handleDisconnect,
     handleOpenHealth,
-  } = useCapsuleActions(reload, startIndexingImpl, cancelIndexingImpl, disconnectCapsuleImpl);
+  } = useCapsuleActions(
+    reload,
+    startIndexingImpl,
+    cancelIndexingImpl,
+    disconnectCapsuleImpl,
+    onOpenCapsule,
+  );
   const { creating, createError, clearCreateError, handleCreateCapsule } = useCapsuleCreate(
     createCapsuleImpl,
     reload,

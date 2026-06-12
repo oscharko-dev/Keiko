@@ -26,6 +26,8 @@ export interface ConnectorGraphProps {
   readonly startIndexingImpl?: typeof startIndexing;
   readonly cancelIndexingImpl?: typeof cancelIndexing;
   readonly disconnectCapsuleImpl?: typeof disconnectCapsule;
+  readonly showBackToWorkspace?: boolean;
+  readonly onOpenCapsule?: (id: KnowledgeCapsuleId) => void;
 }
 
 export interface ConnectorGraphState {

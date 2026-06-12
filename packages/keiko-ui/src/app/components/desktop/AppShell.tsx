@@ -182,6 +182,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "activity",
   "notifications",
   "resources",
+  "localKnowledge",
   "quality",
   "relationships",
 ];
@@ -569,17 +570,22 @@ function AppShellInner(): ReactNode {
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
 
-  // uiux-fix F008 C220 — /relationships used to be a full page until #532 turned it into a
-  // workspace window; the SPA fallback now serves old bookmarks an empty desktop with no hint.
-  // Once the workspace is hydrated, open the Relationships window via the existing tool seam
-  // (idempotent: only when not already open) and normalize the URL back to "/".
+  // uiux-fix F008 C220 — some tool surfaces used to be full pages. Once the workspace is hydrated,
+  // open their singleton window via the existing tool seam (idempotent: only when not already open)
+  // and normalize the URL back to "/".
   const deepLinkHandled = useRef(false);
   useEffect(() => {
     if (deepLinkHandled.current || ws.wins === null) return;
     deepLinkHandled.current = true;
     const path = window.location.pathname.replace(/\/+$/u, "");
-    if (path !== "/relationships") return;
-    if (!ws.wins.some((w) => w.type === "relationships")) onTool("relationships");
+    const deepLinkTool =
+      path === "/relationships"
+        ? "relationships"
+        : path === "/local-knowledge"
+          ? "localKnowledge"
+          : null;
+    if (deepLinkTool === null) return;
+    if (!ws.wins.some((w) => w.type === deepLinkTool)) onTool(deepLinkTool);
     window.history.replaceState(null, "", "/");
   }, [ws.wins, onTool]);
 

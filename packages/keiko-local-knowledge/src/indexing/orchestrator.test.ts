@@ -1064,7 +1064,7 @@ describe("runIndexingJob — partial adapter failure", () => {
     const adapter = scriptedAdapter({
       responder: (req) => {
         if (req.input.startsWith("Lorem")) {
-          return { ok: false, kind: "transport" };
+          return { ok: false, kind: "invalid-response" };
         }
         return {
           ok: true,

@@ -1,7 +1,7 @@
 // Issue #189 — tests for the LeftRail navigation links.
-// Verifies that the remaining page-route links (MemoriaViva, Local Knowledge) render with correct
-// href and accessible name. Epic #270 — Quality Intelligence is now a Workspace tool window (not a
-// page route): it renders as a tool button that calls onTool("quality").
+// Verifies that the remaining page-route link (MemoriaViva) renders with correct href and
+// accessible name. Quality Intelligence, Local Knowledge, and Relationships are Workspace tool
+// windows: each renders as a tool button that calls onTool(...).
 // Epic #518 — also verifies aria-pressed state on toggle buttons (WCAG 4.1.2).
 
 import { render, screen } from "@testing-library/react";
@@ -82,11 +82,34 @@ describe("LeftRail — page-route links", () => {
     );
   });
 
-  it("renders the Local Knowledge link with correct href and accessible name", () => {
+  it("renders Local Knowledge as a tool button (not a page-route link)", () => {
     renderRail();
-    const link = screen.getByRole("link", { name: "Local Knowledge" });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/local-knowledge");
+    expect(screen.getByRole("button", { name: "Local Knowledge" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Local Knowledge" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Local Knowledge window via onTool('localKnowledge') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Local Knowledge" }));
+    expect(onTool).toHaveBeenCalledWith("localKnowledge");
+  });
+
+  it("marks the Local Knowledge button pressed when its window is open", () => {
+    renderRail(new Set(["localKnowledge"]));
+    expect(screen.getByRole("button", { name: "Local Knowledge" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   // Epic #532 — Relationships mirrors Quality Intelligence: a singleton tool button, not a route.
@@ -146,7 +169,7 @@ describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
     expect(settingsBtn).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("route Links (MemoriaViva, QI, LK) do NOT have aria-pressed", () => {
+  it("route links do NOT have aria-pressed", () => {
     renderRail();
     const links = screen.getAllByRole("link");
     for (const link of links) {

@@ -304,6 +304,13 @@ export const Icons = {
       <path d="M9 7v14M9 11h6" />
     </Ico>
   ),
+  server: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <rect x="4" y="4.5" width="16" height="6" rx="1.7" />
+      <rect x="4" y="13.5" width="16" height="6" rx="1.7" />
+      <path d="M8 7.5h.01M8 16.5h.01M12 7.5h4M12 16.5h4" />
+    </Ico>
+  ),
 } as const;
 
 export type IconName = keyof typeof Icons;

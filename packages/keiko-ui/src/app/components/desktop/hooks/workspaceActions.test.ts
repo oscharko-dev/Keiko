@@ -574,6 +574,26 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
   });
 });
 
+describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
+  it("opens one Local Knowledge tool window and closes it on the next toggle", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { toggleTool } = makeMutations({
+      setWins,
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("localKnowledge");
+    expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(1);
+
+    toggleTool("localKnowledge");
+    expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
+  });
+});
+
 // ─── Epic #729 #731 — linkedAllFilesRoots (N+1 multiple folders reader) ──────────
 
 describe("linkedAllFilesRoots (Epic #729 #731)", () => {

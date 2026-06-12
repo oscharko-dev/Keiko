@@ -28,6 +28,7 @@ import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
+import { ConnectorGraph } from "../../../local-knowledge/connector-graph";
 import { buildConnectedRunSources } from "./quality-intelligence/connectedSources";
 import type { QualityIntelligenceInlineSource } from "@oscharko-dev/keiko-contracts";
 
@@ -185,6 +186,7 @@ registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
+registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
@@ -341,14 +343,23 @@ registerWindowRender("figma", (cfg, ctx) => {
 // Epic #189 Slice 3 M2 — connector picker window. updateCfg persists selectedKind/selectedId into
 // the window's cfg so the relationship-edge binding (M3) can read the selection.
 registerWindowRender("connector", (cfg, ctx) => {
+  const presentation = str(cfg, "presentation");
   const selectedKind = str(cfg, "selectedKind");
   const selectedId = str(cfg, "selectedId");
+  const selectedLabel = str(cfg, "selectedLabel");
+  const selectedState = str(cfg, "selectedState");
   return (
     <ConnectorPickerWidget
+      presentation={presentation}
       selectedKind={selectedKind}
       selectedId={selectedId}
+      selectedLabel={selectedLabel}
+      selectedState={selectedState}
       onSelect={(patch) => {
         ctx.updateCfg(patch);
+      }}
+      onManageConnectors={() => {
+        ctx.openWindow("localKnowledge");
       }}
     />
   );

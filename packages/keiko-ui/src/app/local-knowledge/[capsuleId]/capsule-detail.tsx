@@ -6,7 +6,7 @@
 // State is split into capsule-detail-state.ts to keep each file under 400 LOC.
 
 import { useState, type ReactNode } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type {
   KnowledgeCapsuleId,
   ParserDiagnostic,
@@ -16,6 +16,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CapsuleDetail as CapsuleDetailData,
+  CapsuleActionResponse,
   SourceIndexStats,
 } from "@/lib/local-knowledge-api";
 import Link from "next/link";
@@ -42,6 +43,50 @@ function formatTs(epochMs: number): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100).toString()}%`;
+}
+
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds.toString()}s`;
+  return `${minutes.toString()}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function scopeLocation(scope: SourceIndexStats["scope"]): string {
+  if (scope.kind === "folder") return scope.rootPath;
+  if (scope.kind === "repository") return scope.repositoryRoot;
+  return `${scope.rootPath} (${scope.files.length.toString()} selected files)`;
+}
+
+function sourceTotal(src: SourceIndexStats): number {
+  return src.indexedCount + src.failedCount + src.skippedCount;
+}
+
+function latestJob(data: CapsuleDetailData): IndexingJobRecord | undefined {
+  return data.indexingJobs[0];
+}
+
+function completedDocuments(job: IndexingJobRecord | undefined): number {
+  if (job === undefined) return 0;
+  return job.processedDocuments + job.failedDocuments + job.skippedDocuments;
+}
+
+function indexedDocuments(data: CapsuleDetailData): number {
+  return Math.max(
+    0,
+    data.health.documentCount - data.health.failedDocuments - data.health.skippedDocuments,
+  );
+}
+
+function progressStyle(value: number): { readonly width: string } {
+  return { width: formatPercent(value) };
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +128,150 @@ function MoreRowsButton({
     <button type="button" className="lk-btn lk-btn-ghost" onClick={onToggle}>
       {showAll ? `Show fewer ${noun}` : `Show ${hiddenCount.toString()} more ${noun}`}
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IndexingStatusSection
+// ---------------------------------------------------------------------------
+
+function MetricCard({
+  label,
+  value,
+  meta,
+  tone = "neutral",
+}: {
+  label: string;
+  value: ReactNode;
+  meta: ReactNode;
+  tone?: "neutral" | "ok" | "warn" | "danger";
+}): ReactNode {
+  return (
+    <div className="lkd-metric-card" data-tone={tone}>
+      <span className="lkd-metric-label">{label}</span>
+      <strong className="lkd-metric-value">{value}</strong>
+      <span className="lkd-metric-meta">{meta}</span>
+    </div>
+  );
+}
+
+function ProgressBar({
+  value,
+  label,
+  tone = "ok",
+}: {
+  value: number;
+  label: string;
+  tone?: "ok" | "warn" | "danger";
+}): ReactNode {
+  return (
+    <div className="lkd-progress" role="img" aria-label={`${label}: ${formatPercent(value)}`}>
+      <span className="lkd-progress-fill" data-tone={tone} style={progressStyle(value)} />
+    </div>
+  );
+}
+
+function partialIndexMessage(data: CapsuleDetailData, job: IndexingJobRecord | undefined): string {
+  const missingVectors = data.health.chunkCount - data.health.vectorCount;
+  if (job?.lastError?.code === "EMBEDDING_ADAPTER_FAILED") {
+    return `Embedding stopped early: ${job.lastError.message}. ${missingVectors.toString()} chunks still need vectors.`;
+  }
+  if (missingVectors > 0) {
+    return `${missingVectors.toString()} chunks still need vectors before retrieval can cover the full source.`;
+  }
+  if (data.health.unsupportedDocuments > 0) {
+    return `${data.health.unsupportedDocuments.toString()} documents need a different extraction path before they can be indexed.`;
+  }
+  return "Index and vectors are aligned for the current source set.";
+}
+
+function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode {
+  const job = latestJob(data);
+  const total = job?.totalDocuments ?? data.health.documentCount;
+  const completed = completedDocuments(job);
+  const indexedDocumentCount = indexedDocuments(data);
+  const documentProgress = total > 0 ? completed / total : 0;
+  const indexedProgress =
+    data.health.chunkCount > 0 ? data.health.vectorCount / data.health.chunkCount : 0;
+  const missingVectors = Math.max(0, data.health.chunkCount - data.health.vectorCount);
+  const jobDuration =
+    job !== undefined
+      ? formatDuration((job.finishedAt ?? Date.now()) - job.startedAt)
+      : "No job recorded";
+  const elapsedMs = job !== undefined ? Math.max(Date.now() - job.startedAt, 1) : 0;
+  const docsPerMs = completed > 0 ? completed / elapsedMs : 0;
+  const etaMs = docsPerMs > 0 ? Math.max(0, total - completed) / docsPerMs : 0;
+  const remainingLabel =
+    job?.status === "running" && total > 0 && completed > 0
+      ? `ETA ${formatDuration(etaMs)}`
+      : jobDuration;
+  const issueTone =
+    missingVectors > 0 || data.health.failedDocuments > 0
+      ? job?.lastError !== undefined
+        ? "danger"
+        : "warn"
+      : "ok";
+
+  return (
+    <section aria-labelledby="lkd-index-status-heading" className="lkd-status-section">
+      <div className="lkd-section-title-row">
+        <SectionHeading>
+          <span id="lkd-index-status-heading">Index status</span>
+        </SectionHeading>
+        <span className="lkd-live-note" aria-live="polite">
+          {job?.status === "running" ? "Updating every 2s" : "Latest run"}
+        </span>
+      </div>
+      <div className="lkd-metric-grid">
+        <MetricCard
+          label="Indexed documents"
+          value={`${indexedDocumentCount.toString()} / ${data.health.documentCount.toString()}`}
+          meta={`${data.health.failedDocuments.toString()} failed, ${data.health.skippedDocuments.toString()} skipped`}
+          tone={
+            data.health.failedDocuments > 0
+              ? "danger"
+              : data.health.skippedDocuments > 0
+                ? "warn"
+                : "ok"
+          }
+        />
+        <MetricCard
+          label="Vectors"
+          value={`${data.health.vectorCount.toString()} / ${data.health.chunkCount.toString()}`}
+          meta={
+            missingVectors > 0
+              ? `${missingVectors.toString()} chunks missing vectors`
+              : "All chunks embedded"
+          }
+          tone={missingVectors > 0 ? "danger" : "ok"}
+        />
+        <MetricCard
+          label="Latest job"
+          value={job !== undefined ? JOB_STATUS_LABEL[job.status] : "Not indexed"}
+          meta={remainingLabel}
+          tone={job?.status === "failed" ? "danger" : job?.status === "running" ? "warn" : "neutral"}
+        />
+      </div>
+      <div className="lkd-status-bars">
+        <div className="lkd-status-bar-row">
+          <span>Discovery progress</span>
+          <ProgressBar value={documentProgress} label="Document discovery progress" />
+          <span>{formatPercent(documentProgress)}</span>
+        </div>
+        <div className="lkd-status-bar-row">
+          <span>Retrieval coverage</span>
+          <ProgressBar
+            value={indexedProgress}
+            label="Vector retrieval coverage"
+            tone={missingVectors > 0 ? "danger" : "ok"}
+          />
+          <span>{formatPercent(indexedProgress)}</span>
+        </div>
+      </div>
+      <p className="lkd-status-callout" data-tone={issueTone}>
+        {partialIndexMessage(data, job)}
+      </p>
+    </section>
   );
 }
 
@@ -203,26 +392,51 @@ function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): 
       <SectionHeading>
         <span id="lkd-sources-heading">Sources</span>
       </SectionHeading>
-      <ul className="lkd-list" aria-label="Capsule sources">
-        {sources.map((src) => (
-          <li key={src.sourceId} className="lkd-source-row">
-            <div className="lkd-source-name" title={src.displayName}>
-              {src.displayName}
-            </div>
-            <div className="lkd-source-scope">{src.scope.kind}</div>
-            <div className="lkd-source-counts" aria-label="Document counts">
-              <span className="lkd-count lkd-count-ok" title="Indexed">
-                {src.indexedCount.toString()} indexed
-              </span>
-              <span className="lkd-count lkd-count-fail" title="Failed">
-                {src.failedCount.toString()} failed
-              </span>
-              <span className="lkd-count lkd-count-skip" title="Skipped">
-                {src.skippedCount.toString()} skipped
-              </span>
-            </div>
-          </li>
-        ))}
+      <ul className="lkd-list lkd-source-list" aria-label="Capsule sources">
+        {sources.map((src) => {
+          const total = sourceTotal(src);
+          const location = scopeLocation(src.scope);
+          return (
+            <li key={src.sourceId} className="lkd-source-card">
+              <div className="lkd-source-card-head">
+                <div>
+                  <div className="lkd-source-name" title={src.displayName}>
+                    {src.displayName}
+                  </div>
+                  <div className="lkd-source-path" title={location}>
+                    {location}
+                  </div>
+                </div>
+                <span className="lkd-source-scope">{src.scope.kind}</span>
+              </div>
+              <div className="lkd-source-coverage" role="img" aria-label="Source document coverage">
+                <span
+                  className="lkd-source-segment lkd-source-segment-ok"
+                  style={progressStyle(total > 0 ? src.indexedCount / total : 0)}
+                />
+                <span
+                  className="lkd-source-segment lkd-source-segment-fail"
+                  style={progressStyle(total > 0 ? src.failedCount / total : 0)}
+                />
+                <span
+                  className="lkd-source-segment lkd-source-segment-skip"
+                  style={progressStyle(total > 0 ? src.skippedCount / total : 0)}
+                />
+              </div>
+              <div className="lkd-source-counts" aria-label="Document counts">
+                <span className="lkd-count lkd-count-ok">
+                  {src.indexedCount.toString()} indexed
+                </span>
+                <span className="lkd-count lkd-count-fail">
+                  {src.failedCount.toString()} failed
+                </span>
+                <span className="lkd-count lkd-count-skip">
+                  {src.skippedCount.toString()} skipped
+                </span>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -264,6 +478,42 @@ const DIAG_SEVERITY_LABEL: Record<ParserDiagnosticSeverity, string> = {
   error: "Error",
 };
 
+const MAX_DIAGNOSTIC_GROUPS = 8;
+
+interface DiagnosticGroup {
+  readonly key: string;
+  readonly severity: ParserDiagnosticSeverity;
+  readonly code: string;
+  readonly message: string;
+  readonly count: number;
+}
+
+function diagnosticGroups(diagnostics: readonly ParserDiagnostic[]): readonly DiagnosticGroup[] {
+  const groups = new Map<string, DiagnosticGroup>();
+  for (const diag of diagnostics) {
+    const key = `${diag.severity}\u0000${diag.code}\u0000${diag.message}`;
+    const existing = groups.get(key);
+    groups.set(key, {
+      key,
+      severity: diag.severity,
+      code: diag.code,
+      message: diag.message,
+      count: (existing?.count ?? 0) + 1,
+    });
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+}
+
+function DiagnosticGroupRow({ group }: { group: DiagnosticGroup }): ReactNode {
+  return (
+    <li className="lkd-diag-group" data-severity={group.severity}>
+      <span className="lkd-diag-group-count">{group.count.toString()}x</span>
+      <span className="lkd-diag-code">{group.code}</span>
+      <span className="lkd-diag-message">{group.message}</span>
+    </li>
+  );
+}
+
 function DiagnosticRow({ diag }: { diag: ParserDiagnostic }): ReactNode {
   return (
     <li
@@ -291,6 +541,7 @@ function HealthDiagnosticsSection({
   const { visibleCount, showAll, setShowAll } = useVisibleRows(diagnostics.length);
   const visible = diagnostics.slice(0, visibleCount);
   const hiddenCount = diagnostics.length - visible.length;
+  const groups = diagnosticGroups(diagnostics).slice(0, MAX_DIAGNOSTIC_GROUPS);
 
   return (
     <section aria-labelledby="lkd-diag-heading">
@@ -303,6 +554,11 @@ function HealthDiagnosticsSection({
         </p>
       ) : (
         <>
+          <ul className="lkd-list lkd-diag-group-list" aria-label="Grouped parser diagnostics">
+            {groups.map((group) => (
+              <DiagnosticGroupRow key={group.key} group={group} />
+            ))}
+          </ul>
           <ul className="lkd-list lkd-diag-list" aria-label="Parser diagnostics">
             {visible.map((diag, i) => (
               <DiagnosticRow key={`${diag.code}-${i.toString()}`} diag={diag} />
@@ -333,6 +589,8 @@ const JOB_STATUS_LABEL: Record<IndexingJobStatus, string> = {
 };
 
 function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
+  const duration =
+    job.finishedAt !== undefined ? formatDuration(job.finishedAt - job.startedAt) : "In progress";
   return (
     <li className="lkd-job-row" aria-label={`Job ${job.id}: ${JOB_STATUS_LABEL[job.status]}`}>
       <span className="lkd-job-status" data-status={job.status}>
@@ -349,6 +607,7 @@ function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
           </>
         ) : null}
       </span>
+      <span className="lkd-job-duration">{duration}</span>
       <div className="lkd-source-counts" aria-label="Document counts">
         <span className="lkd-count lkd-count-ok">
           {job.processedDocuments.toString()} processed
@@ -356,6 +615,12 @@ function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
         <span className="lkd-count lkd-count-fail">{job.failedDocuments.toString()} failed</span>
         <span className="lkd-count lkd-count-skip">{job.skippedDocuments.toString()} skipped</span>
       </div>
+      {job.lastError !== undefined ? (
+        <div className="lkd-job-error">
+          <span>{job.lastError.code}</span>
+          <span>{job.lastError.message}</span>
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -396,16 +661,32 @@ function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): 
 // ---------------------------------------------------------------------------
 
 export interface CapsuleDetailProps {
+  readonly capsuleId?: KnowledgeCapsuleId;
+  readonly onDeleted?: (response: CapsuleActionResponse) => void;
   // Injectable fetch seam — defaults to the real BFF helper. Tests pass a mock
   // so they never hit the network, following the ConnectorGraph seam pattern.
   readonly fetchDetailImpl?: typeof import("@/lib/local-knowledge-api").fetchCapsuleDetail;
 }
 
-export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): ReactNode {
+export function CapsuleDetail({
+  capsuleId: providedCapsuleId,
+  onDeleted,
+  fetchDetailImpl,
+}: CapsuleDetailProps = {}): ReactNode {
   const searchParams = useSearchParams();
-  const capsuleId = (searchParams.get("capsuleId") ?? "") as KnowledgeCapsuleId;
+  const router = useRouter();
+  const capsuleId =
+    providedCapsuleId ?? ((searchParams.get("capsuleId") ?? "") as KnowledgeCapsuleId);
 
   const { data, loadStatus, loadError, reload } = useCapsuleDetail(capsuleId, fetchDetailImpl);
+
+  function handleDeleted(response: CapsuleActionResponse): void {
+    if (onDeleted !== undefined) {
+      onDeleted(response);
+      return;
+    }
+    router.push("/local-knowledge");
+  }
 
   if (loadStatus === "loading") {
     return (
@@ -425,6 +706,19 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
           No capsule selected. Open a capsule from the Local Knowledge overview.
           <Link href="/local-knowledge" className="lk-alert-retry">
             Back to Local Knowledge
+          </Link>
+        </div>
+      );
+    }
+    const isMissingCapsule =
+      loadError?.includes("NOT_FOUND") === true ||
+      loadError?.toLowerCase().includes("not found") === true;
+    if (isMissingCapsule) {
+      return (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          This capsule no longer exists. Return to the Local Knowledge overview.
+          <Link href="/local-knowledge" className="lk-alert-retry">
+            Back to capsules
           </Link>
         </div>
       );
@@ -467,8 +761,10 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
         sourceCount={data.sources.length}
         lifecycleState={data.capsule.lifecycleState}
         onActionComplete={reload}
+        onDeleted={handleDeleted}
       />
 
+      <IndexingStatusSection data={data} />
       <OverviewSection data={data} />
       <PrivacySection />
       <SourcesSection sources={data.sources} />

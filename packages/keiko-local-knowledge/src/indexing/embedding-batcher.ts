@@ -95,9 +95,9 @@ async function embedSingleChunkWithModel(
 const TRANSIENT_EMBED_KINDS: ReadonlySet<OpenAIEmbeddingErrorKind> =
   new Set<OpenAIEmbeddingErrorKind>(["rate-limited", "timeout", "transport"]);
 
-const DEFAULT_EMBED_MAX_RETRIES = 2;
-const DEFAULT_EMBED_BASE_DELAY_MS = 200;
-const MAX_EMBED_BACKOFF_MS = 5_000;
+const DEFAULT_EMBED_MAX_RETRIES = 6;
+const DEFAULT_EMBED_BASE_DELAY_MS = 500;
+const MAX_EMBED_BACKOFF_MS = 30_000;
 
 function isTransientOutcome(outcome: OpenAIEmbeddingOutcome): boolean {
   return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);

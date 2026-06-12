@@ -24,20 +24,23 @@ export function useCapsuleDetail(
   const [loadStatus, setLoadStatus] = useState<DetailLoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
     if (capsuleId === "") {
       setData(null);
       setLoadError("No capsule selected.");
       setLoadStatus("error");
       return;
     }
-    setLoadStatus("loading");
-    setLoadError(null);
+    if (opts.quiet !== true) {
+      setLoadStatus("loading");
+      setLoadError(null);
+    }
     try {
       const result = await fetchImpl(capsuleId);
       setData(result);
       setLoadStatus("ready");
     } catch (error) {
+      if (opts.quiet === true) return;
       setLoadError(formatError(error));
       setLoadStatus("error");
     }
@@ -46,6 +49,19 @@ export function useCapsuleDetail(
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const latestJob = data?.indexingJobs[0];
+    const isActive =
+      data?.capsule.lifecycleState === "indexing" ||
+      latestJob?.status === "queued" ||
+      latestJob?.status === "running";
+    if (!isActive) return;
+    const timer = window.setInterval(() => {
+      void load({ quiet: true });
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [data?.capsule.lifecycleState, data?.indexingJobs, load]);
 
   function reload(): void {
     void load();

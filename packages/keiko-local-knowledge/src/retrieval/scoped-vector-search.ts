@@ -28,6 +28,49 @@ import type { KnowledgeStore } from "../store.js";
 
 import { RetrievalError } from "./types.js";
 
+const SEARCH_EXCERPT_MAX_CHARS = 1_600;
+const SEARCH_STOPWORDS = new Set([
+  "a",
+  "about",
+  "and",
+  "are",
+  "auf",
+  "aus",
+  "bei",
+  "das",
+  "der",
+  "die",
+  "ein",
+  "eine",
+  "einen",
+  "einer",
+  "eines",
+  "for",
+  "from",
+  "how",
+  "in",
+  "ist",
+  "mit",
+  "of",
+  "on",
+  "oder",
+  "sagen",
+  "steht",
+  "the",
+  "to",
+  "und",
+  "uber",
+  "ueber",
+  "über",
+  "von",
+  "was",
+  "what",
+  "wie",
+  "zu",
+  "zum",
+  "zur",
+]);
+
 // ─── Public input shape ──────────────────────────────────────────────────────
 // A pre-built scope (single capsule or composed set) reshaped into the union the search
 // needs. `capsuleIds` is non-empty and already contains every capsule the caller wants
@@ -343,7 +386,7 @@ function scoreCapsuleVectors(
 }
 
 function oversampleTopK(topK: number): number {
-  return Math.max(topK, Math.min(topK * 3, topK + 12));
+  return Math.max(topK, Math.min(topK * 8, topK + 64));
 }
 
 function scoreDesc(a: ScoredCandidate, b: ScoredCandidate): number {
@@ -573,7 +616,10 @@ function buildReferences(
     refs.push({
       chunkId: citation.chunkId,
       capsuleId: candidate.capsuleId,
-      score: candidate.score + lexicalMetadataBonus(query, citation),
+      score:
+        candidate.score +
+        lexicalMetadataBonus(query, citation) +
+        lexicalContentBonus(store, query, candidate.capsuleId, citation),
       citation,
     });
   }
@@ -587,7 +633,7 @@ function referenceScoreDesc(a: RetrievalReference, b: RetrievalReference): numbe
 }
 
 function lexicalMetadataBonus(query: string, citation: CitationReference): number {
-  const queryTokens = tokenise(query);
+  const queryTokens = uniqueTokens(tokenise(query));
   if (queryTokens.length === 0) return 0;
   const haystack = tokenise(
     [
@@ -604,19 +650,88 @@ function lexicalMetadataBonus(query: string, citation: CitationReference): numbe
   );
   if (haystack.length === 0) return 0;
 
-  let hits = 0;
-  for (const token of queryTokens) {
-    if (haystack.includes(token)) {
-      hits += 1;
-    }
-  }
+  const haystackSet = new Set(haystack);
+  const hits = countTokenHits(queryTokens, haystackSet);
   if (hits === 0) return 0;
   return hits / (queryTokens.length * 10);
 }
 
+function lexicalContentBonus(
+  store: KnowledgeStore,
+  query: string,
+  capsuleId: KnowledgeCapsuleId,
+  citation: CitationReference,
+): number {
+  const queryTokens = uniqueTokens(tokenise(query));
+  if (queryTokens.length === 0) return 0;
+  const excerpt = readCitationSearchExcerpt(store, capsuleId, citation, SEARCH_EXCERPT_MAX_CHARS);
+  if (excerpt.length === 0) return 0;
+  const excerptTokens = tokenise(excerpt);
+  if (excerptTokens.length === 0) return 0;
+
+  const tokenCoverage = countTokenHits(queryTokens, new Set(excerptTokens)) / queryTokens.length;
+  const phraseHits = countAdjacentPhraseHits(queryTokens, normaliseForSearch(excerpt));
+  return Math.min(0.18, tokenCoverage * 0.12) + Math.min(0.12, phraseHits * 0.04);
+}
+
+interface DocumentTextRow {
+  readonly normalized_text?: string;
+}
+
+function readCitationSearchExcerpt(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  citation: CitationReference,
+  maxChars: number,
+): string {
+  const row = store._internal.db
+    .prepare(
+      "SELECT normalized_text FROM document_texts WHERE capsule_id = :capsule_id AND document_id = :document_id",
+    )
+    .get({
+      capsule_id: String(capsuleId),
+      document_id: String(citation.documentId),
+    }) as DocumentTextRow | undefined;
+  const text = row?.normalized_text;
+  if (typeof text !== "string" || text.length === 0) return "";
+  const start = Math.max(0, Math.min(text.length, citation.characterStart ?? 0));
+  const end = Math.max(start, Math.min(text.length, citation.characterEnd ?? start + maxChars));
+  return text.slice(start, Math.min(text.length, end + maxChars)).trim();
+}
+
+function countTokenHits(tokens: readonly string[], haystack: ReadonlySet<string>): number {
+  let hits = 0;
+  for (const token of tokens) {
+    if (haystack.has(token)) hits += 1;
+  }
+  return hits;
+}
+
+function countAdjacentPhraseHits(tokens: readonly string[], normalisedHaystack: string): number {
+  let hits = 0;
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    const first = tokens[i];
+    const second = tokens[i + 1];
+    if (first === undefined || second === undefined) continue;
+    if (normalisedHaystack.includes(`${first} ${second}`)) hits += 1;
+  }
+  return hits;
+}
+
+function uniqueTokens(tokens: readonly string[]): readonly string[] {
+  return [...new Set(tokens)];
+}
+
 function tokenise(value: string): readonly string[] {
+  return normaliseForSearch(value)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length >= 2 && !SEARCH_STOPWORDS.has(token));
+}
+
+function normaliseForSearch(value: string): string {
   return value
+    .normalize("NFKD")
+    .replace(/\p{Mark}+/gu, "")
     .toLowerCase()
-    .split(/[^a-z0-9]+/i)
-    .filter((token) => token.length >= 2);
+    .replace(/ß/gu, "ss");
 }

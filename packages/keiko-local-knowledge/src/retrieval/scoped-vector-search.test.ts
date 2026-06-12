@@ -556,6 +556,76 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("controls-handbook.docx");
     expect(outcome.references[0]?.score).toBeGreaterThan(1);
   });
+
+  it("uses chunk text to promote exact domain terms beyond pure vector order", async () => {
+    const { store } = getFixture();
+    const vectorOnlyText =
+      "General agentic AI overview with orchestration planning and workflow automation. ".repeat(4);
+    const exactText =
+      "NVIDIA NeMo Retriever RAG connects enterprise content to retrieval augmented " +
+      "generation. Nemotron reasoning models are discussed as a related NVIDIA capability.";
+    const vectorOnly = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-vector",
+      sourceId: "src-vector",
+      documentId: "doc-vector",
+      safeDisplayName: "general-agentic-ai.docx",
+      unit: {
+        kind: "section",
+        sectionPath: ["Overview"],
+        characterStart: 0,
+        characterEnd: 220,
+      } satisfies ParsedUnitWithoutDocId,
+      text: vectorOnlyText,
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const exact = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-exact",
+      sourceId: "src-exact",
+      documentId: "doc-exact",
+      safeDisplayName: "nvidia-notes.docx",
+      unit: {
+        kind: "section",
+        sectionPath: ["Products"],
+        characterStart: 0,
+        characterEnd: 260,
+      } satisfies ParsedUnitWithoutDocId,
+      text: exactText,
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: String(vectorOnly.capsuleId), d: String(vectorOnly.documentId), t: vectorOnlyText });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: String(exact.capsuleId), d: String(exact.documentId), t: exactText });
+    setCapsuleVector(store, vectorOnly.capsuleId, vectorBlob(1, 0));
+    setCapsuleVector(store, exact.capsuleId, vectorBlob(0.96, Math.sqrt(1 - 0.96 * 0.96)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [vectorOnly.capsuleId, exact.capsuleId] },
+      "NVIDIA NeMo Retriever RAG Nemotron",
+      { topK: 1 },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("nvidia-notes.docx");
+    expect(outcome.references[0]?.score).toBeGreaterThan(1);
+  });
 });
 
 describe("toScopeInput — single capsule sugar", () => {

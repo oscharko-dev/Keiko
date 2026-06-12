@@ -372,7 +372,7 @@ function loadSourceStats(
 ): readonly {
   readonly sourceId: string;
   readonly displayName: string;
-  readonly scope: { readonly kind: KnowledgeSource["scope"]["kind"] };
+  readonly scope: KnowledgeSource["scope"];
   readonly indexedCount: number;
   readonly failedCount: number;
   readonly skippedCount: number;
@@ -396,7 +396,7 @@ function loadSourceStats(
   return rows.map((row) => ({
     sourceId: row.source_id,
     displayName: row.display_name,
-    scope: { kind: parseScope(row.scope_kind, row.scope_json).kind },
+    scope: parseScope(row.scope_kind, row.scope_json),
     indexedCount: row.indexed_count,
     failedCount: row.failed_count,
     skippedCount: row.skipped_count,

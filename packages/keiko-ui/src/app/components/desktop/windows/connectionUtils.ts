@@ -41,6 +41,12 @@ export function canConnect(a: string | undefined, b: string | undefined): boolea
   return (CONNECTABLE[a] ?? []).includes(b) || (CONNECTABLE[b] ?? []).includes(a);
 }
 
+export function hasConnectablePeer(type: string | undefined): boolean {
+  if (type === undefined) return false;
+  if ((CONNECTABLE[type] ?? []).length > 0) return true;
+  return Object.values(CONNECTABLE).some((peers) => peers.includes(type));
+}
+
 // uiux-fix F008 C074 — never invent a path: prefer the resolved root persisted by the Files
 // widget (same precedence as filesContextFor in workspaceActions.ts), fall back to the
 // configured root, and return null instead of the fabricated "src" sentinel when neither is set.

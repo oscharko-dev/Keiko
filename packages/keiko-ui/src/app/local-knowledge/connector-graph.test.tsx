@@ -2,11 +2,16 @@
 // Uses vitest + React Testing Library (jsdom) matching the existing test pattern.
 // jest-axe WCAG check at the end per GroundedAnswer.a11y.test.tsx pattern.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorGraph } from "./connector-graph";
+import {
+  LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+  type LocalKnowledgeConnectorDropDetail,
+} from "./connector-drag";
 import type {
   CapsulesResponse,
   CapsuleActionResponse,
@@ -159,6 +164,102 @@ describe("ConnectorGraph — with capsules", () => {
     // The pipeline Capsules node sublabel should reflect the count
     const nodeList = screen.getByRole("list", { name: /pipeline nodes/i });
     expect(nodeList.textContent).toContain("2 capsules");
+  });
+
+  it("exports a capsule drag payload for dropping onto the workspace", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("drag"), displayName: "First KC" });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const row = await screen.findByRole("button", { name: "Drag capsule First KC to workspace" });
+    const dataTransfer = {
+      effectAllowed: "none",
+      setData: vi.fn(),
+    };
+
+    fireEvent.dragStart(row, { dataTransfer });
+
+    expect(dataTransfer.effectAllowed).toBe("copy");
+    expect(dataTransfer.setData).toHaveBeenCalledWith(
+      LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+      JSON.stringify({
+        kind: "capsule",
+        id: "cap-drag",
+        label: "First KC",
+        lifecycleState: "ready",
+      }),
+    );
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "First KC");
+  });
+
+  it("dispatches a connector drop event when the capsule row is dragged out to the workspace", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("drag-out"), displayName: "First KC" });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    document.body.appendChild(workspace);
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => workspace);
+    const dropListener = vi.fn((event: Event) => {
+      expect(event).toBeInstanceOf(CustomEvent);
+    });
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const row = await screen.findByRole("button", { name: "Drag capsule First KC to workspace" });
+    fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+
+    expect(dropListener).toHaveBeenCalledTimes(1);
+    const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;
+    expect(event.detail).toEqual({
+      payload: {
+        kind: "capsule",
+        id: "cap-drag-out",
+        label: "First KC",
+        lifecycleState: "ready",
+      },
+      clientX: 120,
+      clientY: 140,
+    });
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    document.elementFromPoint = originalElementFromPoint;
+    workspace.remove();
+  });
+
+  it("dispatches the same connector drop event from native dragend on the workspace", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("native"), displayName: "First KC" });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    document.body.appendChild(workspace);
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => workspace);
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const row = await screen.findByRole("button", { name: "Drag capsule First KC to workspace" });
+    const dragEnd = createEvent.dragEnd(row);
+    Object.defineProperties(dragEnd, {
+      clientX: { value: 240 },
+      clientY: { value: 260 },
+    });
+    fireEvent(row, dragEnd);
+
+    expect(dropListener).toHaveBeenCalledTimes(1);
+    const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;
+    expect(event.detail.payload).toEqual({
+      kind: "capsule",
+      id: "cap-native",
+      label: "First KC",
+      lifecycleState: "ready",
+    });
+    expect(event.detail.clientX).toBe(240);
+    expect(event.detail.clientY).toBe(260);
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    document.elementFromPoint = originalElementFromPoint;
+    workspace.remove();
   });
 });
 
@@ -373,12 +474,13 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     expect(disconnectCapsuleImpl).not.toHaveBeenCalled();
   });
 
-  it("navigates to the capsule detail view when Details is clicked", async () => {
+  it("opens capsule details without navigating away when Details is clicked", async () => {
     const id = makeCapsuleId("77");
     const capsule = makeCapsule({ id, displayName: "Health Cap", lifecycleState: "ready" });
+    const onOpenCapsule = vi.fn();
     const user = userEvent.setup();
 
-    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} onOpenCapsule={onOpenCapsule} />);
 
     await waitFor(() => {
       expect(screen.getByText("Health Cap")).toBeInTheDocument();
@@ -386,7 +488,8 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
 
     await user.click(screen.getByRole("button", { name: /open details for capsule health cap/i }));
 
-    expect(pushMock).toHaveBeenCalledWith("/local-knowledge/capsule?capsuleId=cap-77");
+    expect(onOpenCapsule).toHaveBeenCalledWith(id);
+    expect(pushMock).not.toHaveBeenCalled();
   });
 });
 

@@ -9,7 +9,7 @@ import {
   type RefObject,
 } from "react";
 import { Icons, type IconName } from "../Icons";
-import { subText } from "./connectionUtils";
+import { hasConnectablePeer, subText } from "./connectionUtils";
 import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
@@ -262,6 +262,7 @@ export function WindowFrame({
   wsRef,
 }: WindowFrameProps): ReactNode {
   const def = WIN_TYPES[win.type];
+  const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
   const zoom = win.zoom ?? 1;
   const linkedRoot =
@@ -560,7 +561,7 @@ export function WindowFrame({
             <div key={d} className={`wz wz-${d}`} onPointerDown={startResize(d)} />
           ))
         : null}
-      {!win.max
+      {!win.max && canStartConnection
         ? PORTS.map((d: Port) => (
             <div
               key={`p${d}`}

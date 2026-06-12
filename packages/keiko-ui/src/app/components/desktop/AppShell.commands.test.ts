@@ -188,7 +188,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
   // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
   // command palette (same forgotten-WindowType pattern as #756/"figma"). Pin them.
-  it("includes Open commands for settings, quality, relationships and keiko", () => {
+  it("includes Open commands for settings, local knowledge, quality, relationships and keiko", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -199,6 +199,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     );
     const ids = new Set(commands.map((c) => c.id));
     expect(ids.has("open-settings")).toBe(true);
+    expect(ids.has("open-localKnowledge")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);
     expect(ids.has("open-relationships")).toBe(true);
     expect(ids.has("open-keiko")).toBe(true);

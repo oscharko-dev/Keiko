@@ -43,6 +43,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user",
     persistence: "fs-reference",
   },
+  localKnowledge: {
+    lifecycle: ["idle", "connecting", "connected", "degraded", "disconnected", "error"],
+    trustBoundary: ["ui", "fs", "model"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
   editor: {
     lifecycle: ["viewing", "editing", "unsaved", "saved", "error"],
     trustBoundary: ["ui", "fs"],

@@ -11,6 +11,7 @@
 // WCAG: min 30×30 button targets, focus-visible ring, colour tokens for danger text.
 
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import {
   connectCapsuleSource,
@@ -20,6 +21,8 @@ import {
   startIndexing,
 } from "@/lib/local-knowledge-api";
 import type { CapsuleActionResponse, ConnectCapsuleSourceScope } from "@/lib/local-knowledge-api";
+import { fetchFilesTree, fetchProjects } from "@/lib/api";
+import type { FilesTreeEntry, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "@/app/components/desktop/Icons";
 import { formatError } from "../format-error";
 
@@ -112,6 +115,271 @@ function buildScope(
   return { kind: "files", rootPath: trimmedRoot, files };
 }
 
+function displayLocalPath(root: string, relativePath: string | null): string {
+  if (relativePath === null || relativePath.length === 0) return root;
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
+}
+
+function parentRelativePath(path: string | null): string | null {
+  if (path === null || path.length === 0) return null;
+  const trimmed = path.replace(/\/+$/u, "");
+  const idx = trimmed.lastIndexOf("/");
+  if (idx < 0) return null;
+  const parent = trimmed.slice(0, idx);
+  return parent.length > 0 ? parent : null;
+}
+
+interface LocalSourcePickerDialogProps {
+  readonly scopeKind: ConnectCapsuleSourceScope["kind"];
+  readonly initialRootPath: string;
+  readonly initialFilesInput: string;
+  readonly onApply: (rootPath: string, filesInput?: string) => void;
+  readonly onCancel: () => void;
+  readonly fetchProjectsImpl?: typeof fetchProjects;
+  readonly fetchFilesTreeImpl?: typeof fetchFilesTree;
+}
+
+function LocalSourcePickerDialog({
+  scopeKind,
+  initialRootPath,
+  initialFilesInput,
+  onApply,
+  onCancel,
+  fetchProjectsImpl = fetchProjects,
+  fetchFilesTreeImpl = fetchFilesTree,
+}: LocalSourcePickerDialogProps): ReactNode {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true, onCancel);
+
+  const [projects, setProjects] = useState<readonly ProjectWithAvailability[]>([]);
+  const [activeRoot, setActiveRoot] = useState(initialRootPath.trim());
+  const [rootDraft, setRootDraft] = useState(initialRootPath.trim());
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
+  const [entries, setEntries] = useState<readonly FilesTreeEntry[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<ReadonlySet<string>>(
+    () => new Set(parseFilesInput(initialFilesInput)),
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchProjectsImpl()
+      .then((payload) => {
+        if (cancelled) return;
+        const available = payload.projects.filter((project) => project.available);
+        setProjects(available);
+        if (activeRoot.length === 0 && available[0] !== undefined) {
+          setActiveRoot(available[0].path);
+          setRootDraft(available[0].path);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRoot.length, fetchProjectsImpl]);
+
+  useEffect(() => {
+    if (activeRoot.length === 0) {
+      setEntries([]);
+      setError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void fetchFilesTreeImpl(activeRoot, currentPath ?? "")
+      .then((payload) => {
+        if (cancelled) return;
+        setEntries(payload.entries);
+        setActiveRoot(payload.root);
+        setRootDraft(payload.root);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setEntries([]);
+          setError(formatError(caught));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRoot, currentPath, fetchFilesTreeImpl]);
+
+  function openRoot(nextRoot: string): void {
+    const trimmed = nextRoot.trim();
+    if (trimmed.length === 0) return;
+    setSelectedFiles(new Set());
+    setCurrentPath(null);
+    setActiveRoot(trimmed);
+  }
+
+  function chooseProject(project: ProjectWithAvailability): void {
+    setRootDraft(project.path);
+    openRoot(project.path);
+  }
+
+  function toggleFile(path: string): void {
+    setSelectedFiles((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  const visiblePath = displayLocalPath(activeRoot, currentPath);
+  const selectedFileLines = Array.from(selectedFiles).join("\n");
+  const canApply =
+    scopeKind === "files" ? activeRoot.length > 0 && selectedFiles.size > 0 : activeRoot.length > 0;
+
+  return createPortal(
+    <div className="dlg-overlay in" role="presentation">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lkd-source-picker-title"
+        aria-describedby="lkd-source-picker-desc"
+        className="dlg lkd-source-picker"
+        tabIndex={-1}
+      >
+        <div className="dlg-head">
+          <div className="dlg-htext">
+            <div id="lkd-source-picker-title" className="dlg-title">
+              Choose local source
+            </div>
+            <div id="lkd-source-picker-desc" className="dlg-sub">
+              Select a local {scopeKind === "files" ? "file or files" : "folder"} for this capsule.
+            </div>
+          </div>
+        </div>
+        <div className="dlg-body lkd-source-picker-body">
+          {projects.length > 0 ? (
+            <div className="lkd-picker-projects" aria-label="Registered project folders">
+              {projects.map((project) => (
+                <button
+                  key={project.path}
+                  type="button"
+                  className="lk-btn lk-btn-ghost"
+                  onClick={() => chooseProject(project)}
+                >
+                  {project.name ?? project.path}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <form
+            className="lkd-picker-root"
+            onSubmit={(event) => {
+              event.preventDefault();
+              openRoot(rootDraft);
+            }}
+          >
+            <label htmlFor="lkd-picker-root-input" className="dlg-label">
+              Folder root
+            </label>
+            <input
+              id="lkd-picker-root-input"
+              type="text"
+              className="dlg-input lkd-connect-input"
+              value={rootDraft}
+              placeholder="/absolute/path/to/folder"
+              onChange={(event) => setRootDraft(event.target.value)}
+            />
+            <button type="submit" className="lk-btn lk-btn-ghost">
+              Open
+            </button>
+          </form>
+
+          <div className="lkd-picker-current">
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost"
+              disabled={currentPath === null}
+              onClick={() => setCurrentPath(parentRelativePath(currentPath))}
+            >
+              Up
+            </button>
+            <span className="mono" title={visiblePath}>
+              {visiblePath || "No folder selected"}
+            </span>
+          </div>
+
+          {error !== null ? (
+            <div role="alert" className="lk-alert">
+              {error}
+            </div>
+          ) : null}
+          {loading ? (
+            <p role="status" className="lk-loading">
+              Loading folder…
+            </p>
+          ) : (
+            <ul className="lkd-picker-list" aria-label="Local source browser">
+              {entries.map((entry) => (
+                <li key={entry.path} className="lkd-picker-entry">
+                  {entry.kind === "directory" ? (
+                    <button
+                      type="button"
+                      className="lkd-picker-row"
+                      disabled={!entry.readable}
+                      onClick={() => {
+                        setSelectedFiles(new Set());
+                        setCurrentPath(entry.path);
+                      }}
+                    >
+                      <Icons.folder size={14} />
+                      <span>{entry.name}</span>
+                    </button>
+                  ) : (
+                    <label className="lkd-picker-row">
+                      <input
+                        type="checkbox"
+                        disabled={scopeKind !== "files" || !entry.readable}
+                        checked={selectedFiles.has(entry.path)}
+                        onChange={() => toggleFile(entry.path)}
+                      />
+                      <span>{entry.name}</span>
+                    </label>
+                  )}
+                </li>
+              ))}
+              {!loading && entries.length === 0 && activeRoot.length > 0 ? (
+                <li className="lkd-picker-empty">No entries in this folder.</li>
+              ) : null}
+            </ul>
+          )}
+        </div>
+        <div className="dlg-foot">
+          <button type="button" className="dlg-btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="dlg-btn primary"
+            disabled={!canApply}
+            onClick={() =>
+              onApply(scopeKind === "files" ? activeRoot : visiblePath, selectedFileLines)
+            }
+          >
+            Use selection
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ConnectSourceForm({
   capsuleId,
   onConnected,
@@ -122,6 +390,7 @@ function ConnectSourceForm({
   const [filesInput, setFilesInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const scope = buildScope(scopeKind, rootPath, filesInput);
 
   async function handleConnect(): Promise<void> {
@@ -174,19 +443,29 @@ function ConnectSourceForm({
         <label htmlFor="lkd-connect-path-input" className="dlg-label">
           {rootPathLabel(scopeKind)}
         </label>
-        <input
-          id="lkd-connect-path-input"
-          type="text"
-          className="dlg-input lkd-connect-input"
-          value={rootPath}
-          disabled={busy}
-          placeholder={rootPathPlaceholder(scopeKind)}
-          autoComplete="off"
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && scopeKind !== "files") void handleConnect();
-          }}
-        />
+        <div className="lkd-connect-path-group">
+          <input
+            id="lkd-connect-path-input"
+            type="text"
+            className="dlg-input lkd-connect-input"
+            value={rootPath}
+            disabled={busy}
+            placeholder={rootPathPlaceholder(scopeKind)}
+            autoComplete="off"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && scopeKind !== "files") void handleConnect();
+            }}
+          />
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy}
+            onClick={() => setPickerOpen(true)}
+          >
+            Browse
+          </button>
+        </div>
       </div>
       {scopeKind === "files" ? (
         <div className="lkd-connect-row">
@@ -219,6 +498,20 @@ function ConnectSourceForm({
         <div role="alert" aria-live="assertive" className="lk-alert">
           {connectError}
         </div>
+      ) : null}
+      {pickerOpen ? (
+        <LocalSourcePickerDialog
+          scopeKind={scopeKind}
+          initialRootPath={rootPath}
+          initialFilesInput={filesInput}
+          onApply={(nextRootPath, nextFilesInput) => {
+            setRootPath(nextRootPath);
+            if (nextFilesInput !== undefined) setFilesInput(nextFilesInput);
+            setConnectError(null);
+            setPickerOpen(false);
+          }}
+          onCancel={() => setPickerOpen(false)}
+        />
       ) : null}
     </div>
   );
@@ -358,7 +651,7 @@ function ConfirmModal({
   const titleId = "lkd-confirm-title";
   const descId = "lkd-confirm-desc";
 
-  return (
+  return createPortal(
     <div
       className="dlg-overlay in"
       role="presentation"
@@ -435,7 +728,8 @@ function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -449,6 +743,7 @@ export interface CapsuleActionsProps {
   readonly sourceCount: number;
   readonly lifecycleState: CapsuleLifecycleState;
   readonly onActionComplete: () => void;
+  readonly onDeleted?: (response: CapsuleActionResponse) => void;
   // Injectable seams for tests
   readonly connectCapsuleSourceImpl?: typeof connectCapsuleSource;
   readonly deleteCapsuleImpl?: typeof deleteCapsule;
@@ -463,6 +758,7 @@ export function CapsuleActions({
   sourceCount,
   lifecycleState,
   onActionComplete,
+  onDeleted,
   connectCapsuleSourceImpl = connectCapsuleSource,
   deleteCapsuleImpl = deleteCapsule,
   refreshCapsuleImpl = refreshCapsuleChangedFiles,
@@ -504,13 +800,21 @@ export function CapsuleActions({
     setConfirm((prev) => (prev !== null ? { ...prev, nameInput: value } : null));
   }
 
-  async function runAction(action: () => Promise<CapsuleActionResponse>): Promise<void> {
+  async function runAction(
+    kind: ActionKind,
+    action: () => Promise<CapsuleActionResponse>,
+  ): Promise<void> {
     setBusy(true);
     setActionError(null);
     try {
-      await action();
+      const response = await action();
       setConfirm(null);
-      onActionComplete();
+      if (kind === "delete") {
+        if (onDeleted !== undefined) onDeleted(response);
+        else onActionComplete();
+      } else {
+        onActionComplete();
+      }
     } catch (error) {
       setActionError(formatError(error));
     } finally {
@@ -522,11 +826,11 @@ export function CapsuleActions({
     if (confirm === null || busy) return;
     const { kind } = confirm;
     if (kind === "delete") {
-      void runAction(() => deleteCapsuleImpl(capsuleId));
+      void runAction(kind, () => deleteCapsuleImpl(capsuleId));
     } else if (kind === "refresh") {
-      void runAction(() => refreshCapsuleImpl(capsuleId));
+      void runAction(kind, () => refreshCapsuleImpl(capsuleId));
     } else {
-      void runAction(() => repairCapsuleImpl(capsuleId));
+      void runAction(kind, () => repairCapsuleImpl(capsuleId));
     }
   }
 

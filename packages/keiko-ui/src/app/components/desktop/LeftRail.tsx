@@ -126,17 +126,18 @@ export function LeftRail({
         >
           <Icons.check size={19} />
         </button>
-        {/* Issue #189 — Local Knowledge is a page route, not a window tool */}
-        <Link
-          href="/local-knowledge"
+        <button
+          type="button"
           className="rail-btn"
-          data-active="false"
           data-side="left"
+          data-active={openTools.has("localKnowledge") ? "true" : "false"}
           aria-label="Local Knowledge"
+          aria-pressed={openTools.has("localKnowledge")}
           data-tip="Local Knowledge"
+          onClick={() => onTool("localKnowledge")}
         >
           <Icons.localKnowledge size={19} />
-        </Link>
+        </button>
         {/* Epic #532 — Relationships opens as a singleton Workspace window (not a page route). */}
         <button
           type="button"
