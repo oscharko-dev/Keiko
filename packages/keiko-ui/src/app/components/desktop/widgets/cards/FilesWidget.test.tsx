@@ -147,7 +147,7 @@ describe("FilesWidget", () => {
 
     expect(await screen.findByText("package.json")).toBeInTheDocument();
     expect(fetchFilesTree).toHaveBeenCalledWith("/repo space", "");
-    expect(onActiveFileChange).toHaveBeenCalledWith(null, "/repo space");
+    expect(onActiveFileChange).toHaveBeenCalledWith(null, "/repo space", null);
 
     // tree rows expose ARIA tree semantics (role=treeitem) since audit C143
     await userEvent.click(screen.getByRole("treeitem", { name: /package\.json/i }));
@@ -239,74 +239,94 @@ describe("FilesWidget", () => {
     expect(onOpenFile).not.toHaveBeenCalled();
   });
 
-  it("connects the repository root scope from the Files window", async () => {
+  it("does not render direct repository scope buttons from the Files window", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/resolved-repo",
       path: "",
       truncated: false,
       entries: [],
     });
-    const updated = makeChat({
-      connectedScope: {
-        kind: "workspace-root",
-        relativePaths: [],
-        root: "/resolved-repo",
-        connectedAtMs: 100,
-      },
-    });
-    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
     const session = renderWithSession(<FilesWidget root="/configured-repo" />);
 
     await screen.findByText("Empty folder.");
-    await userEvent.click(screen.getByRole("button", { name: "Connect repository" }));
 
-    await waitFor(() => {
-      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        {
-          kind: "workspace-root",
-          relativePaths: [],
-          root: "/resolved-repo",
-          connectedAtMs: expect.any(Number),
-        },
-      ]);
-    });
-    expect(session.replaceChat).toHaveBeenCalledWith(updated);
+    expect(screen.queryByRole("button", { name: "Connect repository" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update connected scope" })).toBeNull();
+    expect(updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(session.replaceChat).not.toHaveBeenCalled();
   });
 
-  it("connects a readable folder scope from a directory row", async () => {
+  it("enters a readable folder from the folder name and reports it as the visible scope", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/resolved-repo",
       path: "",
       truncated: false,
-      entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
+      ],
     });
-    const updated = makeChat({
-      connectedScope: {
-        kind: "directory",
-        relativePaths: ["src"],
-        root: "/resolved-repo",
-        connectedAtMs: 101,
-      },
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/resolved-repo",
+      path: "src",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" }],
     });
-    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
-    const session = renderWithSession(<FilesWidget root="/configured-repo" />);
+    const onActiveFileChange = vi.fn();
+    const session = renderWithSession(
+      <FilesWidget
+        root="/configured-repo"
+        onRootChange={() => undefined}
+        onActiveFileChange={onActiveFileChange}
+      />,
+    );
 
-    await screen.findByRole("treeitem", { name: /^src$/i });
-    // accessible name carries the target folder so multiple tree pills are
-    // distinguishable for screen readers (audit C214)
-    await userEvent.click(screen.getByRole("button", { name: "Connect folder: src" }));
+    const srcRow = await screen.findByRole("treeitem", { name: /^src$/i });
+    expect(screen.queryByRole("button", { name: "Connect folder: src" })).toBeNull();
+    await userEvent.click(srcRow);
 
     await waitFor(() => {
-      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        {
-          kind: "directory",
-          relativePaths: ["src"],
-          root: "/resolved-repo",
-          connectedAtMs: expect.any(Number),
-        },
-      ]);
+      expect(fetchFilesTree).toHaveBeenCalledWith("/configured-repo", "src");
     });
-    expect(session.replaceChat).toHaveBeenCalledWith(updated);
+    expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
+    expect(screen.getByLabelText("Folder path — open any folder on this machine")).toHaveValue(
+      "/resolved-repo/src",
+    );
+    expect(onActiveFileChange).toHaveBeenCalledWith(null, "/resolved-repo", "src");
+    expect(updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(session.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("expands a folder from the caret without changing the chat-visible folder scope", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/resolved-repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
+      ],
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/resolved-repo",
+      path: "src",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" }],
+    });
+    const onActiveFileChange = vi.fn();
+    render(<FilesWidget root="/configured-repo" onActiveFileChange={onActiveFileChange} />);
+
+    await screen.findByRole("treeitem", { name: /^src$/i });
+    await waitFor(() => {
+      expect(onActiveFileChange).toHaveBeenCalledWith(null, "/resolved-repo", null);
+    });
+    onActiveFileChange.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Expand folder: src" }));
+
+    expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /package\.json/i })).toBeInTheDocument();
+    expect(onActiveFileChange).not.toHaveBeenCalled();
   });
 
   it("shows the empty-workspace state without a repository connector", async () => {
@@ -563,7 +583,7 @@ describe("FilePreview", () => {
     expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
   });
 
-  it("binds the previewed file with the Files root when a chat is active", async () => {
+  it("does not render a direct chat connector for the previewed file", async () => {
     vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
       root: "/resolved-repo",
       path: "hello.txt",
@@ -578,32 +598,15 @@ describe("FilePreview", () => {
       truncated: false,
       maxBytes: 1_000_000,
     });
-    const updated = makeChat({
-      connectedScope: {
-        kind: "files",
-        relativePaths: ["hello.txt"],
-        root: "/resolved-repo",
-        connectedAtMs: 200,
-      },
-    });
-    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
     const session = renderWithSession(
       <FilePreview root="/resolved-repo" path="hello.txt" onClose={() => undefined} />,
     );
 
     await screen.findByText("hello.txt");
-    await userEvent.click(screen.getByRole("button", { name: "Connect to chat" }));
 
-    await waitFor(() => {
-      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        {
-          kind: "files",
-          relativePaths: ["hello.txt"],
-          root: "/resolved-repo",
-          connectedAtMs: expect.any(Number),
-        },
-      ]);
-    });
-    expect(session.replaceChat).toHaveBeenCalledWith(updated);
+    expect(screen.queryByRole("button", { name: "Connect to chat" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update connected scope" })).toBeNull();
+    expect(updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(session.replaceChat).not.toHaveBeenCalled();
   });
 });

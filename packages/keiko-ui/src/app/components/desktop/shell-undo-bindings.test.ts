@@ -35,6 +35,7 @@ function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
     confirmConnect: vi.fn(),
     cancelConnect: vi.fn(),
     removeConn: vi.fn(),
+    updateConnBoundScope: vi.fn(),
     connect: vi.fn(),
     linkedFilesRoot: vi.fn(() => null),
     linkedAllFilesRoots: vi.fn(() => []),

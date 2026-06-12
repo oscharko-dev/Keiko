@@ -127,6 +127,8 @@ function readDataUrl(file: File): Promise<string> {
 export const DEFAULT_CHAT_TITLE = "New chat";
 export const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 export const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
+const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
+const CHAT_DELETE_EVENT = "keiko:chat-delete";
 
 // Issue #152 — conversation request lifecycle states (memory keiko-issue66).
 // `idle` is the resting state; `queued` is set the moment sendMessage commits
@@ -202,6 +204,35 @@ function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+function isChatPayload(value: unknown): value is Chat {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { id?: unknown }).id === "string" &&
+    typeof (value as { projectPath?: unknown }).projectPath === "string" &&
+    typeof (value as { title?: unknown }).title === "string" &&
+    typeof (value as { selectedModel?: unknown }).selectedModel === "string"
+  );
+}
+
+function isChatDeletePayload(value: unknown): value is { readonly chatId: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { chatId?: unknown }).chatId === "string"
+  );
+}
+
+export function notifyChatUpsert(chat: Chat): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CHAT_UPSERT_EVENT, { detail: chat }));
+}
+
+export function notifyChatDeleted(chatId: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { chatId } }));
+}
+
 // Returns the id of the first eligible model, or undefined when no models are
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
@@ -263,7 +294,7 @@ export interface UseChatSessionResult {
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
   // blank/whitespace falls back to DEFAULT_CHAT_TITLE.
-  openNewChat: (project?: ProjectWithAvailability, title?: string) => Promise<void>;
+  openNewChat: (project?: ProjectWithAvailability, title?: string) => Promise<Chat | undefined>;
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
@@ -390,7 +421,7 @@ const INITIAL_STATE: SessionState = {
   selectedModel: undefined,
 };
 
-async function bootstrapSession(): Promise<Partial<SessionState>> {
+async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
@@ -422,10 +453,10 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
 
   // AC #1: when no eligible model exists, set selectedModel to undefined so
   // downstream surfaces show a clear error instead of a placeholder id.
-  if (defaultModel === undefined) {
+  if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
-      selectedModel: undefined,
+      selectedModel: defaultModel,
       projects: Array.from(projects),
       activeProject: project,
       chats: [],
@@ -439,6 +470,7 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
   };
   if (project?.available === true) input.projectPath = project.path;
   const created = await createDesktopChat(input);
+  notifyChatUpsert(created.chat);
   return {
     models: chatModels,
     selectedModel: created.chat.selectedModel,
@@ -450,7 +482,12 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
   };
 }
 
-export function useChatSession(): UseChatSessionResult {
+export interface UseChatSessionOptions {
+  readonly autoCreate?: boolean;
+}
+
+export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
+  const autoCreate = options.autoCreate ?? true;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -657,7 +694,7 @@ export function useChatSession(): UseChatSessionResult {
       setLoading(true);
       setError(undefined);
       try {
-        const patch = await bootstrapSession();
+        const patch = await bootstrapSession(autoCreate);
         if (!cancelled) setState((previous) => ({ ...previous, ...patch }));
       } catch (caught) {
         if (!cancelled) setError(errorMessage(caught));
@@ -668,6 +705,39 @@ export function useChatSession(): UseChatSessionResult {
     void run();
     return () => {
       cancelled = true;
+    };
+  }, [autoCreate]);
+
+  useEffect(() => {
+    const onUpsert = (event: Event): void => {
+      const chat = (event as CustomEvent<unknown>).detail;
+      if (!isChatPayload(chat)) return;
+      setState((previous) => ({
+        ...previous,
+        chats: sortChats([chat, ...previous.chats.filter((existing) => existing.id !== chat.id)]),
+        activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
+        selectedModel:
+          previous.activeChat?.id === chat.id
+            ? resolveSelectedModelId(chat.selectedModel, previous.models)
+            : previous.selectedModel,
+      }));
+    };
+    const onDelete = (event: Event): void => {
+      const payload = (event as CustomEvent<unknown>).detail;
+      if (!isChatDeletePayload(payload)) return;
+      setState((previous) => ({
+        ...previous,
+        chats: previous.chats.filter((chat) => chat.id !== payload.chatId),
+        activeChat:
+          previous.activeChat?.id === payload.chatId ? undefined : previous.activeChat,
+        messages: previous.activeChat?.id === payload.chatId ? [] : previous.messages,
+      }));
+    };
+    window.addEventListener(CHAT_UPSERT_EVENT, onUpsert);
+    window.addEventListener(CHAT_DELETE_EVENT, onDelete);
+    return () => {
+      window.removeEventListener(CHAT_UPSERT_EVENT, onUpsert);
+      window.removeEventListener(CHAT_DELETE_EVENT, onDelete);
     };
   }, []);
 
@@ -718,6 +788,7 @@ export function useChatSession(): UseChatSessionResult {
       .then((result) => {
         if (selectedModelPersistRef.current !== requestId) return;
         if (activeChatIdRef.current !== result.chat.id) return;
+        notifyChatUpsert(result.chat);
         setState((previous) => ({
           ...previous,
           selectedModel: result.chat.selectedModel,
@@ -760,11 +831,14 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   const openNewChat = useCallback(
-    async (projectOverride?: ProjectWithAvailability, title?: string): Promise<void> => {
+    async (
+      projectOverride?: ProjectWithAvailability,
+      title?: string,
+    ): Promise<Chat | undefined> => {
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
         setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
-        return;
+        return undefined;
       }
       setError(undefined);
       try {
@@ -780,6 +854,7 @@ export function useChatSession(): UseChatSessionResult {
         if (targetPath !== undefined) input.projectPath = targetPath;
         const created = await createDesktopChat(input);
         activeChatIdRef.current = created.chat.id;
+        notifyChatUpsert(created.chat);
         setState({
           projects: Array.from(created.projects),
           chats: sortChats(created.chats),
@@ -789,8 +864,10 @@ export function useChatSession(): UseChatSessionResult {
           activeChat: created.chat,
           selectedModel: created.chat.selectedModel,
         });
+        return created.chat;
       } catch (caught) {
         setError(errorMessage(caught));
+        return undefined;
       }
     },
     [state.selectedModel, state.activeProject, state.models],
@@ -920,6 +997,7 @@ export function useChatSession(): UseChatSessionResult {
               ...Array.from(payload.messages),
             ],
           }));
+          notifyChatUpsert(payload.chat);
           if (payload.memory !== undefined) setLatestMemory(payload.memory);
           resolve("completed");
         },
@@ -1047,6 +1125,7 @@ export function useChatSession(): UseChatSessionResult {
             ...Array.from(result.messages),
           ],
         }));
+        notifyChatUpsert(result.chat);
         setLatestMemory(result.memory);
         return "completed";
       } catch (caught) {
@@ -1158,6 +1237,7 @@ export function useChatSession(): UseChatSessionResult {
           chats: sortChats(chatsPayload.chats),
           activeChat: refreshedActive ?? previous.activeChat,
         }));
+        if (refreshedActive !== undefined) notifyChatUpsert(refreshedActive);
         return "completed";
       } catch (caught) {
         // Issue #152 — abort preserves the user's optimistic message (AC#3:
@@ -1508,6 +1588,7 @@ export function useChatSession(): UseChatSessionResult {
   // existing sort order so the pill flip is non-disruptive. activeChat is rewritten when its
   // id matches so the header re-renders with the new ChatConnectedScope.
   const replaceChat = useCallback((chat: Chat) => {
+    notifyChatUpsert(chat);
     setState((previous) => ({
       ...previous,
       chats: previous.chats.map((existing) => (existing.id === chat.id ? chat : existing)),

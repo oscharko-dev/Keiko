@@ -18,12 +18,50 @@ function hasServiceWorker(): boolean {
   return typeof navigator !== "undefined" && "serviceWorker" in navigator;
 }
 
+function deleteKeikoShellCaches(): void {
+  if (typeof caches === "undefined") return;
+  void caches
+    .keys()
+    .then((names) =>
+      Promise.all(
+        names.filter((name) => name.startsWith("keiko-shell-")).map((name) => caches.delete(name)),
+      ),
+    )
+    .catch((_error: unknown) => undefined);
+}
+
+function cleanupDevServiceWorkers(sw: ServiceWorkerContainer): void {
+  try {
+    void sw
+      .getRegistrations()
+      .then((registrations) =>
+        Promise.all(registrations.map((registration) => registration.unregister())),
+      )
+      .then(() => {
+        deleteKeikoShellCaches();
+        if (sw.controller === null) return;
+        const reloadKey = "keiko.dev.service-worker-cleanup-reloaded";
+        if (window.sessionStorage.getItem(reloadKey) === "true") return;
+        window.sessionStorage.setItem(reloadKey, "true");
+        window.location.reload();
+      })
+      .catch((_error: unknown) => undefined);
+  } catch {
+    // Silent failure by design. Development cleanup must never break the app.
+  }
+}
+
 export function registerSw(): void {
   if (!hasServiceWorker()) return;
 
   // Capture a stable reference to avoid the lint warning about `navigator` access after the
   // guard (TS narrowing on a global property access).
   const sw = navigator.serviceWorker;
+
+  if (process.env.NODE_ENV === "development") {
+    cleanupDevServiceWorkers(sw);
+    return;
+  }
 
   // Fire-and-forget. Wrap the synchronous call too: although the spec says `register()`
   // returns a Promise, a non-conforming runtime (or a test stub) could throw synchronously,

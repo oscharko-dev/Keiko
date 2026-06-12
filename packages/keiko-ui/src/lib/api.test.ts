@@ -273,8 +273,10 @@ describe("delete helpers", () => {
         method: "DELETE",
         headers: expect.objectContaining({
           Accept: "application/json",
+          "Content-Type": "application/json",
           "X-Keiko-CSRF": "1",
         }),
+        body: "{}",
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -284,8 +286,10 @@ describe("delete helpers", () => {
         method: "DELETE",
         headers: expect.objectContaining({
           Accept: "application/json",
+          "Content-Type": "application/json",
           "X-Keiko-CSRF": "1",
         }),
+        body: "{}",
       }),
     );
   });

@@ -19,9 +19,47 @@ const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko",
 const pidFile = resolve(process.env.KEIKO_DEV_PID_FILE ?? join(stateDir, "dev-ui.pid.json"));
 const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
-const children = new Set();
+const children = new Map();
+const restartCounts = new Map();
+const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
+const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "webpack";
+let nextBundler = nextBundlerPreference === "turbopack" ? "turbopack" : "webpack";
 let server;
 let shuttingDown = false;
+
+const devServiceWorker = `
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    if (typeof caches !== "undefined") {
+      const names = await caches.keys();
+      await Promise.all(
+        names
+          .filter((name) => name.startsWith("keiko-shell-"))
+          .map((name) => caches.delete(name)),
+      );
+    }
+    await self.registration.unregister();
+    const windows = await self.clients.matchAll({ includeUncontrolled: true, type: "window" });
+    await Promise.all(windows.map((client) => client.navigate(client.url)));
+  })());
+});
+`.trimStart();
+
+if (!["auto", "turbopack", "webpack"].includes(nextBundlerPreference)) {
+  console.error(
+    `Invalid KEIKO_DEV_NEXT_BUNDLER: ${nextBundlerPreference}. Use auto, turbopack, or webpack.`,
+  );
+  process.exit(2);
+}
+
+if (!Number.isInteger(maxRestarts) || maxRestarts < 0) {
+  console.error(`Invalid KEIKO_DEV_MAX_RESTARTS: ${String(process.env.KEIKO_DEV_MAX_RESTARTS)}`);
+  process.exit(2);
+}
 
 function writeState(extra = {}) {
   mkdirSync(dirname(pidFile), { recursive: true });
@@ -33,7 +71,9 @@ function writeState(extra = {}) {
         publicPort,
         bffPort,
         nextPort,
-        children: Array.from(children)
+        stateDir,
+        nextBundler,
+        children: Array.from(children.values())
           .map((child) => child.pid)
           .filter((pid) => pid !== undefined),
         updatedAt: new Date().toISOString(),
@@ -46,6 +86,25 @@ function writeState(extra = {}) {
   );
 }
 
+function restartChild(label) {
+  const count = (restartCounts.get(label) ?? 0) + 1;
+  restartCounts.set(label, count);
+  if (count > maxRestarts) {
+    console.error(`[dev] ${label} exceeded restart limit (${String(maxRestarts)}).`);
+    shutdown(1);
+    return;
+  }
+  const delayMs = Math.min(5_000, 500 * count);
+  console.error(
+    `[dev] restarting ${label} in ${String(delayMs)}ms (${String(count)}/${String(maxRestarts)}) ...`,
+  );
+  setTimeout(() => {
+    if (shuttingDown) return;
+    if (label === "bff") startBff();
+    else startNext();
+  }, delayMs).unref();
+}
+
 function spawnChild(label, command, args, options) {
   const child = spawn(command, args, {
     ...options,
@@ -55,25 +114,86 @@ function spawnChild(label, command, args, options) {
       ...options.env,
     },
   });
-  children.add(child);
+  children.set(label, child);
   writeState();
   child.on("exit", (code, signal) => {
-    children.delete(child);
+    if (children.get(label) !== child) return;
+    children.delete(label);
     writeState({ lastExit: { label, code, signal } });
-    if (!shuttingDown) {
-      console.error(`[dev] ${label} exited unexpectedly.`);
-      shutdown(1);
+    if (shuttingDown) return;
+    console.error(`[dev] ${label} exited unexpectedly.`);
+    if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
+      nextBundler = "webpack";
+      restartCounts.set(label, 0);
+      console.error("[dev] Turbopack dev server exited; falling back to webpack dev server.");
     }
+    restartChild(label);
   });
   child.on("error", (error) => {
     console.error(`[dev] ${label} failed: ${error.message}`);
-    shutdown(1);
+    if (!shuttingDown) restartChild(label);
   });
   return child;
 }
 
-function proxyHttp(req, res, targetPort) {
+function startBff() {
+  spawnChild("bff", process.execPath, [bffScript], {
+    cwd: repoRoot,
+    env: {
+      KEIKO_DEV_BFF_PORT: String(bffPort),
+      KEIKO_STATE_DIR: stateDir,
+    },
+  });
+}
+
+function nextArgs() {
+  return [
+    nextBin,
+    "dev",
+    "--hostname",
+    host,
+    "--port",
+    String(nextPort),
+    nextBundler === "webpack" ? "--webpack" : "--turbopack",
+  ];
+}
+
+function startNext() {
+  spawnChild("next", process.execPath, nextArgs(), {
+    cwd: uiDir,
+    env: {
+      PORT: String(nextPort),
+    },
+  });
+}
+
+function rewriteOriginHeader(value, targetPort) {
+  try {
+    const origin = new URL(value);
+    const publicAuthorities = new Set([
+      `${host}:${String(publicPort)}`,
+      `localhost:${String(publicPort)}`,
+      `[::1]:${String(publicPort)}`,
+    ]);
+    if (!publicAuthorities.has(origin.host.toLowerCase())) {
+      return value;
+    }
+    return `${origin.protocol}//${host}:${String(targetPort)}`;
+  } catch {
+    return value;
+  }
+}
+
+function proxiedHeaders(req, targetPort) {
   const headers = { ...req.headers, host: `${host}:${String(targetPort)}` };
+  if (typeof headers.origin === "string") {
+    headers.origin = rewriteOriginHeader(headers.origin, targetPort);
+  }
+  return headers;
+}
+
+function proxyHttp(req, res, targetPort) {
+  const headers = proxiedHeaders(req, targetPort);
   const upstream = request(
     {
       hostname: host,
@@ -97,15 +217,14 @@ function proxyHttp(req, res, targetPort) {
 }
 
 function proxyUpgrade(req, socket, head, targetPort) {
+  const headers = proxiedHeaders(req, targetPort);
   const upstream = connect(targetPort, host, () => {
     upstream.write(`${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`);
-    for (const [name, value] of Object.entries(req.headers)) {
-      if (name.toLowerCase() === "host") continue;
+    for (const [name, value] of Object.entries(headers)) {
       if (value === undefined) continue;
       const values = Array.isArray(value) ? value : [value];
       for (const item of values) upstream.write(`${name}: ${item}\r\n`);
     }
-    upstream.write(`host: ${host}:${String(targetPort)}\r\n`);
     upstream.write("\r\n");
     if (head.length > 0) upstream.write(head);
     socket.pipe(upstream);
@@ -123,15 +242,24 @@ function targetPortFor(pathname) {
   return pathname.startsWith("/api/") || pathname === "/api" ? bffPort : nextPort;
 }
 
+function serveDevServiceWorker(res) {
+  res.writeHead(200, {
+    "cache-control": "no-store",
+    "content-type": "text/javascript; charset=utf-8",
+  });
+  res.end(devServiceWorker);
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
+  writeState({ ready: false, shuttingDown: true });
   server?.close(() => undefined);
-  for (const child of children) {
+  for (const child of children.values()) {
     if (child.pid !== undefined) child.kill("SIGTERM");
   }
   setTimeout(() => {
-    for (const child of children) {
+    for (const child of children.values()) {
       if (child.pid !== undefined) child.kill("SIGKILL");
     }
     process.exit(code);
@@ -139,28 +267,15 @@ function shutdown(code = 0) {
   if (children.size === 0) process.exit(code);
 }
 
-spawnChild("bff", process.execPath, [bffScript], {
-  cwd: repoRoot,
-  env: {
-    KEIKO_DEV_BFF_PORT: String(bffPort),
-    KEIKO_STATE_DIR: stateDir,
-  },
-});
-
-spawnChild(
-  "next",
-  process.execPath,
-  [nextBin, "dev", "--hostname", host, "--port", String(nextPort)],
-  {
-    cwd: uiDir,
-    env: {
-      PORT: String(nextPort),
-    },
-  },
-);
+startBff();
+startNext();
 
 server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
+  if (url.pathname === "/sw.js") {
+    serveDevServiceWorker(res);
+    return;
+  }
   proxyHttp(req, res, targetPortFor(url.pathname));
 });
 

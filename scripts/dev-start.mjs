@@ -2,6 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import {
   closeSync,
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -17,10 +19,15 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = join(stateDir, "dev-ui.pid.json");
 const logFile = join(stateDir, "dev-ui.log");
+const devGatewayConfigFile = join(stateDir, "ui", "keiko.config.json");
 const host = "127.0.0.1";
 const explicitPublicPort = process.env.KEIKO_DEV_UI_PORT ?? process.env.KEIKO_UI_PORT;
 let publicPort = Number(explicitPublicPort ?? "1983");
 const runnerScript = join(repoRoot, "scripts", "dev-runner.mjs");
+const gatewayConfigSeedCandidates = [
+  join(repoRoot, ".keiko", "ui", "keiko.config.json"),
+  join(repoRoot, "sandbox", ".keiko", "ui", "keiko.config.json"),
+];
 
 function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
@@ -77,6 +84,20 @@ function ensureDependencies() {
   run(npmCommand(), ["ci", "--no-audit", "--no-fund"], repoRoot);
 }
 
+function ensureDevGatewayConfig() {
+  if (process.env.KEIKO_CONFIG_FILE !== undefined || existsSync(devGatewayConfigFile)) {
+    return;
+  }
+  const source = gatewayConfigSeedCandidates.find((candidate) => existsSync(candidate));
+  if (source === undefined) {
+    return;
+  }
+  mkdirSync(dirname(devGatewayConfigFile), { recursive: true });
+  copyFileSync(source, devGatewayConfigFile);
+  chmodSync(devGatewayConfigFile, 0o600);
+  console.log(`[dev:start] seeded gateway config from ${source}`);
+}
+
 function checkPortAvailable(port) {
   return new Promise((resolveAvailable) => {
     const server = createServer();
@@ -94,21 +115,75 @@ async function findAvailablePort(start) {
   throw new Error(`No free loopback port found at or above ${String(start)}`);
 }
 
+async function fetchOk(url, validate = () => true) {
+  const response = await globalThis.fetch(url, { cache: "no-store" });
+  if (!response.ok) return `HTTP ${String(response.status)}`;
+  return (await validate(response)) ? "ok" : "unexpected response";
+}
+
+async function devServerHealth(port) {
+  const baseUrl = `http://${host}:${String(port)}`;
+  const checks = [
+    {
+      name: "api",
+      url: `${baseUrl}/api/health`,
+      validate: async (response) => {
+        const body = await response.json();
+        return body?.status === "ok";
+      },
+    },
+    {
+      name: "ui",
+      url: `${baseUrl}/`,
+      validate: async (response) => {
+        const contentType = response.headers.get("content-type") ?? "";
+        const body = await response.text();
+        return contentType.includes("text/html") && body.includes("Keiko");
+      },
+    },
+    {
+      name: "assets",
+      url: `${baseUrl}/assets/keiko-logo.svg`,
+      validate: async (response) => {
+        const contentType = response.headers.get("content-type") ?? "";
+        const body = await response.text();
+        return contentType.includes("image/svg+xml") && body.includes("<svg");
+      },
+    },
+  ];
+
+  for (const check of checks) {
+    try {
+      const result = await fetchOk(check.url, check.validate);
+      if (result !== "ok") return `${check.name}: ${result}`;
+    } catch (error) {
+      return `${check.name}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  return "ok";
+}
+
+async function stopUnhealthyRunner(pid) {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  for (let i = 0; i < 20; i += 1) {
+    await sleep(250);
+    if (!isAlive(pid)) return;
+  }
+}
+
 async function waitForHealth(port, child) {
-  const url = `http://${host}:${String(port)}/api/health`;
   const deadline = Date.now() + 60_000;
   let lastError = "not started";
   while (Date.now() <= deadline) {
     if (child.exitCode !== null) {
       throw new Error(`development server exited early; see ${logFile}`);
     }
-    try {
-      const response = await globalThis.fetch(url);
-      if (response.ok) return;
-      lastError = `HTTP ${String(response.status)}`;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
+    lastError = await devServerHealth(port);
+    if (lastError === "ok") return;
     await sleep(500);
   }
   throw new Error(`development server did not become healthy: ${lastError}; see ${logFile}`);
@@ -122,17 +197,26 @@ if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) {
 let spawnedChild;
 const state = readState();
 if (state !== undefined && isAlive(state.runnerPid)) {
+  const runningPort = state.publicPort ?? publicPort;
+  const health = await devServerHealth(runningPort);
+  if (health === "ok") {
+    console.log(
+      `Keiko dev UI already running on http://${host}:${String(runningPort)} (pid ${String(
+        state.runnerPid,
+      )}).`,
+    );
+    process.exit(0);
+  }
   console.log(
-    `Keiko dev UI already running on http://${host}:${String(state.publicPort ?? publicPort)} (pid ${String(
-      state.runnerPid,
-    )}).`,
+    `[dev:start] existing runner ${String(state.runnerPid)} is unhealthy (${health}); restarting.`,
   );
-  process.exit(0);
+  await stopUnhealthyRunner(state.runnerPid);
 }
 rmSync(pidFile, { force: true });
 
 try {
   ensureDependencies();
+  ensureDevGatewayConfig();
   run(npmCommand(), ["run", "build"], repoRoot);
   if (!(await checkPortAvailable(publicPort))) {
     if (explicitPublicPort !== undefined) {

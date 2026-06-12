@@ -41,6 +41,11 @@ const ENV_CREDENTIAL_FILENAMES = [
   ".env.production",
 ] as const;
 
+const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>> = {
+  chat: ["chatId"],
+  files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
+};
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -161,7 +166,10 @@ function sanitizeCfgForPersistence(
   if (!isRecord(cfg)) return {};
   const persistence = WIN_META[type].persistence;
   if (persistence === "durable.config") return {};
-  const allowedKeys = new Set((WIN_TYPES[type].config ?? []).map((field) => field.key));
+  const allowedKeys = new Set([
+    ...(WIN_TYPES[type].config ?? []).map((field) => field.key),
+    ...(INTERNAL_CFG_KEYS[type] ?? []),
+  ]);
   const out: Record<string, string | number | boolean | undefined> = {};
   for (const [key, value] of Object.entries(cfg)) {
     if (!allowedKeys.has(key)) continue;
@@ -263,6 +271,16 @@ export function sanitizePersistedConnections(
     // Release 0.2.0 — carry the bind-time snapshot fields through persistence (typed-checked,
     // never trusted blindly) so unbind-after-reload still removes the source the edge bound.
     const boundRoot = typeof conn.boundRoot === "string" && conn.boundRoot.length > 0;
+    const boundScopeKind =
+      conn.boundScopeKind === "workspace-root" ||
+      conn.boundScopeKind === "directory" ||
+      conn.boundScopeKind === "files";
+    const boundRelativePath =
+      typeof conn.boundRelativePath === "string" && conn.boundRelativePath.length > 0;
+    const boundChatWindowId =
+      typeof conn.boundChatWindowId === "string" &&
+      conn.boundChatWindowId.length > 0 &&
+      windowIds.has(conn.boundChatWindowId);
     const boundConnector =
       (conn.boundConnectorKind === "capsule" || conn.boundConnectorKind === "capsule-set") &&
       typeof conn.boundConnectorId === "string" &&
@@ -271,7 +289,10 @@ export function sanitizePersistedConnections(
       id: conn.id,
       a: conn.a,
       b: conn.b,
+      ...(boundChatWindowId ? { boundChatWindowId: conn.boundChatWindowId } : {}),
       ...(boundRoot ? { boundRoot: conn.boundRoot } : {}),
+      ...(boundScopeKind ? { boundScopeKind: conn.boundScopeKind } : {}),
+      ...(boundRelativePath ? { boundRelativePath: conn.boundRelativePath } : {}),
       ...(boundConnector
         ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
         : {}),

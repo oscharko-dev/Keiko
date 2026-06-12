@@ -292,6 +292,7 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
       }),
     );
     expect(screen.getByLabelText("Keiko is responding")).toBeInTheDocument();
+    expect(document.querySelector(".chat-msg-brand")).toHaveAttribute("data-pulsing", "true");
   });
 
   it("suppresses the typing indicator once tokens are streaming (no dots over live text)", () => {

@@ -977,12 +977,40 @@ button {
   color: var(--fg-muted);
   text-align: left;
 }
+.tr-dir-line {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+.tr-caret-btn {
+  display: grid;
+  flex: none;
+  width: 25px;
+  min-height: 24px;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--fg-faint);
+}
+.tr-caret-btn:hover:not(:disabled) {
+  background: var(--card-2);
+  color: var(--fg-muted);
+}
+.tr-caret-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.tr-dir-enter {
+  min-width: 0;
+  flex: 1;
+  width: auto;
+}
 .tr-row:hover:not(:disabled) {
   /* :not(:disabled) (uiux-fix F022 C202) — dead rows must not advertise a click;
      the aria-disabled pendant lives at the end of the file. */
   background: var(--card-2);
 }
-.tr-file[data-active="true"] {
+.tr-file[data-active="true"],
+.tr-dir-enter[data-active="true"] {
   background: var(--accent-dim);
   color: var(--fg);
 }
@@ -4229,6 +4257,41 @@ select.dlg-input {
   color: var(--fg-muted);
   margin-bottom: 5px;
 }
+.chat-msg-brand {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 6px -1px;
+}
+.chat-msg-brand img {
+  width: 22px;
+  height: 22px;
+  display: block;
+  transform-origin: center;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
+}
+.chat-msg-brand[data-pulsing="true"] img {
+  animation: chat-keiko-logo-pulse 1.15s cubic-bezier(0.42, 0, 0.58, 1) infinite;
+}
+@keyframes chat-keiko-logo-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72))
+      drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
+  }
+  50% {
+    transform: scale(1.14);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 8px rgba(126, 224, 171, 0.4));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg-brand[data-pulsing="true"] img {
+    animation: none;
+  }
+}
 .chat-msg-time {
   font-size: 10px;
   color: var(--fg-muted);
@@ -5848,29 +5911,9 @@ select.dlg-input {
   margin-top: 4px;
 }
 
-.files-scope-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 30px 8px 4px;
-}
-
-.files-scope-label {
-  font-size: 11px;
-  color: var(--fg-faint);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .tr-row-wrap {
   display: flex;
   flex-direction: column;
-}
-
-.tr-connect {
-  display: flex;
-  padding-top: 2px;
-  padding-bottom: 4px;
 }
 
 /* Issue #185 — grounded repository-aware Q&A evidence rendering. Lives in the .chatw-grounded
@@ -10082,29 +10125,6 @@ select.dlg-input {
   border-color: var(--ok);
 }
 
-/* ==== uiux-fix F014: tree scope-connect pill density (C214) ==== */
-/* One accent-filled 28px pill under every readable directory dominated the tree
-   (~2.2x row height). Compact secondary variant inside .tr-connect: accent-dim
-   chip (same --accent-text-on-dim pairing as .rail-new / .chat-ctx, AA in both
-   themes), tighter vertical footprint; ≥24px target (WCAG 2.5.8) and the connect
-   mechanics stay unchanged. The root-bar connector keeps the primary style. */
-.tr-connect {
-  padding-top: 0;
-  padding-bottom: 2px;
-}
-.tr-connect .scope-connect-btn {
-  padding: 2px 8px;
-  font-size: 11px;
-  background: var(--accent-dim);
-  color: var(--accent-text);
-  border-color: var(--accent-line);
-}
-.tr-connect .scope-connect-btn:hover:not(:disabled) {
-  filter: none;
-  background: var(--accent-glow);
-  border-color: var(--accent);
-}
-
 /* ==== uiux-fix F028: settings panel focus/hover/error states ==== */
 /* C047/C095 — .gpref-slider sets outline:none with no replacement: keyboard focus
    was invisible on a tab-stop range input (WCAG 2.4.7). App-convention ring;
@@ -11143,8 +11163,8 @@ ul.integ {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 6px 16px;
+  flex-wrap: nowrap;
+  padding: 6px 16px 4px;
 }
 /* C178 — grounding control label (was fully inline-styled). */
 .scope-grounding {
@@ -11154,9 +11174,32 @@ ul.integ {
   flex-wrap: wrap;
   font-size: 12px;
 }
-.scope-grounding .mono {
+.scope-grounding-label {
   /* WCAG 1.4.3 — 12px chat-scope label; --fg-dim is audited ≥4.5:1 on card surfaces. */
   color: var(--fg-dim);
+  transition:
+    color 0.18s ease,
+    text-shadow 0.18s ease;
+}
+.scope-grounding[data-connected="true"] .scope-grounding-label {
+  color: var(--accent-text);
+  text-shadow: 0 0 10px color-mix(in oklch, var(--accent) 30%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .scope-grounding[data-connected="true"] .scope-grounding-label {
+    animation: grounding-label-pulse 2.4s ease-in-out infinite;
+  }
+}
+@keyframes grounding-label-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 7px color-mix(in oklch, var(--accent) 20%, transparent);
+  }
+  50% {
+    opacity: 0.82;
+    text-shadow: 0 0 13px color-mix(in oklch, var(--accent) 44%, transparent);
+  }
 }
 /* C178 — the grounding select was the shell's only raw UA <select>, next to the
    chip-styled .cmp-model-select. Pattern: .qi-select; the
@@ -11501,4 +11544,190 @@ ul.integ {
   box-shadow:
     0 10px 30px -8px var(--accent-glow),
     0 6px 16px rgba(20, 30, 25, 0.22);
+}
+
+/* Chat History workspace tool */
+.chat-history {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  color: var(--fg);
+}
+
+.chat-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-history-head h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.chat-history-kicker {
+  margin: 0 0 3px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.chat-history-search {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+  padding: 0 10px;
+  color: var(--fg-muted);
+}
+
+.chat-history-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.chat-history-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--inset);
+  padding: 3px;
+}
+
+.chat-history-tab {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-history-tab span {
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chat-history-tab[aria-selected="true"] {
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.chat-history-tab[aria-selected="true"] span {
+  color: var(--accent-text);
+}
+
+.chat-history-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.chat-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 88%, transparent);
+  padding: 10px;
+}
+
+.chat-history-row:focus-within,
+.chat-history-row:hover {
+  border-color: var(--line-strong);
+  background: var(--card);
+}
+
+.chat-history-row-main {
+  min-width: 0;
+}
+
+.chat-history-open {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.chat-history-open:disabled {
+  cursor: default;
+}
+
+.chat-history-open:focus-visible,
+.chat-history-title-input:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.chat-history-title {
+  width: 100%;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-history-meta {
+  width: 100%;
+  overflow: hidden;
+  color: var(--fg-faint);
+  font-size: 11.5px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-history-title-input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 9px;
+}
+
+.chat-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }

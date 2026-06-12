@@ -364,6 +364,7 @@ export async function updateProject(
 export async function deleteProject(path: string): Promise<void> {
   await fetchJson<void>(`/api/projects?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
+    body: "{}",
   });
 }
 
@@ -440,6 +441,7 @@ export async function updateChatLocalKnowledgeScopes(
 export async function deleteChat(id: string): Promise<void> {
   await fetchJson<void>(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "DELETE",
+    body: "{}",
   });
 }
 

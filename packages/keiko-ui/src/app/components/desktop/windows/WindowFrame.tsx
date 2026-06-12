@@ -8,7 +8,6 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ChatWindow } from "../ChatWindow";
 import { Icons, type IconName } from "../Icons";
 import { subText } from "./connectionUtils";
 import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
@@ -94,14 +93,24 @@ function selectBody(
   updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
   openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
 ): BodySelection {
+  const def = WIN_TYPES[type];
   if (type === "chat") {
     const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
     return {
       mode: mini ? "mini" : "full",
-      node: <ChatWindow mini={mini} linkedRoot={linkedRoot} />,
+      node: def.render(cfg, {
+        mini,
+        linkedRoot,
+        linkedFilePath,
+        linkedRoots,
+        linkedCapsuleIds,
+        linkedCapsuleSetIds,
+        linkedFigmaSnapshotRunIds,
+        updateCfg,
+        openWindow,
+      }),
     };
   }
-  const def = WIN_TYPES[type];
   if (ew < def.tiny.w || eh < def.tiny.h) {
     return { mode: "tiny", node: <TooSmall icon={def.icon} label={def.title} /> };
   }

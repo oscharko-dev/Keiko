@@ -58,18 +58,18 @@ The form captures version, platform, reproduction steps, expected behavior, actu
 
 ## Quickstart
 
-Install Keiko globally and start the local UI:
+Install Keiko globally or use it directly in your project:
 
 ```bash
 npm install -g @oscharko-dev/keiko
-keiko start --open
+keiko init && keiko start
 ```
 
-The UI runs at `http://127.0.0.1:1983`. Configure a chat model in Settings, add a local project path, and start working with chat, test generation, bug investigation, or verification workflows.
+The UI opens at `http://127.0.0.1:1983`. Configure a chat model in Settings, add a local project path, and start working with chat, test generation, bug investigation, or verification workflows.
 
 To stop Keiko: `keiko stop`.
 
-For a project-local install (adds `keiko:start`/`keiko:stop` npm scripts via `keiko init`), see [Install and start](#install-and-start) below; setup issues are covered in [Troubleshooting](#troubleshooting).
+See [Install and start](#install-and-start) below for package-manager variations and the [Troubleshooting](#troubleshooting) section for setup issues.
 
 ## Development Start
 

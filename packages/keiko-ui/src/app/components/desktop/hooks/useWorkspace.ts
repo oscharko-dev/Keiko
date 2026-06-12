@@ -25,13 +25,14 @@ import {
 import {
   boundConnectorScopeOf,
   connectorChatBind,
-  filesChatBindRoot,
+  boundScopeOf,
+  filesChatBindScope,
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
   makeSnapActions,
 } from "./workspaceActions";
-import type { ChatLocalKnowledgeScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -413,12 +414,16 @@ function useConnectionPrune(
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
-  readonly onScopeBind?: ((filesRoot: string) => boolean | Promise<boolean>) | undefined;
-  readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
-  readonly onConnectorBind?:
-    | ((scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+  readonly onScopeBind?:
+    | ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>)
     | undefined;
-  readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
+  readonly onConnectorBind?:
+    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+    | undefined;
+  readonly onConnectorUnbind?:
+    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void)
+    | undefined;
 }
 
 export function useWorkspace(
@@ -520,13 +525,38 @@ export function useWorkspace(
         // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
         // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
         // for edges persisted before the snapshot fields existed.
-        const root = c.boundRoot ?? filesChatBindRoot(win, other);
-        if (root !== null) opts.onScopeUnbind?.(root);
-        const scope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
-        if (scope !== null) opts.onConnectorUnbind?.(scope);
+        const chatWindowId =
+          c.boundChatWindowId ??
+          (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
+        const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
+        if (scope !== null && chatWindowId !== null) opts.onScopeUnbind?.(chatWindowId, scope);
+        const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
+        if (connectorScope !== null && chatWindowId !== null) {
+          opts.onConnectorUnbind?.(chatWindowId, connectorScope);
+        }
       }
     }
     close(id);
+  };
+
+  const updateConnBoundScope: WorkspaceApi["updateConnBoundScope"] = (
+    connId: string,
+    scope: ChatConnectedScope,
+  ) => {
+    setConns((cs) =>
+      cs.map((conn) =>
+        conn.id === connId
+          ? {
+              ...conn,
+              boundScopeKind: scope.kind,
+              ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
+              ...(scope.relativePaths[0] !== undefined
+                ? { boundRelativePath: scope.relativePaths[0] }
+                : {}),
+            }
+          : conn,
+      ),
+    );
   };
 
   // Component unmount must also drop the global listener.
@@ -556,6 +586,7 @@ export function useWorkspace(
     confirmConnect,
     cancelConnect,
     removeConn,
+    updateConnBoundScope,
     connect,
     linkedFilesRoot,
     linkedFilesContext,

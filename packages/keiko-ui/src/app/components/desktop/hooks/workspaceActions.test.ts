@@ -9,9 +9,11 @@ import {
   appendConnectorScope,
   appendScope,
   connectorChatBind,
+  filesChatBindScope,
   effectiveLocalKnowledgeScopes,
   effectiveScopes,
   filesChatBindRoot,
+  filesVisibleScope,
   makeConnectActions,
   makeMutations,
   removeConnectorScope,
@@ -151,6 +153,74 @@ describe("filesChatBindRoot", () => {
 
   it("returns null when the files window has no resolvable absolute root", () => {
     expect(filesChatBindRoot(win("files", { root: "src" }), win("chat"))).toBeNull();
+  });
+});
+
+describe("filesVisibleScope", () => {
+  it("binds the repository root when the Files card is at the root view", () => {
+    expect(filesVisibleScope(win("files", { resolvedRoot: "/repo" }), 10)).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/repo",
+      connectedAtMs: 10,
+    });
+  });
+
+  it("binds the opened directory when the Files card is inside a folder", () => {
+    expect(
+      filesVisibleScope(
+        win("files", { resolvedRoot: "/repo", activeDirectoryPath: "packages" }),
+        11,
+      ),
+    ).toEqual({
+      kind: "directory",
+      relativePaths: ["packages"],
+      root: "/repo",
+      connectedAtMs: 11,
+    });
+  });
+
+  it("binds the previewed file before the containing directory", () => {
+    expect(
+      filesVisibleScope(
+        win("files", {
+          resolvedRoot: "/repo",
+          activeDirectoryPath: "packages",
+          activeFilePath: "packages/keiko-ui/package.json",
+        }),
+        12,
+      ),
+    ).toEqual({
+      kind: "files",
+      relativePaths: ["packages/keiko-ui/package.json"],
+      root: "/repo",
+      connectedAtMs: 12,
+    });
+  });
+});
+
+describe("filesChatBindScope", () => {
+  it("returns the Files visible scope for a Files↔Chat pair in either order", () => {
+    const files = win("files", { resolvedRoot: "/repo", activeDirectoryPath: "packages" });
+    const chat = win("chat");
+    expect(filesChatBindScope(files, chat, 13)).toMatchObject({
+      kind: "directory",
+      relativePaths: ["packages"],
+      root: "/repo",
+      connectedAtMs: 13,
+    });
+    expect(filesChatBindScope(chat, files, 14)).toMatchObject({
+      kind: "directory",
+      relativePaths: ["packages"],
+      root: "/repo",
+      connectedAtMs: 14,
+    });
+  });
+
+  it("returns null for non Files↔Chat pairings", () => {
+    expect(
+      filesChatBindScope(win("files", { resolvedRoot: "/repo" }), win("quality"), 1),
+    ).toBeNull();
   });
 });
 
@@ -305,10 +375,16 @@ function ref<T>(value: T): MutableRefObject<T> {
 interface ConnectHarnessOverrides {
   readonly connecting?: ConnectingState | null;
   readonly setConns?: Dispatch<SetStateAction<Connection[]>>;
-  readonly onScopeBind?: (root: string) => boolean | Promise<boolean>;
-  readonly onScopeUnbind?: (root: string) => void;
-  readonly onConnectorBind?: (scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>;
-  readonly onConnectorUnbind?: (scope: ChatLocalKnowledgeScope) => void;
+  readonly onScopeBind?: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+  ) => boolean | Promise<boolean>;
+  readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
+  readonly onConnectorBind?: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+  ) => boolean | Promise<boolean>;
+  readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
 }
 
 function makeConnectHarness(
@@ -717,6 +793,67 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
     expect(store.conns[0]?.boundRoot).toBe("/data/docs");
+    expect(store.conns[0]?.boundScopeKind).toBe("workspace-root");
+    expect(store.conns[0]?.boundRelativePath).toBeUndefined();
+  });
+
+  it("draws the edge with the visible directory scope when a Files card is inside a folder", async () => {
+    const store = { conns: [] as Connection[] };
+    const bound: ChatConnectedScope[] = [];
+    const harness = makeConnectHarness(
+      [
+        win("files", { resolvedRoot: "/data/docs", activeDirectoryPath: "src" }, "files-1"),
+        win("chat", {}, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: (_chatWindowId, scope) => {
+          bound.push(scope);
+          return true;
+        },
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(bound[0]).toMatchObject({
+      kind: "directory",
+      relativePaths: ["src"],
+      root: "/data/docs",
+    });
+    expect(store.conns[0]).toMatchObject({
+      boundRoot: "/data/docs",
+      boundScopeKind: "directory",
+      boundRelativePath: "src",
+    });
+  });
+
+  it("draws the edge with the previewed file scope when a file is open", async () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [
+        win(
+          "files",
+          { resolvedRoot: "/data/docs", activeDirectoryPath: "src", activeFilePath: "src/a.ts" },
+          "files-1",
+        ),
+        win("chat", {}, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: () => true,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(store.conns[0]).toMatchObject({
+      boundRoot: "/data/docs",
+      boundScopeKind: "files",
+      boundRelativePath: "src/a.ts",
+    });
   });
 
   it("does not draw the edge when onScopeBind resolves false after persistence failure", async () => {
@@ -829,7 +966,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       boundConnectorId: "cap-a",
     };
     const harness = makeConnectHarness([connector, chat], [edge], {
-      onConnectorUnbind: (scope) => {
+      onConnectorUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
       },
     });
@@ -839,7 +976,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
   });
 
   it("unbinds the bound root even after the Files window navigated elsewhere", () => {
-    const unbound: string[] = [];
+    const unbound: ChatConnectedScope[] = [];
     const files = win("files", { resolvedRoot: "/data/other" }, "files-1");
     const chat = win("chat", {}, "chat-1");
     const edge: Connection = {
@@ -849,24 +986,57 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       boundRoot: "/data/docs",
     };
     const harness = makeConnectHarness([files, chat], [edge], {
-      onScopeUnbind: (root) => {
-        unbound.push(root);
+      onScopeUnbind: (_chatWindowId, scope) => {
+        unbound.push(scope);
       },
     });
     harness.removeConn("files-1~chat-1");
-    expect(unbound).toEqual(["/data/docs"]);
+    expect(unbound[0]).toMatchObject({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/data/docs",
+    });
+  });
+
+  it("unbinds the bound directory even after the Files window navigated elsewhere", () => {
+    const unbound: ChatConnectedScope[] = [];
+    const files = win("files", { resolvedRoot: "/data/other" }, "files-1");
+    const chat = win("chat", {}, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+      boundScopeKind: "directory",
+      boundRelativePath: "src",
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      onScopeUnbind: (_chatWindowId, scope) => {
+        unbound.push(scope);
+      },
+    });
+    harness.removeConn("files-1~chat-1");
+    expect(unbound[0]).toMatchObject({
+      kind: "directory",
+      relativePaths: ["src"],
+      root: "/data/docs",
+    });
   });
 
   it("falls back to cfg-derivation for pre-snapshot edges", () => {
-    const unbound: string[] = [];
-    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const unbound: ChatConnectedScope[] = [];
+    const files = win("files", { resolvedRoot: "/data/docs", activeFilePath: "a.ts" }, "files-1");
     const chat = win("chat", {}, "chat-1");
     const harness = makeConnectHarness([files, chat], [conn("files-1", "chat-1")], {
-      onScopeUnbind: (root) => {
-        unbound.push(root);
+      onScopeUnbind: (_chatWindowId, scope) => {
+        unbound.push(scope);
       },
     });
     harness.removeConn("files-1~chat-1");
-    expect(unbound).toEqual(["/data/docs"]);
+    expect(unbound[0]).toMatchObject({
+      kind: "files",
+      relativePaths: ["a.ts"],
+      root: "/data/docs",
+    });
   });
 });

@@ -102,6 +102,23 @@ function makeCapsuleSetId(value: string): CapsuleSetId {
 }
 
 describe("ChatWindow cancel button", () => {
+  it("keeps connected resource details out of the chat header", () => {
+    const chat = makeChat({
+      connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
+    });
+    const { container } = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chat })}>
+        <ChatWindow linkedRoot="/proj" />
+      </ChatSessionProvider>,
+    );
+
+    const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
+    expect(select.value).toBe("files");
+    expect(container.querySelector(".scope-grounding")).toHaveAttribute("data-connected", "true");
+    expect(container.querySelector(".scope-pill")).toBeNull();
+    expect(container.querySelector(".chat-ctx")).toBeNull();
+  });
+
   it("does not render the cancel button when not sending", () => {
     const chat = makeChat({
       connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
@@ -629,6 +646,43 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
 
 // uiux-fix F042 (C208) — per-bubble copy affordance for assistant messages.
 describe("ChatWindow message copy", () => {
+  it("renders assistant identity as the Keiko logo without the visible wordmark", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Answer body.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    const assistantBubble = document.querySelector(
+      'article[data-role="assistant"] .chat-msg-bubble',
+    );
+    expect(assistantBubble).not.toBeNull();
+    expect(screen.getByRole("img", { name: "Keiko logo" })).toBeInTheDocument();
+    expect(assistantBubble?.querySelector(".chat-msg-brand img")).toHaveAttribute(
+      "src",
+      "/assets/keiko-logo.svg",
+    );
+    expect(assistantBubble?.querySelector(".chat-msg-brand")).toHaveAttribute(
+      "data-pulsing",
+      "false",
+    );
+    expect(assistantBubble?.querySelector(".chat-msg-role")).toBeNull();
+  });
+
   it("copies assistant plaintext with citation markers stripped; user bubbles get no copy button", async () => {
     // jsdom does not implement navigator.clipboard — same descriptor swap as
     // the SafeMarkdown code-block copy test.

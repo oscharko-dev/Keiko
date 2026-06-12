@@ -3,16 +3,18 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
-import type { FilesTreeEntry, SelectedScopeKind } from "../../../../../lib/types";
-import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
+import type { FilesTreeEntry } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
-import { ScopeConnectButton } from "../../ScopeConnectButton";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 
 interface FilesWidgetProps {
   root?: string;
-  onActiveFileChange?: (path: string | null, root: string | null) => void;
+  onActiveFileChange?: (
+    path: string | null,
+    root: string | null,
+    activeDirectoryPath?: string | null,
+  ) => void;
   // Called when the user opens a different machine path from the root bar. The window host
   // persists it into cfg.root so the new root survives reload (widgets/index.tsx). When omitted,
   // the root bar is hidden (the widget is then locked to its configured/fallback root).
@@ -30,6 +32,20 @@ function parentDir(path: string): string | null {
   // Windows drive root e.g. "C:" → keep the backslash form "C:\"
   if (/^[A-Za-z]:$/.test(trimmed.slice(0, idx))) return `${trimmed.slice(0, idx)}\\`;
   return trimmed.slice(0, idx);
+}
+
+function parentRelativePath(path: string): string | null {
+  const trimmed = path.replace(/\/+$/u, "");
+  const idx = trimmed.lastIndexOf("/");
+  if (idx < 0) return null;
+  const parent = trimmed.slice(0, idx);
+  return parent.length > 0 ? parent : null;
+}
+
+function displayPath(root: string, relativePath: string | null): string {
+  if (relativePath === null || relativePath.length === 0) return root;
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
 }
 
 interface DirectoryState {
@@ -62,9 +78,9 @@ function treeIndent(depth: number): number {
 
 const TREE_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"]);
 
-// Arrow-key traversal for the file tree (APG tree pattern subset, audit C215). Rows stay
-// native buttons — Tab/Enter/Space keep working — arrows add efficient traversal, Home/End
-// jump, Right expands / Left collapses or moves to the parent level (via aria-level).
+// Arrow-key traversal for the file tree (APG tree pattern subset, audit C215). Directory rows use
+// a separate caret button for expansion, so Right/Left dispatch to that caret while Enter/Space on
+// the row enters the folder.
 function focusParentRow(rows: readonly HTMLButtonElement[], index: number): void {
   const level = Number(rows[index]?.getAttribute("aria-level") ?? "1");
   for (let i = index - 1; i >= 0; i -= 1) {
@@ -78,16 +94,19 @@ function focusParentRow(rows: readonly HTMLButtonElement[], index: number): void
 function handleTreeNavKey(rows: readonly HTMLButtonElement[], index: number, key: string): void {
   const row = rows[index];
   if (row === undefined) return;
+  const toggle = row
+    .closest(".tr-row-wrap")
+    ?.querySelector<HTMLButtonElement>("button.tr-caret-btn");
   if (key === "ArrowDown") rows[index + 1]?.focus();
   else if (key === "ArrowUp") rows[index - 1]?.focus();
   else if (key === "Home") rows[0]?.focus();
   else if (key === "End") rows[rows.length - 1]?.focus();
   else if (key === "ArrowRight") {
     const expandedState = row.getAttribute("aria-expanded");
-    if (expandedState === "false") row.click();
+    if (expandedState === "false") toggle?.click();
     else if (expandedState === "true") rows[index + 1]?.focus();
   } else if (key === "ArrowLeft") {
-    if (row.getAttribute("aria-expanded") === "true") row.click();
+    if (row.getAttribute("aria-expanded") === "true") toggle?.click();
     else focusParentRow(rows, index);
   }
 }
@@ -111,8 +130,6 @@ export function FilesWidget({
   onRootChange,
   onOpenFile,
 }: FilesWidgetProps): ReactNode {
-  const session = useOptionalChatSessionContext();
-  const activeChat = session?.activeChat;
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
   const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
@@ -122,6 +139,7 @@ export function FilesWidget({
   // (real) root whenever the widget loads a folder, so it always shows where we are.
   const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
   const [refreshKey, setRefreshKey] = useState(0);
@@ -193,7 +211,8 @@ export function FilesWidget({
         const response = await fetchFilesTree(apiRoot, path);
         if (path === "") {
           setResolvedRoot(response.root);
-          activeFileChangeRef.current?.(null, response.root);
+          activeFileChangeRef.current?.(null, response.root, null);
+          setCurrentDirectoryPath(null);
         }
         setDirectories((current) => ({
           ...current,
@@ -223,33 +242,52 @@ export function FilesWidget({
 
   useEffect(() => {
     setSelectedPath(null);
-    activeFileChangeRef.current?.(null, null);
+    setCurrentDirectoryPath(null);
+    activeFileChangeRef.current?.(null, null, null);
     setResolvedRoot(null);
     setExpanded(new Set([""]));
     setDirectories({});
     void loadDirectory("");
   }, [apiRoot, loadDirectory, refreshKey]);
 
-  // Keep the root-bar input showing where we actually are (the resolved real root, else the api root).
+  const visibleRootPath = displayPath(
+    resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : ""),
+    currentDirectoryPath,
+  );
+
+  // Keep the root-bar input showing where we actually are (resolved root + current folder).
   useEffect(() => {
-    const current = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : "");
-    setRootDraft(current);
-  }, [resolvedRoot, apiRoot]);
+    setRootDraft(visibleRootPath);
+  }, [visibleRootPath]);
 
   const openRoot = useCallback(
     (next: string): void => {
       const target = next.trim();
       if (onRootChange === undefined || target.length === 0) return;
-      if (target === (resolvedRoot ?? apiRoot)) return;
+      if (target === visibleRootPath) return;
       onRootChange(target);
     },
-    [onRootChange, resolvedRoot, apiRoot],
+    [onRootChange, visibleRootPath],
+  );
+
+  const goToDirectory = useCallback(
+    (path: string | null): void => {
+      setSelectedPath(null);
+      setCurrentDirectoryPath(path);
+      activeFileChangeRef.current?.(null, resolvedRoot ?? apiRoot, path);
+      if (path !== null && directories[path] === undefined) void loadDirectory(path);
+    },
+    [apiRoot, directories, loadDirectory, resolvedRoot],
   );
 
   const goUp = useCallback((): void => {
+    if (currentDirectoryPath !== null) {
+      goToDirectory(parentRelativePath(currentDirectoryPath));
+      return;
+    }
     const parent = parentDir(resolvedRoot ?? apiRoot);
     if (parent !== null) openRoot(parent);
-  }, [resolvedRoot, apiRoot, openRoot]);
+  }, [apiRoot, currentDirectoryPath, goToDirectory, openRoot, resolvedRoot]);
 
   const toggleDirectory = (entry: FilesTreeEntry): void => {
     if (!entry.readable) return;
@@ -263,6 +301,11 @@ export function FilesWidget({
     if (!wasOpen && directories[entry.path] === undefined) {
       void loadDirectory(entry.path);
     }
+  };
+
+  const enterDirectory = (entry: FilesTreeEntry): void => {
+    if (!entry.readable) return;
+    goToDirectory(entry.path);
   };
 
   const retryDirectory = (path: string): void => {
@@ -286,39 +329,6 @@ export function FilesWidget({
     handleTreeNavKey(rows, index, event.key);
   };
 
-  const renderScopeConnector = (
-    scopeKind: SelectedScopeKind,
-    relativePath: string,
-    targetName?: string,
-  ): ReactNode => {
-    if (session === null || activeChat === undefined) return null;
-    if (apiRoot.length === 0) return null;
-    if (scopeKind !== "workspace-root" && relativePath.length === 0) return null;
-    return (
-      <ScopeConnectButton
-        chatId={activeChat.id}
-        scopeKind={scopeKind}
-        scopeRoot={resolvedRoot ?? apiRoot}
-        currentScopeKind={activeChat.connectedScope?.kind}
-        candidateRelativePaths={scopeKind === "workspace-root" ? [] : [relativePath]}
-        chat={activeChat}
-        onConnected={session.replaceChat}
-        targetName={targetName}
-      />
-    );
-  };
-
-  const renderRootConnector = (): ReactNode => {
-    const connector = renderScopeConnector("workspace-root", "");
-    if (connector === null) return null;
-    return (
-      <div className="files-scope-bar" role="group" aria-label="Repository scope connector">
-        <span className="files-scope-label">Repository scope</span>
-        {connector}
-      </div>
-    );
-  };
-
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     const pad = treeIndent(depth);
     const open = expanded.has(entry.path);
@@ -331,34 +341,44 @@ export function FilesWidget({
       const state = directories[entry.path];
       return (
         <div className="tr-row-wrap" key={entry.path}>
-          <button
-            className="tr-row"
-            role="treeitem"
-            aria-level={depth + 1}
-            aria-selected={false}
-            data-readable={entry.readable}
-            style={{ paddingLeft: pad }}
-            type="button"
-            aria-disabled={entry.readable ? undefined : true}
-            aria-describedby={entry.readable ? undefined : unreadableReasonId}
-            aria-expanded={open}
-            onClick={() => toggleDirectory(entry)}
-            title={entry.readable ? entry.path : unreadableTitle}
-          >
-            <span className="tr-caret" data-open={open}>
-              <Icons.chevronR size={11} />
-            </span>
-            <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-              <Icons.folder size={14} />
-            </span>
-            <span className="tr-name tr-folder">{entry.name}</span>
-            {entry.symlink ? <span className="tr-badge">link</span> : null}
-          </button>
-          {entry.readable ? (
-            <div className="tr-connect" style={{ paddingLeft: pad + 20 }}>
-              {renderScopeConnector("directory", entry.path, entry.name)}
-            </div>
-          ) : null}
+          <div className="tr-dir-line" style={{ paddingLeft: pad }}>
+            <button
+              className="tr-caret-btn"
+              type="button"
+              tabIndex={-1}
+              disabled={!entry.readable}
+              aria-label={`${open ? "Collapse" : "Expand"} folder: ${entry.name}`}
+              onClick={() => toggleDirectory(entry)}
+              title={
+                entry.readable ? `${open ? "Collapse" : "Expand"} ${entry.path}` : unreadableTitle
+              }
+            >
+              <span className="tr-caret" data-open={open}>
+                <Icons.chevronR size={11} />
+              </span>
+            </button>
+            <button
+              className="tr-row tr-dir-enter"
+              role="treeitem"
+              aria-level={depth + 1}
+              aria-selected={currentDirectoryPath === entry.path}
+              data-active={currentDirectoryPath === entry.path}
+              data-readable={entry.readable}
+              data-path={entry.path}
+              type="button"
+              aria-disabled={entry.readable ? undefined : true}
+              aria-describedby={entry.readable ? undefined : unreadableReasonId}
+              aria-expanded={open}
+              onClick={() => enterDirectory(entry)}
+              title={entry.readable ? entry.path : unreadableTitle}
+            >
+              <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+                <Icons.folder size={14} />
+              </span>
+              <span className="tr-name tr-folder">{entry.name}</span>
+              {entry.symlink ? <span className="tr-badge">link</span> : null}
+            </button>
+          </div>
           {open ? renderDirectory(entry.path, depth + 1, state) : null}
         </div>
       );
@@ -480,7 +500,7 @@ export function FilesWidget({
             type="button"
             className="files-root-up"
             onClick={goUp}
-            disabled={parentDir(resolvedRoot ?? apiRoot) === null}
+            disabled={currentDirectoryPath === null && parentDir(resolvedRoot ?? apiRoot) === null}
             title="Open parent folder"
             aria-label="Open parent folder"
           >
@@ -509,7 +529,6 @@ export function FilesWidget({
       >
         <Icons.reset size={13} />
       </button>
-      {renderRootConnector()}
       <span id={unreadableReasonId} className="visually-hidden">
         This link can&apos;t be opened from this folder.
       </span>
@@ -522,7 +541,7 @@ export function FilesWidget({
         tabIndex={-1}
         onKeyDown={onTreeKeyDown}
       >
-        {renderDirectory("", 0)}
+        {renderDirectory(currentDirectoryPath ?? "", 0)}
       </div>
     </div>
   );

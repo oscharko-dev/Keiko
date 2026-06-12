@@ -20,18 +20,25 @@ import { useTheme } from "./hooks/useTheme";
 import { useWorkspace } from "./hooks/useWorkspace";
 import {
   appendConnectorScope,
-  appendScope,
+  appendConnectedScope,
   effectiveLocalKnowledgeScopes,
   effectiveScopes,
   isConnectorScopeConnected,
-  isRootConnected,
+  isScopeConnected,
   removeConnectorScope,
-  removeScope,
+  removeConnectedScope,
+  boundScopeOf,
+  filesChatBindScope,
   totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
-import type { ChatLocalKnowledgeScope, GroundingLimits } from "@/lib/types";
+import type {
+  Chat,
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
+  GroundingLimits,
+} from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
@@ -119,6 +126,29 @@ function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
     : "Review window open";
 }
 
+function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
+  if (scope === null || scope.root === undefined) return null;
+  return [
+    scope.root.replace(/\\/gu, "/").replace(/\/+$/u, ""),
+    scope.kind,
+    ...scope.relativePaths.map((path) => path.replace(/\\/gu, "/").replace(/^\/+|\/+$/gu, "")),
+  ].join("\u0000");
+}
+
+function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
+  if (win?.type !== "chat") return undefined;
+  const value = win.cfg["chatId"];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function relationshipPathForScope(scope: ChatConnectedScope): string | null {
+  if (scope.root === undefined) return null;
+  const relativePath = scope.relativePaths[0]?.replace(/\\/gu, "/").replace(/^\/+/u, "");
+  if (relativePath === undefined || relativePath.length === 0) return scope.root;
+  const root = scope.root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  return `${root}/${relativePath}`;
+}
+
 const CARD_TYPES: readonly WindowType[] = [
   "chat",
   "connector",
@@ -140,6 +170,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   // with LeftRail buttons but were missing here, so the command palette could not open them
   // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
   // the WindowsRegistry declaration.
+  "chatHistory",
   "keiko",
   "settings",
   "project",
@@ -240,8 +271,9 @@ export function buildAppShellCommands(
 function AppShellInner(): ReactNode {
   const { theme, toggle: toggleTheme } = useTheme();
   const twin = useTwin();
-  const session = useChatSession();
+  const session = useChatSession({ autoCreate: false });
   const wsRef = useRef<HTMLDivElement>(null);
+  const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
   // defaults until /api/config resolves (or if an older server omits effectiveGroundingLimits).
   const [groundingLimits, setGroundingLimits] = useState<GroundingLimits>(DEFAULT_GROUNDING_LIMITS);
@@ -268,30 +300,56 @@ function AppShellInner(): ReactNode {
     setSourceConnectionNotice(message);
     return false;
   }, []);
-  // Epic #532 — a Files↔Chat relationship edge binds/unbinds the folder on the active chat's
-  // connectedScopes (1+N), so the gesture actually grounds the chat against the connected folder(s).
+  const chatForWindow = useCallback(
+    (chatWindowId: string): Chat | undefined => {
+      const chatId = chatIdFromWindow(
+        wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId),
+      );
+      if (chatId === undefined) return undefined;
+      const chat =
+        session.chats.find((chat) => chat.id === chatId) ??
+        (session.activeChat?.id === chatId ? session.activeChat : undefined);
+      return chat?.status === "closed" ? undefined : chat;
+    },
+    [session.activeChat, session.chats],
+  );
+  // Files↔Chat edges bind the Files window's visible scope: repository root, opened folder, or
+  // previewed file. The green edge is now the only UI affordance for this binding.
   // Release 0.2.0 — returns whether the bind was accepted: at the source limit the bind is
   // REJECTED (with a visible notice) instead of silently evicting the oldest source, and the
   // caller skips drawing the edge so no dangling ungrounded edge appears.
-  const handleScopeBind = useCallback(
-    async (filesRoot: string): Promise<boolean> => {
-      const chat = session.activeChat;
+  const replaceFilesScope = useCallback(
+    async (
+      chatWindowId: string,
+      nextScope: ChatConnectedScope,
+      previousScope: ChatConnectedScope | null = null,
+    ): Promise<boolean> => {
+      const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
-        return rejectForConnectionFailure("Open a chat before connecting a source.");
+        return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
       }
-      const current = effectiveScopes(chat);
+      const current =
+        previousScope === null
+          ? effectiveScopes(chat)
+          : removeConnectedScope(effectiveScopes(chat), previousScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
-      if (isRootConnected(current, filesRoot)) return true;
+      if (isScopeConnected(current, nextScope)) {
+        if (previousScope !== null) {
+          const res = await updateChatConnectedScopes(chat.id, current.length > 0 ? current : null);
+          session.replaceChat(res.chat);
+        }
+        return true;
+      }
       const cap = totalSourceCap(groundingLimits);
       if (current.length + lkScopes.length >= cap) {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
-      const next = appendScope(current, filesRoot, Date.now(), groundingLimits.maxConnectedSources);
+      const scope = { ...nextScope, connectedAtMs: Date.now() };
+      const next = appendConnectedScope(current, scope, groundingLimits.maxConnectedSources);
       if (next === null) {
         return rejectForConnectionFailure("Choose a local folder before connecting it to chat.");
       }
       if (next === current) {
-        // Not a duplicate (checked above) → the per-list folder cap rejected the append.
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
       try {
@@ -301,7 +359,8 @@ function AppShellInner(): ReactNode {
         // Epic #532 unification — also record the green edge as a governed reads-context
         // relationship so the connection is validated, audited, and visible in the relationship
         // graph. Best-effort: never blocks or breaks the grounding scope bind above.
-        recordReadsContextRelationship(chat.id, filesRoot);
+        const relationshipPath = relationshipPathForScope(scope);
+        if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
         return true;
       } catch {
         return rejectForConnectionFailure(
@@ -309,13 +368,18 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    [session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
+    [chatForWindow, session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
+  );
+  const handleScopeBind = useCallback(
+    async (chatWindowId: string, scope: ChatConnectedScope): Promise<boolean> =>
+      replaceFilesScope(chatWindowId, scope),
+    [replaceFilesScope],
   );
   const handleScopeUnbind = useCallback(
-    (filesRoot: string): void => {
-      const chat = session.activeChat;
+    (chatWindowId: string, scope: ChatConnectedScope): void => {
+      const chat = chatForWindow(chatWindowId);
       if (chat === undefined) return;
-      const next = removeScope(effectiveScopes(chat), filesRoot);
+      const next = removeConnectedScope(effectiveScopes(chat), scope);
       void updateChatConnectedScopes(chat.id, next.length > 0 ? next : null)
         .then((res) => {
           session.replaceChat(res.chat);
@@ -325,17 +389,17 @@ function AppShellInner(): ReactNode {
           console.warn("[keiko] connected-scope unbind failed", error);
         });
     },
-    [session],
+    [chatForWindow, session],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
   // Release 0.2.0 — same accepted/veto contract as handleScopeBind: at the source limit the
   // bind is rejected with a visible notice instead of silently evicting the oldest source.
   const handleConnectorBind = useCallback(
-    async (scope: ChatLocalKnowledgeScope): Promise<boolean> => {
-      const chat = session.activeChat;
+    async (chatWindowId: string, scope: ChatLocalKnowledgeScope): Promise<boolean> => {
+      const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
-        return rejectForConnectionFailure("Open a chat before connecting a source.");
+        return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
       }
       const current = effectiveLocalKnowledgeScopes(chat);
       const folderScopes = effectiveScopes(chat);
@@ -360,11 +424,11 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    [session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
+    [chatForWindow, session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
   );
   const handleConnectorUnbind = useCallback(
-    (scope: ChatLocalKnowledgeScope): void => {
-      const chat = session.activeChat;
+    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
+      const chat = chatForWindow(chatWindowId);
       if (chat === undefined) return;
       const key =
         scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
@@ -375,7 +439,7 @@ function AppShellInner(): ReactNode {
         })
         .catch(() => undefined);
     },
-    [session],
+    [chatForWindow, session],
   );
   const ws = useWorkspace(wsRef, {
     onScopeBind: handleScopeBind,
@@ -383,6 +447,26 @@ function AppShellInner(): ReactNode {
     onConnectorBind: handleConnectorBind,
     onConnectorUnbind: handleConnectorUnbind,
   });
+  wsWinsForBindingRef.current = ws.wins;
+
+  useEffect(() => {
+    if (ws.wins === null) return;
+    for (const conn of ws.conns) {
+      const a = ws.wins.find((win) => win.id === conn.a);
+      const b = ws.wins.find((win) => win.id === conn.b);
+      if (a === undefined || b === undefined) continue;
+      const chatWindowId =
+        conn.boundChatWindowId ?? (a.type === "chat" ? a.id : b.type === "chat" ? b.id : null);
+      if (chatWindowId === null) continue;
+      const nextScope = filesChatBindScope(a, b, Date.now());
+      if (nextScope === null) continue;
+      const previousScope = boundScopeOf(conn);
+      if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) continue;
+      void replaceFilesScope(chatWindowId, nextScope, previousScope).then((accepted) => {
+        if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
+      });
+    }
+  }, [replaceFilesScope, ws.api, ws.conns, ws.wins]);
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
@@ -430,13 +514,8 @@ function AppShellInner(): ReactNode {
       ) {
         ws.api.connect(createdId, __connectFilesId);
       }
-      // uiux-fix F008 C051 — "New chat" must start a fresh conversation instead of mirroring the
-      // active one into a second window. The dialog's title field becomes the conversation title.
-      // The ws.api.add call above stays untouched (window-opening mechanics unchanged).
-      if (current === "chat") {
-        const title = windowCfg.title;
-        void session.openNewChat(undefined, typeof title === "string" ? title : undefined);
-      }
+      // Chat windows create and persist their own conversation id inside the window renderer.
+      // Keeping creation scoped there is what makes N+1 chat windows independent.
       // uiux-fix F008 C053 — focus handoff: once the dialog unmounts, move focus into the freshly
       // created window (chat composer / first focusable control) instead of stranding it on
       // <body>. The dialog's unmount cleanup restores the trigger synchronously before this rAF
@@ -451,7 +530,7 @@ function AppShellInner(): ReactNode {
         });
       }
     },
-    [pending, ws.api, session],
+    [pending, ws.api],
   );
   const closeDialog = useCallback((): void => setPending(null), []);
   const closeCmdk = useCallback((): void => setCmdkOpen(false), []);

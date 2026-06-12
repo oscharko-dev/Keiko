@@ -1,5 +1,5 @@
 import type { WorkspaceDirEntry, WorkspaceFs } from "./fs.js";
-import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
+import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
@@ -18,7 +18,6 @@ interface EntryWalk {
   readonly scope: ScopeShape;
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
-  readonly ignoreMatcher: IgnoreMatcher;
   readonly files: DiscoveredFile[];
   truncated: boolean;
 }
@@ -49,8 +48,8 @@ function pushAllowedFile(walk: EntryWalk, relPath: string, absPath: string): voi
   }
 }
 
-function allowedByFilters(walk: EntryWalk, relPath: string, isDirectory: boolean): boolean {
-  return !isDenied(relPath) && !isIgnored(walk.ignoreMatcher, relPath, isDirectory);
+function allowedByFilters(relPath: string): boolean {
+  return !isDenied(relPath);
 }
 
 function handleDirectoryEntry(
@@ -65,13 +64,13 @@ function handleDirectoryEntry(
   }
   const root = walk.scope.workspace.root;
   const childRel = dirRel.length === 0 ? entry.name : `${dirRel}/${entry.name}`;
-  if (!allowedByFilters(walk, childRel, entry.isDirectory)) {
+  if (!allowedByFilters(childRel)) {
     return;
   }
   const childAbs = resolveWithinWorkspace(root, childRel);
   const contained = containedRealPathInfo(walk.fs, root, childAbs);
   const realRel = normalizeScopePath(contained.realRelative);
-  if (!allowedByFilters(walk, realRel, entry.isDirectory)) {
+  if (!allowedByFilters(realRel)) {
     return;
   }
   if (entry.isDirectory) {
@@ -117,8 +116,8 @@ function handleScopeEntry(walk: EntryWalk, entry: string): void {
     );
   }
   if (
-    !allowedByFilters(walk, entryRel, stat.isDirectory) ||
-    !allowedByFilters(walk, realRel, stat.isDirectory)
+    !allowedByFilters(entryRel) ||
+    !allowedByFilters(realRel)
   ) {
     return;
   }
@@ -139,7 +138,6 @@ export function collectFromEntries(
     scope,
     limits,
     fs,
-    ignoreMatcher: compileIgnore(scope.workspace.ignoreLines),
     files: out,
     truncated: false,
   };

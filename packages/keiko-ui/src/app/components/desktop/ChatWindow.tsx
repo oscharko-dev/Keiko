@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -9,12 +10,6 @@ import {
   type ReactNode,
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
-import {
-  buildLastGroundedBudgetStatus,
-  ConnectedScopePill,
-  type LastGroundedBudgetStatus,
-} from "./ConnectedScopePill";
-import { ConnectorScopePill } from "./ConnectorScopePill";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
@@ -210,7 +205,7 @@ function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
   return (
     <article className="chat-msg" data-role={message.role}>
       <div className="chat-msg-bubble">
-        <div className="chat-msg-role">{isUser ? "You" : "Keiko"}</div>
+        {isUser ? <div className="chat-msg-role">You</div> : <KeikoMessageMark />}
         {isUser ? (
           message.content
         ) : (
@@ -234,11 +229,24 @@ function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
   );
 }
 
+function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): ReactNode {
+  return (
+    <div
+      className="chat-msg-brand"
+      data-pulsing={pulsing ? "true" : "false"}
+      role="img"
+      aria-label="Keiko logo"
+    >
+      <Image src="/assets/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
+    </div>
+  );
+}
+
 function TypingBubble(): ReactNode {
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
-        <div className="chat-msg-role">Keiko</div>
+        <KeikoMessageMark pulsing />
         {/* uiux-fix F042 (C319) — aria-label is prohibited on a generic span and
             ignored by AT; role="img" makes the label exposed. The lifecycle
             announcement itself comes from SendLifecycleStatus. */}
@@ -762,18 +770,6 @@ function MiniChat({
   );
 }
 
-// Design pattern (widgets.jsx ChatWidget): when this card is connected to a
-// Files card via the workspace's connection graph, surface the linked folder
-// so the conversation context is visible to the user. Without this the
-// connect-card gesture has no perceptible effect inside the chat.
-function ChatContext({ root }: { readonly root: string }): ReactNode {
-  return (
-    <div className="chat-ctx">
-      <Icons.files size={12} /> Context <span className="mono">{root}/</span>
-    </div>
-  );
-}
-
 function groundedModeValue(chat: Chat): string {
   const firstLocalKnowledgeScope = chat.localKnowledgeScopes?.[0] ?? chat.localKnowledgeScope;
   if (firstLocalKnowledgeScope?.kind === "capsule") {
@@ -865,10 +861,8 @@ function capsuleSetOptions(
   ];
 }
 
-// uiux-fix F041 (C172) — the capsule/set catalog is loaded ONCE at the scope-
-// header level and shared: the grounding select needs the option lists and the
-// connector pills need the display names (previously the pills always fell back
-// to raw capsule ids because their labels map was never populated).
+// uiux-fix F041 (C172) — the capsule/set catalog is loaded ONCE at the scope-header level and
+// shared by the grounding select.
 interface KnowledgeCatalog {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
@@ -914,27 +908,16 @@ function useKnowledgeCatalog(): KnowledgeCatalog {
   return { capsules, capsuleSets, loadError };
 }
 
-// uiux-fix F041 (C172) — scope key (`capsule:<id>` / `set:<id>`, matching
-// ConnectorScopePill.scopeKey) → full pill label with display name.
-function connectorLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
-  const labels = new Map<string, string>();
-  for (const capsule of catalog.capsules) {
-    labels.set(`capsule:${capsule.id}`, `Capsule: ${capsule.displayName}`);
-  }
-  for (const capsuleSet of catalog.capsuleSets) {
-    labels.set(`set:${capsuleSet.id}`, `Capsule set: ${capsuleSet.displayName}`);
-  }
-  return labels;
-}
-
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
   catalog,
+  connected,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
   readonly catalog: KnowledgeCatalog;
+  readonly connected: boolean;
 }): ReactNode {
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
@@ -1003,8 +986,8 @@ function LocalKnowledgeScopeControl({
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
-    <label className="scope-grounding">
-      <span className="mono">Grounding</span>
+    <label className="scope-grounding" data-connected={connected ? "true" : "false"}>
+      <span className="scope-grounding-label mono">Grounding</span>
       <select
         className="scope-grounding-select"
         value={value}
@@ -1038,38 +1021,27 @@ function LocalKnowledgeScopeControl({
   );
 }
 
-// Issue #184 — surfaces the chat's explicit connected-scope binding (set via the Files-window
-// connector). Rendered above the message log so screen-reader users hear the live-region
-// announce when the binding flips. The pill self-hides when no scope is bound.
 function ChatScopeHeader({
   chat,
   onChatChanged,
-  lastGroundedBudgetStatus,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
-  readonly lastGroundedBudgetStatus: LastGroundedBudgetStatus | undefined;
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
   const catalog = useKnowledgeCatalog();
   // uiux-fix F041 (C178/C179) — layout moved from inline styles to the
   // .chat-scope-header rule in globals.css (16px inset, themeable).
+  const connected = hasGroundingScope(chat);
   return (
-    <div className="chat-scope-header">
-      {/* Folder pills: one per connected folder/file source (1+N, #532). Self-guards to null. */}
-      <ConnectedScopePill
+    <div className="chat-scope-header" data-grounded={connected ? "true" : "false"}>
+      <LocalKnowledgeScopeControl
         chat={chat}
-        onDisconnect={onChatChanged}
-        lastGroundedBudgetStatus={lastGroundedBudgetStatus}
+        onChatChanged={onChatChanged}
+        catalog={catalog}
+        connected={connected}
       />
-      {/* Connector pills: one per Local Knowledge connector source (#189 Slice 3 M4). Mixed N. */}
-      <ConnectorScopePill
-        chat={chat}
-        onDisconnect={onChatChanged}
-        labels={connectorLabels(catalog)}
-      />
-      <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} catalog={catalog} />
     </div>
   );
 }
@@ -1356,7 +1328,7 @@ function MemoryPanel({
   );
 }
 
-export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps): ReactNode {
+export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
   const {
     messages,
@@ -1387,16 +1359,6 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const lastGroundedBudgetStatus = buildLastGroundedBudgetStatus(
-    latestGrounded === undefined
-      ? undefined
-      : latestGrounded.groundingKind === "connected-context"
-        ? latestGrounded.contextPack
-        : latestGrounded.groundingKind === "hybrid"
-          ? latestGrounded.contextPack.folder
-          : undefined,
-  );
-
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
   // reader is near the bottom; never yank someone who scrolled up into the
@@ -1415,13 +1377,8 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
   if (mini) {
     return (
       <div className="chatw chatw-mini">
-        {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
         {activeChat !== undefined ? (
-          <ChatScopeHeader
-            chat={activeChat}
-            onChatChanged={replaceChat}
-            lastGroundedBudgetStatus={lastGroundedBudgetStatus}
-          />
+          <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
         ) : null}
         {noEligibleModels ? <NoModelAlert /> : null}
         <MiniChat session={session} ready={ready} />
@@ -1439,13 +1396,8 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
 
   return (
     <div className="chatw">
-      {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
       {activeChat !== undefined ? (
-        <ChatScopeHeader
-          chat={activeChat}
-          onChatChanged={replaceChat}
-          lastGroundedBudgetStatus={lastGroundedBudgetStatus}
-        />
+        <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
       ) : null}
       {activeChat !== undefined ? (
         <MemoryPanel

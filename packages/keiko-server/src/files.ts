@@ -16,7 +16,6 @@ import {
   relative,
   resolve,
 } from "node:path";
-import { compileIgnore, isIgnored, type IgnoreMatcher } from "@oscharko-dev/keiko-workspace";
 import { redact } from "@oscharko-dev/keiko-security";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -26,7 +25,6 @@ import type { Project, UiStore } from "./store/index.js";
 const MAX_DIRECTORY_ENTRIES = 1_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
-const MAX_IGNORED_SCAN_ENTRIES = 10_000;
 type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
@@ -464,35 +462,14 @@ function childRelative(parentRelativePath: string, name: string): string {
   return parentRelativePath.length === 0 ? name : `${parentRelativePath}/${name}`;
 }
 
-// Best-effort: read the project root's `.gitignore` if present. Silent failure
-// is intentional — `.gitignore` is tier-2 noise reduction, not a safety
-// boundary (deny-list is tier 1). A missing/unreadable `.gitignore` is "no
-// filter". No long-lived cache: the BFF is stateless across user-selected roots.
-async function loadRootGitignore(rootPath: string): Promise<IgnoreMatcher | null> {
-  let raw: string;
-  try {
-    raw = await readFile(join(rootPath, ".gitignore"), "utf8");
-  } catch {
-    return null;
-  }
-  const withoutBom = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
-  return compileIgnore(withoutBom.split("\n"));
-}
-
-function skipEntry(
-  matcher: IgnoreMatcher | null,
-  rel: string,
-  isDir: boolean,
-): "denied" | "ignored" | null {
-  if (pathIsDenied(rel)) return "denied";
-  return matcher !== null && isIgnored(matcher, rel, isDir) ? "ignored" : null;
+function skipEntry(rel: string): boolean {
+  return pathIsDenied(rel);
 }
 
 async function listTreeEntries(
   root: string,
   relativePath: string,
   pathValue: string,
-  matcher: IgnoreMatcher | null,
   redactor: FilesMetadataRedactor,
 ): Promise<{
   readonly entries: readonly FilesTreeEntry[];
@@ -501,28 +478,15 @@ async function listTreeEntries(
   const entries: FilesTreeEntry[] = [];
   const dir = await opendir(pathValue);
   let truncated = false;
-  let ignoredScans = 0;
   try {
     for await (const entry of dir) {
-      // Deny and .gitignore filtering happen BEFORE the truncation counter so
-      // a directory packed with denied entries (e.g. node_modules/**) cannot
-      // exhaust the 1000-entry budget and hide real files behind
-      // `truncated: true`. Deny is applied by the link name (the user only
-      // sees that name) so a symlink whose own name matches a deny pattern is
-      // denied even if its target does not — matches the workspace-layer
-      // semantics.
+      // Deny filtering happens BEFORE the truncation counter so a directory packed with denied
+      // entries (e.g. node_modules/**) cannot exhaust the 1000-entry budget and hide real files
+      // behind `truncated: true`. .gitignore is intentionally not a Files visibility filter:
+      // safe dotfiles and generated files must remain visible and connectable.
       const rel = childRelative(relativePath, entry.name);
       if (!metadataIsSafe(rel, redactor)) continue;
-      const skipReason = skipEntry(matcher, rel, entry.isDirectory());
-      if (skipReason === "denied") continue;
-      if (skipReason === "ignored") {
-        ignoredScans += 1;
-        if (ignoredScans >= MAX_IGNORED_SCAN_ENTRIES) {
-          truncated = true;
-          break;
-        }
-        continue;
-      }
+      if (skipEntry(rel)) continue;
       if (entries.length >= MAX_DIRECTORY_ENTRIES) {
         truncated = true;
         break;
@@ -546,17 +510,7 @@ export async function readFilesTree(
   if (!target.stats.isDirectory()) {
     throw new FilesError(400, "NOT_DIRECTORY", "The requested path is not a directory.");
   }
-  // Per-request: read the project root's `.gitignore` once. Best-effort noise
-  // reduction only; the matcher never relaxes the deny list. No long-lived
-  // cache — the BFF must stay stateless across user-selected roots.
-  const ignoreMatcher = await loadRootGitignore(target.realRoot);
-  const listed = await listTreeEntries(
-    target.realRoot,
-    target.relativePath,
-    target.path,
-    ignoreMatcher,
-    redactor,
-  );
+  const listed = await listTreeEntries(target.realRoot, target.relativePath, target.path, redactor);
   return {
     root: target.root,
     path: target.relativePath,

@@ -1,6 +1,11 @@
+import { useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import { ChatWindow } from "../ChatWindow";
+import { ChatSessionProvider } from "../context/ChatSessionContext";
+import { useChatSession } from "../hooks/useChatSession";
 import { ProjectPanel } from "./panels/ProjectPanel";
+import { ChatHistoryPanel } from "./panels/ChatHistoryPanel";
 import { SearchPanel } from "./panels/SearchPanel";
 import { PluginsPanel } from "./panels/PluginsPanel";
 import { AutomationsPanel } from "./panels/AutomationsPanel";
@@ -103,6 +108,72 @@ function toAgentCfg(cfg: Record<string, unknown>): AgentRunCfg {
   return out;
 }
 
+function ChatWindowSessionHost({
+  cfg,
+  ctx,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+}): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  const creatingRef = useRef(false);
+  const chatId = str(cfg, "chatId");
+  const title = str(cfg, "title");
+  const { updateCfg } = ctx;
+  const { activeChat, chats, loading, openChat, openNewChat } = session;
+  const activeTarget =
+    activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
+
+  useEffect(() => {
+    if (loading) return;
+    if (chatId !== undefined) {
+      if (activeTarget?.id === chatId) return;
+      const target = chats.find((chat) => chat.id === chatId && chat.status !== "closed");
+      if (target !== undefined) void openChat(target);
+      return;
+    }
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    void openNewChat(undefined, title)
+      .then((created) => {
+        if (created !== undefined) updateCfg({ chatId: created.id, title: created.title });
+      })
+      .finally(() => {
+        creatingRef.current = false;
+      });
+  }, [chatId, activeTarget?.id, chats, loading, openChat, openNewChat, title, updateCfg]);
+
+  const targetMissing =
+    chatId !== undefined &&
+    !session.loading &&
+    activeTarget?.id !== chatId &&
+    !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
+  const waitingForTarget = session.loading || (chatId !== undefined && activeTarget?.id !== chatId);
+
+  return (
+    <ChatSessionProvider value={session}>
+      {targetMissing ? (
+        <div className="lk-empty">
+          <p className="lk-empty-title">Chat not found</p>
+          <p className="lk-empty-body">This conversation was deleted or is no longer available.</p>
+        </div>
+      ) : waitingForTarget ? (
+        <div className="lk-loading">Opening chat...</div>
+      ) : (
+        <ChatWindow mini={ctx.mini === true} linkedRoot={ctx.linkedRoot} />
+      )}
+    </ChatSessionProvider>
+  );
+}
+
+registerWindowRender("chat", (cfg, ctx) => <ChatWindowSessionHost cfg={cfg} ctx={ctx} />);
+registerWindowRender("chatHistory", (_cfg, ctx) => (
+  <ChatHistoryPanel
+    openChatWindow={(chat) => {
+      ctx.openWindow("chat", { chatId: chat.id, title: chat.title });
+    }}
+  />
+));
 registerWindowRender("project", () => <ProjectPanel />);
 registerWindowRender("search", () => <SearchPanel />);
 registerWindowRender("plugins", () => <PluginsPanel />);
@@ -168,16 +239,29 @@ registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
   const root = str(cfg, "root");
-  const onActiveFileChange = (path: string | null, resolvedRoot: string | null): void => {
-    ctx.updateCfg({
+  const onActiveFileChange = (
+    path: string | null,
+    resolvedRoot: string | null,
+    activeDirectoryPath?: string | null,
+  ): void => {
+    const patch: Record<string, string | undefined> = {
       activeFilePath: path ?? undefined,
       resolvedRoot: resolvedRoot ?? undefined,
-    });
+    };
+    if (activeDirectoryPath !== undefined) {
+      patch.activeDirectoryPath = activeDirectoryPath ?? undefined;
+    }
+    ctx.updateCfg(patch);
   };
   // Persist the new root into cfg so opening a different machine path survives reload, and so a
   // connected Chat re-binds to the new folder on the next scope update.
   const onRootChange = (nextRoot: string): void => {
-    ctx.updateCfg({ root: nextRoot, activeFilePath: undefined, resolvedRoot: undefined });
+    ctx.updateCfg({
+      root: nextRoot,
+      activeFilePath: undefined,
+      activeDirectoryPath: undefined,
+      resolvedRoot: undefined,
+    });
   };
   const onOpenFile = (fileRoot: string, path: string): void => {
     ctx.openWindow("editor", { root: fileRoot, file: path });

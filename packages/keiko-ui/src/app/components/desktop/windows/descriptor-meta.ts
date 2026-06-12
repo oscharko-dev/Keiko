@@ -25,6 +25,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "durable.ui",
   },
+  chatHistory: {
+    lifecycle: ["live", "archived"],
+    trustBoundary: ["ui"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
   files: {
     lifecycle: ["connecting", "connected", "degraded", "disconnected", "error"],
     trustBoundary: ["ui", "fs"],

@@ -3,6 +3,7 @@ import type { IconName } from "../Icons";
 
 export type WindowType =
   | "chat"
+  | "chatHistory"
   | "files"
   | "editor"
   | "browser"
@@ -53,6 +54,7 @@ export interface ConfigField {
 }
 
 export interface WindowRenderContext {
+  readonly mini?: boolean;
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
   readonly linkedRoots: readonly string[];
@@ -132,6 +134,17 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         placeholder: "Name this conversation",
       },
     ],
+  },
+  chatHistory: {
+    title: "Chat History",
+    icon: "archive",
+    desc: "Manage conversations",
+    w: 380,
+    h: 560,
+    min: { w: 300, h: 320 },
+    tiny: { w: 260, h: 220 },
+    tool: true,
+    singleton: true,
   },
   files: {
     title: "Files",
@@ -471,6 +484,7 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 // Wave 5 palette ordering. Cards first, then tools.
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
+  "chatHistory",
   "connector",
   "figma",
   "files",

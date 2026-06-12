@@ -14,6 +14,7 @@ interface RailTool {
 
 const PRIMARY: readonly RailTool[] = [
   { id: "keiko", icon: "spark", label: "Keiko", img: "/assets/keiko-logo.svg" },
+  { id: "chatHistory", icon: "archive", label: "Chat History" },
   { id: "project", icon: "folder", label: "Project" },
   { id: "search", icon: "search", label: "Search" },
   { id: "plugins", icon: "plugins", label: "Plugins" },

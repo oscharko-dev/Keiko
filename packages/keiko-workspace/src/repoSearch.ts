@@ -1,5 +1,5 @@
 // Governed, deterministic, audit-friendly repository search facade (Epic #177, Issue #179).
-// Composes the existing workspace primitives — discovery, ignore/deny, realpath gate,
+// Composes the existing workspace primitives — discovery, deny policy, realpath gate,
 // readWorkspaceFile, plus the new binaryDetect and stableId modules — into three public
 // APIs that emit normalized EvidenceAtom output: searchText, findFiles, readExcerpt.
 // Pure JS (no subprocess, no ripgrep — deferred). Every fs touch goes through the
@@ -21,7 +21,7 @@ import {
   RepoSearchUnsupportedFileError,
 } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
-import { compileIgnore, isDenied, isIgnored } from "./ignore.js";
+import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import { buildMatcher, compileGlob, fingerprintFor } from "./repoSearchMatchers.js";
@@ -181,7 +181,6 @@ export async function searchText(
     nowMs,
     startMs: nowMs(),
     matcher: buildMatcher(query),
-    ignoreMatcher: compileIgnore(scope.workspace.ignoreLines),
     fingerprint: fingerprintFor(query),
   };
   const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
@@ -206,7 +205,6 @@ export async function searchText(
 interface FindFilesContext {
   readonly scope: SearchScope;
   readonly regex: RegExp;
-  readonly ignoreMatcher: ReturnType<typeof compileIgnore>;
   readonly fingerprint: string;
   readonly nowMs: () => number;
 }
@@ -239,7 +237,6 @@ function findFilesSync(
   const ctx: FindFilesContext = {
     scope,
     regex: compileGlob(query.text),
-    ignoreMatcher: compileIgnore(scope.workspace.ignoreLines),
     fingerprint: fingerprintFor(query),
     nowMs,
   };
@@ -254,7 +251,7 @@ function findFilesSync(
       truncated = true;
       break;
     }
-    if (isDenied(file.relativePath) || isIgnored(ctx.ignoreMatcher, file.relativePath, false)) {
+    if (isDenied(file.relativePath)) {
       candidates.push(buildCandidate(file.relativePath, "ignored"));
       continue;
     }
@@ -326,22 +323,13 @@ function resolveExcerptTarget(
   return { path: contained.path, realScopePath };
 }
 
-function assertExcerptReadableByPolicy(
-  scope: SearchScope,
-  requestPath: string,
-  realScopePath: string,
-): void {
-  // Deny/ignore gates must fire BEFORE any byte read (incl. the binary probe) so that a
-  // denied path such as .env is never read at all, including through an in-workspace symlink.
-  const ignoreMatcher = compileIgnore(scope.workspace.ignoreLines);
-  if (
-    isDenied(requestPath) ||
-    isDenied(realScopePath) ||
-    isIgnored(ignoreMatcher, requestPath, false) ||
-    isIgnored(ignoreMatcher, realScopePath, false)
-  ) {
+function assertExcerptReadableByPolicy(requestPath: string, realScopePath: string): void {
+  // Deny gates must fire BEFORE any byte read (incl. the binary probe) so that a denied path such
+  // as .env is never read at all, including through an in-workspace symlink. .gitignore is not a
+  // context policy boundary; safe ignored/dot files remain readable when the user scopes them in.
+  if (isDenied(requestPath) || isDenied(realScopePath)) {
     throw new RepoSearchUnsupportedFileError(
-      `cannot read excerpt of denied or ignored path: ${requestPath}`,
+      `cannot read excerpt of denied path: ${requestPath}`,
       "denied",
     );
   }
@@ -421,7 +409,7 @@ export async function readExcerpt(
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
   const target = resolveExcerptTarget(scope, request.scopePath, fs);
-  assertExcerptReadableByPolicy(scope, request.scopePath, target.realScopePath);
+  assertExcerptReadableByPolicy(request.scopePath, target.realScopePath);
   assertExcerptWithinSelectedScope(scope, target.realScopePath);
   const stat = fs.stat(target.path);
   await assertExcerptNotBinary(fs, target.path, stat.size, request.scopePath);

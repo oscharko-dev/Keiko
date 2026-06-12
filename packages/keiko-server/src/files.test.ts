@@ -445,6 +445,17 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "node_modules", "foo.js"), "module.exports = 1;\n");
     await mkdir(join(root, ".git"));
     await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await mkdir(join(root, ".keiko"));
+    await writeFile(join(root, ".keiko", "state.json"), "{}\n");
+    await mkdir(join(root, ".codex"));
+    await writeFile(join(root, ".codex", "history.jsonl"), "{}\n");
+    await mkdir(join(root, ".claude"));
+    await writeFile(join(root, ".claude", "transcript.jsonl"), "{}\n");
+    await mkdir(join(root, ".playwright-mcp"));
+    await writeFile(join(root, ".playwright-mcp", "session.json"), "{}\n");
+    await mkdir(join(root, ".idea"));
+    await writeFile(join(root, ".idea", "workspace.xml"), "<workspace />\n");
+    await writeFile(join(root, "keiko.config.json"), "{}\n");
 
     const listing = await readFilesTree(store, root, "");
     const names = listing.entries.map((entry) => entry.name);
@@ -455,6 +466,12 @@ describe("desktop files browser", () => {
     expect(names).not.toContain("server.pem");
     expect(names).not.toContain("node_modules");
     expect(names).not.toContain(".git");
+    expect(names).not.toContain(".keiko");
+    expect(names).not.toContain(".codex");
+    expect(names).not.toContain(".claude");
+    expect(names).not.toContain(".playwright-mcp");
+    expect(names).not.toContain(".idea");
+    expect(names).not.toContain("keiko.config.json");
   });
 
   it("rejects navigation into a denied subtree with 403 DENIED", async () => {
@@ -538,8 +555,11 @@ describe("desktop files browser", () => {
     expect(names).toEqual(["real-a.txt", "real-b.txt", "real-c.txt"]);
   });
 
-  it("honors the project root's .gitignore in tree listings", async () => {
+  it("shows safe hidden and .gitignore-matched entries in tree listings", async () => {
     await writeFile(join(root, ".gitignore"), "generated/\nartifact.txt\n");
+    await writeFile(join(root, ".toolrc"), "tool config\n");
+    await mkdir(join(root, ".safe-hidden"));
+    await writeFile(join(root, ".safe-hidden", "note.txt"), "hidden note\n");
     await mkdir(join(root, "generated"));
     await writeFile(join(root, "generated", "bundle.js"), "// bundle\n");
     await writeFile(join(root, "artifact.txt"), "artifact\n");
@@ -549,14 +569,16 @@ describe("desktop files browser", () => {
     const names = listing.entries.map((entry) => entry.name);
 
     expect(names).toContain("keep.txt");
-    expect(names).not.toContain("generated");
-    expect(names).not.toContain("artifact.txt");
+    expect(names).toContain(".gitignore");
+    expect(names).toContain(".toolrc");
+    expect(names).toContain(".safe-hidden");
+    expect(names).toContain("generated");
+    expect(names).toContain("artifact.txt");
   });
 
   it("still previews .gitignore-matched files (preview is not best-effort)", async () => {
-    // .gitignore is tier-2 noise reduction for listings only. A user clicking
-    // through a direct URL to an ignored (but not denied) file must still
-    // receive a preview. The chosen name does NOT match any deny pattern.
+    // .gitignore is not a Files visibility or preview policy boundary. A user clicking through a
+    // direct URL to an ignored (but not denied) file must receive a preview.
     await writeFile(join(root, ".gitignore"), "artifact.txt\n");
     await writeFile(join(root, "artifact.txt"), "artifact content\n");
 
@@ -568,8 +590,7 @@ describe("desktop files browser", () => {
     }
   });
 
-  it("treats a missing .gitignore as no filter (best-effort, no error)", async () => {
-    // Verifies loadRootGitignore's silent fallback. No .gitignore in fixture.
+  it("lists ordinary files without requiring .gitignore", async () => {
     await writeFile(join(root, "ordinary.txt"), "kept\n");
 
     const listing = await readFilesTree(store, root, "");

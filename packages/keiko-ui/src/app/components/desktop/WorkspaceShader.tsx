@@ -13,7 +13,7 @@ precision highp float;
 uniform vec2  uRes;
 uniform float uTime;
 uniform vec2  uMouse;   // 0..1, y up
-uniform float uDark;    // 1 = dark theme, 0 = light
+uniform float uLight;   // 1 = light theme, 0 = dark; WebGL default 0 keeps failure mode dark
 uniform vec2  uRip[4];  // ripple origins (0..1, y up)
 uniform float uRipT[4]; // seconds since each ripple fired (large = inactive)
 
@@ -81,20 +81,20 @@ void main(){
   vec3 metalL = vec3(0.795, 0.835, 0.812);  // soft grey
   vec3 green  = vec3(0.306, 0.729, 0.529);  // #4EBA87
 
-  vec3 base  = mix(baseL,  baseD,  uDark);
-  vec3 metal = mix(metalL, metalD, uDark);
+  vec3 base  = mix(baseD,  baseL,  uLight);
+  vec3 metal = mix(metalD, metalL, uLight);
 
   vec3 col = mix(base, metal, chrome * 0.85);
 
   // orca-green sheen on the brightest specular ridges
   float spec = smoothstep(0.80, 1.0, bands);
-  col += green * spec * mix(0.085, 0.16, uDark);
+  col += green * spec * mix(0.16, 0.085, uLight);
 
   // soft green glow trailing the cursor — fun to fidget with
   col += green * md * 0.085;
 
   // ripple highlight
-  vec3 ripCol = mix(green, vec3(1.0), uDark);
+  vec3 ripCol = mix(vec3(1.0), green, uLight);
   col += ripCol * max(rip, 0.0) * 0.032;
 
   // keep it dezent — pull back toward base
@@ -187,7 +187,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   const uRes: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRes");
   const uTime: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uTime");
   const uMouse: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uMouse");
-  const uDark: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uDark");
+  const uLight: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uLight");
   const uRip: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRip");
   const uRipT: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRipT");
 
@@ -254,13 +254,13 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
       ripT[i] = (now - (ripStart[i] ?? Number.NEGATIVE_INFINITY)) / 1000;
     }
 
-    const dark = document.documentElement.dataset.theme === "light" ? 0 : 1;
+    const light = document.documentElement.dataset.theme === "light" ? 1 : 0;
 
     if (gl !== null) {
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, time);
       gl.uniform2f(uMouse, mouse.x, mouse.y);
-      gl.uniform1f(uDark, dark);
+      gl.uniform1f(uLight, light);
       gl.uniform2fv(uRip, ripPos);
       gl.uniform1fv(uRipT, ripT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -291,8 +291,10 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     if (ro !== null) ro.disconnect();
     else window.removeEventListener("resize", resize);
     if (gl !== null) {
-      const ext = gl.getExtension("WEBGL_lose_context");
-      if (ext !== null) ext.loseContext();
+      gl.deleteBuffer(buf);
+      gl.deleteProgram(prog);
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
     }
   };
 }

@@ -2,6 +2,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { SnapZone } from "../windows/connectionUtils";
 import type { WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
+import type { ChatConnectedScope } from "@/lib/types";
 
 export interface ViewportWorld {
   readonly x: number;
@@ -32,6 +33,7 @@ export interface WorkspaceApi {
   readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
   readonly cancelConnect: () => void;
   readonly removeConn: (connId: string) => void;
+  readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
   readonly connect: (a: string, b: string) => void;
   readonly linkedFilesRoot: (id: string) => string | null;
   readonly linkedFilesContext: (id: string) => FilesWindowContext | null;

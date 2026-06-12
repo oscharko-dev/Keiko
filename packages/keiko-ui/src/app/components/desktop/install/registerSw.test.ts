@@ -5,6 +5,8 @@ import { registerSw } from "./registerSw";
 // shape and behaviour of `register()` is fully controlled.
 interface FakeServiceWorkerContainer {
   register: ReturnType<typeof vi.fn>;
+  getRegistrations?: ReturnType<typeof vi.fn>;
+  controller?: ServiceWorker | null;
 }
 
 function installServiceWorker(container: FakeServiceWorkerContainer): void {
@@ -30,6 +32,7 @@ describe("registerSw (issue #126)", () => {
   afterEach(() => {
     removeServiceWorker();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("calls navigator.serviceWorker.register with /sw.js and scope '/'", () => {
@@ -84,5 +87,22 @@ describe("registerSw (issue #126)", () => {
     expect(() => {
       registerSw();
     }).not.toThrow();
+  });
+
+  it("unregisters service workers instead of registering them in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const unregister = vi.fn().mockResolvedValue(true);
+    const getRegistrations = vi.fn().mockResolvedValue([{ unregister }]);
+    const register = vi.fn().mockResolvedValue({});
+    installServiceWorker({ controller: null, getRegistrations, register });
+
+    registerSw();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(register).not.toHaveBeenCalled();
+    expect(getRegistrations).toHaveBeenCalledOnce();
+    expect(unregister).toHaveBeenCalledOnce();
   });
 });

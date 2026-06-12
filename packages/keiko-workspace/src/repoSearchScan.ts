@@ -16,7 +16,7 @@ import {
 import { discoverFiles, readWorkspaceFile } from "./discovery.js";
 import { FileTooLargeError, RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
-import { isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
+import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import { looksBinary } from "./binaryDetect.js";
@@ -117,7 +117,7 @@ function collectFromDirectory(
 ): { files: readonly DiscoveredFile[]; truncated: boolean } {
   const files = discoverFiles(
     scope.workspace,
-    { maxDepth: 12, maxFiles: limits.maxFilesScanned + 1, applyGitignore: true },
+    { maxDepth: 12, maxFiles: limits.maxFilesScanned + 1, applyGitignore: false },
     fs,
   );
   return {
@@ -179,7 +179,6 @@ export interface SearchTextRunner {
   readonly nowMs: () => number;
   readonly startMs: number;
   readonly matcher: LineMatcher;
-  readonly ignoreMatcher: IgnoreMatcher;
   readonly fingerprint: string;
 }
 
@@ -306,14 +305,14 @@ export async function scanFile(
     candidates.push(buildCandidate(file.relativePath, "binary"));
     return;
   }
-  if (isDenied(file.relativePath) || isIgnored(runner.ignoreMatcher, file.relativePath, false)) {
+  if (isDenied(file.relativePath)) {
     candidates.push(buildCandidate(file.relativePath, "ignored"));
     return;
   }
   const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
   const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
   const realRel = normalizeScopePath(contained.realRelative);
-  if (isDenied(realRel) || isIgnored(runner.ignoreMatcher, realRel, false)) {
+  if (isDenied(realRel)) {
     candidates.push(buildCandidate(file.relativePath, "ignored"));
     return;
   }

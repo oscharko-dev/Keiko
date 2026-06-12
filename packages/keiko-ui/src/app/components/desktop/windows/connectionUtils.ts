@@ -52,6 +52,18 @@ function configRoot(cfg: Record<string, unknown> | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string): string {
+  const activeFile = cfg?.["activeFilePath"];
+  if (typeof activeFile === "string" && activeFile.length > 0) {
+    return activeFile.split(/[/\\]/u).filter(Boolean).pop() ?? activeFile;
+  }
+  const activeDirectory = cfg?.["activeDirectoryPath"];
+  if (typeof activeDirectory === "string" && activeDirectory.length > 0) {
+    return `${activeDirectory.split(/[/\\]/u).filter(Boolean).pop() ?? activeDirectory}/`;
+  }
+  return `${root.split(/[/\\]/u).filter(Boolean).pop() ?? root}/`;
+}
+
 export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   const filesSide: WinSnapshot | null = a.type === "files" ? a : b.type === "files" ? b : null;
   const other = filesSide === null ? null : filesSide === a ? b : a;
@@ -65,8 +77,7 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
     if (root === null) return "no folder selected";
     // Show only the basename — full absolute paths blew the badge up to hundreds of pixels
     // of destructive (remove) click area on the canvas.
-    const base = root.split(/[/\\]/u).filter(Boolean).pop() ?? root;
-    return `uses ${base}/`;
+    return `uses ${filesScopeLabel(filesSide.cfg, root)}`;
   }
   const pair: readonly [string, string] = [a.type, b.type];
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the

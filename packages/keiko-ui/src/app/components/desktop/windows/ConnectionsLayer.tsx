@@ -27,6 +27,23 @@ interface ResolvedConn {
   readonly dataChannel: boolean;
 }
 
+function connectionMetadataLabel(item: ResolvedConn): string {
+  const parts = [`Connection: ${item.label}`];
+  if (item.c.boundRoot !== undefined) {
+    parts.push(`Root: ${item.c.boundRoot}`);
+  }
+  if (item.c.boundScopeKind !== undefined) {
+    parts.push(`Scope: ${item.c.boundScopeKind}`);
+  }
+  if (item.c.boundRelativePath !== undefined && item.c.boundRelativePath.length > 0) {
+    parts.push(`Path: ${item.c.boundRelativePath}`);
+  }
+  if (item.c.boundConnectorKind !== undefined && item.c.boundConnectorId !== undefined) {
+    parts.push(`Knowledge: ${item.c.boundConnectorKind} ${item.c.boundConnectorId}`);
+  }
+  return parts.join("\n");
+}
+
 // Window kinds a chat reads data FROM. A live exchange on a chat↔source edge is what the data-flow
 // visualization animates (Epic #532 — connections are relationships; activity rides the edge).
 const DATA_SOURCE_TYPES: ReadonlySet<string> = new Set([
@@ -289,6 +306,7 @@ export function ConnectionsLayer({
         {items.map((it) => {
           const active = flowing && it.dataChannel;
           const armed = armedId === it.c.id;
+          const metadataLabel = connectionMetadataLabel(it);
           return (
             <button
               key={it.c.id}
@@ -311,7 +329,9 @@ export function ConnectionsLayer({
                 if (armed) disarm();
               }}
               title={
-                armed ? `Click again to remove: ${it.label}` : `Remove connection: ${it.label}`
+                armed
+                  ? `Click again to remove: ${it.label}\n\n${metadataLabel}`
+                  : `${metadataLabel}\n\nClick once to arm removal.`
               }
               aria-label={
                 armed

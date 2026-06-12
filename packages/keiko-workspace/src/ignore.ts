@@ -85,6 +85,13 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   // Keiko runtime/evidence state. These files are internal product artifacts, not repository
   // source, and must never be discoverable through connected repository grounding.
   ".keiko",
+  "keiko.config.json",
+  // Local tool and IDE runtime state. These directories can contain prompts, transcripts,
+  // worktrees, extension caches, shelves, and machine-local metadata; they are not source context.
+  ".codex",
+  ".claude",
+  ".playwright-mcp",
+  ".idea",
   // build
   "dist",
   "build",

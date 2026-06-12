@@ -1,4 +1,5 @@
 import type { WindowType } from "./WindowsRegistry";
+import type { SelectedScopeKind } from "@/lib/types";
 
 export interface AppWindow {
   readonly id: string;
@@ -28,7 +29,10 @@ export interface Connection {
   // user may have navigated the Files window elsewhere or re-selected another capsule since,
   // and the re-derived value would unbind the wrong source. Absent on non-binding edges and
   // on edges persisted before 0.2.0 (callers fall back to cfg-derivation).
+  readonly boundChatWindowId?: string;
   readonly boundRoot?: string;
+  readonly boundScopeKind?: SelectedScopeKind;
+  readonly boundRelativePath?: string;
   readonly boundConnectorKind?: "capsule" | "capsule-set";
   readonly boundConnectorId?: string;
 }

@@ -109,6 +109,14 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
           return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
         }
       }
+      const dedupeChatId = type === "chat" ? cfg?.["chatId"] : undefined;
+      if (typeof dedupeChatId === "string" && dedupeChatId.length > 0) {
+        const existing = list.find((w) => w.type === "chat" && w.cfg["chatId"] === dedupeChatId);
+        if (existing !== undefined) {
+          createdId = existing.id;
+          return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
+        }
+      }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 40);
       const id = t.singleton === true ? type : `${type}-${Date.now().toString(36)}`;
       createdId = id;
@@ -301,19 +309,29 @@ interface ConnectArgs {
   // connectedScopes so the relationship gesture actually grounds the chat against the folder.
   // Release 0.2.0 — the bind callback returns whether the bind was ACCEPTED; `false` (e.g. the
   // per-chat source limit is reached) vetoes the edge so no dangling ungrounded edge is drawn.
-  readonly onScopeBind?: ((filesRoot: string) => boolean | Promise<boolean>) | undefined;
-  readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
+  readonly onScopeBind?:
+    | ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>)
+    | undefined;
+  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
   readonly onConnectorBind?:
-    | ((scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
     | undefined;
-  readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorUnbind?:
+    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void)
+    | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
   return cs.some((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
+}
+
+function chatWindowIdInPair(a: AppWindow | undefined, b: AppWindow | undefined): string | null {
+  if (a?.type === "chat") return a.id;
+  if (b?.type === "chat") return b.id;
+  return null;
 }
 
 type ConnectApi = Pick<
@@ -379,15 +397,19 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       // other window pairing. Release 0.2.0 — the bind callback now VETOES the edge: when the
       // source limit rejects the bind, drawing the edge anyway would show a connection that does
       // not ground anything (dangling-edge inconsistency).
-      const boundRoot = filesChatBindRoot(from, to);
-      const connectorScope = boundRoot === null ? connectorChatBind(from, to) : null;
+      const boundScope = filesChatBindScope(from, to, Date.now());
+      const connectorScope = boundScope === null ? connectorChatBind(from, to) : null;
+      const chatWindowId =
+        boundScope !== null || connectorScope !== null ? chatWindowIdInPair(from, to) : null;
       let accepted: boolean | Promise<boolean>;
       try {
         accepted =
-          boundRoot !== null
-            ? (onScopeBind?.(boundRoot) ?? true)
+          boundScope !== null && chatWindowId !== null
+            ? (onScopeBind?.(chatWindowId, boundScope) ?? true)
             : connectorScope !== null
-              ? (onConnectorBind?.(connectorScope) ?? true)
+              ? chatWindowId !== null
+                ? (onConnectorBind?.(chatWindowId, connectorScope) ?? true)
+                : false
               : true;
       } catch {
         accepted = false;
@@ -411,7 +433,14 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
                     id: `${c.from}~${toId}`,
                     a: c.from,
                     b: toId,
-                    ...(boundRoot !== null ? { boundRoot } : {}),
+                    ...(chatWindowId !== null ? { boundChatWindowId: chatWindowId } : {}),
+                    ...(boundScope !== null
+                      ? {
+                          boundRoot: boundScope.root,
+                          boundScopeKind: boundScope.kind,
+                          boundRelativePath: boundScope.relativePaths[0],
+                        }
+                      : {}),
                     ...(connectorScope !== null
                       ? connectorScope.kind === "capsule"
                         ? {
@@ -481,11 +510,15 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const a = list.find((w) => w.id === conn.a);
     const b = list.find((w) => w.id === conn.b);
     const bothLive = a !== undefined && b !== undefined;
-    const boundRoot = conn.boundRoot ?? (bothLive ? filesChatBindRoot(a, b) : null);
-    if (boundRoot !== null) onScopeUnbind?.(boundRoot);
+    const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
+    const boundScope =
+      boundScopeOf(conn) ?? (bothLive ? filesChatBindScope(a, b, Date.now()) : null);
+    if (boundScope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, boundScope);
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
-    if (connectorScope !== null) onConnectorUnbind?.(connectorScope);
+    if (connectorScope !== null && chatWindowId !== null) {
+      onConnectorUnbind?.(chatWindowId, connectorScope);
+    }
   };
 
   const connect: WorkspaceApi["connect"] = (a, b) => {
@@ -683,6 +716,50 @@ export function resolvedFilesRoot(w: AppWindow): string | null {
   return root !== null && isAbsoluteRoot(root) ? root : null;
 }
 
+function normaliseRelativePath(path: string): string {
+  return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+}
+
+function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
+  if (a.root === undefined || b.root === undefined) return false;
+  if (normaliseRoot(a.root) !== normaliseRoot(b.root)) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.relativePaths.length !== b.relativePaths.length) return false;
+  return a.relativePaths.every(
+    (path, index) =>
+      normaliseRelativePath(path) === normaliseRelativePath(b.relativePaths[index] ?? ""),
+  );
+}
+
+export function filesVisibleScope(w: AppWindow, connectedAtMs: number): ChatConnectedScope | null {
+  const root = resolvedFilesRoot(w);
+  if (root === null) return null;
+  const activeFile = w.cfg["activeFilePath"];
+  if (typeof activeFile === "string" && activeFile.length > 0) {
+    return {
+      kind: "files",
+      relativePaths: [normaliseRelativePath(activeFile)],
+      root: normaliseRoot(root),
+      connectedAtMs,
+    };
+  }
+  const activeDirectory = w.cfg["activeDirectoryPath"];
+  if (typeof activeDirectory === "string" && activeDirectory.length > 0) {
+    return {
+      kind: "directory",
+      relativePaths: [normaliseRelativePath(activeDirectory)],
+      root: normaliseRoot(root),
+      connectedAtMs,
+    };
+  }
+  return {
+    kind: "workspace-root",
+    relativePaths: [],
+    root: normaliseRoot(root),
+    connectedAtMs,
+  };
+}
+
 /**
  * For a window pair, returns the Files window's resolved root when exactly one side is a Files
  * window and the other is a Chat window; otherwise null. Used to detect a Files↔Chat binding edge.
@@ -694,10 +771,65 @@ export function filesChatBindRoot(a: AppWindow, b: AppWindow): string | null {
   return resolvedFilesRoot(files);
 }
 
+export function filesChatBindScope(
+  a: AppWindow,
+  b: AppWindow,
+  connectedAtMs: number,
+): ChatConnectedScope | null {
+  const files = a.type === "files" ? a : b.type === "files" ? b : null;
+  const chat = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  if (files === null || chat === null) return null;
+  return filesVisibleScope(files, connectedAtMs);
+}
+
+export function boundScopeOf(conn: {
+  readonly boundRoot?: string;
+  readonly boundScopeKind?: string;
+  readonly boundRelativePath?: string;
+}): ChatConnectedScope | null {
+  if (typeof conn.boundRoot !== "string" || conn.boundRoot.length === 0) return null;
+  const connectedAtMs = Date.now();
+  if (conn.boundScopeKind === "directory") {
+    if (typeof conn.boundRelativePath !== "string" || conn.boundRelativePath.length === 0) {
+      return null;
+    }
+    return {
+      kind: "directory",
+      relativePaths: [normaliseRelativePath(conn.boundRelativePath)],
+      root: normaliseRoot(conn.boundRoot),
+      connectedAtMs,
+    };
+  }
+  if (conn.boundScopeKind === "files") {
+    if (typeof conn.boundRelativePath !== "string" || conn.boundRelativePath.length === 0) {
+      return null;
+    }
+    return {
+      kind: "files",
+      relativePaths: [normaliseRelativePath(conn.boundRelativePath)],
+      root: normaliseRoot(conn.boundRoot),
+      connectedAtMs,
+    };
+  }
+  return {
+    kind: "workspace-root",
+    relativePaths: [],
+    root: normaliseRoot(conn.boundRoot),
+    connectedAtMs,
+  };
+}
+
 /** True when `root` (after trailing-separator normalisation) is already in the scopes list. */
 export function isRootConnected(current: readonly ChatConnectedScope[], root: string): boolean {
   const normRoot = normaliseRoot(root);
   return current.some((s) => s.root !== undefined && normaliseRoot(s.root) === normRoot);
+}
+
+export function isScopeConnected(
+  current: readonly ChatConnectedScope[],
+  scope: ChatConnectedScope,
+): boolean {
+  return current.some((candidate) => scopeMatches(candidate, scope));
 }
 
 /**
@@ -741,6 +873,26 @@ export function appendScope(
   return [...current, next];
 }
 
+export function appendConnectedScope(
+  current: readonly ChatConnectedScope[],
+  scope: ChatConnectedScope,
+  maxScopes: number = MAX_SCOPES,
+): readonly ChatConnectedScope[] | null {
+  if (scope.root === undefined) return null;
+  const root = normaliseRoot(scope.root);
+  if (!isAbsoluteRoot(root)) return null;
+  const relativePaths = scope.relativePaths.map(normaliseRelativePath);
+  const nextScope: ChatConnectedScope = {
+    kind: scope.kind,
+    relativePaths,
+    root,
+    connectedAtMs: scope.connectedAtMs,
+  };
+  if (current.some((candidate) => scopeMatches(candidate, nextScope))) return current;
+  if (current.length >= maxScopes) return current;
+  return [...current, nextScope];
+}
+
 /**
  * Removes the source with the given root from the scopes list. Returns an
  * empty array (not null) when the list becomes empty so callers can PATCH null.
@@ -753,6 +905,13 @@ export function removeScope(
 ): readonly ChatConnectedScope[] {
   const normRoot = normaliseRoot(root);
   return current.filter((s) => s.root === undefined || normaliseRoot(s.root) !== normRoot);
+}
+
+export function removeConnectedScope(
+  current: readonly ChatConnectedScope[],
+  scope: ChatConnectedScope,
+): readonly ChatConnectedScope[] {
+  return current.filter((candidate) => !scopeMatches(candidate, scope));
 }
 
 /** Canonical reader: derive effective scopes from Chat fields. */

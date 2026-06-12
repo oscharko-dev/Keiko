@@ -4,9 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
-import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
 import { Icons } from "../../Icons";
-import { ScopeConnectButton } from "../../ScopeConnectButton";
 import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
 
@@ -89,22 +87,7 @@ function MetadataRow({
   );
 }
 
-export function FilePreview({
-  root,
-  path,
-  onClose,
-  onOpenInEditor,
-}: FilePreviewProps): ReactNode {
-  // Issue #184 — the connector binds the currently-previewed file (workspace-relative path)
-  // onto the active chat. The chat session is consulted optionally: if no chat is active the
-  // connector is hidden. The candidate is always a single-file scope (length 1) because the
-  // FilesWidget routes selection through this preview view one file at a time.
-  // useOptional* returns null when this component is rendered outside the chat session
-  // (e.g. legacy file-browser-only tests or storybook usage); the connector then hides.
-  const session = useOptionalChatSessionContext();
-  const activeChat = session?.activeChat;
-  const candidatePaths = path.length > 0 ? ([path] as const) : ([] as const);
-
+export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreviewProps): ReactNode {
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PreviewError | null>(null);
@@ -204,17 +187,6 @@ export function FilePreview({
           >
             <Icons.editor size={15} />
           </button>
-        ) : null}
-        {activeChat !== undefined && session !== null ? (
-          <ScopeConnectButton
-            chatId={activeChat.id}
-            scopeKind="files"
-            scopeRoot={root}
-            currentScopeKind={activeChat.connectedScope?.kind}
-            candidateRelativePaths={candidatePaths}
-            chat={activeChat}
-            onConnected={session.replaceChat}
-          />
         ) : null}
         <button
           className="fpv-back"

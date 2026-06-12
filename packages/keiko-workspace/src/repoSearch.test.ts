@@ -398,11 +398,15 @@ describe("searchText (memFs)", () => {
     expect(r.atoms.every((a) => a.scopePath !== ".env")).toBe(true);
   });
 
-  it("omits internal .keiko evidence while grounding package.json metadata", async () => {
+  it("omits internal runtime state while grounding package.json metadata", async () => {
     const { scope, fs } = memScope({
       "package.json": '{\n  "packageManager": "npm@10.9.8"\n}\n',
       ".keiko/evidence/qi/run.candidates.json":
         '{"packageManager":"stale-internal-value","connected":"repository","context":"evidence"}\n',
+      ".codex/history.jsonl":
+        '{"packageManager":"stale-codex-value","connected":"repository","context":"history"}\n',
+      ".claude/transcript.jsonl":
+        '{"packageManager":"stale-claude-value","connected":"repository","context":"history"}\n',
     });
     const r = await searchText(
       scope,
@@ -415,11 +419,13 @@ describe("searchText (memFs)", () => {
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["package.json"]);
     expect(r.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
     expect(r.atoms.every((a) => !a.scopePath.startsWith(".keiko/"))).toBe(true);
+    expect(r.atoms.every((a) => !a.scopePath.startsWith(".codex/"))).toBe(true);
+    expect(r.atoms.every((a) => !a.scopePath.startsWith(".claude/"))).toBe(true);
   });
 
-  it("respects scope.workspace.ignoreLines for gitignore filtering", async () => {
+  it("includes safe hidden and gitignored files in text search", async () => {
     const { scope, fs } = memScope(
-      { "src/a.ts": "match\n", "build/b.ts": "match\n" },
+      { "src/a.ts": "match\n", "generated/b.ts": "match\n", ".hidden.ts": "match\n" },
       {
         workspace: {
           root: MEM_ROOT,
@@ -429,7 +435,7 @@ describe("searchText (memFs)", () => {
           sourceDirs: ["src"],
           testDirs: ["tests"],
           languages: ["typescript"],
-          ignoreLines: ["build/"],
+          ignoreLines: ["generated/", ".hidden.ts"],
         },
       },
     );
@@ -437,7 +443,11 @@ describe("searchText (memFs)", () => {
       fs,
       nowMs: FIXED_NOW,
     });
-    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+    expect(r.atoms.map((a) => a.scopePath)).toEqual([
+      ".hidden.ts",
+      "generated/b.ts",
+      "src/a.ts",
+    ]);
   });
 
   it("respects maxMatchesReturned with truncated=true", async () => {
@@ -474,7 +484,7 @@ describe("searchText (memFs)", () => {
     expect(r.truncated).toBe(true);
   });
 
-  it("uses workspace-root ignore rules before counting explicit-scope candidates", async () => {
+  it("includes safe gitignored files from explicit-scope text search", async () => {
     const { scope, fs } = memScope(
       {
         "packages/a/generated/0.ts": "match\n",
@@ -496,9 +506,14 @@ describe("searchText (memFs)", () => {
         relativePaths: ["packages/a"],
       },
     );
-    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 10 };
     const r = await searchText(scope, nlq("match"), limits, { fs, nowMs: FIXED_NOW });
-    expect(r.atoms.map((a) => a.scopePath)).toEqual(["packages/a/src/ok.ts"]);
+    expect(r.atoms.map((a) => a.scopePath)).toEqual([
+      "packages/a/generated/0.ts",
+      "packages/a/generated/1.ts",
+      "packages/a/generated/2.ts",
+      "packages/a/src/ok.ts",
+    ]);
     expect(r.truncated).toBe(false);
   });
 
@@ -676,7 +691,7 @@ describe("findFiles (memFs)", () => {
     expect(r.truncated).toBe(true);
   });
 
-  it("uses workspace-root ignore rules before counting explicit-scope file candidates", async () => {
+  it("includes safe gitignored files from explicit-scope file search", async () => {
     const { scope, fs } = memScope(
       {
         "packages/a/generated/0.ts": "",
@@ -698,9 +713,14 @@ describe("findFiles (memFs)", () => {
         relativePaths: ["packages/a"],
       },
     );
-    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 10 };
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
-    expect(r.atoms.map((a) => a.scopePath)).toEqual(["packages/a/src/ok.ts"]);
+    expect(r.atoms.map((a) => a.scopePath)).toEqual([
+      "packages/a/generated/0.ts",
+      "packages/a/generated/1.ts",
+      "packages/a/generated/2.ts",
+      "packages/a/src/ok.ts",
+    ]);
     expect(r.truncated).toBe(false);
   });
 
@@ -924,6 +944,28 @@ describe("Copilot finding fixes (memFs)", () => {
     ).rejects.toBeInstanceOf(RepoSearchUnsupportedFileError);
   });
 
+  it("readExcerpt refuses local tool runtime state paths", async () => {
+    const { scope, fs } = memScope({
+      ".codex/history.jsonl": '{"private":"state"}\n',
+      ".claude/transcript.jsonl": '{"private":"state"}\n',
+    });
+
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: ".codex/history.jsonl", startLine: 1, endLine: 1, maxBytes: 100 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchUnsupportedFileError);
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: ".claude/transcript.jsonl", startLine: 1, endLine: 1, maxBytes: 100 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchUnsupportedFileError);
+  });
+
   it("readExcerpt refuses a path outside scope.relativePaths", async () => {
     const { scope, fs } = memScope(
       { "src/a.ts": "alpha\n", "docs/b.md": "secret\n" },
@@ -965,6 +1007,38 @@ describe("Copilot finding fixes (memFs)", () => {
       { fs, nowMs: FIXED_NOW },
     );
     expect(result.content).toBe("secret");
+  });
+
+  it("readExcerpt allows safe gitignored and hidden files", async () => {
+    const { scope, fs } = memScope(
+      { "generated/report.txt": "generated context\n", ".toolrc": "hidden config\n" },
+      {
+        workspace: {
+          root: MEM_ROOT,
+          name: "demo",
+          version: "1.0.0",
+          testFramework: "vitest",
+          sourceDirs: ["src"],
+          testDirs: ["tests"],
+          languages: ["typescript"],
+          ignoreLines: ["generated/", ".toolrc"],
+        },
+      },
+    );
+
+    const generated = await readExcerpt(
+      scope,
+      { scopePath: "generated/report.txt", startLine: 1, endLine: 1, maxBytes: 64 },
+      { fs, nowMs: FIXED_NOW },
+    );
+    const hidden = await readExcerpt(
+      scope,
+      { scopePath: ".toolrc", startLine: 1, endLine: 1, maxBytes: 64 },
+      { fs, nowMs: FIXED_NOW },
+    );
+
+    expect(generated.content).toBe("generated context");
+    expect(hidden.content).toBe("hidden config");
   });
 
   it("searchText denies node_modules when explicitly listed in scope.relativePaths", async () => {
