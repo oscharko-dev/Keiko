@@ -161,11 +161,12 @@ function RunRow({
         </button>
       ) : (
         // Step 2: inline confirm strip — Confirm + Cancel as siblings in a group.
+        // Escape is handled on the focusable buttons (not this group container) so it stays within
+        // jsx-a11y's interactive-element rule; focus is always on Confirm or Cancel while open.
         <div
           className="qi-cand-actions"
           role="group"
           aria-label={`Confirm deleting run ${formatDate(run.requestedAt)}`}
-          onKeyDown={handleKeyDownConfirm}
           style={{
             display: "flex",
             alignItems: "center",
@@ -184,6 +185,7 @@ function RunRow({
             // aria-disabled keeps the button focusable while in-flight (mirrors GovernedActionButton).
             aria-disabled={deleting || undefined}
             onClick={handleConfirmDelete}
+            onKeyDown={handleKeyDownConfirm}
           >
             {deleting ? (
               <>
@@ -204,6 +206,7 @@ function RunRow({
               if (deleting) return;
               handleCancelConfirm();
             }}
+            onKeyDown={handleKeyDownConfirm}
           >
             Cancel
           </button>
