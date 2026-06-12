@@ -15,7 +15,9 @@ import { EvidenceReadError } from "../errors.js";
 
 export const QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION = 1 as const;
 
-const CANDIDATES_SUFFIX = ".candidates.json";
+// Exported (but intentionally NOT re-exported from the package barrel) so the run-deletion path
+// can reference the evidence-owned companion suffix without duplicating the literal.
+export const CANDIDATES_SUFFIX = ".candidates.json";
 
 export interface QualityIntelligenceCandidateRow {
   readonly id: string;

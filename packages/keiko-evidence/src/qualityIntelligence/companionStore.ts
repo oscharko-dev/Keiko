@@ -166,3 +166,28 @@ export function createNodeContainedJsonArtifactStore<T>(
     },
   };
 }
+
+/**
+ * Idempotently delete ONE QI companion artifact `<runId><suffix>` from the contained `qi/` dir.
+ *
+ * Used by the run-deletion path (`deleteQualityIntelligenceRun`) to clean up companion artifacts
+ * that live alongside the run manifest. EXACT-suffix matching is mandatory: a non-leading `.` is a
+ * legal runId character (`assertValidRunId`), so `run-1` and `run-1.2` can coexist and a prefix
+ * (`startsWith`) sweep would let deleting `run-1` destroy `run-1.2`'s companion. By deriving the
+ * full `${runId}${suffix}` name and resolving it through `assertContainedRealPath`, the delete is
+ * collision-free, realpath-contained, and symlink-refusing (`deleteArtifactFile` lstat-gates
+ * `isFile`, which is false for a symlink). Returns true iff a regular file was removed.
+ *
+ * Intentionally NOT re-exported from the package barrel — it is an internal seam consumed only by
+ * the deletion path, so the published surface stays unchanged.
+ */
+export function deleteQualityIntelligenceCompanionArtifact(
+  evidenceDir: string,
+  runId: string,
+  suffix: string,
+  options: { readonly fs?: WorkspaceFs } = {},
+): boolean {
+  const baseDir = join(evidenceDir, QI_SUBDIR);
+  const fs = options.fs ?? nodeWorkspaceFs;
+  return deleteArtifactFile(baseDir, fs, suffix, runId);
+}

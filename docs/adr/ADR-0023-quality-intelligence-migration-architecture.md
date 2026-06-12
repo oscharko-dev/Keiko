@@ -148,6 +148,17 @@ the `maxRuns=50` retention policy. TI evidence and attestation behavior is class
 issue #274. The `adr-0019-trust-6-evidence-allowed-callers` rule is extended to include
 `keiko-quality-intelligence` as a permitted caller.
 
+Deletion is part of evidence semantics: deleting a run MUST remove the run manifest AND every
+companion artifact keyed by that `<runId>` under `qi/` so no customer-derived content is orphaned
+(AC4). `keiko-evidence` owns and always sweeps the companions it writes (`.candidates.json`);
+higher layers pass the suffixes they own (keiko-server's `.review.json` and the figma route
+companions) via `companionSuffixes`, because `keiko-evidence` MUST NOT hard-code suffixes it does
+not own. The sweep is exact-suffix (`<runId><suffix>`) — never a `startsWith` prefix, since a
+non-leading `.` is a legal `runId` character (`run-1` and `run-1.2` can coexist) — and routes
+through the same realpath-containment + symlink/`isFile` guards as the manifest store. The
+figma-snapshot companion and its `figma-snapshots/<runId>/` side-files are cleaned by their own
+seam (`enforceFigmaSnapshotRetention`), not by the manifest-deletion sweep.
+
 ### D9 — External Connector Policy
 
 External connectors (Figma REST API, Jira/ADF, TMS/ALM/qTest/Polarion/Xray export) are
@@ -466,6 +477,27 @@ before implementation begins in that area:
   workflow; adversarial critic workflow may be deferred).
 - Whether the repair loop is implemented as a new `WorkflowDescriptor` stage or as a loop inside
   a single stage (harness retry semantics).
+
+**#274 (evidence and local state)**
+
+- Scope is the LIBRARY surface: the QI evidence manifest store, companion artifact store,
+  redaction, retention-decision function, idempotent deletion (incl. companion sweep), corrupt
+  manifest quarantine, and restart-recovery attestation — all in `keiko-evidence`, with regression
+  tests. The ORCHESTRATION that drives these in production is deferred to the consuming epic, so
+  AC3-quarantine and AC4-retention/deletion are intentionally NOT considered "wired" by #274 alone:
+  there is no DELETE route and no scheduled retention sweep yet. The consuming epic wires
+  (a) a UI/BFF delete action → `deleteQualityIntelligenceRun` (passing the server-owned
+  `companionSuffixes`), (b) a retention sweep → `applyQualityIntelligenceRetention` →
+  `deleteQualityIntelligenceRun`, and (c) `quarantineCorruptQualityIntelligenceManifest` from a
+  maintenance path (never from a GET).
+- Accepted trade-offs (documented, not defects): integrity verification covers the hashed
+  collections + totals, not the run-level scalars (a local on-disk edit of `status`/`provenanceRefs`
+  etc. passes load — accepted under the local-state threat model where the operator owns the disk);
+  the optional-group hash back-compat path (`coverageMatrix`/`sourceFingerprints`) tolerates a
+  legacy manifest that predates that group's hashing, so a present-group-with-stripped-hash is not
+  rejected; an unknown `retentionPolicyId` retains all runs (forward-compat) rather than applying a
+  default cap. Tightening any of these is a follow-up that must weigh the back-compat regression of
+  failing closed on real legacy local runs.
 
 **#282 (review governance)**
 

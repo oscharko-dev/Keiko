@@ -263,8 +263,12 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
         const summary = projectRunSummary(manifest);
         if (summary !== null) runs.push(summary);
       } catch {
-        // A single corrupt manifest must not prevent listing other runs.
-        // Skip and continue — the store's quarantine mechanism handles it.
+        // A single corrupt manifest must not prevent listing other runs: skip and continue. The
+        // store fails closed on a corrupt manifest (EvidenceReadError) so nothing unsafe is
+        // surfaced. Quarantine (`quarantineCorruptQualityIntelligenceManifest`) is a SEPARATE,
+        // explicitly-invoked maintenance step — it is intentionally NOT run from this read path
+        // (a GET must not rename files); its wiring is deferred with the retention orchestrator
+        // (Issue #274 follow-up).
       }
     }
     const body: QualityIntelligenceUiRunListResponse = { runs, limit, totalRunIds, truncated };

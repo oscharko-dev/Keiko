@@ -283,6 +283,16 @@ function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifes
   );
 }
 
+// Integrity scope (be precise — this is the on-read tamper-detection contract): we verify the
+// (totals ↔ collection-length) invariant for findings/exports AND the per-group SHA-256 hashes for
+// findings / exports / evidenceRefs / atomFingerprints (+ coverageMatrix / sourceFingerprints when
+// their stored hash is present). We do NOT hash the run-level scalars (`status`, `totals.candidates`,
+// `provenanceRefs`, `qualityScore`, `modelId`, `modelParameters`, `seedUsed`, `planAt`/`completedAt`,
+// `retentionPolicyId`, `policyProfileIds`, `modelGatewayCallCount`, `redactionSummary`): a local
+// on-disk edit of those passes load. This is an accepted limitation of the local-state threat model
+// (the operator owns the disk); extending coverage to a scalar `meta` group is tracked as a #274
+// follow-up (see ADR-0023 D8). The schema gate already rejects unknown/missing top-level keys and a
+// bad status enum, so a scalar edit cannot change the manifest SHAPE — only a value.
 function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest): void {
   if (manifest.totals.findings !== manifest.findings.length) {
     throw new EvidenceReadError(

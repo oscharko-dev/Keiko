@@ -2,8 +2,10 @@
 //
 // Pure decision function (`applyQualityIntelligenceRetention`) consumed by the orchestrator with
 // the current store snapshot; the orchestrator does the side effects. Idempotent deletion
-// (`deleteQualityIntelligenceRun`) removes the manifest and emits a typed deletion-receipt
-// audit event without throwing on a missing run.
+// (`deleteQualityIntelligenceRun`) removes the manifest AND its companion artifacts
+// (`.candidates.json` plus any caller-supplied server-owned suffixes) so a deleted run leaves no
+// orphaned customer-derived content, and emits a typed deletion-receipt audit event without
+// throwing on a missing run.
 //
 // Restart recovery is enforced at the WRITE seam: every persist is atomic O_EXCL temp + rename,
 // so an unclean shutdown leaves at most one `.tmp` (or nothing). The list/load surfaces filter on
@@ -11,8 +13,10 @@
 // to call — recovery IS the absence of a code path that surfaces partials.
 
 import { lstatSync, renameSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { CANDIDATES_SUFFIX } from "./candidatesArtifact.js";
+import { deleteQualityIntelligenceCompanionArtifact } from "./companionStore.js";
 import {
   getQualityIntelligenceRetentionProfile,
   type QualityIntelligenceRetentionProfile,
@@ -23,6 +27,16 @@ import {
   type QualityIntelligenceLoadOptions,
   type QualityIntelligenceLocalStore,
 } from "./store.js";
+
+// Companion artifacts that `keiko-evidence` OWNS and writes alongside the run manifest under
+// `qi/`, keyed by `<runId>`. They are swept by default on deletion so a "deleted" run never leaves
+// customer-derived generated content (`.candidates.json`) orphaned on disk (Issue #274 AC4).
+// Higher layers that own their own companions (e.g. keiko-server's `.review.json`, the figma
+// route companions) pass their suffixes via `QualityIntelligenceDeleteOptions.companionSuffixes`;
+// keiko-evidence MUST NOT hard-code suffixes it does not own (layering). The figma-snapshot
+// companion + its `figma-snapshots/<runId>/` side-files are deliberately EXCLUDED here — they have
+// their own retention seam (`enforceFigmaSnapshotRetention`) and are cleaned by that subsystem.
+const QI_EVIDENCE_OWNED_COMPANION_SUFFIXES: readonly string[] = Object.freeze([CANDIDATES_SUFFIX]);
 
 // ─── Retention decision (pure) ─────────────────────────────────────────────────────
 
@@ -141,6 +155,9 @@ export type QualityIntelligenceDeletionStatus = "deleted" | "absent";
 export interface QualityIntelligenceDeletionReceipt {
   readonly runId: string;
   readonly status: QualityIntelligenceDeletionStatus;
+  // Companion-artifact suffixes that were present and removed alongside the manifest (e.g.
+  // `.candidates.json`). Empty when only an in-memory store was used or no companion existed.
+  readonly removedCompanionSuffixes: readonly string[];
   readonly auditEvent: QualityIntelligenceRunDeletedEvent;
 }
 
@@ -151,6 +168,9 @@ export interface QualityIntelligenceRunDeletedEvent {
   readonly type: "qi:run:deleted";
   readonly runId: string;
   readonly status: QualityIntelligenceDeletionStatus;
+  // Companion suffixes removed with the manifest — recorded on the audit event so the ledger can
+  // attest the deletion was complete for compliance (Issue #274 AC4).
+  readonly removedCompanionSuffixes: readonly string[];
   // ISO-8601 timestamp. Injectable via options for deterministic tests; defaults to new Date().
   readonly at: string;
 }
@@ -164,6 +184,13 @@ export interface QualityIntelligenceDeleteOptions extends QualityIntelligenceLoa
   // side-file dir is a no-op; an unrelated FS error propagates as an Error so the caller knows
   // the deletion was partial.
   readonly sideFileRoot?: string | undefined;
+  // Additional companion-artifact suffixes owned by HIGHER layers (e.g. keiko-server's
+  // `.review.json`, `.figma-codegen.json`, `.figma-audit.json`, `.figma-consent.json`). The
+  // evidence-owned companions (`.candidates.json`) are ALWAYS swept when `evidenceDir` is supplied;
+  // pass server-owned suffixes here so the orchestrator can guarantee a deleted run leaves no
+  // orphaned artifact. Each is matched EXACTLY (`<runId><suffix>`), realpath-contained, and
+  // symlink-refusing. Ignored when only an in-memory `store` is supplied (nothing on disk).
+  readonly companionSuffixes?: readonly string[] | undefined;
 }
 
 function resolveDeleteStore(
@@ -182,7 +209,16 @@ function resolveDeleteStore(
 // A symlink at the run-dir path is refused (defence against a planted symlink redirecting the
 // rm into an unrelated tree).
 function removeSideFileDirIfPresent(runId: string, sideFileRoot: string): void {
-  const runDir = join(sideFileRoot, runId);
+  const root = resolve(sideFileRoot);
+  const runDir = join(root, runId);
+  // Defence-in-depth: runId is already `assertValidRunId`-checked (no separators, no `..`, no
+  // leading dot) before this is reached, so `runDir` cannot escape `root`. Assert it lexically so
+  // a future refactor that relaxes the validation order fails loudly here instead of `rm`-ing an
+  // unrelated tree — the one #274 FS op that did not previously route through the containment
+  // discipline used by the manifest/companion stores.
+  if (!runDir.startsWith(root + sep)) {
+    throw new Error(`QI side-file dir escapes the side-file root, refusing to delete: ${runDir}`);
+  }
   const stat = lstatSync(runDir, { throwIfNoEntry: false });
   if (stat === undefined) {
     return;
@@ -191,6 +227,26 @@ function removeSideFileDirIfPresent(runId: string, sideFileRoot: string): void {
     throw new Error(`QI side-file dir is a symlink, refusing to delete: ${runDir}`);
   }
   rmSync(runDir, { recursive: true, force: true });
+}
+
+// Sweep the run's companion artifacts (evidence-owned + caller-supplied) from the contained `qi/`
+// dir. Exact-suffix, idempotent: a companion that does not exist is skipped. Returns the suffixes
+// that were actually removed so the deletion receipt/audit event can attest completeness.
+function removeRunCompanions(
+  evidenceDir: string,
+  runId: string,
+  extraSuffixes: readonly string[] | undefined,
+): readonly string[] {
+  const suffixes = [
+    ...new Set<string>([...QI_EVIDENCE_OWNED_COMPANION_SUFFIXES, ...(extraSuffixes ?? [])]),
+  ];
+  const removed: string[] = [];
+  for (const suffix of suffixes) {
+    if (deleteQualityIntelligenceCompanionArtifact(evidenceDir, runId, suffix)) {
+      removed.push(suffix);
+    }
+  }
+  return removed.sort();
 }
 
 // Idempotent removal of a single QI run's local state. Returns a structured receipt rather than
@@ -205,6 +261,12 @@ export function deleteQualityIntelligenceRun(
   assertValidRunId(runId);
   const store = resolveDeleteStore(options);
   const removed = store.delete(runId);
+  // Sweep companion artifacts so a deleted run leaves no orphaned customer-derived content on disk
+  // (Issue #274 AC4). On-disk only — skipped when just an in-memory store is supplied.
+  const removedCompanionSuffixes =
+    options.evidenceDir === undefined
+      ? []
+      : removeRunCompanions(options.evidenceDir, runId, options.companionSuffixes);
   if (options.sideFileRoot !== undefined) {
     removeSideFileDirIfPresent(runId, options.sideFileRoot);
   }
@@ -213,7 +275,8 @@ export function deleteQualityIntelligenceRun(
   return {
     runId,
     status,
-    auditEvent: { type: "qi:run:deleted", runId, status, at },
+    removedCompanionSuffixes,
+    auditEvent: { type: "qi:run:deleted", runId, status, removedCompanionSuffixes, at },
   };
 }
 
