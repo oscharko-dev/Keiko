@@ -44,6 +44,10 @@ export interface QiHubPanelProps {
   readonly fetchRunsImpl?: typeof fetchQiRuns;
 }
 
+// The run list accumulates over a project's lifetime (server returns up to 100 by default, 500 max).
+// Render the first page and reveal the rest on demand — the #280 progressive-rendering Deliverable.
+const INITIAL_VISIBLE_RUNS = 25;
+
 function RunRow({
   run,
   onOpen,
@@ -102,6 +106,7 @@ export function QiHubPanel({
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [visibleRuns, setVisibleRuns] = useState(INITIAL_VISIBLE_RUNS);
 
   const loadRuns = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -178,10 +183,21 @@ export function QiHubPanel({
           ) : (
             <>
               <ul className="qi-run-list" aria-label="Run list">
-                {runs.map((run) => (
+                {runs.slice(0, visibleRuns).map((run) => (
                   <RunRow key={run.id} run={run} onOpen={openRun} />
                 ))}
               </ul>
+              {visibleRuns < runs.length ? (
+                <button
+                  type="button"
+                  className="qi-btn qi-btn-secondary qi-show-more"
+                  onClick={() => {
+                    setVisibleRuns((v) => v + INITIAL_VISIBLE_RUNS);
+                  }}
+                >
+                  Show more runs ({(runs.length - visibleRuns).toString()} remaining)
+                </button>
+              ) : null}
               {truncated ? (
                 <p className="qi-runs-truncated" data-testid="qi-runs-truncated">
                   {`Showing ${runs.length.toString()} of ${totalRunIds.toString()} runs.`}

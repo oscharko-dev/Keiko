@@ -329,7 +329,9 @@ export function CandidatesPane({
           {actionsDisabledReason}
         </p>
       ) : null}
-      <ul className="qi-cand-cards" aria-label="Generated test cases">
+      {/* a11y m-04: the wrapping <section> in QiRunCard already names this "Generated test cases";
+          a more specific list label avoids AT announcing the same name twice. */}
+      <ul className="qi-cand-cards" aria-label="Test case list">
         {shown.map((c) => (
           <CandidateCard
             key={c.id}
@@ -350,7 +352,7 @@ export function CandidatesPane({
             setVisible((v) => v + INITIAL_VISIBLE);
           }}
         >
-          Show more ({(candidates.length - visible).toString()} remaining)
+          Show more test cases ({(candidates.length - visible).toString()} remaining)
         </button>
       ) : null}
     </div>

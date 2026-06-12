@@ -298,11 +298,14 @@ export function CandidateEditForm({
           {saveError}
         </p>
       ) : null}
-      {confirmDiscard ? (
-        <p className="qi-edit-discard-note" role="status">
-          Unsaved changes — press Escape or activate Cancel again to discard them.
-        </p>
-      ) : null}
+      {/* a11y m-01: persistent live region — a role="status" inserted together with its text is
+          unreliably announced by AT, so mount it always (empty, no visible box) and toggle the
+          text when a discard is pending. */}
+      <p className="qi-edit-discard-note" role="status" aria-live="polite">
+        {confirmDiscard
+          ? "Unsaved changes — press Escape or activate Cancel again to discard them."
+          : ""}
+      </p>
       <EditActions onCancel={requestCancel} saving={saving} />
       <TextAreaField
         id={`${id}-preconditions`}

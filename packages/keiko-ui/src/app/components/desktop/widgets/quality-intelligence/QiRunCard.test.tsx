@@ -131,7 +131,11 @@ describe("QiRunCard", () => {
     ) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
 
     render(
-      <QiRunCard runId="qi-run-pending" fetchDetailImpl={fetchOk(detail)} reviewImpl={reviewImpl} />,
+      <QiRunCard
+        runId="qi-run-pending"
+        fetchDetailImpl={fetchOk(detail)}
+        reviewImpl={reviewImpl}
+      />,
     );
     const approveButton = await screen.findByRole("button", { name: /approve/i });
     await user.click(approveButton);
@@ -422,7 +426,11 @@ describe("QiRunCard", () => {
     expect(await screen.findByTestId("qi-drift-unavailable")).toHaveTextContent(
       /no current source handle/i,
     );
-    expect(screen.getByTestId("qi-drift-recheck-unavailable")).toBeDisabled();
+    // a11y m-03: aria-disabled (focusable + describes why) rather than native disabled.
+    const unavailableBtn = screen.getByTestId("qi-drift-recheck-unavailable");
+    expect(unavailableBtn).not.toBeDisabled();
+    expect(unavailableBtn).toHaveAttribute("aria-disabled", "true");
+    expect(unavailableBtn).toHaveAccessibleDescription(/no current source handle/i);
   });
 
   it("hides the drift panel when connected sources is an empty array", async () => {
@@ -430,5 +438,57 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-d3" fetchDetailImpl={fetchOk(detail)} connectedSources={[]} />);
     await screen.findByText("A test");
     expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
+  });
+});
+
+describe("QiRunCard — progressive rendering of large lists (#280)", () => {
+  it("paginates the findings list and reveals the rest on Show more", async () => {
+    const findingRefs = Array.from({ length: 25 }, (_, i) => ({
+      id: `find-${i.toString()}`,
+      kind: "logic-defect" as const,
+      severity: "medium" as const,
+      summaryRedacted: `Finding number ${i.toString()}`,
+    }));
+    const detail: QualityIntelligenceUiRunDetail = {
+      ...makeDetail("qi-run-findings", [makeCandidate("tc-1", "A test")]),
+      findingRefs,
+    };
+    render(<QiRunCard runId="qi-run-findings" fetchDetailImpl={fetchOk(detail)} />);
+
+    expect(await screen.findByText("Finding number 0")).toBeInTheDocument();
+    // First page only: 20 visible, items 20–24 hidden behind Show more.
+    expect(screen.getByText("Finding number 19")).toBeInTheDocument();
+    expect(screen.queryByText("Finding number 20")).not.toBeInTheDocument();
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /show more findings \(5 remaining\)/i }));
+
+    expect(screen.getByText("Finding number 24")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show more findings/i })).not.toBeInTheDocument();
+  });
+
+  it("paginates the coverage gap radar and reveals the rest on Show more", async () => {
+    const atoms = Array.from({ length: 25 }, (_, i) => ({
+      atomId: `atom-${i.toString()}`,
+      status: "uncovered" as const,
+      confidence: 0,
+      requirementExcerptRedacted: `Requirement ${i.toString()}`,
+    }));
+    const detail = makeDetail("qi-run-gaps", [], atoms, 0);
+    render(<QiRunCard runId="qi-run-gaps" fetchDetailImpl={fetchOk(detail)} />);
+
+    expect(await screen.findByText("Requirement 0")).toBeInTheDocument();
+    expect(screen.getByText("Requirement 19")).toBeInTheDocument();
+    expect(screen.queryByText("Requirement 20")).not.toBeInTheDocument();
+    // The radar header still reports the FULL gap count, not the visible slice.
+    expect(screen.getByText(/Gap radar \(25\)/i)).toBeInTheDocument();
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /show more gaps \(5 remaining\)/i }));
+
+    expect(screen.getByText("Requirement 24")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show more gaps/i })).not.toBeInTheDocument();
   });
 });

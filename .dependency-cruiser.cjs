@@ -661,8 +661,13 @@ module.exports = {
         "ADR-0019 direction rule 8: the browser-tier keiko-ui package must not import Node-only " +
         "domain packages as value imports. Type-only imports are allowed for shared wire shapes. " +
         "src/ui/ is intentionally excluded because after issue #166 it is the Node-side BFF, not " +
-        "the browser tier. Also fires on tests/architecture/fixtures/ui-browser/ so the gate can be " +
-        "proven live by scripts/arch-check-negative.mjs.",
+        "the browser tier. The forbidden set names the pure-domain leaves keiko-quality-intelligence " +
+        "(ADR-0023 D14) and keiko-local-knowledge so the native Quality Intelligence UI surface " +
+        "(issue #280) cannot value-import the Node-side domain — credentials, raw prompts, provider " +
+        "config, fs access — instead of the browser-safe keiko-contracts wire shapes and the " +
+        "same-origin BFF clients (@/lib/quality-intelligence-api, @/lib/local-knowledge-api). Also " +
+        "fires on tests/architecture/fixtures/ui-browser/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs.",
       severity: "error",
       from: {
         path: "^(packages/keiko-ui/src/|tests/architecture/fixtures/ui-browser/)",
@@ -670,8 +675,8 @@ module.exports = {
       },
       to: {
         path:
-          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server)/|" +
-          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server)|" +
+          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server|quality-intelligence|local-knowledge)/|" +
+          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server|quality-intelligence|local-knowledge)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|verification|evaluations))",
         dependencyTypesNot: ["type-only"],
       },

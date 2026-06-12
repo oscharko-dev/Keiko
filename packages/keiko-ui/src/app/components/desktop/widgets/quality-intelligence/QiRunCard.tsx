@@ -5,7 +5,7 @@
 // grid with per-candidate review), enterprise export, and any validation findings. Reuses the QI BFF
 // routes; never embeds raw prompts or secrets (the wire projection is already redacted upstream).
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceUiRunDetail,
@@ -114,16 +114,25 @@ const KIND_LABEL: Readonly<Record<string, string>> = {
   "test-quality": "Test quality",
 };
 
+// Findings, coverage gaps, and the run list can each grow to hundreds of rows (findings are capped
+// at 512 server-side; the coverage gap radar has NO server cap and scales with source-atom count).
+// Render the first page eagerly and reveal the rest on demand — the #280 "progressive rendering for
+// large artifact lists" Deliverable, mirroring CandidatesPane's INITIAL_VISIBLE pattern.
+const INITIAL_VISIBLE_ROWS = 20;
+
 function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
-  if (detail.findingRefs.length === 0) return null;
+  const [visible, setVisible] = useState(INITIAL_VISIBLE_ROWS);
+  const total = detail.findingRefs.length;
+  if (total === 0) return null;
+  const shown = detail.findingRefs.slice(0, visible);
   return (
     <section className="qi-run-findings" aria-label="Findings">
       <h3 className="qi-col-subtitle">
         Findings
-        <span className="qi-col-count">{detail.findingRefs.length.toString()}</span>
+        <span className="qi-col-count">{total.toString()}</span>
       </h3>
       <ul className="qi-finding-list" aria-label="Findings list">
-        {detail.findingRefs.map((f) => (
+        {shown.map((f) => (
           <li key={f.id} className="qi-finding-item">
             <div className="qi-finding-header">
               <span className="qi-finding-kind">{KIND_LABEL[f.kind] ?? f.kind}</span>
@@ -133,6 +142,17 @@ function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDet
           </li>
         ))}
       </ul>
+      {visible < total ? (
+        <button
+          type="button"
+          className="qi-btn qi-btn-secondary qi-show-more"
+          onClick={() => {
+            setVisible((v) => v + INITIAL_VISIBLE_ROWS);
+          }}
+        >
+          Show more findings ({(total - visible).toString()} remaining)
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -152,10 +172,19 @@ const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "unc
   };
 
 function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
-  if (detail.coverageByAtom.length === 0) return null;
-  const total = detail.coverageByAtom.length;
-  const coveredCount = detail.coverageByAtom.filter((r) => r.status === "covered").length;
-  const gaps = detail.coverageByAtom.filter((r) => r.status !== "covered");
+  const [visibleGaps, setVisibleGaps] = useState(INITIAL_VISIBLE_ROWS);
+  // Derive once per fetch — coverageByAtom only changes when `detail` is replaced, not on the
+  // show-more state change (the old code re-filtered the whole matrix on every render).
+  const { total, coveredCount, gaps } = useMemo(() => {
+    const rows = detail.coverageByAtom;
+    return {
+      total: rows.length,
+      coveredCount: rows.filter((r) => r.status === "covered").length,
+      gaps: rows.filter((r) => r.status !== "covered"),
+    };
+  }, [detail.coverageByAtom]);
+  if (total === 0) return null;
+  const shownGaps = gaps.slice(0, visibleGaps);
   return (
     <section className="qi-coverage-panel" aria-label="Coverage">
       <h3 className="qi-col-subtitle">
@@ -175,7 +204,7 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
         <section className="qi-coverage-gaps" aria-label="Gap radar">
           <h4 className="qi-col-subtitle">{`Gap radar (${gaps.length.toString()})`}</h4>
           <ul className="qi-coverage-gap-list" aria-label="Uncovered and weakly covered atoms">
-            {gaps.map((row) => {
+            {shownGaps.map((row) => {
               const label = COVERAGE_STATUS_LABEL[row.status];
               const cls = COVERAGE_STATUS_CLASS[row.status];
               const excerpt = row.requirementExcerptRedacted;
@@ -205,6 +234,17 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
               );
             })}
           </ul>
+          {visibleGaps < gaps.length ? (
+            <button
+              type="button"
+              className="qi-btn qi-btn-secondary qi-show-more"
+              onClick={() => {
+                setVisibleGaps((v) => v + INITIAL_VISIBLE_ROWS);
+              }}
+            >
+              Show more gaps ({(gaps.length - visibleGaps).toString()} remaining)
+            </button>
+          ) : null}
         </section>
       ) : null}
     </section>
@@ -216,21 +256,29 @@ function DriftUnavailablePanel({
 }: {
   readonly detail: QualityIntelligenceUiRunDetail;
 }): ReactNode {
+  const noteId = useId();
   if (!detail.drift.reCheckSupported) return null;
   return (
     <section className="qi-drift-panel" aria-label="Drift detection">
       <div className="qi-drift-head">
         <h3 className="qi-col-subtitle">Living tests</h3>
+        {/* a11y m-03: aria-disabled (not native `disabled`) keeps the control focusable so keyboard
+            and screen-reader users can reach it and hear WHY it is inactive via aria-describedby —
+            the same governance pattern used everywhere else in the QI surface. The click no-ops. */}
         <button
           type="button"
           className="qi-btn qi-btn-secondary"
-          disabled
+          aria-disabled="true"
+          aria-describedby={noteId}
           data-testid="qi-drift-recheck-unavailable"
+          onClick={(event) => {
+            event.preventDefault();
+          }}
         >
           Re-check drift
         </button>
       </div>
-      <p className="qi-drift-note" data-testid="qi-drift-unavailable">
+      <p id={noteId} className="qi-drift-note" data-testid="qi-drift-unavailable">
         Drift fingerprints are recorded for this run, but this card has no current source handle.
         Reopen it from the connected source or start a new run from the current source.
       </p>
@@ -337,7 +385,16 @@ export function QiRunCard({
   return (
     <div className="qi-run-card" data-testid="qi-run-card">
       <header className="qi-run-card-head">
-        <span className="qi-run-id qi-monospace" title={runId}>
+        {/* a11y m-02: name the card as a level-2 heading so the inner section <h3>s are not
+            orphaned and screen-reader heading navigation can reach the card. role="heading" keeps
+            the existing monospace run-id visual unchanged (no font/structure change). */}
+        <span
+          className="qi-run-id qi-monospace"
+          title={runId}
+          role="heading"
+          aria-level={2}
+          aria-label={`Quality Intelligence run ${runId}`}
+        >
           {runId}
         </span>
       </header>
@@ -397,11 +454,18 @@ export function QiRunCard({
               <p id={reviewerHelpId} className="qi-run-governance-help">
                 Used for QI review and edit audit entries.
               </p>
-              {!governanceEnabled ? (
-                <p id={reviewerWarningId} className="qi-run-governance-warning" role="note">
-                  {GOVERNANCE_REQUIRED_MESSAGE}
-                </p>
-              ) : null}
+              {/* Persistent live region (a11y M-02): always mounted so AT announces when the user
+                  clears the reviewer label and governance turns off. role="note" carries no implicit
+                  aria-live, and a conditionally-inserted region is unreliably announced. Empty (and
+                  visually nothing — the class has no box) while governance is enabled. */}
+              <p
+                id={reviewerWarningId}
+                className="qi-run-governance-warning"
+                role="status"
+                aria-live="polite"
+              >
+                {!governanceEnabled ? GOVERNANCE_REQUIRED_MESSAGE : ""}
+              </p>
             </section>
             <SummaryStrip detail={detail} />
             <FindingsList detail={detail} />

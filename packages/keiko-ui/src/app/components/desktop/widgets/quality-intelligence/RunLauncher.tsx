@@ -56,6 +56,27 @@ const INITIAL_PROGRESS: Progress = {
   skippedSources: [],
 };
 
+// Shown when a run finishes with a server-reported "failed" status (a `done` frame, distinct from a
+// thrown `error` frame). Without this the launcher would clear the spinner and surface nothing.
+const QI_RUN_FAILED_MESSAGE = "The run did not complete successfully. Adjust the source and retry.";
+
+// Screen-reader announcement for the always-mounted progress live region (a11y M-01). The visible
+// spinner+text stays conditional, but the announcement region is mounted from first render and only
+// its text changes — the reliable aria-live pattern. Empty while idle so nothing is announced.
+function progressAnnouncement(running: boolean, progress: Progress): string {
+  if (!running) return "";
+  if (progress.stageName === null && progress.candidates === 0 && progress.findings === 0) {
+    return "Generating test cases…";
+  }
+  const stage = progress.stageName !== null ? `Stage: ${progress.stageName}. ` : "";
+  const cases = `${progress.candidates.toString()} test case${progress.candidates !== 1 ? "s" : ""}`;
+  const findings =
+    progress.findings > 0
+      ? `, ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
+      : "";
+  return `${stage}${cases}${findings}`;
+}
+
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
   if (msg.type === "accepted") {
     return {
@@ -190,6 +211,10 @@ export function RunLauncher({
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const completedRunIdRef = useRef<string | null>(null);
+  // Synchronous double-submit guard: handleStart's `running` check reads a React state closure, so
+  // two clicks dispatched before React commits setRunning(true) both see running===false and both
+  // launch a run (doubling model-gateway cost). A ref closes that window before any state update.
+  const isStartingRef = useRef(false);
 
   // Fold EVERY connected Files/Connector/Figma window into one deduped, capped multi-source list
   // (Epic #729 N+1): a focused single file, connected folders, capsules, capsule-sets, AND figma
@@ -241,7 +266,16 @@ export function RunLauncher({
   const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
-    if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
+    // Open the result card ONLY for a run that actually succeeded. The server always emits a
+    // terminal `done` frame with the final status on the non-throwing path (runRoutes.ts
+    // streamRunExecution); a thrown failure emits an `error` frame and no `done`. The old code
+    // captured the runId on `accepted`, so EVERY run that started opened a result card — a failed
+    // run then showed an error banner AND a spurious card for a run that produced nothing.
+    if (msg.type === "done") {
+      if (msg.status === "succeeded") completedRunIdRef.current = msg.runId;
+      else if (msg.status === "failed") setError(QI_RUN_FAILED_MESSAGE);
+      // "cancelled" is a user action — no error, no card.
+    }
     if (msg.type === "error") setError(formatCodedError(msg.code, msg.message));
     setProgress((prev) => reduceProgress(prev, msg));
   }, []);
@@ -333,6 +367,9 @@ export function RunLauncher({
     // Defensive guard — the Generate button already no-ops while blocked (aria-disabled pattern),
     // and an invalid seed surfaces as an inline field error next to the input.
     if (!ready || running || !seedValid) return;
+    // Synchronous guard against a double-click race React state cannot close (see isStartingRef).
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
     setRunning(true);
     setError(null);
     setProgress(INITIAL_PROGRESS);
@@ -357,6 +394,7 @@ export function RunLauncher({
     } finally {
       setRunning(false);
       abortRef.current = null;
+      isStartingRef.current = false;
     }
   }, [
     ready,
@@ -627,13 +665,10 @@ export function RunLauncher({
           ) : null}
         </div>
         {running ? (
-          <div
-            className="qi-progress"
-            role="status"
-            aria-live="polite"
-            aria-label="Run progress"
-            data-testid="qi-launch-progress"
-          >
+          // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
+          // sr-only region below (a11y M-01), so this block must not also be a live region or it
+          // would double-announce. Kept conditional for layout.
+          <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
             <span className="qi-progress-spinner" aria-hidden="true" />
             <span className="qi-progress-text">
               {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
@@ -646,6 +681,12 @@ export function RunLauncher({
             </span>
           </div>
         ) : null}
+        {/* Always-mounted progress live region (a11y M-01): a region inserted together with its
+            content is unreliably announced by AT, so the visible block above is aria-hidden and this
+            persistent sr-only region carries the announcement — empty string while idle. */}
+        <p className="sr-only" role="status" aria-live="polite" data-testid="qi-launch-progress-sr">
+          {progressAnnouncement(running, progress)}
+        </p>
         {/* Persistent live region for the coverage notice (uiux-fix F047 C155) — mounted from the
             first render; the visible notice below stays conditional and carries no live role. */}
         <p className="sr-only" role="status" aria-live="polite">

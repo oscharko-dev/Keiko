@@ -143,6 +143,13 @@ export async function startQiRun(
       }
     }
   } finally {
+    // Cancel the body stream before releasing the lock so the HTTP connection closes
+    // promptly on abort. That close is what fires the server's res.on("close") cancel hook
+    // (runRoutes.ts handleStartQiRun), which aborts the in-flight run and stops model-gateway
+    // work. releaseLock() alone leaves the connection open until GC collects the Response, so a
+    // cancelled run would keep generating for an indeterminate time. cancel() on an already-ended
+    // or errored stream is a harmless no-op; swallow its rejection.
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }

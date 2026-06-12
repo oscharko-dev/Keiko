@@ -49,6 +49,15 @@ const DONE_FRAME: QualityIntelligenceRunStreamMessage = {
   totals: { candidates: 0, findings: 0, exports: 0 },
 };
 
+// A terminal `done` frame for a specific run. The result card opens for the run that SUCCEEDED, so
+// completion keys off the done frame's runId (in production accepted.runId === done.runId).
+function succeededDone(
+  runId: string,
+  status: "succeeded" | "failed" | "cancelled" = "succeeded",
+): QualityIntelligenceRunStreamMessage {
+  return { type: "done", runId, status, totals: { candidates: 0, findings: 0, exports: 0 } };
+}
+
 /**
  * Builds a fake startImpl that delivers a configurable sequence of messages
  * then resolves. The `onMessage` pattern mirrors the real startQiRun signature:
@@ -572,7 +581,7 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
         atomCount: 3,
       },
       { type: "event", kind: "candidate:proposed", sequence: 1, candidateId: "tc-1" },
-      DONE_FRAME,
+      succeededDone(acceptedRunId),
     ]);
     const onRunCompleted = vi.fn();
     render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
@@ -601,7 +610,7 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
         sourceCount: 1,
         atomCount: 2,
       },
-      DONE_FRAME,
+      succeededDone(acceptedRunId),
     ]);
     const onRunCompleted = vi.fn();
     render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
@@ -690,6 +699,126 @@ describe("RunLauncher — cancel behaviour", () => {
     expect(capturedSignal()?.aborted).toBe(true);
 
     // Clean up by resolving the stall so there are no hanging promises.
+    act(() => {
+      resolveStall();
+    });
+  });
+
+  // Regression guard for the #270 "cancel-misclassified-as-failed" bug (pr-reviewer M3): a
+  // user-initiated cancel must NOT surface an error banner and must restore the Generate button.
+  it("does not show an error and restores Generate after the user cancels", async () => {
+    const user = userEvent.setup();
+    const { startImpl, resolveStall } = makeStallingFake();
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Cancel cleanly");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    act(() => {
+      resolveStall();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate test cases/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
+  });
+
+  // The real startQiRun rejects with an AbortError from reader.read() when the signal is aborted.
+  // The catch guard (`if (!controller.signal.aborted) setError`) must swallow it — no error banner.
+  it("suppresses the AbortError thrown by the stream when cancelled", async () => {
+    const user = userEvent.setup();
+    let abort!: () => void;
+    const startImpl = vi.fn(
+      (_request: Parameters<StartQiRunFn>[0], signal: AbortSignal): Promise<void> =>
+        new Promise<void>((_res, reject) => {
+          abort = () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          };
+          signal.addEventListener("abort", abort);
+        }),
+    ) as unknown as StartQiRunFn;
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Abort mid-stream");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate test cases/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
+  async function runToTerminal(status: "failed" | "cancelled"): Promise<ReturnType<typeof vi.fn>> {
+    const user = userEvent.setup();
+    const onRunCompleted = vi.fn();
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-term-1",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      succeededDone("run-term-1", status),
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+    return onRunCompleted;
+  }
+
+  it("does NOT open a run card when the run completes with status failed, and shows a message", async () => {
+    const onRunCompleted = await runToTerminal("failed");
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-error")).toBeInTheDocument();
+    });
+    expect(onRunCompleted).not.toHaveBeenCalled();
+  });
+
+  it("does NOT open a run card or show an error when the run completes with status cancelled", async () => {
+    const onRunCompleted = await runToTerminal("cancelled");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate test cases/i })).toBeInTheDocument();
+    });
+    expect(onRunCompleted).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunLauncher — progress announcement (a11y M-01)", () => {
+  it("mounts the sr-only progress live region from first render (empty while idle)", () => {
+    render(<RunLauncher onRunCompleted={vi.fn()} />);
+    const region = screen.getByTestId("qi-launch-progress-sr");
+    expect(region).toBeInTheDocument();
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region.textContent).toBe("");
+  });
+
+  it("announces progress in the persistent region while a run is active", async () => {
+    const user = userEvent.setup();
+    const { startImpl, resolveStall } = makeStallingFake();
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Announce me");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-progress-sr").textContent).not.toBe("");
+    });
     act(() => {
       resolveStall();
     });
