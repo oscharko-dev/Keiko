@@ -311,6 +311,48 @@ On top of the per-list bounds, a single combined cap of `max(maxConnectedSources
 
 The effective limits at runtime are visible via `GET /api/config` as `effectiveGroundingLimits`.
 
+### Figma snapshot connector
+
+The Figma connector needs exactly one credential: a read-only personal access token (scopes `file_read` / `files:read`).
+
+| Variable                             | Purpose                                                                                                                                                                                                            | Default |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `FIGMA_ACCESS_TOKEN`                 | Read-only Figma PAT. Loaded from the local `.env` (the only non-`KEIKO_*` name the loader imports) or the process environment; consumed server-side only, never sent to the browser, never persisted in snapshots. | —       |
+| `KEIKO_FIGMA_KEY`                    | Override for the encrypted vault key name used to store the PAT.                                                                                                                                                   | —       |
+| `KEIKO_FIGMA_PAGE_DEPTH`             | Per-screen BFS discovery depth of the scoped deep fetch.                                                                                                                                                           | 8       |
+| `KEIKO_FIGMA_MAX_NODES_PER_SCREEN`   | Node budget per screen before the branch stays shallow.                                                                                                                                                            | 10000   |
+| `KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN` | Scoped API fetch budget per screen.                                                                                                                                                                                | 32      |
+| `KEIKO_FIGMA_MAX_SCREENS_DEEP`       | Maximum screens that are deep-fetched per snapshot.                                                                                                                                                                | 80      |
+| `KEIKO_FIGMA_FETCH_CONCURRENCY`      | Concurrent Figma API fetches during the snapshot build.                                                                                                                                                            | 3       |
+| `KEIKO_FIGMA_REQUEST_TIMEOUT_MS`     | Per-request timeout for Figma API and render downloads.                                                                                                                                                            | 60000   |
+| `KEIKO_FIGMA_BUILD_DEADLINE_MS`      | Total wall-clock deadline for one snapshot build (HTTP 504 `FIGMA_BUILD_TIMEOUT` when exceeded).                                                                                                                   | 600000  |
+
+Figma is contacted only during the bounded snapshot build (scoped node fetch + screen render); every downstream stage — Quality Intelligence test generation, the accessibility baseline, design-to-code — reads the stored immutable snapshot. Re-snapshot is an explicit full re-fetch. Concurrent snapshot requests for the same board coalesce into one build. Budget caps surface as coverage notices in the snapshot summary, never as silent truncation. Failures are coded (`FIGMA_RATE_LIMITED`, `FIGMA_NETWORK_UNREACHABLE`, `FIGMA_EGRESS_TIMEOUT`, `FIGMA_TLS_CA_FAILURE`, `FIGMA_PROXY_*` — proxy codes appear only when a proxy is actually configured) and content-free: no URL, host, or token material ever appears in an error.
+
+### Outbound egress (proxy / custom CA)
+
+Keiko routes Figma and model-gateway egress through one shared outbound HTTP layer with forward-proxy and custom-CA support. Configure it with an `egress` block in `keiko.config.json` and/or environment variables (the `KEIKO_*` form wins over the standard form):
+
+```json
+{
+  "providers": [{ "...": "..." }],
+  "egress": {
+    "httpsProxy": "http://proxy.corp.example:8080",
+    "noProxy": "localhost,127.0.0.1,.internal.example",
+    "caBundlePath": "/etc/ssl/corp-root-ca.pem"
+  }
+}
+```
+
+| Variable                            | Purpose                                                |
+| ----------------------------------- | ------------------------------------------------------ |
+| `KEIKO_HTTPS_PROXY` / `HTTPS_PROXY` | Forward proxy for https egress (CONNECT tunnel).       |
+| `KEIKO_HTTP_PROXY` / `HTTP_PROXY`   | Forward proxy for http egress.                         |
+| `KEIKO_NO_PROXY` / `NO_PROXY`       | Bypass list (`*`, exact host, `.suffix`, `host:port`). |
+| `KEIKO_CA_BUNDLE_PATH`              | PEM bundle for TLS-intercepting proxies / private CAs. |
+
+Trusted CAs compose from Node's bundled roots, the operating-system trust store (macOS keychain via `tls.getCACertificates`), `NODE_EXTRA_CA_CERTS`, and `caBundlePath` — in many corporate-CA environments the system trust store alone is sufficient and no configuration is needed. Proxy URLs must not embed credentials; a malformed egress variable is reported by name (the remaining egress fields stay effective — one bad variable cannot silently disable the proxy). A configured-but-unreadable CA bundle logs a warning instead of failing silently.
+
 ## Security boundaries
 
 Keiko is a local tool, not a remote service.

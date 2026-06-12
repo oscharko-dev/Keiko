@@ -58,7 +58,6 @@ export {
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
   normalizeApiKeyHeaderName,
-  parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
   toSafeObject,
   validateBaseUrl,
