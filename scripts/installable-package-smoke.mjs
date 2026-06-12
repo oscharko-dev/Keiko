@@ -110,7 +110,12 @@ function probeHost(compilerOptions, probeFile, probeText) {
 }
 
 function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
-  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts");
+  // TypeScript normalises program filenames to forward slashes internally, and the custom compiler
+  // host below matches the in-memory probe by exact string (`fileName === probeFile`). On Windows
+  // `join` yields backslashes, so TS would look up `C:/.../probe.ts` while the host holds
+  // `C:\...\probe.ts` → no match → "probe file not found". Use a forward-slash path so the host and
+  // `program.getSourceFile` agree with TS's normalisation on every OS (POSIX is already `/`).
+  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts").replace(/\\/gu, "/");
   const probeText =
     `export * from ${JSON.stringify(specifier)};\n` +
     `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
@@ -354,6 +359,16 @@ async function assertQiRouteReachable(baseUrl) {
   }
 }
 
+// Compare two absolute paths for equality. On Windows paths are case-insensitive and may differ in
+// separator (`\` vs `/`) or drive-letter case between `realpathSync` and the server's resolved path,
+// so normalise both before comparing there; POSIX comparison stays exact (case-sensitive).
+function samePath(a, b) {
+  if (a === undefined || b === undefined) return false;
+  if (process.platform !== "win32") return a === b;
+  const norm = (p) => String(p).replace(/\\/gu, "/").toLowerCase();
+  return norm(a) === norm(b);
+}
+
 async function assertUiLaunchProject(baseUrl, tmp) {
   const expectedProjectPath = realpathSync(tmp);
   const projectsRes = await globalThis.fetch(`${baseUrl}/api/projects`);
@@ -362,7 +377,7 @@ async function assertUiLaunchProject(baseUrl, tmp) {
   }
   const projectsPayload = await projectsRes.json();
   const launchProject = projectsPayload.projects?.[0];
-  if (launchProject?.path !== expectedProjectPath) {
+  if (!samePath(launchProject?.path, expectedProjectPath)) {
     fail(`keiko ui did not select launch cwd; first project was ${String(launchProject?.path)}`);
   }
   if (launchProject.available !== true) {
