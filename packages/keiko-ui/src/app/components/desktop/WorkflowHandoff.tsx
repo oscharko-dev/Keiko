@@ -70,7 +70,6 @@ export function LaunchWorkflowButton({
         className="cmp-mode"
         title="Launch a governed workflow with the current model"
         aria-haspopup="dialog"
-        aria-expanded={pickerOpen}
         onClick={() => setPickerOpen(true)}
       >
         <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Launch workflow
@@ -121,11 +120,13 @@ function WorkflowPickerDialog({ modelId, launch, onClose }: WorkflowPickerDialog
   const dialogRef = useRef<HTMLDivElement>(null);
   const entry = workflowId === undefined ? undefined : findChatWorkflow(workflowId);
 
-  // Focus the dialog container on mount so screen-reader users land inside the modal. The first
-  // focusable child receives focus on tab.
+  // Focus the dialog container on mount AND on every step transition (list → form via a workflow
+  // choice, form → list via Back), so keyboard/screen-reader users land inside the new view instead
+  // of on <body> when the previously-focused choice/Back button unmounts (WCAG 2.4.3). The first
+  // focusable child receives focus on the next Tab.
   useEffect(() => {
     dialogRef.current?.focus();
-  }, []);
+  }, [workflowId]);
 
   // Close on Escape (WCAG 2.1.2) and trap Tab focus within the dialog (WH-03,
   // WCAG 2.1.2 "No Keyboard Trap" applied as a modal focus loop): Tab past the
@@ -419,6 +420,7 @@ export function LaunchGroundedWorkflowButton({
 }: LaunchGroundedWorkflowButtonProps): ReactNode {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const busyHintId = useId();
   if (
     answer === undefined ||
     answer.groundingKind !== "connected-context" ||
@@ -427,6 +429,11 @@ export function LaunchGroundedWorkflowButton({
   ) {
     return null;
   }
+  // WCAG 4.1.2: when a run is in flight the trigger stays in the tab order (aria-disabled, not the
+  // native `disabled` attribute) and points at an sr-only hint, so a keyboard/screen-reader user can
+  // reach it and hear WHY it is unavailable instead of a silent "dimmed" button. The onClick guard
+  // enforces the blocked state.
+  const isBusy = busy === true;
   return (
     <>
       <button
@@ -435,13 +442,21 @@ export function LaunchGroundedWorkflowButton({
         className="cmp-mode"
         title="Launch a governed workflow from this grounded answer"
         aria-haspopup="dialog"
-        aria-expanded={open}
-        disabled={busy === true}
-        onClick={() => setOpen(true)}
+        aria-disabled={isBusy || undefined}
+        aria-describedby={isBusy ? busyHintId : undefined}
+        onClick={() => {
+          if (isBusy) return;
+          setOpen(true);
+        }}
       >
         <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Launch grounded workflow
         <Icons.chevron size={12} />
       </button>
+      {isBusy ? (
+        <span className="sr-only" id={busyHintId}>
+          A run is in progress. Wait for it to complete before launching another grounded workflow.
+        </span>
+      ) : null}
       {open ? (
         <GroundedWorkflowDialog
           answer={answer}
@@ -486,9 +501,11 @@ function GroundedWorkflowDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
+  // Focus the dialog container on mount AND on every step transition (choice → form, Back → choice)
+  // so focus is never dropped onto <body> when the previously-focused control unmounts (WCAG 2.4.3).
   useEffect(() => {
     dialogRef.current?.focus();
-  }, []);
+  }, [workflowKind]);
 
   useEffect(() => {
     if (workflowKind !== undefined) {
@@ -774,12 +791,26 @@ export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
   const status = message.workflowStatus ?? "queued";
   const workflowLabel = message.workflowId ?? message.taskType ?? "workflow";
   const runIdShort = message.runId === undefined ? "" : message.runId.slice(0, 8);
+
+  // WCAG 4.1.3: the card's aria-label changes when the run completes (running → succeeded/failed),
+  // but AT does not re-read a static container on re-render, so a screen-reader user never hears the
+  // run finish. An always-mounted polite live region carries the announcement. It stays EMPTY until
+  // the status actually changes after mount, so loading a chat log full of historical cards does not
+  // fire a burst of stale announcements (same gating idea as RunLauncher's progress region).
+  const [announcement, setAnnouncement] = useState("");
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    if (prevStatusRef.current !== status) {
+      prevStatusRef.current = status;
+      setAnnouncement(`Workflow ${workflowLabel}: ${status}`);
+    }
+  }, [status, workflowLabel]);
+
   return (
     <article
       className="run-summary-card"
       data-testid="run-summary-card"
       data-status={status}
-      role="group"
       aria-label={`Workflow run ${workflowLabel} — ${status}`}
     >
       <header className="run-summary-card-head">
@@ -807,6 +838,9 @@ export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
           </p>
         ) : null}
       </div>
+      <p className="sr-only" role="status" aria-live="polite" data-testid="run-summary-card-sr">
+        {announcement}
+      </p>
     </article>
   );
 }
