@@ -29,6 +29,10 @@ import type { KnowledgeStore } from "../store.js";
 import { RetrievalError } from "./types.js";
 
 const SEARCH_EXCERPT_MAX_CHARS = 1_600;
+const SEARCH_CONTEXT_BEFORE_CHARS = 420;
+const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
+const BROAD_QUERY_PATTERN =
+  /\b(compare|comparez|summari[sz]e|overview|explain|describe|analyse|analyze|erkl[aä]re|ueberblick|überblick|vergleiche|zusammenfassung)\b/iu;
 const SEARCH_STOPWORDS = new Set([
   "a",
   "about",
@@ -86,6 +90,19 @@ export interface SearchOptions {
   readonly topK: number;
   readonly minScore?: number;
   readonly signal?: AbortSignal;
+  readonly strategy?: "auto" | "balanced" | "exact" | "broad";
+}
+
+interface QueryProfile {
+  readonly strategy: "balanced" | "exact" | "broad";
+  readonly tokens: readonly string[];
+  readonly exactTerms: readonly string[];
+  readonly lexicalWeight: number;
+  readonly phraseWeight: number;
+  readonly metadataWeight: number;
+  readonly contextBeforeChars: number;
+  readonly documentDiversityPenalty: number;
+  readonly sectionDiversityPenalty: number;
 }
 
 // ─── Compose a scope object from either `ComposedRetrievalScope` or a single capsule ────
@@ -366,7 +383,7 @@ function scoreCapsuleVectors(
   rows: readonly VectorRow[],
   capsule: KnowledgeCapsule,
   queryVector: Float32Array,
-  topK: number,
+  candidateLimit: number,
   minScore: number | undefined,
 ): readonly ScoredCandidate[] {
   const metric = capsule.embeddingModelIdentity.vectorMetric;
@@ -382,11 +399,13 @@ function scoreCapsuleVectors(
     scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, score });
   }
   scored.sort(scoreDesc);
-  return scored.slice(0, oversampleTopK(topK));
+  return scored.slice(0, candidateLimit);
 }
 
-function oversampleTopK(topK: number): number {
-  return Math.max(topK, Math.min(topK * 8, topK + 64));
+function oversampleTopK(topK: number, profile: QueryProfile): number {
+  const multiplier = profile.strategy === "exact" ? 12 : profile.strategy === "broad" ? 10 : 8;
+  const cap = profile.strategy === "exact" ? topK + 96 : topK + 64;
+  return Math.max(topK, Math.min(topK * multiplier, cap));
 }
 
 function scoreDesc(a: ScoredCandidate, b: ScoredCandidate): number {
@@ -445,6 +464,7 @@ async function processCapsule(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
   query: string,
   options: SearchOptions,
+  profile: QueryProfile,
   cache: Map<string, EmbeddedQuery>,
   state: SearchState,
 ): Promise<void> {
@@ -473,7 +493,7 @@ async function processCapsule(
     rows,
     capsule,
     embedded.vector,
-    options.topK,
+    oversampleTopK(options.topK, profile),
     options.minScore,
   );
   state.candidates.push(...candidates);
@@ -508,7 +528,11 @@ type CandidateSelection =
   | { readonly ok: true; readonly top: readonly ScoredCandidate[] }
   | { readonly ok: false; readonly reason: EmptyReason };
 
-function selectTopCandidates(state: SearchState, options: SearchOptions): CandidateSelection {
+function selectTopCandidates(
+  state: SearchState,
+  options: SearchOptions,
+  profile: QueryProfile,
+): CandidateSelection {
   if (!state.anyVectorSeen) return { ok: false, reason: "no-vectors" };
   if (state.embeddingFailed && state.candidates.length === 0) {
     return { ok: false, reason: "embedding-failed" };
@@ -517,7 +541,7 @@ function selectTopCandidates(state: SearchState, options: SearchOptions): Candid
     return { ok: false, reason: "incompatible-embedding-identity" };
   }
   state.candidates.sort(scoreDesc);
-  const top = state.candidates.slice(0, oversampleTopK(options.topK));
+  const top = state.candidates.slice(0, oversampleTopK(options.topK, profile));
   if (top.length === 0) return { ok: false, reason: "below-min-score" };
   return { ok: true, top };
 }
@@ -532,6 +556,7 @@ export async function searchVectorsForScope(
   const capsules = loadCapsules(store, scope.capsuleIds);
   if (capsules.length === 0) return { references: [], noEvidenceReason: "no-vectors" };
 
+  const profile = profileQuery(query, options.strategy);
   const cache = new Map<string, EmbeddedQuery>();
   const state = emptyState();
   for (const capsule of capsules) {
@@ -542,13 +567,14 @@ export async function searchVectorsForScope(
       sourceFilterForCapsule(scope.sourceFilter, capsule),
       query,
       options,
+      profile,
       cache,
       state,
     );
   }
-  const selection = selectTopCandidates(state, options);
+  const selection = selectTopCandidates(state, options, profile);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
-  return { references: buildReferences(store, selection.top, query, options.topK) };
+  return { references: buildReferences(store, selection.top, query, options.topK, profile) };
 }
 
 function sourceFilterForCapsule(
@@ -577,6 +603,7 @@ function buildReferences(
   candidates: readonly ScoredCandidate[],
   query: string,
   limit: number,
+  profile: QueryProfile,
 ): readonly RetrievalReference[] {
   // Group surviving candidates by capsule so we can issue one citation-read per capsule.
   const byCapsule = new Map<string, ScoredCandidate[]>();
@@ -618,13 +645,13 @@ function buildReferences(
       capsuleId: candidate.capsuleId,
       score:
         candidate.score +
-        lexicalMetadataBonus(query, citation) +
-        lexicalContentBonus(store, query, candidate.capsuleId, citation),
+        lexicalMetadataBonus(citation, profile) +
+        lexicalContentBonus(store, candidate.capsuleId, citation, profile),
       citation,
     });
   }
   refs.sort(referenceScoreDesc);
-  return refs.slice(0, limit);
+  return diversifyReferences(refs, limit, profile);
 }
 
 function referenceScoreDesc(a: RetrievalReference, b: RetrievalReference): number {
@@ -632,9 +659,79 @@ function referenceScoreDesc(a: RetrievalReference, b: RetrievalReference): numbe
   return String(a.chunkId).localeCompare(String(b.chunkId));
 }
 
-function lexicalMetadataBonus(query: string, citation: CitationReference): number {
-  const queryTokens = uniqueTokens(tokenise(query));
-  if (queryTokens.length === 0) return 0;
+function diversifyReferences(
+  references: readonly RetrievalReference[],
+  limit: number,
+  profile: QueryProfile,
+): readonly RetrievalReference[] {
+  if (references.length <= limit) return references;
+  const remaining = [...references];
+  const selected: RetrievalReference[] = [];
+  while (remaining.length > 0 && selected.length < limit) {
+    const pick = pickNextReference(remaining, selected, profile);
+    selected.push(pick.reference);
+    remaining.splice(pick.index, 1);
+  }
+  selected.sort(referenceScoreDesc);
+  return selected;
+}
+
+function pickNextReference(
+  remaining: readonly RetrievalReference[],
+  selected: readonly RetrievalReference[],
+  profile: QueryProfile,
+): { readonly reference: RetrievalReference; readonly index: number } {
+  let bestIndex = 0;
+  let best = withDiversityScore(remaining[0], selected, profile);
+  for (let i = 1; i < remaining.length; i += 1) {
+    const candidate = withDiversityScore(remaining[i], selected, profile);
+    if (referenceScoreDesc(candidate, best) < 0) {
+      best = candidate;
+      bestIndex = i;
+    }
+  }
+  return { reference: best, index: bestIndex };
+}
+
+function withDiversityScore(
+  reference: RetrievalReference | undefined,
+  selected: readonly RetrievalReference[],
+  profile: QueryProfile,
+): RetrievalReference {
+  if (reference === undefined) throw new RetrievalError("STORE_READ_FAILED", "missing reference");
+  const penalty = diversityPenalty(reference, selected, profile);
+  if (penalty === 0) return reference;
+  return { ...reference, score: reference.score - penalty };
+}
+
+function diversityPenalty(
+  reference: RetrievalReference,
+  selected: readonly RetrievalReference[],
+  profile: QueryProfile,
+): number {
+  let sameDocument = 0;
+  let sameSection = 0;
+  const sectionKey = referenceSectionKey(reference);
+  for (const prior of selected) {
+    if (String(prior.citation.documentId) === String(reference.citation.documentId)) {
+      sameDocument += 1;
+    }
+    if (sectionKey !== "" && sectionKey === referenceSectionKey(prior)) {
+      sameSection += 1;
+    }
+  }
+  return (
+    sameDocument * profile.documentDiversityPenalty + sameSection * profile.sectionDiversityPenalty
+  );
+}
+
+function referenceSectionKey(reference: RetrievalReference): string {
+  const path = reference.citation.sectionPath?.join(">");
+  return path === undefined ? "" : `${String(reference.citation.documentId)}:${path}`;
+}
+
+function lexicalMetadataBonus(citation: CitationReference, profile: QueryProfile): number {
+  if (profile.tokens.length === 0) return 0;
   const haystack = tokenise(
     [
       citation.safeDisplayName,
@@ -651,27 +748,39 @@ function lexicalMetadataBonus(query: string, citation: CitationReference): numbe
   if (haystack.length === 0) return 0;
 
   const haystackSet = new Set(haystack);
-  const hits = countTokenHits(queryTokens, haystackSet);
+  const hits = countTokenHits(profile.tokens, haystackSet);
   if (hits === 0) return 0;
-  return hits / (queryTokens.length * 10);
+  return (hits / profile.tokens.length) * profile.metadataWeight;
 }
 
 function lexicalContentBonus(
   store: KnowledgeStore,
-  query: string,
   capsuleId: KnowledgeCapsuleId,
   citation: CitationReference,
+  profile: QueryProfile,
 ): number {
-  const queryTokens = uniqueTokens(tokenise(query));
-  if (queryTokens.length === 0) return 0;
-  const excerpt = readCitationSearchExcerpt(store, capsuleId, citation, SEARCH_EXCERPT_MAX_CHARS);
+  if (profile.tokens.length === 0) return 0;
+  const excerpt = readCitationSearchExcerpt(
+    store,
+    capsuleId,
+    citation,
+    SEARCH_EXCERPT_MAX_CHARS,
+    profile.contextBeforeChars,
+  );
   if (excerpt.length === 0) return 0;
   const excerptTokens = tokenise(excerpt);
   if (excerptTokens.length === 0) return 0;
 
-  const tokenCoverage = countTokenHits(queryTokens, new Set(excerptTokens)) / queryTokens.length;
-  const phraseHits = countAdjacentPhraseHits(queryTokens, normaliseForSearch(excerpt));
-  return Math.min(0.18, tokenCoverage * 0.12) + Math.min(0.12, phraseHits * 0.04);
+  const normalisedExcerpt = normaliseForSearch(excerpt);
+  const tokenCoverage =
+    countTokenHits(profile.tokens, new Set(excerptTokens)) / profile.tokens.length;
+  const phraseHits = countAdjacentPhraseHits(profile.tokens, normalisedExcerpt);
+  const exactHits = countExactTermHits(profile.exactTerms, normalisedExcerpt);
+  return (
+    Math.min(0.24, tokenCoverage * profile.lexicalWeight) +
+    Math.min(0.16, phraseHits * profile.phraseWeight) +
+    Math.min(0.18, exactHits * 0.06)
+  );
 }
 
 interface DocumentTextRow {
@@ -683,6 +792,7 @@ function readCitationSearchExcerpt(
   capsuleId: KnowledgeCapsuleId,
   citation: CitationReference,
   maxChars: number,
+  beforeChars: number,
 ): string {
   const row = store._internal.db
     .prepare(
@@ -694,9 +804,15 @@ function readCitationSearchExcerpt(
     }) as DocumentTextRow | undefined;
   const text = row?.normalized_text;
   if (typeof text !== "string" || text.length === 0) return "";
-  const start = Math.max(0, Math.min(text.length, citation.characterStart ?? 0));
-  const end = Math.max(start, Math.min(text.length, citation.characterEnd ?? start + maxChars));
-  return text.slice(start, Math.min(text.length, end + maxChars)).trim();
+  const focusStart = Math.max(0, Math.min(text.length, citation.characterStart ?? 0));
+  const focusEnd = Math.max(
+    focusStart,
+    Math.min(text.length, citation.characterEnd ?? focusStart + maxChars),
+  );
+  const start = Math.max(0, focusStart - beforeChars);
+  const afterBudget = Math.max(0, maxChars - (focusStart - start));
+  const end = Math.min(text.length, focusEnd + afterBudget);
+  return text.slice(start, end).trim();
 }
 
 function countTokenHits(tokens: readonly string[], haystack: ReadonlySet<string>): number {
@@ -716,6 +832,102 @@ function countAdjacentPhraseHits(tokens: readonly string[], normalisedHaystack: 
     if (normalisedHaystack.includes(`${first} ${second}`)) hits += 1;
   }
   return hits;
+}
+
+function countExactTermHits(terms: readonly string[], normalisedHaystack: string): number {
+  let hits = 0;
+  for (const term of terms) {
+    if (normalisedHaystack.includes(term)) hits += 1;
+  }
+  return hits;
+}
+
+function profileQuery(
+  query: string,
+  requested: SearchOptions["strategy"] | undefined,
+): QueryProfile {
+  const tokens = uniqueTokens(tokenise(query));
+  const exactTerms = extractExactTerms(query);
+  const strategy = resolveQueryStrategy(query, tokens, exactTerms, requested);
+  if (strategy === "exact") return exactQueryProfile(tokens, exactTerms);
+  if (strategy === "broad") return broadQueryProfile(tokens, exactTerms);
+  return balancedQueryProfile(tokens, exactTerms);
+}
+
+function resolveQueryStrategy(
+  query: string,
+  tokens: readonly string[],
+  exactTerms: readonly string[],
+  requested: SearchOptions["strategy"] | undefined,
+): QueryProfile["strategy"] {
+  if (requested !== undefined && requested !== "auto") return requested;
+  if (exactTerms.length > 0) return "exact";
+  if (tokens.length >= 8 || BROAD_QUERY_PATTERN.test(query)) return "broad";
+  return "balanced";
+}
+
+function exactQueryProfile(tokens: readonly string[], exactTerms: readonly string[]): QueryProfile {
+  return {
+    strategy: "exact",
+    tokens,
+    exactTerms,
+    lexicalWeight: 0.22,
+    phraseWeight: 0.06,
+    metadataWeight: 0.16,
+    contextBeforeChars: SEARCH_CONTEXT_BEFORE_CHARS * 2,
+    documentDiversityPenalty: 0.018,
+    sectionDiversityPenalty: 0.01,
+  };
+}
+
+function broadQueryProfile(tokens: readonly string[], exactTerms: readonly string[]): QueryProfile {
+  return {
+    strategy: "broad",
+    tokens,
+    exactTerms,
+    lexicalWeight: 0.16,
+    phraseWeight: 0.04,
+    metadataWeight: 0.1,
+    contextBeforeChars: SEARCH_CONTEXT_BEFORE_CHARS,
+    documentDiversityPenalty: 0.085,
+    sectionDiversityPenalty: 0.035,
+  };
+}
+
+function balancedQueryProfile(
+  tokens: readonly string[],
+  exactTerms: readonly string[],
+): QueryProfile {
+  return {
+    strategy: "balanced",
+    tokens,
+    exactTerms,
+    lexicalWeight: 0.18,
+    phraseWeight: 0.045,
+    metadataWeight: 0.12,
+    contextBeforeChars: SEARCH_CONTEXT_BEFORE_CHARS,
+    documentDiversityPenalty: 0.045,
+    sectionDiversityPenalty: 0.02,
+  };
+}
+
+function extractExactTerms(value: string): readonly string[] {
+  const out: string[] = [];
+  const matches = value.matchAll(EXACT_TERM_PATTERN);
+  for (const match of matches) {
+    const raw = match[0];
+    if (!isExactTerm(raw)) continue;
+    const term = normaliseForSearch(raw);
+    if (term.length > 0) out.push(term);
+  }
+  return uniqueTokens(out);
+}
+
+function isExactTerm(value: string): boolean {
+  if (/\d/u.test(value)) return true;
+  if (/[._:/#-]/u.test(value)) return true;
+  if (/[a-z][A-Z]/u.test(value)) return true;
+  return value.length >= 3 && value === value.toUpperCase() && /\p{L}/u.test(value);
 }
 
 function uniqueTokens(tokens: readonly string[]): readonly string[] {

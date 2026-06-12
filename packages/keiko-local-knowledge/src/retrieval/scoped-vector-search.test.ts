@@ -69,6 +69,19 @@ function setCapsuleVector(
     .run({ embedding: blob, capsule_id: capsuleId });
 }
 
+function setChunkVector(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  chunkId: string,
+  blob: Uint8Array,
+): void {
+  store._internal.db
+    .prepare(
+      "UPDATE vectors SET embedding = :embedding WHERE capsule_id = :capsule_id AND chunk_id = :chunk_id",
+    )
+    .run({ embedding: blob, capsule_id: capsuleId, chunk_id: chunkId });
+}
+
 describe("searchVectorsForScope — empty capsule", () => {
   it("returns noEvidenceReason 'no-vectors' when the capsule has zero vectors", async () => {
     const { store } = getFixture();
@@ -596,7 +609,11 @@ describe("searchVectorsForScope — citation fields", () => {
       .prepare(
         "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
       )
-      .run({ c: String(vectorOnly.capsuleId), d: String(vectorOnly.documentId), t: vectorOnlyText });
+      .run({
+        c: String(vectorOnly.capsuleId),
+        d: String(vectorOnly.documentId),
+        t: vectorOnlyText,
+      });
     store._internal.db
       .prepare(
         "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
@@ -625,6 +642,129 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.references).toHaveLength(1);
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("nvidia-notes.docx");
     expect(outcome.references[0]?.score).toBeGreaterThan(1);
+  });
+
+  it("uses leading document context to recover exact identifiers split before a chunk", async () => {
+    const { store } = getFixture();
+    const genericText = "General integration overview for connector deployments.".repeat(4);
+    const contextualText =
+      "Release ticket TS-999 belongs to the connector hardening rollout. " +
+      "The implementation details are validated by the platform test matrix.";
+    const generic = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-generic",
+      sourceId: "src-generic",
+      documentId: "doc-generic",
+      safeDisplayName: "generic.txt",
+      text: genericText,
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const contextual = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-contextual",
+      sourceId: "src-contextual",
+      documentId: "doc-contextual",
+      safeDisplayName: "release-notes.txt",
+      unit: {
+        kind: "section",
+        sectionPath: ["Implementation"],
+        characterStart: 66,
+        characterEnd: contextualText.length,
+      } satisfies ParsedUnitWithoutDocId,
+      text: contextualText,
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: String(generic.capsuleId), d: String(generic.documentId), t: genericText });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({
+        c: String(contextual.capsuleId),
+        d: String(contextual.documentId),
+        t: contextualText,
+      });
+    setCapsuleVector(store, generic.capsuleId, vectorBlob(1, 0));
+    setCapsuleVector(store, contextual.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [generic.capsuleId, contextual.capsuleId] },
+      "What changed in TS-999?",
+      { topK: 1 },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("release-notes.txt");
+  });
+
+  it("diversifies broad query results across documents when scores are otherwise close", async () => {
+    const { store } = getFixture();
+    const first = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-diverse",
+      sourceId: "src-diverse",
+      documentId: "doc-a",
+      safeDisplayName: "controls-a.md",
+      text:
+        "Primary controls overview and implementation details. " +
+        "Repeated controls overview and implementation details.",
+      chunkingOptions: { maxTokens: 4, minTokens: 0, overlapTokens: 0 },
+    });
+    const second = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-diverse",
+      sourceId: "src-diverse",
+      documentId: "doc-b",
+      safeDisplayName: "controls-b.md",
+      unitId: "unit-diverse-b",
+      text: "Independent risk monitoring evidence and rollout status.",
+      skipCapsule: true,
+      skipSource: true,
+      contentHash: "c".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const firstChunk = first.chunkIds[0];
+    const duplicateChunk = first.chunkIds[1];
+    const secondChunk = second.chunkIds[0];
+    if (firstChunk === undefined || duplicateChunk === undefined || secondChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    setChunkVector(store, first.capsuleId, firstChunk, vectorBlob(1, 0));
+    setChunkVector(store, first.capsuleId, duplicateChunk, vectorBlob(0.99, 0.14106736));
+    setChunkVector(store, second.capsuleId, secondChunk, vectorBlob(0.98, 0.19899749));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [first.capsuleId] },
+      "Summarize controls implementation risk monitoring rollout evidence",
+      { topK: 2 },
+    );
+
+    expect(outcome.references.map((ref) => String(ref.citation.documentId))).toEqual([
+      "doc-a",
+      "doc-b",
+    ]);
   });
 });
 

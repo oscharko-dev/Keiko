@@ -756,6 +756,85 @@ export const staleIndexFixture: RetrievalEvalFixture = {
   ],
 };
 
+export const broadQueryDiversityFixture: RetrievalEvalFixture = {
+  id: "broad-query-diversity",
+  description: "Broad query should prefer supporting evidence across documents over duplicates.",
+  capsules: [
+    {
+      id: capsuleId("cap-diversity"),
+      displayName: "Diversity",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-diversity"),
+          documents: [
+            {
+              id: documentId("doc-div-a"),
+              safeDisplayName: "controls-a.md",
+              parsedUnits: [
+                {
+                  id: "section-a",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Controls"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-div-a1"),
+                  text: "controls implementation evidence primary with rollout trace",
+                  topic: "diverse",
+                },
+                {
+                  id: chunkId("c-div-a2"),
+                  text: "controls duplicate",
+                  topic: "diverse",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-div-b"),
+              safeDisplayName: "controls-b.md",
+              parsedUnits: [
+                {
+                  id: "section-b",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Risk Monitoring"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-div-b"),
+                  text: "risk monitoring rollout evidence",
+                  topic: "diverse",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-diverse",
+      text: "Summarize controls implementation risk monitoring rollout evidence",
+      topic: "diverse",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-diversity") },
+      expectedChunkIds: [chunkId("c-div-a1"), chunkId("c-div-b")],
+      topK: 2,
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -767,4 +846,5 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   structuredFileFixture,
   contextBudgetFixture,
   staleIndexFixture,
+  broadQueryDiversityFixture,
 ] as const;

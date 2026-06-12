@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_FIXTURES,
   ambiguousQueryFixture,
+  broadQueryDiversityFixture,
   contextBudgetFixture,
   multiCapsuleFixture,
   multiPageFixture,
@@ -51,6 +52,7 @@ describe("fixtures — registry", () => {
       structuredFileFixture.id,
       contextBudgetFixture.id,
       staleIndexFixture.id,
+      broadQueryDiversityFixture.id,
     ]);
   });
 

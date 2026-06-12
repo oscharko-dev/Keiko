@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ambiguousQueryFixture,
+  broadQueryDiversityFixture,
   contextBudgetFixture,
   multiCapsuleFixture,
   multiPageFixture,
@@ -55,6 +56,15 @@ describe("runRetrievalEval — ambiguous-query fixture", () => {
   it("recall stays at 1.0 because both acceptable ground-truth chunks come back", async () => {
     const scorecard = await runRetrievalEval(ambiguousQueryFixture);
     expect(scorecard.dimensions.recall).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — broad-query diversity fixture", () => {
+  it("keeps recall high when broad queries need evidence from multiple documents", async () => {
+    const scorecard = await runRetrievalEval(broadQueryDiversityFixture);
+    expect(scorecard.dimensions.recall).toBe(1);
+    expect(scorecard.dimensions.precision).toBe(1);
     expect(scorecard.passed).toBe(true);
   });
 });
