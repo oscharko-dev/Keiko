@@ -191,9 +191,15 @@ function assertCliExecutable(tmp) {
   if (!existsSync(cliEntry)) {
     fail(`installed tarball missing CLI entry at ${cliEntry}`);
   }
-  const mode = statSync(cliEntry).mode;
-  if ((mode & 0o111) === 0) {
-    fail(`installed CLI entry ${cliEntry} is not executable (mode ${mode.toString(8)})`);
+  // The POSIX executable bit is meaningless on Windows: NTFS has no `0o111`, Node's statSync reports
+  // a fixed `100666`, and executability is determined by file extension / PATHEXT. The CLI's *actual*
+  // runnability is verified cross-platform by assertCliVersionAndHelp (it runs `node <bin> --version`
+  // / `--help`). Only enforce the exec bit on the platforms where it is a real concept.
+  if (process.platform !== "win32") {
+    const mode = statSync(cliEntry).mode;
+    if ((mode & 0o111) === 0) {
+      fail(`installed CLI entry ${cliEntry} is not executable (mode ${mode.toString(8)})`);
+    }
   }
 }
 
