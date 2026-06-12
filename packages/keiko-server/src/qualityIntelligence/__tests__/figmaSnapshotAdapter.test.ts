@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
+import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
@@ -97,6 +99,101 @@ describe("makeFigmaSnapshotLoader", () => {
       const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }));
       expect(loader).toBeDefined();
       expect(loader?.("run-does-not-exist")).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Drift seam: resolveLatestByScope (#735) ───────────────────────────────────────
+//
+// A pinned write-once snapshot can never drift under its own identity. With the option set, the
+// loader resolves the LATEST snapshot of the same board scope and returns it when (and only when)
+// its integrity hash differs — so re-check sees changed atoms while generate keeps exact pinning.
+
+describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
+  const record = (dir: string, runId: string, fetchedAt: string, screenText: string): void => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const ir = {
+      id: "s1",
+      name: "Login",
+      root: {
+        id: "s1-root",
+        name: "root",
+        type: "FRAME",
+        interactionHint: "container",
+        text: screenText,
+        imageFills: [],
+        children: [],
+      },
+    };
+    const screenHash = `h-${screenText}`;
+    store.record({
+      runId,
+      provenance: { fileKey: "KEY", nodeId: "0:1", version: undefined, fetchedAt },
+      integrityHash: hashSnapshot(1, undefined, [{ screenId: "s1", integrityHash: screenHash }]),
+      screens: [
+        {
+          screenId: "s1",
+          irJson: ir,
+          integrityHash: screenHash,
+          image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50]) },
+        },
+      ],
+      skippedScreens: [],
+      links: [],
+      tokens: { colors: [], typography: [], spacing: [], radius: [] },
+    });
+  };
+
+  it("without the option, always returns the pinned record", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-pin-"));
+    try {
+      record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "alt");
+      record(dir, "fs-new", "2026-02-01T00:00:00.000Z", "neu");
+      const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }));
+      expect(loader?.("fs-old")?.runId).toBe("fs-old");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the newest same-scope record when its integrity hash differs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-drift-"));
+    try {
+      record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "alt");
+      record(dir, "fs-new", "2026-02-01T00:00:00.000Z", "neu");
+      const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
+        resolveLatestByScope: true,
+      });
+      expect(loader?.("fs-old")?.runId).toBe("fs-new");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the pinned record when the newest same-scope record has the same hash (no false drift)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-same-"));
+    try {
+      record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "gleich");
+      record(dir, "fs-new", "2026-02-01T00:00:00.000Z", "gleich");
+      const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
+        resolveLatestByScope: true,
+      });
+      expect(loader?.("fs-old")?.runId).toBe("fs-old");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the pinned record when it is itself the newest for its scope", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-self-"));
+    try {
+      record(dir, "fs-only", "2026-01-01T00:00:00.000Z", "solo");
+      const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
+        resolveLatestByScope: true,
+      });
+      expect(loader?.("fs-only")?.runId).toBe("fs-only");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

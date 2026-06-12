@@ -25,17 +25,47 @@ import { resolveQiMultimodalSelection } from "./modelSelection.js";
 /** Loads an immutable Figma Snapshot evidence record by runId. Returns `undefined` when not found. */
 export type FigmaSnapshotLoader = (snapshotRunId: string) => FigmaSnapshotRecord | undefined;
 
+export interface FigmaSnapshotLoaderOptions {
+  /**
+   * Drift seam (#735): a figma-snapshot source pins a write-once, content-addressed runId, so its
+   * content can never change under its identity — re-checking the pinned record would always
+   * report "fresh" even after the board changed and was re-snapshotted. When this flag is set the
+   * loader resolves the LATEST snapshot recorded for the same board scope (fileKey + nodeId) and
+   * returns it instead of the pinned record whenever its integrity hash differs. Screen atom ids
+   * are board-stable (screenId-derived), so compareStaleness sees changed atoms, not orphans.
+   * Used by re-check and regenerate-stale ONLY — the generate path keeps exact pinning.
+   */
+  readonly resolveLatestByScope?: boolean;
+}
+
 /**
  * Build the snapshot loader. Returns `undefined` when `deps.evidenceDir` is not configured so the
  * ingestion layer maps an attempted figma-snapshot source to QI_FIGMA_SNAPSHOT_UNAVAILABLE.
  */
-export function makeFigmaSnapshotLoader(deps: UiHandlerDeps): FigmaSnapshotLoader | undefined {
+export function makeFigmaSnapshotLoader(
+  deps: UiHandlerDeps,
+  options?: FigmaSnapshotLoaderOptions,
+): FigmaSnapshotLoader | undefined {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) return undefined;
   const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const resolveLatest = options?.resolveLatestByScope === true;
   return (snapshotRunId: string): FigmaSnapshotRecord | undefined => {
     try {
-      return store.load(snapshotRunId);
+      const pinned = store.load(snapshotRunId);
+      if (pinned === undefined || !resolveLatest) return pinned;
+      const entries = store.listByScope(pinned.provenance.fileKey, pinned.provenance.nodeId);
+      const newest = entries[0];
+      if (
+        newest === undefined ||
+        newest.runId === pinned.runId ||
+        newest.integrityHash === pinned.integrityHash
+      ) {
+        return pinned;
+      }
+      // Fall back to the pinned record when the newest record fails to load — drift detection
+      // must degrade to "fresh", never crash the re-check.
+      return store.load(newest.runId) ?? pinned;
     } catch {
       // A malformed / unreadable record is treated as "not found"; the caller emits a coded error.
       return undefined;

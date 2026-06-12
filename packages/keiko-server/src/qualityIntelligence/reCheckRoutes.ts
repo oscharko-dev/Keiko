@@ -408,7 +408,9 @@ function ingestSourcesForDrift(
         runId: ingestRunId,
         registeredAt: new Date().toISOString(),
         capsuleResolver: makeCapsuleResolver(deps),
-        figmaSnapshotLoader: makeFigmaSnapshotLoader(deps),
+        // Drift must see the board's LATEST snapshot, not the pinned immutable record — a pinned
+        // write-once runId can never drift under its own identity (#735). Generate keeps pinning.
+        figmaSnapshotLoader: makeFigmaSnapshotLoader(deps, { resolveLatestByScope: true }),
         figmaVision: makeFigmaVisionHintProvider(deps),
       }),
     };
