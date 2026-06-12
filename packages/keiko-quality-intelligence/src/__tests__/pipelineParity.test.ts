@@ -21,7 +21,12 @@ import {
 } from "../domain/coverageRelevance.js";
 import { deduplicateCandidates } from "../domain/deduplication.js";
 import { deriveIntent } from "../domain/intentDerivation.js";
-import { bankingDefault, insuranceDefault, regressionDefault } from "../domain/policyProfile.js";
+import {
+  bankingDefault,
+  insuranceDefault,
+  type PolicyProfile,
+  regressionDefault,
+} from "../domain/policyProfile.js";
 import { designTestCaseCandidates } from "../domain/testDesignModel.js";
 import { validateCandidates } from "../domain/validation.js";
 import { loadFixture } from "./_fixtureLoader.js";
@@ -40,8 +45,6 @@ interface PipelineResult {
   readonly candidatesJson: string;
   readonly dedupedJson: string;
 }
-
-type PolicyProfile = Parameters<typeof deriveIntent>[1];
 
 const runPipeline = (fixtureName: string, profile: PolicyProfile): PipelineResult => {
   const fixture = loadFixture(fixtureName);
