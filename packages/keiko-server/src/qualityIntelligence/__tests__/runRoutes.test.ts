@@ -12,10 +12,11 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { UiHandlerDeps } from "../../deps.js";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { Redactor, UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createInMemoryUiStore, createRunRegistry, STREAMING } from "../../index.js";
 import type { RouteContext, RouteResult } from "../../routes.js";
-import { handleStartQiRun } from "../runRoutes.js";
+import { handleStartQiRun, toStreamEvent } from "../runRoutes.js";
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -325,5 +326,40 @@ describe("handleStartQiRun — figma-snapshot source validation (Issue #754)", (
     if (outcome !== STREAMING) {
       expect(outcome.status).not.toBe(400);
     }
+  });
+});
+
+describe("toStreamEvent — reasonSummary redaction backstop (#279 AC3)", () => {
+  // The workflow already produces a fail-closed, secret-free reasonSummary, but the SSE writer is
+  // the one QI surface with no other redaction. This proves the redactor is actually applied to the
+  // free-text field before it is streamed — removing the applyRedactor call fails this test.
+  it("passes the reasonSummary field through the live-payload redactor", () => {
+    const marker = "https://leak.example/v1 token sk-LEAKLEAKLEAK";
+    const redactor: Redactor = (value: unknown): unknown =>
+      typeof value === "string"
+        ? value.replaceAll("sk-LEAKLEAKLEAK", "[redacted]").replaceAll("leak.example", "[redacted]")
+        : value;
+    const event = {
+      sequence: 1,
+      payload: { kind: "run:failed", reasonSummary: marker },
+    } as unknown as QI.QualityIntelligenceRunEvent;
+
+    const message = toStreamEvent(event, redactor) as { kind: string; reasonSummary?: string };
+
+    expect(message.kind).toBe("run:failed");
+    expect(message.reasonSummary).toBeDefined();
+    expect(message.reasonSummary).not.toContain("sk-LEAKLEAKLEAK");
+    expect(message.reasonSummary).not.toContain("leak.example");
+  });
+
+  it("leaves a non-secret reasonSummary unchanged (redactor is a no-op on safe codes)", () => {
+    const event = {
+      sequence: 2,
+      payload: { kind: "run:failed", reasonSummary: "qi-run-error" },
+    } as unknown as QI.QualityIntelligenceRunEvent;
+
+    const message = toStreamEvent(event, buildRedactor({})) as { reasonSummary?: string };
+
+    expect(message.reasonSummary).toBe("qi-run-error");
   });
 });

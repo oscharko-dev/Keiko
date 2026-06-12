@@ -50,20 +50,43 @@ interface JudgePromptInput {
   readonly sourceContext: readonly JudgeSourceContext[];
 }
 
-// Strip C0/C1 control characters (keep tab/LF/CR) and neutralise any literal
-// <qi-...> delimiter so untrusted candidate/source text cannot break the prompt boundary.
-// Mirrors scrubEvidenceText from generationPort.ts (Issue #284 defence-in-depth).
+// Invisible / directional format controls that NFKC does NOT remove: zero-width characters
+// (ZWSP/ZWNJ/ZWJ, BOM/ZWNBSP) and bidirectional controls (LRM/RLM, the LRE…RLO embedding/override
+// block, and the isolate block). They carry no legitimate meaning in untrusted candidate/source
+// text but can smuggle homoglyph/bidi deception into the judge prompt — and into any rationale or
+// finding rendered/exported from it (#278 Audit Addendum).
+function isInvisibleFormatControl(cp: number): boolean {
+  return (
+    (cp >= 0x200b && cp <= 0x200f) || // ZWSP, ZWNJ, ZWJ, LRM, RLM
+    (cp >= 0x202a && cp <= 0x202e) || // LRE, RLE, PDF, LRO, RLO
+    (cp >= 0x2066 && cp <= 0x2069) || // LRI, RLI, FSI, PDI
+    cp === 0xfeff // BOM / ZWNBSP
+  );
+}
+
+// A code point that must be stripped from candidate/source text: C0 controls (except tab/LF/CR),
+// DEL, C1 controls, or an invisible zero-width/bidi format control. Tab/LF/CR survive as legitimate
+// whitespace. Kept at parity with isStrippableEvidenceCodePoint in generationPort.ts.
+function isStrippableCandidateCodePoint(cp: number): boolean {
+  return (
+    (cp <= 0x1f && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) ||
+    cp === 0x7f ||
+    (cp >= 0x80 && cp <= 0x9f) ||
+    isInvisibleFormatControl(cp)
+  );
+}
+
+// Strip control / invisible format characters (keep tab/LF/CR), then neutralise any literal
+// <qi-...> delimiter so untrusted candidate/source text cannot break the prompt boundary. Kept at
+// parity with scrubEvidenceText in generationPort.ts (Issue #284/#278 defence-in-depth); the shared
+// parity is locked by tests in judgePort.test.ts.
 export function scrubCandidateText(text: string): string {
   const normalised = text.normalize("NFKC");
   let out = "";
   for (const ch of normalised) {
     const cp = ch.codePointAt(0);
     if (cp === undefined) continue;
-    const isStrippable =
-      (cp <= 0x1f && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) ||
-      cp === 0x7f ||
-      (cp >= 0x80 && cp <= 0x9f);
-    if (!isStrippable) out += ch;
+    if (!isStrippableCandidateCodePoint(cp)) out += ch;
   }
   return out.replace(/<\/?qi-[a-z-]+/giu, "[qi-data]");
 }

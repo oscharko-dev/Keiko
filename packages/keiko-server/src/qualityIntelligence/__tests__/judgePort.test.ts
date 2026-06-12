@@ -172,6 +172,15 @@ describe("createQiJudgePort — capability gate", () => {
       expect((err as QiJudgeError).code).toBe("QI_JUDGE_MODEL_UNAVAILABLE");
     }
   });
+
+  // #279 AC2: an unsupported model must fail BEFORE any payload is sent. Asserting the fake port's
+  // call log stays empty makes that explicit and mutation-robust — moving the gate after the first
+  // model.call would populate `calls` and fail here.
+  it("does not call the gateway when the model is unknown (fail before network)", () => {
+    const { deps, calls } = depsFor("chat-model-1");
+    expect(() => createQiJudgePort(deps, "unknown-model")).toThrow(QiJudgeError);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 // ─── scrubCandidateText ───────────────────────────────────────────────────────
@@ -204,6 +213,31 @@ describe("scrubCandidateText", () => {
   it("neutralises <qi-source-context> delimiters in source text too", () => {
     const result = scrubCandidateText("before <qi-source-context> after");
     expect(result).toContain("[qi-data]>");
+  });
+
+  // Parity with scrubEvidenceText (generationPort.ts) — #278: invisible/bidi format controls that
+  // NFKC does not remove must be stripped from candidate/source text before it reaches the judge
+  // prompt, or rationale/findings rendered from it could carry homoglyph/bidi deception. Built from
+  // explicit code points so the assertion does not depend on invisible characters in this source.
+  it("strips zero-width and bidi format controls (parity with scrubEvidenceText)", () => {
+    const invisible = [
+      0x200b, // ZWSP
+      0x200c, // ZWNJ
+      0x200d, // ZWJ
+      0x200e, // LRM
+      0x200f, // RLM
+      0x202a, // LRE
+      0x202e, // RLO
+      0x2066, // LRI
+      0x2069, // PDI
+      0xfeff, // BOM / ZWNBSP
+    ];
+    for (const cp of invisible) {
+      const ch = String.fromCodePoint(cp);
+      expect(scrubCandidateText(`pre${ch}post`)).toBe("prepost");
+    }
+    const mixed = `a${String.fromCodePoint(0x200b)}b${String.fromCodePoint(0x202e)}c`;
+    expect(scrubCandidateText(mixed)).toBe("abc");
   });
 });
 

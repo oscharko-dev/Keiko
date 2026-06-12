@@ -130,6 +130,20 @@ async function invokePort(ctx: InvocationContext): Promise<NormalizedResponse> {
   }
 }
 
+/**
+ * Compose a single Quality Intelligence model call with capability gate, budget reservation,
+ * prompt segmentation, replay cache, composed timeout/cancellation, and qi/* safe-error shaping.
+ *
+ * REUSABLE PRIMITIVE — NOT the current live path. The live generation/judge runtime
+ * (`keiko-server` generationPort.ts / judgePort.ts) deliberately calls the gateway `ModelPort`
+ * directly and applies its own capability gate + prompt segmentation, inheriting timeout / retry /
+ * circuit-breaking from the gateway resilience layer (`resilience.ts`) — the same machinery Chat
+ * and grounded-QA use. This dispatcher (and its budget / replayCache / circuitBreaker / cancellation
+ * helpers) is the ported-from-Test-Intelligence composition kept available for a future multi-call
+ * QI flow that wants combined budget + cache + circuit semantics at one call site. It must NOT be
+ * force-wired into the live ports (that would change the resilience contract) and must NOT be
+ * deleted as "dead code" (#279: ported TI ideas live here as generic gateway capabilities).
+ */
 export async function dispatchQualityIntelligenceRequest(
   args: QualityIntelligenceDispatcherArgs,
 ): Promise<QualityIntelligenceDispatcherResult> {

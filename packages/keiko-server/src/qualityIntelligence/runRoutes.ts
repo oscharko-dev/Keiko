@@ -28,7 +28,7 @@ import {
   type RouteResult,
   type RouteDefinition,
 } from "../routes.js";
-import type { UiHandlerDeps } from "../deps.js";
+import type { Redactor, UiHandlerDeps } from "../deps.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "./runExecution.js";
 import { qiRunRegistry } from "./runRegistry.js";
 
@@ -248,7 +248,12 @@ async function parseStartBody(req: IncomingMessage): Promise<ParseOutcome> {
   return validateRequest(parsed);
 }
 
-function toStreamEvent(event: QI.QualityIntelligenceRunEvent): QualityIntelligenceRunStreamMessage {
+// Exported for unit testing of the reasonSummary redaction backstop (#279 AC3); not part of the
+// package public surface (the QI index re-exports only the route handlers, not this helper).
+export function toStreamEvent(
+  event: QI.QualityIntelligenceRunEvent,
+  redact: Redactor,
+): QualityIntelligenceRunStreamMessage {
   const p = event.payload;
   return {
     type: "event",
@@ -257,8 +262,21 @@ function toStreamEvent(event: QI.QualityIntelligenceRunEvent): QualityIntelligen
     ...("stageName" in p ? { stageName: p.stageName } : {}),
     ...("candidateId" in p ? { candidateId: String(p.candidateId) } : {}),
     ...("findingId" in p ? { findingId: String(p.findingId) } : {}),
-    ...("reasonSummary" in p ? { reasonSummary: p.reasonSummary } : {}),
+    // `reasonSummary` is the only free-text field on the QI event envelope. The workflow already
+    // produces a fail-closed, secret-free summary (see `safeReasonSummary`), but pass it through the
+    // live-payload redactor too so this SSE writer — the one QI surface with no other redaction —
+    // can never stream a credential/endpoint substring should a future code path widen the field
+    // (#279 AC3, defence-in-depth; mirrors the Conversation Center SSE redaction posture).
+    ...("reasonSummary" in p ? { reasonSummary: applyRedactor(redact, p.reasonSummary) } : {}),
   };
+}
+
+// Apply the live-payload redactor to a string field. The redactor is typed `(unknown) => unknown`
+// (it walks arbitrary structures); for a string input it returns the redacted string. Fall back to
+// the already-safe input on the impossible non-string return so the field type stays `string`.
+function applyRedactor(redact: Redactor, value: string): string {
+  const out = redact(value);
+  return typeof out === "string" ? out : value;
 }
 
 function classifyStartError(error: unknown): { readonly code: string; readonly message: string } {
@@ -306,7 +324,7 @@ async function streamRunExecution(
         if (event.payload.kind === "candidate:proposed") totals.candidates += 1;
         if (event.payload.kind === "finding:recorded") totals.findings += 1;
         qiRunRegistry.updateTotals(runId, totals);
-        write(toStreamEvent(event));
+        write(toStreamEvent(event, deps.redactor));
       },
     });
     terminal = summary.status;

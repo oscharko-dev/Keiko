@@ -147,15 +147,41 @@ export function checkCancelled(ctx: RunContext): void {
   }
 }
 
+// Error names raised inside the QI server/workflow layers whose identity (and, for coded errors,
+// whose `QI_*` code) is authored, static, and secret-free — safe to surface so a failed run stays
+// actionable. Matched by name rather than `instanceof` because the coded server errors
+// (QiGenerationError / QiIngestionError) live in a higher layer this package must not import.
+const SAFE_QI_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "EmptyEvidenceError",
+  "UnparseableModelOutputError",
+  "QiGenerationError",
+  "QiIngestionError",
+]);
+
+const QI_ERROR_CODE_PATTERN = /^QI_[A-Z0-9_]+$/;
+
+// Derive a redaction-safe, statically-bounded failure summary for a run/stage event (#279 AC3).
+//
+// FAIL-CLOSED: the raw `.message` of an arbitrary error is NEVER echoed. A productive model call
+// rejects through the Keiko Model Gateway with a `GatewayError` whose message can carry the
+// provider base URL, a deployment endpoint, or a credential-shaped substring (see
+// keiko-server `conversation-audit.test.ts`); that string must not reach the SSE `reasonSummary`
+// or any persisted field. Only three shapes produce a non-generic summary:
+//   1. a QI safe-error exception          -> its `qi/*` code (already secret-free by construction);
+//   2. an allow-listed in-repo QI error   -> its `QI_*` code when present, else its error name;
+//   3. everything else (gateway/provider/unexpected) -> a fixed generic code, no message.
 export function safeReasonSummary(error: unknown): string {
   if (error instanceof QualityIntelligenceSafeErrorException) {
     return `qi-safe-error: ${error.safe.code}`;
   }
-  if (error instanceof Error) {
-    const firstLine = error.message.split("\n")[0] ?? error.name;
-    return firstLine.slice(0, 200);
+  if (error instanceof Error && SAFE_QI_ERROR_NAMES.has(error.name)) {
+    const code = (error as { readonly code?: unknown }).code;
+    if (typeof code === "string" && QI_ERROR_CODE_PATTERN.test(code)) {
+      return `qi-error: ${code}`;
+    }
+    return `qi-error: ${error.name}`;
   }
-  return "unknown-error";
+  return "qi-run-error";
 }
 
 export async function withStage<T>(
