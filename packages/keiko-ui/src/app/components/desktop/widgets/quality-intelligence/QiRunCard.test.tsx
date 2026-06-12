@@ -426,7 +426,11 @@ describe("QiRunCard", () => {
     expect(await screen.findByTestId("qi-drift-unavailable")).toHaveTextContent(
       /no current source handle/i,
     );
-    expect(screen.getByTestId("qi-drift-recheck-unavailable")).toBeDisabled();
+    // a11y m-03: aria-disabled (focusable + describes why) rather than native disabled.
+    const unavailableBtn = screen.getByTestId("qi-drift-recheck-unavailable");
+    expect(unavailableBtn).not.toBeDisabled();
+    expect(unavailableBtn).toHaveAttribute("aria-disabled", "true");
+    expect(unavailableBtn).toHaveAccessibleDescription(/no current source handle/i);
   });
 
   it("hides the drift panel when connected sources is an empty array", async () => {

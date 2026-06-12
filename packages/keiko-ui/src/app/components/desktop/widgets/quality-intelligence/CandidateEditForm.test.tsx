@@ -128,9 +128,11 @@ describe("CandidateEditForm", () => {
     await user.type(title, " edited");
     await user.keyboard("{Escape}");
     expect(screen.getByRole("status")).toHaveTextContent(/unsaved changes/i);
-    // Continuing to edit clears the warning; the next Escape warns again instead of discarding.
+    // Continuing to edit clears the warning. The status region is persistent (a11y m-01), so it
+    // stays mounted but empties its text rather than unmounting.
     await user.type(title, "!");
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(onCancel).not.toHaveBeenCalled();
   });

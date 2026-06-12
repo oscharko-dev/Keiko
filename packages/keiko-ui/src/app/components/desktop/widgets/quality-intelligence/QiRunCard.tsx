@@ -256,21 +256,29 @@ function DriftUnavailablePanel({
 }: {
   readonly detail: QualityIntelligenceUiRunDetail;
 }): ReactNode {
+  const noteId = useId();
   if (!detail.drift.reCheckSupported) return null;
   return (
     <section className="qi-drift-panel" aria-label="Drift detection">
       <div className="qi-drift-head">
         <h3 className="qi-col-subtitle">Living tests</h3>
+        {/* a11y m-03: aria-disabled (not native `disabled`) keeps the control focusable so keyboard
+            and screen-reader users can reach it and hear WHY it is inactive via aria-describedby —
+            the same governance pattern used everywhere else in the QI surface. The click no-ops. */}
         <button
           type="button"
           className="qi-btn qi-btn-secondary"
-          disabled
+          aria-disabled="true"
+          aria-describedby={noteId}
           data-testid="qi-drift-recheck-unavailable"
+          onClick={(event) => {
+            event.preventDefault();
+          }}
         >
           Re-check drift
         </button>
       </div>
-      <p className="qi-drift-note" data-testid="qi-drift-unavailable">
+      <p id={noteId} className="qi-drift-note" data-testid="qi-drift-unavailable">
         Drift fingerprints are recorded for this run, but this card has no current source handle.
         Reopen it from the connected source or start a new run from the current source.
       </p>
@@ -377,7 +385,16 @@ export function QiRunCard({
   return (
     <div className="qi-run-card" data-testid="qi-run-card">
       <header className="qi-run-card-head">
-        <span className="qi-run-id qi-monospace" title={runId}>
+        {/* a11y m-02: name the card as a level-2 heading so the inner section <h3>s are not
+            orphaned and screen-reader heading navigation can reach the card. role="heading" keeps
+            the existing monospace run-id visual unchanged (no font/structure change). */}
+        <span
+          className="qi-run-id qi-monospace"
+          title={runId}
+          role="heading"
+          aria-level={2}
+          aria-label={`Quality Intelligence run ${runId}`}
+        >
           {runId}
         </span>
       </header>
@@ -437,11 +454,18 @@ export function QiRunCard({
               <p id={reviewerHelpId} className="qi-run-governance-help">
                 Used for QI review and edit audit entries.
               </p>
-              {!governanceEnabled ? (
-                <p id={reviewerWarningId} className="qi-run-governance-warning" role="note">
-                  {GOVERNANCE_REQUIRED_MESSAGE}
-                </p>
-              ) : null}
+              {/* Persistent live region (a11y M-02): always mounted so AT announces when the user
+                  clears the reviewer label and governance turns off. role="note" carries no implicit
+                  aria-live, and a conditionally-inserted region is unreliably announced. Empty (and
+                  visually nothing — the class has no box) while governance is enabled. */}
+              <p
+                id={reviewerWarningId}
+                className="qi-run-governance-warning"
+                role="status"
+                aria-live="polite"
+              >
+                {!governanceEnabled ? GOVERNANCE_REQUIRED_MESSAGE : ""}
+              </p>
             </section>
             <SummaryStrip detail={detail} />
             <FindingsList detail={detail} />
