@@ -21,6 +21,9 @@ const FORBIDDEN_IMPORT_PATTERNS: readonly RegExp[] = [
   /\brequire\(\s*["']@oscharko-dev\/ti-/u,
   /\bimport\(\s*["']@oscharko-dev\/test-intelligence(?:[/"'])/u,
   /\bimport\(\s*["']@oscharko-dev\/ti-/u,
+  // Bare side-effect imports: `import "@oscharko-dev/ti-foo";` — no `from`, no parens.
+  /^\s*import\s+["']@oscharko-dev\/test-intelligence(?:[/"'])/mu,
+  /^\s*import\s+["']@oscharko-dev\/ti-/mu,
 ];
 
 const collectFiles = (directory: string): readonly string[] => {
