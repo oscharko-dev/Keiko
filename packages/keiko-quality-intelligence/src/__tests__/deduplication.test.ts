@@ -71,4 +71,64 @@ describe("deduplicateCandidates", () => {
       computeCandidateEquivalenceSignature(right),
     );
   });
+
+  // ─── Order-independence: smaller id is second in input ────────────────────
+
+  it("keeps the lexicographically SMALLER id even when it appears SECOND in input", () => {
+    // Kills: mutant `compareCandidateById(...) < 0` → `false` (keep-first-seen).
+    // With the mutant, the first-seen "bbbb" id would survive; the correct code
+    // replaces the incumbent when the incoming candidate has a smaller id.
+    const firstSeen = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-bbbbbbbbbbbb"),
+    });
+    const laterSeen = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-aaaaaaaaaaaa"),
+    });
+    // Both have identical canonical projections (same title, steps, results, priority, riskClass).
+    expect(computeCandidateEquivalenceSignature(firstSeen)).toBe(
+      computeCandidateEquivalenceSignature(laterSeen),
+    );
+    const result = deduplicateCandidates([firstSeen, laterSeen]);
+    expect(result).toHaveLength(1);
+    // The smaller id "aaaa..." must win regardless of input order.
+    expect(result[0]?.id).toBe(
+      QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-aaaaaaaaaaaa"),
+    );
+  });
+
+  // ─── riskClass distinguishes the equivalence signature ────────────────────
+
+  it("produces DIFFERENT signatures when riskClass differs and keeps BOTH candidates", () => {
+    // Kills: mutant that omits riskClass from the signature projection.
+    // "functional" and "security" (via "safety") differ in the canonical JSON →
+    // different sha256 → different equivalence class → both survive dedup.
+    const functional = baseCandidate({ riskClass: "functional" });
+    const safety = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-cccccccccccc"),
+      riskClass: "safety",
+    });
+    expect(computeCandidateEquivalenceSignature(functional)).not.toBe(
+      computeCandidateEquivalenceSignature(safety),
+    );
+    const result = deduplicateCandidates([functional, safety]);
+    expect(result).toHaveLength(2);
+  });
+
+  // ─── expectedResults distinguishes the equivalence signature ──────────────
+
+  it("produces DIFFERENT signatures when expectedResults differ and keeps BOTH candidates", () => {
+    // Kills: mutant that omits expectedResults from the signature projection.
+    const left = baseCandidate({
+      expectedResults: ["The user lands on the dashboard"],
+    });
+    const right = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-dddddddddddd"),
+      expectedResults: ["The user sees an error message"],
+    });
+    expect(computeCandidateEquivalenceSignature(left)).not.toBe(
+      computeCandidateEquivalenceSignature(right),
+    );
+    const result = deduplicateCandidates([left, right]);
+    expect(result).toHaveLength(2);
+  });
 });

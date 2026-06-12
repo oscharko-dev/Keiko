@@ -45,6 +45,17 @@ const DENIED_SPECIFIER_PREFIXES: readonly string[] = [
   "node:child_process",
   "node:os",
   "node:process",
+  // Audit Addendum: remaining capability-bearing node builtins not originally listed.
+  // Each grants sandbox-escape power (code eval, thread spawning, UDP/raw sockets,
+  // HTTP/2 server, V8 internals, module loader interception).
+  "node:vm",
+  "node:worker_threads",
+  "node:cluster",
+  "node:dgram",
+  "node:http2",
+  "node:inspector",
+  "node:module",
+  "node:v8",
 ];
 
 // Bareword module names that must also be absent. Closing-quote anchoring is mandatory:
@@ -174,5 +185,61 @@ describe("domain purity guard (expanded to all of src/)", () => {
     expect(checkSource("<bareword-http>", barewordImport).length).toBeGreaterThan(0);
     expect(checkSource("<require-cp>", requireCall).length).toBeGreaterThan(0);
     expect(checkSource("<dynamic-fs>", dynamicImport).length).toBeGreaterThan(0);
+  });
+
+  // ─── Audit Addendum: expanded capability-bearing node builtins ────────────
+  // Each test is focused to a single specifier so a per-entry omission fails precisely.
+  // Kills: mutant that removes any single entry from DENIED_SPECIFIER_PREFIXES.
+
+  it("node:vm import is denied (code-eval sandbox escape)", () => {
+    expect(checkSource("<vm>", `import vm from "node:vm";`).length).toBeGreaterThan(0);
+  });
+
+  it("node:worker_threads import is denied (thread spawning)", () => {
+    expect(
+      checkSource("<worker_threads>", `import { Worker } from "node:worker_threads";`).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("node:http2 import is denied (raw HTTP/2 server capability)", () => {
+    expect(checkSource("<http2>", `import http2 from "node:http2";`).length).toBeGreaterThan(0);
+  });
+
+  it("node:cluster import is denied (process-cluster capability)", () => {
+    expect(checkSource("<cluster>", `import cluster from "node:cluster";`).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("node:dgram import is denied (raw UDP socket capability)", () => {
+    expect(checkSource("<dgram>", `import dgram from "node:dgram";`).length).toBeGreaterThan(0);
+  });
+
+  it("node:inspector import is denied (V8 debugger access)", () => {
+    expect(
+      checkSource("<inspector>", `import inspector from "node:inspector";`).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("node:module import is denied (module loader interception)", () => {
+    expect(
+      checkSource("<module>", `import { createRequire } from "node:module";`).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("node:v8 import is denied (V8 heap/serialization internals)", () => {
+    expect(checkSource("<v8>", `import v8 from "node:v8";`).length).toBeGreaterThan(0);
+  });
+
+  it("prose containing 'vm', 'cluster', or 'inspector' does NOT trigger the prefix guard", () => {
+    // Regression guard: the node:-prefix form is safe against prose over-matching because
+    // prose never contains the literal `"node:vm` — only actual import statements do.
+    const prose = [
+      `const desc = "vm image build failed";`,
+      `throw new Error("cluster is unhealthy");`,
+      `console.log("inspector connected");`,
+      `const x = "http2 upgrade not supported";`,
+    ].join("\n");
+    expect(checkSource("<prose-new-builtins>", prose)).toEqual([]);
   });
 });
