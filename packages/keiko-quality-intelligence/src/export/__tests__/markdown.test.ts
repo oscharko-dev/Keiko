@@ -114,3 +114,63 @@ describe("adaptToMarkdown", () => {
     expect(out).not.toMatch(/system prompt|you are an? /iu);
   });
 });
+
+// ─── export sanitisation (Issue #284 AC2) ─────────────────────────────────────
+
+describe("adaptToMarkdown — export sanitisation", () => {
+  it("neutralises a spreadsheet formula lead in the title so it stays inert if pasted into a sheet", () => {
+    const c = candidate("tc-1", '=HYPERLINK("http://evil","x")');
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("## '=HYPERLINK(");
+  });
+
+  it("neutralises a formula lead hidden behind leading whitespace", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["  =1+1"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("1. '  =1+1");
+  });
+
+  it("escapes a markdown link in a step so a javascript: href cannot render as a live link", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["Click [here](javascript:alert(1)) to continue"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    // The active link syntax is escaped; the raw clickable form is gone.
+    expect(out).toContain("\\[here\\](");
+    expect(out).not.toContain("[here](");
+  });
+
+  it("escapes a markdown image so a tracking/SSRF pixel cannot render from an exported field", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      expectedResults: ["![pixel](http://evil/p.png)"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    // The active image syntax is neutralised (no live `![..](..)`); the bracket is escaped.
+    expect(out).not.toContain("![");
+    expect(out).toContain("\\[pixel\\]");
+  });
+
+  it("escapes a fenced-code run smuggled into a field", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      preconditions: ["```js"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).not.toContain("```js");
+    expect(out).toContain("\\`\\`\\`js");
+  });
+
+  it("stays deterministic with adversarial field content", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "=cmd"),
+      steps: ["[x](javascript:1)", "![y](z)"],
+    };
+    const b = bundle([c]);
+    expect(adaptToMarkdown(b, [c])).toBe(adaptToMarkdown(b, [c]));
+  });
+});
