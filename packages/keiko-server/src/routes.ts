@@ -129,6 +129,7 @@ import {
   QI_REVIEW_ROUTE_GROUP,
   QI_EXPORT_ROUTE_GROUP,
   QI_EDIT_ROUTE_GROUP,
+  QI_RETENTION_ROUTE_GROUP,
   QI_TRACEABILITY_ROUTE_GROUP,
   QI_RECHECK_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
@@ -422,6 +423,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Issue #726 (Epic #712) — inline candidate editing. Literal-suffix POST /runs/:id/edit
   // disambiguates against /runs/:id/cancel just like /review and /export above.
   ...QI_EDIT_ROUTE_GROUP,
+  // Issue #282 follow-up (Epic #270) — run-deletion control. DELETE /runs/:id is method-distinct
+  // from GET /runs/:id and sweeps every server-owned companion (ADR-0023 D8).
+  ...QI_RETENTION_ROUTE_GROUP,
   // Issue #740 (Epic #734) — requirement↔test traceability matrix export.
   ...QI_TRACEABILITY_ROUTE_GROUP,
   // Issue #743 (Epic #735) — drift re-check + targeted regeneration. Literal-suffix POST routes

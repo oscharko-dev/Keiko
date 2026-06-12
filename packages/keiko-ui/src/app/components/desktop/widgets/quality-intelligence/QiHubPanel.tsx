@@ -5,13 +5,13 @@
 // finishing, opens a `qiRun` result card on the Workspace canvas (one card per run). The hub never
 // renders run results itself — it stays a compact launcher + list that lives beside the result cards.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRunSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { fetchQiRuns } from "@/lib/quality-intelligence-api";
+import { deleteQiRun, fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";
 import {
   StatusBadge,
@@ -42,25 +42,77 @@ export interface QiHubPanelProps {
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
   /** Seam for tests. */
   readonly fetchRunsImpl?: typeof fetchQiRuns;
+  /** Seam for tests — injects the delete API call. */
+  readonly deleteImpl?: typeof deleteQiRun;
 }
 
 // The run list accumulates over a project's lifetime (server returns up to 100 by default, 500 max).
 // Render the first page and reveal the rest on demand — the #280 progressive-rendering Deliverable.
 const INITIAL_VISIBLE_RUNS = 25;
 
+// ---------------------------------------------------------------------------
+// RunRow — a single list item with an open action and a two-step delete control.
+// The two are SIBLINGS inside <li> (never nested buttons); the <li> is a flex row.
+// ---------------------------------------------------------------------------
+
 function RunRow({
   run,
   onOpen,
+  onDelete,
+  deleting,
 }: {
   readonly run: QualityIntelligenceUiRunSummary;
   readonly onOpen: (id: string) => void;
+  readonly onDelete: (id: string) => void;
+  readonly deleting: boolean;
 }): ReactNode {
   const cases = run.totals.candidates;
+  const [confirming, setConfirming] = useState(false);
+
+  // Refs for focus management — focus Cancel when confirm appears; return to Delete on cancel.
+  const deleteTriggerRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+
+  // When the confirm strip appears, focus Cancel (the safer default).
+  useEffect(() => {
+    if (confirming) {
+      cancelRef.current?.focus();
+    }
+  }, [confirming]);
+
+  const handleCancelConfirm = useCallback(() => {
+    setConfirming(false);
+    // Return focus to the Delete trigger once the confirm strip collapses.
+    // Schedule after the state flush so the button is back in the DOM.
+    requestAnimationFrame(() => {
+      deleteTriggerRef.current?.focus();
+    });
+  }, []);
+
+  const handleKeyDownConfirm = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleCancelConfirm();
+      }
+    },
+    [handleCancelConfirm],
+  );
+
+  const handleConfirmDelete = useCallback(() => {
+    if (deleting) return;
+    onDelete(run.id);
+  }, [deleting, onDelete, run.id]);
+
   return (
-    <li>
+    // Flex row so the open button and the delete control are siblings, never nested.
+    <li style={{ display: "flex", alignItems: "stretch" }}>
+      {/* ── Open button ── keeps the original full-width flex layout, shrinks to make room. */}
       <button
         type="button"
         className="qi-run-item"
+        style={{ flex: 1 }}
         onClick={() => {
           onOpen(run.id);
         }}
@@ -84,9 +136,86 @@ function RunRow({
           {run.totals.candidates.toString()} test case{run.totals.candidates !== 1 ? "s" : ""}
         </span>
       </button>
+
+      {/* ── Delete control (two-step confirm) ── */}
+      {!confirming ? (
+        // Step 1: a single Delete trigger with a danger affordance.
+        <button
+          ref={deleteTriggerRef}
+          type="button"
+          className="qi-btn qi-btn-reject"
+          style={{
+            alignSelf: "center",
+            minWidth: 0,
+            padding: "4px 10px",
+            fontSize: 12,
+            margin: "0 6px 0 0",
+            flexShrink: 0,
+          }}
+          aria-label={`Delete run ${formatDate(run.requestedAt)}`}
+          onClick={() => {
+            setConfirming(true);
+          }}
+        >
+          Delete
+        </button>
+      ) : (
+        // Step 2: inline confirm strip — Confirm + Cancel as siblings in a group.
+        <div
+          className="qi-cand-actions"
+          role="group"
+          aria-label={`Confirm deleting run ${formatDate(run.requestedAt)}`}
+          onKeyDown={handleKeyDownConfirm}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "0 6px",
+            flexShrink: 0,
+          }}
+        >
+          <button
+            ref={confirmRef}
+            type="button"
+            className="qi-btn qi-btn-reject"
+            style={{ minWidth: 0, padding: "4px 10px", fontSize: 12, flexShrink: 0 }}
+            aria-label={`Confirm delete of run ${formatDate(run.requestedAt)}`}
+            aria-busy={deleting || undefined}
+            // aria-disabled keeps the button focusable while in-flight (mirrors GovernedActionButton).
+            aria-disabled={deleting || undefined}
+            onClick={handleConfirmDelete}
+          >
+            {deleting ? (
+              <>
+                <span aria-hidden="true">Deleting…</span>
+                <span className="sr-only">Deleting run, please wait</span>
+              </>
+            ) : (
+              "Confirm delete"
+            )}
+          </button>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="qi-btn qi-btn-secondary"
+            style={{ minWidth: 0, padding: "4px 10px", fontSize: 12, flexShrink: 0 }}
+            aria-disabled={deleting || undefined}
+            onClick={() => {
+              if (deleting) return;
+              handleCancelConfirm();
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </li>
   );
 }
+
+// ---------------------------------------------------------------------------
+// QiHubPanel
+// ---------------------------------------------------------------------------
 
 export function QiHubPanel({
   openRun,
@@ -97,6 +226,7 @@ export function QiHubPanel({
   connectedCapsuleSetIds,
   connectedFigmaSnapshotRunIds,
   fetchRunsImpl = fetchQiRuns,
+  deleteImpl = deleteQiRun,
 }: QiHubPanelProps): ReactNode {
   const [runs, setRuns] = useState<readonly QualityIntelligenceUiRunSummary[]>([]);
   // uiux-fix F030 C277: the wire contract reports limit/totalRunIds/truncated explicitly so the
@@ -107,6 +237,10 @@ export function QiHubPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visibleRuns, setVisibleRuns] = useState(INITIAL_VISIBLE_RUNS);
+  // Per-row in-flight lock: null = idle, string = the run id whose delete is in flight.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Polite announcement when a delete completes — read by the dedicated sr-only live region.
+  const [deletedAnnounce, setDeletedAnnounce] = useState("");
 
   const loadRuns = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -133,6 +267,28 @@ export function QiHubPanel({
       openRun(runId, recheckableSources);
     },
     [loadRuns, openRun],
+  );
+
+  // Delete a run: call the API, refetch the list, surface failures via the existing error channel.
+  // The deletingId lock prevents concurrent deletes. On error the row stays; on success the refetch
+  // removes it. The panel-level error channel (ErrorState) is reused — the same retryable alert
+  // already proven in the list-load path is appropriate for a delete failure.
+  const handleDelete = useCallback(
+    async (runId: string): Promise<void> => {
+      if (deletingId !== null) return; // concurrent-delete guard
+      setDeletingId(runId);
+      setError(null);
+      try {
+        await deleteImpl(runId);
+        setDeletedAnnounce("Run deleted.");
+        await loadRuns();
+      } catch (err) {
+        setError(formatError(err));
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [deletingId, deleteImpl, loadRuns],
   );
 
   return (
@@ -163,6 +319,11 @@ export function QiHubPanel({
               ? `Run list loaded: ${runs.length.toString()} run${runs.length === 1 ? "" : "s"}${truncated ? ` of ${totalRunIds.toString()}` : ""}.`
               : ""}
         </p>
+        {/* Dedicated live region for delete completion announcements — separate from the list
+            status region so a delete announcement does not clash with a concurrent list reload. */}
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {deletedAnnounce}
+        </p>
         <div className="qi-col-body" aria-busy={loading}>
           {loading ? (
             <LoadingSkeleton />
@@ -184,7 +345,15 @@ export function QiHubPanel({
             <>
               <ul className="qi-run-list" aria-label="Run list">
                 {runs.slice(0, visibleRuns).map((run) => (
-                  <RunRow key={run.id} run={run} onOpen={openRun} />
+                  <RunRow
+                    key={run.id}
+                    run={run}
+                    onOpen={openRun}
+                    onDelete={(id) => {
+                      void handleDelete(id);
+                    }}
+                    deleting={deletingId === run.id}
+                  />
                 ))}
               </ul>
               {visibleRuns < runs.length ? (
