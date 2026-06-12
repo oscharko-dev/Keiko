@@ -24,6 +24,11 @@ const FORBIDDEN_IMPORT_PATTERNS: readonly RegExp[] = [
   // Bare side-effect imports: `import "@oscharko-dev/ti-foo";` — no `from`, no parens.
   /^\s*import\s+["']@oscharko-dev\/test-intelligence(?:[/"'])/mu,
   /^\s*import\s+["']@oscharko-dev\/ti-/mu,
+  // Dynamic-evasion form: a dynamic import or require whose specifier is a template literal that
+  // interpolates a variable right after the @oscharko-dev/ scope, so the forbidden package name
+  // never appears as a contiguous literal. The negated character class keeps the match inside the
+  // package-name segment, so dynamic subpaths of statically-named packages stay allowed.
+  /\b(?:import|require)\s*\(\s*`[^`]*@oscharko-dev\/[^`/]*\$\{/u,
 ];
 
 const collectFiles = (directory: string): readonly string[] => {

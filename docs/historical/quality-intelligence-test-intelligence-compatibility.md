@@ -4,6 +4,8 @@
 
 **Audience**: Product managers, operations teams, and implementors who need to understand whether existing standalone Test Intelligence workflows will continue to work during and after the Keiko-native migration.
 
+> **Status: Governing contract — active, not archived.** This document is co-located under `docs/historical/` with the Epic #270 migration record, but it is **not superseded**: it remains the binding compatibility decision (maintenance-only; retirement deferred) until a separate explicit retirement/migration governance issue replaces it. The "no TI imports" invariant in §2/§5 is enforced in CI by `npm run check:qi-supply-chain` — see §5.1.
+
 ---
 
 ## 1. Scope and Directional Decision
@@ -16,18 +18,18 @@ The directional product status for the standalone product is: **maintenance-only
 
 ## 2. Compatibility Matrix
 
-| Standalone TI Surface                                                                                                            | Behavior Preserved?                                                                                                                    | Keiko-Side Action                                                                                                                                                           | Owner                                                        |
-| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| **Package**: `@oscharko-dev/test-intelligence` npm install                                                                       | Yes, unchanged.                                                                                                                        | Zero Keiko imports of TI packages or any `@oscharko-dev/ti-*` namespace. Enforced by `arch:check` rule `direction-10a`.                                                     | Architecture (enforced by #287)                              |
-| **CLI Binary**: `test-intelligence run`, `test-intelligence review`, `test-intelligence tms-push`, `test-intelligence calibrate` | Yes, unchanged as a standalone binary.                                                                                                 | Zero embed or repackage of TI's CLI binary. Keiko defines native `keiko quality-intelligence` subcommands alongside (not replacement) TI CLI.                               | Product (no deprecation until explicit issue #286 follow-up) |
-| **Workbench UI**: Local Next.js app running `localhost:3001` (or configured port)                                                | Yes, unchanged as a separate Node process.                                                                                             | Zero embed or build TI's Workbench into Keiko's UI bundle. Keiko's Quality Intelligence UI lives in `keiko-ui` package only.                                                | Product + Engineering (UI isolation)                         |
-| **Runtime state**: `.test-intelligence/` directory (run-state, storage-artifacts, gbe, jobs, local-runtime)                      | Keiko does not read, write, or move files under `.test-intelligence/` by default.                                                      | If user explicitly requests artifact import via a future `keiko migrate` command (deferred), Keiko will import via explicit permission only, never silently. See section 3. | Operations + Product (explicit user action required)         |
-| **Workbench database**: `.test-intelligence/workbench.db` (BetterSQLite3)                                                        | Yes, unchanged and untouched by Keiko.                                                                                                 | Keiko uses its own `keiko-server` SQLite store for UI state. No shared database, no schema migration, no automatic backup.                                                  | Engineering (separate stores)                                |
-| **Local runtime config**: `.test-intelligence/local-runtime/workbench-settings.json`                                             | Yes, unchanged and untouched by Keiko.                                                                                                 | Keiko uses environment-variable-only credential injection (see section 4). No plaintext credential files.                                                                   | Engineering (separate credential model)                      |
-| **Model Gateway config**: TI's provider setup (OAuth tokens, API keys in `workbench-settings.json` or environment)               | Keiko uses distinct `KEIKO_*` environment variables, not TI's `TI_*` vars. No credential sharing.                                      | See section 4 below.                                                                                                                                                        | Engineering (disjoint environment vars)                      |
-| **Evidence/Audit dossier**: TI's run evidence (stored in `.test-intelligence/storage-artifacts/` or Workbench DB)                | Keiko native evidence uses `keiko-evidence` package with distinct schema.                                                              | TI evidence and Keiko evidence are separate stores. If import is required, see section 3 (deferred to explicit migration tool).                                             | Product + Engineering (#274 evidence extension)              |
-| **Judge calibration artifacts**: TI's judge training/calibration records in Workbench DB                                         | Keiko uses `keiko-quality-intelligence` judge seam with distinct calibration contract.                                                 | No shared judge state. Judge calibration is not auto-migrated.                                                                                                              | Engineering (#279 judge extension)                           |
-| **TMS/Jira export adapters**: TI's connectors for test-push and traceability sync (in `packages/integrations/`)                  | Keiko exports are deferred to #283. When implemented, Keiko uses `keiko-server` connector routes (user-configured, env-var-only auth). | TI's export code is reference only; Keiko reimplements from scratch with dry-run preview required. Do NOT copy TI's export implementations.                                 | Product (#283 export gates)                                  |
+| Standalone TI Surface                                                                                                            | Behavior Preserved?                                                                                                                    | Keiko-Side Action                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Owner                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Package**: `@oscharko-dev/test-intelligence` npm install                                                                       | Yes, unchanged.                                                                                                                        | Zero Keiko imports of TI packages or any `@oscharko-dev/ti-*` namespace. Enforced in CI by the `check:qi-supply-chain` gate (`scripts/check-quality-intelligence-supply-chain.mjs`), which scans source AND manifests. The `arch:check` rule `direction-10a` is a complementary guard that keeps `keiko-quality-intelligence` a pure-domain leaf; it constrains `keiko-*` import direction and does not itself match the external `@oscharko-dev/test-intelligence` namespace. | Architecture (enforced by #287)                              |
+| **CLI Binary**: `test-intelligence run`, `test-intelligence review`, `test-intelligence tms-push`, `test-intelligence calibrate` | Yes, unchanged as a standalone binary.                                                                                                 | Zero embed or repackage of TI's CLI binary. Keiko defines native `keiko quality-intelligence` subcommands alongside (not replacement) TI CLI.                                                                                                                                                                                                                                                                                                                                  | Product (no deprecation until explicit issue #286 follow-up) |
+| **Workbench UI**: Local Next.js app running `localhost:3001` (or configured port)                                                | Yes, unchanged as a separate Node process.                                                                                             | Zero embed or build TI's Workbench into Keiko's UI bundle. Keiko's Quality Intelligence UI lives in `keiko-ui` package only.                                                                                                                                                                                                                                                                                                                                                   | Product + Engineering (UI isolation)                         |
+| **Runtime state**: `.test-intelligence/` directory (run-state, storage-artifacts, gbe, jobs, local-runtime)                      | Keiko does not read, write, or move files under `.test-intelligence/` by default.                                                      | If user explicitly requests artifact import via a future `keiko migrate` command (deferred), Keiko will import via explicit permission only, never silently. See section 3.                                                                                                                                                                                                                                                                                                    | Operations + Product (explicit user action required)         |
+| **Workbench database**: `.test-intelligence/workbench.db` (BetterSQLite3)                                                        | Yes, unchanged and untouched by Keiko.                                                                                                 | Keiko uses its own `keiko-server` SQLite store for UI state. No shared database, no schema migration, no automatic backup.                                                                                                                                                                                                                                                                                                                                                     | Engineering (separate stores)                                |
+| **Local runtime config**: `.test-intelligence/local-runtime/workbench-settings.json`                                             | Yes, unchanged and untouched by Keiko.                                                                                                 | Keiko uses environment-variable-only credential injection (see section 4). No plaintext credential files.                                                                                                                                                                                                                                                                                                                                                                      | Engineering (separate credential model)                      |
+| **Model Gateway config**: TI's provider setup (OAuth tokens, API keys in `workbench-settings.json` or environment)               | Keiko uses distinct `KEIKO_*` environment variables, not TI's `TI_*` vars. No credential sharing.                                      | See section 4 below.                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Engineering (disjoint environment vars)                      |
+| **Evidence/Audit dossier**: TI's run evidence (stored in `.test-intelligence/storage-artifacts/` or Workbench DB)                | Keiko native evidence uses `keiko-evidence` package with distinct schema.                                                              | TI evidence and Keiko evidence are separate stores. If import is required, see section 3 (deferred to explicit migration tool).                                                                                                                                                                                                                                                                                                                                                | Product + Engineering (#274 evidence extension)              |
+| **Judge calibration artifacts**: TI's judge training/calibration records in Workbench DB                                         | Keiko uses `keiko-quality-intelligence` judge seam with distinct calibration contract.                                                 | No shared judge state. Judge calibration is not auto-migrated.                                                                                                                                                                                                                                                                                                                                                                                                                 | Engineering (#279 judge extension)                           |
+| **TMS/Jira export adapters**: TI's connectors for test-push and traceability sync (in `packages/integrations/`)                  | Keiko exports are deferred to #283. When implemented, Keiko uses `keiko-server` connector routes (user-configured, env-var-only auth). | TI's export code is reference only; Keiko reimplements from scratch with dry-run preview required. Do NOT copy TI's export implementations.                                                                                                                                                                                                                                                                                                                                    | Product (#283 export gates)                                  |
 
 ---
 
@@ -72,19 +74,19 @@ The parity matrix in #285 must verify that Keiko's native Quality Intelligence a
 
 ### Check 5.1: `parity:standalone-import-static`
 
-**Purpose**: Assert that no Keiko source file imports `@oscharko-dev/test-intelligence` or any `@oscharko-dev/ti-*` package (directly or transitively).
+**Purpose**: Assert that no Keiko source file imports — and no package manifest declares — `@oscharko-dev/test-intelligence` or any `@oscharko-dev/ti-*` package (including a name assembled at runtime from a template literal).
 
 **Command**:
 
 ```bash
 cd /Users/oscharko-dev/Projects/Keiko && \
-  npm run arch:check 2>&1 | grep -i direction-10a || true
-# Expected: rule `direction-10a-quality-intelligence-only-contracts-security` passes (no violations)
+  npm run check:qi-supply-chain
+# Expected: "qi-supply-chain check passed: …" and exit code 0.
 ```
 
-**Assertion**: Exit code = 0. If any package (especially `keiko-quality-intelligence`) imports a forbidden namespace, `arch:check` must fail with a clear error.
+**Assertion**: Exit code = 0. The `check:qi-supply-chain` gate (`scripts/check-quality-intelligence-supply-chain.mjs`) scans `packages/*/src`, `packages/*/test`, `scripts/`, `src/`, and every package manifest; on any forbidden reference it prints the offending file/entry and exits 1. This is the operative TI-import gate and runs in the required `ci` check. (Do **not** rely on `arch:check | grep direction-10a`: that rule constrains `keiko-*` import direction for the `keiko-quality-intelligence` leaf and does not match the external `@oscharko-dev/test-intelligence` namespace, so it cannot catch a TI import.)
 
-**Owned by**: #287 (rule definition and enforcement).
+**Owned by**: #287 (supply-chain gate) and #271 (ADR-0023 D12).
 
 ---
 
@@ -96,8 +98,10 @@ cd /Users/oscharko-dev/Projects/Keiko && \
 
 ```bash
 cd /Users/oscharko-dev/Projects/Keiko && \
-  grep -r '\.test-intelligence' src/ tests/ --include="*.ts" --include="*.tsx" || echo "No matches (expected)"
-# Expected: No matches found
+  grep -rn '\.test-intelligence' packages/*/src src scripts \
+    --include="*.ts" --include="*.tsx" --include="*.mjs" --include="*.cjs" \
+    || echo "No matches (expected)"
+# Expected: No matches found in production source.
 ```
 
 **Assertion**: Exit code = 0 and no output. If any string `.test-intelligence` appears in source, it must be in a comment explaining why it's safe (e.g., documentation, test fixture path that is explicitly guarded).
@@ -151,7 +155,7 @@ The following are explicitly **NOT** committed to in this issue or the Quality I
 - **Epic #270**: Integrate Test Intelligence as native Keiko Quality Intelligence.
 - **Issue #271 (ADR-0023)**: Quality Intelligence Migration Architecture. Records the hard constraints that forbid TI runtime embedding.
 - **Issue #285**: Parity matrix and verification. Implements the parity fixtures and comparison gates.
-- **Issue #287**: Package surface and supply-chain integrity gate. Enforces rule `direction-10a` to prevent TI package imports.
+- **Issue #287**: Package surface and supply-chain integrity gate. The `check:qi-supply-chain` gate prevents TI package imports and manifest dependencies; `arch:check` rule `direction-10a` keeps `keiko-quality-intelligence` a pure-domain leaf.
 - **Issue #286** (this issue): Standalone compatibility decision. Defers explicit retirement decision to a later product governance issue.
 - **Document**: `docs/historical/quality-intelligence-test-intelligence-inventory.md`. Catalogs TI capabilities, defects, and reuse targets.
 - **Document**: `docs/historical/quality-intelligence-keiko-baseline.md`. Records the 17 Keiko packages available for Quality Intelligence reuse.
@@ -177,11 +181,15 @@ After this document lands, the following commands must all exit 0:
 ```bash
 cd /Users/oscharko-dev/Projects/Keiko
 
-# Verify no TI imports at architecture level
+# Verify no TI imports or manifest dependencies (operative gate; fails closed on any violation)
+npm run check:qi-supply-chain
+
+# Verify QI architecture leaf-purity (keiko-* import direction; NOT the TI-import gate —
+# direction-10a does not match @oscharko-dev/test-intelligence, so use check:qi-supply-chain above)
 npm run arch:check
 
 # Verify no TI path references in source
-grep -r '\.test-intelligence' src/ tests/ --include="*.ts" --include="*.tsx" || echo "No matches"
+grep -rn '\.test-intelligence' packages/*/src src scripts --include="*.ts" --include="*.tsx" --include="*.mjs" || echo "No matches"
 
 # Verify lint (docs changes should not affect linting)
 npm run lint
@@ -197,6 +205,6 @@ npx prettier --check docs/historical/quality-intelligence-test-intelligence-comp
 
 **Document Status**: Accepted as part of Epic #270 Quality Intelligence migration (issue #286).
 
-**Last Updated**: 2026-06-05
+**Last Updated**: 2026-06-12 (corrected the §2/§5/§7/§9 enforcement references: the operative TI-import gate is `check:qi-supply-chain`, not `arch:check` rule `direction-10a`; added the governing-status banner)
 
 **Next Review**: After #285 (parity matrix) is complete.

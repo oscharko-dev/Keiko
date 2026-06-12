@@ -26,6 +26,12 @@ const FORBIDDEN_IMPORT_PATTERNS: readonly RegExp[] = [
   // Bare side-effect imports: `import "@oscharko-dev/ti-foo";` — no `from`, no parens.
   /^\s*import\s+["']@oscharko-dev\/test-intelligence(?:[/"'])/mu,
   /^\s*import\s+["']@oscharko-dev\/ti-/mu,
+  // Dynamic-evasion form: a dynamic import or require whose specifier is a template literal that
+  // interpolates a variable right after the @oscharko-dev/ scope, so the forbidden package name
+  // never appears as a contiguous literal. The negated character class keeps the match inside the
+  // package-name segment, so dynamic subpaths of statically-named packages stay allowed. (The
+  // matchable sample lives in `forbiddenSamples` below, in this self-skipped file.)
+  /\b(?:import|require)\s*\(\s*`[^`]*@oscharko-dev\/[^`/]*\$\{/u,
 ];
 
 const collectSourceFiles = (directory: string): readonly string[] => {
@@ -57,10 +63,24 @@ describe("independence guard — patterns catch every import form", () => {
     'const x = await import("@oscharko-dev/ti-core");',
     'import "@oscharko-dev/test-intelligence";',
     'import "@oscharko-dev/ti-core";',
+    "const x = await import(`@oscharko-dev/${pkg}`);",
+    "const x = require(`@oscharko-dev/ti-${pkg}`);",
   ];
   it.each(forbiddenSamples)("flags %s", (sample) => {
     const matched = FORBIDDEN_IMPORT_PATTERNS.some((pattern) => pattern.test(sample));
     expect(matched).toBe(true);
+  });
+
+  // The dynamic-scope pattern must not over-block: a static package name with an interpolated
+  // SUBPATH, or any non-@oscharko-dev dynamic import, is legitimate and stays allowed.
+  const allowedSamples: readonly string[] = [
+    "const x = await import(`@oscharko-dev/keiko-contracts/${sub}`);",
+    "const x = await import(`./local/${name}`);",
+    'import { ok } from "@oscharko-dev/keiko-contracts";',
+  ];
+  it.each(allowedSamples)("does not flag %s", (sample) => {
+    const matched = FORBIDDEN_IMPORT_PATTERNS.some((pattern) => pattern.test(sample));
+    expect(matched).toBe(false);
   });
 });
 

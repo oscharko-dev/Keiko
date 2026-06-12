@@ -7,9 +7,12 @@
 // package surface or runtime dependency graph. Six checks, in order:
 //
 //   1. No source under packages/*/src, packages/*/test, scripts, or src imports
-//      `@oscharko-dev/test-intelligence` or the `@oscharko-dev/ti-*` namespace.
-//   2. The root package.json `dependencies`/`devDependencies`/`bundleDependencies` does not list
-//      any test-intelligence or ti-* package.
+//      `@oscharko-dev/test-intelligence` or the `@oscharko-dev/ti-*` namespace. This also catches
+//      the dynamic-evasion form `import(`@oscharko-dev/${x}`)` / `require(`@oscharko-dev/ti-${x}`)`
+//      where the package name is built from a template literal so the forbidden substring never
+//      appears contiguously.
+//   2. The root package.json `dependencies`/`devDependencies`/`peerDependencies`/`bundleDependencies`
+//      does not list any test-intelligence or ti-* package.
 //   3. Every packages/*/package.json `dependencies`/`devDependencies`/`peerDependencies` is free of
 //      the same forbidden namespaces.
 //   4. The dependency decision matrix exists and is internally consistent against the live
@@ -30,6 +33,15 @@ import { join, resolve } from "node:path";
 const DEFAULT_MATRIX = "docs/release/quality-intelligence-dependency-decision-matrix.md";
 
 const FORBIDDEN_IMPORT_PATTERNS = ["@oscharko-dev/test-intelligence", "@oscharko-dev/ti-"];
+
+// A static substring scan cannot see a forbidden package whose name is assembled at runtime, e.g.
+// `import(`@oscharko-dev/${pkg}`)`. This pattern flags any dynamic `import(...)`/`require(...)` whose
+// template-literal argument interpolates within the `@oscharko-dev/` package-name segment — the only
+// realistic way to reach `test-intelligence`/`ti-*` without the contiguous literal. `[^`/]*` keeps
+// the match inside the package-name segment, so legitimate dynamic SUBPATHS of statically-named
+// packages (`import(`@oscharko-dev/keiko-foo/${sub}`)`) are NOT flagged.
+const FORBIDDEN_DYNAMIC_SCOPE_PATTERN =
+  /\b(?:import|require)\s*\(\s*`[^`]*@oscharko-dev\/[^`/]*\$\{/u;
 
 const TELEMETRY_SUBSTRINGS = [
   "@sentry/",
@@ -179,6 +191,9 @@ function findForbiddenImportHits(files) {
         hits.push({ file, pattern });
       }
     }
+    if (FORBIDDEN_DYNAMIC_SCOPE_PATTERN.test(content)) {
+      hits.push({ file, pattern: "dynamic @oscharko-dev/ package-name import (template literal)" });
+    }
   }
   return hits;
 }
@@ -205,7 +220,11 @@ function nameMatchesForbidden(name) {
 function checkRootManifestForbidden(rootManifestPath) {
   const manifest = readJson(rootManifestPath);
   const hits = [];
-  const sections = manifestDependencySections(manifest, ["dependencies", "devDependencies"]);
+  const sections = manifestDependencySections(manifest, [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+  ]);
   for (const { section, names } of sections) {
     for (const name of names) {
       const match = nameMatchesForbidden(name);

@@ -230,6 +230,50 @@ describe("findForbiddenImportHits", () => {
   });
 });
 
+describe("findForbiddenImportHits — dynamic template-literal evasion", () => {
+  let root;
+  beforeEach(() => {
+    root = makeRoot();
+    minimalCleanRoot(root);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("flags a dynamic template-literal import that assembles the forbidden package name", () => {
+    // The contiguous literal "@oscharko-dev/test-intelligence" never appears: the name is built
+    // from a template literal. A `.includes()` scan misses it; the dynamic-scope pattern catches it.
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/sneaky.ts",
+      'const n = "test-intelligence";\nconst m = await import(`@oscharko-dev/${n}`);\n',
+    );
+    const hits = findForbiddenImportHits(listScannableSourceFiles(root));
+    expect(hits.some((h) => h.pattern.startsWith("dynamic @oscharko-dev/"))).toBe(true);
+  });
+
+  it("flags a dynamic require that interpolates the ti-* package name", () => {
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/sneaky-require.ts",
+      "const sub = process.env.X;\nconst m = require(`@oscharko-dev/ti-${sub}`);\n",
+    );
+    const hits = findForbiddenImportHits(listScannableSourceFiles(root));
+    expect(hits.some((h) => h.pattern.startsWith("dynamic @oscharko-dev/"))).toBe(true);
+  });
+
+  it("does NOT flag a dynamic SUBPATH of a statically-named allowed package", () => {
+    // The package name is static (`@oscharko-dev/keiko-foo`); only the subpath is interpolated.
+    // This must stay allowed so the gate does not over-block legitimate dynamic imports.
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/dynamic-subpath.ts",
+      "const sub = process.env.X;\nconst m = await import(`@oscharko-dev/keiko-foo/${sub}`);\n",
+    );
+    expect(findForbiddenImportHits(listScannableSourceFiles(root))).toEqual([]);
+  });
+});
+
 describe("checkRootManifestForbidden", () => {
   let root;
   beforeEach(() => {
@@ -249,6 +293,23 @@ describe("checkRootManifestForbidden", () => {
     const hits = checkRootManifestForbidden(join(root, "package.json"));
     expect(hits).toEqual([
       { section: "bundleDependencies", name: "@oscharko-dev/ti-core", match: "@oscharko-dev/ti-" },
+    ]);
+  });
+
+  it("detects a forbidden entry in the root peerDependencies section", () => {
+    writeJson(root, "package.json", {
+      name: "synthetic-root",
+      version: "0.0.0",
+      dependencies: { ws: "^8.0.0" },
+      peerDependencies: { "@oscharko-dev/test-intelligence": "*" },
+    });
+    const hits = checkRootManifestForbidden(join(root, "package.json"));
+    expect(hits).toEqual([
+      {
+        section: "peerDependencies",
+        name: "@oscharko-dev/test-intelligence",
+        match: "@oscharko-dev/test-intelligence",
+      },
     ]);
   });
 
@@ -398,5 +459,27 @@ describe("end-to-end main() via subprocess — fail cases", () => {
     const result = runScript(root);
     expect(result.status).toBe(1);
     expect(result.stderr.length).toBeGreaterThan(0);
+  });
+});
+
+describe("end-to-end main() via subprocess — dynamic evasion fail case", () => {
+  let root;
+  beforeEach(() => {
+    root = makeRoot();
+    minimalCleanRoot(root);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("exits 1 when a source file dynamically assembles a forbidden package name", () => {
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/sneaky.ts",
+      'const n = "test-intelligence";\nexport const m = import(`@oscharko-dev/${n}`);\n',
+    );
+    const result = runScript(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/dynamic @oscharko-dev|forbidden import/);
   });
 });
