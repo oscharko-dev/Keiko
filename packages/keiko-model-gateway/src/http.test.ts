@@ -935,10 +935,16 @@ describe("Host header via proxy (no default port)", () => {
     const originPort = await listen(origin);
     const proxy = createHttpServer((req, res) => {
       capturedHost = req.headers.host;
-      // Forward to origin using the already-imported httpRequest.
+      // Forward to the KNOWN local origin only — the fake proxy never dereferences the
+      // request-line URL, so the harness cannot be steered anywhere else (js/request-forgery).
       const upstream = httpRequest(
-        req.url ?? "/",
-        { method: req.method, headers: req.headers },
+        {
+          host: "127.0.0.1",
+          port: originPort,
+          path: "/",
+          method: req.method,
+          headers: req.headers,
+        },
         (upRes: IncomingMessage) => {
           res.writeHead(upRes.statusCode ?? 200, upRes.headers);
           upRes.pipe(res);
