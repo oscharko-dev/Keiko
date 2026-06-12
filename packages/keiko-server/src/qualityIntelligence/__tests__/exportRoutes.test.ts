@@ -767,6 +767,7 @@ describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
     });
   };
 
