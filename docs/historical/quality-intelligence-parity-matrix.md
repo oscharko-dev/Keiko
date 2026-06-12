@@ -326,7 +326,7 @@ Figma token: read from environment only (enforced at connector route scope).
 
 **ADR-0023 Rule**: No duplicating keiko-local-knowledge's capsule store. No second embedding or retrieval orchestration. New parsers registered via ParserRegistry.
 
-**Verification**: Figma parser added to keiko-local-knowledge `ParserRegistry` per #278. QI code calls `retrieveLocalKnowledge()` API, not standalone retrieval.
+**Verification**: Figma parser added to keiko-local-knowledge `ParserRegistry` per #278. QI code calls `runLocalKnowledgeRetrieval()` API, not standalone retrieval.
 
 **Status**: ✅ PASS — Local Knowledge reused; Figma parser registered via ParserRegistry.
 
