@@ -76,6 +76,15 @@ const FORBIDDEN_IMPORT_TARGETS: readonly string[] = [
   "node:tls",
   "node:dns",
   "node:child_process",
+  // Additional pure-leaf Node built-ins that must never appear in QI contract sources.
+  // Verified clean today; this list is a permanent gate against future regressions.
+  "node:path",
+  "node:url",
+  "node:crypto",
+  "node:os",
+  "node:process",
+  "node:stream",
+  "node:worker_threads",
   "@oscharko-dev/test-intelligence",
   "@oscharko-dev/ti-",
 ];
@@ -92,6 +101,19 @@ describe("QI module barrel — value exports", () => {
   it("pins QUALITY_INTELLIGENCE_SCHEMA_VERSION to '1'", () => {
     expect(Qi.QUALITY_INTELLIGENCE_SCHEMA_VERSION).toBe("1");
   });
+
+  it("exports EXACTLY the required value-export set — no undeclared exports, none missing", () => {
+    // This pins the complete value surface. Adding or removing a value export from the
+    // barrel without updating requiredValueExports will fail this test.
+    // Mutation killed: any extra or missing name shifts the count and the set difference.
+    const actual = new Set(Object.keys(Qi));
+    const expected = new Set(requiredValueExports);
+    const undeclared = [...actual].filter((n) => !expected.has(n));
+    const missing = [...expected].filter((n) => !actual.has(n));
+    expect(undeclared).toEqual([]);
+    expect(missing).toEqual([]);
+    expect(actual.size).toBe(requiredValueExports.length);
+  });
 });
 
 describe("Outer package barrel — namespace re-export", () => {
@@ -103,6 +125,18 @@ describe("Outer package barrel — namespace re-export", () => {
     for (const name of requiredValueExports) {
       expect(Object.keys(Contracts.QualityIntelligence)).toContain(name);
     }
+  });
+
+  it("the Contracts.QualityIntelligence namespace exports EXACTLY the required value set", () => {
+    // Symmetrical exactness check for the outer-barrel namespace re-export.
+    // Mutation killed: a name accidentally dropped from the outer re-export shifts the count.
+    const actual = new Set(Object.keys(Contracts.QualityIntelligence));
+    const expected = new Set(requiredValueExports);
+    const undeclared = [...actual].filter((n) => !expected.has(n));
+    const missing = [...expected].filter((n) => !actual.has(n));
+    expect(undeclared).toEqual([]);
+    expect(missing).toEqual([]);
+    expect(actual.size).toBe(requiredValueExports.length);
   });
 });
 

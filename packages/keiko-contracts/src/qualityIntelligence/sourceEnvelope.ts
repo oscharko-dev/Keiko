@@ -95,8 +95,45 @@ export type QualityIntelligenceSourceEnvelope =
   | QualityIntelligenceConnectorDocumentEnvelope;
 
 /**
+ * Returns `true` if a field value looks safe to surface in a browser context.
+ * Rejects when the value contains:
+ *   (a) any URL authority — `scheme://` for ANY scheme (http, ftp, s3, file, …)
+ *   (b) well-known credential token prefixes (AWS AKIA, GitHub ghp_/gho_/github_pat_,
+ *       Slack xox[baprs]-, OpenAI sk-, Bearer token, PEM PRIVATE KEY header)
+ *   (c) an absolute filesystem path (POSIX `/`, Windows drive `C:\`, UNC `\\`)
+ */
+const fieldLooksUnsafe = (value: string): boolean => {
+  // (a) any scheme://
+  if (/[a-z][a-z0-9+.-]*:\/\//iu.test(value)) return true;
+  // (b) credential shapes
+  if (/AKIA[0-9A-Z]{12,}/u.test(value)) return true;
+  if (/(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/u.test(value)) return true;
+  if (/xox[baprs]-[A-Za-z0-9-]{10,}/u.test(value)) return true;
+  if (/sk-[A-Za-z0-9]{16,}/u.test(value)) return true;
+  if (/\bBearer\s+\S/u.test(value)) return true;
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(value)) return true;
+  // (c) absolute filesystem paths
+  if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(value)) return true;
+  return false;
+};
+
+/**
  * Cheap structural guard: rejects envelopes that look like they may carry credentials,
  * URLs, or oversized labels in their display surface. Pure, no IO.
+ *
+ * Scanned fields: `displayLabel`, `localRef`, `provenance.origin`, and (for
+ * `connector-document` envelopes) `adapterId`.
+ *
+ * Rejected when ANY scanned field contains:
+ *   - a URL with an authority (`scheme://` for any scheme)
+ *   - a well-known credential shape (AWS AKIA*, GitHub ghp_/gho_/github_pat_*,
+ *     Slack xox[baprs]-, OpenAI sk-*, Bearer token, PEM PRIVATE KEY header)
+ *   - an absolute filesystem path (POSIX `/`, Windows drive, or UNC `\\`)
+ *
+ * Additionally rejects when:
+ *   - `displayLabel` is empty or exceeds 256 characters
+ *   - `displayLabel` looks base64-ish (≥40 chars of the base64 alphabet)
+ *   - `provenance.integrityHashSha256Hex` is not a 64-char lowercase hex string
  *
  * The runtime that builds envelopes is responsible for ALL redaction; this helper is
  * a defence-in-depth check the audit ledger can use before persisting.
@@ -106,9 +143,11 @@ export const looksLikeBrowserSafeSourceEnvelope = (
 ): boolean => {
   const { displayLabel, provenance, localRef } = envelope;
   if (displayLabel.length === 0 || displayLabel.length > 256) return false;
-  if (/https?:\/\//iu.test(displayLabel)) return false;
-  if (/https?:\/\//iu.test(localRef)) return false;
-  if (/^[A-Za-z0-9+/]{40,}={0,2}$/u.test(displayLabel)) return false; // base64-ish
+  if (/^[A-Za-z0-9+/]{40,}={0,2}$/u.test(displayLabel)) return false; // base64-ish (displayLabel only)
   if (!/^[0-9a-f]{64}$/u.test(provenance.integrityHashSha256Hex)) return false;
+  if (fieldLooksUnsafe(displayLabel)) return false;
+  if (fieldLooksUnsafe(localRef)) return false;
+  if (fieldLooksUnsafe(provenance.origin)) return false;
+  if (envelope.kind === "connector-document" && fieldLooksUnsafe(envelope.adapterId)) return false;
   return true;
 };

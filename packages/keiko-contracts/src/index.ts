@@ -623,7 +623,7 @@ export { estimateConversationBudget } from "./conversation-budget.js";
 // (RunId, TestCaseId, finding kinds, etc.) collides with names already used by
 // gateway/workflow/audit modules above. Consumers reach the QI types via
 // `import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";` and then
-// `QualityIntelligence.QualityIntelligenceRunEvent`, or via the subpath barrel.
+// `QualityIntelligence.QualityIntelligenceRunEvent`.
 // The schema version literal follows the same evolution rule as
 // LOCAL_KNOWLEDGE_SCHEMA_VERSION / MEMORY_SCHEMA_VERSION: a breaking change adds a
 // new literal member instead of mutating the existing one.

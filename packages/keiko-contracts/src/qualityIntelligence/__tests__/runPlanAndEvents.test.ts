@@ -116,6 +116,33 @@ describe("QualityIntelligenceRunEvent", () => {
 });
 
 describe("assertRunEventSequenceMonotonic", () => {
+  it("accepts an empty array (vacuously monotonic)", () => {
+    // Mutation killed: a guard that requires at least one element would throw here.
+    expect(() => {
+      assertRunEventSequenceMonotonic([]);
+    }).not.toThrow();
+  });
+
+  it("accepts a single-element sequence", () => {
+    // Mutation killed: a guard that requires a previous element to compare against would throw.
+    expect(() => {
+      assertRunEventSequenceMonotonic([baseEvent(0, "run:queued")]);
+    }).not.toThrow();
+  });
+
+  it("accepts a non-contiguous strictly-increasing gap sequence (0, 5, 100)", () => {
+    // Proves the invariant requires STRICTLY INCREASING, not CONTIGUOUS.
+    // Mutation killed: changing the implementation to require sequence[i] === sequence[i-1] + 1
+    // would turn this from passing to throwing.
+    expect(() => {
+      assertRunEventSequenceMonotonic([
+        baseEvent(0, "run:queued"),
+        baseEvent(5, "run:started"),
+        baseEvent(100, "run:succeeded"),
+      ]);
+    }).not.toThrow();
+  });
+
   it("accepts a strictly increasing sequence", () => {
     expect(() => {
       assertRunEventSequenceMonotonic([

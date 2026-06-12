@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -123,7 +123,58 @@ describe("Compatibility round-trip — runEvents.synthetic.json", () => {
     }).not.toThrow();
   });
 
+  it("events appear in the exact ordered kind sequence from the fixture", () => {
+    // This pins the MEANINGFUL sequence, not just the count. If the fixture order is
+    // permuted, or if a kind is swapped, this test fails while the count test would pass.
+    // Mutation killed: removing any kind from the expected list or reordering would fail.
+    const { events } = stripped as { readonly events: readonly QualityIntelligenceRunEvent[] };
+    const kinds = events.map((e) => e.payload.kind);
+    expect(kinds).toEqual([
+      "run:queued",
+      "run:started",
+      "stage:started",
+      "stage:completed",
+      "run:succeeded",
+    ]);
+  });
+
   it("re-serialises to a structurally equal object", () => {
     expect(JSON.parse(JSON.stringify(stripped)) as unknown).toEqual(stripped);
   });
+});
+
+// ─── Fixture sanitization — no secrets or PII in any fixture file ──────────────
+
+describe("Fixture sanitization scan", () => {
+  const fixturesDir = FIXTURES_DIR;
+
+  // Patterns that must never appear in any fixture file.
+  // All are case-insensitive to catch mixed-case variants.
+  const SECRET_PATTERNS: readonly RegExp[] = [
+    /AKIA/i,
+    /-----BEGIN (RSA|EC|OPENSSH|PRIVATE)/i,
+    /Bearer /i,
+    /sk-[a-z0-9]/i,
+    /xox[baprs]-/i,
+    /\/Users\//i,
+    /\/home\//i,
+    /password/i,
+    /secret_key/i,
+  ];
+
+  const fixtureFiles = readdirSync(fixturesDir).filter((f) => f.endsWith(".json"));
+
+  it("fixture directory contains at least one json file (self-check)", () => {
+    expect(fixtureFiles.length).toBeGreaterThan(0);
+  });
+
+  for (const filename of fixtureFiles) {
+    it(`${filename} contains no secrets or PII patterns`, () => {
+      // Mutation killed: adding a fake secret to any fixture breaks exactly this test.
+      const content = readFileSync(join(fixturesDir, filename), "utf8");
+      for (const pattern of SECRET_PATTERNS) {
+        expect(content).not.toMatch(pattern);
+      }
+    });
+  }
 });

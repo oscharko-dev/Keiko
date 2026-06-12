@@ -90,6 +90,9 @@ describe("validateQualityIntelligenceIdString", () => {
   it("returns ok for a valid string", () => {
     expect(validateQualityIntelligenceIdString("abc-123", "RunId")).toEqual({ ok: true });
   });
+  it("returns ok for a valid string with internal hyphen", () => {
+    expect(validateQualityIntelligenceIdString("run-001", "RunId")).toEqual({ ok: true });
+  });
   it("returns a typed failure for non-string input", () => {
     const result = validateQualityIntelligenceIdString(42, "RunId");
     expect(result).toEqual({ ok: false, reason: "RunId must be a string" });
@@ -98,6 +101,50 @@ describe("validateQualityIntelligenceIdString", () => {
     const result = validateQualityIntelligenceIdString(null, "RunId");
     expect(result).toEqual({ ok: false, reason: "RunId must be a string" });
   });
+  it("returns a typed failure for undefined", () => {
+    const result = validateQualityIntelligenceIdString(undefined, "RunId");
+    expect(result).toEqual({ ok: false, reason: "RunId must be a string" });
+  });
+  it("rejects string with both leading and trailing whitespace", () => {
+    expect(validateQualityIntelligenceIdString(" run-001 ", "RunId")).toEqual({
+      ok: false,
+      reason: "RunId must not have leading or trailing whitespace",
+    });
+  });
+  it("rejects string with trailing whitespace only", () => {
+    expect(validateQualityIntelligenceIdString("run-001 ", "RunId")).toEqual({
+      ok: false,
+      reason: "RunId must not have leading or trailing whitespace",
+    });
+  });
+  it("rejects string with leading whitespace only", () => {
+    expect(validateQualityIntelligenceIdString(" run-001", "RunId")).toEqual({
+      ok: false,
+      reason: "RunId must not have leading or trailing whitespace",
+    });
+  });
+  it("rejects string with leading tab", () => {
+    expect(validateQualityIntelligenceIdString("\trun-001", "RunId")).toEqual({
+      ok: false,
+      reason: "RunId must not have leading or trailing whitespace",
+    });
+  });
+});
+
+describe("QI id constructors — surrounding-whitespace rejection", () => {
+  for (const [name, ctor] of constructors) {
+    it(`${name} rejects surrounding whitespace (" x ")`, () => {
+      expect(() => ctor(" x ")).toThrow(TypeError);
+    });
+  }
+});
+
+describe("QI id constructors — regression: clean id still accepted", () => {
+  for (const [name, ctor] of constructors) {
+    it(`${name} accepts "run-001"`, () => {
+      expect(ctor("run-001")).toBe("run-001");
+    });
+  }
 });
 
 describe("Brand sanity", () => {

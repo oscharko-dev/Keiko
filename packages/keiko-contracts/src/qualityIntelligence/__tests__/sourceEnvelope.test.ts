@@ -145,4 +145,45 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
     };
     expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
   });
+
+  // --- new negative tests (Issue #277 AC1 hardening) ---
+
+  it("rejects a localRef containing a credential (AKIA)", () => {
+    const env = { ...makeRepo(), localRef: "tok:AKIAIOSFODNN7EXAMPLE" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a localRef with a non-http scheme (ftp)", () => {
+    const env = { ...makeRepo(), localRef: "ftp://internal/dump" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a localRef with a non-http scheme (s3)", () => {
+    const env = { ...makeRepo(), localRef: "s3://bucket/creds.json" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a localRef with a non-http scheme (file)", () => {
+    const env = { ...makeRepo(), localRef: "file:///etc/passwd" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a localRef that is an absolute POSIX path", () => {
+    const env = { ...makeRepo(), localRef: "/Users/alice/secret" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a provenance.origin containing a URL", () => {
+    const env = {
+      ...makeRepo(),
+      provenance: { ...makeRepo().provenance, origin: "https://internal-endpoint/secret" },
+    };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a connector-document with a leaky adapterId (URL)", () => {
+    const env = { ...makeConnector(), adapterId: "https://evil.example.com/token" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a connector-document with a credential in adapterId (ghp_)", () => {
+    const env = { ...makeConnector(), adapterId: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij" };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("accepts a clean connector-document envelope", () => {
+    expect(looksLikeBrowserSafeSourceEnvelope(makeConnector())).toBe(true);
+  });
 });

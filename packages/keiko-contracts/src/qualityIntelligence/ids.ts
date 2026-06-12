@@ -100,6 +100,9 @@ export const validateQualityIntelligenceIdString = (
   if (value.trim().length === 0) {
     return { ok: false, reason: `${kind} must not be whitespace-only` };
   }
+  if (value !== value.trim()) {
+    return { ok: false, reason: `${kind} must not have leading or trailing whitespace` };
+  }
   if (value.length > QI_ID_MAX_LENGTH) {
     return { ok: false, reason: `${kind} exceeds max length ${String(QI_ID_MAX_LENGTH)}` };
   }

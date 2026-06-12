@@ -1,0 +1,21 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "atoms": [
+    {
+      "kind": "requirement",
+      "id": "atom-synthetic-req-01",
+      "sourceEnvelopeId": "env-synthetic-01",
+      "canonicalHashSha256Hex": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "finalised"
+    },
+    {
+      "kind": "document-excerpt",
+      "id": "atom-synthetic-doc-01",
+      "sourceEnvelopeId": "env-synthetic-02",
+      "canonicalHashSha256Hex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "redactionStatus": "redacted",
+      "lifecycleStatus": "draft"
+    }
+  ]
+}
