@@ -141,8 +141,10 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
 }
 
 function packRoot() {
-  // The default pack runs the full `prepack` chain (clean + build + every release gate). The
-  // cross-platform runtime smoke (#284 AC4) sets KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 to pack the
+  // BEHAVIOURAL BRANCH (env-gated, opt-in): default behaviour is unchanged — the gating Linux
+  // `build-scan-sbom-smoke` job leaves the flag unset and packs with the full `prepack` chain
+  // (clean + build + every release gate). ONLY the cross-platform runtime smoke (#284 AC4) opts in
+  // by setting KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1, which packs the
   // ALREADY-BUILT dist (assembled by the job's explicit build / prepare:bin / build:ui steps)
   // WITHOUT re-running that chain: the prepack gates (arch-check, package-surface, supply-chain)
   // are the Linux publish gate — they run on the gating `build-scan-sbom-smoke` job and several
@@ -333,6 +335,13 @@ async function assertQiRouteReachable(baseUrl) {
   // is deterministic and offline — exactly the path handling most likely to break on Windows. A QI
   // run / evidence WRITE is model-gated (Model Gateway) and out of an offline smoke; the read seam
   // is what this asserts cross-platform.
+  //
+  // Test layering: the handler (handleListQiRuns) is already unit-tested in keiko-server's
+  // uiRoutes.test.ts (populated, empty-`[]`, and limit-boundary cases), so the response SHAPE is
+  // covered at the unit level. This assertion is deliberately integration-only — it verifies a
+  // property a unit test cannot express: that the route is reachable and the evidence-dir path
+  // resolves on the packed artifact, per OS. The `!Array.isArray` check also fails closed on a
+  // null / malformed `runs` shape, so the empty and the malformed cases both surface clearly.
   const res = await globalThis.fetch(`${baseUrl}/api/quality-intelligence/runs`);
   if (!res.ok) {
     fail(`keiko ui GET /api/quality-intelligence/runs exited with HTTP ${String(res.status)}`);
