@@ -175,6 +175,12 @@ jobs:
       - name: Build UI (static export)
         run: npm run build:ui
       - name: Installable-package smoke (Issue #169 AC2 / #284 AC4 cross-platform)
+        env:
+          # Pack the dist already built by the steps above instead of re-running the Linux-oriented
+          # `prepack` publish gate (arch-check / package-surface / supply-chain shell out to npx/npm
+          # in ways that are not Windows-portable — a separate concern from artifact portability).
+          # The gating `build-scan-sbom-smoke` job keeps the full prepack pack on Linux.
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install
 
   ui:

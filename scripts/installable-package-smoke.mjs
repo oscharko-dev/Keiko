@@ -141,7 +141,19 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
 }
 
 function packRoot() {
-  const result = run("npm", ["pack", "--silent"], { cwd: repoRoot });
+  // The default pack runs the full `prepack` chain (clean + build + every release gate). The
+  // cross-platform runtime smoke (#284 AC4) sets KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 to pack the
+  // ALREADY-BUILT dist (assembled by the job's explicit build / prepare:bin / build:ui steps)
+  // WITHOUT re-running that chain: the prepack gates (arch-check, package-surface, supply-chain)
+  // are the Linux publish gate — they run on the gating `build-scan-sbom-smoke` job and several
+  // shell out to `npx`/`npm` in ways that are not Windows-portable, which is a separate concern from
+  // verifying that the PACKED ARTIFACT runs cross-platform. On Linux the gate keeps the full
+  // prepack pack (flag unset), so its coverage is unchanged.
+  const packArgs =
+    process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS === "1"
+      ? ["pack", "--silent", "--ignore-scripts"]
+      : ["pack", "--silent"];
+  const result = run("npm", packArgs, { cwd: repoRoot });
   if (result.status !== 0) {
     fail(`npm pack exited ${String(result.status)}: ${result.stderr}`);
   }
