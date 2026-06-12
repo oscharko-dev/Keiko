@@ -265,6 +265,7 @@ function recordEdit(
       candidateId: edit.candidateId,
       reviewerLabel: edit.editorLabel,
       now: new Date().toISOString(),
+      redact: deps.redactor,
     });
   }
   return {

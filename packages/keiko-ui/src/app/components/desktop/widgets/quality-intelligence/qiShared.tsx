@@ -21,6 +21,34 @@ export const REVIEW_LABEL: Readonly<Record<QualityIntelligenceReviewState, strin
   withdrawn: "Withdrawn",
 };
 
+// CSS class map for review state badges — shared by CandidatesPane (per-candidate badge) and
+// QiHubPanel (run-row badge) so the same colour tokens apply consistently in both views
+// (Issue #282 / A11y-2: run-row now carries a review badge, must reuse the same CSS map).
+export const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
+  open: "qi-review-open",
+  approved: "qi-review-approved",
+  "changes-requested": "qi-review-changes",
+  rejected: "qi-review-rejected",
+  withdrawn: "qi-review-withdrawn",
+};
+
+// No aria-label here: naming is prohibited on a generic <span> (ARIA 1.2), so assistive tech
+// ignores it. The "Review:" context is supplied via a screen-reader-only prefix instead.
+// Used by CandidatesPane (per-candidate) and QiHubPanel (run-row) — single source of truth
+// (de-duplicated from CandidatesPane.tsx by Issue #282 A11y-2 refactor).
+export function ReviewBadge({
+  state,
+}: {
+  readonly state: QualityIntelligenceReviewState;
+}): ReactNode {
+  return (
+    <span className={`qi-review-badge ${REVIEW_CLASS[state]}`}>
+      <span className="sr-only">Review: </span>
+      {REVIEW_LABEL[state]}
+    </span>
+  );
+}
+
 // Coded errors render message-first with the machine code trailing in parentheses — users read the
 // human sentence, auditors still get the stable code (uiux-fix F047 C271: the raw "QI_…: message"
 // prefix leaked the machine code as the headline). Also used by the SSE error frames (RunLauncher),

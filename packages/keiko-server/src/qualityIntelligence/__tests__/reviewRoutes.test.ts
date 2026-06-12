@@ -18,6 +18,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { handleQiReview } from "../reviewRoutes.js";
+import { loadRunReviewState, runReviewStateOf, candidateReviewStateOf } from "../reviewStore.js";
 import type { QualityIntelligenceEvidenceManifest } from "@oscharko-dev/keiko-evidence";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
@@ -283,11 +284,14 @@ describe("handleQiReview — run-scope approve", () => {
   });
 });
 
-// ─── All valid actions are accepted ──────────────────────────────────────────
+// ─── Legal first transitions from OPEN (Issue #282 FIX A) ────────────────────
+//
+// A fresh run is OPEN. approve / reject / request-changes / withdraw all flip away from open and
+// are legal. reopen-from-open is a no-op (to === from) and is now rejected with 409.
 
-describe("handleQiReview — all valid actions", () => {
-  it.each(["approve", "reject", "request-changes", "reopen", "withdraw"])(
-    "accepts action '%s' without error",
+describe("handleQiReview — first transition from OPEN", () => {
+  it.each(["approve", "reject", "request-changes", "withdraw"])(
+    "accepts action '%s' from open without error",
     async (action) => {
       // Record a fresh run for each action to avoid state contamination.
       const freshDir = mkdtempSync(join(tmpdir(), `keiko-review-action-${action}-`));
@@ -303,6 +307,112 @@ describe("handleQiReview — all valid actions", () => {
       }
     },
   );
+
+  it("rejects reopen-from-open as 409 (no-op transition) and persists no review artifact", async () => {
+    const req = makeReq({ action: "reopen" });
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_REVIEW_TRANSITION_NOT_ALLOWED",
+    );
+    // A first illegal action must not even create the `.review.json` companion (no audit log).
+    expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
+  });
+});
+
+// ─── Illegal transitions are rejected and do not mutate state (Issue #282 FIX A) ──
+
+describe("handleQiReview — illegal transitions are rejected (run scope)", () => {
+  it("rejects approve→reject (rejecting an approved run) with 409 and persists no audit entry", async () => {
+    const d = deps(evidenceDir);
+    // approve the run first (legal: open → approved).
+    await handleQiReview(ctx("run-review-001", makeReq({ action: "approve" })), d);
+    // reject an approved run — illegal (approved is terminal, action !== reopen).
+    const result = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "reject" })), d),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_REVIEW_TRANSITION_NOT_ALLOWED",
+    );
+    // State unchanged (still approved) and the audit log did NOT grow past the single approve.
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    expect(runReviewStateOf(after)).toBe("approved");
+    expect(after?.auditLog).toHaveLength(1);
+  });
+
+  it("rejects reject→approve (approving a rejected run) with 409", async () => {
+    const d = deps(evidenceDir);
+    await handleQiReview(ctx("run-review-001", makeReq({ action: "reject" })), d);
+    const result = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "approve" })), d),
+    );
+    expect(result.status).toBe(409);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    expect(runReviewStateOf(after)).toBe("rejected");
+    expect(after?.auditLog).toHaveLength(1);
+  });
+
+  it("permits approve→reopen→reject as a 200 chain (reopen is the audited undo)", async () => {
+    const d = deps(evidenceDir);
+    const approve = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "approve" })), d),
+    );
+    expect(approve.status).toBe(200);
+    const reopen = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "reopen" })), d),
+    );
+    expect(reopen.status).toBe(200);
+    expect((reopen.body as { runState: string }).runState).toBe("open");
+    const reject = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "reject" })), d),
+    );
+    expect(reject.status).toBe(200);
+    expect((reject.body as { runState: string }).runState).toBe("rejected");
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    expect(after?.auditLog).toHaveLength(3);
+  });
+
+  it("permits changes-requested→approve (non-terminal source) as 200", async () => {
+    const d = deps(evidenceDir);
+    await handleQiReview(ctx("run-review-001", makeReq({ action: "request-changes" })), d);
+    const result = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "approve" })), d),
+    );
+    expect(result.status).toBe(200);
+    expect((result.body as { runState: string }).runState).toBe("approved");
+  });
+
+  it("permits withdrawn→reopen→approve as a 200 chain", async () => {
+    const d = deps(evidenceDir);
+    await handleQiReview(ctx("run-review-001", makeReq({ action: "withdraw" })), d);
+    await handleQiReview(ctx("run-review-001", makeReq({ action: "reopen" })), d);
+    const result = asResult(
+      await handleQiReview(ctx("run-review-001", makeReq({ action: "approve" })), d),
+    );
+    expect(result.status).toBe(200);
+    expect((result.body as { runState: string }).runState).toBe("approved");
+  });
+});
+
+describe("handleQiReview — illegal transitions are rejected (candidate scope)", () => {
+  it("rejects approve→reject on a candidate with 409 and leaves its state approved", async () => {
+    const d = deps(evidenceDir);
+    await handleQiReview(
+      ctx("run-review-001", makeReq({ action: "approve", candidateId: "cand-x" })),
+      d,
+    );
+    const result = asResult(
+      await handleQiReview(
+        ctx("run-review-001", makeReq({ action: "reject", candidateId: "cand-x" })),
+        d,
+      ),
+    );
+    expect(result.status).toBe(409);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    expect(after?.candidateStates["cand-x"]).toBe("approved");
+    expect(after?.auditLog).toHaveLength(1);
+  });
 });
 
 // ─── reviewerLabel is capped and defaults ────────────────────────────────────
@@ -320,5 +430,42 @@ describe("handleQiReview — reviewerLabel handling", () => {
     const req = makeReq({ action: "approve", candidateId: "cand-1", reviewerLabel: "Alice" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(200);
+  });
+
+  // FIX M1 (Issue #282) — the `.review.json` companion was the only QI artifact that bypassed the
+  // persist redactor: a secret-shaped reviewerLabel landed verbatim in the append-only audit log.
+  it("redacts a secret-shaped reviewerLabel before it lands in the persisted audit entry", async () => {
+    const secretLabel = `AKIA${"A".repeat(16)}`; // 20-char AWS-access-key shape
+    const req = makeReq({ action: "approve", candidateId: "cand-1", reviewerLabel: secretLabel });
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(200);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    const entry = after?.auditLog[0];
+    expect(entry).toBeDefined();
+    // The raw secret must NOT survive into the persisted artifact.
+    expect(entry?.reviewerLabel).not.toContain(secretLabel);
+  });
+});
+
+// ─── FIX L1 (Issue #282) — prototype-pollution defense for candidate ids ─────
+
+describe("handleQiReview — prototype-pollution defense", () => {
+  it("stores a candidate literally named __proto__ without polluting the prototype", async () => {
+    const req = makeReq({ action: "approve", candidateId: "__proto__" });
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(200);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    // The candidate's own state is readable as approved (no collision with Object.prototype).
+    expect(candidateReviewStateOf(after, "__proto__")).toBe("approved");
+    // The global prototype was not mutated (no `approved` leaked onto Object.prototype).
+    expect(({} as Record<string, unknown>).__proto__).toBe(Object.prototype);
+  });
+
+  it("stores a candidate named constructor and reads its state back", async () => {
+    const req = makeReq({ action: "request-changes", candidateId: "constructor" });
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(200);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    expect(candidateReviewStateOf(after, "constructor")).toBe("changes-requested");
   });
 });

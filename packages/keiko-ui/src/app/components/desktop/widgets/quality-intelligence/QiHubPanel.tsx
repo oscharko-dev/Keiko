@@ -15,11 +15,13 @@ import { fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";
 import {
   StatusBadge,
+  ReviewBadge,
   LoadingSkeleton,
   ErrorState,
   formatError,
   formatDate,
   runStatusLabel,
+  REVIEW_LABEL,
 } from "./qiShared";
 
 export interface QiHubPanelProps {
@@ -69,7 +71,9 @@ function RunRow({
         // the full label so failed and succeeded runs are distinguishable while list-navigating.
         // "test case(s)" — the suite-wide object name (uiux-fix F047 C388: the hub said "cases",
         // the export preview "candidates", launcher/card "test cases").
-        aria-label={`Open run ${run.id} — ${runStatusLabel(run.status)}, ${formatDate(run.requestedAt)}, ${cases.toString()} test case${cases !== 1 ? "s" : ""}`}
+        // Issue #282 A11y-2: append review state so screen-reader list-navigation announces the
+        // artifact lifecycle state (AC1 — run-as-artifact has a visible + announced review state).
+        aria-label={`Open run ${run.id} — ${runStatusLabel(run.status)}, ${formatDate(run.requestedAt)}, ${cases.toString()} test case${cases !== 1 ? "s" : ""}, review ${REVIEW_LABEL[run.reviewState]}`}
         title={`Open run ${run.id}`}
       >
         {/* uiux-fix F038 C145: the wire summary carries no source label, so the opaque UUID
@@ -79,6 +83,10 @@ function RunRow({
             slice looked like a complete id). Full id stays in title + aria-label. */}
         <span className="qi-run-title">{formatDate(run.requestedAt)}</span>
         <StatusBadge status={run.status} />
+        {/* Issue #282 A11y-2: review badge surfaces the run-as-artifact lifecycle state in the
+            primary scanning view (AC1). Reuses ReviewBadge from qiShared — same CSS tokens,
+            same sr-only prefix, no duplication of the class map. */}
+        <ReviewBadge state={run.reviewState} />
         <span className="qi-run-id">{run.id.slice(0, 16)}…</span>
         <span className="qi-run-totals">
           {run.totals.candidates.toString()} test case{run.totals.candidates !== 1 ? "s" : ""}

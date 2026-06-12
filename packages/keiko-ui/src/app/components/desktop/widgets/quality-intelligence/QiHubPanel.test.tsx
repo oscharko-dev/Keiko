@@ -10,6 +10,7 @@ import type { QualityIntelligenceUiRunSummary } from "@oscharko-dev/keiko-contra
 function makeRun(
   id: string,
   status: QualityIntelligenceUiRunSummary["status"],
+  reviewState: QualityIntelligenceUiRunSummary["reviewState"] = "open",
 ): QualityIntelligenceUiRunSummary {
   return {
     id,
@@ -17,6 +18,8 @@ function makeRun(
     requestedAt: "2026-06-01T10:00:00.000Z",
     completedAt: status === "running" ? null : "2026-06-01T10:01:00.000Z",
     totals: { candidates: 3, findings: 0, exports: 0 },
+    // Issue #282 A11y-2: reviewState is now required on the wire summary (backend contract update).
+    reviewState,
   };
 }
 
@@ -142,5 +145,47 @@ describe("QiHubPanel", () => {
 
     expect(within(list).getAllByRole("listitem")).toHaveLength(30);
     expect(screen.queryByRole("button", { name: /show more runs/i })).not.toBeInTheDocument();
+  });
+
+  // Issue #282 A11y-2: run rows must show a review badge next to the status badge, and the
+  // aria-label must include the review state so screen-reader list-navigation announces it.
+  it("renders a review badge for each run row defaulting to 'Open' (AC1 — Issue #282)", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-rev-badge-1", "succeeded")])}
+      />,
+    );
+    // Wait for the run list to appear, then assert the review badge is present.
+    await screen.findByRole("button", { name: /open run qi-run-rev-badge-1/i });
+    // ReviewBadge renders a sr-only "Review: " prefix followed by the label.
+    // The combined text node is "Review: Open".
+    expect(screen.getByText(/^Open$/i)).toBeInTheDocument();
+  });
+
+  it("renders the correct review badge when reviewState is 'approved'", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-rev-approved", "succeeded", "approved")])}
+      />,
+    );
+    await screen.findByRole("button", { name: /open run qi-run-rev-approved/i });
+    expect(screen.getByText(/^Approved$/i)).toBeInTheDocument();
+  });
+
+  it("includes the review state in the run-row aria-label (AC1 — Issue #282 A11y-2)", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-aria-rev", "succeeded", "rejected")])}
+      />,
+    );
+    // The aria-label must include "review Rejected" so SR list-navigation announces lifecycle.
+    expect(
+      await screen.findByRole("button", {
+        name: /open run qi-run-aria-rev.*review Rejected/i,
+      }),
+    ).toBeInTheDocument();
   });
 });

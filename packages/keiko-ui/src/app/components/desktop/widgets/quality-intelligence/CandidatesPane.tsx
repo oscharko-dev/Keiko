@@ -14,7 +14,7 @@ import type {
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
 import { CandidateEditForm } from "./CandidateEditForm";
-import { REVIEW_LABEL, WeakTestFlag } from "./qiShared";
+import { ReviewBadge, WeakTestFlag } from "./qiShared";
 
 const INITIAL_VISIBLE = 25;
 
@@ -31,24 +31,15 @@ export interface QiPendingReview {
   readonly action: QiReviewAction;
 }
 
-const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
-  open: "qi-review-open",
-  approved: "qi-review-approved",
-  "changes-requested": "qi-review-changes",
-  rejected: "qi-review-rejected",
-  withdrawn: "qi-review-withdrawn",
-};
-
-// No aria-label here: naming is prohibited on a generic <span> (ARIA 1.2), so assistive tech ignores
-// it. The "Review:" context is supplied via a screen-reader-only prefix instead.
-function ReviewBadge({ state }: { readonly state: QualityIntelligenceReviewState }): ReactNode {
-  return (
-    <span className={`qi-review-badge ${REVIEW_CLASS[state]}`}>
-      <span className="sr-only">Review: </span>
-      {REVIEW_LABEL[state]}
-    </span>
-  );
-}
+// Terminal states: once a candidate reaches one of these, the ONLY legal action is "reopen".
+// The server enforces this with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED; the UI pre-empts the
+// error by disabling Approve/Reject/Request-changes and surfacing a Reopen button instead
+// (Issue #282 FIX A-UI / A11y-4).
+const TERMINAL_STATES = new Set<QualityIntelligenceReviewState>([
+  "approved",
+  "rejected",
+  "withdrawn",
+]);
 
 function StringList({
   items,
@@ -126,14 +117,31 @@ function ReviewControls({
   const reviewBusy = pendingReview !== null && pendingReview !== undefined;
   const isSaving = (action: QiReviewAction): boolean =>
     reviewBusy && pendingReview.candidateId === candidateId && pendingReview.action === action;
+
+  // Terminal states: Approve/Reject/Request-changes are governance-illegal; only Reopen is legal.
+  // Render a final-note that explains WHY so keyboard/SR users can understand via aria-describedby.
+  const isTerminal = TERMINAL_STATES.has(state);
+  const finalNoteId = useId();
+
+  // Compose the describedBy for the three primary buttons: terminal reason takes precedence when
+  // in a terminal state; otherwise fall back to the outer governance describedBy (reviewer label).
+  const primaryDescribedBy = isTerminal ? finalNoteId : describedBy;
+
   return (
     <div className="qi-cand-actions" role="group" aria-label="Review decision">
+      {/* Final-state note: always mounted when terminal so aria-describedby resolves reliably.
+          Visually reuses the governance-note style (same role="note", same padding/colour token). */}
+      {isTerminal ? (
+        <p id={finalNoteId} className="qi-cand-governance-note" role="note">
+          This review decision is final — reopen to change it.
+        </p>
+      ) : null}
       <GovernedActionButton
         className="qi-btn qi-btn-approve"
         label={isSaving("approve") ? "Saving…" : "Approve"}
         pressed={state === "approved"}
-        disabled={disabled || reviewBusy}
-        describedBy={describedBy}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "approve");
         }}
@@ -142,8 +150,8 @@ function ReviewControls({
         className="qi-btn qi-btn-reject"
         label={isSaving("reject") ? "Saving…" : "Reject"}
         pressed={state === "rejected"}
-        disabled={disabled || reviewBusy}
-        describedBy={describedBy}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "reject");
         }}
@@ -152,12 +160,26 @@ function ReviewControls({
         className="qi-btn qi-btn-secondary"
         label={isSaving("request-changes") ? "Saving…" : "Request changes"}
         pressed={state === "changes-requested"}
-        disabled={disabled || reviewBusy}
-        describedBy={describedBy}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "request-changes");
         }}
       />
+      {/* Reopen: rendered only in terminal states — the one legal action to return to "open".
+          It is NOT disabled by isTerminal (that's the whole point). Still respects the outer
+          governance gate (disabled) and the in-flight busy lock (reviewBusy). */}
+      {isTerminal ? (
+        <GovernedActionButton
+          className="qi-btn qi-btn-secondary"
+          label={isSaving("reopen") ? "Saving…" : "Reopen"}
+          disabled={disabled || reviewBusy}
+          describedBy={disabled ? describedBy : undefined}
+          onActivate={() => {
+            onReview(candidateId, "reopen");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

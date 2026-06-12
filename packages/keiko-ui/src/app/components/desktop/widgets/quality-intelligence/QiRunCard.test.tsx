@@ -193,6 +193,44 @@ describe("QiRunCard", () => {
     expect(screen.queryByTestId("qi-action-error")).not.toBeInTheDocument();
   });
 
+  // Issue #282 A11y-1 (WCAG 4.1.3): a dedicated live region must announce the review outcome so
+  // screen-reader users receive feedback after a review action. The announcement must contain
+  // the candidate title and the resulting state label so it is informative and AT re-announces it
+  // (as opposed to the existing "Run loaded: N test cases" region which is byte-identical across
+  // all review actions and therefore suppressed by AT de-duplication).
+  it("updates the review-announce live region after a successful Approve (A11y-1 / Issue #282)", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    const detail = makeDetail("qi-run-rev-announce", [
+      makeCandidate("tc-announce-1", "Verify checkout flow"),
+    ]);
+    const reviewImpl = vi.fn().mockResolvedValue({
+      runState: "open",
+      candidateStates: { "tc-announce-1": "approved" },
+      auditCount: 1,
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+    render(
+      <QiRunCard
+        runId="qi-run-rev-announce"
+        fetchDetailImpl={fetchOk(detail)}
+        reviewImpl={reviewImpl}
+      />,
+    );
+    const approveButton = await screen.findByRole("button", { name: /approve/i });
+    await waitFor(() => {
+      expect(approveButton).toBeEnabled();
+    });
+    await user.click(approveButton);
+
+    // After the review settles, the dedicated live region must carry the outcome text.
+    await waitFor(() => {
+      const region = screen.getByTestId("qi-review-announce");
+      expect(region).toHaveTextContent(/marked Approved/i);
+      expect(region).toHaveTextContent(/Verify checkout flow/i);
+    });
+  });
+
   it("surfaces a retryable error when the detail fetch fails", async () => {
     const failing = vi
       .fn()

@@ -21,7 +21,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { loadRunReviewState, candidateReviewStateOf } from "./reviewStore.js";
+import { loadRunReviewState, candidateReviewStateOf, runReviewStateOf } from "./reviewStore.js";
 import { assemblePdf, assembleZipBundle } from "./exportAssembly.js";
 
 type Adapter = QI.QualityIntelligenceExportAdapter;
@@ -144,6 +144,10 @@ function selectRows(
 ): readonly QualityIntelligenceCandidateRow[] {
   if (!approvedOnly) return rows;
   const review = loadRunReviewState(runId, evidenceDir);
+  // FIX E (Issue #282) — a reviewer can approve the whole RUN instead of each candidate. A
+  // run-level approval is an explicit approval of every candidate, so it satisfies approvedOnly
+  // (incl. the TMS adapters that force it). Otherwise fall back to the per-candidate filter.
+  if (runReviewStateOf(review) === "approved") return rows;
   return rows.filter((r) => candidateReviewStateOf(review, r.id) === "approved");
 }
 
