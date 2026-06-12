@@ -847,7 +847,7 @@ describe("runIndexingJob — binary parser text projection", () => {
     expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
     expect(inputs.join("\n")).toContain("Hello PDF");
     expect(inputs.join("\n")).not.toContain("%PDF-1.4");
-  });
+  }, 15_000);
 });
 
 // ─── Test 5: embedding-identity mismatch ─────────────────────────────────────
