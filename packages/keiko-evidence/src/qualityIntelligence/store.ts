@@ -486,9 +486,20 @@ function resolveStore(
 //
 // The store is wired via options.store (explicit, e.g. in-memory for tests) or options.evidenceDir
 // (resolve to a node adapter). Either MUST be supplied.
+/**
+ * The string-bearing optional manifest fields that pass the persist redactor in
+ * `recordQualityIntelligenceRun`. They are sourced from the redacted set (not raw `input`) so the
+ * persisted/hashed values match what the redactor produced.
+ */
+interface RedactedOptionalManifestFields {
+  readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
+  readonly modelParameters?: QualityIntelligenceEvidenceManifest["modelParameters"];
+}
+
 /** Optional manifest fields that are only present when supplied (exactOptionalPropertyTypes). */
 function optionalManifestFields(
   input: QualityIntelligenceRecordInput,
+  redacted: RedactedOptionalManifestFields,
 ): Partial<
   Pick<
     QualityIntelligenceEvidenceManifest,
@@ -502,14 +513,18 @@ function optionalManifestFields(
   >
 > {
   return {
-    ...(input.coverageMatrix !== undefined ? { coverageMatrix: input.coverageMatrix } : {}),
+    // coverageMatrix + modelParameters are taken from the redacted set; the remaining optionals are
+    // ids / sha-256 hashes / numbers that carry no free text and need no persist-time scrub.
+    ...(redacted.coverageMatrix !== undefined ? { coverageMatrix: redacted.coverageMatrix } : {}),
     ...(input.qualityScore !== undefined ? { qualityScore: input.qualityScore } : {}),
     ...(input.sourceFingerprints !== undefined
       ? { sourceFingerprints: input.sourceFingerprints }
       : {}),
     ...(input.atomFingerprints !== undefined ? { atomFingerprints: input.atomFingerprints } : {}),
     ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
-    ...(input.modelParameters !== undefined ? { modelParameters: input.modelParameters } : {}),
+    ...(redacted.modelParameters !== undefined
+      ? { modelParameters: redacted.modelParameters }
+      : {}),
     ...(input.seedUsed !== undefined ? { seedUsed: input.seedUsed } : {}),
   };
 }
@@ -528,6 +543,7 @@ function buildRunManifest(
   },
   summary: QualityIntelligenceEvidenceManifest["redactionSummary"],
   integrityHashes: QualityIntelligenceEvidenceManifest["integrityHashes"],
+  redactedOptionals: RedactedOptionalManifestFields,
 ): QualityIntelligenceEvidenceManifest {
   return {
     qiEvidenceSchemaVersion: QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
@@ -545,7 +561,7 @@ function buildRunManifest(
     provenanceRefs: redacted.provenanceRefs,
     redactionSummary: summary,
     integrityHashes,
-    ...optionalManifestFields(input),
+    ...optionalManifestFields(input, redactedOptionals),
   };
 }
 
@@ -573,6 +589,12 @@ export function recordQualityIntelligenceRun(
       exports: input.exports,
       evidenceRefs: input.evidenceRefs,
       provenanceRefs: input.provenanceRefs,
+      // coverageMatrix carries requirementExcerptRedacted (derived from raw source text) and
+      // modelParameters is a free-shaped Record; both are string-bearing leaves that must pass the
+      // persist redactor — not just their build-time scrub — so audit storage keeps the same
+      // fail-closed backstop as findings/evidenceRefs (#273 audit — AC#3 audit-storage safety).
+      coverageMatrix: input.coverageMatrix,
+      modelParameters: input.modelParameters,
     },
     options.redaction ?? {},
   );
@@ -581,10 +603,13 @@ export function recordQualityIntelligenceRun(
     redacted.exports,
     redacted.evidenceRefs,
     input.atomFingerprints,
-    input.coverageMatrix,
+    redacted.coverageMatrix,
     input.sourceFingerprints,
   );
-  const manifest = buildRunManifest(input, redacted, summary, integrityHashes);
+  const manifest = buildRunManifest(input, redacted, summary, integrityHashes, {
+    coverageMatrix: redacted.coverageMatrix,
+    modelParameters: redacted.modelParameters,
+  });
   return { manifest, location: store.record(manifest) };
 }
 

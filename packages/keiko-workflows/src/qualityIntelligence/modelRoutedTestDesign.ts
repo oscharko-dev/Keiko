@@ -304,13 +304,25 @@ async function generateCandidates(
     profile: ctx.profile,
     maxTestCases: maxCandidates,
   });
-  const result = await deps.generate.generate({
-    systemPrompt: QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT,
-    instruction,
-    evidence,
-    maxCandidates,
-    signal: ctx.signal,
-  });
+  // Count the generation gateway dispatch as an ATTEMPT, mirroring the judge contract
+  // (judgeOneCandidate counts before its await). The generation port makes at most one gateway
+  // dispatch per call, so a rejection (Azure 5xx / timeout / network / abort) still means one call
+  // was attempted and billed. Counting only result.modelCallCount AFTER a successful await
+  // under-reported a failed run's audit trail as 0 gateway calls (#273 audit; #843 undercount class).
+  // The deterministic baseline port never rejects and reports modelCallCount 0, so it is unaffected.
+  let result: QualityIntelligenceGenerationPortResult;
+  try {
+    result = await deps.generate.generate({
+      systemPrompt: QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT,
+      instruction,
+      evidence,
+      maxCandidates,
+      signal: ctx.signal,
+    });
+  } catch (error) {
+    ctx.modelGatewayCallCount += 1;
+    throw error;
+  }
   ctx.modelGatewayCallCount += result.modelCallCount;
   if (result.modelId === undefined && result.modelCallCount === 0) {
     return {

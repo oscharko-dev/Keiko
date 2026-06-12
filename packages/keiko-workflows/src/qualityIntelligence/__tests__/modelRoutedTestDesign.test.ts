@@ -842,3 +842,101 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
     expect(gap?.summaryRedacted).toBe("Atom atom-3 has no tracing test (uncovered).");
   });
 });
+
+// ─── Generation undercount regression (#273 / #843 undercount class) ─────────────
+//
+// A FAILED generation must still count its gateway dispatch as one attempt: the generation port
+// makes at most one dispatch per call, so a rejection (Azure 5xx / timeout / network / abort) still
+// means one call was attempted and billed. Counting only result.modelCallCount AFTER a successful
+// await under-reported a failed run's audit trail as 0 gateway calls. generateCandidates now does
+// `ctx.modelGatewayCallCount += 1` in the catch before rethrowing, mirroring the judge contract.
+//
+// Mutation thinking: reverting the catch-side increment makes both modelGatewayCallCount assertions
+// below collapse to 0, so this test fails closed on the regression. The companion baseline test
+// guards the opposite direction — the deterministic (model-free) port must NOT be over-counted.
+
+describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-call audit (#273)", () => {
+  it("counts a REJECTED generation dispatch as one gateway call in the summary AND the failed manifest", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-gen-reject-001"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      // The gateway dispatch rejects (Azure 503): one call was attempted, none succeeded.
+      generate: { generate: () => Promise.reject(new Error("HTTP 503 Service Unavailable")) },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    // The run fails (no candidates parsed) but the audit trail must show the attempted dispatch.
+    expect(summary.status).toBe("failed");
+    expect(summary.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
+    // The persisted "failed" manifest must carry the same honest call count (not 0).
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.status).toBe("failed");
+    expect(manifest?.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
+    // The raw provider message must never leak into the persisted/summary reason.
+    expect(summary.reasonSummary).not.toContain("503");
+  });
+
+  it("does NOT over-count the deterministic model-free baseline (modelCallCount 0 → 0 dispatches)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "REQ-1: Lock the account after five failed logins."),
+      makeIngestedAtom("atom-2", "REQ-2: Reset the counter after a success."),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-gen-baseline-001"),
+      },
+      envelopes: [
+        {
+          id: QualityIntelligence.asQualityIntelligenceSourceEnvelopeId("env-1"),
+          kind: "human-context",
+          displayLabel: "Audit source",
+          localRef: "env-1",
+          provenance: {
+            origin: "requirements",
+            registeredAt: "2026-06-08T00:00:00.000Z",
+            integrityHashSha256Hex: "b".repeat(64),
+          },
+        },
+      ],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      // Deterministic baseline port: resolves, modelCallCount 0, no modelId → no gateway dispatch.
+      generate: {
+        generate: () =>
+          Promise.resolve({ rawText: JSON.stringify({ testCases: [] }), modelCallCount: 0 }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(summary.status).toBe("succeeded");
+    // The successful, model-free baseline must report exactly zero gateway dispatches.
+    expect(summary.modelGatewayCallCount).toBe(0);
+    expect(store.load(String(input.plan.id))?.modelGatewayCallCount).toBe(0);
+  });
+});

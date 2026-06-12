@@ -151,19 +151,23 @@ export async function runQualityIntelligenceTestDesign(
   emitQueuedAndStarted(ctx);
   try {
     await withStage(ctx, "plan", async () => Promise.resolve());
-    const intent = await withStage(ctx, "intent", async () =>
-      Promise.resolve(deriveIntent(input.envelopes, ctx.profile)),
-    );
-    const rawCandidates = await withStage(ctx, "candidates", async () =>
-      Promise.resolve(
+    // Intent derivation is a deterministic sub-step of candidate design, not a separately surfaced
+    // stage. The shared qi:test-design descriptor declares the model-routed lifecycle
+    // (plan, candidates, judge, coverage, validate, finalize); emitting an undeclared "intent"
+    // stage here threw via assertStageRegistered and made this scripted entry impossible to
+    // succeed. Derive intent inside the declared "candidates" stage so the scripted entry stays a
+    // strict subset of the descriptor's stage set.
+    const rawCandidates = await withStage(ctx, "candidates", async () => {
+      const intent = deriveIntent(input.envelopes, ctx.profile);
+      return Promise.resolve(
         designTestCaseCandidates({
           runId: input.plan.id,
           intent,
           atoms: input.atoms,
           profile: ctx.profile,
         }),
-      ),
-    );
+      );
+    });
     const candidates = truncateCandidates(rawCandidates, ctx.limits.maxCandidatesPerRun);
     emitCandidateProposed(ctx, candidates);
     const coverageMatrix = await withStage(ctx, "coverage", async () =>
