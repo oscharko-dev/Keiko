@@ -15,7 +15,7 @@ import {
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
 import { gatewayFetch, readJsonCapped, readSseStream } from "./http.js";
-import { normalizeChatResponse } from "./normalize.js";
+import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type {
   CostClass,
@@ -28,6 +28,8 @@ import type {
   ProviderAdapter,
   UsageMetadata,
 } from "./types.js";
+
+const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
 
 export interface AdapterDeps {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -132,7 +134,11 @@ function firstStreamChoice(chunk: unknown): Record<string, unknown> | undefined 
 function deltaFromChunk(chunk: unknown): string | undefined {
   const choice = firstStreamChoice(chunk);
   const delta = choice !== undefined && isRecord(choice.delta) ? choice.delta : undefined;
-  return delta !== undefined && typeof delta.content === "string" ? delta.content : undefined;
+  if (delta === undefined || !("content" in delta)) {
+    return undefined;
+  }
+  const content = textFromContent(delta.content);
+  return content.length > 0 ? content : undefined;
 }
 
 function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
@@ -211,6 +217,21 @@ function redactResponse(
     toolCalls: response.toolCalls.map((call) => redactToolCall(call, secrets)),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
   };
+}
+
+function assertUsableAssistantResponse(
+  response: NormalizedResponse,
+  modelId: string,
+  secrets: readonly string[],
+): void {
+  if (response.content.trim().length > 0 || response.toolCalls.length > 0) {
+    return;
+  }
+  throw new ProviderError(
+    `provider returned an empty assistant response for '${modelId}'`,
+    PROVIDER_EMPTY_ASSISTANT_STATUS,
+    secrets,
+  );
 }
 
 function errorSignal(payload: unknown): string {
@@ -292,19 +313,18 @@ export class OpenAiAdapter implements ProviderAdapter {
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
     const payload = await this.readBody(response, config, secrets);
-    return redactResponse(
-      normalizeChatResponse(
-        payload,
-        config.modelId,
-        {
-          requestId: this.deps.requestId,
-          latencyMs: this.now() - start,
-          costClass: this.deps.costClass,
-        },
-        request.responseFormat?.type === "json_schema",
-      ),
-      secrets,
+    const normalized = normalizeChatResponse(
+      payload,
+      config.modelId,
+      {
+        requestId: this.deps.requestId,
+        latencyMs: this.now() - start,
+        costClass: this.deps.costClass,
+      },
+      request.responseFormat?.type === "json_schema",
     );
+    assertUsableAssistantResponse(normalized, config.modelId, secrets);
+    return redactResponse(normalized, secrets);
   };
 
   // Streaming chat path (Layer 1): yields redacted content-delta tokens as they
@@ -333,6 +353,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       yield { type: "delta", token };
     }
     const assembled = this.assembleResponse(config, start, acc);
+    assertUsableAssistantResponse(assembled, config.modelId, secrets);
     yield { type: "done", response: redactResponse(assembled, secrets) };
   };
 

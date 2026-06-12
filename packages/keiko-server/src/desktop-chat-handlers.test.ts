@@ -335,6 +335,78 @@ describe("desktop chat routes", () => {
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
   });
 
+  it("rejects an empty model response without persisting a fake assistant message", async () => {
+    await restartWithDeps(deps(fakeModel("")));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Say hello",
+      }),
+    });
+
+    expect(sendRes.status).toBe(502);
+    const body = (await sendRes.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe("GATEWAY_PROVIDER_ERROR");
+    expect(body.error?.message).toContain("empty assistant response");
+    const persisted = store.listMessages(created.chat.id);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(persisted.some((message) => message.role === "assistant")).toBe(false);
+    expect(JSON.stringify(persisted)).not.toContain("The model returned an empty response.");
+  });
+
+  it("does not send legacy empty-response placeholders back to the model as chat context", async () => {
+    await restartWithDeps(deps(fakeModel("fresh response")));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    store.createMessage({
+      chatId: created.chat.id,
+      role: "assistant",
+      content: "The model returned an empty response.",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Say hello again",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(JSON.stringify(seenRequests[0]?.messages)).not.toContain(
+      "The model returned an empty response.",
+    );
+    const body = (await sendRes.json()) as { messages: { role: string; content: string }[] };
+    expect(body.messages.map((message) => message.content)).toEqual([
+      "Say hello again",
+      "fresh response",
+    ]);
+  });
+
   // eslint-disable-next-line complexity
   it("does not retrieve unrelated memories before persisting candidate proposals from chat intents", async () => {
     const memoryDir = join(tmp, "memory-vault");

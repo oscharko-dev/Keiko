@@ -75,6 +75,7 @@ import {
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
+import { assertUsableAssistantContent } from "./assistant-response.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -613,8 +614,9 @@ function createGatewayAnswerer(
         signal,
       );
       const content = response.content.trim();
+      assertUsableAssistantContent(content, modelId);
       return {
-        content: content.length > 0 ? content : "The model returned an empty response.",
+        content,
         usage: {
           promptTokens: response.usage.promptTokens,
           completionTokens: response.usage.completionTokens,

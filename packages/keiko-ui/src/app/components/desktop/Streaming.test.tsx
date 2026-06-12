@@ -17,7 +17,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow, sendStatusLabel } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { useChatSession, type ChatSessionApi } from "./hooks/useChatSession";
+import {
+  EMPTY_MODEL_RESPONSE_USER_MESSAGE,
+  useChatSession,
+  type ChatSessionApi,
+} from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
@@ -1294,6 +1298,30 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     const users = view.result.current.messages.filter((m) => m.role === "user");
     expect(users).toHaveLength(0);
     // No partial assistant content persisted.
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(0);
+  });
+
+  it("maps an empty provider stream error to a user-facing frontend message", async () => {
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      async (_input, _signal, handlers): Promise<void> => {
+        handlers.onError({
+          code: "GATEWAY_PROVIDER_ERROR",
+          message: "model 'streaming-model' returned an empty assistant response",
+        });
+      },
+    );
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("trigger empty response"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("failed");
+    expect(view.result.current.error).toBe(
+      `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (GATEWAY_PROVIDER_ERROR)`,
+    );
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(0);
   });

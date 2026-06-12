@@ -180,6 +180,17 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
   });
 
+  it("ignores German stop words so localized prompts do not overmatch prose", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "die mir welche kannst sagen und\n" });
+    const r = await searchText(
+      scope,
+      nlq("Kannst du mir sagen welche Testumgebung genutzt wird?"),
+      DEFAULT_SEARCH_LIMITS,
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(r.atoms).toHaveLength(0);
+  });
+
   it("caps emitted matches per file so one file cannot dominate the budget", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "needle\n".repeat(20) });
     const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {

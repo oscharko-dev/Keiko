@@ -14,9 +14,8 @@
 //     (so the audit ledger can persist the same shape #199 already documents), and the
 //     `noEvidence` flag the UI uses to phrase its message.
 //   * `AnswerGenerator` — the injectable port that turns a context pack into an answer
-//     string. The runner takes the port; the package ships two implementations:
-//     `ScriptedAnswerGenerator` (deterministic, test fixture) and
-//     `ModelGatewayAnswerGenerator` (production, calls `Gateway.chat`).
+//     string. Production composition uses `ModelGatewayAnswerGenerator` to call `Gateway.chat`;
+//     tests inject local fixtures at the runner boundary.
 //
 // `ConversationGroundedAnswer.references` is the SAME `RetrievalReference` array the pack
 // was assembled from — the BFF and audit ledger need both the human-readable citation

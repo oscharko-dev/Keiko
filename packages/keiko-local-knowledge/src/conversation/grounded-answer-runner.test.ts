@@ -16,7 +16,6 @@ import { scriptedAdapter, seedCapsuleWithVectors } from "../retrieval/_support.j
 import type { KnowledgeStore } from "../store.js";
 
 import { runGroundedAnswer } from "./grounded-answer-runner.js";
-import { ScriptedAnswerGenerator } from "./scripted-answer-generator.js";
 import type { AnswerGenerator, AnswerGeneratorInput, ConversationGroundedQuery } from "./types.js";
 
 interface Fixture {
@@ -80,13 +79,13 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.pack.scope.capsuleIds).toContain(seeded.capsuleId);
   });
 
-  it("integrates with ScriptedAnswerGenerator end-to-end", async () => {
+  it("integrates retrieval, generation, and citation attachment end-to-end", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-b" });
     const result = await runGroundedAnswer(
       {
         retrieval: { store, embeddingAdapter: scriptedAdapter() },
-        answerGenerator: new ScriptedAnswerGenerator(),
+        answerGenerator: fakeGenerator("Found grounded evidence [1]."),
       },
       {
         conversationId: "conv-2",

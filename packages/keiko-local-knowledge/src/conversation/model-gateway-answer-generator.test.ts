@@ -140,6 +140,21 @@ describe("ModelGatewayAnswerGenerator", () => {
     expect(gw.calls[0]?.cancellationSignal).toBe(controller.signal);
   });
 
+  it("rejects an empty gateway answer instead of returning fake content", async () => {
+    const refs = [reference("ch-1")];
+    const pack = assembleGroundedContext(refs);
+    const gw = fakeGateway("");
+    const generator = new ModelGatewayAnswerGenerator({
+      chatGateway: gw.chat,
+      modelId: "test-model",
+      policy: "best-effort",
+    });
+
+    await expect(generator.generate({ query, pack, references: refs })).rejects.toThrow(
+      "empty grounded answer",
+    );
+  });
+
   it("redacts citation display metadata before sending the prompt", async () => {
     const refs = [reference("ch-1", "manual-TOKEN-123.md")];
     const pack = assembleGroundedContext(refs);

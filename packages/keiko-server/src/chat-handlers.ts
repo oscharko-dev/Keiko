@@ -60,6 +60,10 @@ import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { cosineSimilarity, embedAndStoreMemory, embedMemoryText } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
+import {
+  assertUsableAssistantContent,
+  isLegacyEmptyAssistantPlaceholder,
+} from "./assistant-response.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -217,7 +221,9 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     available: isProjectAvailable(item),
   }));
   const chats = deps.store.listChats(project.path);
-  const messages = deps.store.listMessages(chat.id);
+  const messages = deps.store
+    .listMessages(chat.id)
+    .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
   return {
     project: { ...project, available: isProjectAvailable(project) },
     chat,
@@ -262,6 +268,9 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
 function messageForGateway(
   message: ChatMessage,
 ): { role: "user" | "assistant"; content: string } | null {
+  if (isLegacyEmptyAssistantPlaceholder(message)) {
+    return null;
+  }
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
@@ -567,11 +576,13 @@ export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   content: string,
+  modelId: string,
 ): ChatMessage {
+  assertUsableAssistantContent(content, modelId);
   return deps.store.createMessage({
     chatId: request.chatId,
     role: "assistant",
-    content: content.length > 0 ? content : "The model returned an empty response.",
+    content,
     timestamp: Date.now(),
     runId: undefined,
     workflowId: undefined,
@@ -897,7 +908,7 @@ async function persistModelChatTurn(
     // system prompt) would otherwise surface it un-redacted on the success path, mirroring the
     // grounded-QA path (grounded-qa.ts line 549) which already applies deps.redactor here.
     const redactedContent = deps.redactor(response.content) as string;
-    const assistantMessage = createAssistantMessage(deps, request, redactedContent);
+    const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
     const memoryActions = await collectMemoryActions(
       deps,
       request,

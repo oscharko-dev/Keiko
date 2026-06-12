@@ -92,6 +92,18 @@ describe("extractAnchors", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("drops German function words while keeping repository-relevant content terms", () => {
+    const result = run("Kannst du die App sehen und mir sagen welche Testumgebung genutzt wird?");
+    const terms = result.anchors.map((anchor) => anchor.term);
+    expect(terms).toContain("app");
+    expect(terms).toContain("testumgebung");
+    expect(terms).toContain("genutzt");
+    expect(terms).not.toContain("die");
+    expect(terms).not.toContain("mir");
+    expect(terms).not.toContain("welche");
+    expect(terms).not.toContain("kannst");
+  });
+
   it("does NOT match Windows-style backslash paths", () => {
     const result = run("see src\\foo\\bar.ts for context");
     const path = result.anchors.find((a) => a.kind === "path");

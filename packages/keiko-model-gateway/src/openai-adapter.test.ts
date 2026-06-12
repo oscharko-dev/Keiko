@@ -288,7 +288,7 @@ describe("OpenAiAdapter.call", () => {
       const raw = init?.body;
       sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
       return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+        jsonResponse({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }),
       );
     });
     await adapter.call(
@@ -313,11 +313,48 @@ describe("OpenAiAdapter.call", () => {
       const raw = init?.body;
       sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
       return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+        jsonResponse({ choices: [{ message: { content: "seeded" }, finish_reason: "stop" }] }),
       );
     });
     await adapter.call({ ...REQUEST, seed: 13 }, CONFIG);
     expect((sentBody as { seed?: number }).seed).toBe(13);
+  });
+
+  it("normalises assistant text-part arrays from OpenAI-compatible providers", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: [
+                  { type: "text", text: "Hello " },
+                  { type: "text", text: "from parts" },
+                ],
+              },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await adapter.call(REQUEST, CONFIG);
+
+    expect(result.content).toBe("Hello from parts");
+  });
+
+  it("rejects an empty assistant response instead of normalising it to success", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content: "" }, finish_reason: "stop" }],
+        }),
+      ),
+    );
+
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ProviderError);
   });
 
   it("serialises assistant tool_calls and tool response tool_call_id on continuation turns", async () => {
@@ -425,12 +462,40 @@ describe("OpenAiAdapter.callStream", () => {
     const adapter = adapterWith((_url, init) => {
       const raw = init?.body;
       sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
-      return Promise.resolve(sseResponse(["data: [DONE]\n"]));
+      return Promise.resolve(sseResponse([deltaLine("ok"), "data: [DONE]\n"]));
     });
     await collectStream(adapter.callStream(REQUEST, CONFIG));
     const body = sentBody as { stream?: boolean; stream_options?: { include_usage?: boolean } };
     expect(body.stream).toBe(true);
     expect(body.stream_options?.include_usage).toBe(true);
+  });
+
+  it("yields text from streamed content-part arrays", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        sseResponse([
+          `data: ${JSON.stringify({
+            choices: [{ delta: { content: [{ type: "text", text: "part" }] } }],
+          })}\n`,
+          "data: [DONE]\n",
+        ]),
+      ),
+    );
+
+    const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+
+    expect(chunks[0]).toEqual({ type: "delta", token: "part" });
+    const done = chunks[1];
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.content).toBe("part");
+  });
+
+  it("rejects a stream that finishes without assistant content", async () => {
+    const adapter = adapterWith(() => Promise.resolve(sseResponse(["data: [DONE]\n"])));
+
+    await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
+      ProviderError,
+    );
   });
 
   it("redacts a configured secret leaked inside a streamed delta token", async () => {

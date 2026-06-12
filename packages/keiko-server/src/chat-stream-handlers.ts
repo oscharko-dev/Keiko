@@ -87,7 +87,7 @@ async function persistStreamedTurn(
   userMessage: ChatMessage,
 ): Promise<Record<string, unknown>> {
   const redactedContent = deps.redactor(turn.response.content) as string;
-  const assistantMessage = createAssistantMessage(deps, request, redactedContent);
+  const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
   const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
     deps,
     request,
