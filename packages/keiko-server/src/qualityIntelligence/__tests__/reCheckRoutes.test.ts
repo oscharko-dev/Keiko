@@ -793,6 +793,11 @@ describe("handleQiRegenerateStale — no stale candidates still materialises a n
     expect(JSON.stringify(loadQualityIntelligenceCandidates(runId, { evidenceDir }))).toBe(
       beforeArtifact,
     );
+    const newManifest = loadQualityIntelligenceRun(body.runId, { evidenceDir });
+    expect(newManifest?.runId).toBe(body.runId);
+    expect(newManifest?.status).toBe("succeeded");
+    expect(newManifest?.totals.candidates).toBe(2);
+    expect(listQualityIntelligenceRuns({ evidenceDir })).toContain(body.runId);
     const artifact = loadQualityIntelligenceCandidates(body.runId, { evidenceDir });
     expect(artifact?.candidates.map((candidate) => candidate.id).sort()).toEqual([
       "cand-no-stale-login",
