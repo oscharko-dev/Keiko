@@ -10,9 +10,13 @@
 // artifact is loadable. The serializers are deterministic and formula-injection safe.
 
 import type { IncomingMessage } from "node:http";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
+  appendQualityIntelligenceExportRow,
   loadQualityIntelligenceCandidates,
   loadQualityIntelligenceRun,
+  type QualityIntelligenceExportRow,
+  type QualityIntelligenceTraceabilityExportMode,
 } from "@oscharko-dev/keiko-evidence";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
@@ -106,6 +110,32 @@ function candidateTitlesFor(id: string, evidenceDir: string): ReadonlyMap<string
   return titles;
 }
 
+/**
+ * Best-effort append of an export-evidence row after a successful traceability matrix download
+ * (Epic #734, Issue #740). A failed audit write must NOT withhold the already-computed body from
+ * the caller: the matrix is deterministic, has no external side effect, and the manifest write is
+ * atomic so failures are rare. Swallow on failure rather than turning a 200 into a 500.
+ */
+function recordTraceabilityExportEvidence(
+  id: string,
+  target: QualityIntelligenceTraceabilityExportMode,
+  body: string,
+  evidenceDir: string,
+): void {
+  const row: QualityIntelligenceExportRow = {
+    id: `qi-export-${sha256Hex(`${id}|${target}`).slice(0, 24)}`,
+    targetAdapter: target,
+    integrityHash: sha256Hex(body),
+    redactionAttested: true,
+    dryRun: false,
+  };
+  try {
+    appendQualityIntelligenceExportRow({ runId: id, export: row }, { evidenceDir });
+  } catch {
+    // intentionally swallowed — see doc comment
+  }
+}
+
 export async function handleQiTraceabilityExport(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -140,6 +170,11 @@ export async function handleQiTraceabilityExport(
     format === "markdown"
       ? QualityIntelligenceExport.adaptToTraceabilityMarkdown(rows, display)
       : QualityIntelligenceExport.adaptToTraceabilityCsv(rows, display);
+  const target: QualityIntelligenceTraceabilityExportMode =
+    format === "markdown" ? "traceability-markdown" : "traceability-csv";
+  // Emit audit evidence for the materialised download (Epic #734, Issue #740). Best-effort: see
+  // recordTraceabilityExportEvidence for the swallow rationale.
+  recordTraceabilityExportEvidence(id, target, body, evidenceDir);
   const meta = FORMAT_META[format];
   return {
     status: 200,
