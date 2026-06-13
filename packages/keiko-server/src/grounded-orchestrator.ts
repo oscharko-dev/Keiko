@@ -652,6 +652,20 @@ function projectMetadataQueryFingerprint(query: RetrievalQuery): string {
     .slice(0, 16);
 }
 
+function selectedFileQueryFingerprint(query: RetrievalQuery): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind: "explicit-selected-file",
+        queryKind: query.kind,
+        text: query.text,
+        caseSensitive: query.caseSensitive,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 16);
+}
+
 function wantsProjectMetadata(queryText: string): boolean {
   const lowered = queryText.toLowerCase();
   return PROJECT_METADATA_QUERY_TERMS.some((term) => lowered.includes(term));
@@ -701,7 +715,41 @@ function metadataAtom(
   };
 }
 
-function fileExistsInSearchScope(searchScope: SearchScope, fs: WorkspaceFs, scopePath: string): boolean {
+function selectedFileAtom(
+  scope: SelectedScope,
+  scopePath: string,
+  queryFingerprint: string,
+  nowMs: () => number,
+): EvidenceAtom {
+  return {
+    schemaVersion: scope.schemaVersion,
+    stableId: evidenceAtomStableId({
+      scopeId: scope.scopeId,
+      scopePath,
+      lineRange: undefined,
+      provenanceKind: "file-listing",
+      provenanceTool: "repo.selectedFile",
+      queryFingerprint,
+    }),
+    scopePath,
+    lineRange: undefined,
+    score: 1,
+    provenance: {
+      kind: "file-listing",
+      tool: "repo.selectedFile",
+      queryFingerprint,
+    },
+    redactionState: "redacted",
+    emittedAtMs: nowMs(),
+    ledgerRef: undefined,
+  };
+}
+
+function fileExistsInSearchScope(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+): boolean {
   try {
     const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
     const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
@@ -709,6 +757,34 @@ function fileExistsInSearchScope(searchScope: SearchScope, fs: WorkspaceFs, scop
   } catch {
     return false;
   }
+}
+
+function selectedFileScopeAtoms(
+  input: OrchestratorInput,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+): readonly EvidenceAtom[] {
+  if (input.scope.explicitConnection !== true || input.scope.kind !== "files") {
+    return [];
+  }
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  const queryFingerprint = selectedFileQueryFingerprint(input.query);
+  for (const entry of input.scope.relativePaths) {
+    if (!isValidScopePath(entry, { mustBeRelative: true })) {
+      continue;
+    }
+    const scopePath = entry.replace(/\\/gu, "/");
+    if (seen.has(scopePath)) {
+      continue;
+    }
+    seen.add(scopePath);
+    if (fileExistsInSearchScope(searchScope, fs, scopePath)) {
+      atoms.push(selectedFileAtom(input.scope, scopePath, queryFingerprint, nowMs));
+    }
+  }
+  return atoms;
 }
 
 function projectMetadataAtoms(
@@ -749,6 +825,19 @@ function withProjectMetadataAtoms(
   return metadataAtoms.length === 0
     ? rings
     : { ...rings, atoms: [...rings.atoms, ...metadataAtoms] };
+}
+
+function withExplicitScopeAtoms(
+  rings: RingRunSummary,
+  input: OrchestratorInput,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+): RingRunSummary {
+  const selectedAtoms = selectedFileScopeAtoms(input, searchScope, fs, nowMs);
+  return selectedAtoms.length === 0
+    ? rings
+    : { ...rings, atoms: [...selectedAtoms, ...rings.atoms] };
 }
 
 function queryTerms(queryText: string, anchors: readonly SearchAnchor[]): readonly string[] {
@@ -1249,6 +1338,9 @@ async function assemblePackFromReads({
   cacheIdentity,
   assembleOptions,
 }: FinalContextPackInputs): Promise<ConnectedContextPack> {
+  const needsNoEvidenceMarker =
+    excerptReads.excerpts.size === 0 &&
+    !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence");
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
@@ -1264,6 +1356,7 @@ async function assemblePackFromReads({
         ...rings.uncertainty,
         ...excerptReads.uncertainty,
         ...prepared.evidenceUncertainty,
+        ...(needsNoEvidenceMarker ? [noEvidence(assembleOptions.nowMs())] : []),
       ],
     },
     assembleOptions,
@@ -1280,7 +1373,8 @@ async function assembleGroundedPack({
   fs,
   nowMs,
 }: AssembleGroundedPackInputs): Promise<ConnectedContextPack> {
-  const augmentedRings = withProjectMetadataAtoms(rings, input, searchScope, fs, nowMs);
+  const scopedRings = withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs);
+  const augmentedRings = withProjectMetadataAtoms(scopedRings, input, searchScope, fs, nowMs);
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
   const cacheIdentity =
     deps.microIndex === undefined
