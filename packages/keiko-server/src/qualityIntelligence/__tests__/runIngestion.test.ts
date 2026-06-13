@@ -1400,6 +1400,145 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
       rmSync(fileDir, { recursive: true, force: true });
     }
   });
+
+  // Mutation caught: stamping a source's atom with a SIBLING envelope's id (a permutation the
+  // existing membership-only test cannot detect), or miscounting per-source atomCount for a
+  // multi-doc capsule. The content markers are ALL-CAPS, space-free, and redaction-safe so they
+  // survive the redact() pass byte-for-byte.
+  it("binds each source kind's content to its own envelope and reports per-source atomCount (mutation-proof attribution)", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-732-ws-"));
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-732-file-"));
+    try {
+      // Single-sentence .md → split.length <= 1 → workspaceAtom fallback → exactly 1 atom.
+      writeFileSync(
+        join(wsDir, "login.md"),
+        "The WORKSPACEONLYMARKER login screen shall validate credentials.",
+        "utf8",
+      );
+      const filePath = join(fileDir, "transfer.md");
+      writeFileSync(filePath, "The FILEONLYMARKER transfer shall enforce the daily limit.", "utf8");
+      const capsuleDocs = [
+        { documentId: "cap-doc-1", text: "The CAPSULEONLYMARKER policy governs session expiry." },
+        { documentId: "cap-doc-2", text: "The CAPSULEONLYMARKER rule requires two-factor login." },
+      ] as const;
+
+      const result = ingest(
+        inputWithResolver(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            capsuleSource("PolicyCap", "cap-policy"),
+          ],
+          () => capsuleDocs,
+        ),
+      );
+
+      // (1) Three sources → three envelopes in source order.
+      expect(result.envelopes.length).toBe(3);
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file", "capsule"]);
+      expect(result.envelopes.map((e) => e.provenance.origin)).toEqual([
+        "workspace",
+        "file",
+        "local-knowledge-capsule:cap-policy",
+      ]);
+
+      // (2) Per-source atomCount must be [1, 1, 2] and the sum must match ingestedAtoms.length.
+      expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([1, 1, 2]);
+      expect(result.ingestedAtoms.length).toBe(
+        result.sourceSummaries.reduce((sum, s) => sum + s.atomCount, 0),
+      );
+
+      // (3) Content↔envelope cross-wire guard: each envelope's atoms must contain ONLY its own
+      // marker and must not contain any sibling marker.
+      const wsEnv = result.envelopes[0];
+      const fileEnv = result.envelopes[1];
+      const capEnv = result.envelopes[2];
+      expect(wsEnv).toBeDefined();
+      expect(fileEnv).toBeDefined();
+      expect(capEnv).toBeDefined();
+
+      const atomsFor = (envId: unknown): readonly string[] =>
+        result.ingestedAtoms
+          .filter((a) => String(a.atom.sourceEnvelopeId) === String(envId))
+          .map((a) => a.canonicalText);
+
+      const wsTexts = atomsFor(wsEnv?.id);
+      expect(wsTexts.length).toBe(1);
+      expect(wsTexts.every((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(true);
+      expect(wsTexts.some((t) => t.includes("FILEONLYMARKER"))).toBe(false);
+      expect(wsTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
+
+      const fileTexts = atomsFor(fileEnv?.id);
+      expect(fileTexts.length).toBe(1);
+      expect(fileTexts.every((t) => t.includes("FILEONLYMARKER"))).toBe(true);
+      expect(fileTexts.some((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(false);
+      expect(fileTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
+
+      const capTexts = atomsFor(capEnv?.id);
+      expect(capTexts.length).toBe(2);
+      expect(capTexts.every((t) => t.includes("CAPSULEONLYMARKER"))).toBe(true);
+      expect(capTexts.some((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(false);
+      expect(capTexts.some((t) => t.includes("FILEONLYMARKER"))).toBe(false);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+  });
+
+  // Mutation caught: a failing connected source throwing instead of being skipped (ingest would
+  // throw rather than succeed), or the skipped source still emitting an envelope (envelopes.length
+  // would be 3 instead of 2).
+  it("keeps the healthy kinds attributable when one connected kind is unavailable", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-732-skip-ws-"));
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-732-skip-file-"));
+    try {
+      writeFileSync(
+        join(wsDir, "login.md"),
+        "The WORKSPACEONLYMARKER login screen shall validate credentials.",
+        "utf8",
+      );
+      const filePath = join(fileDir, "transfer.md");
+      writeFileSync(filePath, "The FILEONLYMARKER transfer shall enforce the daily limit.", "utf8");
+
+      // capsule resolver returns [] → QI_CAPSULE_UNAVAILABLE for that source only.
+      const result = ingest(
+        inputWithResolver(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            capsuleSource("Cap", "cap-unavail"),
+          ],
+          () => [],
+        ),
+      );
+
+      // (1) Run succeeds; healthy sources produced atoms.
+      expect(result.ingestedAtoms.length).toBeGreaterThanOrEqual(2);
+
+      // (2) Only the two healthy sources have envelopes.
+      expect(result.envelopes.length).toBe(2);
+      expect(result.envelopes.map((e) => e.provenance.origin)).toEqual(["workspace", "file"]);
+
+      // (3) Every atom's envelopeId ∈ the 2-envelope set, and both are cited.
+      const envelopeIds = new Set(result.envelopes.map((e) => String(e.id)));
+      for (const a of result.ingestedAtoms) {
+        expect(envelopeIds.has(String(a.atom.sourceEnvelopeId))).toBe(true);
+      }
+      const cited = new Set(result.ingestedAtoms.map((a) => String(a.atom.sourceEnvelopeId)));
+      expect(cited.size).toBe(2);
+
+      // (4) The capsule appears in skippedSources with the right kind and code.
+      expect(result.skippedSources.length).toBe(1);
+      expect(result.skippedSources[0]?.kind).toBe("capsule");
+      expect(result.skippedSources[0]?.code).toBe("QI_CAPSULE_UNAVAILABLE");
+
+      // (5) sourceSummaries only tracks the ingested sources.
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file"]);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Capsule / capsule-set byte-budget at n > 1 (Issue #730 byte containment) ──────────────────
