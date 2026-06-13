@@ -94,6 +94,8 @@ interface ClassifyContext {
     string,
     { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }
   >;
+  readonly oldAtomIdsByEnvelope: ReadonlyMap<string, readonly string[]>;
+  readonly currentAtomIdsByEnvelope: ReadonlyMap<string, readonly string[]>;
 }
 
 const UNKNOWN_ENVELOPE = "unknown";
@@ -114,7 +116,10 @@ function buildAtomFingerprintMap(
       }[]
     | undefined,
 ): ReadonlyMap<string, { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }> {
-  const map = new Map<string, { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }>();
+  const map = new Map<
+    string,
+    { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }
+  >();
   for (const fp of fingerprints ?? []) {
     map.set(fp.atomId, {
       envelopeId: fp.envelopeId,
@@ -124,17 +129,47 @@ function buildAtomFingerprintMap(
   return map;
 }
 
+function buildAtomIdsByEnvelope(
+  fingerprints:
+    | readonly {
+        atomId: string;
+        envelopeId: string;
+        canonicalHashSha256Hex: string;
+      }[]
+    | undefined,
+): ReadonlyMap<string, readonly string[]> {
+  const map = new Map<string, string[]>();
+  for (const fp of fingerprints ?? []) {
+    const current = map.get(fp.envelopeId);
+    if (current === undefined) {
+      map.set(fp.envelopeId, [fp.atomId]);
+    } else {
+      current.push(fp.atomId);
+    }
+  }
+  return map;
+}
+
 function classifyMissingCurrentAtom(
   candidateId: string,
+  atomId: string,
   envelopeId: string,
   ctx: ClassifyContext,
 ): StalenessReason {
   if (!ctx.currentMap.has(envelopeId)) {
     return staleReason(candidateId, "source-removed", envelopeId);
   }
-  return envelopeId.startsWith(REQUIREMENTS_ENVELOPE_PREFIX)
-    ? staleReason(candidateId, "source-changed", envelopeId)
-    : staleReason(candidateId, "source-removed", envelopeId);
+  if (!envelopeId.startsWith(REQUIREMENTS_ENVELOPE_PREFIX)) {
+    return staleReason(candidateId, "source-removed", envelopeId);
+  }
+  const oldAtomIds = ctx.oldAtomIdsByEnvelope.get(envelopeId) ?? [];
+  const currentAtomIds = ctx.currentAtomIdsByEnvelope.get(envelopeId) ?? [];
+  const oldIndex = oldAtomIds.indexOf(atomId);
+  const currentAtomAtSamePosition = oldIndex >= 0 ? currentAtomIds[oldIndex] : undefined;
+  if (currentAtomAtSamePosition !== undefined && !ctx.oldAtoms.has(currentAtomAtSamePosition)) {
+    return staleReason(candidateId, "source-changed", envelopeId);
+  }
+  return staleReason(candidateId, "source-removed", envelopeId);
 }
 
 function classifyCandidateWithAtomFingerprints(
@@ -157,7 +192,12 @@ function classifyCandidateWithAtomFingerprints(
       }
       continue;
     }
-    const missingCurrentAtomReason = classifyMissingCurrentAtom(candidate.id, oldAtom.envelopeId, ctx);
+    const missingCurrentAtomReason = classifyMissingCurrentAtom(
+      candidate.id,
+      atomId,
+      oldAtom.envelopeId,
+      ctx,
+    );
     if (missingCurrentAtomReason.reason === "source-changed") {
       changedEnvelopeId ??= oldAtom.envelopeId;
       continue;
@@ -211,7 +251,8 @@ function classifyCandidate(
   ctx: ClassifyContext,
 ): StalenessReason | null {
   const hasAtomMetadata =
-    ctx.oldAtoms.size > 0 && candidate.derivedFromAtomIds.every((atomId) => ctx.oldAtoms.has(atomId));
+    ctx.oldAtoms.size > 0 &&
+    candidate.derivedFromAtomIds.every((atomId) => ctx.oldAtoms.has(atomId));
   if (hasAtomMetadata) {
     return classifyCandidateWithAtomFingerprints(candidate, ctx);
   }
@@ -221,7 +262,11 @@ function classifyCandidate(
   if (candidate.derivedFromAtomIds.some((atomId) => !ctx.atomToEnvelope.has(atomId))) {
     return staleReason(candidate.id, "source-changed", UNKNOWN_ENVELOPE);
   }
-  return classifyEnvelopeLevelCandidate(candidate.id, orderedCandidateEnvelopeIds(candidate, ctx), ctx);
+  return classifyEnvelopeLevelCandidate(
+    candidate.id,
+    orderedCandidateEnvelopeIds(candidate, ctx),
+    ctx,
+  );
 }
 
 /**
@@ -236,6 +281,8 @@ export function compareStaleness(args: CompareStalenessArgs): StalenessResult {
     envelopeOrder: envelopeOrderOf(args.evidenceRefs),
     oldAtoms: buildAtomFingerprintMap(args.oldAtomFingerprints),
     currentAtoms: buildAtomFingerprintMap(args.currentAtomFingerprints),
+    oldAtomIdsByEnvelope: buildAtomIdsByEnvelope(args.oldAtomFingerprints),
+    currentAtomIdsByEnvelope: buildAtomIdsByEnvelope(args.currentAtomFingerprints),
   };
 
   const fresh: string[] = [];

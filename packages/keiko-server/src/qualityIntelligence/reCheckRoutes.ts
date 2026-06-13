@@ -426,8 +426,14 @@ function buildDriftStaleness(
   oldCandidates: readonly QualityIntelligenceCandidateRow[],
   ingestion: QiIngestion,
 ): ReturnType<typeof compareStaleness> {
+  const oldAtomFingerprints = manifest.atomFingerprints;
+  const oldFingerprints =
+    oldAtomFingerprints === undefined ? Object.freeze([]) : (manifest.sourceFingerprints ?? []);
   return compareStaleness({
-    oldFingerprints: manifest.sourceFingerprints ?? [],
+    // Newer runs persist atom fingerprints, which are required for exact per-test drift. Older
+    // source-only manifests cannot safely distinguish an unchanged workspace path set from edited
+    // file content, so fail closed instead of reporting "fresh" from envelope fingerprints alone.
+    oldFingerprints,
     evidenceRefs: manifest.evidenceRefs.map((ref) => ({
       envelopeId: ref.envelopeId,
       atomId: ref.atomId,
@@ -438,9 +444,7 @@ function buildDriftStaleness(
     })),
     currentFingerprints: mapCurrentSourceFingerprints(ingestion),
     currentAtomFingerprints: mapCurrentAtomFingerprints(ingestion.ingestedAtoms),
-    ...(manifest.atomFingerprints !== undefined
-      ? { oldAtomFingerprints: manifest.atomFingerprints }
-      : {}),
+    ...(oldAtomFingerprints !== undefined ? { oldAtomFingerprints } : {}),
   });
 }
 

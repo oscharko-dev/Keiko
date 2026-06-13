@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
+import { envelopeIdFor, ingestInlineSources, QiIngestionError } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
@@ -1699,5 +1699,53 @@ describe("ingestInlineSources — AC3 Chat-parity source cap (Issue #730)", () =
     expect(result.sourceSummaries.length).toBe(cap);
     // Exactly 1 dropped — mutation check: a cap of `cap+1` would give droppedSourceCount=0.
     expect(result.droppedSourceCount).toBe(1);
+  });
+});
+
+// ─── Envelope-id pre-image injectivity (pipe-injection hardening, #732 security follow-up) ──────
+//
+// envelopeIdFor hashes "qi-src-v1|<index>|<label>|<content>"; label and content are
+// user/path-controlled. escapeEnvelopeField escapes "\" then "|" in each field so a value can never
+// inject a raw delimiter and shift a field boundary — making the pre-image injective regardless of
+// field order. Clean values (no "\" or "|") are unchanged, so their envelope ids stay byte-stable.
+
+describe("envelopeIdFor — injective pre-image (pipe-injection hardening)", () => {
+  it("gives distinct ids to label/content splits that share the same raw bytes", () => {
+    // Same index; ("x|a","b") vs ("x","a|b") both flatten to the bytes "x|a|b". Without field
+    // escaping both hash "qi-src-v1|0|x|a|b" and collide; escaping keeps the two ids distinct.
+    expect(String(envelopeIdFor(0, "x|a", "b"))).not.toBe(String(envelopeIdFor(0, "x", "a|b")));
+  });
+
+  it("escapes the backslash too, so a trailing backslash cannot fake an escaped delimiter", () => {
+    expect(String(envelopeIdFor(0, "a\\", "b"))).not.toBe(String(envelopeIdFor(0, "a", "\\b")));
+  });
+
+  it("keeps clean labels/content byte-identical to the unescaped pre-image (behavior-preserving)", () => {
+    // Clean inputs must keep their existing envelope id so persisted runs and the atom ids derived
+    // from the envelope id are unchanged after this hardening.
+    const expected = `qi-src-${sha256Hex("qi-src-v1|0|Doc|src/app.ts").slice(0, 24)}`;
+    expect(String(envelopeIdFor(0, "Doc", "src/app.ts"))).toBe(expected);
+  });
+
+  it("is deterministic for identical inputs", () => {
+    const first = String(envelopeIdFor(2, "Spec", "key-1"));
+    const second = String(envelopeIdFor(2, "Spec", "key-1"));
+    expect(first).toBe(second);
+  });
+
+  it("ingests pipe-bearing-label sources with distinct envelopes and correct attribution", () => {
+    const docs = [{ documentId: "d1", text: "The system shall log audit events." }];
+    const result = ingest(
+      inputWithResolver(
+        [capsuleSource("Cap|One", "cap-a"), capsuleSource("Cap|Two", "cap-b")],
+        (_id: string): readonly { documentId: string; text: string }[] => docs,
+      ),
+    );
+    expect(result.envelopes.length).toBe(2);
+    const ids = new Set(result.envelopes.map((e) => String(e.id)));
+    expect(ids.size).toBe(2);
+    for (const atom of result.ingestedAtoms) {
+      expect(ids.has(String(atom.atom.sourceEnvelopeId))).toBe(true);
+    }
   });
 });
