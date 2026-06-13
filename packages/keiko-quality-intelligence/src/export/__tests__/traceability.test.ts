@@ -242,13 +242,9 @@ describe("T1: embedded newline in title/excerpt renders as single physical line"
     const out = adaptToTraceabilityMarkdown([r], { candidateTitleById: titleMap });
     const reverseIdx = out.indexOf("## Tests → Requirements");
     const reverseSection = out.slice(reverseIdx);
-    // Each pipe-delimited row must fit on exactly one line (no bare \n inside a row)
-    const reverseLines = reverseSection.split("\n").filter((l) => l.startsWith("|"));
-    for (const line of reverseLines) {
-      expect(line).not.toContain("\n");
-    }
-    // The folded content (space instead of \n) is present
-    expect(reverseSection).toContain("Line one Line two");
+    // The whole reverse row — including the folded title — stays on one physical line; an
+    // unfolded "\n" would split it and this exact single-line row would be absent.
+    expect(reverseSection).toContain("| tc-1 | Line one Line two | atom-1 | 1 |");
   });
 
   it("Markdown: requirementExcerptRedacted with \\n stays on one physical line", () => {
