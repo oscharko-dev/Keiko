@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="packages/keiko-ui/public/assets/keiko-logo.svg" alt="Keiko logo" width="144" />
+  <img src="https://raw.githubusercontent.com/oscharko-dev/Keiko/release/0.2.0/packages/keiko-ui/public/keiko-logo.svg" alt="Keiko logo" width="144" />
 </p>
 
 <h1 align="center">Keiko</h1>
@@ -273,6 +273,10 @@ Environment variables can override file values:
 | `KEIKO_MODEL_<ID>_API_KEY_HEADER_NAME` | Per-model credential header name. |
 | `KEIKO_UI_PORT`                        | Local UI port override.           |
 
+`KEIKO_*` runtime variables are read from the process environment only. `keiko ui` does not
+import them automatically from a repository-local `.env`; use an explicit shell export, process
+env-file launch, `--config`, or the first-run setup flow.
+
 Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, and `api-key`.
 
 Do not commit gateway config files, API tokens, `.keiko/`, or evidence that contains project-specific review material unless your process explicitly requires it.
@@ -315,17 +319,17 @@ The effective limits at runtime are visible via `GET /api/config` as `effectiveG
 
 The Figma connector needs exactly one credential: a read-only personal access token (scopes `file_read` / `files:read`).
 
-| Variable                             | Purpose                                                                                                                                                                                                            | Default |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `FIGMA_ACCESS_TOKEN`                 | Read-only Figma PAT. Loaded from the local `.env` (the only non-`KEIKO_*` name the loader imports) or the process environment; consumed server-side only, never sent to the browser, never persisted in snapshots. | —       |
-| `KEIKO_FIGMA_KEY`                    | Override for the encrypted vault key name used to store the PAT.                                                                                                                                                   | —       |
-| `KEIKO_FIGMA_PAGE_DEPTH`             | Per-screen BFS discovery depth of the scoped deep fetch.                                                                                                                                                           | 8       |
-| `KEIKO_FIGMA_MAX_NODES_PER_SCREEN`   | Node budget per screen before the branch stays shallow.                                                                                                                                                            | 10000   |
-| `KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN` | Scoped API fetch budget per screen.                                                                                                                                                                                | 32      |
-| `KEIKO_FIGMA_MAX_SCREENS_DEEP`       | Maximum screens that are deep-fetched per snapshot.                                                                                                                                                                | 80      |
-| `KEIKO_FIGMA_FETCH_CONCURRENCY`      | Concurrent Figma API fetches during the snapshot build.                                                                                                                                                            | 3       |
-| `KEIKO_FIGMA_REQUEST_TIMEOUT_MS`     | Per-request timeout for Figma API and render downloads.                                                                                                                                                            | 60000   |
-| `KEIKO_FIGMA_BUILD_DEADLINE_MS`      | Total wall-clock deadline for one snapshot build (HTTP 504 `FIGMA_BUILD_TIMEOUT` when exceeded).                                                                                                                   | 600000  |
+| Variable                             | Purpose                                                                                                                                                                                                                   | Default |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `FIGMA_ACCESS_TOKEN`                 | Read-only Figma PAT. Loaded from the local `.env` (the only name the UI imports from a repo-local `.env`) or the process environment; consumed server-side only, never sent to the browser, never persisted in snapshots. | —       |
+| `KEIKO_FIGMA_KEY`                    | Override for the encrypted vault key name used to store the PAT.                                                                                                                                                          | —       |
+| `KEIKO_FIGMA_PAGE_DEPTH`             | Per-screen BFS discovery depth of the scoped deep fetch.                                                                                                                                                                  | 8       |
+| `KEIKO_FIGMA_MAX_NODES_PER_SCREEN`   | Node budget per screen before the branch stays shallow.                                                                                                                                                                   | 10000   |
+| `KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN` | Scoped API fetch budget per screen.                                                                                                                                                                                       | 32      |
+| `KEIKO_FIGMA_MAX_SCREENS_DEEP`       | Maximum screens that are deep-fetched per snapshot.                                                                                                                                                                       | 80      |
+| `KEIKO_FIGMA_FETCH_CONCURRENCY`      | Concurrent Figma API fetches during the snapshot build.                                                                                                                                                                   | 3       |
+| `KEIKO_FIGMA_REQUEST_TIMEOUT_MS`     | Per-request timeout for Figma API and render downloads.                                                                                                                                                                   | 60000   |
+| `KEIKO_FIGMA_BUILD_DEADLINE_MS`      | Total wall-clock deadline for one snapshot build (HTTP 504 `FIGMA_BUILD_TIMEOUT` when exceeded).                                                                                                                          | 600000  |
 
 Figma is contacted only during the bounded snapshot build (scoped node fetch + screen render); every downstream stage — Quality Intelligence test generation, the accessibility baseline, design-to-code — reads the stored immutable snapshot. Re-snapshot is an explicit full re-fetch. Concurrent snapshot requests for the same board coalesce into one build. Budget caps surface as coverage notices in the snapshot summary, never as silent truncation. Failures are coded (`FIGMA_RATE_LIMITED`, `FIGMA_NETWORK_UNREACHABLE`, `FIGMA_EGRESS_TIMEOUT`, `FIGMA_TLS_CA_FAILURE`, `FIGMA_PROXY_*` — proxy codes appear only when a proxy is actually configured) and content-free: no URL, host, or token material ever appears in an error.
 

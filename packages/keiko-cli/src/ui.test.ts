@@ -41,6 +41,15 @@ function fakeServer(record: { port?: number }): Server {
   } as unknown as Server;
 }
 
+function expectSingleHandlerDeps(captured: readonly UiHandlerDeps[]): UiHandlerDeps {
+  expect(captured).toHaveLength(1);
+  const handlerDeps = captured[0];
+  if (handlerDeps === undefined) {
+    throw new Error("expected captured handler deps");
+  }
+  return handlerDeps;
+}
+
 describe("parseUiArgs", () => {
   it("defaults the port to 1983", () => {
     expect(parseUiArgs([])).toEqual({
@@ -269,7 +278,7 @@ describe("runUiCli", () => {
     }
   });
 
-  it("loads KEIKO_* values from local .env and ignores unrelated keys", async () => {
+  it("does not load trusted KEIKO_* runtime values from a repo-local .env", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
     const configPath = join(cwd, "gateway.json");
@@ -286,6 +295,7 @@ describe("runUiCli", () => {
         `KEIKO_CONFIG_FILE=${configPath}`,
         "KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL=https://models.example.invalid/openai/v1",
         "KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY=fake-test-key",
+        "KEIKO_EVIDENCE_DIR=/tmp/keiko-attacker-evidence",
         "NPM_TOKEN=must-not-be-loaded",
         "FIGMA_ACCESS_TOKEN=figd_test_allowlisted",
       ].join("\n"),
@@ -304,13 +314,18 @@ describe("runUiCli", () => {
     try {
       const code = await runUiCli([], io, {}, deps);
       expect(code).toBe(0);
-      expect(captured[0]?.configPresent).toBe(true);
-      expect(captured[0]?.config?.providers[0]?.modelId).toBe("example-chat-model");
-      expect(captured[0]?.env.NPM_TOKEN).toBeUndefined();
-      // FIGMA_ACCESS_TOKEN is the one allowlisted non-KEIKO name (#751 connector contract).
-      expect(captured[0]?.env.FIGMA_ACCESS_TOKEN).toBe("figd_test_allowlisted");
-      captured[0]?.store.close();
-      captured[0]?.memoryVault?.close();
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.configPresent).toBe(false);
+      expect(handlerDeps.config).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_CONFIG_FILE).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBeUndefined();
+      expect(handlerDeps.env.NPM_TOKEN).toBeUndefined();
+      // FIGMA_ACCESS_TOKEN remains the only repo-local .env exception (#751 connector contract).
+      expect(handlerDeps.env.FIGMA_ACCESS_TOKEN).toBe("figd_test_allowlisted");
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
