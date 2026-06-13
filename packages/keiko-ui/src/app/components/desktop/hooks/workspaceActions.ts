@@ -691,7 +691,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       if (w === undefined || w.type !== "connector") continue;
       if (w.cfg["selectedKind"] !== selectedKind) continue;
       const selectedId = w.cfg["selectedId"];
-      if (typeof selectedId !== "string" || selectedId.length === 0) continue;
+      // Skip a missing, empty, OR whitespace-only selectedId. The server trims before validating and
+      // rejects a blank capsule id with QI_BAD_REQUEST (400); treating a whitespace-only id as "no
+      // selection" here keeps the binding a silent skip (parity with the server guard) instead of
+      // surfacing an unhelpful 400 on Generate.
+      if (typeof selectedId !== "string" || selectedId.trim().length === 0) continue;
       if (seen.has(selectedId)) continue;
       seen.add(selectedId);
       ids.push(selectedId);

@@ -481,6 +481,19 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
   });
 
+  it("excludes a connector with a whitespace-only selectedId (parity with the server's trim guard)", () => {
+    // A blank id would reach the server and be rejected with a QI_BAD_REQUEST 400; the reader treats
+    // it as "no selection" and skips it so Generate never sends an unusable capsule source.
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "   " }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
   it("deduplicates the same capsuleId from two connectors", () => {
     const { linkedConnectorCapsuleIds } = makeConnectHarness(
       [
@@ -499,6 +512,25 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
       [conn("quality", "files-1")],
     );
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
+  it("caps the capsule list at MAX_SCOPES when more than 16 capsule connectors are bound", () => {
+    // The reader caps at MAX_SCOPES so the QI Generate request never exceeds the server's source
+    // limit (mirrors the linkedAllFilesRoots cap). Without this test an off-by-one regression in the
+    // `ids.length >= MAX_SCOPES` break would silently let 17+ capsule sources through.
+    const connectors = Array.from({ length: 20 }, (_unused, i) =>
+      win(
+        "connector",
+        { selectedKind: "capsule", selectedId: `cap-${String(i)}` },
+        `conn-${String(i)}`,
+      ),
+    );
+    const conns = connectors.map((w) => conn("quality", w.id));
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...connectors],
+      conns,
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toHaveLength(MAX_SCOPES);
   });
 });
 
@@ -536,6 +568,52 @@ describe("linkedConnectorCapsuleSetIds (Epic #710 #718)", () => {
       [conn("quality", "conn-1"), conn("quality", "conn-2"), conn("quality", "conn-3")],
     );
     expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-1", "set-2"]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-xyz" }, "conn-1"),
+      ],
+      [conn("conn-1", "quality")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-xyz"]);
+  });
+
+  it("excludes a connector with an empty selectedId", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("ignores connections to non-connector windows", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", { resolvedRoot: "/data" }, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("caps the capsule-set list at MAX_SCOPES when more than 16 capsule-set connectors are bound", () => {
+    const connectors = Array.from({ length: 20 }, (_unused, i) =>
+      win(
+        "connector",
+        { selectedKind: "capsule-set", selectedId: `set-${String(i)}` },
+        `conn-${String(i)}`,
+      ),
+    );
+    const conns = connectors.map((w) => conn("quality", w.id));
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...connectors],
+      conns,
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toHaveLength(MAX_SCOPES);
   });
 });
 
@@ -911,6 +989,37 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     harness.confirmConnect("chat-1", evt);
     await flushAsyncBind();
     expect(store.conns).toHaveLength(0);
+  });
+
+  it("draws a quality↔connector edge WITHOUT firing the chat onConnectorBind callback (#710 #718)", async () => {
+    // The QI hub reads a connected connector's capsule per-render (linkedConnectorCapsuleIds); it must
+    // NOT go through the chat localKnowledgeScopes bind path. connectorChatBind requires one side to be
+    // a chat window, so for a quality↔connector pair it returns null, chatWindowId stays null, and
+    // onConnectorBind is never invoked — yet the relationship edge is still drawn so the reader sees it.
+    const store = { conns: [] as Connection[] };
+    let connectorBindCalls = 0;
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality-1"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-abc" }, "conn-1"),
+      ],
+      [],
+      {
+        connecting: { from: "quality-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => {
+          connectorBindCalls += 1;
+          return true;
+        },
+      },
+    );
+    harness.confirmConnect("conn-1", evt);
+    await flushAsyncBind();
+    expect(connectorBindCalls).toBe(0);
+    expect(store.conns).toHaveLength(1);
+    // The edge carries no chat-bind snapshot fields — it is a plain relationship edge the QI hub reads.
+    expect(store.conns[0]?.boundConnectorId).toBeUndefined();
+    expect(store.conns[0]?.boundChatWindowId).toBeUndefined();
   });
 
   it("draws the edge with a boundRoot snapshot when onScopeBind accepts", async () => {

@@ -41,6 +41,15 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
     ]);
   });
 
+  it("folds a lone connected capsule-set into a single capsule-set source (#710 #718)", () => {
+    // A Connector window bound as a capsule-set with nothing else connected must yield exactly one
+    // capsule-set source — the server expands the set into its member capsules at ingestion.
+    const sources = buildConnectedRunSources({ connectedCapsuleSetIds: ["set-regulatory"] });
+    expect(sources).toEqual([
+      { kind: "capsule-set", label: "set-regulatory", capsuleSetId: "set-regulatory" },
+    ]);
+  });
+
   it("aggregates connected figma snapshots alongside other sources, deduped (Epic #750 N+1 parity)", () => {
     const sources = buildConnectedRunSources({
       connectedRoots: ["/f1"],
