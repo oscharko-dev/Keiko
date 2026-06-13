@@ -627,6 +627,24 @@ describe("CandidatesPane — inline editing", () => {
     expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
   });
 
+  it("returns focus to the Edit button after a successful save (no keyboard dead-end)", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    render(<CandidatesPane candidates={[makeCandidate({ title: "Old title" })]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByRole("textbox", { name: /^title$/i });
+    expect(titleInput).toHaveFocus();
+    await user.clear(titleInput);
+    await user.type(titleInput, "New title");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    // After the save resolves the form unmounts; focus must return to the Edit trigger rather than
+    // dropping to <body>. This exercises the Save-close path — distinct from the Cancel-close path
+    // above, which restores focus synchronously rather than after an awaited save.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
+    });
+  });
+
   it("renders the governance note and disables actions when governance is blocked", () => {
     render(
       <CandidatesPane
@@ -682,6 +700,28 @@ describe("CandidatesPane — inline editing", () => {
       await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required."),
     ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: /edit editable/i })).toBeInTheDocument();
+  });
+
+  it("surfaces the validation error when a required field is cleared (submits an empty list)", async () => {
+    const user = userEvent.setup();
+    const candidate = makeCandidate({
+      title: "Has steps",
+      steps: ["Navigate to the page", "Click submit"],
+    });
+    const onEdit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('QI_BAD_EDIT: The "steps" field is empty or invalid.'));
+    render(<CandidatesPane candidates={[candidate]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.clear(screen.getByRole("textbox", { name: /steps/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    // Clearing a required list field submits an empty list; the server's minItems:1 gate rejects it
+    // and the UI surfaces the coded error while keeping the form open with the reviewer's edits.
+    expect(onEdit).toHaveBeenCalledWith(candidate.id, { steps: [] });
+    expect(
+      await screen.findByText('QI_BAD_EDIT: The "steps" field is empty or invalid.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("form")).toBeInTheDocument();
   });
 
   it("clears the save error when the reviewer edits the form again", async () => {

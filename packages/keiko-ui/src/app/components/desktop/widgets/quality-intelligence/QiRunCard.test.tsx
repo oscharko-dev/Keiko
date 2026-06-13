@@ -275,6 +275,49 @@ describe("QiRunCard", () => {
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("reflects the edited text in the card after the post-save reload (AC1 round-trip, Epic #712)", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    // The post-save reload is the ONLY source of truth for the rendered text: handleEdit discards
+    // the edit response (a partial projection) and re-fetches the run detail. So the first GET
+    // returns the pre-edit title and the post-edit reload returns the updated detail. Asserting the
+    // NEW title is rendered proves the reload → re-render path end to end — not merely that the edit
+    // seam was called (the sibling test above is mutation-blind to a broken reload/render).
+    const before = makeDetail("qi-run-roundtrip", [makeCandidate("tc-1", "Login")]);
+    const after = makeDetail("qi-run-roundtrip", [makeCandidate("tc-1", "Edited login")]);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValue(
+        after,
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRunDetail;
+    const editImpl = vi
+      .fn()
+      .mockResolvedValue(
+        makeCandidate("tc-1", "Edited login"),
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").editQiCandidate;
+
+    render(<QiRunCard runId="qi-run-roundtrip" fetchDetailImpl={fetchImpl} editImpl={editImpl} />);
+    // Before the edit, the card heading shows the original title.
+    expect(await screen.findByRole("heading", { name: "Login" })).toBeInTheDocument();
+    const editButton = screen.getByRole("button", { name: /^edit$/i });
+    await waitFor(() => {
+      expect(editButton).toBeEnabled();
+    });
+    await user.click(editButton);
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Edited login");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    // The form closes and the reloaded detail re-renders the card with the edited title.
+    await waitFor(() => {
+      expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    });
+    expect(await screen.findByRole("heading", { name: "Edited login" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Login" })).not.toBeInTheDocument();
+  });
+
   it("blocks review and edit actions until a reviewer label is set", async () => {
     const detail = makeDetail("qi-run-blocked", [makeCandidate("tc-1", "Login")]);
     render(<QiRunCard runId="qi-run-blocked" fetchDetailImpl={fetchOk(detail)} />);
@@ -335,6 +378,50 @@ describe("QiRunCard", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: /edit login/i })).toBeInTheDocument();
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it("keeps an open edit form intact when a review reloads the detail for another candidate", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    const detail = makeDetail("qi-run-coedit", [
+      makeCandidate("tc-1", "First case"),
+      makeCandidate("tc-2", "Second case"),
+    ]);
+    const fetchImpl = fetchOk(detail);
+    const reviewImpl = vi.fn().mockResolvedValue({
+      runState: "open",
+      candidateStates: { "tc-2": "approved" },
+      auditCount: 1,
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+    render(<QiRunCard runId="qi-run-coedit" fetchDetailImpl={fetchImpl} reviewImpl={reviewImpl} />);
+    // Open the edit form on the FIRST candidate and type into it.
+    const editButtons = await screen.findAllByRole("button", { name: /^edit$/i });
+    const firstEdit = editButtons[0];
+    if (firstEdit === undefined) throw new Error("Expected an Edit button on the first candidate.");
+    await waitFor(() => {
+      expect(firstEdit).toBeEnabled();
+    });
+    await user.click(firstEdit);
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "First case (editing)");
+
+    // Approve the SECOND candidate — the only review control on screen, since the first card now
+    // renders the edit form in place of its review controls. This triggers a detail reload.
+    await user.click(screen.getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => {
+      expect(reviewImpl).toHaveBeenCalledWith("qi-run-coedit", "approve", "tc-2", "Alice");
+    });
+    // Wait for the post-review reload to settle (initial load + post-review reload).
+    await waitFor(() => {
+      expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    // The reload must NOT unmount or reset the open edit form: per-card editing state is independent
+    // and cards are keyed by candidate id, so the in-progress edit (and its typed value) survives.
+    expect(screen.getByRole("form", { name: /edit first case/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toHaveValue("First case (editing)");
   });
 
   it("renders the coverage percentage badge when coverageByAtom is non-empty", async () => {
