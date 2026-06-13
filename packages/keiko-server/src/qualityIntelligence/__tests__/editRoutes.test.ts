@@ -751,3 +751,147 @@ describe("handleQiEditCandidate — multi-candidate isolation", () => {
     expect(revisions[0]?.candidateId).toBe("tc-1");
   });
 });
+
+// ─── Epic #712 integration audit: candidate-text normalisation parity with generation ───────────
+//
+// The generation path strips bidi / zero-width / control spoofing code points from every persisted
+// candidate text field (parseGeneratedCandidates → normaliseCandidateText). The inline-edit path must
+// apply the SAME normalisation before persist, or an edited title / step / tag / reviewer label carries
+// those code points to disk, the run-detail GET, and every export — the #280/#1038 spoofing class,
+// reachable through the human-edit channel. These cases pin the parity: unsafe code points are stripped
+// from an accepted edit, and a field whose only content was unsafe code points is rejected (never
+// silently dropped or persisted as junk).
+
+const RLO = String.fromCodePoint(0x202e); // right-to-left override (bidi spoof)
+const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+const ZWJ = String.fromCodePoint(0x200d); // zero-width joiner
+const BOM = String.fromCodePoint(0xfeff); // byte-order mark / zero-width no-break space
+const UNSAFE_CHARS = [RLO, ZWSP, ZWJ, BOM];
+const hasUnsafe = (value: string): boolean => UNSAFE_CHARS.some((ch) => value.includes(ch));
+
+describe("handleQiEditCandidate — strips bidi/zero-width/control chars before persist (Epic #712)", () => {
+  it("strips spoofing code points from the persisted title, list items, and reviewer labels", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: {
+              title: `Login ${RLO}evil${ZWSP} case${BOM}`,
+              steps: [`open${ZWJ} the page`, `submit${ZWSP}`],
+              tags: [`smoke${RLO}`],
+            },
+            editorLabel: `Ali${RLO}ce${ZWSP}`,
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    // Exact equality pins that every spoofing code point is stripped while the visible text survives.
+    expect((reloaded?.candidates ?? [])[0]).toMatchObject({
+      title: "Login evil case",
+      steps: ["open the page", "submit"],
+      tags: ["smoke"],
+    });
+    // The provenance label and the `.review.json` audit label both derive from editorLabel → both clean.
+    expect((reloaded?.editedRevisions ?? [])[0]?.provenance.editorLabel).toBe("Alice");
+    const auditLog = loadRunReviewState(RUN_ID, evidenceDir)?.auditLog ?? [];
+    expect(auditLog.find((e) => e.action === "edit")?.reviewerLabel).toBe("Alice");
+  });
+
+  it("reflects the cleaned title (no spoofing code points) on the next run-detail GET fetch", async () => {
+    const edit = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: `Audit ${RLO}clean${ZWSP} title` },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // AC1 read-back through the real GET projection reflects the cleaned text, never the spoofing chars.
+    const fetched = handleGetQiRun(getCtx(RUN_ID), deps(evidenceDir));
+    const title = detailCandidates(fetched).find((c) => c.id === "tc-1")?.title ?? "";
+    expect(title).toBe("Audit clean title");
+    expect(hasUnsafe(title)).toBe(false);
+  });
+
+  it("rejects an edit whose required field is only spoofing code points (400, not a silent drop)", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { steps: [`${ZWSP}${ZWJ}${BOM}`] },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    // A step of only zero-width chars normalises to "" → rejected as empty/invalid; nothing persists.
+    expect(result.status).toBe(400);
+    expect(errorOf(result).code).toBe("QI_BAD_EDIT");
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions ?? []).toHaveLength(0);
+    expect(reloaded?.candidates[0]?.steps).toEqual(["step-a"]);
+  });
+
+  it("rejects an edit whose entire reviewer label is spoofing code points (400 QI_BAD_EDIT)", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "Valid title" },
+            editorLabel: `${RLO}${ZWSP}${BOM}`,
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    // editorLabel normalises to "" → the route requires a non-empty reviewer label → 400, no persist.
+    expect(result.status).toBe(400);
+    expect(errorOf(result).code).toBe("QI_BAD_EDIT");
+    expect(
+      loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.editedRevisions ?? [],
+    ).toHaveLength(0);
+  });
+
+  it("measures MAX_TITLE_LEN on the cleaned title, so zero-width padding cannot smuggle it past the cap", async () => {
+    // 256 visible chars (exactly MAX_TITLE_LEN) + zero-width padding → raw length 258. Because the
+    // route normalises BEFORE the length check, the cleaned 256-char title is accepted and persisted.
+    // Were normalisation applied AFTER validation, the raw 258-length title would be rejected (400) —
+    // this pins the normalise-before-validate ordering in the title-length direction.
+    const cleanTitle = "A".repeat(256);
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: `${cleanTitle}${ZWSP}${BOM}` },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.candidates[0]?.title).toBe(
+      cleanTitle,
+    );
+  });
+});

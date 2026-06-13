@@ -853,6 +853,52 @@ describe("handleQiEditCandidate → handleGetQiRun → handleQiExport (Issue #72
   });
 });
 
+describe("handleQiEditCandidate → handleQiExport — strips bidi/zero-width chars before export (Epic #712)", () => {
+  it("an edited title with spoofing code points exports clean across markdown, plain-text, and the ZIP bundle", async () => {
+    const RLO = String.fromCodePoint(0x202e); // right-to-left override (bidi spoof)
+    const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+
+    // Edit through the REAL route, injecting a bidi override + zero-width space into the title.
+    const edit = asResult(
+      await handleQiEditCandidate(
+        editCtx(RUN_ID, {
+          candidateId: "cand-001",
+          edited: { title: `Login ${RLO}admin${ZWSP} flow` },
+          editorLabel: "Alice",
+        }),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // Text exports: the cleaned title is present and neither spoofing code point survives.
+    for (const adapter of ["markdown", "plain-text"]) {
+      const result = asResult(
+        await handleQiExport(ctx(RUN_ID, makeReq({ adapter, dryRun: false })), deps(evidenceDir)),
+      );
+      expect(result.status).toBe(200);
+      const body = (result.body as { body: string }).body;
+      expect(body).toContain("Login admin flow");
+      expect(body.includes(RLO)).toBe(false);
+      expect(body.includes(ZWSP)).toBe(false);
+    }
+
+    // Binary STORE-method ZIP: decode and assert the cleaned title is present and the UTF-8 byte
+    // sequence of each spoofing code point is absent (compared in latin1 so multi-byte runs match).
+    const zip = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(zip.status).toBe(200);
+    const decoded = Buffer.from((zip.body as { body: string }).body, "base64").toString("latin1");
+    expect(decoded).toContain("Login admin flow");
+    expect(decoded.includes(Buffer.from(RLO, "utf8").toString("latin1"))).toBe(false);
+    expect(decoded.includes(Buffer.from(ZWSP, "utf8").toString("latin1"))).toBe(false);
+  });
+});
+
 // ─── Issue #283 AC4 — export evidence emission ───────────────────────────────────────
 
 describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {

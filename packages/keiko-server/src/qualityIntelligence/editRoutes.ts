@@ -17,6 +17,7 @@ import {
   QualityIntelligence,
   type QualityIntelligenceUiCandidate,
 } from "@oscharko-dev/keiko-contracts";
+import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { appendEditAudit, candidateReviewStateOf, loadRunReviewState } from "./reviewStore.js";
@@ -112,8 +113,12 @@ interface ParsedEdit {
 
 function parseEditorLabel(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, MAX_LABEL_LEN) : undefined;
+  // Strip bidi/zero-width/control spoofing code points (+ NFKC + trim) before length-capping so the
+  // persisted provenance `editorLabel` and the `.review.json` `reviewerLabel` (both derived from this
+  // one value) get the same content-safety treatment as generated candidate text. A label of only
+  // format characters normalises to "" and is rejected as a missing reviewer label.
+  const cleaned = normaliseCandidateText(value);
+  return cleaned.length > 0 ? cleaned.slice(0, MAX_LABEL_LEN) : undefined;
 }
 
 type CollectOutcome =
@@ -121,12 +126,45 @@ type CollectOutcome =
   // `invalidField` names the field that failed validation; `undefined` means no field was supplied.
   | { readonly ok: false; readonly invalidField: string | undefined };
 
+// The editable fields whose value is an array of candidate body-text lines. `title` (single string)
+// and the closed enums (priority / riskClass) are handled separately in normaliseEditedValue.
+const TEXT_LIST_KEYS: ReadonlySet<string> = new Set([
+  "preconditions",
+  "steps",
+  "expectedResults",
+  "tags",
+]);
+
+// Strip bidi / zero-width / control spoofing code points (+ NFKC + trim) from every human-supplied
+// text field BEFORE validation, so an inline edit persists through the SAME candidate-text
+// normalisation as the generation path (parseGeneratedCandidates → normaliseCandidateText — the
+// documented single chokepoint for persisted candidate text). Closed enums (priority / riskClass) and
+// any non-string shape pass through untouched; their validators reject anything off-list. A title or
+// list item whose only content was format characters normalises to "" and is then rejected by the
+// non-blank validators (an actionable 400) rather than persisted as junk. Normalising first also means
+// MAX_TITLE_LEN is measured on the cleaned text, so padding a title with zero-width marks cannot
+// smuggle it past the length cap.
+function normaliseEditedValue(key: string, value: unknown): unknown {
+  if (key === "title") {
+    return typeof value === "string" ? normaliseCandidateText(value) : value;
+  }
+  if (TEXT_LIST_KEYS.has(key) && Array.isArray(value)) {
+    // `Array.isArray` narrows `unknown` to `any[]`; widen back to `unknown[]` so each item is typed
+    // (no unsafe `any`). Non-string items pass through for the list validator to reject.
+    return (value as readonly unknown[]).map((item) =>
+      typeof item === "string" ? normaliseCandidateText(item) : item,
+    );
+  }
+  return value;
+}
+
 function collectEditedFields(edited: Record<string, unknown>): CollectOutcome {
   const collected: Partial<Record<(typeof EDITABLE_KEYS)[number], unknown>> = {};
   let fieldCount = 0;
   for (const key of EDITABLE_KEYS) {
-    const value = edited[key];
-    if (value === undefined) continue;
+    const raw = edited[key];
+    if (raw === undefined) continue;
+    const value = normaliseEditedValue(key, raw);
     if (!isValidField(key, value)) return { ok: false, invalidField: key };
     collected[key] = value;
     fieldCount += 1;
