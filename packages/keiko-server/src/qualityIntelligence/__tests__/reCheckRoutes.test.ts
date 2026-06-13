@@ -27,6 +27,7 @@ import {
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
 } from "@oscharko-dev/keiko-evidence";
+import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-workflows";
 import type {
   EvidenceStore,
   QualityIntelligenceEvidenceManifest,
@@ -421,6 +422,28 @@ describe("handleQiReCheck — malformed candidates companion", () => {
   });
 });
 
+describe("handleQiReCheck — missing candidates companion", () => {
+  it("fails closed when the manifest says candidates exist but the companion is absent", async () => {
+    rmSync(join(evidenceDir, "qi", `${RUN_ID}.candidates.json`));
+
+    const result = asResult(
+      await handleQiReCheck(
+        ctx(
+          "re-check",
+          RUN_ID,
+          makeReq({
+            sources: [{ kind: "requirements", label: "req-1", text: "REQ-1: User can log in" }],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(500);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CANDIDATES_MISSING");
+  });
+});
+
 // ─── re-check: happy path — unchanged sources ─────────────────────────────────
 
 describe("handleQiReCheck — unchanged source (same hash)", () => {
@@ -712,6 +735,75 @@ describe("handleQiRegenerateStale — no model configured", () => {
   });
 });
 
+describe("handleQiRegenerateStale — no stale candidates still materialises a new run (#743)", () => {
+  it("writes a new immutable run preserving all candidates and edits when nothing is stale", async () => {
+    const runId = "run-regen-no-stale";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const source = { kind: "requirements", label: "Spec", text: originalText } as const;
+    const seeded = ingestInlineSources({
+      request: { sources: [source] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [source],
+      candidates: [
+        qiCandidate(runId, "cand-no-stale-login", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-no-stale-mfa", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+      editedRevisions: [
+        {
+          candidateId: "cand-no-stale-login",
+          provenance: {
+            editedAt: "2026-06-09T10:02:00.000Z",
+            editedBy: "human",
+            editorLabel: "Reviewer A",
+          },
+          editedFields: { title: "Login test (edited)" },
+        },
+      ],
+    });
+    const beforeManifest = JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }));
+    const beforeArtifact = JSON.stringify(
+      loadQualityIntelligenceCandidates(runId, { evidenceDir }),
+    );
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx("regenerate-stale", runId, makeReq({ sources: [source] })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      runId: string;
+      regeneratedCount: number;
+      preservedCount: number;
+    };
+    expect(body.runId).not.toBe(runId);
+    expect(body.regeneratedCount).toBe(0);
+    expect(body.preservedCount).toBe(2);
+    expect(JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }))).toBe(beforeManifest);
+    expect(JSON.stringify(loadQualityIntelligenceCandidates(runId, { evidenceDir }))).toBe(
+      beforeArtifact,
+    );
+    const artifact = loadQualityIntelligenceCandidates(body.runId, { evidenceDir });
+    expect(artifact?.candidates.map((candidate) => candidate.id).sort()).toEqual([
+      "cand-no-stale-login",
+      "cand-no-stale-mfa",
+    ]);
+    expect(artifact?.editedRevisions?.map((revision) => revision.candidateId)).toEqual([
+      "cand-no-stale-login",
+    ]);
+  });
+});
+
 describe("handleQiRegenerateStale — malformed candidates companion", () => {
   it("returns 500 QI_REGEN_FAILED when the candidates companion is corrupted", async () => {
     writeFileSync(
@@ -999,6 +1091,120 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
     expect(artifact?.editedRevisions?.map((revision) => revision.candidateId)).toEqual([
       "cand-preserved",
     ]);
+  });
+});
+
+describe("handleQiRegenerateStale — requirement replacements are positional (#743)", () => {
+  it("regenerates only the edited requirement line and ignores unrelated newly-added lines", async () => {
+    const runId = "run-regen-requirement-positional";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const currentText =
+      "Login must work reliably\nMFA must also write an audit entry\nReports must export as CSV";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    const current = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: currentText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-positional-fresh", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-positional-stale", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: currentText }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      runId: string;
+      regeneratedCount: number;
+      preservedCount: number;
+    };
+    expect(body.regeneratedCount).toBe(1);
+    expect(body.preservedCount).toBe(1);
+    const artifact = loadQualityIntelligenceCandidates(body.runId, { evidenceDir });
+    expect(artifact?.candidates).toHaveLength(2);
+    expect(artifact?.candidates.map((candidate) => candidate.id)).toContain(
+      "cand-positional-fresh",
+    );
+    const unrelatedAddedAtomId = String(current.ingestedAtoms[2]?.atom.id);
+    expect(
+      artifact?.candidates.some((candidate) =>
+        candidate.derivedFromAtomIds.map(String).includes(unrelatedAddedAtomId),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("handleQiRegenerateStale — merged candidate budget (#743)", () => {
+  it("fails closed without writing a new run when preserved plus regenerated candidates exceed the cap", async () => {
+    const runId = "run-regen-candidate-cap";
+    const originalText =
+      "Login must work reliably\nMFA must work reliably\nReports must export as CSV";
+    const currentText =
+      "Login must work reliably\nMFA must also write an audit entry\nReports must export as PDF";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    const limit = QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxCandidatesPerRun;
+    const preserved = Array.from({ length: limit - 1 }, (_, index) =>
+      qiCandidate(runId, `cand-cap-preserved-${String(index)}`, `Login test ${String(index)}`, [
+        String(seeded.ingestedAtoms[0]?.atom.id),
+      ]),
+    );
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        ...preserved,
+        qiCandidate(runId, "cand-cap-stale-mfa", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-cap-stale-reports", "Reports test", [
+          String(seeded.ingestedAtoms[2]?.atom.id),
+        ]),
+      ],
+    });
+
+    const beforeRunIds = listQualityIntelligenceRuns({ evidenceDir });
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: currentText }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_REGEN_CANDIDATE_CAP_EXCEEDED",
+    );
+    expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(beforeRunIds);
   });
 });
 
