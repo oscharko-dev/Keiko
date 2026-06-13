@@ -202,6 +202,11 @@ async function readEdit(req: IncomingMessage): Promise<ReadOutcome> {
   return { ok: true, edit: edit.edit };
 }
 
+// Project the edited row for the immediate POST response. This intentionally omits `weakTestFlag`
+// (the adversarial-judge badge): that flag is derived from the run MANIFEST findings, not the
+// candidate row, and recomputing it here would duplicate the run-detail GET's manifest read
+// (uiRoutes.ts) and risk drift. AC1 scopes "reflected" to the next run-detail fetch, where the GET
+// projection re-attaches `weakTestFlag`; clients refresh the badge from that fetch.
 function projectCandidate(
   row: QualityIntelligenceCandidateRow,
   evidenceDir: string,
@@ -259,6 +264,15 @@ function recordEdit(
     return errorResult(404, "QI_NOT_FOUND", "Candidate not found for this run.");
   }
   if (result.changed) {
+    // Append the consolidated `.review.json` audit entry. The atomic, per-edit record is the
+    // `editedRevisions[]` provenance just written WITH the candidate change (a single candidates.json
+    // write inside applyQualityIntelligenceCandidateEdit); this is a second, separate companion write.
+    // If it throws (e.g. disk failure) the outer handler returns 500, but the edit is still recorded
+    // in editedRevisions[] provenance — an edit is never fully unaudited. The trade-off: the
+    // consolidated audit log can lag the per-artifact provenance on a partial-write failure, and a
+    // retry with identical fields is a no-op (changed === false) that won't backfill it. Cross-artifact
+    // write atomicity is a tracked follow-up; it is not introduced here to avoid touching the shared
+    // companion store used by every QI route.
     appendEditAudit({
       runId,
       evidenceDir,
