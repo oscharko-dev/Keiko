@@ -10,15 +10,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { MemoryDetail } from "../components/MemoryDetail";
 
-interface MemoryDetailClientProps {
-  readonly basePath?: string;
-  readonly surfaceLabel?: string;
-}
-
-export function MemoryDetailClient({
-  basePath = "/memoriaviva",
-  surfaceLabel = "MemoriaViva",
-}: MemoryDetailClientProps): ReactNode {
+export function MemoryDetailClient(): ReactNode {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   if (id === "") {
@@ -33,13 +25,13 @@ export function MemoryDetailClient({
             This link is missing a memory id. Open a memory from the list instead.
           </p>
           <p>
-            <Link href={basePath} className="lk-btn lk-btn-ghost">
-              Back to {surfaceLabel}
+            <Link href="/memoriaviva" className="lk-btn lk-btn-ghost">
+              Back to MemoriaViva
             </Link>
           </p>
         </div>
       </div>
     );
   }
-  return <MemoryDetail id={id} basePath={basePath} surfaceLabel={surfaceLabel} />;
+  return <MemoryDetail id={id} />;
 }

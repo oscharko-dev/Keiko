@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "MemoriaViva — Internal memory-consolidation package: pure-function engine that takes a bounded set of accepted MemoryRecords and returns proposed relationship edges, stale flags, and review items (multi-way duplicates and potential conflicts). The engine NEVER mutates accepted memories: every merge/supersession is routed through a ReviewItem so the caller (#211 Memory Center UI or a workflow) materializes the actual MemorySupersession envelope after explicit review. No IO, no clock, no randomness (caller supplies nowMs and id factories via ConsolidationOptions). ADR-0019 direction rule 3h (consolidation may depend only on keiko-contracts and keiko-security). Not published independently.",
+  "description": "MemoriaViva — Internal memory-consolidation package: pure-function engine that takes a bounded set of accepted MemoryRecords and returns proposed relationship edges, stale flags, and review items (multi-way duplicates and potential conflicts). The engine NEVER mutates accepted memories: every merge/supersession is routed through a ReviewItem so the caller (#211 MemoriaViva UI or a workflow) materializes the actual MemorySupersession envelope after explicit review. No IO, no clock, no randomness (caller supplies nowMs and id factories via ConsolidationOptions). ADR-0019 direction rule 3h (consolidation may depend only on keiko-contracts and keiko-security). Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -218,25 +218,6 @@ describe("MemoryDetail — success state with full record", () => {
     });
   });
 
-  it("uses the configured Memory Center route for back navigation", async () => {
-    const record = makeRecord({ type: "preference" });
-    render(
-      <MemoryDetail
-        id="mem-001"
-        fetchMemoryImpl={resolvesWith(record)}
-        basePath="/memory"
-        surfaceLabel="Memory Center"
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Back to Memory Center" })).toHaveAttribute(
-        "href",
-        "/memory",
-      );
-    });
-  });
-
   it("renders the status badge as a static label (no live region)", async () => {
     const record = makeRecord({ status: "accepted" });
     render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} />);

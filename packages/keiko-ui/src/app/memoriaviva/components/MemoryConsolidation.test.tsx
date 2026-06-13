@@ -127,43 +127,6 @@ describe("MemoryConsolidation", () => {
     expect(screen.getByText("No consolidation job started yet.")).toBeInTheDocument();
   });
 
-  it("uses the configured Memory Center route for memory links and back navigation", async () => {
-    const startJobImpl = vi.fn().mockResolvedValue(completedJob());
-    const fetchJobImpl = vi.fn();
-    const cancelJobImpl = vi.fn();
-    const user = userEvent.setup();
-
-    render(
-      <MemoryConsolidation
-        startJobImpl={startJobImpl}
-        fetchJobImpl={fetchJobImpl}
-        cancelJobImpl={cancelJobImpl}
-        basePath="/memory"
-        surfaceLabel="Memory Center"
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "Memory Center Consolidation" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to Memory Center" })).toHaveAttribute(
-      "href",
-      "/memory",
-    );
-
-    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
-
-    await waitFor(() => {
-      for (const link of screen.getAllByRole("link", { name: "mem-old" })) {
-        expect(link).toHaveAttribute("href", "/memory/detail?id=mem-old");
-      }
-      expect(screen.getByRole("link", { name: "mem-stale" })).toHaveAttribute(
-        "href",
-        "/memory/detail?id=mem-stale",
-      );
-    });
-  });
-
   it("starts a job with explicit settings and renders polled results", async () => {
     const startJobImpl = vi.fn().mockResolvedValue(runningJob());
     const fetchJobImpl = vi.fn().mockResolvedValue(completedJob());

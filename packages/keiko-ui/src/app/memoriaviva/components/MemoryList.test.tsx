@@ -192,32 +192,6 @@ describe("MemoryList — populated state", () => {
       );
     });
   });
-
-  it("keeps list, detail, review, and consolidation links on the configured Memory Center route", async () => {
-    const record = makeRecord({ id: makeMemoryId(43), body: "Route-safe memory" });
-    render(
-      <MemoryList
-        fetchMemoriesImpl={fetchWith([record])}
-        basePath="/memory"
-        surfaceLabel="Memory Center"
-      />,
-    );
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Memory Center" })).toBeInTheDocument();
-      expect(screen.getByRole("link", { name: /route-safe memory/i })).toHaveAttribute(
-        "href",
-        "/memory/detail?id=mem-43",
-      );
-      expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
-        "href",
-        "/memory/consolidation",
-      );
-      expect(screen.getByRole("link", { name: /review queue/i })).toHaveAttribute(
-        "href",
-        "/memory/review-queue",
-      );
-    });
-  });
 });
 
 describe("MemoryList — error state", () => {

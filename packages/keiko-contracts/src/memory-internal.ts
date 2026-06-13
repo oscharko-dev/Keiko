@@ -5,7 +5,7 @@
 
 // Bounded text caps. Chosen to keep audit summaries and rationales safe to ship to a
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
-// Memory Center card without scrolling.
+// MemoriaViva card without scrolling.
 export const MEMORY_BODY_MAX_CHARS = 4096;
 export const MEMORY_RATIONALE_MAX_CHARS = 1024;
 export const MEMORY_REASON_MAX_CHARS = 1024;

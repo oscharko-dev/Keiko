@@ -134,21 +134,13 @@ function TagsList({ tags }: { readonly tags: readonly string[] }): ReactNode {
 // RecordHeader
 // ---------------------------------------------------------------------------
 
-function RecordHeader({
-  record,
-  basePath,
-  surfaceLabel,
-}: {
-  readonly record: MemoryRecord;
-  readonly basePath: string;
-  readonly surfaceLabel: string;
-}): ReactNode {
+function RecordHeader({ record }: { readonly record: MemoryRecord }): ReactNode {
   return (
     <header className="mc-detail-header">
       <Link
-        href={basePath}
+        href="/memoriaviva"
         className="mc-back-link lk-btn lk-btn-ghost"
-        aria-label={`Back to ${surfaceLabel}`}
+        aria-label="Back to MemoriaViva"
       >
         ← Back
       </Link>
@@ -176,16 +168,9 @@ function RecordHeader({
 interface MemoryDetailProps {
   readonly id: string;
   readonly fetchMemoryImpl?: typeof fetchMemory;
-  readonly basePath?: string;
-  readonly surfaceLabel?: string;
 }
 
-export function MemoryDetail({
-  id,
-  fetchMemoryImpl = fetchMemory,
-  basePath = "/memoriaviva",
-  surfaceLabel = "MemoriaViva",
-}: MemoryDetailProps): ReactNode {
+export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetailProps): ReactNode {
   const [record, setRecord] = useState<MemoryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -248,8 +233,8 @@ export function MemoryDetail({
           </button>
         </div>
         <p>
-          <Link href={basePath} className="lk-btn lk-btn-ghost">
-            Back to {surfaceLabel}
+          <Link href="/memoriaviva" className="lk-btn lk-btn-ghost">
+            Back to MemoriaViva
           </Link>
         </p>
       </>
@@ -267,8 +252,8 @@ export function MemoryDetail({
               : "This memory may have been deleted. Open a memory from the list instead."}
           </p>
           <p>
-            <Link ref={removedBackLinkRef} href={basePath} className="lk-btn lk-btn-ghost">
-              Back to {surfaceLabel}
+            <Link ref={removedBackLinkRef} href="/memoriaviva" className="lk-btn lk-btn-ghost">
+              Back to MemoriaViva
             </Link>
           </p>
         </div>
@@ -278,7 +263,7 @@ export function MemoryDetail({
 
   return (
     <article aria-label={`Memory record: ${record.body.slice(0, 60)}`} className="mc-detail">
-      <RecordHeader record={record} basePath={basePath} surfaceLabel={surfaceLabel} />
+      <RecordHeader record={record} />
 
       <section aria-label="Memory body" className="mc-section">
         <h2 className="lk-section-head">Content</h2>

@@ -42,6 +42,18 @@ function makeConflicted(id = makeId(2), body = "Conflicted memory"): MemoryRecor
   return { ...makeProposed(id, body), status: "conflicted" };
 }
 
+function makeStaleAccepted(id = makeId(14), body = "Stale accepted memory"): MemoryRecord {
+  return {
+    ...makeProposed(id, body),
+    status: "accepted",
+    staleReason: "source workflow was revoked",
+  };
+}
+
+function makeExpired(id = makeId(15), body = "Expired memory"): MemoryRecord {
+  return { ...makeProposed(id, body), status: "expired" };
+}
+
 function queueWith(records: readonly MemoryRecord[]): () => Promise<MemoryReviewQueueResponse> {
   return vi.fn().mockResolvedValue({ memories: records, total: records.length });
 }
@@ -50,6 +62,7 @@ const emptyQueue = () => vi.fn().mockResolvedValue({ memories: [], total: 0 });
 
 const acceptOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(1), "accepted") });
 const rejectOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(1), "rejected") });
+const archiveOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(1), "archived") });
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -99,6 +112,41 @@ describe("ReviewQueue — populated state", () => {
     expect(screen.getByRole("button", { name: "Reject conflict" })).toBeInTheDocument();
   });
 
+  it("renders stale accepted memory with its stale reason and archive action", async () => {
+    const record = makeStaleAccepted(makeId(16), "Outdated package manager preference");
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        archiveImpl={archiveOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Outdated package manager preference")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Stale: source workflow was revoked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Archive stale" })).toBeInTheDocument();
+  });
+
+  it("renders expired memory as a stale review item", async () => {
+    const record = makeExpired(makeId(17), "Expired captured memory");
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        archiveImpl={archiveOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Expired captured memory")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Stale")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive stale" })).toBeInTheDocument();
+  });
+
   it("links each row to the memory detail page", async () => {
     const record = makeProposed(makeId(12), "Linked proposal");
     render(
@@ -114,30 +162,6 @@ describe("ReviewQueue — populated state", () => {
           name: "View details for memory mem-q-12: Linked proposal",
         }),
       ).toHaveAttribute("href", "/memoriaviva/detail?id=mem-q-12");
-    });
-  });
-
-  it("keeps detail and back links on the configured Memory Center route", async () => {
-    const record = makeProposed(makeId(13), "Route-safe proposal");
-    render(
-      <ReviewQueue
-        fetchQueueImpl={queueWith([record])}
-        acceptImpl={acceptOk()}
-        rejectImpl={rejectOk()}
-        basePath="/memory"
-        surfaceLabel="Memory Center"
-      />,
-    );
-    await waitFor(() => {
-      expect(
-        screen.getByRole("link", {
-          name: "View details for memory mem-q-13: Route-safe proposal",
-        }),
-      ).toHaveAttribute("href", "/memory/detail?id=mem-q-13");
-      expect(screen.getByRole("link", { name: "Back to Memory Center" })).toHaveAttribute(
-        "href",
-        "/memory",
-      );
     });
   });
 
@@ -177,6 +201,32 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.queryByText("Memory to reject")).toBeNull();
     });
+  });
+
+  it("archives stale memories and removes them from the queue", async () => {
+    const record = makeStaleAccepted(makeId(18), "Memory to archive");
+    const archiveImpl = archiveOk();
+    const user = userEvent.setup();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        archiveImpl={archiveImpl}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Memory to archive")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Archive stale" }));
+    await waitFor(() => {
+      expect(archiveImpl).toHaveBeenCalledWith(
+        "mem-q-18",
+        "archived stale memory from review queue",
+      );
+      expect(screen.queryByText("Memory to archive")).toBeNull();
+    });
+    expect(screen.getByText("Memory archived")).toBeInTheDocument();
   });
 
   it("announces the result and moves focus to the next row after an action (uiux-fix F035)", async () => {

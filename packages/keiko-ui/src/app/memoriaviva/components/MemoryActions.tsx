@@ -86,7 +86,7 @@ export function MemoryActions({
 
   const handleReject = useCallback((): void => {
     void run("reject", async () => {
-      const res = await rejectImpl(record.id as MemoryId, "rejected by user in Memory Center");
+      const res = await rejectImpl(record.id as MemoryId, "rejected by user in MemoriaViva");
       onRecordChange(res.memory);
     });
   }, [onRecordChange, record.id, rejectImpl, run]);
@@ -107,7 +107,7 @@ export function MemoryActions({
 
   const handleArchive = useCallback((): void => {
     void run("archive", async () => {
-      const res = await archiveImpl(record.id as MemoryId, "archived by user in Memory Center");
+      const res = await archiveImpl(record.id as MemoryId, "archived by user in MemoriaViva");
       onRecordChange(res.memory);
     });
   }, [archiveImpl, onRecordChange, record.id, run]);

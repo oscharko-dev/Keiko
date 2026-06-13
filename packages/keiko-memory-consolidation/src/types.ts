@@ -11,7 +11,7 @@
 // Design choice (preserved across review and pinned here so future contributors do not "fix" it):
 // `updatesProposed` is reserved for a future model-assisted body-summarisation pass. v1 NEVER
 // emits `MemoryUpdate` envelopes: every merge / supersession is routed through a `ReviewItem`
-// carrying a `ProposedAction`, so the caller (#211 Memory Center UI or a workflow) materialises
+// carrying a `ProposedAction`, so the caller (#211 MemoriaViva UI or a workflow) materialises
 // the actual `MemorySupersession` envelope after explicit review. This preserves the Epic #204
 // invariant: "consolidation never mutates accepted memories without preserving provenance and
 // audit history" — the caller's supersession is the audited transition, not a silent in-place
@@ -45,7 +45,7 @@ export interface ConsolidationJob {
 
 // ─── Stale flags ──────────────────────────────────────────────────────────────
 // Stale memories are NEVER deleted by consolidation. They are surfaced as flags the caller can
-// route into the Memory Center for explicit review and (optional) archival.
+// route into MemoriaViva for explicit review and (optional) archival.
 
 export type StaleReason = "expired" | "low-confidence" | "aged-out";
 

@@ -493,7 +493,7 @@ export {
 // Pure contract surface for durable, scoped, governed memory: scopes, sensitivity,
 // status lifecycle, provenance, validity intervals, edges, operation envelopes, and
 // pure validators. Storage (#206), capture (#207), consolidation (#208), conflict and
-// forget (#209), retrieval (#210), Memory Center UI (#211), Conversation Center
+// forget (#209), retrieval (#210), MemoriaViva UI (#211), Conversation Center
 // integration (#212), workflow integration (#213), audit (#214), evaluation (#215),
 // and final verification (#216) all pin against `MEMORY_SCHEMA_VERSION` and the types
 // re-exported here. A breaking change to the contract introduces a NEW literal member

@@ -3,7 +3,7 @@
 //
 // Design choice pinned here so future contributors do not "fix" it:
 //   updatesProposed is ALWAYS the empty array in v1. Every merge / supersession is routed
-//   through a ReviewItem carrying a ProposedAction; the caller (#211 Memory Center UI or a
+//   through a ReviewItem carrying a ProposedAction; the caller (#211 MemoriaViva UI or a
 //   workflow) materializes the actual MemorySupersession envelope after explicit review. The
 //   updatesProposed slot is reserved for a future model-assisted body-summarisation pass
 //   (issue #212 or follow-up). This preserves the Epic #204 invariant: "consolidation never

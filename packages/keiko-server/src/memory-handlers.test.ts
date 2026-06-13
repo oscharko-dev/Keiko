@@ -210,6 +210,44 @@ describe("memory handlers", () => {
     expect(memories[0]?.id).toBe("conflict-1");
   });
 
+  it("includes expired and stale accepted memories in the review queue", () => {
+    const vault = makeVault();
+    vault.insertMemory(
+      makeMemory("expired-1", "expired proposal", {
+        status: "expired",
+        createdAt: 30,
+        updatedAt: 30,
+      }),
+    );
+    vault.insertMemory(
+      makeMemory("stale-accepted-1", "stale accepted preference", {
+        status: "accepted",
+        staleReason: "source workflow was revoked",
+        createdAt: 20,
+        updatedAt: 20,
+      }),
+    );
+    vault.insertMemory(
+      makeMemory("archived-stale-1", "resolved stale preference", {
+        status: "archived",
+        staleReason: "already handled",
+        createdAt: 10,
+        updatedAt: 10,
+      }),
+    );
+
+    const result = handleMemoryReviewQueue(
+      makeCtx("/api/memory/review-queue", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    expect(body.total).toBe(2);
+    const memories = body.memories as readonly MemoryRecord[];
+    expect(memories.map((memory) => memory.id)).toEqual(["expired-1", "stale-accepted-1"]);
+  });
+
   it("allows conflicted memories to be dismissed through the reject route", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("conflict-2", "dismiss me", { status: "conflicted" }));
@@ -368,7 +406,7 @@ describe("memory handlers", () => {
     expect(tombstones).toHaveLength(1);
     expect(tombstones[0]?.memoryId).toBe(memoryId("memory-forget-1"));
     expect(tombstones[0]?.reason).toBe("user removed stale package-manager preference");
-    expect(tombstones[0]?.reviewerId).toBe("memory-center-ui");
+    expect(tombstones[0]?.reviewerId).toBe("memoriaviva-ui");
     expect(tombstones[0]?.originalStatus).toBe("accepted");
     expect(JSON.stringify(tombstones)).not.toContain("PRIVATE-BODY-FORGET-FINGERPRINT");
   });
@@ -412,7 +450,7 @@ describe("memory handlers", () => {
       expect.objectContaining({
         memoryId: memoryId("memory-delete-1"),
         reason: "operator requested delete",
-        reviewerId: "memory-center-ui",
+        reviewerId: "memoriaviva-ui",
         originalStatus: "accepted",
       }),
     );

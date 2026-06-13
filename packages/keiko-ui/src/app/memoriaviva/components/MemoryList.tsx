@@ -90,16 +90,10 @@ function formatConfidence(confidence: number): string {
 // MemoryRow
 // ---------------------------------------------------------------------------
 
-function MemoryRow({
-  record,
-  basePath,
-}: {
-  readonly record: MemoryRecord;
-  readonly basePath: string;
-}): ReactNode {
+function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
   return (
     <li>
-      <Link href={`${basePath}/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
+      <Link href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
         <div className="mc-row-main">
           {/* title: full text on hover — the row body is single-line truncated
               and otherwise only reachable via the detail page (uiux-fix F035). */}
@@ -153,15 +147,9 @@ function EmptyState({ hasFilters }: { readonly hasFilters: boolean }): ReactNode
 
 interface MemoryListProps {
   readonly fetchMemoriesImpl?: typeof fetchMemories;
-  readonly basePath?: string;
-  readonly surfaceLabel?: string;
 }
 
-export function MemoryList({
-  fetchMemoriesImpl = fetchMemories,
-  basePath = "/memoriaviva",
-  surfaceLabel = "MemoriaViva",
-}: MemoryListProps): ReactNode {
+export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProps): ReactNode {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -203,27 +191,27 @@ export function MemoryList({
     (next: MemoryFilterState): void => {
       const qs = filtersToParams(next).toString();
       startTransition(() => {
-        router.push(`${basePath}${qs.length > 0 ? `?${qs}` : ""}`);
+        router.push(`/memoriaviva${qs.length > 0 ? `?${qs}` : ""}`);
       });
     },
-    [basePath, router],
+    [router],
   );
 
   return (
     <>
       <header className="lk-header">
-        <h1 className="lk-title">{surfaceLabel}</h1>
+        <h1 className="lk-title">MemoriaViva</h1>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {/* Declared exit back to the desktop shell — the memoriaviva routes
               live outside the workspace and had no way back (uiux-fix F035). */}
           <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
             Back to Workspace
           </Link>
-          <Link href={`${basePath}/consolidation`} className="lk-btn lk-btn-ghost lk-btn-lg">
+          <Link href="/memoriaviva/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
             Consolidation
           </Link>
           <Link
-            href={`${basePath}/review-queue`}
+            href="/memoriaviva/review-queue"
             className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
           >
             Review queue
@@ -284,7 +272,7 @@ export function MemoryList({
             }}
           >
             {memories.map((record) => (
-              <MemoryRow key={record.id} record={record} basePath={basePath} />
+              <MemoryRow key={record.id} record={record} />
             ))}
           </ul>
         )}

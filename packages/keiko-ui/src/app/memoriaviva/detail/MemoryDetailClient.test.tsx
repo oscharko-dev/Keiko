@@ -27,21 +27,8 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("../components/MemoryDetail", () => ({
-  MemoryDetail: ({
-    id,
-    basePath,
-    surfaceLabel,
-  }: {
-    readonly id: string;
-    readonly basePath?: string;
-    readonly surfaceLabel?: string;
-  }) => (
-    <div
-      data-testid="memory-detail"
-      data-id={id}
-      data-base-path={basePath}
-      data-surface-label={surfaceLabel}
-    />
+  MemoryDetail: ({ id }: { readonly id: string }) => (
+    <div data-testid="memory-detail" data-id={id} />
   ),
 }));
 
@@ -50,26 +37,21 @@ describe("MemoryDetailClient", () => {
     navState.memoryId = null;
   });
 
-  it("renders a route-aware missing-id empty state", () => {
-    render(<MemoryDetailClient basePath="/memory" surfaceLabel="Memory Center" />);
+  it("renders a MemoriaViva missing-id empty state", () => {
+    render(<MemoryDetailClient />);
 
     expect(screen.getByText("No memory selected")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to Memory Center" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Back to MemoriaViva" })).toHaveAttribute(
       "href",
-      "/memory",
+      "/memoriaviva",
     );
   });
 
-  it("passes the route configuration to MemoryDetail when an id is present", () => {
+  it("passes the selected id to the MemoriaViva detail component", () => {
     navState.memoryId = "mem-detail-client-1";
 
-    render(<MemoryDetailClient basePath="/memory" surfaceLabel="Memory Center" />);
+    render(<MemoryDetailClient />);
 
     expect(screen.getByTestId("memory-detail")).toHaveAttribute("data-id", "mem-detail-client-1");
-    expect(screen.getByTestId("memory-detail")).toHaveAttribute("data-base-path", "/memory");
-    expect(screen.getByTestId("memory-detail")).toHaveAttribute(
-      "data-surface-label",
-      "Memory Center",
-    );
   });
 });

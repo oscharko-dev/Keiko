@@ -107,10 +107,10 @@ export interface UiHandlerDeps {
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
-  // Issue #211 — Memory Center vault. Optional so legacy tests that do not exercise /api/memory/*
+  // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
-  // Issue #208 — explicit, bounded in-memory consolidation job registry for Memory Center polling.
+  // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.

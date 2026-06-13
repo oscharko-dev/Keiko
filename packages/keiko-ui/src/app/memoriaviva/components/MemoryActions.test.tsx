@@ -67,7 +67,7 @@ describe("MemoryActions", () => {
     await user.click(screen.getByRole("button", { name: /reject this memory proposal/i }));
 
     await waitFor(() => {
-      expect(rejectImpl).toHaveBeenCalledWith("mem-actions-1", "rejected by user in Memory Center");
+      expect(rejectImpl).toHaveBeenCalledWith("mem-actions-1", "rejected by user in MemoriaViva");
       expect(onRecordChange).toHaveBeenCalledWith(rejected);
     });
   });
@@ -127,7 +127,7 @@ describe("MemoryActions", () => {
     await waitFor(() => {
       expect(deleteImpl).toHaveBeenCalledWith(
         "mem-actions-1",
-        "user-initiated delete from Memory Center",
+        "user-initiated delete from MemoriaViva",
       );
       expect(onRecordChange).toHaveBeenCalledWith(null);
     });
