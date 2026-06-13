@@ -22,6 +22,8 @@ export interface WorkspaceApi {
   readonly toggleTool: (type: WindowType) => void;
   readonly focus: (id: string) => void;
   readonly close: (id: string) => void;
+  readonly minimize: (id: string) => void;
+  readonly restore: (id: string) => void;
   readonly maximize: (id: string) => void;
   readonly update: (id: string, patch: Partial<AppWindow>) => void;
   readonly setSnap: (zone: SnapZone | null) => void;

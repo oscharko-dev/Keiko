@@ -47,7 +47,6 @@
   --accent-glow: color-mix(in oklch, #4eba87 26%, transparent);
   /* text-tone alias — equals --accent in dark theme; overridden to ≥4.5:1 on white in light */
   --accent-text: var(--accent);
-
   /* status */
   --ok: #4eba87;
   --warn: oklch(0.78 0.13 75);
@@ -76,8 +75,11 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-ui);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  /* Preserve native subpixel/font rasterization. Forced grayscale antialiasing
+     made dense 11-13px UI text look thin and soft on 1x displays. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+  text-rendering: auto;
   overflow: hidden;
 }
 #root {
@@ -636,6 +638,8 @@ button {
 }
 
 .footer {
+  position: relative;
+  z-index: 9400;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -662,6 +666,120 @@ button {
 .ft-accent {
   /* uses --accent-text so light theme gets a darkened shade that meets WCAG 1.4.3 (≥4.5:1) */
   color: var(--accent-text);
+}
+.ft-window-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.ft-window-trigger {
+  color: var(--accent-text);
+  font: inherit;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.ft-window-trigger:hover:not(:disabled),
+.ft-window-trigger[aria-expanded="true"] {
+  background: var(--card-2);
+}
+.ft-window-trigger:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+.ft-window-palette {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(430px, calc(100vh - 96px));
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+.ft-window-palette-head {
+  padding: 3px 5px 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+.ft-window-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+}
+.ft-window-card {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.ft-window-card:hover,
+.ft-window-card:focus-visible {
+  background: var(--card-2);
+  border-color: var(--line-soft);
+}
+.ft-window-card[data-minimized="true"] {
+  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--accent) 6%, transparent);
+}
+.ft-window-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--inset);
+  color: var(--fg-muted);
+}
+.ft-window-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ft-window-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 650;
+}
+.ft-window-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.ft-window-state {
+  align-self: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--inset);
+  color: var(--fg-muted);
+  font-size: 10.5px;
 }
 .ft-dim {
   color: var(--fg-faint);
@@ -968,12 +1086,13 @@ button {
   align-items: center;
   gap: 7px;
   width: 100%;
-  /* uiux-fix F050 C347: rows measured ~23.6px (13px text + 2*4px padding) — just
-     under the WCAG 2.5.8 24px target minimum; the floor is font-metric-proof. */
-  min-height: 24px;
-  padding: 4px 8px;
+  /* uiux-fix F050 C347 plus text-clarity pass: keep rows above the 24px target
+     floor and avoid 13px text looking soft on 1x displays. */
+  min-height: 26px;
+  padding: 5px 8px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: 13.5px;
+  font-weight: 450;
   color: var(--fg-muted);
   text-align: left;
 }
@@ -1042,7 +1161,7 @@ button {
 }
 .tr-folder {
   color: var(--fg);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 /* plugins (MCP + connectors) */
@@ -1671,7 +1790,7 @@ button {
 .win-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: 38px;
   padding: 0 6px 0 11px;
   border-bottom: 1px solid var(--line-soft);
@@ -1687,12 +1806,13 @@ button {
   place-items: center;
 }
 .win-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 650;
   color: var(--fg);
 }
 .win-sub {
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--fg-muted);
   background: var(--inset);
   padding: 2px 7px;
@@ -1709,6 +1829,57 @@ button {
   place-items: center;
   border-radius: 7px;
   color: var(--fg-dim);
+}
+.win-traffic {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 2px;
+}
+.win-traffic-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+.window[data-max="true"] .win-traffic-btn {
+  width: 30px;
+  height: 30px;
+}
+.win-traffic-btn::before {
+  content: "";
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in oklch, #000 18%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, #fff 34%, transparent),
+    0 0 0 1px color-mix(in oklch, #000 8%, transparent);
+}
+.window[data-max="true"] .win-traffic-btn::before {
+  width: 17px;
+  height: 17px;
+}
+.win-traffic-close::before {
+  background: var(--danger);
+}
+.win-traffic-minimize::before {
+  background: oklch(0.78 0.15 82);
+}
+.win-traffic-maximize::before {
+  background: var(--accent);
+}
+.win-traffic-btn:hover {
+  background: var(--card-2);
+}
+.win-traffic-btn:active::before {
+  transform: scale(0.92);
 }
 .win-zoom {
   display: flex;
@@ -4704,15 +4875,15 @@ select.dlg-input {
 .files-root-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 30px 6px 2px; /* right pad clears the absolute refresh button */
+  gap: 5px;
+  padding: 2px 34px 8px 2px; /* right pad clears the absolute refresh button */
   border-bottom: 1px solid var(--line-soft);
   margin-bottom: 4px;
 }
 .files-root-up {
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   border-radius: 6px;
@@ -4731,11 +4902,12 @@ select.dlg-input {
 .files-root-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11.5px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  font-weight: 500;
   border-radius: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   background: var(--inset);
   color: var(--fg);
 }
@@ -4748,10 +4920,10 @@ select.dlg-input {
 }
 .files-root-open {
   flex: 0 0 auto;
-  height: 24px;
-  padding: 0 10px;
-  font-size: 11.5px;
-  font-weight: 550;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 700;
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--accent);
@@ -9662,8 +9834,11 @@ select.dlg-input {
    window header buttons, zoom controls, FAB, empty-state CTA, connection badge.
    App convention (2px ring, 2px offset); accent-text = accent in dark, AA in light. */
 .win-btn:focus-visible,
+.win-traffic-btn:focus-visible,
 .win-zbtn:focus-visible,
 .win-zpct:focus-visible,
+.ft-window-trigger:focus-visible,
+.ft-window-card:focus-visible,
 .ws-zoom-btn:focus-visible,
 .ws-zoom-pct:focus-visible,
 .ws-fab:focus-visible,
@@ -10921,10 +11096,11 @@ ul.integ {
 .tr-badge {
   flex: none;
   padding: 2px 5px;
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 1;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
+  font-weight: 650;
   border-radius: 5px;
   color: var(--fg-muted);
   background: var(--inset);
@@ -10932,7 +11108,8 @@ ul.integ {
 }
 .tr-meta {
   flex: none;
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--fg-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -10983,11 +11160,10 @@ ul.integ {
 }
 
 /* C062 — narrow windows (DEFAULT_MIN w:150) pushed Maximize/Close out of the
-   frame: the title had no truncation and the invisible content-zoom cluster
-   (opacity 0) still held its 82px layout slot. Title ellipsizes like .win-sub,
-   icon/buttons never shrink, and the zoom cluster collapses to zero width until
-   hover or keyboard focus (width 0 keeps its buttons tabbable, display:none
-   would not — :focus-within then restores the width). */
+   frame: the title had no truncation. Title ellipsizes like .win-sub, icon/buttons
+   never shrink, and the zoom cluster may shrink to zero when space is tight.
+   At normal widths it keeps a stable visible slot so rapid content-zoom clicks
+   cannot shift underneath the pointer and hit Maximize instead. */
 .win-title {
   min-width: 0;
   white-space: nowrap;
@@ -10995,17 +11171,21 @@ ul.integ {
   text-overflow: ellipsis;
 }
 .win-ico,
-.win-btn {
+.win-btn,
+.win-traffic {
   flex: none;
 }
 .win-zoom {
-  width: 0;
+  flex: 0 1 86px;
+  min-width: 0;
   overflow: hidden;
+  opacity: 0.72;
+  pointer-events: auto;
 }
 .win-head:hover .win-zoom,
 .win-zoom:focus-within {
-  width: auto;
   overflow: visible;
+  opacity: 1;
 }
 
 /* ==== uiux-fix F035: memoriaviva review-queue body clamp + detail link (C024) ==== */

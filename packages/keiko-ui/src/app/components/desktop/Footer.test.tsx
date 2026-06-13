@@ -13,13 +13,35 @@
 import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Footer } from "./Footer";
+import type { AppWindow } from "./windows/types";
 
-function renderFooter(patch: Partial<ComponentProps<typeof Footer>> = {}): ReturnType<typeof render> {
+function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
+  return {
+    x: 40,
+    y: 40,
+    w: 320,
+    h: 260,
+    z: 1,
+    cfg: {},
+    max: false,
+    zoom: 1,
+    ...patch,
+  };
+}
+
+function renderFooter(
+  patch: Partial<ComponentProps<typeof Footer>> = {},
+): ReturnType<typeof render> {
   return render(
     <Footer
       winCount={0}
+      windows={[]}
+      windowPaletteOpen={false}
+      onToggleWindowPalette={vi.fn()}
+      onSelectWindow={vi.fn()}
+      onCloseWindowPalette={vi.fn()}
       mode="manual"
       selectedModel={undefined}
       projectName="Keiko"
@@ -53,8 +75,68 @@ describe("Footer — shell-level status indicators (epic #518 #526)", () => {
   });
 
   it("singularises the window-count indicator when a single window is open", () => {
-    renderFooter({ winCount: 1 });
+    renderFooter({ winCount: 1, windows: [footerWindow({ id: "files-1", type: "files" })] });
     expect(screen.getByText(/1 window\b/)).toBeInTheDocument();
+  });
+
+  it("exposes the window-count indicator as a palette trigger", async () => {
+    const user = userEvent.setup();
+    const onToggleWindowPalette = vi.fn();
+    renderFooter({
+      winCount: 2,
+      windows: [
+        footerWindow({ id: "files-1", type: "files", cfg: { root: "/repo" }, z: 1 }),
+        footerWindow({ id: "chat-1", type: "chat", cfg: { title: "Sprint triage" }, z: 2 }),
+      ],
+      onToggleWindowPalette,
+    });
+
+    await user.click(screen.getByRole("button", { name: /2 windows/ }));
+
+    expect(onToggleWindowPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders open and minimized windows in the footer palette", () => {
+    renderFooter({
+      winCount: 2,
+      windowPaletteOpen: true,
+      windows: [
+        footerWindow({ id: "files-1", type: "files", cfg: { root: "/repo" }, z: 1 }),
+        footerWindow({
+          id: "chat-1",
+          type: "chat",
+          cfg: { title: "Sprint triage" },
+          minimized: true,
+          z: 2,
+        }),
+      ],
+    });
+
+    expect(screen.getByRole("menu", { name: "Open windows" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Restore Chat window - Sprint triage" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Focus Files window - /repo" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Minimized")).toBeInTheDocument();
+  });
+
+  it("selects a window from the footer palette", async () => {
+    const user = userEvent.setup();
+    const onSelectWindow = vi.fn();
+    renderFooter({
+      winCount: 1,
+      windowPaletteOpen: true,
+      windows: [
+        footerWindow({ id: "files-1", type: "files", cfg: { root: "/repo" }, minimized: true }),
+      ],
+      onSelectWindow,
+    });
+
+    await user.click(screen.getByRole("menuitem", { name: "Restore Files window - /repo" }));
+
+    expect(onSelectWindow).toHaveBeenCalledWith("files-1");
   });
 
   it("renders the review and evidence-access indicator", () => {

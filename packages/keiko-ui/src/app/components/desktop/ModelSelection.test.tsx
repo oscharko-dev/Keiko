@@ -309,6 +309,11 @@ describe("Footer selectedModel display (AC #4)", () => {
     render(
       <Footer
         winCount={1}
+        windows={[]}
+        windowPaletteOpen={false}
+        onToggleWindowPalette={vi.fn()}
+        onSelectWindow={vi.fn()}
+        onCloseWindowPalette={vi.fn()}
         mode="autonomous"
         selectedModel="gpt-4o"
         projectName="Keiko"
@@ -324,6 +329,11 @@ describe("Footer selectedModel display (AC #4)", () => {
     render(
       <Footer
         winCount={1}
+        windows={[]}
+        windowPaletteOpen={false}
+        onToggleWindowPalette={vi.fn()}
+        onSelectWindow={vi.fn()}
+        onCloseWindowPalette={vi.fn()}
         mode="autonomous"
         selectedModel={undefined}
         projectName="Keiko"

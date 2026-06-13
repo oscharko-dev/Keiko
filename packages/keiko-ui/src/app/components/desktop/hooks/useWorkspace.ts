@@ -86,11 +86,15 @@ function isFormField(el: Element | null): boolean {
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
 }
 
-function topZ(ws: readonly AppWindow[]): AppWindow {
-  // Safe: callers gate on ws.length > 0.
-  let best = ws[0] as AppWindow;
-  for (let i = 1; i < ws.length; i++) {
+function topZ(ws: readonly AppWindow[]): AppWindow | null {
+  let best: AppWindow | null = null;
+  for (let i = 0; i < ws.length; i++) {
     const next = ws[i] as AppWindow;
+    if (next.minimized === true) continue;
+    if (best === null) {
+      best = next;
+      continue;
+    }
     if (next.z > best.z) best = next;
   }
   return best;
@@ -150,10 +154,26 @@ function nextContentZoom(current: number, key: string): number {
   return clampContentZoom(current + 0.1);
 }
 
+export function nextContentZoomFromWheel(current: number, deltaY: number): number {
+  return clampContentZoom(current * Math.exp(-deltaY * 0.0015));
+}
+
+export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow {
+  const current = win.zoom ?? 1;
+  const zoom = nextContentZoomFromWheel(current, deltaY);
+  return zoom === current ? win : { ...win, zoom };
+}
+
+function windowIdFromWheelTarget(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null;
+  return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
+}
+
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
   readonly setView: Dispatch<SetStateAction<View>>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
 interface PanZoomResult {
@@ -165,7 +185,7 @@ interface PanZoomResult {
   readonly rect: () => DOMRect | null;
 }
 
-function usePanZoom({ wsRef, view, setView }: UsePanZoomArgs): PanZoomResult {
+function usePanZoom({ wsRef, view, setView, setWins }: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
 
@@ -179,6 +199,15 @@ function usePanZoom({ wsRef, view, setView }: UsePanZoomArgs): PanZoomResult {
     const onWheel = (e: WheelEvent): void => {
       if (e.metaKey || e.ctrlKey) {
         e.preventDefault();
+        const windowId = windowIdFromWheelTarget(e.target);
+        if (windowId !== null) {
+          setWins((ws) =>
+            ws === null
+              ? ws
+              : ws.map((w) => (w.id === windowId ? applyContentWheelZoom(w, e.deltaY) : w)),
+          );
+          return;
+        }
         const r = el.getBoundingClientRect();
         const v = viewRef.current;
         const z2 = clampViewZoom(v.zoom * Math.exp(-e.deltaY * 0.0015));
@@ -196,7 +225,7 @@ function usePanZoom({ wsRef, view, setView }: UsePanZoomArgs): PanZoomResult {
     return () => {
       el.removeEventListener("wheel", onWheel);
     };
-  }, [wsRef, setView]);
+  }, [wsRef, setView, setWins]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -292,6 +321,7 @@ function handleContentZoomKey(
   setWins((ws) => {
     if (ws === null || ws.length === 0) return ws;
     const top = topZ(ws);
+    if (top === null) return ws;
     const z = nextContentZoom(top.zoom ?? 1, key);
     return ws.map((w) => (w.id === top.id ? { ...w, zoom: z } : w));
   });
@@ -306,6 +336,7 @@ function handleArrowKey(
   setWins((ws) => {
     if (ws === null || ws.length === 0) return ws;
     const top = topZ(ws);
+    if (top === null) return ws;
     const next = size ? applyArrowResize(top, rect, arrow) : applyArrowMove(top, rect, arrow);
     return ws.map((w) => (w.id === top.id ? { ...w, ...next, max: false } : w));
   });
@@ -452,7 +483,12 @@ export function useWorkspace(
   const connectCleanupRef = useRef<(() => void) | null>(null);
   const cancelConnectRef = useRef<() => void>(() => undefined);
 
-  const { viewRef, worldVP, zoomTo, resetView, panBy, rect } = usePanZoom({ wsRef, view, setView });
+  const { viewRef, worldVP, zoomTo, resetView, panBy, rect } = usePanZoom({
+    wsRef,
+    view,
+    setView,
+    setWins,
+  });
 
   useHydrate({ wsRef, setWins, setConns, zc });
 
@@ -470,7 +506,7 @@ export function useWorkspace(
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
-  const { update, focus, close, maximize, add, toggleTool } = makeMutations({
+  const { update, focus, close, minimize, restore, maximize, add, toggleTool } = makeMutations({
     setWins,
     zc,
     worldVP,
@@ -575,6 +611,8 @@ export function useWorkspace(
     toggleTool,
     focus,
     close: closeWithTeardown,
+    minimize,
+    restore,
     maximize,
     update,
     setSnap,

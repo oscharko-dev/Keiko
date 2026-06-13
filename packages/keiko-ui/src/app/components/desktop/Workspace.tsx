@@ -84,9 +84,14 @@ function stepViewZoom(current: number, delta: number): number {
 
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
-  let best = wins[0] as AppWindow;
-  for (let i = 1; i < wins.length; i++) {
+  let best: AppWindow | null = null;
+  for (let i = 0; i < wins.length; i++) {
     const next = wins[i] as AppWindow;
+    if (next.minimized === true) continue;
+    if (best === null) {
+      best = next;
+      continue;
+    }
     if (next.z > best.z) best = next;
   }
   return best;
@@ -168,10 +173,14 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
 
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
-  const top = topWindow(wins);
+  const visibleWins = useMemo(
+    () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
+    [wins],
+  );
+  const top = topWindow(visibleWins);
   const connFrom: AppWindow | null =
-    connecting !== null && wins !== null
-      ? (wins.find((w) => w.id === connecting.from) ?? null)
+    connecting !== null && visibleWins !== null
+      ? (visibleWins.find((w) => w.id === connecting.from) ?? null)
       : null;
 
   const connStateFor = (w: AppWindow): ConnState => {
@@ -202,13 +211,14 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   // so children re-layout (and text/SVG re-rasterize) at the new pixel grid —
   // otherwise the browser samples a once-rasterized bitmap of the scene at its
   // natural size and upscales it, blurring widget content at zoom > 1 (#305).
-  // Translation stays in `transform`; `transform` values are in outer pixels
-  // and are not themselves affected by the element's own `zoom`, so the visual
-  // mapping (worldPt -> workspaceLeft + view.x + worldPt * view.zoom) and the
-  // pan/zoom/drag math in useWorkspace/WindowFrame are preserved.
+  // Chrome applies CSS `zoom` to the transform translation as well. Divide the
+  // stored outer-pixel pan by the zoom so the visual mapping stays:
+  // worldPt -> workspaceLeft + view.x + worldPt * view.zoom.
+  // Without this compensation, maximized windows at non-100% workspace zoom are
+  // placed outside the workspace because worldVP math and rendered geometry diverge.
   const sceneStyle: CSSProperties = useMemo(
     () => ({
-      transform: `translate(${String(view.x)}px, ${String(view.y)}px)`,
+      transform: `translate(${String(view.x / view.zoom)}px, ${String(view.y / view.zoom)}px)`,
       transformOrigin: "0 0",
       zoom: view.zoom,
     }),
@@ -216,10 +226,11 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   );
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || connecting === null || connFrom === null || wins === null) return;
+    if (event.button !== 0 || connecting === null || connFrom === null || visibleWins === null)
+      return;
     const targetId = windowIdFromEventTarget(event.target);
     if (targetId === undefined || targetId === connFrom.id) return;
-    const target = wins.find((w) => w.id === targetId);
+    const target = visibleWins.find((w) => w.id === targetId);
     if (target !== undefined && canConnect(connFrom.type, target.type)) {
       api.confirmConnect(target.id, event);
     }
@@ -260,7 +271,12 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       const rect = wsRef.current?.getBoundingClientRect();
       if (rect === undefined) return;
       const { clientX, clientY, payload } = event.detail;
-      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
         return;
       }
       addKnowledgeConnectorNode(payload, clientX, clientY, rect);
@@ -302,7 +318,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      <ConnectAnnouncer wins={wins} connecting={connecting} conns={conns} />
+      <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
         // mode otherwise only signals via cursor/dimming, leaving the exits
@@ -331,11 +347,11 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
             style={{ left: snapPrev.x, top: snapPrev.y, width: snapPrev.w, height: snapPrev.h }}
           />
         ) : null}
-        {wins !== null ? (
-          <ConnectionsLayer wins={wins} conns={conns} connecting={connecting} api={api} />
+        {visibleWins !== null ? (
+          <ConnectionsLayer wins={visibleWins} conns={conns} connecting={connecting} api={api} />
         ) : null}
-        {wins !== null
-          ? wins.map((w) => (
+        {visibleWins !== null
+          ? visibleWins.map((w) => (
               <WindowFrame
                 key={w.id}
                 win={w}

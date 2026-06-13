@@ -226,6 +226,7 @@ function sanitizeWindow(win: unknown): AppWindow | null {
   const prev = sanitizePrev(win["prev"]);
   return {
     ...next,
+    ...(win["minimized"] === true ? { minimized: true } : {}),
     ...(prev !== undefined ? { prev } : {}),
     ...(isFiniteNumber(win["zoom"]) ? { zoom: win["zoom"] } : {}),
   };

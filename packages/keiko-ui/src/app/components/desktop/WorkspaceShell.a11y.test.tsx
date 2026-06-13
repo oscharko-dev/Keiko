@@ -31,6 +31,8 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
+    minimize: vi.fn(),
+    restore: vi.fn(),
     maximize: vi.fn(),
     update: vi.fn(),
     setSnap: vi.fn(),
@@ -121,6 +123,11 @@ describe("Workspace shell accessibility", () => {
         </div>
         <Footer
           winCount={1}
+          windows={[reviewWindow]}
+          windowPaletteOpen={false}
+          onToggleWindowPalette={vi.fn()}
+          onSelectWindow={vi.fn()}
+          onCloseWindowPalette={vi.fn()}
           mode="manual"
           selectedModel="gpt-5.5"
           projectName="Keiko"
@@ -148,6 +155,11 @@ describe("Workspace shell accessibility", () => {
     const { container } = render(
       <Footer
         winCount={2}
+        windows={[]}
+        windowPaletteOpen={false}
+        onToggleWindowPalette={vi.fn()}
+        onSelectWindow={vi.fn()}
+        onCloseWindowPalette={vi.fn()}
         mode="autonomous"
         selectedModel="gpt-5.5"
         projectName="Keiko"

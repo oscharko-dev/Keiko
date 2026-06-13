@@ -29,7 +29,7 @@ interface MutateArgs {
 
 type Mutations = Pick<
   WorkspaceApi,
-  "update" | "focus" | "close" | "maximize" | "add" | "toggleTool"
+  "update" | "focus" | "close" | "minimize" | "restore" | "maximize" | "add" | "toggleTool"
 >;
 
 function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
@@ -48,6 +48,37 @@ function makeClose(setWins: MutateArgs["setWins"]): WorkspaceApi["close"] {
   return (id) => setWins((ws) => (ws === null ? ws : ws.filter((w) => w.id !== id)));
 }
 
+function makeMinimize(setWins: MutateArgs["setWins"]): WorkspaceApi["minimize"] {
+  return (id) =>
+    setWins((ws) =>
+      ws === null ? ws : ws.map((w) => (w.id === id ? { ...w, minimized: true } : w)),
+    );
+}
+
+function makeRestore(
+  setWins: MutateArgs["setWins"],
+  zc: MutateArgs["zc"],
+): WorkspaceApi["restore"] {
+  return (id) =>
+    setWins((ws) =>
+      ws === null
+        ? ws
+        : ws.map((w) => (w.id === id ? { ...w, minimized: false, z: ++zc.current } : w)),
+    );
+}
+
+function fallbackRestoreGeometry(type: WindowType, vp: ViewportWorld): SnapPrev {
+  const def = WIN_TYPES[type];
+  const w = Math.min(def.w, Math.max(def.min.w, vp.w - 32));
+  const h = Math.min(def.h, Math.max(def.min.h, vp.h - 32));
+  return {
+    x: vp.x + Math.max(16, Math.round((vp.w - w) / 2)),
+    y: vp.y + Math.max(16, Math.round((vp.h - h) / 2)),
+    w,
+    h,
+  };
+}
+
 function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
   const { setWins, zc, worldVP } = args;
   return (id) =>
@@ -57,13 +88,16 @@ function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
       if (vp === null) return ws;
       return ws.map((w) => {
         if (w.id !== id) return w;
-        if (w.max && w.prev !== undefined) {
+        if (w.max) {
+          const restore = w.prev ?? fallbackRestoreGeometry(w.type, vp);
+          const { prev: _prev, ...rest } = w;
+          void _prev;
           const restored: AppWindow = {
-            ...w,
-            x: w.prev.x,
-            y: w.prev.y,
-            w: w.prev.w,
-            h: w.prev.h,
+            ...rest,
+            x: restore.x,
+            y: restore.y,
+            w: restore.w,
+            h: restore.h,
             max: false,
             z: ++zc.current,
           };
@@ -96,7 +130,9 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         const existing = list.find((w) => w.type === type);
         if (existing !== undefined) {
           createdId = existing.id;
-          return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
+          return list.map((w) =>
+            w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+          );
         }
       }
       // Epic #270 — QI run cards are identified by runId: opening a run that already has a card
@@ -106,7 +142,9 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         const existing = list.find((w) => w.type === "qiRun" && w.cfg["runId"] === dedupeRunId);
         if (existing !== undefined) {
           createdId = existing.id;
-          return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
+          return list.map((w) =>
+            w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+          );
         }
       }
       const dedupeChatId = type === "chat" ? cfg?.["chatId"] : undefined;
@@ -114,7 +152,9 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         const existing = list.find((w) => w.type === "chat" && w.cfg["chatId"] === dedupeChatId);
         if (existing !== undefined) {
           createdId = existing.id;
-          return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
+          return list.map((w) =>
+            w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+          );
         }
       }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 40);
@@ -137,7 +177,13 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       const vp = worldVP();
       if (vp === null) return ws;
       const list = ws ?? [];
-      if (list.find((w) => w.type === type) !== undefined) {
+      const existing = list.find((w) => w.type === type);
+      if (existing !== undefined && existing.minimized === true) {
+        return list.map((w) =>
+          w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+        );
+      }
+      if (existing !== undefined) {
         return list.filter((w) => w.type !== type);
       }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 28);
@@ -154,6 +200,8 @@ export function makeMutations(args: MutateArgs): Mutations {
     update: makeUpdate(args.setWins),
     focus: makeFocus(args.setWins, args.zc),
     close: makeClose(args.setWins),
+    minimize: makeMinimize(args.setWins),
+    restore: makeRestore(args.setWins, args.zc),
     maximize: makeMaximize(args),
     add: makeAdd(args),
     toggleTool: makeToggleTool(args),
@@ -189,6 +237,7 @@ function makeTileAll({ setWins, worldVP }: LayoutArgs): WorkspaceApi["tileAll"] 
         return {
           ...stripPrev(w),
           max: false,
+          minimized: false,
           x: vp.x + g + c * (cw + g),
           y: vp.y + g + rr * (ch + g),
           w: cw,
@@ -205,16 +254,33 @@ function makeSplitFront({ setWins, worldVP }: LayoutArgs): WorkspaceApi["splitFr
       const vp = worldVP();
       if (vp === null) return ws;
       const ids = [...ws]
+        .filter((w) => w.minimized !== true)
         .sort((a, b) => b.z - a.z)
         .slice(0, 2)
         .map((s) => s.id);
       return ws.map((w) => {
         const i = ids.indexOf(w.id);
         if (i === 0) {
-          return { ...stripPrev(w), max: false, x: vp.x, y: vp.y, w: vp.w / 2, h: vp.h };
+          return {
+            ...stripPrev(w),
+            max: false,
+            minimized: false,
+            x: vp.x,
+            y: vp.y,
+            w: vp.w / 2,
+            h: vp.h,
+          };
         }
         if (i === 1) {
-          return { ...stripPrev(w), max: false, x: vp.x + vp.w / 2, y: vp.y, w: vp.w / 2, h: vp.h };
+          return {
+            ...stripPrev(w),
+            max: false,
+            minimized: false,
+            x: vp.x + vp.w / 2,
+            y: vp.y,
+            w: vp.w / 2,
+            h: vp.h,
+          };
         }
         return w;
       });
@@ -230,6 +296,7 @@ function makeCascade({ setWins, worldVP }: LayoutArgs): WorkspaceApi["cascade"] 
       return ws.map((w, i) => ({
         ...stripPrev(w),
         max: false,
+        minimized: false,
         x: vp.x + 24 + i * 30,
         y: vp.y + 24 + i * 30,
         w: Math.min(560, vp.w - 80),
