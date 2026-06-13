@@ -183,6 +183,23 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
     const env = { ...makeConnector(), adapterId: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij" };
     expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
   });
+
+  // --- Epic #729: bidi / zero-width display-spoof hardening (defence-in-depth mirror of the
+  // envelope-building sanitiser; vectors built via String.fromCodePoint so the source stays ASCII) ---
+
+  it("rejects a displayLabel containing a bidi override (RLO U+202E)", () => {
+    const env = { ...makeRepo(), displayLabel: `spec${String.fromCodePoint(0x202e)}fdp.txt` };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a displayLabel containing a zero-width space (U+200B)", () => {
+    const env = { ...makeRepo(), displayLabel: `inv${String.fromCodePoint(0x200b)}oice` };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+  it("rejects a localRef containing a bidi isolate (U+2066)", () => {
+    const env = { ...makeRepo(), localRef: `scope:${String.fromCodePoint(0x2066)}foo` };
+    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+  });
+
   it("accepts a clean connector-document envelope", () => {
     expect(looksLikeBrowserSafeSourceEnvelope(makeConnector())).toBe(true);
   });

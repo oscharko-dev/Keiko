@@ -52,6 +52,7 @@ export {
   canonicaliseFragmentList,
   isKnownPriority,
   isMeaningfulText,
+  isUnsafeFormatCodePoint,
   normaliseCandidateText,
   normaliseText,
 } from "./domain/assertions.js";

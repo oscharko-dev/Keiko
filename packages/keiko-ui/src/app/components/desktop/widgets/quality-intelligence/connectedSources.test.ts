@@ -141,6 +141,20 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
     expect(sources.filter((s) => s.kind === "capsule")).toHaveLength(0);
   });
 
+  it("subjects figma snapshots to the SAME global cap — they do not escape the break (#729 #750)", () => {
+    // Figma is LAST in the precedence order, so it is the kind most likely to be dropped at the cap.
+    // 16 folder roots already fill MAX_SCOPES; the trailing figma snapshot must hit the single global
+    // break and be dropped, not appended past the limit. Without this case the figma path through the
+    // cap is mutation-blind (the cap test above used only file + folders + capsules).
+    const folders = Array.from({ length: MAX_SCOPES }, (_unused, i) => `/folder-${i.toString()}`);
+    const sources = buildConnectedRunSources({
+      connectedRoots: folders,
+      connectedFigmaSnapshotRunIds: ["fig-overflow"],
+    });
+    expect(sources).toHaveLength(MAX_SCOPES);
+    expect(sources.filter((s) => s.kind === "figma-snapshot")).toHaveLength(0);
+  });
+
   it("returns an empty list when nothing is connected (manual-input fallback case)", () => {
     expect(buildConnectedRunSources({})).toEqual([]);
     expect(buildConnectedRunSources({ connectedRoots: [], connectedCapsuleIds: [] })).toEqual([]);

@@ -14,6 +14,7 @@ import {
   QualityIntelligenceGeneration,
   QualityIntelligenceHardening,
   QualityIntelligenceFigma,
+  isUnsafeFormatCodePoint,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   detectWorkspaceAt,
@@ -134,15 +135,31 @@ const CREDENTIAL_LABEL_SHAPES: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu,
 ];
 
-// Replace every control character (C0 range incl. tab/newline/CR, plus DEL) with a space using a
-// code-point scan — the `no-control-regex` lint rule forbids a control-range regex literal, and a
-// scan is the established in-package idiom (mirrors generationPort.scrubEvidenceText). Keeps a
-// label single-line.
-function collapseControlCharsToSpace(value: string): string {
+// Make a source label single-line AND spoof-safe with one code-point scan (the `no-control-regex`
+// lint rule forbids a control-range regex literal, and a scan is the established in-package idiom —
+// mirrors generationPort.scrubEvidenceText):
+//   - C0 controls (incl. tab/newline/CR) and DEL become a SPACE, so a multi-line or control-laden
+//     label can never glue a second line of content into the streamed displayLabel (#277/#278).
+//   - Bidi overrides/isolates, zero-width/BOM, LRM/RLM, the Arabic letter mark, and C1 controls are
+//     DROPPED outright. These are invisible or reorder surrounding text, so a source filename /
+//     capsule id cannot smuggle a right-to-left or zero-width spoof into the browser-streamed
+//     envelope display surface. The drop set is the SHARED `isUnsafeFormatCodePoint` predicate used
+//     by the candidate-text scrubber (keiko-quality-intelligence stripUnsafeFormatChars), so the
+//     source-label path is symmetric with the persisted/exported candidate-text path (Epic #729;
+//     the bidi/zero-width display-hygiene class of #280/#284). C0/DEL are handled first (→ space)
+//     because a single-line label spaces line breaks rather than gluing them.
+function stripUnsafeLabelChars(value: string): string {
   let out = "";
   for (const ch of value) {
     const cp = ch.codePointAt(0) ?? 0;
-    out += cp <= 0x1f || cp === 0x7f ? " " : ch;
+    if (cp <= 0x1f || cp === 0x7f) {
+      out += " ";
+      continue;
+    }
+    if (isUnsafeFormatCodePoint(cp)) {
+      continue;
+    }
+    out += ch;
   }
   return out;
 }
@@ -153,12 +170,15 @@ const sanitiseLabel = (label: string): string => {
   // into the envelope display surface that is streamed back to the client (#277/#278).
   let cleaned = label.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, " ");
   for (const shape of CREDENTIAL_LABEL_SHAPES) cleaned = cleaned.replace(shape, " ");
-  // Replace every control character (newline, CR, tab, NUL, DEL, …) with a space so a multi-line or
-  // control-laden label can never carry a second line of content into the browser-streamed envelope
-  // displayLabel. Without this, the absolute-path basename-collapse below (which splits on "/" only)
-  // would keep a trailing "\n<more content>" glued inside the final path segment — defeating the
-  // basename defence and emitting a multi-line label (#277/#278 envelope display-surface invariant).
-  cleaned = collapseControlCharsToSpace(cleaned);
+  // Map control characters (newline, CR, tab, NUL, DEL, …) to spaces and DROP bidi-override,
+  // zero-width, BOM, and C1 spoofing code points so a multi-line, control-laden, or
+  // visually-reordered label can never carry a second line of content into — or spoof the reading
+  // order of — the browser-streamed envelope displayLabel. Without the control→space step the
+  // absolute-path basename-collapse below (which splits on "/" only) would keep a trailing
+  // "\n<more content>" glued inside the final path segment, defeating the basename defence; without
+  // the bidi/zero-width drop a crafted filename could reorder the displayed label (#277/#278
+  // envelope display-surface invariant; Epic #729 symmetry with the candidate-text scrubber).
+  cleaned = stripUnsafeLabelChars(cleaned);
   cleaned = cleaned.trim();
   // Collapse an absolute POSIX / Windows-drive / UNC path label to its final segment so the
   // display label never leaks the filesystem layout (the basename is the useful display token).
