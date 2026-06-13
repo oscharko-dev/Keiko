@@ -187,4 +187,55 @@ describe("createWorkflowMemoryPort", () => {
     });
     vault.close();
   });
+
+  it("does not persist confidential workflow candidates before explicit approval", () => {
+    const { dir, vault } = createVault();
+    cleanup.push(dir);
+    const evidenceStore = createEvidenceStore();
+    const port = createWorkflowMemoryPort({
+      vault,
+      evidenceStore,
+      runId: runId("wr-4"),
+      redactString: (value) => value,
+      now: () => 1_710_000_000_000,
+    });
+
+    if (port.onMemoryWriteCandidate === undefined) {
+      throw new Error("expected workflow memory port to expose onMemoryWriteCandidate");
+    }
+    port.onMemoryWriteCandidate({
+      proposalSummary: "the private support email is developer@example.com",
+      scope: { kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") },
+      source: "workflow-correction",
+    });
+
+    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    vault.close();
+  });
+
+  it("uses supplied customer identifier matchers for workflow candidate rejection", () => {
+    const { dir, vault } = createVault();
+    cleanup.push(dir);
+    const evidenceStore = createEvidenceStore();
+    const port = createWorkflowMemoryPort({
+      vault,
+      evidenceStore,
+      runId: runId("wr-5"),
+      redactString: (value) => value,
+      customerIdentifierMatchers: [/CustomerOmega/],
+      now: () => 1_710_000_000_000,
+    });
+
+    if (port.onMemoryWriteCandidate === undefined) {
+      throw new Error("expected workflow memory port to expose onMemoryWriteCandidate");
+    }
+    port.onMemoryWriteCandidate({
+      proposalSummary: "CustomerOmega requires SSO for releases",
+      scope: { kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") },
+      source: "workflow-success",
+    });
+
+    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    vault.close();
+  });
 });

@@ -606,6 +606,45 @@ describe("handleMemoryCaptureFromConversation", () => {
     );
   });
 
+  it("blocks confidential candidates instead of durably persisting them before approval", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-confidential");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that my private support email is developer@example.com",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
+    ]);
+    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+  });
+
+  it("uses deployment redaction literals as customer identifier rejection matchers", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      redactionSecrets: ["CustomerOmega"],
+    });
+    const chat = registerChat(deps, "capture-customer-id");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that CustomerOmega requires SSO for releases",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      { kind: "rejected", reason: "customer-identifier" },
+    ]);
+    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+  });
+
   it("resolves an explicit forget intent against in-scope memories", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });

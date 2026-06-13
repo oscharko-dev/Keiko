@@ -18,12 +18,14 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { isPersistableMemoryCandidate } from "./memory-capture-policy.js";
 
 interface WorkflowMemoryPortOptions {
   readonly vault: MemoryVaultStore;
   readonly evidenceStore: EvidenceStore;
   readonly runId: string;
   readonly redactString: (input: string) => string;
+  readonly customerIdentifierMatchers?: readonly RegExp[] | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -98,10 +100,15 @@ function persistWorkflowCandidates(
       capturedAt,
     },
     captureContextFor(event.scope, capturedAt, options.runId),
-    { scopeKind: event.scope.kind },
+    {
+      scopeKind: event.scope.kind,
+      ...(options.customerIdentifierMatchers === undefined
+        ? {}
+        : { customerIdentifierMatchers: options.customerIdentifierMatchers }),
+    },
   );
   for (const outcome of outcomes) {
-    if (outcome.kind !== "candidate") {
+    if (!isPersistableMemoryCandidate(outcome)) {
       continue;
     }
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;

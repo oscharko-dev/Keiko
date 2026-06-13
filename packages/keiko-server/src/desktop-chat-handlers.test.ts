@@ -459,6 +459,83 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
+  it("blocks confidential chat-intent candidates before durable persistence", async () => {
+    const memoryDir = join(tmp, "memory-vault-confidential");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that my private support email is developer@example.com",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; reason?: string }[] };
+    };
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
+    ]);
+    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    memoryVault.close();
+  });
+
+  it("threads deployment redaction literals into chat-intent memory rejection", async () => {
+    const memoryDir = join(tmp, "memory-vault-customer-identifier");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(
+      deps(fakeModel("memory response"), {
+        memoryVault,
+        redactionSecrets: ["CustomerOmega"],
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that CustomerOmega requires SSO for releases",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; reason?: string }[] };
+    };
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "customer-identifier" },
+    ]);
+    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    memoryVault.close();
+  });
+
   // eslint-disable-next-line complexity
   it("captures an ambient identity statement, requires acceptance, and recalls it in a new chat", async () => {
     const memoryDir = join(tmp, "memory-vault-ambient-identity");
