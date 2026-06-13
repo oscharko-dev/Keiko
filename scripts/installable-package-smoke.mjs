@@ -22,7 +22,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
-const NPM_INSTALL_TIMEOUT_MS = 90_000;
+const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 90_000;
+const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 300_000;
+const NPM_INSTALL_TIMEOUT_MS =
+  process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
