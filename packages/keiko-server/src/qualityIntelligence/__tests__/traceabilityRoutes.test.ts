@@ -125,7 +125,157 @@ describe("handleQiTraceabilityExport", () => {
   });
 });
 
-// ─── Requirement excerpts + candidate titles (#790) ─────────────────────────────
+// --- T-A: contentType + filename (#740) -----------------------------------------
+
+describe("handleQiTraceabilityExport — contentType and filename (T-A)", () => {
+  it("returns text/markdown contentType and a .md filename for markdown format", async () => {
+    // Arrange
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+
+    // Act
+    const result = await handleQiTraceabilityExport(
+      ctx(RUN_ID, makeReq({ format: "markdown" })),
+      deps(evidenceDir),
+    );
+
+    // Assert — RED if FORMAT_META markdown.contentType mutated to "text/csv" or ext mutated to "csv"
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      format: string;
+      contentType: string;
+      filename: string;
+      byteLen: number;
+      body: string;
+    };
+    expect(body.format).toBe("markdown");
+    expect(body.contentType).toBe("text/markdown");
+    expect(body.filename).toMatch(/\.md$/u);
+    expect(body.filename).toBe(`${RUN_ID}-traceability.md`);
+    expect(body.byteLen).toBe(Buffer.byteLength(body.body, "utf8"));
+  });
+
+  it("returns text/csv contentType and a .csv filename for CSV (default) format", async () => {
+    // Arrange
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+
+    // Act
+    const result = await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
+
+    // Assert — RED if FORMAT_META csv.contentType mutated to "text/markdown" or ext mutated to "md"
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      format: string;
+      contentType: string;
+      filename: string;
+      byteLen: number;
+      body: string;
+    };
+    expect(body.format).toBe("csv");
+    expect(body.contentType).toBe("text/csv");
+    expect(body.filename).toMatch(/\.csv$/u);
+    expect(body.filename).toBe(`${RUN_ID}-traceability.csv`);
+    expect(body.byteLen).toBe(Buffer.byteLength(body.body, "utf8"));
+  });
+});
+
+// --- T-B: empty/whitespace run id -> 400 (#740) ---------------------------------
+
+describe("handleQiTraceabilityExport — empty id guard (T-B)", () => {
+  it("returns 400 QI_BAD_REQUEST for a whitespace-only run id", async () => {
+    // Arrange — whitespace id; guard fires before evidenceDir or manifest lookup
+    const req = makeReq(null);
+
+    // Act — RED if the `.trim().length === 0` clause is removed from traceabilityRoutes.ts:114
+    const result = await handleQiTraceabilityExport(ctx("   ", req), deps(evidenceDir));
+
+    // Assert
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("QI_BAD_REQUEST");
+    expect(body.error.message).toMatch(/required/iu);
+  });
+
+  it("returns 400 QI_BAD_REQUEST for an empty-string run id", async () => {
+    // Arrange
+    const req = makeReq(null);
+
+    // Act — RED if id === undefined alone is kept but empty-string is not covered
+    const result = await handleQiTraceabilityExport(ctx("", req), deps(evidenceDir));
+
+    // Assert
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string } };
+    expect(body.error.code).toBe("QI_BAD_REQUEST");
+  });
+});
+
+// --- T-C: parseFormat robustness + DoS cap (#740) --------------------------------
+
+/**
+ * makeRawReq streams an arbitrary byte buffer as the request body without JSON.stringify.
+ * Used for malformed-JSON and oversized-body cases where makeReq's serialisation is unsuitable.
+ */
+function makeRawReq(rawBody: string | Buffer): IncomingMessage {
+  const buf = typeof rawBody === "string" ? Buffer.from(rawBody, "utf8") : rawBody;
+  return Readable.from(buf.length > 0 ? [buf] : []) as unknown as IncomingMessage;
+}
+
+describe("handleQiTraceabilityExport — parseFormat robustness (T-C)", () => {
+  it("falls back to csv when the request body is malformed JSON", async () => {
+    // Arrange
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    // Non-JSON payload within MAX_BODY_BYTES — exercises the JSON.parse catch branch in parseFormat
+    const req = makeRawReq("{not valid json");
+
+    // Act — RED if the malformed-JSON catch branch in parseFormat is removed
+    const result = await handleQiTraceabilityExport(ctx(RUN_ID, req), deps(evidenceDir));
+
+    // Assert — route must succeed and fall back to CSV, never 500
+    expect(result.status).toBe(200);
+    const body = result.body as { format: string; contentType: string };
+    expect(body.format).toBe("csv");
+    expect(body.contentType).toBe("text/csv");
+  });
+
+  it("falls back to csv when the request body exceeds MAX_BODY_BYTES (4 KiB)", async () => {
+    // Arrange
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    // Body contains format: "markdown" so that without the cap it would select markdown.
+    // The cap forces readBody to reject before JSON.parse; parseFormat catches that and returns csv.
+    const oversizeBody = JSON.stringify({ format: "markdown", pad: "x".repeat(5000) });
+    // Confirm the payload actually exceeds 4 KiB before streaming it.
+    expect(Buffer.byteLength(oversizeBody, "utf8")).toBeGreaterThan(4 * 1024);
+    const req = makeRawReq(oversizeBody);
+
+    // Act — RED if the `total > MAX_BODY_BYTES` guard is removed from readBody
+    const result = await handleQiTraceabilityExport(ctx(RUN_ID, req), deps(evidenceDir));
+
+    // Assert — cap fires → readBody rejects → parseFormat catch → csv fallback
+    expect(result.status).toBe(200);
+    const body = result.body as { format: string; contentType: string };
+    expect(body.format).toBe("csv");
+    expect(body.contentType).toBe("text/csv");
+  });
+
+  it("falls back to csv for an unknown format value", async () => {
+    // Arrange
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+
+    // Act — RED if parseFormat ever passed the unknown string through as the format
+    const result = await handleQiTraceabilityExport(
+      ctx(RUN_ID, makeReq({ format: "xml" })),
+      deps(evidenceDir),
+    );
+
+    // Assert
+    expect(result.status).toBe(200);
+    const body = result.body as { format: string; contentType: string };
+    expect(body.format).toBe("csv");
+    expect(body.contentType).toBe("text/csv");
+  });
+});
+
+// --- Requirement excerpts + candidate titles (#790) ------------------------------
 
 const READABLE_MATRIX = [
   {
