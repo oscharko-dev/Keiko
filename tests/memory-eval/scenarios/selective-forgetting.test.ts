@@ -29,6 +29,7 @@ import {
 
 import {
   FIXED_NOW_MS,
+  TEST_VAULT_KEY,
   counterIdSource,
   loadFixture,
   makeRecord,
@@ -59,6 +60,7 @@ function openVault(dir: string): MemoryVaultStore {
     env: { KEIKO_MEMORY_DIR: dir },
     now: () => FIXED_NOW_MS,
     newTombstoneId: ids,
+    vaultKey: TEST_VAULT_KEY,
   });
 }
 
