@@ -112,6 +112,7 @@ export {
   type QualityIntelligenceDeletionStatus,
   type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceBinaryExportMode,
+  type QualityIntelligenceTraceabilityExportMode,
   type QualityIntelligenceEvidenceRefRow,
   type QualityIntelligenceExportEvidenceInput,
   type QualityIntelligenceExportRow,
