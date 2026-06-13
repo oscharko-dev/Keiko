@@ -3,7 +3,7 @@
 // - The totals-vs-collection-length invariant fails closed.
 // - Schema validation rejects a stored manifest with an unknown top-level key (defensive read).
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -145,6 +145,24 @@ describe("recordQualityIntelligenceRun + load + list", () => {
       findings: [], // length 0, totals.findings says 5
     };
     expect(() => recordQualityIntelligenceRun(input, { evidenceDir })).toThrow(EvidenceWriteError);
+  });
+
+  it("refuses to overwrite an existing symlinked QI manifest entry", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "keiko-qi-victim-"));
+    try {
+      const victim = join(outside, "victim.qi.json");
+      await writeFile(victim, "ORIGINAL", "utf8");
+      await mkdir(join(evidenceDir, QI_SUBDIR), { recursive: true });
+      await symlink(victim, join(evidenceDir, QI_SUBDIR, "run-symlink.qi.json"));
+
+      expect(() => recordQualityIntelligenceRun(baseInput("run-symlink"), { evidenceDir })).toThrow(
+        EvidenceWriteError,
+      );
+      expect(await readFile(victim, "utf8")).toBe("ORIGINAL");
+      expect(loadQualityIntelligenceRun("run-symlink", { evidenceDir })).toBeUndefined();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("loadQualityIntelligenceRun returns undefined for a missing runId", () => {
