@@ -4,7 +4,7 @@
 // have dedicated test cases that would fail if the condition were inverted or shifted.
 // Deterministic — no async, no network, no filesystem.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -387,6 +387,31 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     const traversal = join(dir, "sub", "..", ".ssh", "id.md");
     try {
       ingest(input([fileSource("Traversal", traversal)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
+    }
+  });
+
+  it("throws QI_SOURCE_DENIED when a benign-named symlinked parent resolves into a denied dir", () => {
+    // Defense-in-depth (#713 security review: "deny-list still applies"). A directory symlink whose
+    // name is innocuous ("docs") but whose REAL target is a denied credential dir (".aws") must not
+    // let a supported file inside it read through. The lexical deny check sees only "docs"; the
+    // keiko-workspace deny gate sees only the basename relative to the realpath'd root — so without a
+    // realpath re-check over the connected path the credential file would be ingested. This pins the
+    // symlink-root half of the deny invariant and fails if assertRealPathNotDenied is removed.
+    const dir = makeDir();
+    const awsDir = join(dir, ".aws");
+    mkdirSync(awsDir);
+    writeFile(
+      awsDir,
+      "config.md",
+      "aws_session_token opaque-bare-token-018245-not-a-shaped-secret",
+    );
+    symlinkSync(awsDir, join(dir, "docs")); // benign-named link -> denied real dir
+    const viaLink = join(dir, "docs", "config.md"); // lexically "docs/config.md", real ".aws/config.md"
+    try {
+      ingest(input([fileSource("Docs", viaLink)]));
       expect.fail("should have thrown");
     } catch (err) {
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
@@ -1080,6 +1105,28 @@ describe("ingestInlineSources — folder deny-root containment (Epic #729 securi
     writeFileSync(join(denied, "credentials"), "aws_secret=should-never-ingest\n", "utf8");
     try {
       ingestInlineSources(input([{ kind: "workspace", label: "Creds", path: denied }]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a folder source whose ROOT is a benign-named symlink into a denied dir", () => {
+    // Symlink parity with the lexical root deny above: a folder symlink named innocuously ("vault")
+    // whose REAL target is a denied credential dir (".ssh") must be rejected before discovery walks
+    // it, otherwise every relative path inside ("id_rsa") would slip past the per-file deny check.
+    const base = mkdtempSync(join(tmpdir(), "qi-deny-link-"));
+    const denied = join(base, ".ssh");
+    mkdirSync(denied);
+    writeFileSync(join(denied, "id_rsa"), "PRIVATE KEY should-never-ingest\n", "utf8");
+    symlinkSync(denied, join(base, "vault")); // benign-named link -> denied real dir
+    try {
+      ingestInlineSources(
+        input([{ kind: "workspace", label: "Vault", path: join(base, "vault") }]),
+      );
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(QiIngestionError);

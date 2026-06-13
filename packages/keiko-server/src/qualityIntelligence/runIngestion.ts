@@ -6,6 +6,7 @@
 // may touch the filesystem); the pure domain owns splitting + hashing. Oversize and unsupported
 // inputs fail with user-actionable errors (#278 AC) before any model prompt is built.
 
+import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -153,8 +154,35 @@ const sanitiseLabel = (label: string): string => {
 // Reject a source whose absolute path (any segment) names a denied credential location. isDenied
 // inspects EVERY path segment, so a denied ancestor cannot be hidden by rooting a read deeper. Shared
 // by the folder and single-file paths so both honour the same containment guard (Epic #729 security).
+// Also rejects the symlink variant (assertRealPathNotDenied) so a benign-named link cannot resolve
+// into a protected location.
 function assertNotDenied(absPath: string, label: string, noun: string): void {
   if (isDenied(absPath)) {
+    throw new QiIngestionError(
+      "QI_SOURCE_DENIED",
+      `${noun} "${label}" is in a protected location.`,
+    );
+  }
+  assertRealPathNotDenied(absPath, label, noun);
+}
+
+// Defense-in-depth against a symlinked workspace root. The keiko-workspace deny gate (readWorkspaceFile)
+// inspects only the path RELATIVE to the realpath'd root, so a denied segment AT or ABOVE the connected
+// root is invisible to it: a benign-named "~/docs" symlink whose real target is "~/.aws" lets a
+// supported file inside it read through to the model, even though the lexical assertNotDenied above sees
+// only "docs". Re-running the deny gate over the REAL (symlink-resolved) absolute path rejects it. The
+// lexical check above already covers the no-symlink case, so this only ADDS denials when realpath
+// diverges into a protected location; a non-existent target surfaces later as NOT_FOUND, so a failed
+// realpath is a deliberate no-op here. (#713 single-file security review: "deny-list still applies";
+// #729 folder-root parity — both ingest paths share this boundary blind spot.)
+function assertRealPathNotDenied(absPath: string, label: string, noun: string): void {
+  let realPath: string;
+  try {
+    realPath = realpathSync(absPath);
+  } catch {
+    return;
+  }
+  if (realPath !== absPath && isDenied(realPath)) {
     throw new QiIngestionError(
       "QI_SOURCE_DENIED",
       `${noun} "${label}" is in a protected location.`,
@@ -330,8 +358,8 @@ function ingestWorkspace(
   byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
-  // Reject a folder whose ROOT names a denied credential location: connecting e.g. ~/.aws or
-  // ~/.docker AS A FOLDER would otherwise ingest credential files whose RELATIVE paths
+  // Reject a folder whose ROOT names a denied credential location (lexically or via a symlinked root):
+  // connecting e.g. ~/.aws AS A FOLDER would otherwise ingest credential files whose RELATIVE paths
   // ("credentials", "config.json") never trip the per-file deny check (#729 security).
   assertNotDenied(resolve(source.path), label, "Folder");
   let workspace: ReturnType<typeof detectWorkspaceAt>;
@@ -506,7 +534,7 @@ function ingestFile(
     );
   }
   // Reject any path whose segments name a denied credential directory or file (.ssh, .aws, .env,
-  // *.pem, id_rsa, …) regardless of how the workspace root resolves below.
+  // *.pem, id_rsa, …) — lexically or after symlink resolution — regardless of the workspace root below.
   assertNotDenied(absFile, label, "File");
   const content = readSingleFileContent(absFile, label);
   // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
