@@ -655,6 +655,61 @@ describe("handleGroundedAsk", () => {
     );
   });
 
+  it("production path includes an explicitly connected single file when the question has no lexical hit", async () => {
+    const project = store.createProject(tmp, "demo");
+    mkdirSync(join(project.path, "src/pages"), { recursive: true });
+    writeFileSync(
+      join(project.path, "src/pages/index.vue"),
+      "<template>\n" +
+        '  <main class="landing-page">\n' +
+        "    <h1>Willkommen</h1>\n" +
+        "  </main>\n" +
+        "</template>\n" +
+        "\n" +
+        '<script setup lang="ts">\n' +
+        "const title = 'Digitalisierung';\n" +
+        "</script>\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(project.path, "src/pages/sibling.vue"),
+      "<template>\n  <section>optimieren code sibling decoy</section>\n</template>\n",
+      "utf8",
+    );
+    const chat = store.createChat(project.path, "Single file scope", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: {
+        kind: "files",
+        relativePaths: ["src/pages/index.vue"],
+        connectedAtMs: NOW,
+      },
+    });
+    const seenRequests: GatewayRequest[] = [];
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId: chat.id,
+          content: "Kannst du diesen Code optimieren?",
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("Grounded answer from selected file.", seenRequests)),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const request = firstGatewayRequest(seenRequests);
+    const userMessage = request.messages.find((message) => message.role === "user");
+    expect(userMessage?.content).toContain("src/pages/index.vue");
+    expect(userMessage?.content).toContain("<template>");
+    expect(userMessage?.content).toContain("Digitalisierung");
+    expect(userMessage?.content).not.toContain("sibling decoy");
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.contextPack.scopeKind).toBe("files");
+    expect(answer.contextPack.fileCount).toBe(1);
+    expect(answer.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(false);
+  });
+
   it("returns a safe error when a connected file is removed before grounded ask", async () => {
     const project = store.createProject(tmp, "demo");
     seedScopedRepo(project.path);
