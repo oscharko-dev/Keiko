@@ -25,7 +25,10 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 // v3 = access tracking (#204). Adds the `memory_access` counter table that feeds the decay /
 // reinforcement maintenance cycle. The table holds ONLY counters + timestamps (no memory
 // content), so it stays CLEARTEXT — the cipher is never applied to it.
-export const MEMORY_VAULT_SCHEMA_VERSION = 3;
+// v4 = tombstone provenance hardening (#209). Adds reviewer_id and original_status to deletion
+// tombstones so audit consumers can distinguish who initiated deletion and what lifecycle state
+// was removed without storing memory body content.
+export const MEMORY_VAULT_SCHEMA_VERSION = 4;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -128,9 +131,15 @@ CREATE TABLE memory_access (
 CREATE INDEX idx_memory_access_last ON memory_access(last_accessed_at);
 `;
 
+const V4_SQL = `
+ALTER TABLE memory_tombstones ADD COLUMN reviewer_id TEXT;
+ALTER TABLE memory_tombstones ADD COLUMN original_status TEXT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
+  { version: 4, sql: V4_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
@@ -166,8 +175,8 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
       encryptExistingContent(db, cipher);
     }
     // Pin the final version to the current schema head once every pending DDL and the encryption
-    // sweep have run. A fresh DB applies v1 + v3 DDL and the encryption sweep, then lands on 3; a
-    // v2 DB applies only the v3 DDL and lands on 3; a v1 DB is encrypted then lands on 3.
+    // sweep have run. A fresh DB applies v1 + later DDL and the encryption sweep, then lands on
+    // the current schema head; older encrypted DBs apply only the later DDL they missed.
     setUserVersion(db, MEMORY_VAULT_SCHEMA_VERSION);
     db.exec("COMMIT");
   } catch (error) {

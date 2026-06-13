@@ -1,5 +1,5 @@
 // Issue #211 — typed BFF helpers for the Memory Center surface.
-// Wraps the 12 /api/memory/* routes from packages/keiko-server/src/memory-handlers.ts.
+// Wraps the Memory Center /api/memory/* routes from packages/keiko-server/src/memory-handlers.ts.
 // Browser-safe: imports only from @oscharko-dev/keiko-contracts (ADR-0019 rule 8).
 // CSRF header added automatically for all mutating methods.
 
@@ -122,12 +122,16 @@ export interface MemoryConsolidationJobResponse {
 
 export interface MemoryForgetResponse {
   readonly forgotten: true;
-  readonly memoryId: string;
+  readonly memoryId?: string;
+  readonly memoryIds: readonly string[];
+  readonly count: number;
 }
 
 export interface MemoryDeleteResponse {
   readonly deleted: true;
   readonly memoryId: string;
+  readonly memoryIds: readonly string[];
+  readonly count: number;
 }
 
 export interface MemoryCorrectionResponse {
@@ -150,6 +154,43 @@ export interface StartMemoryConsolidationInput {
   readonly maxAgeMs: number;
   readonly maxClustersPerRun: number;
   readonly maxRecordsPerRun: number;
+}
+
+export type ForgetSelector =
+  | { readonly kind: "by-id"; readonly memoryId: MemoryId }
+  | { readonly kind: "by-scope"; readonly scope: MemoryScope }
+  | { readonly kind: "by-type"; readonly scope: MemoryScope; readonly type: MemoryType }
+  | {
+      readonly kind: "by-source-conversation";
+      readonly scope: MemoryScope;
+      readonly sourceConversationId: string;
+    }
+  | { readonly kind: "by-time-window"; readonly scope: MemoryScope; readonly olderThanMs: number };
+
+export interface SelectiveForgetInput {
+  readonly selector: ForgetSelector;
+  readonly reason?: string;
+}
+
+export interface ResolveMemoryConflictInput {
+  readonly winner: MemoryId;
+  readonly losers: readonly MemoryId[];
+  readonly reason?: string;
+}
+
+export interface MemoryConflictTransition {
+  readonly memoryId: MemoryId;
+  readonly from: MemoryStatus;
+  readonly to: MemoryStatus;
+  readonly transitionedAt: number;
+}
+
+export interface ResolveMemoryConflictResponse {
+  readonly resolved: true;
+  readonly winner: MemoryId;
+  readonly losers: readonly MemoryId[];
+  readonly supersessionEdgeIds: readonly string[];
+  readonly transitions: readonly MemoryConflictTransition[];
 }
 
 // ---------------------------------------------------------------------------
@@ -333,15 +374,36 @@ export async function forgetMemory(
   });
 }
 
+export async function forgetMemories(
+  input: SelectiveForgetInput,
+  fetchImpl = fetchJson<MemoryForgetResponse>,
+): Promise<MemoryForgetResponse> {
+  return fetchImpl("/api/memory/forget", {
+    method: "POST",
+    body: JSON.stringify({
+      acknowledged: true,
+      selector: input.selector,
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    }),
+  });
+}
+
 // ---------------------------------------------------------------------------
-// Delete (hard delete)
+// Delete (governed tombstone delete)
 // ---------------------------------------------------------------------------
 
 export async function deleteMemory(
   id: MemoryId,
+  reason?: string,
   fetchImpl = fetchJson<MemoryDeleteResponse>,
 ): Promise<MemoryDeleteResponse> {
-  return fetchImpl(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE", body: "{}" });
+  return fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    body: JSON.stringify({
+      acknowledged: true,
+      ...(reason !== undefined ? { reason } : {}),
+    }),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +418,16 @@ export async function correctMemory(
   return fetchImpl(`/api/memory/${encodeURIComponent(id)}/correct`, {
     method: "POST",
     body: JSON.stringify({ body: correctedBody }),
+  });
+}
+
+export async function resolveMemoryConflict(
+  input: ResolveMemoryConflictInput,
+  fetchImpl = fetchJson<ResolveMemoryConflictResponse>,
+): Promise<ResolveMemoryConflictResponse> {
+  return fetchImpl("/api/memory/conflicts/resolve", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

@@ -194,6 +194,14 @@ function applyFilters(
       omitted.push({ memoryId: r.id, reason: "type-filtered" });
       continue;
     }
+    if (r.status === "superseded" && request.includeSuperseded !== true) {
+      omitted.push({
+        memoryId: r.id,
+        reason: "suppressed-by-status",
+        suppressionDetail: "superseded",
+      });
+      continue;
+    }
     const sup = isMemorySuppressed(r, request.nowMs, resolved.staleConfidenceThreshold);
     if (sup.suppressed) {
       // sup.reason is optional on SuppressionResult; under exactOptionalPropertyTypes we
@@ -229,9 +237,7 @@ function buildEdgesIndex(
   return map;
 }
 
-function hasPositiveSemanticSignal(
-  semanticById: MemoryRetrievalRequest["semanticById"],
-): boolean {
+function hasPositiveSemanticSignal(semanticById: MemoryRetrievalRequest["semanticById"]): boolean {
   if (semanticById === undefined) return false;
   for (const score of semanticById.values()) {
     if (score > 0) return true;
@@ -240,8 +246,7 @@ function hasPositiveSemanticSignal(
 }
 
 function hasQuerySignal(request: MemoryRetrievalRequest): boolean {
-  const lexicalSignal =
-    request.queryText !== undefined && tokenize(request.queryText).length > 0;
+  const lexicalSignal = request.queryText !== undefined && tokenize(request.queryText).length > 0;
   return lexicalSignal || hasPositiveSemanticSignal(request.semanticById);
 }
 

@@ -376,7 +376,7 @@ async function forgetMemory(baseUrl, memoryId) {
 async function deleteMemory(baseUrl, memoryId) {
   return api(baseUrl, `/api/memory/${encodeURIComponent(memoryId)}`, {
     method: "DELETE",
-    body: "{}",
+    body: JSON.stringify({ acknowledged: true, reason: "installable memory smoke" }),
   });
 }
 
@@ -610,7 +610,10 @@ async function main() {
     await acceptProposal(ui.baseUrl, deleteId);
     await deleteMemory(ui.baseUrl, deleteId);
     const deleted = await fetchMemory(ui.baseUrl, deleteId);
-    assert(deleted.status === 404, "hard-deleted memory still resolved from the Memory Center API");
+    assert(
+      deleted.status === 404,
+      "deleted and tombstoned memory still resolved from the Memory Center API",
+    );
 
     console.log(
       "installable-memory-smoke ok: tarball-installed UI/BFF served pages and exercised create, use, correct, forget, delete, scope isolation, restart persistence, and memory-off mode.",

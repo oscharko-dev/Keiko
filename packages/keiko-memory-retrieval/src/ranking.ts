@@ -46,7 +46,10 @@ function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): Incl
     recency: recencyScore(record.updatedAt, query.nowMs),
     confidence: record.provenance.confidence,
     pinned: record.pinned ? 1 : 0,
-    correction: record.type === "correction" ? 1 : 0,
+    correction:
+      record.type === "correction" || record.provenance.sourceKind === "accepted-correction"
+        ? 1
+        : 0,
     graph: 0,
     semantic: query.semanticById?.get(record.id) ?? 0,
   };
