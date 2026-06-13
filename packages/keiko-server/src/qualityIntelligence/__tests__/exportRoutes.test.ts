@@ -572,7 +572,7 @@ describe("handleQiExport — local adapter coverage", () => {
 // ─── All TMS adapters with dryRun: false → 403 or 409 ────────────────────────
 
 describe("handleQiExport — all TMS adapters reject live export", () => {
-  it.each(["jira-issues", "qtest", "xray", "polarion", "alm"])(
+  it.each(["jira-issues", "qtest", "xray", "polarion", "alm", "quality-center"])(
     "TMS adapter '%s' with dryRun: false returns 403 (after approval) or 409 (no approval)",
     async (adapter) => {
       const result = asResult(
@@ -657,7 +657,26 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       ),
     );
     expect(result.status).toBe(200);
-    expect((result.body as { dryRun: boolean }).dryRun).toBe(true);
+    const body = result.body as { dryRun: boolean; candidateCount: number; preview: string };
+    expect(body.dryRun).toBe(true);
+    expect(body.candidateCount).toBe(1);
+    // The preview must carry the Quality Center serializer's own output, not an empty or
+    // wrong-adapter body — pins the preview content so an empty/truncated preview regresses RED.
+    expect(body.preview).toContain("Quality Center Export Preview");
+    expect(body.preview).toContain("QC-0001");
+  });
+
+  it("Quality Center dry-run returns 409 QI_NOTHING_TO_EXPORT when no candidate is approved (TMS forces approvedOnly)", async () => {
+    // No approveSeeded() — the seeded candidate stays unapproved. A TMS adapter forces approvedOnly,
+    // so the dry-run must NOT preview unapproved content; it returns 409 instead of a 200 preview.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
   });
 
   it("Quality Center live write is disabled: 403 QI_EXTERNAL_EXPORT_DISABLED (after approval)", async () => {
@@ -827,6 +846,22 @@ describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.targetAdapter).toBe("jira-issues");
     expect(rows[0]?.dryRun).toBe(true);
+  });
+
+  it("records a TMS dry-run preview with dryRun=true (quality-center, approved)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("quality-center");
+    expect(rows[0]?.dryRun).toBe(true);
+    expect(rows[0]?.redactionAttested).toBe(true);
   });
 
   it("records NO row for a disabled external TMS write (jira-issues live → 403)", async () => {
