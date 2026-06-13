@@ -8,6 +8,7 @@ import type {
   ModelCapability,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import { TEST_QUALITY_JUDGE_RESPONSE_SCHEMA } from "@oscharko-dev/keiko-contracts";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "../../deps.js";
@@ -322,7 +323,7 @@ describe("parseJudgeVerdict", () => {
     expect(names).toContain("ac-fidelity");
   });
 
-  it("clamps score to [0, 100]", () => {
+  it("returns safe default when a score exceeds the rubric range", () => {
     const json = JSON.stringify({
       dimensions: [
         { name: "verifiability", score: 150, rationale: "r" },
@@ -333,7 +334,51 @@ describe("parseJudgeVerdict", () => {
       overallRationale: "test",
     });
     const verdict = parseJudgeVerdict(json);
-    expect(verdict.dimensions[0]?.score).toBeLessThanOrEqual(100);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when a score is below the rubric range", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: -1, rationale: "r" },
+        { name: "atomicity", score: 75, rationale: "a" },
+        { name: "determinism", score: 80, rationale: "d" },
+        { name: "ac-fidelity", score: 90, rationale: "f" },
+      ],
+      overallRationale: "test",
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when a score is fractional", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 59.6, rationale: "r" },
+        { name: "atomicity", score: 75, rationale: "a" },
+        { name: "determinism", score: 80, rationale: "d" },
+        { name: "ac-fidelity", score: 90, rationale: "f" },
+      ],
+      overallRationale: "test",
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when a score is not finite JSON number syntax", () => {
+    const json =
+      '{"dimensions":[' +
+      '{"name":"verifiability","score":Infinity,"rationale":"r"},' +
+      '{"name":"atomicity","score":75,"rationale":"a"},' +
+      '{"name":"determinism","score":80,"rationale":"d"},' +
+      '{"name":"ac-fidelity","score":90,"rationale":"f"}' +
+      '],"overallRationale":"test"}';
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
   });
 
   it("returns safe default when dimensions array is empty", () => {
@@ -375,6 +420,42 @@ describe("parseJudgeVerdict", () => {
         { name: "determinism", score: 90, rationale: "no randomness" },
         { name: "ac-fidelity", score: 75, rationale: "matches AC" },
       ],
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when the top-level verdict carries unknown properties", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 80, rationale: "clear expected outcome" },
+        { name: "atomicity", score: 70, rationale: "single action" },
+        { name: "determinism", score: 90, rationale: "no randomness" },
+        { name: "ac-fidelity", score: 75, rationale: "matches AC" },
+      ],
+      overallRationale: "good test",
+      scratchpad: "not part of the contract",
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when a dimension carries unknown properties", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        {
+          name: "verifiability",
+          score: 80,
+          rationale: "clear expected outcome",
+          extra: "not part of the contract",
+        },
+        { name: "atomicity", score: 70, rationale: "single action" },
+        { name: "determinism", score: 90, rationale: "no randomness" },
+        { name: "ac-fidelity", score: 75, rationale: "matches AC" },
+      ],
+      overallRationale: "good test",
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
@@ -535,10 +616,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
     const responseFormat = calls[0]?.request.responseFormat;
     expect(responseFormat?.type).toBe("json_schema");
     if (responseFormat?.type === "json_schema") {
-      expect(responseFormat.schema).toMatchObject({ type: "object" });
-      const props = responseFormat.schema.properties as Record<string, unknown>;
-      expect(props).toHaveProperty("dimensions");
-      expect(props).toHaveProperty("overallRationale");
+      expect(responseFormat.schema).toEqual(TEST_QUALITY_JUDGE_RESPONSE_SCHEMA);
     }
   });
 });
