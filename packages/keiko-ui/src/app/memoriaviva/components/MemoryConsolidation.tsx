@@ -507,6 +507,8 @@ export function MemoryConsolidation({
         {activeJob?.result !== undefined ? (
           <section
             aria-label="Consolidation results"
+            aria-live="polite"
+            aria-atomic="false"
             style={{
               display: "grid",
               gap: 16,

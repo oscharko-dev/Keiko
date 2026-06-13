@@ -1,12 +1,13 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Icons } from "../../Icons";
 import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
 
 export function SearchPanel(): ReactNode {
   const session = useOptionalChatSessionContext();
   const projectName = session?.activeProject?.name ?? "No project selected";
+  const comingSoonId = useId();
   return (
     <div className="srch">
       <div className="srch-box">
@@ -14,6 +15,7 @@ export function SearchPanel(): ReactNode {
         <input
           type="search"
           aria-label="Search files and symbols"
+          aria-describedby={comingSoonId}
           placeholder="Search files & symbols…"
           disabled
         />
@@ -30,7 +32,7 @@ export function SearchPanel(): ReactNode {
           <div className="ph-stripes" />
           <span className="rb-ph-label mono">search</span>
         </div>
-        <div className="rb-foot mono" style={{ marginTop: 14 }}>
+        <div id={comingSoonId} className="rb-foot mono" style={{ marginTop: 14 }}>
           Search across workspace files &amp; symbols — coming soon.
         </div>
       </div>
