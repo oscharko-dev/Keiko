@@ -71,6 +71,9 @@ export function gateDeleteOptions(options: DeleteMemoryOptions): DeleteMemoryOpt
   if (options.forgetterSurface.length === 0) {
     errors.push("deleteOptions.forgetterSurface must be non-empty");
   }
+  if (options.reviewerId?.length === 0) {
+    errors.push("deleteOptions.reviewerId must be non-empty when provided");
+  }
   if (!Number.isFinite(options.nowMs) || options.nowMs < 0) {
     errors.push("deleteOptions.nowMs must be a finite non-negative number");
   }

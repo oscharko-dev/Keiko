@@ -19,32 +19,48 @@ import { randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MemoryStorageError,
+  type MemoryBatchUpdate,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import {
   GovernanceError,
   buildArchiveOperation,
+  buildConflictTransitions,
+  buildCorrection,
   buildForgetOperations,
   buildPinOperation,
   buildUnpinOperation,
+  detectConflictPair,
   selectMemoriesForForget,
+  type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
 import {
+  checkStatusTransition,
   MEMORY_SCOPE_KINDS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  validateMemoryScope,
+  type MemoryConversationId,
+  type MemoryAuditEvent,
+  type MemoryEdge,
+  type MemoryEdgeId,
   type MemoryId,
+  type MemoryProposal,
+  type MemoryProposalId,
   type MemoryRecord,
   type MemoryReviewerId,
+  type MemoryScope,
   type MemoryScopeKind,
   type MemorySensitivity,
   type MemoryStatus,
   type MemoryType,
+  type MemorySupersession,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ApiError, RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -112,6 +128,19 @@ function splitComma(raw: string | null): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+function parseScope(raw: unknown): MemoryScope | RouteResult {
+  if (!isRecord(raw)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "selector.scope must be an object.") };
+  }
+  if (!validateMemoryScope(raw).ok) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "selector.scope must be a valid memory scope."),
+    };
+  }
+  return raw as MemoryScope;
 }
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
@@ -589,15 +618,24 @@ export async function handleArchiveMemory(
   }
 }
 
-// ─── Handler: POST /api/memory/:id/forget ─────────────────────────────────────
-// "forget" transitions the record to status "forgotten" — the storage layer then tombstones it.
-// The user must supply `{ acknowledged: true }` in the request body.
+// ─── Handler: POST /api/memory/:id/forget + POST /api/memory/forget ───────────
+// The public destructive surfaces all use the same governed path:
+//   1. require explicit acknowledgement,
+//   2. let the governance selector protect pinned/forgotten records,
+//   3. delete with an audit tombstone.
 
-interface ForgetInput {
+interface DestructiveInput {
   readonly reason: string;
 }
 
-function parseForgetInput(raw: Record<string, unknown>): ForgetInput | RouteResult {
+interface ForgetSelectionInput extends DestructiveInput {
+  readonly selector: ForgetSelector;
+}
+
+function parseDestructiveInput(
+  raw: Record<string, unknown>,
+  defaultReason: string,
+): DestructiveInput | RouteResult {
   if (raw.acknowledged !== true) {
     return {
       status: 400,
@@ -610,39 +648,182 @@ function parseForgetInput(raw: Record<string, unknown>): ForgetInput | RouteResu
   const reason =
     typeof raw.reason === "string" && raw.reason.trim().length > 0
       ? raw.reason.trim()
-      : "user-initiated forget from Memory Center";
+      : defaultReason;
   return { reason };
 }
 
-function executeForget(vault: MemoryVaultStore, id: string, reason: string): RouteResult {
-  const record = vault.getMemory(id as MemoryId);
-  if (record === undefined) {
-    return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
+function parseByIdForgetSelector(raw: Record<string, unknown>): ForgetSelector | RouteResult {
+  if (typeof raw.memoryId !== "string" || raw.memoryId.trim().length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "selector.memoryId must be a non-empty string."),
+    };
   }
-  const nowMs = Date.now();
-  const candidates = selectMemoriesForForget(
-    [record],
-    { kind: "by-id", memoryId: id as MemoryId },
-    { nowMs },
+  return { kind: "by-id", memoryId: raw.memoryId as MemoryId };
+}
+
+function parseByScopeForgetSelector(raw: Record<string, unknown>): ForgetSelector | RouteResult {
+  const scope = parseScope(raw.scope);
+  if (isRouteResult(scope)) return scope;
+  return { kind: "by-scope", scope };
+}
+
+function parseByTypeForgetSelector(raw: Record<string, unknown>): ForgetSelector | RouteResult {
+  const scope = parseScope(raw.scope);
+  if (isRouteResult(scope)) return scope;
+  if (!isMemoryType(raw.type)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "selector.type must be a valid memory type."),
+    };
+  }
+  return { kind: "by-type", scope, type: raw.type };
+}
+
+function parseBySourceConversationForgetSelector(
+  raw: Record<string, unknown>,
+): ForgetSelector | RouteResult {
+  const scope = parseScope(raw.scope);
+  if (isRouteResult(scope)) return scope;
+  if (
+    typeof raw.sourceConversationId !== "string" ||
+    raw.sourceConversationId.trim().length === 0
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "selector.sourceConversationId must be a non-empty string."),
+    };
+  }
+  return {
+    kind: "by-source-conversation",
+    scope,
+    sourceConversationId: raw.sourceConversationId as MemoryConversationId,
+  };
+}
+
+function parseByTimeWindowForgetSelector(
+  raw: Record<string, unknown>,
+): ForgetSelector | RouteResult {
+  const scope = parseScope(raw.scope);
+  if (isRouteResult(scope)) return scope;
+  if (
+    typeof raw.olderThanMs !== "number" ||
+    !Number.isFinite(raw.olderThanMs) ||
+    raw.olderThanMs < 0
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "selector.olderThanMs must be a finite non-negative number."),
+    };
+  }
+  return { kind: "by-time-window", scope, olderThanMs: raw.olderThanMs };
+}
+
+function parseForgetSelector(raw: unknown): ForgetSelector | RouteResult {
+  if (!isRecord(raw)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "selector must be an object.") };
+  }
+  switch (raw.kind) {
+    case "by-id":
+      return parseByIdForgetSelector(raw);
+    case "by-scope":
+      return parseByScopeForgetSelector(raw);
+    case "by-type":
+      return parseByTypeForgetSelector(raw);
+    case "by-source-conversation":
+      return parseBySourceConversationForgetSelector(raw);
+    case "by-time-window":
+      return parseByTimeWindowForgetSelector(raw);
+    default:
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "selector.kind is not supported."),
+      };
+  }
+}
+
+function parseForgetSelectionInput(
+  raw: Record<string, unknown>,
+): ForgetSelectionInput | RouteResult {
+  const destructive = parseDestructiveInput(
+    raw,
+    "user-initiated selective forget from Memory Center",
   );
+  if (isRouteResult(destructive)) return destructive;
+  const selector = parseForgetSelector(raw.selector);
+  if (isRouteResult(selector)) return selector;
+  return { ...destructive, selector };
+}
+
+function listForgetCandidates(
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+): readonly MemoryRecord[] | RouteResult {
+  if (selector.kind === "by-id") {
+    const record = vault.getMemory(selector.memoryId);
+    if (record === undefined) {
+      return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
+    }
+    return [record];
+  }
+  return sortMemories(vault.listMemoriesByScope(selector.scope, { includeExpired: true }));
+}
+
+function executeForgetSelection(
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+  reason: string,
+): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
+  const nowMs = Date.now();
+  const records = listForgetCandidates(vault, selector);
+  if (isRouteResult(records)) return records;
+  const candidates = selectMemoriesForForget(records, selector, { nowMs });
   if (candidates.length === 0) {
     return {
       status: 409,
-      body: errorBody("GOVERNANCE_ERROR", "Memory cannot be forgotten (it may be pinned)."),
+      body: errorBody("GOVERNANCE_ERROR", "No matching memories can be forgotten."),
     };
   }
-  buildForgetOperations(
+  const operations = buildForgetOperations(
     candidates,
     { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
     { reason, writeTombstone: true },
   );
-  vault.deleteMemory(id as MemoryId, {
-    tombstone: true,
-    reason,
-    forgetterSurface: "memory-center",
-    nowMs,
-  });
-  return { status: 200, body: { forgotten: true, memoryId: id } };
+  vault.deleteMemories(
+    operations.map((operation) => ({
+      id: operation.memoryId,
+      options: {
+        tombstone: true,
+        reviewerId: operation.reviewerId,
+        reason: operation.reason,
+        forgetterSurface: "memory-center",
+        nowMs: operation.forgottenAt,
+      },
+    })),
+  );
+  return { memoryIds: operations.map((operation) => operation.memoryId) };
+}
+
+function formatForgetBody(memoryIds: readonly MemoryId[]): Record<string, unknown> {
+  return {
+    forgotten: true,
+    memoryIds,
+    count: memoryIds.length,
+    ...(memoryIds.length === 1 ? { memoryId: memoryIds[0] } : {}),
+  };
+}
+
+function memoryMutationErrorBody(err: unknown, fallbackMessage: string): RouteResult {
+  if (err instanceof GovernanceError) {
+    return { status: 400, body: governanceErrorBody(err) };
+  }
+  if (err instanceof MemoryStorageError) {
+    return {
+      status: err.code === "not-found" ? 404 : 500,
+      body: errorBody("MEMORY_ERROR", fallbackMessage),
+    };
+  }
+  throw err;
 }
 
 export async function handleForgetMemory(
@@ -660,29 +841,51 @@ export async function handleForgetMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const input = parseForgetInput(body);
+  const input = parseDestructiveInput(body, "user-initiated forget from Memory Center");
   if (isRouteResult(input)) return input;
 
   try {
-    return executeForget(vault, id, input.reason);
+    const result = executeForgetSelection(
+      vault,
+      { kind: "by-id", memoryId: id as MemoryId },
+      input.reason,
+    );
+    if (isRouteResult(result)) return result;
+    return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
-    if (err instanceof GovernanceError) {
-      return { status: 400, body: governanceErrorBody(err) };
-    }
-    if (err instanceof MemoryStorageError) {
-      return {
-        status: err.code === "not-found" ? 404 : 500,
-        body: errorBody("MEMORY_ERROR", "Failed to forget memory."),
-      };
-    }
-    throw err;
+    return memoryMutationErrorBody(err, "Failed to forget memory.");
+  }
+}
+
+export async function handleForgetMemories(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+
+  const input = parseForgetSelectionInput(body);
+  if (isRouteResult(input)) return input;
+
+  try {
+    const result = executeForgetSelection(vault, input.selector, input.reason);
+    if (isRouteResult(result)) return result;
+    return { status: 200, body: formatForgetBody(result.memoryIds) };
+  } catch (err) {
+    return memoryMutationErrorBody(err, "Failed to forget memories.");
   }
 }
 
 // ─── Handler: DELETE /api/memory/:id ──────────────────────────────────────────
-// Hard delete without a tombstone. Intended for admin / data cleanup.
+// DELETE is a convenience alias for governed, tombstoned deletion. It does not expose hard delete.
 
-export function handleDeleteMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export async function handleDeleteMemory(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -691,25 +894,248 @@ export function handleDeleteMemory(ctx: RouteContext, deps: UiHandlerDeps): Rout
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+
+  const input = parseDestructiveInput(body, "user-initiated delete from Memory Center");
+  if (isRouteResult(input)) return input;
+
   try {
-    const existing = vault.getMemory(id as MemoryId);
-    if (existing === undefined) {
+    const result = executeForgetSelection(
+      vault,
+      { kind: "by-id", memoryId: id as MemoryId },
+      input.reason,
+    );
+    if (isRouteResult(result)) return result;
+    return {
+      status: 200,
+      body: {
+        deleted: true,
+        memoryId: id,
+        memoryIds: result.memoryIds,
+        count: result.memoryIds.length,
+      },
+    };
+  } catch (err) {
+    return memoryMutationErrorBody(err, "Failed to delete memory.");
+  }
+}
+
+// ─── Handler: POST /api/memory/conflicts/resolve ──────────────────────────────
+
+interface ConflictResolutionInput {
+  readonly winner: MemoryId;
+  readonly losers: readonly MemoryId[];
+  readonly reason: string;
+}
+
+function uniqueIds(ids: readonly MemoryId[]): readonly MemoryId[] {
+  return ids.filter((id, index) => ids.indexOf(id) === index);
+}
+
+function parseConflictResolutionInput(
+  raw: Record<string, unknown>,
+): ConflictResolutionInput | RouteResult {
+  if (typeof raw.winner !== "string" || raw.winner.trim().length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "winner must be a non-empty string.") };
+  }
+  if (
+    !Array.isArray(raw.losers) ||
+    raw.losers.length === 0 ||
+    !raw.losers.every((id): id is string => typeof id === "string" && id.trim().length > 0)
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "losers must be a non-empty string array."),
+    };
+  }
+  const reason =
+    typeof raw.reason === "string" && raw.reason.trim().length > 0
+      ? raw.reason.trim()
+      : "conflict resolved from Memory Center";
+  const winner = raw.winner as MemoryId;
+  const losers = raw.losers.map((id) => id as MemoryId);
+  if (uniqueIds([winner, ...losers]).length !== 1 + losers.length) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "winner and losers must be unique memory ids."),
+    };
+  }
+  return {
+    winner,
+    losers,
+    reason,
+  };
+}
+
+function loadConflictMemories(
+  vault: MemoryVaultStore,
+  input: ConflictResolutionInput,
+): readonly MemoryRecord[] | RouteResult {
+  const records: MemoryRecord[] = [];
+  for (const id of uniqueIds([input.winner, ...input.losers])) {
+    const record = vault.getMemory(id);
+    if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    vault.deleteMemory(id as MemoryId, {
-      tombstone: false,
-      forgetterSurface: "memory-center",
-      nowMs: Date.now(),
-    });
-    return { status: 200, body: { deleted: true, memoryId: id } };
-  } catch (err) {
-    if (err instanceof MemoryStorageError) {
-      return {
-        status: err.code === "not-found" ? 404 : 500,
-        body: errorBody("MEMORY_ERROR", "Failed to delete memory."),
-      };
+    records.push(record);
+  }
+  return records;
+}
+
+function scopeKey(scope: MemoryScope): string {
+  switch (scope.kind) {
+    case "user":
+      return `user:${scope.userId}`;
+    case "workspace":
+      return `workspace:${scope.workspaceId}`;
+    case "project":
+      return `project:${scope.projectId}`;
+    case "workflow":
+      return `workflow:${scope.workflowDefinitionId}`;
+    case "global":
+      return "global";
+  }
+}
+
+function validateConflictPairForResolution(winner: MemoryRecord, loser: MemoryRecord): void {
+  if (winner.type !== loser.type || scopeKey(winner.scope) !== scopeKey(loser.scope)) {
+    throw new GovernanceError(
+      "invalid-resolution",
+      "conflict resolution requires memories with the same scope and type",
+    );
+  }
+  const conflict = detectConflictPair(winner, loser);
+  if (!conflict.hasConflict) {
+    throw new GovernanceError(
+      "invalid-resolution",
+      "conflict resolution requires an actual detected conflict",
+    );
+  }
+}
+
+function validateConflictResolutionMemories(
+  memories: readonly MemoryRecord[],
+  input: ConflictResolutionInput,
+): void {
+  const winner = findMemoryById(memories, input.winner);
+  if (winner === undefined) {
+    throw new GovernanceError("invalid-resolution", "winner is not loaded");
+  }
+  for (const loserId of input.losers) {
+    const loser = findMemoryById(memories, loserId);
+    if (loser === undefined) {
+      throw new GovernanceError("invalid-resolution", "loser is not loaded");
     }
-    throw err;
+    validateConflictPairForResolution(winner, loser);
+  }
+}
+
+function buildEdgeFromSupersession(supersession: MemorySupersession): MemoryEdge {
+  return {
+    id: randomUUID() as MemoryEdgeId,
+    schemaVersion: "1",
+    fromMemoryId: supersession.oldMemoryId,
+    toMemoryId: supersession.newMemoryId,
+    kind: supersession.edgeKind,
+    createdAt: supersession.supersededAt,
+    provenanceSummary: supersession.reason,
+  };
+}
+
+function findMemoryById(memories: readonly MemoryRecord[], id: MemoryId): MemoryRecord | undefined {
+  return memories.find((memory) => memory.id === id);
+}
+
+function persistConflictTransitions(
+  vault: MemoryVaultStore,
+  resolution: ReturnType<typeof buildConflictTransitions>,
+  reason: string,
+): void {
+  for (const transition of resolution.statusTransitions) {
+    vault.updateMemory(
+      transition.memoryId,
+      { status: transition.to, staleReason: reason },
+      transition.transitionedAt,
+    );
+  }
+}
+
+function persistConflictSupersessions(
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  memories: readonly MemoryRecord[],
+  supersessions: readonly MemorySupersession[],
+  nowMs: number,
+): readonly MemoryEdgeId[] {
+  const edgeIds: MemoryEdgeId[] = [];
+  for (const supersession of supersessions) {
+    const edge = vault.insertEdge(buildEdgeFromSupersession(supersession));
+    edgeIds.push(edge.id);
+    const loser = findMemoryById(memories, supersession.oldMemoryId);
+    const winner = findMemoryById(memories, supersession.newMemoryId);
+    if (loser === undefined || winner === undefined) continue;
+    recordSupersessionAudit(
+      deps,
+      loser,
+      winner,
+      nowMs,
+      "Conflict resolution linked losing memory to the selected winner.",
+    );
+  }
+  return edgeIds;
+}
+
+function executeConflictResolution(
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  input: ConflictResolutionInput,
+): Record<string, unknown> | RouteResult {
+  const memories = loadConflictMemories(vault, input);
+  if (isRouteResult(memories)) return memories;
+  validateConflictResolutionMemories(memories, input);
+  const nowMs = Date.now();
+  const resolution = buildConflictTransitions(
+    memories,
+    { winner: input.winner, losers: input.losers },
+    { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+  );
+  persistConflictTransitions(vault, resolution, input.reason);
+  const edgeIds = persistConflictSupersessions(
+    vault,
+    deps,
+    memories,
+    resolution.supersessions,
+    nowMs,
+  );
+  return {
+    resolved: true,
+    winner: input.winner,
+    losers: input.losers,
+    supersessionEdgeIds: edgeIds,
+    transitions: resolution.statusTransitions,
+  };
+}
+
+export async function handleResolveMemoryConflict(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+
+  const input = parseConflictResolutionInput(body);
+  if (isRouteResult(input)) return input;
+
+  try {
+    const result = executeConflictResolution(vault, deps, input);
+    if (isRouteResult(result)) return result;
+    return { status: 200, body: result };
+  } catch (err) {
+    return memoryMutationErrorBody(err, "Failed to resolve conflict.");
   }
 }
 
@@ -728,29 +1154,59 @@ function parseCorrectInput(raw: Record<string, unknown>): { correctedBody: strin
 }
 
 function buildCorrectionRecord(
-  existing: MemoryRecord,
-  correctedBody: string,
+  proposal: MemoryProposal,
+  id: MemoryId,
   nowMs: number,
 ): MemoryRecord {
   // Note: exactOptionalPropertyTypes is on — omit staleReason rather than assigning undefined.
-  return {
-    id: randomUUID() as MemoryId,
+  const base = {
+    id,
     schemaVersion: "1",
-    scope: existing.scope,
-    type: "correction",
-    body: correctedBody,
-    provenance: {
-      ...existing.provenance,
-      sourceKind: "accepted-correction",
-      capturedAt: nowMs,
-    },
-    validity: existing.validity,
-    status: "proposed",
+    scope: proposal.scope,
+    type: proposal.type,
+    body: proposal.body,
+    provenance: proposal.provenance,
+    validity: proposal.validity,
+    status: proposal.initialStatus,
     pinned: false,
-    tags: existing.tags,
+    tags: proposal.tags,
     createdAt: nowMs,
     updatedAt: nowMs,
+  } satisfies Omit<MemoryRecord, "payload" | "retentionHint" | "staleReason">;
+  return {
+    ...base,
+    ...(proposal.payload === undefined ? {} : { payload: proposal.payload }),
+    ...(proposal.retentionHint === undefined ? {} : { retentionHint: proposal.retentionHint }),
   };
+}
+
+function redactString(deps: UiHandlerDeps, value: string): string {
+  const redacted = deps.redactor(value);
+  return typeof redacted === "string" ? redacted : value;
+}
+
+function recordSupersessionAudit(
+  deps: UiHandlerDeps,
+  oldMemory: MemoryRecord,
+  newMemory: MemoryRecord,
+  nowMs: number,
+  summary: string,
+): void {
+  const event: MemoryAuditEvent = {
+    schemaVersion: "1",
+    kind: "memory:superseded",
+    eventId: randomUUID(),
+    occurredAt: nowMs,
+    initiatorSurface: "memory-center",
+    summary,
+    oldMemoryId: oldMemory.id,
+    newMemoryId: newMemory.id,
+    scope: oldMemory.scope,
+  };
+  recordMemoryAudit(
+    { evidenceStore: deps.evidenceStore, redactString: (value) => redactString(deps, value) },
+    event,
+  );
 }
 
 export async function handleCorrectMemory(
@@ -776,14 +1232,25 @@ export async function handleCorrectMemory(
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    const inserted = vault.insertMemory(
-      buildCorrectionRecord(existing, input.correctedBody, Date.now()),
-    );
+    const nowMs = Date.now();
+    const correctionId = randomUUID() as MemoryId;
+    const { proposal, supersession } = buildCorrection({
+      olderMemory: existing,
+      correctedBody: input.correctedBody,
+      context: { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+      newProposalId: randomUUID() as MemoryProposalId,
+      newMemoryId: correctionId,
+    });
+    const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
+    vault.insertEdge(buildEdgeFromSupersession(supersession));
     return {
       status: 201,
       body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
     };
   } catch (err) {
+    if (err instanceof GovernanceError) {
+      return { status: 400, body: governanceErrorBody(err) };
+    }
     if (err instanceof MemoryStorageError) {
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to create correction.") };
     }
@@ -792,6 +1259,140 @@ export async function handleCorrectMemory(
 }
 
 // ─── Handler: POST /api/memory/proposals/:id/accept ───────────────────────────
+
+function assertSupersedable(memory: MemoryRecord): void {
+  const check = checkStatusTransition(memory.status, "superseded");
+  if (!check.ok) {
+    throw new GovernanceError(
+      "illegal-status-transition",
+      check.reason ?? `illegal transition: ${memory.status} -> superseded`,
+    );
+  }
+}
+
+interface CorrectionSupersessionOrigin {
+  readonly edge: MemoryEdge;
+  readonly original: MemoryRecord;
+}
+
+function loadCorrectionSupersessionOrigins(
+  vault: MemoryVaultStore,
+  proposal: MemoryRecord,
+): readonly CorrectionSupersessionOrigin[] {
+  if (proposal.type !== "correction") return [];
+  const incomingSupersessions = vault
+    .listIncomingEdges(proposal.id)
+    .filter((edge) => edge.kind === "supersedes");
+  if (incomingSupersessions.length === 0) {
+    throw new GovernanceError(
+      "invalid-resolution",
+      "correction proposal requires a supersession origin",
+    );
+  }
+  return incomingSupersessions.map((edge) => {
+    const original = vault.getMemory(edge.fromMemoryId);
+    if (original === undefined) {
+      throw new GovernanceError("invalid-resolution", "correction origin memory is missing");
+    }
+    return { edge, original };
+  });
+}
+
+function acceptedCorrectionType(
+  origins: readonly CorrectionSupersessionOrigin[],
+): MemoryType | undefined {
+  if (origins.length === 0) return undefined;
+  const first = origins[0]?.original.type;
+  if (first === undefined) return undefined;
+  for (const origin of origins) {
+    if (origin.original.type !== first) {
+      throw new GovernanceError(
+        "invalid-resolution",
+        "correction origins must have the same memory type",
+      );
+    }
+    assertSupersedable(origin.original);
+  }
+  return first;
+}
+
+function buildAcceptProposalPatch(origins: readonly CorrectionSupersessionOrigin[]): {
+  readonly status: "accepted";
+  readonly type?: MemoryType;
+} {
+  const correctionType = acceptedCorrectionType(origins);
+  return correctionType === undefined
+    ? { status: "accepted" }
+    : { status: "accepted", type: correctionType };
+}
+
+function buildCorrectionAcceptanceUpdates(
+  proposalId: MemoryId,
+  acceptPatch: MemoryBatchUpdate["patch"],
+  origins: readonly CorrectionSupersessionOrigin[],
+  nowMs: number,
+): readonly MemoryBatchUpdate[] {
+  return [
+    { id: proposalId, patch: acceptPatch, nowMs },
+    ...origins.map(({ edge, original }) => ({
+      id: original.id,
+      patch: {
+        status: "superseded" as const,
+        staleReason: edge.provenanceSummary ?? "accepted correction",
+      },
+      nowMs,
+    })),
+  ];
+}
+
+function recordCorrectionSupersessionAudits(
+  deps: UiHandlerDeps,
+  acceptedCorrection: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+  nowMs: number,
+): void {
+  for (const { original } of origins) {
+    recordSupersessionAudit(
+      deps,
+      original,
+      acceptedCorrection,
+      nowMs,
+      "Accepted correction superseded the original memory.",
+    );
+  }
+}
+
+function ensureProposedMemory(existing: MemoryRecord | undefined): MemoryRecord | RouteResult {
+  if (existing === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Memory proposal not found.") };
+  }
+  if (existing.status !== "proposed") {
+    return {
+      status: 409,
+      body: errorBody("CONFLICT", "Memory is not in proposed status."),
+    };
+  }
+  return existing;
+}
+
+function acceptMemoryProposal(
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  id: MemoryId,
+): RouteResult {
+  const existing = ensureProposedMemory(vault.getMemory(id));
+  if (isRouteResult(existing)) return existing;
+  const nowMs = Date.now();
+  const origins = loadCorrectionSupersessionOrigins(vault, existing);
+  const acceptPatch = buildAcceptProposalPatch(origins);
+  const updates = buildCorrectionAcceptanceUpdates(id, acceptPatch, origins, nowMs);
+  const [updated] = vault.updateMemories(updates);
+  if (updated === undefined) {
+    throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
+  }
+  recordCorrectionSupersessionAudits(deps, updated, origins, nowMs);
+  return { status: 200, body: { memory: redactMemory(deps, updated) } };
+}
 
 export function handleAcceptMemoryProposal(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
@@ -803,26 +1404,9 @@ export function handleAcceptMemoryProposal(ctx: RouteContext, deps: UiHandlerDep
   }
 
   try {
-    const existing = vault.getMemory(id as MemoryId);
-    if (existing === undefined) {
-      return { status: 404, body: errorBody("NOT_FOUND", "Memory proposal not found.") };
-    }
-    if (existing.status !== "proposed") {
-      return {
-        status: 409,
-        body: errorBody("CONFLICT", "Memory is not in proposed status."),
-      };
-    }
-    const updated = vault.updateMemory(id as MemoryId, { status: "accepted" }, Date.now());
-    return { status: 200, body: { memory: redactMemory(deps, updated) } };
+    return acceptMemoryProposal(vault, deps, id as MemoryId);
   } catch (err) {
-    if (err instanceof MemoryStorageError) {
-      return {
-        status: err.code === "not-found" ? 404 : 500,
-        body: errorBody("MEMORY_ERROR", "Failed to accept proposal."),
-      };
-    }
-    throw err;
+    return memoryMutationErrorBody(err, "Failed to accept proposal.");
   }
 }
 

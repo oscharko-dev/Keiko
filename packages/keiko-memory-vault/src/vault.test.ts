@@ -7,6 +7,7 @@ import type {
   MemoryEdgeId,
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   ProjectId,
   UserId,
   WorkspaceId,
@@ -217,6 +218,45 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     expect(events.map((e) => e.kind)).toEqual(["memory:deleted"]);
     v.close();
   });
+
+  it("emits delete and tombstone events after an atomic batch delete", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = openVault(dir, events);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    events.length = 0;
+
+    const results = v.deleteMemories([
+      {
+        id: "m1" as MemoryId,
+        options: {
+          tombstone: true,
+          forgetterSurface: "test",
+          reason: "test",
+          nowMs: 1_700_000_001_000,
+        },
+      },
+      {
+        id: "m2" as MemoryId,
+        options: {
+          tombstone: true,
+          forgetterSurface: "test",
+          reason: "test",
+          nowMs: 1_700_000_001_000,
+        },
+      },
+    ]);
+
+    expect(results.map((result) => result.memoryId)).toEqual(["m1", "m2"]);
+    expect(events.map((e) => e.kind)).toEqual([
+      "memory:deleted",
+      "memory:tombstoned",
+      "memory:deleted",
+      "memory:tombstoned",
+    ]);
+    v.close();
+  });
 });
 
 describe("validator gate fires BEFORE any SQL touches", () => {
@@ -271,6 +311,27 @@ describe("validator gate fires BEFORE any SQL touches", () => {
     v.close();
   });
 
+  it("rolls back updateMemories when any update fails validation", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = openVault(dir, events);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, body: "before" }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId, body: "target" }));
+    events.length = 0;
+
+    expect(() => {
+      v.updateMemories([
+        { id: "m1" as MemoryId, patch: { body: "after" }, nowMs: 1_700_000_000_100 },
+        { id: "m2" as MemoryId, patch: { body: "" }, nowMs: 1_700_000_000_100 },
+      ]);
+    }).toThrow(MemoryStorageValidationError);
+
+    expect(v.getMemory("m1" as MemoryId)?.body).toBe("before");
+    expect(v.getMemory("m2" as MemoryId)?.body).toBe("target");
+    expect(events).toEqual([]);
+    v.close();
+  });
+
   it("rejects insertEdge with a missing-endpoint record before SQL (FK still defends below)", () => {
     const dir = freshDir();
     const v = openVault(dir);
@@ -311,6 +372,7 @@ describe("deterministic now/newTombstoneId", () => {
     v.deleteMemory("m1" as MemoryId, {
       tombstone: true,
       forgetterSurface: "test",
+      reviewerId: "reviewer-1" as MemoryReviewerId,
       nowMs: 1_700_000_001_000,
     });
     const userScope = { kind: "user" as const, userId: "u-1" as UserId };
@@ -324,6 +386,8 @@ describe("deterministic now/newTombstoneId", () => {
         type: "preference",
         forgottenAt: 1_700_000_001_000,
         forgetterSurface: "test",
+        reviewerId: "reviewer-1",
+        originalStatus: "accepted",
       },
     ]);
     v.close();
@@ -404,6 +468,50 @@ describe("update + delete error paths", () => {
         nowMs: 1,
       });
     }).toThrow(MemoryStorageError);
+    v.close();
+  });
+
+  it("rolls back deleteMemories when a later tombstone insert fails", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      newTombstoneId: () => "duplicate-tombstone",
+      onMemoryEvent: (e) => events.push(e),
+    });
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    events.length = 0;
+
+    expect(() => {
+      v.deleteMemories([
+        {
+          id: "m1" as MemoryId,
+          options: {
+            tombstone: true,
+            forgetterSurface: "test",
+            reason: "test",
+            nowMs: 1,
+          },
+        },
+        {
+          id: "m2" as MemoryId,
+          options: {
+            tombstone: true,
+            forgetterSurface: "test",
+            reason: "test",
+            nowMs: 1,
+          },
+        },
+      ]);
+    }).toThrow();
+
+    expect(v.getMemory("m1" as MemoryId)).toBeDefined();
+    expect(v.getMemory("m2" as MemoryId)).toBeDefined();
+    expect(v.listTombstonesByScope({ kind: "user", userId: "u-1" as UserId })).toEqual([]);
+    expect(events).toEqual([]);
     v.close();
   });
 

@@ -7,8 +7,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   MemoryId,
+  MemoryReviewerId,
   MemoryScope,
   MemoryScopeKind,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
@@ -23,14 +25,16 @@ interface TombstoneRow {
   readonly type: string;
   readonly forgotten_at: number;
   readonly forgetter_surface: string;
+  readonly reviewer_id: string | null;
+  readonly original_status: string | null;
   readonly reason: string | null;
 }
 
 const INSERT_SQL = `
 INSERT INTO memory_tombstones (
   id, memory_id, scope_kind, scope_coordinate, type, forgotten_at,
-  forgetter_surface, reason
-) VALUES (?,?,?,?,?,?,?,?)
+  forgetter_surface, reviewer_id, original_status, reason
+) VALUES (?,?,?,?,?,?,?,?,?,?)
 `;
 
 const LIST_BY_SCOPE_SQL = `
@@ -50,7 +54,14 @@ function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryT
     forgottenAt: row.forgotten_at,
     forgetterSurface: row.forgetter_surface,
   };
-  return row.reason === null ? base : { ...base, reason: cipher.openString(row.reason) };
+  return {
+    ...base,
+    ...(row.reviewer_id === null ? {} : { reviewerId: row.reviewer_id as MemoryReviewerId }),
+    ...(row.original_status === null
+      ? {}
+      : { originalStatus: row.original_status as MemoryStatus }),
+    ...(row.reason === null ? {} : { reason: cipher.openString(row.reason) }),
+  };
 }
 
 export function insertTombstoneRow(
@@ -67,6 +78,8 @@ export function insertTombstoneRow(
     tombstone.type,
     tombstone.forgottenAt,
     tombstone.forgetterSurface,
+    tombstone.reviewerId ?? null,
+    tombstone.originalStatus ?? null,
     reason,
   );
 }

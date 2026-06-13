@@ -50,8 +50,11 @@ import {
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
 import { MemoryStorageError } from "./errors.js";
 import type {
+  MemoryBatchDelete,
   DeleteMemoryOptions,
+  MemoryBatchUpdate,
   ListMemoriesOptions,
+  MemoryDeleteResult,
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
   MemoryEvent,
@@ -159,8 +162,52 @@ function buildTombstone(
     type: record.type,
     forgottenAt: options.nowMs,
     forgetterSurface: options.forgetterSurface,
+    originalStatus: record.status,
   };
-  return options.reason === undefined ? base : { ...base, reason: options.reason };
+  return {
+    ...base,
+    ...(options.reviewerId === undefined ? {} : { reviewerId: options.reviewerId }),
+    ...(options.reason === undefined ? {} : { reason: options.reason }),
+  };
+}
+
+type MemoryMutators = Pick<
+  MemoryVaultStore,
+  | "insertMemory"
+  | "updateMemory"
+  | "updateMemories"
+  | "deleteMemory"
+  | "deleteMemories"
+  | "getMemory"
+  | "listMemories"
+  | "listMemoriesByScope"
+>;
+
+function prepareDelete(
+  db: DatabaseSync,
+  id: MemoryId,
+  options: DeleteMemoryOptions,
+  opts: ResolvedOptions,
+): MemoryDeleteResult {
+  gateDeleteOptions(options);
+  const existing = existingMemoryOrThrow(db, id, opts.cipher);
+  const tombstone = options.tombstone
+    ? redactTombstone(buildTombstone(existing, options, opts), opts.redactString)
+    : undefined;
+  return { memoryId: id, scope: existing.scope, tombstone };
+}
+
+function applyPreparedDelete(
+  db: DatabaseSync,
+  result: MemoryDeleteResult,
+  opts: ResolvedOptions,
+): void {
+  if (!deleteMemoryRow(db, result.memoryId)) {
+    throw new MemoryStorageError("not-found", "Memory not found.");
+  }
+  if (result.tombstone !== undefined) {
+    insertTombstoneRow(db, result.tombstone, opts.cipher);
+  }
 }
 
 function runDelete(
@@ -168,37 +215,98 @@ function runDelete(
   id: MemoryId,
   options: DeleteMemoryOptions,
   opts: ResolvedOptions,
-): { tombstone: MemoryTombstone | undefined } {
-  const existing = getMemoryRow(db, id, opts.cipher);
-  if (existing === undefined) {
-    throw new MemoryStorageError("not-found", "Memory not found.");
-  }
-  const tombstone = options.tombstone
-    ? redactTombstone(buildTombstone(existing, options, opts), opts.redactString)
-    : undefined;
+): MemoryDeleteResult {
+  const ready = prepareDelete(db, id, options, opts);
   db.exec("BEGIN");
   try {
-    deleteMemoryRow(db, id);
-    if (tombstone !== undefined) {
-      insertTombstoneRow(db, tombstone, opts.cipher);
+    applyPreparedDelete(db, ready, opts);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ready;
+}
+
+function runBatchDeleteMemories(
+  db: DatabaseSync,
+  deletes: readonly MemoryBatchDelete[],
+  opts: ResolvedOptions,
+): readonly MemoryDeleteResult[] {
+  const ready = deletes.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
+  db.exec("BEGIN");
+  try {
+    for (const result of ready) {
+      applyPreparedDelete(db, result, opts);
     }
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return { tombstone };
+  return ready;
 }
 
-type MemoryMutators = Pick<
-  MemoryVaultStore,
-  | "insertMemory"
-  | "updateMemory"
-  | "deleteMemory"
-  | "getMemory"
-  | "listMemories"
-  | "listMemoriesByScope"
->;
+function updateMemoryInPlace(
+  db: DatabaseSync,
+  update: MemoryBatchUpdate,
+  opts: ResolvedOptions,
+): MemoryRecord {
+  const existing = existingMemoryOrThrow(db, update.id, opts.cipher);
+  const merged = mergePatch(existing, update.patch, update.nowMs);
+  const ready = preparedForWrite(merged, opts);
+  updateMemoryRow(db, ready, opts.cipher);
+  return ready;
+}
+
+function runBatchUpdateMemories(
+  db: DatabaseSync,
+  updates: readonly MemoryBatchUpdate[],
+  opts: ResolvedOptions,
+): readonly MemoryRecord[] {
+  const ready: MemoryRecord[] = [];
+  db.exec("BEGIN");
+  try {
+    for (const update of updates) {
+      ready.push(updateMemoryInPlace(db, update, opts));
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ready;
+}
+
+function emitUpdatedRecords(records: readonly MemoryRecord[], opts: ResolvedOptions): void {
+  for (const record of records) {
+    opts.emit({ kind: "memory:updated", record });
+  }
+}
+
+function emitDeletedRecords(results: readonly MemoryDeleteResult[], opts: ResolvedOptions): void {
+  for (const result of results) {
+    opts.emit({
+      kind: "memory:deleted",
+      memoryId: result.memoryId,
+      scope: result.scope,
+      tombstoned: result.tombstone !== undefined,
+    });
+    if (result.tombstone !== undefined) {
+      opts.emit({ kind: "memory:tombstoned", tombstone: result.tombstone });
+    }
+  }
+}
+
+function deleteMemoryWithEvents(
+  db: DatabaseSync,
+  id: MemoryId,
+  options: DeleteMemoryOptions,
+  opts: ResolvedOptions,
+): void {
+  const result = runDelete(db, id, options, opts);
+  emitDeletedRecords([result], opts);
+}
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
   return {
@@ -209,26 +317,22 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       return ready;
     },
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
-      const existing = existingMemoryOrThrow(db, id, opts.cipher);
-      const merged = mergePatch(existing, patch, nowMs);
-      const ready = preparedForWrite(merged, opts);
-      updateMemoryRow(db, ready, opts.cipher);
+      const ready = updateMemoryInPlace(db, { id, patch, nowMs }, opts);
       opts.emit({ kind: "memory:updated", record: ready });
       return ready;
     },
+    updateMemories: (updates: readonly MemoryBatchUpdate[]): readonly MemoryRecord[] => {
+      const ready = runBatchUpdateMemories(db, updates, opts);
+      emitUpdatedRecords(ready, opts);
+      return ready;
+    },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
-      gateDeleteOptions(options);
-      const existing = existingMemoryOrThrow(db, id, opts.cipher);
-      const { tombstone } = runDelete(db, id, options, opts);
-      opts.emit({
-        kind: "memory:deleted",
-        memoryId: id,
-        scope: existing.scope,
-        tombstoned: tombstone !== undefined,
-      });
-      if (tombstone !== undefined) {
-        opts.emit({ kind: "memory:tombstoned", tombstone });
-      }
+      deleteMemoryWithEvents(db, id, options, opts);
+    },
+    deleteMemories: (deletes: readonly MemoryBatchDelete[]): readonly MemoryDeleteResult[] => {
+      const ready = runBatchDeleteMemories(db, deletes, opts);
+      emitDeletedRecords(ready, opts);
+      return ready;
     },
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemories: (options?: ListMemoriesOptions): readonly MemoryRecord[] => {

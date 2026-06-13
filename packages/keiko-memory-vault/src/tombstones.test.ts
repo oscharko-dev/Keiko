@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type {
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   MemoryScope,
   UserId,
   WorkspaceId,
@@ -55,6 +56,8 @@ describe("tombstones", () => {
     const t = makeTombstone({
       id: "t1",
       memoryId: "m1" as MemoryId,
+      reviewerId: "reviewer-1" as MemoryReviewerId,
+      originalStatus: "accepted",
       reason: "explicit user-requested deletion",
     });
     insertTombstoneRow(db, t, TEST_CIPHER);
@@ -171,6 +174,7 @@ describe("AC4: hard delete leaves the tombstones table empty", () => {
     vault.deleteMemory("m-1" as MemoryId, {
       tombstone: false,
       forgetterSurface: "test",
+      reviewerId: "reviewer-1" as MemoryReviewerId,
       nowMs: 1_700_000_000_001,
     });
     expect(vault.listTombstonesByScope(userScope)).toEqual([]);

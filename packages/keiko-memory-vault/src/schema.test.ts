@@ -40,20 +40,37 @@ describe("runMigrations", () => {
 
   it("lands a fresh DB on the current schema head even though encryption keys to v2", () => {
     // Regression guard: the encryption sweep is keyed to ENCRYPTION_VERSION (2) but must NOT pin
-    // user_version to 2 — the v3 DDL migration owns the head. A fresh DB must end at 3, not 2.
+    // user_version to 2 — later DDL migrations own the head.
     const db = openMemDb();
     runMigrations(db, TEST_CIPHER);
-    expect(userVersion(db)).toBe(3);
+    expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
   });
 
-  it("upgrades a v2 DB forward to v3 by applying only the v3 DDL", () => {
+  it("upgrades a v2 DB forward to the current schema head by applying only later DDL", () => {
     const db = openMemDb();
     runMigrations(db, TEST_CIPHER);
     // Simulate a genuine pre-v3 (encryption-era) database: the access table did not exist and the
     // version sat at the encryption head. Dropping the table + regressing the version reproduces
     // the on-disk shape a v2 DB actually has before this migration runs.
     db.exec("DROP TABLE memory_access");
+    db.exec("DROP INDEX idx_tombstones_scope");
+    db.exec("DROP INDEX idx_tombstones_memory_id");
+    db.exec("DROP TABLE memory_tombstones");
+    db.exec(`
+      CREATE TABLE memory_tombstones (
+        id TEXT NOT NULL PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_coordinate TEXT NOT NULL,
+        type TEXT NOT NULL,
+        forgotten_at INTEGER NOT NULL,
+        forgetter_surface TEXT NOT NULL,
+        reason TEXT
+      ) STRICT;
+      CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
+      CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
+    `);
     db.exec("PRAGMA user_version = 2");
     runMigrations(db, TEST_CIPHER);
     expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
@@ -61,6 +78,12 @@ describe("runMigrations", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'memory_access'")
       .get() as { name?: string } | undefined;
     expect(hasAccess?.name).toBe("memory_access");
+    const tombstoneColumns = db
+      .prepare("PRAGMA table_info(memory_tombstones)")
+      .all() as unknown as readonly { name: string }[];
+    expect(tombstoneColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["reviewer_id", "original_status"]),
+    );
     db.close();
   });
 

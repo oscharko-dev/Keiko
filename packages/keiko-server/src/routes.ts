@@ -49,8 +49,10 @@ import {
   handleUnpinMemory,
   handleArchiveMemory,
   handleForgetMemory,
+  handleForgetMemories,
   handleDeleteMemory,
   handleCorrectMemory,
+  handleResolveMemoryConflict,
   handleAcceptMemoryProposal,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
@@ -306,9 +308,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
   },
-  // Issue #211 — Memory Center governance routes (Epic #204).
+  // Issues #209/#211 — Memory Center governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
+  { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
+  {
+    method: "POST",
+    pattern: "/api/memory/conflicts/resolve",
+    handler: handleResolveMemoryConflict,
+  },
   { method: "GET", pattern: "/api/memory/:id", handler: handleGetMemory },
   { method: "PATCH", pattern: "/api/memory/:id", handler: handleEditMemory },
   { method: "POST", pattern: "/api/memory/:id/pin", handler: handlePinMemory },

@@ -7,6 +7,7 @@ import type {
   MemoryEdgeId,
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   MemoryScope,
   MemoryScopeKind,
   MemoryStatus,
@@ -46,6 +47,8 @@ export interface MemoryTombstone {
   readonly type: MemoryType;
   readonly forgottenAt: number;
   readonly forgetterSurface: string;
+  readonly reviewerId?: MemoryReviewerId;
+  readonly originalStatus?: MemoryStatus;
   readonly reason?: string;
 }
 
@@ -74,6 +77,23 @@ export type MemoryUpdatePatch = Partial<
   Omit<MemoryRecord, "id" | "schemaVersion" | "scope" | "createdAt">
 >;
 
+export interface MemoryBatchUpdate {
+  readonly id: MemoryId;
+  readonly patch: MemoryUpdatePatch;
+  readonly nowMs: number;
+}
+
+export interface MemoryBatchDelete {
+  readonly id: MemoryId;
+  readonly options: DeleteMemoryOptions;
+}
+
+export interface MemoryDeleteResult {
+  readonly memoryId: MemoryId;
+  readonly scope: MemoryScope;
+  readonly tombstone: MemoryTombstone | undefined;
+}
+
 export interface ListMemoriesOptions {
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
@@ -91,6 +111,7 @@ export interface ListMemoriesOptions {
 export interface DeleteMemoryOptions {
   readonly tombstone: boolean;
   readonly forgetterSurface: string;
+  readonly reviewerId?: MemoryReviewerId;
   readonly reason?: string;
   readonly nowMs: number;
 }
@@ -98,8 +119,10 @@ export interface DeleteMemoryOptions {
 export interface MemoryVaultStore {
   readonly insertMemory: (record: MemoryRecord) => MemoryRecord;
   readonly updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number) => MemoryRecord;
+  readonly updateMemories: (updates: readonly MemoryBatchUpdate[]) => readonly MemoryRecord[];
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
+  readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];
   readonly listMemories: (options?: ListMemoriesOptions) => readonly MemoryRecord[];
   readonly listMemoriesByScope: (
     scope: MemoryScope,

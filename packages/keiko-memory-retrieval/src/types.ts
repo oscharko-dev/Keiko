@@ -98,6 +98,8 @@ export interface MemoryRetrievalRequest {
   readonly relevanceWeight?: number;
   readonly semanticWeight?: number;
   readonly staleConfidenceThreshold?: number;
+  /** Audit/debug opt-in. Active context retrieval suppresses superseded memories by default. */
+  readonly includeSuperseded?: boolean;
   // Per-memory cosine similarity (in [0,1]) of the query embedding to each candidate's stored
   // embedding, keyed by memory id (#204). Computed by the caller (which owns the embedding
   // gateway and the vault's stored vectors); the retrieval layer stays pure and IO-free. When
