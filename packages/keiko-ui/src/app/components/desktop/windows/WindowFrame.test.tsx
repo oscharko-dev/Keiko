@@ -59,7 +59,29 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
 }
 
 describe("WindowFrame content zoom controls", () => {
-  it("minimizes through the yellow traffic-light control", async () => {
+  it("orders window controls as minimize, maximize, close", () => {
+    render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const controls = screen.getByRole("group", { name: "Agents window controls" });
+    const buttons = Array.from(controls.querySelectorAll("button"));
+
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Minimize Agents window",
+      "Maximize Agents window",
+      "Close Agents window",
+    ]);
+  });
+
+  it("minimizes through the minimize window control", async () => {
     const minimize = vi.fn();
     const close = vi.fn();
     const user = userEvent.setup();
