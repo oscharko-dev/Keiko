@@ -31,6 +31,8 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
+    minimize: vi.fn(),
+    restore: vi.fn(),
     maximize: vi.fn(),
     update: vi.fn(),
     setSnap: vi.fn(),
@@ -117,6 +119,20 @@ describe("M1 — empty startup layout", () => {
     );
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
+
+  it("does not render minimized windows on the workspace surface", () => {
+    const wins = [appWindow({ id: "agents-1", type: "agents", minimized: true })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(container.querySelector('[data-window-id="agents-1"]')).toBeNull();
+    expect(screen.queryByText("Empty workspace")).toBeNull();
+  });
 });
 
 describe("Workspace card connections", () => {
@@ -141,7 +157,9 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" }),
+    ).toBeNull();
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", () => {
@@ -196,10 +214,12 @@ describe("Workspace card connections", () => {
     );
   });
 
-  it("scales the scene with CSS zoom so widget content re-rasterizes (#305)", () => {
+  it("scales the scene with CSS zoom while preserving outer-pixel pan geometry (#305)", () => {
     // `transform: scale()` would rasterize the scene once at its natural size
     // and upscale the bitmap, blurring text/SVG inside widgets at zoom > 1.
     // The scene must use CSS `zoom` to trigger a layout pass and re-rasterize.
+    // Chrome applies CSS zoom to transform translation too, so pan is divided by
+    // zoom to keep maximized/window viewport math aligned with rendered pixels.
     const { container } = render(
       <Workspace
         ws={workspace({ view: { x: 12, y: 34, zoom: 1.75 } })}
@@ -212,7 +232,7 @@ describe("Workspace card connections", () => {
     expect(scene).not.toBeNull();
     const style = (scene as HTMLElement).style;
     expect(style.zoom).toBe("1.75");
-    expect(style.transform).toBe("translate(12px, 34px)");
+    expect(style.transform).toBe("translate(6.857142857142857px, 19.428571428571427px)");
     expect(style.transform).not.toContain("scale(");
   });
 

@@ -81,6 +81,17 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it("preserves minimized window state in the browser-local snapshot", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "files-1", type: "files", cfg: { root: "/repo" }, minimized: true }),
+    ]);
+
+    expect(persisted).toEqual([
+      win({ id: "files-1", type: "files", cfg: { root: "/repo" }, minimized: true }),
+    ]);
+    expect(parsePersistedWindows(JSON.stringify(persisted))).toEqual(persisted);
+  });
+
   it("redacts or drops secret-shaped config values before browser-local persistence", () => {
     const openAiKey = `sk-${"a".repeat(24)}`;
     const gitHubToken = `ghp_${"A".repeat(36)}`;

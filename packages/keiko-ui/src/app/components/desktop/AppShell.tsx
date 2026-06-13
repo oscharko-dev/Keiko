@@ -53,9 +53,14 @@ import { registerSw } from "./install/registerSw";
 
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
-  let best = wins[0] as AppWindow;
-  for (let i = 1; i < wins.length; i++) {
+  let best: AppWindow | null = null;
+  for (let i = 0; i < wins.length; i++) {
     const next = wins[i] as AppWindow;
+    if (next.minimized === true) continue;
+    if (best === null) {
+      best = next;
+      continue;
+    }
     if (next.z > best.z) best = next;
   }
   return best;
@@ -472,6 +477,7 @@ function AppShellInner(): ReactNode {
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
   const [cmdkOpen, setCmdkOpen] = useState(false);
+  const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
 
   const winCount = ws.wins?.length ?? 0;
   const active = topWindow(ws.wins);
@@ -483,6 +489,15 @@ function AppShellInner(): ReactNode {
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
+  const toggleWindowPalette = useCallback((): void => setWindowPaletteOpen((open) => !open), []);
+  const closeWindowPalette = useCallback((): void => setWindowPaletteOpen(false), []);
+  const selectFooterWindow = useCallback(
+    (id: string): void => {
+      ws.api.restore(id);
+      setWindowPaletteOpen(false);
+    },
+    [ws.api],
+  );
   // uiux-fix F013 C023 — the header's window buttons act on the front (highest-z)
   // window via the existing maximize toggle: expand maximizes a windowed front
   // window, restore returns a maximized one to its previous geometry (the toggle's
@@ -695,6 +710,11 @@ function AppShellInner(): ReactNode {
           </div>
           <Footer
             winCount={winCount}
+            windows={ws.wins ?? []}
+            windowPaletteOpen={windowPaletteOpen}
+            onToggleWindowPalette={toggleWindowPalette}
+            onSelectWindow={selectFooterWindow}
+            onCloseWindowPalette={closeWindowPalette}
             mode={twin.mode}
             selectedModel={session.selectedModel}
             projectName={projectName}

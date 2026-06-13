@@ -21,6 +21,8 @@ function fakeApi(): WorkspaceApi {
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
+    minimize: vi.fn(),
+    restore: vi.fn(),
     maximize: vi.fn(),
     update: vi.fn(),
     setSnap: vi.fn(),

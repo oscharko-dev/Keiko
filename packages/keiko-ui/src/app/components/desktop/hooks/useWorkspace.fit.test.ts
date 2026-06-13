@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { fitWindowToViewport } from "./useWorkspace";
+import {
+  applyContentWheelZoom,
+  fitWindowToViewport,
+  nextContentZoomFromWheel,
+} from "./useWorkspace";
 import type { ViewportWorld } from "./useWorkspace.types";
 import type { AppWindow } from "../windows/types";
 
@@ -60,5 +64,38 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
     const next = fitWindowToViewport(win, panned);
     expect(next.x).toBe(panned.x - (win.w - 120));
     expect(next.y).toBe(panned.y);
+  });
+});
+
+describe("content wheel zoom", () => {
+  it("maps Command/Ctrl wheel deltas to the same clamped content zoom scale", () => {
+    expect(nextContentZoomFromWheel(1, -100)).toBe(1.2);
+    expect(nextContentZoomFromWheel(1, 100)).toBe(0.9);
+    expect(nextContentZoomFromWheel(1.9, -1000)).toBe(2);
+    expect(nextContentZoomFromWheel(0.6, 1000)).toBe(0.5);
+  });
+
+  it("updates only window content zoom and preserves frame geometry", () => {
+    const win = appWindow({
+      x: 123,
+      y: 234,
+      w: 456,
+      h: 345,
+      max: false,
+      zoom: 1,
+    });
+
+    const next = applyContentWheelZoom(win, -100);
+
+    expect(next).toMatchObject({
+      id: win.id,
+      type: win.type,
+      x: win.x,
+      y: win.y,
+      w: win.w,
+      h: win.h,
+      max: win.max,
+      zoom: 1.2,
+    });
   });
 });

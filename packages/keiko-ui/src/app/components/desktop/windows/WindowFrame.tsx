@@ -4,6 +4,7 @@ import {
   useCallback,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
@@ -26,6 +27,7 @@ const MIN_W_FALLBACK = 240;
 const MIN_H_FALLBACK = 150;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
+const HEADER_CONTROL_GUTTER_PX = 210;
 
 interface WindowFrameProps {
   readonly win: AppWindow;
@@ -72,6 +74,14 @@ function TooSmall({ icon, label }: TooSmallProps): ReactNode {
 
 function clampContentZoom(z: number): number {
   return Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, Math.round(z * 10) / 10));
+}
+
+function shouldMaximizeFromHeaderDoubleClick(event: ReactMouseEvent<HTMLElement>): boolean {
+  const target = event.target;
+  if (target instanceof Element && target.closest("button,[role='button']") !== null) return false;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const controlGutter = Math.min(HEADER_CONTROL_GUTTER_PX, rect.width / 2);
+  return event.clientX < rect.right - controlGutter;
 }
 
 interface BodySelection {
@@ -435,6 +445,16 @@ export function WindowFrame({
     });
   }, [api, win.id]);
 
+  const minimizeWithFocusRestore = useCallback((): void => {
+    api.minimize(win.id);
+    requestAnimationFrame(() => {
+      const next =
+        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
+        document.querySelector<HTMLElement>(".ws-fab");
+      next?.focus({ preventScroll: true });
+    });
+  }, [api, win.id]);
+
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
   const sectionStyle: CSSProperties = {
@@ -477,7 +497,9 @@ export function WindowFrame({
       <header
         className="win-head"
         onPointerDown={onHeaderPointerDown}
-        onDoubleClick={() => api.maximize(win.id)}
+        onDoubleClick={(e) => {
+          if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
+        }}
       >
         <span
           className="win-ico"
@@ -506,6 +528,9 @@ export function WindowFrame({
             aria-label={`Zoom ${def.title} content out`}
             disabled={zoom <= CONTENT_MIN_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
             onClick={() => setZoom(zoom - 0.1)}
           >
             <Icons.zoomOut size={13} />
@@ -516,6 +541,9 @@ export function WindowFrame({
             title="Reset content zoom to 100%"
             aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
             onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
             onClick={() => api.update(win.id, { zoom: 1 })}
           >
             {Math.round(zoom * 100)}%
@@ -527,31 +555,49 @@ export function WindowFrame({
             aria-label={`Zoom ${def.title} content in`}
             disabled={zoom >= CONTENT_MAX_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
             onClick={() => setZoom(zoom + 0.1)}
           >
             <Icons.zoomIn size={13} />
           </button>
         </div>
-        <button
-          type="button"
-          className="win-btn"
-          title={win.max ? "Restore" : "Maximize"}
-          aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => api.maximize(win.id)}
-        >
-          {win.max ? <Icons.restore size={13} /> : <Icons.maximize size={13} />}
-        </button>
-        <button
-          type="button"
-          className="win-btn win-close"
-          title="Close"
-          aria-label={`Close ${def.title} window`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={closeWithFocusRestore}
-        >
-          <Icons.close size={14} />
-        </button>
+        <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
+          <button
+            type="button"
+            className="win-traffic-btn win-traffic-close"
+            title="Close"
+            aria-label={`Close ${def.title} window`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={closeWithFocusRestore}
+          />
+          <button
+            type="button"
+            className="win-traffic-btn win-traffic-minimize"
+            title="Minimize"
+            aria-label={`Minimize ${def.title} window`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={minimizeWithFocusRestore}
+          />
+          <button
+            type="button"
+            className="win-traffic-btn win-traffic-maximize"
+            title={win.max ? "Restore" : "Maximize"}
+            aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={() => api.maximize(win.id)}
+          />
+        </div>
       </header>
       <div className="win-body" data-mode={bodyMode} style={bodyStyle}>
         {body}

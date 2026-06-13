@@ -32,6 +32,12 @@ function indexOfNth(haystack: string, needle: string, n: number): number {
   return idx;
 }
 
+function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
+  const idx = opts.fromLast === true ? css.lastIndexOf(selector) : css.indexOf(selector);
+  expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
+  return css.slice(idx, css.indexOf("}", idx) + 1);
+}
+
 // ─── Fix 1: WCAG 2.4.7 — focus-visible ───────────────────────────────────────
 
 describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
@@ -258,9 +264,83 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
-// ─── Fix 4: mobile root toolbar no-clip behavior ────────────────────────────
+// ─── Fix 4: dense desktop text clarity ───────────────────────────────────────
 
-describe("Fix 4 — mobile root toolbar compression", () => {
+describe("Fix 4 — dense desktop text clarity", () => {
+  it("keeps native font rasterization instead of forcing thin grayscale antialiasing", () => {
+    const bodyBlock = cssBlock("body");
+    expect(bodyBlock).toContain("-webkit-font-smoothing: auto");
+    expect(bodyBlock).toContain("-moz-osx-font-smoothing: auto");
+    expect(bodyBlock).toContain("text-rendering: auto");
+    expect(bodyBlock).not.toContain("-webkit-font-smoothing: antialiased");
+    expect(bodyBlock).not.toContain("text-rendering: optimizeLegibility");
+  });
+
+  it("keeps Files root controls above the micro-text floor", () => {
+    const inputBlock = cssBlock(".files-root-input");
+    expect(inputBlock).toContain("height: 28px");
+    expect(inputBlock).toContain("font-size: 12.5px");
+    expect(inputBlock).toContain("font-weight: 500");
+
+    const openBlock = cssBlock(".files-root-open");
+    expect(openBlock).toContain("height: 28px");
+    expect(openBlock).toContain("font-size: 12.5px");
+    expect(openBlock).toContain("font-weight: 700");
+  });
+
+  it("keeps workspace tree rows legible on 1x displays", () => {
+    const rowBlock = cssBlock(".tr-row");
+    expect(rowBlock).toContain("min-height: 26px");
+    expect(rowBlock).toContain("font-size: 13.5px");
+    expect(rowBlock).toContain("font-weight: 450");
+
+    const folderBlock = cssBlock(".tr-folder");
+    expect(folderBlock).toContain("font-weight: 600");
+  });
+
+  it("keeps window chrome labels strong enough for daily-use desktop work", () => {
+    const titleBlock = cssBlock(".win-title");
+    expect(titleBlock).toContain("font-size: 13.5px");
+    expect(titleBlock).toContain("font-weight: 650");
+
+    const subtitleBlock = cssBlock(".win-sub");
+    expect(subtitleBlock).toContain("font-size: 11.5px");
+    expect(subtitleBlock).toContain("font-weight: 500");
+  });
+
+  it("keeps traffic-light window controls large enough for full-screen cards", () => {
+    const buttonBlock = cssBlock(".win-traffic-btn");
+    expect(buttonBlock).toContain("width: 28px");
+    expect(buttonBlock).toContain("height: 28px");
+
+    const bubbleBlock = cssBlock(".win-traffic-btn::before");
+    expect(bubbleBlock).toContain("width: 15px");
+    expect(bubbleBlock).toContain("height: 15px");
+
+    const maxButtonBlock = cssBlock('.window[data-max="true"] .win-traffic-btn');
+    expect(maxButtonBlock).toContain("width: 30px");
+    expect(maxButtonBlock).toContain("height: 30px");
+
+    const maxBubbleBlock = cssBlock('.window[data-max="true"] .win-traffic-btn::before');
+    expect(maxBubbleBlock).toContain("width: 17px");
+    expect(maxBubbleBlock).toContain("height: 17px");
+  });
+
+  it("keeps file metadata readable without widened tracking", () => {
+    const badgeBlock = cssBlock(".tr-badge", { fromLast: true });
+    expect(badgeBlock).toContain("font-size: 10px");
+    expect(badgeBlock).toContain("letter-spacing: 0");
+    expect(badgeBlock).toContain("font-weight: 650");
+
+    const metaBlock = cssBlock(".tr-meta", { fromLast: true });
+    expect(metaBlock).toContain("font-size: 11.5px");
+    expect(metaBlock).toContain("font-weight: 500");
+  });
+});
+
+// ─── Fix 5: mobile root toolbar no-clip behavior ────────────────────────────
+
+describe("Fix 5 — mobile root toolbar compression", () => {
   const mobileMedia = "@media (max-width: 680px)";
   const mediaIdx = css.indexOf(mobileMedia);
 

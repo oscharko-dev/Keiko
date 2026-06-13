@@ -22,6 +22,7 @@ import {
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -571,6 +572,120 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     h.add("qiRun", { runId: "qi-run-1" });
     h.add("qiRun", { runId: "qi-run-2" });
     expect(h.cards()).toHaveLength(2);
+  });
+});
+
+describe("makeMutations.maximize", () => {
+  function harness(
+    initial: AppWindow[],
+    vp = { x: 0, y: 0, w: 1000, h: 800 },
+  ): {
+    maximize: ReturnType<typeof makeMutations>["maximize"];
+    windows: () => readonly AppWindow[];
+  } {
+    let wins: AppWindow[] | null = initial;
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { maximize } = makeMutations({
+      setWins,
+      zc: { current: 10 },
+      worldVP: () => vp,
+    });
+    return { maximize, windows: () => wins ?? [] };
+  }
+
+  it("restores a maximized window to its previous frame", () => {
+    const h = harness([
+      {
+        ...win("files", {}, "files-1"),
+        x: 20,
+        y: 30,
+        w: 300,
+        h: 340,
+      },
+    ]);
+
+    h.maximize("files-1");
+    expect(h.windows()[0]).toMatchObject({
+      max: true,
+      prev: { x: 20, y: 30, w: 300, h: 340 },
+      x: 0,
+      y: 0,
+      w: 1000,
+      h: 800,
+    });
+
+    h.maximize("files-1");
+    expect(h.windows()[0]).toMatchObject({
+      max: false,
+      x: 20,
+      y: 30,
+      w: 300,
+      h: 340,
+    });
+    expect(h.windows()[0]?.prev).toBeUndefined();
+  });
+
+  it("recovers a maximized window without prev to the type default frame", () => {
+    const type = "files";
+    const h = harness([
+      {
+        ...win(type, {}, "files-1"),
+        x: 0,
+        y: 0,
+        w: 1000,
+        h: 800,
+        max: true,
+      },
+    ]);
+
+    h.maximize("files-1");
+
+    expect(h.windows()[0]).toMatchObject({
+      max: false,
+      w: WIN_TYPES[type].w,
+      h: WIN_TYPES[type].h,
+    });
+    expect(h.windows()[0]?.x).toBeGreaterThan(0);
+    expect(h.windows()[0]?.y).toBeGreaterThan(0);
+    expect(h.windows()[0]?.prev).toBeUndefined();
+  });
+});
+
+describe("makeMutations.minimize/restore", () => {
+  function harness(initial: AppWindow[]): {
+    minimize: ReturnType<typeof makeMutations>["minimize"];
+    restore: ReturnType<typeof makeMutations>["restore"];
+    windows: () => readonly AppWindow[];
+  } {
+    let wins: AppWindow[] | null = initial;
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { minimize, restore } = makeMutations({
+      setWins,
+      zc: { current: 10 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+    return { minimize, restore, windows: () => wins ?? [] };
+  }
+
+  it("marks a window minimized without removing it", () => {
+    const h = harness([win("files", {}, "files-1")]);
+
+    h.minimize("files-1");
+
+    expect(h.windows()).toHaveLength(1);
+    expect(h.windows()[0]).toMatchObject({ id: "files-1", minimized: true });
+  });
+
+  it("restores a minimized window and raises it", () => {
+    const h = harness([{ ...win("files", {}, "files-1"), minimized: true, z: 3 }]);
+
+    h.restore("files-1");
+
+    expect(h.windows()[0]).toMatchObject({ id: "files-1", minimized: false, z: 11 });
   });
 });
 
