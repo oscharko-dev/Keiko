@@ -298,8 +298,12 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
   });
 
   it("does not emit coverage-gap findings when all atoms are covered", async () => {
+    // T1 — strengthened: prove ZERO gap findings AND every coverageMatrix row is "covered".
+    // Mutation target: the gap loop guard `s.status !== "covered"` in modelRoutedTestDesign.ts.
+    // Flipping it to `true` causes every atom to emit a gap entry → toHaveLength(0) fails.
     const store = createInMemoryQualityIntelligenceLocalStore();
-    // Only 2 atoms, model covers both
+    // Only 2 atoms; MODEL_OUTPUT_COVERING_TWO cites each with a single-atom index list
+    // → bestFocus=1 ≤ FOCUS_COVERED_MAX(3) → both atoms are "covered".
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement atom 1"),
       makeIngestedAtom("atom-2", "Requirement atom 2"),
@@ -318,12 +322,102 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
 
     const manifest = store.load(String(plan.id));
     expect(manifest).toBeDefined();
-    // Atom-1 and atom-2 are cited — coverage-gap count depends on confidence threshold
-    // but the 3rd-atom gap that was the focus of this epic is absent
-    const gapFindings = (manifest?.findings ?? []).filter((f) => f.kind === "coverage-gap");
-    // No atom-3 row in a 2-atom run
-    const hasAtom3Gap = gapFindings.some((f) => f.summaryRedacted.includes("atom-3"));
-    expect(hasAtom3Gap).toBe(false);
+    if (manifest === undefined) throw new Error("manifest not found");
+
+    // Deliverable: a fully-covered run produces ZERO coverage-gap findings.
+    const gapFindings = manifest.findings.filter((f) => f.kind === "coverage-gap");
+    expect(gapFindings).toHaveLength(0);
+
+    // Deliverable: every coverageMatrix row must be "covered" (not "weakly-covered" / "uncovered").
+    const matrix = manifest.coverageMatrix ?? [];
+    expect(matrix.length).toBe(2);
+    expect(matrix.every((row) => row.status === "covered")).toBe(true);
+  });
+
+  it("emits exactly one LOW-severity gap finding for a weakly-covered atom", async () => {
+    // T2 — new test: weakly-covered atom branch of buildCoverageGapFinding.
+    //
+    // Fixture: 4 atoms. ONE broad candidate cites all 4 (derivedFromEvidenceIndexes:[1,2,3,4]
+    // → bestFocus=4 > FOCUS_COVERED_MAX=3 → every atom is "weakly-covered", not "covered").
+    //
+    // Mutation target A: flip severity ternary at modelRoutedTestDesign.ts:210
+    //   (e.g. `"uncovered" ? "low" : "high"`) → severity becomes "high"
+    //   → expect(atom4Gap.severity).toBe("low") fails.
+    //
+    // Mutation target B: narrow gap loop guard to `s.status === "uncovered"` (dropping
+    //   "weakly-covered") → no gap findings for weakly-covered atoms
+    //   → expect(weaklyGaps).not.toHaveLength(0) fails.
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-cov-test-003"),
+    };
+
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+      makeIngestedAtom("atom-3", "Requirement atom 3"),
+      makeIngestedAtom("atom-4", "Requirement atom 4 — broad citer only"),
+    ];
+
+    // One candidate citing all 4 atoms → bestFocus=4 > FOCUS_COVERED_MAX(3) → weakly-covered.
+    const rawTextBroadCoverage = JSON.stringify([
+      {
+        title: "Broad integration test touching all requirements",
+        steps: ["Trigger the combined flow"],
+        expectedResults: ["All requirements satisfied"],
+        priority: "P2",
+        riskClass: "regression",
+        derivedFromEvidenceIndexes: [1, 2, 3, 4],
+      },
+    ]);
+
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: rawTextBroadCoverage,
+            modelCallCount: 1,
+            modelId: "test-model",
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+
+    const manifest = store.load(String(plan.id));
+    expect(manifest).toBeDefined();
+    if (manifest === undefined) throw new Error("manifest not found");
+
+    // Weakly-covered atoms must emit gap findings (mutation target B trips this).
+    const weaklyGaps = manifest.findings.filter((f) => f.kind === "coverage-gap");
+    expect(weaklyGaps).not.toHaveLength(0);
+
+    // Assert on atom-4 specifically (the labeled atom in the fixture).
+    const atom4Gap = weaklyGaps.find((f) => f.summaryRedacted.includes("atom-4"));
+    expect(atom4Gap).toBeDefined();
+    if (atom4Gap === undefined) throw new Error("atom-4 gap finding not found");
+
+    // (a) severity must be "low" for weakly-covered (mutation target A trips this).
+    expect(atom4Gap.severity).toBe("low");
+    // (a) summary describes the weakly-covered state, not the uncovered state.
+    expect(atom4Gap.summaryRedacted).toContain("weakly covered");
+
+    // (b) coverageMatrix row for atom-4 must have status "weakly-covered".
+    const matrix = manifest.coverageMatrix ?? [];
+    const atom4Row = matrix.find((row) => row.atomId === "atom-4");
+    expect(atom4Row).toBeDefined();
+    expect(atom4Row?.status).toBe("weakly-covered");
   });
 });
 
