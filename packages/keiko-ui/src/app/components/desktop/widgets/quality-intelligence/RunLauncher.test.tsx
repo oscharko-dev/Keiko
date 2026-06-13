@@ -16,7 +16,7 @@
 // Design note: startImpl is typed as the real function but replaced with a
 // controllable fake in every test. We never hit the network.
 
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
@@ -1237,5 +1237,48 @@ describe("RunLauncher — connected capsule-set source (Epic #710 #718)", () => 
     expect(req.sources[0]).toMatchObject({ kind: "workspace", path: "/work/docs" });
     expect(req.sources[1]).toMatchObject({ kind: "capsule", capsuleId: "cap-1" });
     expect(req.sources[2]).toMatchObject({ kind: "capsule-set", capsuleSetId: SET_ID });
+  });
+});
+
+// ─── Multi-source rendered list items (Issue #731 / Epic #729) ───────────────
+//
+// When connectedSources.length > 1, RunLauncher renders a <ul aria-label="Connected sources">
+// with one <li> per source showing the kind label (via sourceKindLabel) and the value (via
+// sourceValue). These render paths were previously mutation-blind: the existing N+1 test only
+// asserted the count text and the built request, not the DOM list items. A regression in
+// sourceKindLabel or the <li> map would go undetected.
+describe("RunLauncher — multi-source connected-source list DOM (Issue #731 / Epic #729)", () => {
+  it("renders one <li> per source with correct kind labels and values for a mixed multi-source connection", () => {
+    // Arrange: file (absolute path → directly usable) + 2 folders + 1 capsule + 1 capsule-set.
+    // This exercises the "file", "workspace", "capsule", and "capsule-set" arms of
+    // sourceKindLabel and sourceValue simultaneously.
+    render(
+      <RunLauncher
+        connectedFilePath="/work/fachkonzept/funds-transfer.md"
+        connectedRoots={["/work/a", "/work/b"]}
+        connectedCapsuleIds={["cap-1"]}
+        connectedCapsuleSetIds={["set-1"]}
+      />,
+    );
+
+    // Act: locate the accessible list.
+    const list = screen.getByRole("list", { name: /connected sources/i });
+    const items = within(list).getAllByRole("listitem");
+
+    // Assert: one <li> per connected source (1 file + 2 folders + 1 capsule + 1 capsule-set).
+    expect(items).toHaveLength(5);
+
+    // Kind labels — each sourceKindLabel arm renders into the DOM.
+    expect(within(list).getByText("File")).toBeInTheDocument();
+    expect(within(list).getAllByText("Folder")).toHaveLength(2);
+    expect(within(list).getByText("Capsule")).toBeInTheDocument();
+    expect(within(list).getByText("Capsule set")).toBeInTheDocument();
+
+    // Values — sourceValue returns path / capsuleId / capsuleSetId per source kind.
+    expect(within(list).getByText("/work/fachkonzept/funds-transfer.md")).toBeInTheDocument();
+    expect(within(list).getByText("/work/a")).toBeInTheDocument();
+    expect(within(list).getByText("/work/b")).toBeInTheDocument();
+    expect(within(list).getByText("cap-1")).toBeInTheDocument();
+    expect(within(list).getByText("set-1")).toBeInTheDocument();
   });
 });

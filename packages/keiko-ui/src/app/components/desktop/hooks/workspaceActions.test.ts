@@ -22,6 +22,7 @@ import {
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
@@ -1282,5 +1283,26 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       relativePaths: ["a.ts"],
       root: "/data/docs",
     });
+  });
+});
+
+// ─── AC2 Chat-parity drift guard (Issue #731 / Epic #729) ────────────────────
+//
+// MAX_SCOPES (the QI hub's connected-source cap, workspaceActions.ts) and
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources (Chat's grounding cap from
+// @oscharko-dev/keiko-contracts) must stay in sync. A change to one without
+// updating the other silently breaks the parity contract: Chat users would see
+// a different source limit than QI users.
+//
+// Server-side precedent: runIngestion.test.ts pins the same invariant against
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources (Issue #730 / #731 audit).
+// This test extends that guard to the UI layer.
+describe("MAX_SCOPES — AC2 Chat-parity drift guard (Issue #731 / Epic #729)", () => {
+  it("matches DEFAULT_GROUNDING_LIMITS.maxConnectedSources so the QI hub cap stays in sync with Chat", () => {
+    // If Chat's grounding default changes, this test will fail and force an intentional
+    // decision about whether MAX_SCOPES should change too. The alternative — silently
+    // leaving the values misaligned — would mean QI accepts a different number of sources
+    // than Chat, violating the N+1 parity AC.
+    expect(MAX_SCOPES).toBe(DEFAULT_GROUNDING_LIMITS.maxConnectedSources);
   });
 });
