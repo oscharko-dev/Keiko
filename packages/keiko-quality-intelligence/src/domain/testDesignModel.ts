@@ -14,7 +14,7 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { isKnownPriority, normaliseText } from "./assertions.js";
+import { isKnownPriority, normaliseCandidateText } from "./assertions.js";
 import type { IntentSummary } from "./intentDerivation.js";
 import type { PolicyProfile } from "./policyProfile.js";
 import { regressionDefault } from "./policyProfile.js";
@@ -133,6 +133,35 @@ const deriveCandidateIdString = (
   return `qi-candidate-${digest}`;
 };
 
+// Sanitise an ordered fragment list for a persisted candidate field: NFKC-normalise,
+// strip unsafe bidi / zero-width / C0/C1/DEL code points (via normaliseCandidateText),
+// and drop fragments that become empty. Order-preserving, no dedup. The deterministic
+// builder receives untrusted text only through `intent` (derived from source display
+// labels, which sanitiseLabel does NOT strip bidi/zero-width from), so without this the
+// deterministic candidates persist and export those spoofing code points — the
+// deterministic-path twin of the model-path chokepoint in parseGeneratedCandidates
+// (Epic #711 / Issue #724 residual). Clean fragments are byte-identical (strip is a
+// no-op and the fragments are already trimmed), so candidate IDs — derived from
+// runId/atomHash/index, never from text — stay stable.
+const sanitiseFragmentList = (values: readonly string[]): readonly string[] =>
+  Object.freeze(
+    values.map((value) => normaliseCandidateText(value)).filter((value) => value.length > 0),
+  );
+
+// Sanitise + canonicalise a tag list: strip unsafe code points, drop empties, dedup,
+// and sort — preserving the Set+sort semantics of buildTags on the post-strip values so
+// a zero-width-spoofed theme cannot smuggle a visually-duplicate tag into the export.
+const canonicaliseCandidateTags = (values: readonly string[]): readonly string[] => {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const cleaned = normaliseCandidateText(value);
+    if (cleaned.length > 0) {
+      seen.add(cleaned);
+    }
+  }
+  return Object.freeze(Array.from(seen).sort(compareString));
+};
+
 /**
  * Produce deterministic draft candidates from the intent summary + atoms.
  * Returns the empty array when the atom list is empty. Atoms are first
@@ -163,18 +192,18 @@ export const designTestCaseCandidates = (
     const idString = deriveCandidateIdString(runId, atom, index);
     const id = QualityIntelligence.asQualityIntelligenceTestCaseId(idString);
     const riskClass = deriveRiskClass(atom, profile);
-    const title = normaliseText(buildTitle(atom, intent, index));
+    const title = normaliseCandidateText(buildTitle(atom, intent, index));
     const candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate = {
       id,
       runId,
       derivedFromAtomIds: Object.freeze([atom.id]),
       title,
-      preconditions: buildPreconditions(intent),
-      steps: buildSteps(atom, intent),
-      expectedResults: buildExpectedResults(atom, intent),
+      preconditions: sanitiseFragmentList(buildPreconditions(intent)),
+      steps: sanitiseFragmentList(buildSteps(atom, intent)),
+      expectedResults: sanitiseFragmentList(buildExpectedResults(atom, intent)),
       priority,
       riskClass,
-      tags: buildTags(intent, riskClass),
+      tags: canonicaliseCandidateTags(buildTags(intent, riskClass)),
       status: "proposed",
     };
     candidates.push(Object.freeze(candidate));
