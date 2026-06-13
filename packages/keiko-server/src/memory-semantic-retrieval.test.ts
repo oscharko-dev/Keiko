@@ -378,6 +378,32 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
+  it("does not embed sensitive memory-enabled query text for secondary retrieval ranking", async () => {
+    const memoryDir = join(tmp, "vault-sensitive-query");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    insertAccepted(vault, "mem-package-manager", "Use pnpm for installs");
+    storeEmbedding(vault, "mem-package-manager", "Use pnpm for installs");
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+      ),
+    );
+
+    const chatId = await createChat();
+    const result = await sendChat(chatId, "My private support email is dev@example.com; use pnpm?");
+
+    const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
+    expect(ids).toContain("mem-package-manager");
+    expect(embeddingCalls).toEqual([]);
+    vault.close();
+  });
+
   it("does not embed the query when scoped vaults are empty", async () => {
     const memoryDir = join(tmp, "vault-empty-semantic");
     mkdirSync(memoryDir);

@@ -80,34 +80,46 @@ function renderedCost(entries: readonly MemoryContextBlockEntry[]): number {
   return estimateTokens(renderText(entries));
 }
 
+function entryForRank(
+  rank: IncludedMemory,
+  record: MemoryRecord,
+  bodyExcerpt: string,
+): MemoryContextBlockEntry {
+  return {
+    memoryId: rank.memoryId,
+    bodyExcerpt,
+    inclusionReason: rank.inclusionReason,
+    sourceKind: record.provenance.sourceKind,
+    ...(record.provenance.captureRationale !== undefined
+      ? { captureRationale: record.provenance.captureRationale }
+      : {}),
+    sensitivity: record.provenance.sensitivity,
+    confidence: record.provenance.confidence,
+    status: record.status,
+    capturedAt: record.provenance.capturedAt,
+  };
+}
+
 function fitEntryToBudget(
   entries: readonly MemoryContextBlockEntry[],
   rank: IncludedMemory,
-  body: string,
+  record: MemoryRecord,
   budgetTokens: number,
   perEntry: number,
 ): MemoryContextBlockEntry | undefined {
-  const initialExcerpt = clipToTokenBudget(body, perEntry);
-  const initialEntry = {
-    memoryId: rank.memoryId,
-    bodyExcerpt: initialExcerpt,
-    inclusionReason: rank.inclusionReason,
-  };
+  const initialExcerpt = clipToTokenBudget(record.body, perEntry);
+  const initialEntry = entryForRank(rank, record, initialExcerpt);
   if (renderedCost([...entries, initialEntry]) <= budgetTokens) {
     return initialEntry;
   }
 
-  const words = wordsOf(body);
+  const words = wordsOf(record.body);
   let lo = 1;
   let hi = Math.min(words.length, Math.max(1, Math.floor(perEntry / TOKEN_PER_WORD_RATIO)));
   let best: MemoryContextBlockEntry | undefined;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
-    const candidate = {
-      memoryId: rank.memoryId,
-      bodyExcerpt: clippedWords(words, mid),
-      inclusionReason: rank.inclusionReason,
-    };
+    const candidate = entryForRank(rank, record, clippedWords(words, mid));
     if (renderedCost([...entries, candidate]) <= budgetTokens) {
       best = candidate;
       lo = mid + 1;
@@ -150,7 +162,7 @@ function greedyAssemble(
     const entry = fitEntryToBudget(
       entries,
       rank,
-      record.body,
+      record,
       options.budgetTokens,
       Math.max(1, Math.min(perEntry, options.budgetTokens - used)),
     );

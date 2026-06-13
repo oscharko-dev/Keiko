@@ -1710,6 +1710,32 @@ button {
   font-size: 13px;
 }
 
+.chat-memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.chat-memory-meta div {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.chat-memory-meta dt {
+  font-weight: 700;
+}
+
+.chat-memory-meta dd {
+  margin: 0;
+}
+
+.chat-memory-rationale {
+  color: var(--fg-muted);
+}
+
 .chat-memory-action-buttons {
   display: flex;
   gap: 8px;

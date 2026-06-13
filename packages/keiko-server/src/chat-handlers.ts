@@ -34,6 +34,7 @@ import {
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   extractCandidatesFromUserText,
+  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -44,7 +45,7 @@ import {
   type ChatMessage,
   type Project,
 } from "./store/index.js";
-import { composeConversationPrompt } from "./conversation-prompt.js";
+import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
   validateConversationPayload,
   type ConversationAttachment,
@@ -298,8 +299,7 @@ function conversationForGateway(messages: readonly ChatMessage[]): GatewayConver
   return [
     {
       role: "system",
-      content:
-        "You are Keiko, an enterprise developer-assist AI. Be concise, practical, and explicit about uncertainty. Do not claim tool access you do not have in this chat.",
+      content: CONVERSATION_SYSTEM_PROMPT,
     },
     ...usable,
   ];
@@ -736,6 +736,12 @@ function toMemoryResult(
         memoryId: String(item.memoryId),
         bodyExcerpt: item.bodyExcerpt,
         inclusionReason: item.inclusionReason,
+        sourceKind: item.sourceKind,
+        ...(item.captureRationale !== undefined ? { captureRationale: item.captureRationale } : {}),
+        sensitivity: item.sensitivity,
+        confidence: item.confidence,
+        status: item.status,
+        capturedAt: item.capturedAt,
       })),
       budget: retrieval.budget,
     },
@@ -762,12 +768,16 @@ export async function buildMemoryResult(
     return emptyMemoryResult(true);
   }
   const nowMs = Date.now();
-  const semanticById = await buildSemanticScores(
-    deps,
-    vault,
-    request.content,
-    gatherCandidateIds(vault, scopes, nowMs),
-  );
+  const safeForSecondaryModel =
+    memoryTextEgressRejectionReason(request.content, memoryCapturePolicyForDeps(deps)) === null;
+  const semanticById = safeForSecondaryModel
+    ? await buildSemanticScores(
+        deps,
+        vault,
+        request.content,
+        gatherCandidateIds(vault, scopes, nowMs),
+      )
+    : undefined;
   const retrieval = retrieveMemoryContext(
     {
       scopes,

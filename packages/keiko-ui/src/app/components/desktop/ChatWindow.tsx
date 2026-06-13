@@ -1230,6 +1230,10 @@ function MemoryActionCard({
   );
 }
 
+function formatMemoryCapturedAt(capturedAt: number): string {
+  return new Date(capturedAt).toISOString().slice(0, 10);
+}
+
 function MemoryPanel({
   memoryEnabled,
   setMemoryEnabled,
@@ -1305,6 +1309,31 @@ function MemoryPanel({
                 <span>{memory.inclusionReason}</span>
               </div>
               <p>{memory.bodyExcerpt}</p>
+              <dl className="chat-memory-meta" aria-label={`Provenance for ${memory.memoryId}`}>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{memory.sourceKind}</dd>
+                </div>
+                <div>
+                  <dt>Sensitivity</dt>
+                  <dd>{memory.sensitivity}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{memory.status}</dd>
+                </div>
+                <div>
+                  <dt>Confidence</dt>
+                  <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
+                </div>
+                <div>
+                  <dt>Captured</dt>
+                  <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
+                </div>
+              </dl>
+              {memory.captureRationale !== undefined ? (
+                <p className="chat-memory-rationale">{memory.captureRationale}</p>
+              ) : null}
             </article>
           ))}
           {latestMemory?.actions.map((action) => (

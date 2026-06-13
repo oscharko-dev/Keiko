@@ -322,6 +322,12 @@ describe("ChatWindow memory disclosure", () => {
                 memoryId: "mem-1",
                 bodyExcerpt: "Use pnpm",
                 inclusionReason: "scope-match",
+                sourceKind: "explicit-user-instruction",
+                captureRationale: "user asked Keiko to remember this",
+                sensitivity: "public",
+                confidence: 1,
+                status: "accepted",
+                capturedAt: 1_700_000_000_000,
               },
             ],
             budget: { tokens: 1200, used: 42 },
@@ -337,6 +343,8 @@ describe("ChatWindow memory disclosure", () => {
     await user.click(disclosureButton);
     expect(disclosureButton).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Use pnpm")).toBeInTheDocument();
+    expect(screen.getByText("explicit-user-instruction")).toBeInTheDocument();
+    expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 });
@@ -458,6 +466,54 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
 });
 
 describe("ChatWindow memory controls", () => {
+  it("lets users disable MemoriaViva for the next request and adjust the context budget", () => {
+    const setMemoryEnabled = vi.fn();
+    const setMemoryBudgetTokens = vi.fn();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        memoryEnabled: true,
+        memoryBudgetTokens: 1200,
+        setMemoryEnabled,
+        setMemoryBudgetTokens,
+      }),
+    );
+
+    const toggle = screen.getByRole("switch", {
+      name: "Enable MemoriaViva for the next request",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    expect(setMemoryEnabled).toHaveBeenCalledWith(false);
+
+    fireEvent.change(screen.getByLabelText("Budget (tokens)"), { target: { value: "800" } });
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(800);
+  });
+
+  it("discloses disabled no-memory responses without deleting stored memories", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        memoryEnabled: false,
+        latestMemory: {
+          context: {
+            enabled: false,
+            text: "",
+            memories: [],
+            budget: { tokens: 0, used: 0 },
+          },
+          actions: [],
+        },
+      }),
+    );
+
+    expect(screen.getByText("MemoriaViva off")).toBeInTheDocument();
+    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
+    await user.click(disclosureButton);
+    expect(screen.getByText(/MemoriaViva was disabled for the last request/i)).toBeInTheDocument();
+  });
+
   it("renders memory disclosure and candidate actions from the latest response", async () => {
     const acceptMemoryCandidate = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
@@ -473,6 +529,12 @@ describe("ChatWindow memory controls", () => {
                 memoryId: "mem-1",
                 bodyExcerpt: "Use TypeScript strict mode.",
                 inclusionReason: "top signal: lexical match",
+                sourceKind: "system-default",
+                captureRationale: "Automatically inferred from conversation (salience capture)",
+                sensitivity: "public",
+                confidence: 0.82,
+                status: "accepted",
+                capturedAt: 1_700_000_000_000,
               },
             ],
             budget: { tokens: 1200, used: 180 },
@@ -493,8 +555,73 @@ describe("ChatWindow memory controls", () => {
 
     await user.click(screen.getByRole("button", { name: /1 memories included/i }));
     expect(screen.getByText("Use TypeScript strict mode.")).toBeInTheDocument();
+    expect(screen.getByText("top signal: lexical match")).toBeInTheDocument();
+    expect(screen.getByText("system-default")).toBeInTheDocument();
+    expect(screen.getByText("82%")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));
+  });
+
+  it("routes proposed memory rejection from the conversation flow", async () => {
+    const rejectMemoryCandidate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [
+            {
+              kind: "candidate",
+              proposalId: "prop-reject-1",
+              body: "Remember the rejected deployment note.",
+              scopeLabel: "Conversation memory",
+              requiresApproval: true,
+            },
+          ],
+        },
+        rejectMemoryCandidate,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByText("Remember the rejected deployment note.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(rejectMemoryCandidate).toHaveBeenCalledWith("prop-reject-1"));
+  });
+
+  it("surfaces explicit update intents returned by governed memory operations", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [
+            {
+              kind: "update",
+              memoryId: "mem-update-1",
+              bodyPatch: "Test runner is vitest.",
+            },
+          ],
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByText("MemoriaViva update detected")).toBeInTheDocument();
+    expect(screen.getByText("mem-update-1")).toBeInTheDocument();
+    expect(screen.getByText("Suggested update: Test runner is vitest.")).toBeInTheDocument();
   });
 
   it("requires inline confirmation before executing a forget action", async () => {
