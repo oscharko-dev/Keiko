@@ -11,6 +11,7 @@ export {
 } from "./manifestSchema.js";
 export type {
   QualityIntelligenceBinaryExportMode,
+  QualityIntelligenceTraceabilityExportMode,
   QualityIntelligenceEvidenceManifest,
   QualityIntelligenceEvidenceRefRow,
   QualityIntelligenceExportRow,
