@@ -51,6 +51,79 @@ export const isKnownPriority = (
   return false;
 };
 
+// Returns true for code points in the lower unsafe range (U+0000–U+009F plus DEL).
+// Split from isUnsafeCodePoint to keep cyclomatic complexity below the lint limit.
+const isUnsafeLow = (cp: number): boolean => {
+  // C0 controls except TAB (U+0009) / LF (U+000A) / CR (U+000D)
+  if (cp <= 0x001f) return cp !== 0x0009 && cp !== 0x000a && cp !== 0x000d;
+  // DEL
+  if (cp === 0x007f) return true;
+  // C1 controls
+  return cp >= 0x0080 && cp <= 0x009f;
+};
+
+// Returns true for code points in the upper unsafe range (bidi / zero-width / BOM).
+// Split from isUnsafeCodePoint to keep cyclomatic complexity below the lint limit.
+const isUnsafeHigh = (cp: number): boolean => {
+  if (cp === 0x061c) return true; // Arabic letter mark
+  if (cp >= 0x200b && cp <= 0x200f) return true; // ZWSP/ZWNJ/ZWJ/LRM/RLM
+  if (cp >= 0x202a && cp <= 0x202e) return true; // Bidi embedding + override
+  if (cp === 0xfeff) return true; // BOM / ZWNBSP
+  return cp >= 0x2066 && cp <= 0x2069; // Bidi isolates
+};
+
+/**
+ * Returns true when `cp` is a code point that must be removed from persisted
+ * candidate text. See {@link stripUnsafeFormatChars} for the full set.
+ */
+export const isUnsafeFormatCodePoint = (cp: number): boolean => isUnsafeLow(cp) || isUnsafeHigh(cp);
+
+/**
+ * Remove Unicode bidi-override, zero-width, and C0/C1/DEL control code points
+ * from `value`, preserving ordinary text, accents, CJK, emoji, and the
+ * legitimate whitespace trio TAB (U+0009) / LF (U+000A) / CR (U+000D).
+ *
+ * Removed code-point ranges:
+ *   - C0 controls U+0000–U+001F except U+0009, U+000A, U+000D
+ *   - DEL U+007F
+ *   - C1 controls U+0080–U+009F
+ *   - Arabic letter mark U+061C
+ *   - Zero-width / BOM: U+200B, U+200C, U+200D, U+FEFF
+ *   - LRM / RLM: U+200E, U+200F
+ *   - Bidi embedding / override: U+202A–U+202E
+ *   - Bidi isolate: U+2066–U+2069
+ *
+ * Iterates by code point (not UTF-16 code unit) so surrogate pairs for
+ * supplementary-plane emoji are handled correctly. Pure and deterministic.
+ */
+export const stripUnsafeFormatChars = (value: string): string => {
+  const chars: string[] = [];
+  for (const ch of value) {
+    const cp = ch.codePointAt(0);
+    if (cp !== undefined && !isUnsafeFormatCodePoint(cp)) {
+      chars.push(ch);
+    }
+  }
+  return chars.join("");
+};
+
+/**
+ * Value-bearing candidate-text normaliser: NFKC-normalise, strip unsafe
+ * control/bidi/zero-width spoofing code points, then trim. Returns `""` for
+ * `undefined`.
+ *
+ * Distinct from the heuristic {@link normaliseText} (NFKC + trim only) which
+ * is used for deduplication keys and must remain byte-stable. This function is
+ * the single chokepoint for persisted candidate text fields (title, steps,
+ * preconditions, expectedResults, tags).
+ */
+export const normaliseCandidateText = (value: string | undefined): string => {
+  if (value === undefined) {
+    return "";
+  }
+  return stripUnsafeFormatChars(value.normalize("NFKC")).trim();
+};
+
 /**
  * Returns a stable, lexicographic, NFKC-normalised copy of the supplied
  * fragments. Equal fragments after normalisation collapse to a single entry.
