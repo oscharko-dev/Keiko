@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout } from "node:timers";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,8 @@ const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "webpack";
 let nextBundler = nextBundlerPreference === "turbopack" ? "turbopack" : "webpack";
 let server;
 let shuttingDown = false;
+let publicReady = false;
+let readinessCheckRunning = false;
 
 const devServiceWorker = `
 self.addEventListener("install", (event) => {
@@ -102,6 +105,7 @@ function restartChild(label) {
     if (shuttingDown) return;
     if (label === "bff") startBff();
     else startNext();
+    void waitForPublicReadiness();
   }, delayMs).unref();
 }
 
@@ -119,7 +123,8 @@ function spawnChild(label, command, args, options) {
   child.on("exit", (code, signal) => {
     if (children.get(label) !== child) return;
     children.delete(label);
-    writeState({ lastExit: { label, code, signal } });
+    publicReady = false;
+    writeState({ ready: false, lastExit: { label, code, signal } });
     if (shuttingDown) return;
     console.error(`[dev] ${label} exited unexpectedly.`);
     if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
@@ -134,6 +139,56 @@ function spawnChild(label, command, args, options) {
     if (!shuttingDown) restartChild(label);
   });
   return child;
+}
+
+async function fetchOk(url, validate = () => true) {
+  const response = await globalThis.fetch(url, { cache: "no-store" });
+  if (!response.ok) return `HTTP ${String(response.status)}`;
+  return (await validate(response)) ? "ok" : "unexpected response";
+}
+
+async function readinessProbe() {
+  try {
+    const api = await fetchOk(`http://${host}:${String(bffPort)}/api/health`, async (response) => {
+      const body = await response.json();
+      return body?.status === "ok";
+    });
+    if (api !== "ok") return `api: ${api}`;
+
+    const ui = await fetchOk(`http://${host}:${String(nextPort)}/`, async (response) => {
+      const contentType = response.headers.get("content-type") ?? "";
+      const body = await response.text();
+      return contentType.includes("text/html") && body.includes("Keiko");
+    });
+    if (ui !== "ok") return `ui: ${ui}`;
+
+    return "ok";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function waitForPublicReadiness() {
+  if (readinessCheckRunning) return;
+  readinessCheckRunning = true;
+  publicReady = false;
+  writeState({ ready: false });
+  try {
+    let lastError = "not started";
+    while (!shuttingDown) {
+      lastError = await readinessProbe();
+      if (lastError === "ok") {
+        publicReady = true;
+        writeState({ ready: true });
+        console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
+        return;
+      }
+      writeState({ ready: false, starting: lastError });
+      await sleep(500);
+    }
+  } finally {
+    readinessCheckRunning = false;
+  }
 }
 
 function startBff() {
@@ -250,6 +305,15 @@ function serveDevServiceWorker(res) {
   res.end(devServiceWorker);
 }
 
+function serveStarting(res) {
+  res.writeHead(503, {
+    "cache-control": "no-store",
+    "content-type": "text/plain; charset=utf-8",
+    "retry-after": "1",
+  });
+  res.end("Keiko development server is starting.");
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -276,17 +340,31 @@ server = createServer((req, res) => {
     serveDevServiceWorker(res);
     return;
   }
+  if (!publicReady) {
+    serveStarting(res);
+    return;
+  }
   proxyHttp(req, res, targetPortFor(url.pathname));
 });
 
 server.on("upgrade", (req, socket, head) => {
+  if (!publicReady) {
+    socket.end(
+      "HTTP/1.1 503 Service Unavailable\r\n" +
+        "Connection: close\r\n" +
+        "Retry-After: 1\r\n" +
+        "\r\n",
+    );
+    return;
+  }
   const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
   proxyUpgrade(req, socket, head, targetPortFor(url.pathname));
 });
 
 server.listen(publicPort, host, () => {
-  writeState({ ready: true });
-  console.log(`[dev] listening on http://${host}:${String(publicPort)}`);
+  writeState({ ready: false, starting: "waiting for API and UI" });
+  console.log(`[dev] listening on http://${host}:${String(publicPort)} (warming up)`);
+  void waitForPublicReadiness();
 });
 
 process.once("SIGINT", () => shutdown(0));
