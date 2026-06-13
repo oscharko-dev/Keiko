@@ -3,6 +3,9 @@ import type { MemoryAuditEvent, MemoryScope } from "@oscharko-dev/keiko-contract
 import { safeSummary } from "./memory-audit-event-builders.js";
 
 function maskedCoordinate(value: string, redactString: (input: string) => string): string {
+  if (value.startsWith("[redacted:") && value.endsWith("]")) {
+    return value;
+  }
   const redacted = redactString(value);
   if (redacted !== value) {
     return redacted;

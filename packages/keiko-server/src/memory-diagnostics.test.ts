@@ -14,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
+  MemoryAuditEvent,
   MemoryId,
   MemoryProjectId,
   MemoryRecord,
@@ -22,7 +23,7 @@ import type {
   MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
 import { exportMemoryDiagnostics } from "./memory-diagnostics.js";
-import { createMemoryAuditHandler } from "./memory-audit-handler.js";
+import { auditRunIdFor, createMemoryAuditHandler } from "./memory-audit-handler.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ interface MakeRecordOptions {
   readonly status?: MemoryRecord["status"];
   readonly pinned?: boolean;
   readonly body?: string;
+  readonly payload?: MemoryRecord["payload"];
 }
 
 function makeVault(
@@ -103,6 +105,7 @@ function insertRecord(vault: MemoryVaultStore, options: MakeRecordOptions): Memo
     scope: SCOPE,
     type: "preference",
     body: options.body ?? `record ${options.id}`,
+    ...(options.payload === undefined ? {} : { payload: options.payload }),
     provenance: {
       sourceKind: "explicit-user-instruction",
       capturedAt: FIXED_NOW,
@@ -166,6 +169,25 @@ describe("exportMemoryDiagnostics — body and payload absence", () => {
     const vault = makeVault();
     const fingerprint = "DIAG-BODY-FINGERPRINT-x4q2lm9p";
     insertRecord(vault, { id: "r-body", status: "accepted", body: fingerprint });
+    const diag = exportMemoryDiagnostics({
+      vault,
+      scopes: [SCOPE],
+      evidenceStore: createInMemoryEvidenceStore(),
+      redactString: (s) => s,
+      evidenceDir: "/tmp/evidence",
+      now: () => FIXED_NOW,
+    });
+    expect(JSON.stringify(diag)).not.toContain(fingerprint);
+  });
+
+  it("never includes structured payload values in the serialised diagnostics", () => {
+    const vault = makeVault();
+    const fingerprint = "DIAG-PAYLOAD-FINGERPRINT-t8y7r3";
+    insertRecord(vault, {
+      id: "r-payload",
+      status: "accepted",
+      payload: { kind: "string-list", items: [fingerprint] },
+    });
     const diag = exportMemoryDiagnostics({
       vault,
       scopes: [SCOPE],
@@ -299,6 +321,44 @@ describe("exportMemoryDiagnostics — sanitised audit tail", () => {
         expect(first.scope.kind).toBe("user");
       }
     }
+  });
+
+  it("defensively sanitises a poisoned audit manifest before exporting diagnostics", () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault();
+    const privateProject = "/Users/private/customer-a/project";
+    const privateScope: MemoryScope = {
+      kind: "project",
+      projectId: brandedMemoryProjectId(privateProject),
+    };
+    const secret = ["sk-", "proj", "_", "DiagPoison0123456789"].join("");
+    const poisonedEvent: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:workflow-omitted",
+      eventId: "evt-poisoned",
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: `omitted ${secret}`,
+      workflowRunId: "workflow-run-poisoned",
+      scopes: [privateScope],
+      omittedMemoryId: brandedMemoryId("mem-poisoned"),
+      reason: `diagnostic reason ${secret}`,
+    };
+    evidenceStore.put(auditRunIdFor(FIXED_NOW), JSON.stringify([poisonedEvent]));
+    const redact = createAuditRedactor({ additionalSecrets: [secret] }, {});
+    const diag = exportMemoryDiagnostics({
+      vault,
+      scopes: [privateScope],
+      evidenceStore,
+      redactString: redact,
+      evidenceDir: "/tmp/evidence",
+      lastNAuditEvents: 10,
+      now: () => FIXED_NOW,
+    });
+    const serialised = JSON.stringify(diag);
+    expect(diag.recentAuditEvents).toHaveLength(1);
+    expect(serialised).not.toContain(secret);
+    expect(serialised).not.toContain(privateProject);
   });
 
   it("clamps lastNAuditEvents to [1, 1000]", () => {

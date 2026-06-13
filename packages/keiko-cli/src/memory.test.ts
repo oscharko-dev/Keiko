@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
 import { runMemoryCli } from "./memory.js";
@@ -90,6 +91,7 @@ describe("runMemoryCli — usage and dispatch", () => {
     const cap = capture();
     expect(runMemoryCli(["--help"], cap.io, {})).toBe(0);
     expect(cap.out()).toContain("keiko memory stats");
+    expect(cap.out()).toContain("keiko memory diagnostics");
   });
 
   it("exits 2 on an unknown subcommand", () => {
@@ -120,6 +122,38 @@ describe("runMemoryCli stats", () => {
     const cap = capture();
     expect(runMemoryCli(["stats"], cap.io, {}, { vault })).toBe(0);
     expect(cap.out()).toContain("Total: 0");
+  });
+});
+
+describe("runMemoryCli diagnostics", () => {
+  it("prints a redacted body-free diagnostics snapshot", () => {
+    const vault = makeVault();
+    const fingerprint = "CLI-DIAGNOSTICS-BODY-FINGERPRINT";
+    insert(vault, { id: "diag-a", status: "accepted" });
+    vault.updateMemory(mid("diag-a"), { body: fingerprint }, Date.now());
+    const cap = capture();
+    expect(
+      runMemoryCli(
+        ["diagnostics", "--last", "5"],
+        cap.io,
+        {},
+        {
+          vault,
+          evidenceStore: createInMemoryEvidenceStore(),
+          redactString: (s) => s,
+        },
+      ),
+    ).toBe(0);
+    const out = cap.out();
+    const parsed = JSON.parse(out) as {
+      schemaVersion: string;
+      statusHistogram: { accepted: number };
+      scopeCounts: readonly { count: number }[];
+    };
+    expect(parsed.schemaVersion).toBe("1");
+    expect(parsed.statusHistogram.accepted).toBe(1);
+    expect(parsed.scopeCounts[0]?.count).toBe(1);
+    expect(out).not.toContain(fingerprint);
   });
 });
 

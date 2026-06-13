@@ -26,6 +26,65 @@ configured model gateway, what is never transmitted, and how to delete it.
   outcome. It does **not** persist raw prompt text, raw assistant output, or
   attachment contents.
 
+## MemoriaViva scope, retrieval, and deletion
+
+MemoriaViva is Keiko's local memory surface. It can keep durable facts such as
+user preferences, recurring project routines, accepted outcomes, procedural
+guidance, and corrections that a reviewer approved or that a governed capture
+policy proposed for review. It is not a hosted profile, cloud telemetry, shared
+team memory, or a remote audit upload.
+
+Each memory has a scope coordinate:
+
+- **User** memories apply to the local user.
+- **Workspace** memories apply to a bounded workspace.
+- **Project** memories apply to a selected project path.
+- **Workflow** memories apply to a workflow family.
+- **Global** memories apply only when the memory was intentionally created with
+  global scope.
+
+Retrieval uses those scopes before memory context reaches a prompt. Conversation
+requests ask for the current conversation/project scopes; workflow agents ask for
+their governed workflow/project scopes. Memories outside the requested scope are
+not eligible for that turn. When a memory is retrieved, Keiko may include a
+bounded, redacted memory block in the model request. The prompt treats the block
+as reference context, not as executable instruction; it cannot trigger tools,
+patching, workflow runs, or scope expansion by itself.
+
+MemoriaViva exposes separate lifecycle controls:
+
+- **Approve / reject** decides whether a proposed memory can be recalled later.
+- **Edit / correct** updates reviewable memory content. Corrections create a new
+  proposed correction and preserve a body-free supersession audit record when
+  accepted.
+- **Pin / unpin** controls retention priority. Pinned memories are not eligible
+  for retention cleanup.
+- **Archive** removes a memory from the active working set without deleting the
+  audit trail.
+- **Forget / delete** removes the active memory record and writes a tombstone so
+  reviewers can audit that deletion happened without retaining the raw body in
+  diagnostics.
+- **Tombstone retention** purges expired tombstones through the local vault port
+  when a tombstone-retention threshold is configured.
+
+`keiko memory maintain` runs the same bounded maintenance pass as the UI memory
+maintenance route. It can promote strong proposed memories, reinforce frequently
+used memories, decay stale memories, archive faded memories, and forget expired
+or very low-confidence memories. It can also purge tombstones that are older
+than the configured tombstone-retention threshold. Maintenance reports counts
+and review items; it does not print memory bodies.
+
+Memory diagnostics are designed for local support and audit review. The
+`keiko memory diagnostics` command reports schema version, generated time, scope
+counts, status histogram, redacted storage path, and a redacted tail of recent
+memory audit events. It does not serialize raw memory bodies or structured
+payload values.
+
+The desktop Digital Twin panel does not store separate MemoriaViva entries in
+browser `localStorage`. MemoriaViva's user-facing memory surface is the
+governed `/memoriaviva` route backed by the local vault and `/api/memory/*`
+routes.
+
 ## What is sent to the model gateway
 
 The primary chat request carries:
@@ -119,6 +178,13 @@ configured literal secrets never reach disk. Manifests record metadata
 (workflow kind, model id, usage counters, outcome, redacted error messages),
 not raw conversation content.
 
+MemoriaViva audit records use the same evidence store. Memory audit events cover
+proposal, acceptance, rejection, update, supersession, pin/unpin, archive,
+forget/delete, retrieval, workflow use, workflow omission, and workflow
+write-candidate proposals. Audit summaries, storage paths, and scope coordinates
+are redacted before persistence; raw memory bodies and payloads are excluded from
+the audit event model.
+
 ## Limitations
 
 The following are **not** redacted:
@@ -145,3 +211,12 @@ The following are **not** redacted:
   [packages/keiko-ui/src/app/components/desktop/ConversationRetention.test.tsx](../packages/keiko-ui/src/app/components/desktop/ConversationRetention.test.tsx).
 - Connected-context privacy (sibling document):
   [docs/connected-context-privacy.md](./connected-context-privacy.md).
+- Local runtime state contract:
+  [docs/local-runtime-state-contract.md](./local-runtime-state-contract.md).
+- Security and audit boundaries:
+  [docs/security-and-audit-boundaries.md](./security-and-audit-boundaries.md).
+- MemoriaViva BFF routes:
+  [packages/keiko-server/src/memory-handlers.ts](../packages/keiko-server/src/memory-handlers.ts).
+- Memory audit and diagnostics:
+  [packages/keiko-server/src/memory-audit-handler.ts](../packages/keiko-server/src/memory-audit-handler.ts),
+  [packages/keiko-server/src/memory-diagnostics.ts](../packages/keiko-server/src/memory-diagnostics.ts).

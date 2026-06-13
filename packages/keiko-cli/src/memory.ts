@@ -4,6 +4,8 @@
 //              forget) against the local vault and print the applied counts. Reuses the exact same
 //              `runMemoryMaintenance` core the BFF route uses, so the CLI and UI never drift.
 //   stats      Print memory counts by status, by scope kind, and the total.
+//   diagnostics
+//              Print a redacted body-free diagnostics snapshot for local support.
 //
 // The vault is opened at the resolved memory dir (default $KEIKO_MEMORY_DIR or the platform state
 // dir; override with --memory-dir). Tests inject a vault via deps so no disk is touched. Exit 0 on
@@ -13,9 +15,16 @@
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   createMemoryEmbedder,
+  exportMemoryDiagnostics,
   runMemoryMaintenance,
   type MemoryEmbedder,
 } from "@oscharko-dev/keiko-server";
+import {
+  createAuditRedactor,
+  createNodeEvidenceStore,
+  resolveEvidenceDir,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-evidence";
 import {
   loadConfigFromFile,
   requestOpenAIEmbedding,
@@ -28,15 +37,19 @@ import type { CliIo } from "./runner.js";
 const USAGE = `Usage:
   keiko memory maintain [--memory-dir PATH]   Run a bounded consolidate + decay + forget pass.
   keiko memory stats [--memory-dir PATH]      Print memory counts by status and scope.
+  keiko memory diagnostics [--memory-dir PATH] [--evidence-dir PATH] [--last N]
+                                              Print redacted local diagnostics JSON.
   keiko memory reembed [--memory-dir PATH] [--limit N] [--config PATH]
                                               Backfill embeddings for accepted memories lacking one.
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
 --memory-dir). \`maintain\` strengthens recalled memories, decays stale ones, archives faded ones,
-forgets expired/very-faint ones, and reports unresolved consolidation review items. \`reembed\`
-computes the embedding for each accepted memory that has none (bounded by --limit, default 200), so
-pre-existing memories become semantically retrievable; it is gated on an embedding model being
-configured (via --config / $KEIKO_CONFIG_FILE) and is best-effort.
+forgets expired/very-faint ones, and reports unresolved consolidation review items. \`diagnostics\`
+prints schema version, generated time, scope/status counts, redacted storage path, and a bounded
+audit tail without memory body or payload content. \`reembed\` computes the embedding for each
+accepted memory that has none (bounded by --limit, default 200), so pre-existing memories become
+semantically retrievable; it is gated on an embedding model being configured (via --config /
+$KEIKO_CONFIG_FILE) and is best-effort.
 `;
 
 const DEFAULT_REEMBED_LIMIT = 200;
@@ -49,6 +62,8 @@ export interface MemoryCliDeps {
   readonly openVault?:
     | ((memoryDir: string | undefined, env: EnvSource) => MemoryVaultStore)
     | undefined;
+  readonly evidenceStore?: EvidenceStore | undefined;
+  readonly redactString?: ((input: string) => string) | undefined;
   readonly embedText?: MemoryEmbedder | null | undefined;
 }
 
@@ -75,6 +90,33 @@ function resolveVault(
 
 function scopeKindOf(scope: MemoryScope): string {
   return scope.kind;
+}
+
+function scopeKey(scope: MemoryScope): string {
+  switch (scope.kind) {
+    case "user":
+      return `user:${scope.userId}`;
+    case "workspace":
+      return `workspace:${scope.workspaceId}`;
+    case "project":
+      return `project:${scope.projectId}`;
+    case "workflow":
+      return `workflow:${scope.workflowDefinitionId}`;
+    case "global":
+      return "global";
+    default: {
+      const never: never = scope;
+      return never;
+    }
+  }
+}
+
+function uniqueRecordScopes(records: readonly MemoryRecord[]): readonly MemoryScope[] {
+  const scopes = new Map<string, MemoryScope>();
+  for (const record of records) {
+    scopes.set(scopeKey(record.scope), record.scope);
+  }
+  return scopes.size === 0 ? [{ kind: "global" }] : [...scopes.values()];
 }
 
 function tallyBy<TKey extends string>(
@@ -127,6 +169,41 @@ function runStats(args: readonly string[], io: CliIo, env: EnvSource, deps: Memo
   try {
     const records = vault.listMemories({ includeExpired: true });
     io.out(renderStats(records));
+    return 0;
+  } finally {
+    if (deps.vault === undefined) vault.close();
+  }
+}
+
+function parseLastAuditEvents(args: readonly string[]): number | undefined {
+  const raw = flagValue(args, "--last");
+  if (raw === undefined) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function runDiagnostics(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: MemoryCliDeps,
+): number {
+  const vault = resolveVault(args, env, deps);
+  const evidenceDir = resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
+  const evidenceStore = deps.evidenceStore ?? createNodeEvidenceStore(evidenceDir);
+  const redactString = deps.redactString ?? createAuditRedactor({}, env);
+  try {
+    const records = vault.listMemories({ includeExpired: true });
+    const lastNAuditEvents = parseLastAuditEvents(args);
+    const diagnostics = exportMemoryDiagnostics({
+      vault,
+      scopes: uniqueRecordScopes(records),
+      evidenceStore,
+      redactString,
+      evidenceDir,
+      ...(lastNAuditEvents === undefined ? {} : { lastNAuditEvents }),
+    });
+    io.out(`${JSON.stringify(diagnostics, null, 2)}\n`);
     return 0;
   } finally {
     if (deps.vault === undefined) vault.close();
@@ -269,6 +346,7 @@ function dispatchSubcommand(
   try {
     if (sub === "maintain") return runMaintain(args, io, env, deps);
     if (sub === "stats") return runStats(args, io, env, deps);
+    if (sub === "diagnostics") return runDiagnostics(args, io, env, deps);
     if (sub === "reembed") return runReembed(args, io, env, deps);
   } catch (error) {
     io.err(`keiko memory: ${error instanceof Error ? error.message : String(error)}\n`);

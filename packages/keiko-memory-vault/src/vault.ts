@@ -39,7 +39,11 @@ import {
 } from "./edges.js";
 import { getEmbeddingRow, getEmbeddingRows, upsertEmbeddingRow } from "./embeddings.js";
 import { getAccessStatsRows, recordAccessRows, type MemoryAccessStat } from "./access.js";
-import { insertTombstoneRow, listTombstonesByScopeRows } from "./tombstones.js";
+import {
+  deleteTombstonesByScopeBeforeRows,
+  insertTombstoneRow,
+  listTombstonesByScopeRows,
+} from "./tombstones.js";
 import {
   gateDeleteOptions,
   gateEmbeddingInput,
@@ -361,9 +365,11 @@ type EdgeAndEmbeddingOps = Pick<
   | "upsertEmbedding"
   | "getEmbedding"
   | "getEmbeddings"
-  | "listTombstonesByScope"
-  | "recordAccess"
-  | "getAccessStats"
+>;
+
+type TombstoneAndAccessOps = Pick<
+  MemoryVaultStore,
+  "listTombstonesByScope" | "purgeTombstonesByScopeBefore" | "recordAccess" | "getAccessStats"
 >;
 
 function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
@@ -402,9 +408,21 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
       getEmbeddingRow(db, memoryId, opts.cipher),
     getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>
       getEmbeddingRows(db, memoryIds, opts.cipher),
+  };
+}
+
+function buildTombstoneAndAccessOps(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+): TombstoneAndAccessOps {
+  return {
     listTombstonesByScope: (scope: MemoryScope): readonly MemoryTombstone[] => {
       gateMemoryScope(scope);
       return listTombstonesByScopeRows(db, scope, opts.cipher);
+    },
+    purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
+      gateMemoryScope(scope);
+      return deleteTombstonesByScopeBeforeRows(db, scope, forgottenBeforeMs);
     },
     recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
       recordAccessRows(db, ids, nowMs);
@@ -418,6 +436,7 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
   return {
     ...buildMemoryMutators(db, opts),
     ...buildEdgeAndEmbeddingOps(db, opts),
+    ...buildTombstoneAndAccessOps(db, opts),
     close: (): void => {
       db.close();
     },

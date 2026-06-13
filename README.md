@@ -109,6 +109,19 @@ Connect a Figma board read-only with a personal access token. The token is encry
 
 Keiko's memory is now encrypted at rest (AES-256-GCM vault, ADR-0035) — no plaintext memory content touches disk. Memories are captured from natural conversation when salient, decay and can be forgotten under governance rules (`keiko memory maintain`), and are recalled semantically via embeddings. The memory window is available from the left rail as **MemoriaViva**.
 
+MemoriaViva is local machine state, not cloud telemetry or shared team memory. Memories are scoped
+to user, workspace, project, workflow, or global coordinates, and retrieval uses those scopes before
+adding any memory context to a model prompt. When memory is enabled for a conversation or workflow,
+Keiko may add a bounded, redacted memory context block to the model call; disabling memory or using
+memory-off mode omits that block. Forget/delete actions tombstone the selected memory for audit, and
+maintenance can archive, decay, forget stale records, or purge expired tombstones under
+deterministic retention rules. Diagnostics and audit exports are body-free: they report counts,
+status, scope summaries, and redacted audit events rather than raw memory bodies or structured
+payloads. Use `keiko memory diagnostics` for the local support snapshot; the Digital Twin panel
+does not maintain a separate browser-local memory store. See
+[Conversation Center privacy and retention](https://github.com/oscharko-dev/Keiko/blob/dev/docs/conversation-center-privacy.md)
+for the public memory privacy contract.
+
 ### Conversation Center and grounding
 
 Chat now streams tokens over SSE (first token in well under a second on TLS-intercepted enterprise networks). Grounded answers can draw on any local folder plus Local Knowledge connectors simultaneously; reciprocal-rank fusion keeps one source from starving the others, and grounding budgets are operator-configurable.
@@ -383,6 +396,7 @@ Every grounded answer in the Conversation Center shows a context inspection summ
 Read the full contracts and decisions:
 
 - [Connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md)
+- [Conversation Center privacy and retention](https://github.com/oscharko-dev/Keiko/blob/dev/docs/conversation-center-privacy.md)
 - [ADR-0022: Connected context privacy](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md)
 
 ## Troubleshooting
