@@ -3,10 +3,9 @@
 //
 // POST /api/memory/maintenance runs a bounded, synchronous pass:
 //   1. Load every memory (all scopes) + the access stats.
-//   2. Run consolidation on the accepted subset; persist proposed edges; AUTO-APPLY pairwise
-//      supersede review items (a correction superseding one older conflicting memory) by demoting
-//      the loser to `superseded`. Multi-way merges are NOT auto-resolved — they stay as review
-//      items for the Memory Center.
+//   2. Run consolidation on the accepted subset; persist auto-applicable relationship edges and
+//      return unresolved review items for Memory Center or CLI operators. Conflict and merge review
+//      items are NEVER auto-applied here.
 //   3. Compute the maintenance plan and apply it: promote (-> accepted), reinforce / decay
 //      (confidence patch), archive (-> archived), forget (vault delete + tombstone + reason).
 //   4. Emit one audit event per applied effect and return the counts.
@@ -16,11 +15,7 @@
 // rather than crashing the loopback server.
 
 import { randomUUID } from "node:crypto";
-import {
-  runConsolidation,
-  type ProposedAction,
-  type ReviewItem,
-} from "@oscharko-dev/keiko-memory-consolidation";
+import { runConsolidation, type ReviewItem } from "@oscharko-dev/keiko-memory-consolidation";
 import {
   planMemoryMaintenance,
   type MemoryAccessStatLike,
@@ -29,10 +24,10 @@ import {
 import type {
   MemoryAuditEvent,
   MemoryAuditInitiatorSurface,
+  MemoryEdge,
   MemoryEdgeId,
   MemoryId,
   MemoryRecord,
-  MemoryScope,
 } from "@oscharko-dev/keiko-contracts";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -50,9 +45,18 @@ export interface MaintenanceCounts {
   superseded: number;
   edgesCreated: number;
   clustersInspected: number;
+  reviewItemsCreated: number;
 }
 
-function emptyCounts(): MaintenanceCounts {
+export interface MaintenanceResult extends MaintenanceCounts {
+  readonly reviewItems: readonly ReviewItem[];
+}
+
+interface MaintenanceAccumulator extends MaintenanceCounts {
+  readonly reviewItems: ReviewItem[];
+}
+
+function emptyCounts(): MaintenanceAccumulator {
   return {
     promoted: 0,
     reinforced: 0,
@@ -62,6 +66,8 @@ function emptyCounts(): MaintenanceCounts {
     superseded: 0,
     edgesCreated: 0,
     clustersInspected: 0,
+    reviewItemsCreated: 0,
+    reviewItems: [],
   };
 }
 
@@ -113,69 +119,29 @@ function recordsById(records: readonly MemoryRecord[]): Map<MemoryId, MemoryReco
 }
 
 // ─── Consolidation effects ───────────────────────────────────────────────────
+function isAutoApplicableConsolidationEdge(edge: MemoryEdge): boolean {
+  return (
+    edge.kind === "derived-from" || edge.kind === "related" || edge.kind === "temporal-precedes"
+  );
+}
+
 function applyEdges(
   vault: MemoryVaultStore,
   edges: ReturnType<typeof runConsolidation>["edgesProposed"],
 ): number {
   let created = 0;
   for (const edge of edges) {
+    if (!isAutoApplicableConsolidationEdge(edge)) continue;
     vault.insertEdge(edge);
     created += 1;
   }
   return created;
 }
 
-type SupersedeAction = Extract<ProposedAction, { kind: "supersede" }>;
-
-// A pairwise supersede picks the OLDER memory as the loser: the newer correction wins, the older
-// conflicting fact is demoted to `superseded` so retrieval suppresses it. Multi-way merges carry a
-// `merge` action and are intentionally left untouched for human review.
-function pairwiseSupersede(action: ProposedAction | undefined): SupersedeAction | null {
-  return action?.kind === "supersede" ? action : null;
-}
-
-function applySupersessions(
-  vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
-  reviewItems: readonly ReviewItem[],
-  byId: Map<MemoryId, MemoryRecord>,
-): number {
-  let superseded = 0;
-  for (const item of reviewItems) {
-    const action = pairwiseSupersede(item.proposedAction);
-    if (action === null) continue;
-    const loser = byId.get(action.older);
-    if (loser?.status !== "accepted") continue;
-    vault.updateMemory(action.older, { status: "superseded" }, Date.now());
-    superseded += 1;
-    emitSupersedeAudit(evidenceStore, action, loser.scope);
-  }
-  return superseded;
-}
-
-function emitSupersedeAudit(
-  evidenceStore: EvidenceStore | undefined,
-  action: SupersedeAction,
-  scope: MemoryScope,
-): void {
-  emitAudit(
-    evidenceStore,
-    "memory:superseded",
-    "consolidation",
-    "Auto-superseded an older conflicting memory.",
-    {
-      oldMemoryId: action.older,
-      newMemoryId: action.newer,
-      scope,
-    },
-  );
-}
-
 function runConsolidationPass(
   vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
   records: readonly MemoryRecord[],
-  counts: MaintenanceCounts,
+  counts: MaintenanceAccumulator,
 ): void {
   const result = runConsolidation(records, {
     nowMs: Date.now(),
@@ -184,12 +150,8 @@ function runConsolidationPass(
   });
   counts.edgesCreated += applyEdges(vault, result.edgesProposed);
   counts.clustersInspected += result.clustersInspected;
-  counts.superseded += applySupersessions(
-    vault,
-    evidenceStore,
-    result.reviewItems,
-    recordsById(records),
-  );
+  counts.reviewItemsCreated += result.reviewItems.length;
+  counts.reviewItems.push(...result.reviewItems);
 }
 
 // ─── Plan application ──────────────────────────────────────────────────────────
@@ -201,7 +163,7 @@ function applyDecayEffects(
   evidenceStore: EvidenceStore | undefined,
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
-  counts: MaintenanceCounts,
+  counts: MaintenanceAccumulator,
 ): void {
   applyConfidencePatches(vault, plan.reinforce, byId, (n) => (counts.reinforced += n));
   applyConfidencePatches(vault, plan.decay, byId, (n) => (counts.decayed += n));
@@ -214,7 +176,7 @@ function applyPromotions(
   evidenceStore: EvidenceStore | undefined,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
-  counts: MaintenanceCounts,
+  counts: MaintenanceAccumulator,
 ): void {
   for (const id of ids) {
     const record = byId.get(id);
@@ -250,7 +212,7 @@ function applyArchives(
   evidenceStore: EvidenceStore | undefined,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
-  counts: MaintenanceCounts,
+  counts: MaintenanceAccumulator,
 ): void {
   for (const id of ids) {
     const record = byId.get(id);
@@ -301,7 +263,7 @@ function applyForgets(
 export function runMemoryMaintenance(
   vault: MemoryVaultStore,
   evidenceStore?: EvidenceStore,
-): MaintenanceCounts {
+): MaintenanceResult {
   const counts = emptyCounts();
   // Phase 1 — promote strong `proposed` memories FIRST. Consolidation and conflict detection only
   // inspect `accepted` records, so without this a vault full of freshly-captured `proposed`
@@ -311,12 +273,12 @@ export function runMemoryMaintenance(
   const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, { nowMs: Date.now() });
   applyPromotions(vault, evidenceStore, promotePlan.promote, recordsById(beforePromote), counts);
-  // Phase 2 — consolidate the now-accepted set: link near-duplicates and auto-supersede pairwise
-  // correction conflicts (the older conflicting fact -> `superseded`).
+  // Phase 2 — consolidate the now-accepted set: link safe near-duplicate metadata and surface
+  // conflicts / merges as explicit review items. Status mutations require a later governed review.
   const accepted = vault
     .listMemories({ includeExpired: true })
     .filter((record) => record.status === "accepted");
-  runConsolidationPass(vault, evidenceStore, accepted, counts);
+  runConsolidationPass(vault, accepted, counts);
   // Phase 3 — reinforce / decay / archive / forget on the post-consolidation snapshot. The access
   // stats feed the strength model.
   const all = vault.listMemories({ includeExpired: true });

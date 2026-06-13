@@ -67,6 +67,7 @@ export interface MemoryConsolidationReviewItem {
   readonly reason: MemoryConsolidationReviewReason;
   readonly relatedMemoryIds: readonly MemoryId[];
   readonly proposedAction?: MemoryConsolidationProposedAction;
+  readonly proposedEdges?: readonly MemoryEdge[];
   readonly detectedAt: number;
 }
 
@@ -77,6 +78,8 @@ export interface MemoryConsolidationResult {
   readonly staleFlags: readonly MemoryConsolidationStaleFlag[];
   readonly reviewItems: readonly MemoryConsolidationReviewItem[];
   readonly clustersInspected: number;
+  readonly recordsInspected: number;
+  readonly truncated: boolean;
   readonly elapsedMs: number;
 }
 
@@ -101,6 +104,7 @@ export interface MemoryConsolidationJobSettings {
   readonly staleConfidenceThreshold: number;
   readonly maxAgeMs: number;
   readonly maxClustersPerRun: number;
+  readonly maxRecordsPerRun: number;
 }
 
 export interface MemoryConsolidationJobEnvelope {
@@ -145,6 +149,7 @@ export interface StartMemoryConsolidationInput {
   readonly staleConfidenceThreshold: number;
   readonly maxAgeMs: number;
   readonly maxClustersPerRun: number;
+  readonly maxRecordsPerRun: number;
 }
 
 // ---------------------------------------------------------------------------

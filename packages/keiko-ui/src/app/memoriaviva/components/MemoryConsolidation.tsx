@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS: StartMemoryConsolidationInput = {
   staleConfidenceThreshold: 0.3,
   maxAgeMs: 90 * DAY_MS,
   maxClustersPerRun: 100,
+  maxRecordsPerRun: 1_000,
 };
 
 /* "1 review items" → "1 review item" (uiux-fix F034, C372) */
@@ -333,9 +334,21 @@ export function MemoryConsolidation({
                 name="maxClustersPerRun"
                 value={settings.maxClustersPerRun}
                 min={0}
+                max={1000}
                 step={1}
                 disabled={submitting || hasActiveRun}
                 help="Hard bound on duplicate clusters inspected in one run."
+                onChange={updateSetting}
+              />
+              <SettingsField
+                label="Max records per run"
+                name="maxRecordsPerRun"
+                value={settings.maxRecordsPerRun}
+                min={0}
+                max={1000}
+                step={1}
+                disabled={submitting || hasActiveRun}
+                help="Hard bound on accepted records admitted to one scan."
                 onChange={updateSetting}
               />
             </div>
@@ -441,6 +454,13 @@ export function MemoryConsolidation({
                   <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Elapsed</div>
                   <div style={{ fontVariantNumeric: "tabular-nums" }}>
                     {formatElapsed(activeJob.result?.elapsedMs ?? 0)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Records inspected</div>
+                  <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {activeJob.result?.recordsInspected ?? 0}
+                    {activeJob.result?.truncated === true ? " (truncated)" : ""}
                   </div>
                 </div>
                 <div>

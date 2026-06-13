@@ -53,6 +53,7 @@ function runningJob(): MemoryConsolidationJobResponse {
         staleConfidenceThreshold: 0.3,
         maxAgeMs: 7_776_000_000,
         maxClustersPerRun: 100,
+        maxRecordsPerRun: 1_000,
       },
       memoryCount: 2,
       cancelRequested: false,
@@ -93,6 +94,8 @@ function completedJob(): MemoryConsolidationJobResponse {
             },
           ],
           clustersInspected: 3,
+          recordsInspected: 2,
+          truncated: false,
           elapsedMs: 250,
         },
       },
@@ -103,6 +106,7 @@ function completedJob(): MemoryConsolidationJobResponse {
         staleConfidenceThreshold: 0.3,
         maxAgeMs: 7_776_000_000,
         maxClustersPerRun: 100,
+        maxRecordsPerRun: 1_000,
       },
       memoryCount: 2,
       cancelRequested: false,
@@ -137,6 +141,7 @@ describe("MemoryConsolidation", () => {
       staleConfidenceThreshold: 0.3,
       maxAgeMs: 7_776_000_000,
       maxClustersPerRun: 100,
+      maxRecordsPerRun: 1_000,
     });
 
     await waitFor(() => {
@@ -168,6 +173,7 @@ describe("MemoryConsolidation", () => {
           staleConfidenceThreshold: 0.3,
           maxAgeMs: 7_776_000_000,
           maxClustersPerRun: 100,
+          maxRecordsPerRun: 1_000,
         },
         memoryCount: 2,
         cancelRequested: true,
