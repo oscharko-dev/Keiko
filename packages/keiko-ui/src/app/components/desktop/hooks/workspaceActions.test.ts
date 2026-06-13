@@ -535,6 +535,85 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
   });
 });
 
+// ─── Epic #729 #750 #756 — linkedFigmaSnapshotRunIds ─────────────────────────
+// The figma reader is one of the N+1 source kinds aggregated into a QI run (Epic #729). Prior to this
+// suite it was mutation-blind (deferred in the #731 UI audit). These cases pin the reader's dedupe,
+// cap, non-figma-skip, and — critically — the whitespace-only snapshotRunId skip (parity with the
+// connector reader and the server's validateFigmaSnapshotSource trim guard).
+describe("linkedFigmaSnapshotRunIds (Epic #729 #750 #756)", () => {
+  it("returns empty when the quality window has no connections", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("returns the snapshotRunId from a connected Figma Snapshot window", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-run-1" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-run-1"]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-run-2" }, "fig-1")],
+      [conn("fig-1", "quality")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-run-2"]);
+  });
+
+  it("ignores connections to non-figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", { resolvedRoot: "/data" }, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with an empty snapshotRunId", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with a whitespace-only snapshotRunId (parity with the server's trim guard)", () => {
+    // A blank id would reach the server and be rejected with a 400 (validateFigmaSnapshotSource trims
+    // before validating); the reader treats it as "no selection" and skips it so Generate never sends
+    // an unusable figma source. Parity with the connector capsule reader above.
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "   " }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("deduplicates the same snapshotRunId from two figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-1"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-2"),
+      ],
+      [conn("quality", "fig-1"), conn("quality", "fig-2")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-dup"]);
+  });
+
+  it("caps the figma list at MAX_SCOPES when more than 16 figma windows are bound", () => {
+    const figmas = Array.from({ length: 20 }, (_unused, i) =>
+      win("figma", { snapshotRunId: `fig-${String(i)}` }, `fig-${String(i)}`),
+    );
+    const conns = figmas.map((w) => conn("quality", w.id));
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...figmas],
+      conns,
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toHaveLength(MAX_SCOPES);
+  });
+});
+
 describe("linkedConnectorCapsuleSetIds (Epic #710 #718)", () => {
   it("returns the capsuleSetId from a connected Connector window (capsule-set kind)", () => {
     const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
