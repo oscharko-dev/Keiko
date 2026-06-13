@@ -1542,3 +1542,115 @@ describe("handleQiRegenerateStale — edit history of STALE candidates is droppe
     expect(preservedRevisionIds).not.toContain("cand-stale");
   });
 });
+
+// ─── merged findings: severity-sort + per-run cap parity with the initial run path (#743) ──────
+//
+// The initial run path (modelRoutedTestDesign) orders findings by severity BEFORE truncating to
+// maxFindingsPerRun, so high-severity findings (including uncovered-requirement coverage gaps)
+// always survive the per-run cap. The re-check merge path assembles preserved + regenerated +
+// coverage-gap findings and MUST apply the same sort-then-cap so the two production persist paths
+// converge: a re-check whose merged findings exceed the cap persists exactly maxFindingsPerRun
+// rows, severity-ordered, with the most-severe rows retained.
+//
+// The cap is sourced from QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxFindingsPerRun because the
+// re-check regeneration sub-run (regenWorkflowDeps) passes no custom `limits` and therefore runs
+// under the default workflow limits — keeping the merge cap consistent with the sub-run's own cap.
+//
+// Fixture note: a single inline source ingests at most MAX_TOTAL_ATOMS (120) atoms, so coverage-gap
+// rows alone cannot exceed the 512 cap. To build a deterministic >512 merged set we carry forward
+// preserved test-quality (judge) findings from the seeded old manifest — filteredJudgeFindings keeps
+// every "test-quality" finding whose candidateId is preserved — mixed in severity, plus a single
+// high-severity uncovered coverage gap. Identical sources => zero stale => the merge path runs with
+// no baseline regeneration, so the persisted finding set is fully deterministic.
+describe("handleQiRegenerateStale — merged findings are severity-sorted and capped like the initial run path (#743)", () => {
+  const CAP = QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxFindingsPerRun;
+  const SEVERITY_RANK = QualityIntelligence.QUALITY_INTELLIGENCE_SEVERITY_RANK;
+
+  function judgeFinding(
+    index: number,
+    candidateId: string,
+    severity: QualityIntelligence.QualityIntelligenceSeverity,
+  ): Parameters<typeof recordQualityIntelligenceRun>[0]["findings"][number] {
+    return {
+      id: `qi-finding-judge-${String(index)}`,
+      kind: "test-quality",
+      severity,
+      summaryRedacted: `Judge finding ${String(index)} (${severity}).`,
+      candidateId,
+    };
+  }
+
+  it("persists exactly maxFindingsPerRun severity-ordered findings, keeping a high coverage gap and dropping low ones", async () => {
+    const runId = "run-regen-findings-cap";
+    // Two requirement lines => two atoms. The first is covered by the preserved candidate (no gap);
+    // the second has no covering candidate, yielding one high-severity uncovered coverage gap.
+    const text = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    const coveredAtomId = String(seeded.ingestedAtoms[0]?.atom.id);
+
+    // Build a >CAP judge-finding set with a controlled severity mix, all scoped to the preserved
+    // candidate so filteredJudgeFindings carries every one forward into the merge:
+    //   - a handful of `critical` (rank 0, ahead of the high coverage gap),
+    //   - enough `medium` (rank 2) to comfortably overshoot the cap,
+    //   - a tail of `low` (rank 3) that MUST be dropped once the cap is hit.
+    const criticalCount = 5;
+    const mediumCount = CAP + 20; // overshoot the cap with mid-severity rows alone
+    const lowCount = 40; // these are the rows the cap must drop after sorting
+    const seededFindings = [
+      ...Array.from({ length: criticalCount }, (_, i) => judgeFinding(i, "cand-cov", "critical")),
+      ...Array.from({ length: mediumCount }, (_, i) =>
+        judgeFinding(criticalCount + i, "cand-cov", "medium"),
+      ),
+      ...Array.from({ length: lowCount }, (_, i) =>
+        judgeFinding(criticalCount + mediumCount + i, "cand-cov", "low"),
+      ),
+    ];
+
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text }],
+      candidates: [qiCandidate(runId, "cand-cov", "Login test", [coveredAtomId])],
+      findings: seededFindings,
+    });
+
+    // Identical sources => nothing stale => deterministic merge with no baseline regeneration.
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const newRunId = (result.body as { runId: string }).runId;
+    const manifest = loadQualityIntelligenceRun(newRunId, { evidenceDir });
+    const findings = manifest?.findings ?? [];
+
+    // AC1 (cap): the merged set far exceeds the cap pre-truncation, so exactly CAP rows persist, and
+    // totals.findings stays equal to the persisted length.
+    expect(seededFindings.length).toBeGreaterThan(CAP);
+    expect(findings).toHaveLength(CAP);
+    expect(manifest?.totals.findings).toBe(CAP);
+
+    // AC2 (severity order): ranks are non-decreasing across the persisted array (critical -> low).
+    const ranks = findings.map((row) => SEVERITY_RANK[row.severity]);
+    for (let i = 1; i < ranks.length; i += 1) {
+      expect(ranks[i] ?? 0).toBeGreaterThanOrEqual(ranks[i - 1] ?? 0);
+    }
+
+    // AC3 (high coverage gap survives): the uncovered second requirement's high coverage-gap finding
+    // is kept despite the cap, and ALL critical judge findings survive while the low tail is dropped.
+    expect(findings.some((row) => row.kind === "coverage-gap" && row.severity === "high")).toBe(
+      true,
+    );
+    expect(findings.filter((row) => row.severity === "critical")).toHaveLength(criticalCount);
+    expect(findings.some((row) => row.severity === "low")).toBe(false);
+  });
+});

@@ -906,6 +906,25 @@ function buildCoverageArtifacts(
   };
 }
 
+// Order by severity (critical -> low) BEFORE truncating, then cap to the per-run limit — mirroring
+// the initial run path (modelRoutedTestDesign). Sorting first guarantees that if the merge hits the
+// cap, the most severe findings (including high-severity uncovered-requirement coverage gaps) survive
+// rather than being dropped by array position. Array.prototype.sort is stable, so same-severity
+// insertion order — coverage-gap rows first — is preserved, matching the initial path exactly.
+function sortAndCapMergedFindings(
+  rows: readonly QualityIntelligenceFindingRow[],
+  cap: number,
+): readonly QualityIntelligenceFindingRow[] {
+  return rows
+    .slice()
+    .sort(
+      (a, b) =>
+        QualityIntelligence.QUALITY_INTELLIGENCE_SEVERITY_RANK[a.severity] -
+        QualityIntelligence.QUALITY_INTELLIGENCE_SEVERITY_RANK[b.severity],
+    )
+    .slice(0, cap);
+}
+
 function buildMergedFindings(args: {
   readonly runId: QI.QualityIntelligenceRunId;
   readonly mergedCandidates: readonly QiTestCaseCandidate[];
@@ -924,12 +943,19 @@ function buildMergedFindings(args: {
     args.regeneratedManifest === undefined
       ? []
       : filteredJudgeFindings(args.regeneratedManifest.findings, regeneratedIds);
-  return Object.freeze([
-    ...args.coverageGapRows,
-    ...validateCandidates(args.runId, args.mergedCandidates).map(toCandidateFindingRow),
-    ...preservedJudgeRows,
-    ...regeneratedJudgeRows,
-  ]);
+  // Source the cap from the default workflow limits: the re-check regeneration sub-run
+  // (regenWorkflowDeps) passes no custom `limits`, so it runs under these defaults — keeping the
+  // merge cap consistent with the sub-run's own maxFindingsPerRun.
+  const merged = sortAndCapMergedFindings(
+    [
+      ...args.coverageGapRows,
+      ...validateCandidates(args.runId, args.mergedCandidates).map(toCandidateFindingRow),
+      ...preservedJudgeRows,
+      ...regeneratedJudgeRows,
+    ],
+    QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxFindingsPerRun,
+  );
+  return Object.freeze(merged);
 }
 
 function buildMergedRunRecord(args: {
