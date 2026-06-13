@@ -424,12 +424,9 @@ describe("handleQiReCheck — malformed candidates companion", () => {
 // ─── re-check: happy path — unchanged sources ─────────────────────────────────
 
 describe("handleQiReCheck — unchanged source (same hash)", () => {
-  it("returns 200 with staleCount=0 when the ingested source produces the same hash", async () => {
-    // Supply a requirements source whose content we know produces a predictable hash.
-    // The re-check compares against the stored HASH_AAA fingerprint for env-1.
-    // Because ingestInlineSources computes its own hash, and the stored hash is HASH_AAA
-    // (a string of 64 'a's — not from real content), the fingerprints will differ.
-    // This test verifies the shape of the 200 response rather than the zero-stale case.
+  it("returns 200 response shape when the stored fingerprint is artificial", async () => {
+    // The default fixture stores HASH_AAA, not a hash produced by ingestInlineSources, so this
+    // verifies only the response shape for a successful re-check.
     const body = {
       sources: [{ kind: "requirements", label: "req-1", text: "REQ-1: User can log in" }],
     };
@@ -449,6 +446,50 @@ describe("handleQiReCheck — unchanged source (same hash)", () => {
     expect(Array.isArray(b.fresh)).toBe(true);
     expect(Array.isArray(b.changedStale)).toBe(true);
     expect(Array.isArray(b.orphanedStale)).toBe(true);
+  });
+
+  it("returns staleCount=0 with all original candidates fresh for an identical real-ingested source", async () => {
+    const runId = "run-recheck-real-unchanged";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const source = { kind: "requirements", label: "Spec", text: originalText } as const;
+    const seeded = ingestInlineSources({
+      request: { sources: [source] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    expect(seeded.ingestedAtoms).toHaveLength(2);
+
+    seedRunFromSources({
+      runId,
+      sources: [source],
+      candidates: [
+        qiCandidate(runId, "cand-unchanged-login", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-unchanged-mfa", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+
+    const result = asResult(
+      await handleQiReCheck(
+        ctx("re-check", runId, makeReq({ sources: [source] })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      staleCount: number;
+      fresh: readonly string[];
+      changedStale: readonly unknown[];
+      orphanedStale: readonly unknown[];
+    };
+    expect(body.staleCount).toBe(0);
+    expect([...body.fresh].sort()).toEqual(["cand-unchanged-login", "cand-unchanged-mfa"]);
+    expect(body.changedStale).toHaveLength(0);
+    expect(body.orphanedStale).toHaveLength(0);
   });
 
   it("returns staleCount = changedStale.length + orphanedStale.length", async () => {
@@ -513,6 +554,76 @@ describe("handleQiReCheck — no stored sourceFingerprints", () => {
     // oldFingerprints is empty → every candidate's envelope is "removed" → all orphanedStale
     expect(b.staleCount).toBeGreaterThanOrEqual(1);
     expect(b.orphanedStale.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("handleQiReCheck — legacy source-only fingerprints", () => {
+  it("fails closed instead of reporting fresh when atom fingerprints are absent", async () => {
+    const runId = "run-recheck-source-only";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const source = { kind: "requirements", label: "Spec", text: originalText } as const;
+    const seeded = ingestInlineSources({
+      request: { sources: [source] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    recordQualityIntelligenceRun(
+      {
+        runId,
+        planAt: "2026-06-09T10:00:00.000Z",
+        completedAt: "2026-06-09T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: ["qi:regression-default"],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 0,
+        totals: { candidates: 2, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: seeded.ingestedAtoms.map((entry) => ({
+          envelopeId: String(entry.atom.sourceEnvelopeId),
+          atomId: String(entry.atom.id),
+          lifecycleStatus: entry.atom.lifecycleStatus,
+        })),
+        provenanceRefs: seeded.provenanceRefs,
+        sourceFingerprints: seeded.envelopes.map((envelope) => ({
+          envelopeId: String(envelope.id),
+          integrityHashSha256Hex: envelope.provenance.integrityHashSha256Hex,
+        })),
+      },
+      { evidenceDir },
+    );
+    recordQualityIntelligenceCandidates({
+      runId,
+      generatedAt: "2026-06-09T10:01:00.000Z",
+      candidates: [
+        qiCandidate(runId, "cand-source-only-login", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-source-only-mfa", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+      evidenceDir,
+      redact: (value: unknown): unknown => value,
+    });
+
+    const result = asResult(
+      await handleQiReCheck(
+        ctx("re-check", runId, makeReq({ sources: [source] })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      staleCount: number;
+      fresh: readonly string[];
+      changedStale: readonly unknown[];
+      orphanedStale: readonly unknown[];
+    };
+    expect(body.fresh).toHaveLength(0);
+    expect(body.staleCount).toBe(2);
+    expect(body.changedStale.length + body.orphanedStale.length).toBe(2);
   });
 });
 
@@ -708,6 +819,60 @@ describe("handleQiReCheck — requirement drift is atom-aware (#798)", () => {
       reason: "source-changed",
     });
     expect(typeof body.changedStale[0]?.envelopeId).toBe("string");
+  });
+
+  it("marks a deleted requirement line as orphaned-stale, not changed-stale", async () => {
+    const runId = "run-req-atom-removed";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: {
+        sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-kept-line", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-deleted-line", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+
+    const result = asResult(
+      await handleQiReCheck(
+        ctx(
+          "re-check",
+          runId,
+          makeReq({
+            sources: [{ kind: "requirements", label: "Spec", text: "Login must work reliably" }],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      staleCount: number;
+      fresh: readonly string[];
+      changedStale: readonly { candidateId: string; reason: string; envelopeId: string }[];
+      orphanedStale: readonly { candidateId: string; reason: string; envelopeId: string }[];
+    };
+    expect(body.staleCount).toBe(1);
+    expect(body.fresh).toEqual(["cand-kept-line"]);
+    expect(body.changedStale).toHaveLength(0);
+    expect(body.orphanedStale).toEqual([
+      expect.objectContaining({
+        candidateId: "cand-deleted-line",
+        reason: "source-removed",
+      }),
+    ]);
   });
 });
 
