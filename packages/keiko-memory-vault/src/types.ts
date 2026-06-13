@@ -138,6 +138,7 @@ export interface MemoryVaultStore {
     memoryIds: readonly MemoryId[],
   ) => ReadonlyMap<MemoryId, MemoryEmbeddingRow>;
   readonly listTombstonesByScope: (scope: MemoryScope) => readonly MemoryTombstone[];
+  readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.

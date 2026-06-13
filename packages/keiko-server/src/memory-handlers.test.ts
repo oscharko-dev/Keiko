@@ -318,7 +318,12 @@ describe("memory handlers", () => {
     expect(edges[0]?.toMemoryId).toBe(correction.id);
     expect(edges[0]?.provenanceSummary).toBe("user-issued correction");
 
-    expect(readAllAuditEvents(evidenceStore)).toEqual([]);
+    expect(readAllAuditEvents(evidenceStore)).toEqual([
+      expect.objectContaining({
+        kind: "memory:proposed",
+        memoryId: correction.id,
+      }),
+    ]);
   });
 
   it("accepts a correction by superseding the original and writing body-free audit evidence", async () => {

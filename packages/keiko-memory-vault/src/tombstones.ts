@@ -43,6 +43,11 @@ WHERE scope_kind = ? AND scope_coordinate = ?
 ORDER BY forgotten_at ASC
 `;
 
+const DELETE_BY_SCOPE_BEFORE_SQL = `
+DELETE FROM memory_tombstones
+WHERE scope_kind = ? AND scope_coordinate = ? AND forgotten_at < ?
+`;
+
 // `reason` is the only free-text tombstone column, so it is the only sealed one (ADR-0035).
 function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryTombstone {
   const base = {
@@ -93,4 +98,15 @@ export function listTombstonesByScopeRows(
     .prepare(LIST_BY_SCOPE_SQL)
     .all(scopeKindOf(scope), scopeCoordinateOf(scope)) as unknown as readonly TombstoneRow[];
   return rows.map((row) => rowToTombstone(row, cipher));
+}
+
+export function deleteTombstonesByScopeBeforeRows(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  forgottenBeforeMs: number,
+): number {
+  const info = db
+    .prepare(DELETE_BY_SCOPE_BEFORE_SQL)
+    .run(scopeKindOf(scope), scopeCoordinateOf(scope), forgottenBeforeMs);
+  return Number(info.changes);
 }

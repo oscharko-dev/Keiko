@@ -60,7 +60,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { ApiError, RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { auditRunIdFor, recordMemoryAudit } from "./memory-audit-handler.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1231,6 +1231,44 @@ function recordSupersessionAudit(
   );
 }
 
+function auditEventCountForDay(deps: UiHandlerDeps, nowMs: number): number {
+  const json = deps.evidenceStore.get(auditRunIdFor(nowMs));
+  if (json === undefined) {
+    return 0;
+  }
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function recordCorrectionProposalAuditIfNeeded(
+  deps: UiHandlerDeps,
+  inserted: MemoryRecord,
+  nowMs: number,
+  countBeforeInsert: number,
+): void {
+  if (auditEventCountForDay(deps, nowMs) > countBeforeInsert) {
+    return;
+  }
+  const event: MemoryAuditEvent = {
+    schemaVersion: "1",
+    kind: "memory:proposed",
+    eventId: randomUUID(),
+    occurredAt: nowMs,
+    initiatorSurface: "memory-center",
+    summary: `memory ${inserted.id} correction proposed`,
+    memoryId: inserted.id,
+    scope: inserted.scope,
+  };
+  recordMemoryAudit(
+    { evidenceStore: deps.evidenceStore, redactString: (value) => redactString(deps, value) },
+    event,
+  );
+}
+
 export async function handleCorrectMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1263,7 +1301,9 @@ export async function handleCorrectMemory(
       newProposalId: randomUUID() as MemoryProposalId,
       newMemoryId: correctionId,
     });
+    const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
     const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
+    recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
     vault.insertEdge(buildEdgeFromSupersession(supersession));
     return {
       status: 201,
