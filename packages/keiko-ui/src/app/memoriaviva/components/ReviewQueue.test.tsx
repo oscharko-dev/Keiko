@@ -65,7 +65,7 @@ describe("ReviewQueue — empty state", () => {
 });
 
 describe("ReviewQueue — populated state", () => {
-  it("renders proposed memory with Accept and Reject buttons", async () => {
+  it("renders proposed memory with Approve and Reject buttons", async () => {
     const record = makeProposed(makeId(1), "Use camelCase for variables");
     render(
       <ReviewQueue
@@ -77,11 +77,11 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Use camelCase for variables")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 
-  it("renders conflicted memory with Reject conflict button (no Accept)", async () => {
+  it("renders conflicted memory with Reject conflict button (no Approve)", async () => {
     const record = makeConflicted(makeId(3), "Conflicting preference");
     render(
       <ReviewQueue
@@ -93,7 +93,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Conflicting preference")).toBeInTheDocument();
     });
-    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     // Honest label (uiux-fix F035): the action permanently rejects the
     // conflicted memory — it is not a mere queue dismissal.
     expect(screen.getByRole("button", { name: "Reject conflict" })).toBeInTheDocument();
@@ -109,14 +109,39 @@ describe("ReviewQueue — populated state", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
+      expect(
+        screen.getByRole("link", {
+          name: "View details for memory mem-q-12: Linked proposal",
+        }),
+      ).toHaveAttribute("href", "/memoriaviva/detail?id=mem-q-12");
+    });
+  });
+
+  it("keeps detail and back links on the configured Memory Center route", async () => {
+    const record = makeProposed(makeId(13), "Route-safe proposal");
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        basePath="/memory"
+        surfaceLabel="Memory Center"
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("link", {
+          name: "View details for memory mem-q-13: Route-safe proposal",
+        }),
+      ).toHaveAttribute("href", "/memory/detail?id=mem-q-13");
+      expect(screen.getByRole("link", { name: "Back to Memory Center" })).toHaveAttribute(
         "href",
-        "/memoriaviva/detail?id=mem-q-12",
+        "/memory",
       );
     });
   });
 
-  it("removes row from queue after Accept", async () => {
+  it("removes row from queue after Approve", async () => {
     const record = makeProposed(makeId(4), "Memory to accept");
     const user = userEvent.setup();
     render(
@@ -129,7 +154,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Memory to accept")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
       expect(screen.queryByText("Memory to accept")).toBeNull();
     });
@@ -171,18 +196,18 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByText("First in queue")).toBeInTheDocument();
     });
 
-    const [firstAccept] = screen.getAllByRole("button", { name: "Accept" });
+    const [firstAccept] = screen.getAllByRole("button", { name: "Approve" });
     expect(firstAccept).toBeDefined();
-    if (firstAccept === undefined) throw new Error("Expected an Accept button.");
+    if (firstAccept === undefined) throw new Error("Expected an Approve button.");
     await user.click(firstAccept);
 
     await waitFor(() => {
       expect(screen.queryByText("First in queue")).toBeNull();
     });
     // Focus lands on the next row's first action button instead of <body>.
-    expect(screen.getByRole("button", { name: "Accept" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Approve" })).toHaveFocus();
     // The dedicated status region announces the outcome.
-    expect(screen.getByText("Memory accepted")).toBeInTheDocument();
+    expect(screen.getByText("Memory approved")).toBeInTheDocument();
   });
 
   it("moves focus to the heading when the last row is removed (uiux-fix F035)", async () => {
@@ -198,7 +223,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Only entry")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
       expect(screen.queryByText("Only entry")).toBeNull();
     });
@@ -219,12 +244,12 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Fail to accept")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/accept failed/i)).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
   it("keeps other rows interactive while one row is busy", async () => {
@@ -252,7 +277,7 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByText("Second proposal")).toBeInTheDocument();
     });
 
-    const acceptButtons = screen.getAllByRole("button", { name: "Accept" });
+    const acceptButtons = screen.getAllByRole("button", { name: "Approve" });
     expect(acceptButtons).toHaveLength(2);
     const [firstAcceptButton, secondAcceptButton] = acceptButtons;
     expect(firstAcceptButton).toBeDefined();

@@ -3,7 +3,7 @@
 // Issue #211 — MemoriaViva review queue: proposed + conflicted records needing action.
 //
 // WCAG: role="status" aria-live="polite" on the count badge.
-// Accept/Reject action buttons inline per row (≥ 24px target via lk-btn).
+// Approve/Reject action buttons inline per row (≥ 24px target via lk-btn).
 // Empty state when queue is clear. motion-safe on any animated element.
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,6 +21,7 @@ import { SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
+  readonly basePath: string;
   readonly busyAction: "accept" | "reject" | null;
   readonly rowError: string | null;
   readonly onAccept: (record: MemoryRecord) => void;
@@ -29,12 +30,14 @@ interface ReviewRowProps {
 
 function ReviewRow({
   record,
+  basePath,
   busyAction,
   rowError,
   onAccept,
   onReject,
 }: ReviewRowProps): ReactNode {
   const labelId = `memory-review-body-${record.id}`;
+  const detailLinkLabel = `View details for memory ${record.id}: ${record.body.slice(0, 80)}`;
   return (
     <li data-review-row-id={record.id}>
       <article className="mc-review-row">
@@ -54,8 +57,9 @@ function ReviewRow({
             {/* full text + provenance/conflict context before deciding —
                 unlike the list, queue rows are not links (uiux-fix F035) */}
             <Link
-              href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
+              href={`${basePath}/detail?id=${encodeURIComponent(record.id)}`}
               className="mc-row-detail-link"
+              aria-label={detailLinkLabel}
             >
               View details
             </Link>
@@ -82,7 +86,7 @@ function ReviewRow({
                   onAccept(record);
                 }}
               >
-                {busyAction === "accept" ? "Accepting…" : "Accept"}
+                {busyAction === "accept" ? "Approving…" : "Approve"}
               </button>
               <button
                 type="button"
@@ -123,12 +127,16 @@ interface ReviewQueueProps {
   readonly fetchQueueImpl?: typeof fetchMemoryReviewQueue;
   readonly acceptImpl?: typeof acceptMemoryProposal;
   readonly rejectImpl?: typeof rejectMemoryProposal;
+  readonly basePath?: string;
+  readonly surfaceLabel?: string;
 }
 
 export function ReviewQueue({
   fetchQueueImpl = fetchMemoryReviewQueue,
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
+  basePath = "/memoriaviva",
+  surfaceLabel = "MemoriaViva",
 }: ReviewQueueProps): ReactNode {
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -228,7 +236,7 @@ export function ReviewQueue({
           );
         }
         removeRecord(id);
-        setActionStatus(action === "accept" ? "Memory accepted" : "Memory rejected");
+        setActionStatus(action === "accept" ? "Memory approved" : "Memory rejected");
       } catch (err) {
         setRowErrorsById((prev) => ({ ...prev, [id]: formatError(err) }));
         setBusyById((prev) => {
@@ -254,8 +262,8 @@ export function ReviewQueue({
         <span role="status" aria-live="polite" className="mc-badge-count">
           {records.length.toString()} awaiting review
         </span>
-        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to MemoriaViva
+        <Link href={basePath} className="lk-btn lk-btn-ghost lk-btn-lg">
+          Back to {surfaceLabel}
         </Link>
       </header>
 
@@ -316,6 +324,7 @@ export function ReviewQueue({
               <ReviewRow
                 key={record.id}
                 record={record}
+                basePath={basePath}
                 busyAction={busyById[record.id] ?? null}
                 rowError={rowErrorsById[record.id] ?? null}
                 onAccept={(row) => {

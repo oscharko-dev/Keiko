@@ -96,9 +96,9 @@ export function ForgetConfirmDialog({
     setError(null);
     try {
       if (isDeleteMode) {
-        await deleteMemoryImpl(record.id as MemoryId, "user-initiated delete from MemoriaViva");
+        await deleteMemoryImpl(record.id as MemoryId, "user-initiated delete from Memory Center");
       } else {
-        await forgetMemoryImpl(record.id as MemoryId, "user-initiated forget from MemoriaViva");
+        await forgetMemoryImpl(record.id as MemoryId, "user-initiated forget from Memory Center");
       }
       onComplete();
     } catch (err) {

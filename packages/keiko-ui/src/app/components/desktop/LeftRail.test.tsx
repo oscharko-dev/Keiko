@@ -1,5 +1,5 @@
 // Issue #189 — tests for the LeftRail navigation links.
-// Verifies that the remaining page-route link (MemoriaViva) renders with correct href and
+// Verifies that the remaining page-route link (Memory Center) renders with correct href and
 // accessible name. Quality Intelligence, Local Knowledge, and Relationships are Workspace tool
 // windows: each renders as a tool button that calls onTool(...).
 // Epic #518 — also verifies aria-pressed state on toggle buttons (WCAG 4.1.2).
@@ -45,11 +45,11 @@ describe("LeftRail — page-route links", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the MemoriaViva link with correct href and accessible name", () => {
+  it("renders the Memory Center link with correct href and accessible name", () => {
     renderRail();
-    const link = screen.getByRole("link", { name: "MemoriaViva" });
+    const link = screen.getByRole("link", { name: "Memory Center" });
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/memoriaviva");
+    expect(link).toHaveAttribute("href", "/memory");
   });
 
   it("renders Quality Intelligence as a tool button (not a page-route link)", () => {

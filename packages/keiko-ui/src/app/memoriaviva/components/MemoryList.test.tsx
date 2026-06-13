@@ -155,6 +155,25 @@ describe("MemoryList — populated state", () => {
     });
   });
 
+  it("renders provenance, confidence, and sensitivity metadata in each row", async () => {
+    const record = makeRecord({
+      id: makeMemoryId(9),
+      body: "Metadata memory",
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: 1_700_000_000_000,
+        confidence: 0.87,
+        sensitivity: "confidential",
+      },
+    });
+    render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Source explicit-user-instruction")).toBeInTheDocument();
+      expect(screen.getByText("87% confidence")).toBeInTheDocument();
+      expect(screen.getByText("Sensitivity confidential")).toBeInTheDocument();
+    });
+  });
+
   it("links each row to /memoriaviva/detail?id=:id", async () => {
     const record = makeRecord({ id: makeMemoryId(42), body: "Linked memory" });
     render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
@@ -170,6 +189,32 @@ describe("MemoryList — populated state", () => {
       expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
         "href",
         "/memoriaviva/consolidation",
+      );
+    });
+  });
+
+  it("keeps list, detail, review, and consolidation links on the configured Memory Center route", async () => {
+    const record = makeRecord({ id: makeMemoryId(43), body: "Route-safe memory" });
+    render(
+      <MemoryList
+        fetchMemoriesImpl={fetchWith([record])}
+        basePath="/memory"
+        surfaceLabel="Memory Center"
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Memory Center" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /route-safe memory/i })).toHaveAttribute(
+        "href",
+        "/memory/detail?id=mem-43",
+      );
+      expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
+        "href",
+        "/memory/consolidation",
+      );
+      expect(screen.getByRole("link", { name: /review queue/i })).toHaveAttribute(
+        "href",
+        "/memory/review-queue",
       );
     });
   });

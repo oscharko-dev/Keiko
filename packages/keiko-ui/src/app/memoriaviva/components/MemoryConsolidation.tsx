@@ -47,10 +47,16 @@ function formatElapsed(ms: number): string {
 
 /* Raw memory ids were plain text — link each id to the detail route so review
    decisions are actionable (uiux-fix F034, C240; pattern: .mc-row-detail-link) */
-function MemoryIdLink({ id }: { readonly id: string }): ReactNode {
+function MemoryIdLink({
+  id,
+  basePath,
+}: {
+  readonly id: string;
+  readonly basePath: string;
+}): ReactNode {
   return (
     <Link
-      href={`/memoriaviva/detail?id=${encodeURIComponent(id)}`}
+      href={`${basePath}/detail?id=${encodeURIComponent(id)}`}
       className="mc-id-link"
       title={id}
     >
@@ -59,41 +65,59 @@ function MemoryIdLink({ id }: { readonly id: string }): ReactNode {
   );
 }
 
-function MemoryIdList({ ids }: { readonly ids: readonly string[] }): ReactNode {
+function MemoryIdList({
+  ids,
+  basePath,
+}: {
+  readonly ids: readonly string[];
+  readonly basePath: string;
+}): ReactNode {
   return (
     <>
       {ids.map((id, index) => (
         <Fragment key={`${index.toString()}:${id}`}>
           {index > 0 ? ", " : null}
-          <MemoryIdLink id={id} />
+          <MemoryIdLink id={id} basePath={basePath} />
         </Fragment>
       ))}
     </>
   );
 }
 
-function ReviewAction({ item }: { readonly item: MemoryConsolidationReviewItem }): ReactNode {
+function ReviewAction({
+  item,
+  basePath,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly basePath: string;
+}): ReactNode {
   if (item.proposedAction === undefined) return <>No automatic action proposed.</>;
   if (item.proposedAction.kind === "merge") {
     return (
       <>
-        Merge into <MemoryIdLink id={item.proposedAction.winner} />; replace{" "}
-        <MemoryIdList ids={item.proposedAction.losers} />.
+        Merge into <MemoryIdLink id={item.proposedAction.winner} basePath={basePath} />; replace{" "}
+        <MemoryIdList ids={item.proposedAction.losers} basePath={basePath} />.
       </>
     );
   }
   return (
     <>
-      Supersede <MemoryIdLink id={item.proposedAction.older} /> with{" "}
-      <MemoryIdLink id={item.proposedAction.newer} />.
+      Supersede <MemoryIdLink id={item.proposedAction.older} basePath={basePath} /> with{" "}
+      <MemoryIdLink id={item.proposedAction.newer} basePath={basePath} />.
     </>
   );
 }
 
-function StaleFlagEntry({ flag }: { readonly flag: MemoryConsolidationStaleFlag }): ReactNode {
+function StaleFlagEntry({
+  flag,
+  basePath,
+}: {
+  readonly flag: MemoryConsolidationStaleFlag;
+  readonly basePath: string;
+}): ReactNode {
   return (
     <>
-      <MemoryIdLink id={flag.memoryId} /> — {flag.reason}
+      <MemoryIdLink id={flag.memoryId} basePath={basePath} /> — {flag.reason}
     </>
   );
 }
@@ -158,6 +182,8 @@ interface MemoryConsolidationProps {
   readonly fetchJobImpl?: typeof fetchMemoryConsolidationJob;
   readonly cancelJobImpl?: typeof cancelMemoryConsolidationJob;
   readonly pollIntervalMs?: number;
+  readonly basePath?: string;
+  readonly surfaceLabel?: string;
 }
 
 export function MemoryConsolidation({
@@ -165,6 +191,8 @@ export function MemoryConsolidation({
   fetchJobImpl = fetchMemoryConsolidationJob,
   cancelJobImpl = cancelMemoryConsolidationJob,
   pollIntervalMs = 2_000,
+  basePath = "/memoriaviva",
+  surfaceLabel = "MemoriaViva",
 }: MemoryConsolidationProps): ReactNode {
   const [settings, setSettings] = useState<StartMemoryConsolidationInput>(DEFAULT_SETTINGS);
   const [jobRecord, setJobRecord] = useState<MemoryConsolidationJobEnvelope | null>(null);
@@ -260,14 +288,14 @@ export function MemoryConsolidation({
     <>
       <header className="lk-header">
         <div style={{ display: "grid", gap: 4 }}>
-          <h1 className="lk-title">MemoriaViva Consolidation</h1>
+          <h1 className="lk-title">{surfaceLabel} Consolidation</h1>
           <p style={{ margin: 0, color: "var(--fg-muted)" }}>
             Start a bounded consolidation job, inspect its output, and cancel it while it is still
             queued or running.
           </p>
         </div>
-        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to MemoriaViva
+        <Link href={basePath} className="lk-btn lk-btn-ghost lk-btn-lg">
+          Back to {surfaceLabel}
         </Link>
       </header>
 
@@ -534,10 +562,10 @@ export function MemoryConsolidation({
                         {item.reason.replaceAll("-", " ")}
                       </strong>
                       <span>
-                        <MemoryIdList ids={item.relatedMemoryIds} />
+                        <MemoryIdList ids={item.relatedMemoryIds} basePath={basePath} />
                       </span>
                       <span style={{ color: "var(--fg-muted)" }}>
-                        <ReviewAction item={item} />
+                        <ReviewAction item={item} basePath={basePath} />
                       </span>
                     </li>
                   ))}
@@ -564,7 +592,7 @@ export function MemoryConsolidation({
                 <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
                   {activeJob.result.staleFlags.map((flag) => (
                     <li key={`${flag.memoryId}:${flag.reason}`}>
-                      <StaleFlagEntry flag={flag} />
+                      <StaleFlagEntry flag={flag} basePath={basePath} />
                     </li>
                   ))}
                 </ul>
@@ -592,8 +620,8 @@ export function MemoryConsolidation({
                     <li key={edge.id} style={{ display: "grid", gap: 4 }}>
                       <strong>{edge.kind}</strong>
                       <span>
-                        <MemoryIdLink id={edge.fromMemoryId} /> →{" "}
-                        <MemoryIdLink id={edge.toMemoryId} />
+                        <MemoryIdLink id={edge.fromMemoryId} basePath={basePath} /> →{" "}
+                        <MemoryIdLink id={edge.toMemoryId} basePath={basePath} />
                       </span>
                       {edge.provenanceSummary !== undefined ? (
                         <span style={{ color: "var(--fg-muted)" }}>{edge.provenanceSummary}</span>
