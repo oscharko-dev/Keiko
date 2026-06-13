@@ -132,7 +132,7 @@ describe("memory consolidation job handlers", () => {
     expect(result.status).toBe(503);
   });
 
-  it("creates a skipped job immediately when no memories match", async () => {
+  it("registers a queued job and then skips when no memories match", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
     const result = await handleCreateConsolidationJob(
@@ -145,13 +145,23 @@ describe("memory consolidation job handlers", () => {
     expect(result.status).toBe(202);
     const body = asJson(result);
     const job = body.job as {
+      id: string;
       state: string;
       memoryCount: number;
-      settings: { maxClustersPerRun: number };
+      settings: { maxClustersPerRun: number; maxRecordsPerRun: number };
     };
-    expect(job.state).toBe("skipped");
+    expect(job.state).toBe("queued");
     expect(job.memoryCount).toBe(0);
     expect(job.settings.maxClustersPerRun).toBe(10);
+    expect(job.settings.maxRecordsPerRun).toBe(1_000);
+    await flushImmediate();
+    const getResult = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${job.id}`, {}, { jobId: job.id }),
+      deps,
+    );
+    const skipped = asJson(getResult).job as { state: string; memoryCount: number };
+    expect(skipped.state).toBe("skipped");
+    expect(skipped.memoryCount).toBe(0);
   });
 
   it("creates a job that can be polled to completion with review data", async () => {
@@ -176,13 +186,51 @@ describe("memory consolidation job handlers", () => {
     expect(getResult.status).toBe(200);
     const fetched = asJson(getResult).job as {
       state: string;
-      result?: { edgesProposed: readonly unknown[]; elapsedMs: number };
+      result?: {
+        edgesProposed: readonly unknown[];
+        elapsedMs: number;
+        recordsInspected: number;
+        truncated: boolean;
+      };
       memoryCount: number;
     };
     expect(fetched.state).toBe("completed");
     expect(fetched.memoryCount).toBe(2);
-    expect(fetched.result?.edgesProposed).toHaveLength(1);
+    expect(fetched.result?.edgesProposed).toHaveLength(3);
+    expect(fetched.result?.recordsInspected).toBe(2);
+    expect(fetched.result?.truncated).toBe(false);
     expect(fetched.result?.elapsedMs ?? -1).toBeGreaterThanOrEqual(0);
+  });
+
+  it("caps loaded records and marks the result truncated when a selection exceeds maxRecordsPerRun", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "unique memory one" });
+    insertAcceptedMemory(vault, { id: "m-2", body: "unique memory two" });
+    insertAcceptedMemory(vault, { id: "m-3", body: "unique memory three" });
+    const deps = makeDeps({ memoryVault: vault });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+        settings: { maxRecordsPerRun: 2 },
+      }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    const createdJob = asJson(createResult).job as { id: string };
+    await flushImmediate();
+    const getResult = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
+      deps,
+    );
+    const fetched = asJson(getResult).job as {
+      state: string;
+      result?: { recordsInspected: number; truncated: boolean };
+      memoryCount: number;
+    };
+    expect(fetched.state).toBe("completed");
+    expect(fetched.memoryCount).toBe(2);
+    expect(fetched.result?.recordsInspected).toBe(2);
+    expect(fetched.result?.truncated).toBe(true);
   });
 
   it("cancels a queued job before execution starts", async () => {
@@ -238,13 +286,15 @@ describe("memory consolidation job handlers", () => {
       vault: MemoryVaultStore,
       settings: Record<string, unknown>,
     ): Promise<RouteResult> {
-      return handleCreateConsolidationJob(
+      const result = await handleCreateConsolidationJob(
         makeCtx("/api/memory/consolidation/jobs", {
           scopes: [{ kind: "global" }],
           settings,
         }),
         makeDeps({ memoryVault: vault }),
       );
+      if (result.status === 202) await flushImmediate();
+      return result;
     }
 
     it("rejects jaccardThreshold above 1 with 400 naming the field", async () => {
@@ -295,6 +345,38 @@ describe("memory consolidation job handlers", () => {
       expect((body.error as { message: string }).message).toContain("maxClustersPerRun");
     });
 
+    it("rejects maxClustersPerRun above the hard cap with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxClustersPerRun: 1_001 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxClustersPerRun");
+    });
+
+    it("rejects negative maxRecordsPerRun with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxRecordsPerRun: -1 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxRecordsPerRun");
+    });
+
+    it("rejects non-integer maxRecordsPerRun with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxRecordsPerRun: 1.5 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxRecordsPerRun");
+    });
+
+    it("rejects maxRecordsPerRun above the hard cap with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxRecordsPerRun: 1_001 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxRecordsPerRun");
+    });
+
     it("accepts boundary value jaccardThreshold=0", async () => {
       const vault = makeVault();
       const result = await postSettings(vault, { jaccardThreshold: 0 });
@@ -316,6 +398,12 @@ describe("memory consolidation job handlers", () => {
     it("accepts boundary value maxClustersPerRun=0 (skipped job)", async () => {
       const vault = makeVault();
       const result = await postSettings(vault, { maxClustersPerRun: 0 });
+      expect(result.status).toBe(202);
+    });
+
+    it("accepts boundary value maxRecordsPerRun=0 (skipped job)", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxRecordsPerRun: 0 });
       expect(result.status).toBe(202);
     });
   });

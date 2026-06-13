@@ -16,6 +16,8 @@
 
 import {
   type MemoryEdge,
+  type MemoryEdgeKind,
+  type MemoryId,
   type MemoryRecord,
   validateMemoryRecord,
 } from "@oscharko-dev/keiko-contracts/memory";
@@ -24,9 +26,12 @@ import {
   JACCARD_DEFAULT,
   MAX_AGE_MS_DEFAULT,
   MAX_CLUSTERS_PER_RUN_DEFAULT,
+  MAX_CLUSTERS_PER_RUN_HARD_LIMIT,
+  MAX_RECORDS_PER_RUN_DEFAULT,
+  MAX_RECORDS_PER_RUN_HARD_LIMIT,
   STALE_CONFIDENCE_DEFAULT,
 } from "./_constants.js";
-import { compareEdges, compareReviewItems } from "./_ordering.js";
+import { compareEdges, compareRecordsByAge, compareReviewItems } from "./_ordering.js";
 import { CONFLICT_OVERLAP_THRESHOLD, detectConflicts, findConflictPairs } from "./conflicts.js";
 import { scanDuplicateClusters, type DuplicateCluster } from "./dedupe.js";
 import { findStaleMemories } from "./stale.js";
@@ -40,6 +45,7 @@ interface ResolvedOptions {
   readonly staleConfidenceThreshold: number;
   readonly maxAgeMs: number;
   readonly maxClustersPerRun: number;
+  readonly maxRecordsPerRun: number;
   readonly cancellationSignal: () => boolean;
 }
 
@@ -62,14 +68,20 @@ interface NumericKnobs {
   readonly staleConfidenceThreshold: number;
   readonly maxAgeMs: number;
   readonly maxClustersPerRun: number;
+  readonly maxRecordsPerRun: number;
 }
 
 function validateNumericKnobs(knobs: NumericKnobs): boolean {
   if (!isFiniteInRange(knobs.jaccardThreshold, 0, 1)) return false;
   if (!isFiniteInRange(knobs.staleConfidenceThreshold, 0, 1)) return false;
   if (!isFiniteNonNegative(knobs.maxAgeMs)) return false;
-  if (!isFiniteNonNegative(knobs.maxClustersPerRun)) return false;
-  return Number.isInteger(knobs.maxClustersPerRun);
+  if (!isFiniteInRange(knobs.maxClustersPerRun, 0, MAX_CLUSTERS_PER_RUN_HARD_LIMIT)) {
+    return false;
+  }
+  if (!isFiniteInRange(knobs.maxRecordsPerRun, 0, MAX_RECORDS_PER_RUN_HARD_LIMIT)) {
+    return false;
+  }
+  return Number.isInteger(knobs.maxClustersPerRun) && Number.isInteger(knobs.maxRecordsPerRun);
 }
 
 function resolveOptions(options: ConsolidationOptions): ResolvedOptions | null {
@@ -78,6 +90,7 @@ function resolveOptions(options: ConsolidationOptions): ResolvedOptions | null {
     staleConfidenceThreshold: options.staleConfidenceThreshold ?? STALE_CONFIDENCE_DEFAULT,
     maxAgeMs: options.maxAgeMs ?? MAX_AGE_MS_DEFAULT,
     maxClustersPerRun: options.maxClustersPerRun ?? MAX_CLUSTERS_PER_RUN_DEFAULT,
+    maxRecordsPerRun: options.maxRecordsPerRun ?? MAX_RECORDS_PER_RUN_DEFAULT,
   };
   if (!validateNumericKnobs(knobs)) return null;
   return {
@@ -89,7 +102,11 @@ function resolveOptions(options: ConsolidationOptions): ResolvedOptions | null {
   };
 }
 
-function emptyResult(state: ConsolidationResult["state"]): ConsolidationResult {
+function emptyResult(
+  state: ConsolidationResult["state"],
+  recordsInspected = 0,
+  truncated = false,
+): ConsolidationResult {
   return {
     state,
     edgesProposed: [],
@@ -97,6 +114,8 @@ function emptyResult(state: ConsolidationResult["state"]): ConsolidationResult {
     staleFlags: [],
     reviewItems: [],
     clustersInspected: 0,
+    recordsInspected,
+    truncated,
     elapsedMs: 0,
   };
 }
@@ -113,9 +132,94 @@ function eligibleMemories(memories: readonly MemoryRecord[]): readonly MemoryRec
   return accepted;
 }
 
+function boundedEligibleMemories(
+  memories: readonly MemoryRecord[],
+  resolved: ResolvedOptions,
+): { readonly records: readonly MemoryRecord[]; readonly truncated: boolean } {
+  const sorted = [...memories].sort(compareRecordsByAge);
+  return {
+    records: sorted.slice(0, resolved.maxRecordsPerRun),
+    truncated: sorted.length > resolved.maxRecordsPerRun,
+  };
+}
+
 interface ClusterEffects {
-  readonly edge: MemoryEdge | null;
+  readonly edges: readonly MemoryEdge[];
   readonly reviewItem: ReviewItem | null;
+}
+
+function buildEdge(
+  fromMemoryId: MemoryId,
+  toMemoryId: MemoryId,
+  kind: MemoryEdgeKind,
+  resolved: ResolvedOptions,
+  provenanceSummary: string,
+): MemoryEdge {
+  return {
+    id: resolved.newEdgeId(),
+    schemaVersion: "1",
+    fromMemoryId,
+    toMemoryId,
+    kind,
+    createdAt: resolved.nowMs,
+    provenanceSummary,
+  };
+}
+
+function buildDuplicateEdges(
+  older: MemoryRecord,
+  newer: MemoryRecord,
+  resolved: ResolvedOptions,
+): readonly MemoryEdge[] {
+  return [
+    buildEdge(older.id, newer.id, "derived-from", resolved, "consolidation: near-duplicate"),
+    buildEdge(older.id, newer.id, "related", resolved, "consolidation: related duplicate"),
+    buildEdge(older.id, newer.id, "temporal-precedes", resolved, "consolidation: temporal link"),
+  ];
+}
+
+function buildSupersedeReviewEdges(
+  older: MemoryId,
+  newer: MemoryId,
+  resolved: ResolvedOptions,
+): readonly MemoryEdge[] {
+  return [
+    buildEdge(older, newer, "conflicts-with", resolved, "consolidation: proposed conflict"),
+    buildEdge(newer, older, "corrects", resolved, "consolidation: proposed correction"),
+    buildEdge(older, newer, "supersedes", resolved, "consolidation: proposed supersession"),
+  ];
+}
+
+function buildMergeReviewEdges(
+  winner: MemoryId,
+  losers: readonly MemoryId[],
+  resolved: ResolvedOptions,
+): readonly MemoryEdge[] {
+  const edges: MemoryEdge[] = [];
+  for (const loser of losers) {
+    edges.push(
+      buildEdge(loser, winner, "derived-from", resolved, "consolidation: proposed merge lineage"),
+      buildEdge(loser, winner, "related", resolved, "consolidation: proposed merge relationship"),
+      buildEdge(
+        loser,
+        winner,
+        "supersedes",
+        resolved,
+        "consolidation: proposed merge supersession",
+      ),
+    );
+  }
+  return edges;
+}
+
+function withProposedReviewEdges(item: ReviewItem, resolved: ResolvedOptions): ReviewItem {
+  const action = item.proposedAction;
+  if (action === undefined) return item;
+  const proposedEdges =
+    action.kind === "supersede"
+      ? buildSupersedeReviewEdges(action.older, action.newer, resolved)
+      : buildMergeReviewEdges(action.winner, action.losers, resolved);
+  return proposedEdges.length === 0 ? item : { ...item, proposedEdges };
 }
 
 function processTwoMemberCluster(
@@ -127,23 +231,18 @@ function processTwoMemberCluster(
     newReviewItemId: resolved.newReviewItemId,
   });
   if (conflictItems.length > 0) {
-    return { edge: null, reviewItem: conflictItems[0] ?? null };
+    const item = conflictItems[0];
+    return {
+      edges: [],
+      reviewItem: item === undefined ? null : withProposedReviewEdges(item, resolved),
+    };
   }
   const older = cluster.members[0];
   const newer = cluster.members[1];
   if (older === undefined || newer === undefined) {
-    return { edge: null, reviewItem: null };
+    return { edges: [], reviewItem: null };
   }
-  const edge: MemoryEdge = {
-    id: resolved.newEdgeId(),
-    schemaVersion: "1",
-    fromMemoryId: older.id,
-    toMemoryId: newer.id,
-    kind: "derived-from",
-    createdAt: resolved.nowMs,
-    provenanceSummary: "consolidation: near-duplicate",
-  };
-  return { edge, reviewItem: null };
+  return { edges: buildDuplicateEdges(older, newer, resolved), reviewItem: null };
 }
 
 function processMultiWayCluster(
@@ -154,13 +253,17 @@ function processMultiWayCluster(
     nowMs: resolved.nowMs,
     newReviewItemId: resolved.newReviewItemId,
   });
-  return { edge: null, reviewItem: items[0] ?? null };
+  const item = items[0];
+  return {
+    edges: [],
+    reviewItem: item === undefined ? null : withProposedReviewEdges(item, resolved),
+  };
 }
 
 function processCluster(cluster: DuplicateCluster, resolved: ResolvedOptions): ClusterEffects {
   if (cluster.members.length > 2) return processMultiWayCluster(cluster, resolved);
   if (cluster.members.length === 2) return processTwoMemberCluster(cluster, resolved);
-  return { edge: null, reviewItem: null };
+  return { edges: [], reviewItem: null };
 }
 
 interface ConsumeResult {
@@ -185,7 +288,7 @@ function consumeClusters(
     const cluster = clusters[i];
     if (cluster === undefined) continue;
     const effects = processCluster(cluster, resolved);
-    if (effects.edge !== null) edges.push(effects.edge);
+    for (const edge of effects.edges) edges.push(edge);
     if (effects.reviewItem !== null) reviewItems.push(effects.reviewItem);
     clustersInspected += 1;
   }
@@ -217,7 +320,7 @@ function collectConflictPairs(
     nowMs: resolved.nowMs,
     newReviewItemId: resolved.newReviewItemId,
     cancellationSignal: resolved.cancellationSignal,
-  });
+  }).map((item) => withProposedReviewEdges(item, resolved));
 }
 
 // Public entry. Same input + same options => byte-identical result.
@@ -230,21 +333,27 @@ export function runConsolidation(
   if (resolved.cancellationSignal()) return emptyResult("canceled");
   const eligible = eligibleMemories(memories);
   if (eligible === null) return emptyResult("failed");
-  if (eligible.length === 0 || resolved.maxClustersPerRun === 0) return emptyResult("skipped");
-  const scanned = scanDuplicateClusters(eligible, resolved.jaccardThreshold, {
+  if (eligible.length === 0) return emptyResult("skipped");
+  const bounded = boundedEligibleMemories(eligible, resolved);
+  if (bounded.records.length === 0 || resolved.maxClustersPerRun === 0) {
+    return emptyResult("skipped", bounded.records.length, bounded.truncated);
+  }
+  const scanned = scanDuplicateClusters(bounded.records, resolved.jaccardThreshold, {
     cancellationSignal: resolved.cancellationSignal,
   });
-  if (scanned.canceled && scanned.clusters.length === 0) return emptyResult("canceled");
+  if (scanned.canceled && scanned.clusters.length === 0) {
+    return emptyResult("canceled", bounded.records.length, bounded.truncated);
+  }
   const clusters = scanned.clusters;
   const consumed = consumeClusters(clusters, resolved);
   const conflictPairs = collectConflictPairs(
-    eligible,
+    bounded.records,
     clusters,
     resolved,
     consumed.state,
     scanned.canceled,
   );
-  const staleFlags = collectStaleFlags(eligible, resolved);
+  const staleFlags = collectStaleFlags(bounded.records, resolved);
   const mergedReviewItems = [...consumed.reviewItems, ...conflictPairs].sort(compareReviewItems);
   return {
     state: scanned.canceled ? "canceled" : consumed.state,
@@ -253,6 +362,8 @@ export function runConsolidation(
     staleFlags,
     reviewItems: mergedReviewItems,
     clustersInspected: consumed.clustersInspected + conflictPairs.length,
+    recordsInspected: bounded.records.length,
+    truncated: bounded.truncated,
     elapsedMs: 0,
   };
 }

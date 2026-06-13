@@ -28,6 +28,7 @@ describe("memory consolidation API helpers", () => {
       staleConfidenceThreshold: 0.2,
       maxAgeMs: 1_000,
       maxClustersPerRun: 25,
+      maxRecordsPerRun: 500,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -40,6 +41,7 @@ describe("memory consolidation API helpers", () => {
             staleConfidenceThreshold: 0.2,
             maxAgeMs: 1_000,
             maxClustersPerRun: 25,
+            maxRecordsPerRun: 500,
           },
         }),
         headers: expect.objectContaining({

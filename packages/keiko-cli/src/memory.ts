@@ -33,7 +33,7 @@ const USAGE = `Usage:
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
 --memory-dir). \`maintain\` strengthens recalled memories, decays stale ones, archives faded ones,
-forgets expired/very-faint ones, and auto-supersedes pairwise correction conflicts. \`reembed\`
+forgets expired/very-faint ones, and reports unresolved consolidation review items. \`reembed\`
 computes the embedding for each accepted memory that has none (bounded by --limit, default 200), so
 pre-existing memories become semantically retrievable; it is gated on an embedding model being
 configured (via --config / $KEIKO_CONFIG_FILE) and is best-effort.
@@ -117,6 +117,7 @@ function renderMaintenanceReport(counts: ReturnType<typeof runMemoryMaintenance>
     `  superseded:        ${String(counts.superseded)}`,
     `  edgesCreated:      ${String(counts.edgesCreated)}`,
     `  clustersInspected: ${String(counts.clustersInspected)}`,
+    `  reviewItems:       ${String(counts.reviewItemsCreated)}`,
     "",
   ].join("\n");
 }

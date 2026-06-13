@@ -90,6 +90,23 @@ Memory test totals at epic-branch HEAD: 3,861 tests + 1 skipped across 278 test 
 
 ## Additional closure notes
 
+### Issue #208 release hardening
+
+The `release/0.2.0` line carries additional hardening for the #208
+consolidation contract:
+
+- Consolidation jobs admit a bounded number of accepted records before the
+  duplicate and conflict scans run, and results report `recordsInspected` plus
+  `truncated` when a selection exceeds that budget.
+- The consolidation engine emits safe duplicate metadata (`derived-from`,
+  `related`, `temporal-precedes`) as auto-applicable proposed edges, while
+  conflict and merge decisions carry review-only proposed edges
+  (`conflicts-with`, `corrects`, `supersedes`) on the `ReviewItem`.
+- The maintenance route and `keiko memory maintain` surface unresolved
+  consolidation review items instead of silently demoting accepted memories.
+  Supersession still requires an explicit governed review path that preserves
+  provenance and audit history.
+
 The following notes clarify how Issue #216 closure evidence maps to the current
 `dev` integration and release surfaces:
 

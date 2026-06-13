@@ -74,6 +74,10 @@ export interface ReviewItem {
   readonly reason: ReviewReason;
   readonly relatedMemoryIds: readonly MemoryId[];
   readonly proposedAction?: ProposedAction;
+  // Relationship edges that MAY be materialised only after the review item is explicitly accepted.
+  // They are intentionally kept off `ConsolidationResult.edgesProposed` so maintenance callers do
+  // not silently apply conflict-resolution relationships before a reviewer settles the item.
+  readonly proposedEdges?: readonly MemoryEdge[];
   readonly detectedAt: number;
 }
 
@@ -91,6 +95,9 @@ export interface ConsolidationOptions {
   readonly staleConfidenceThreshold?: number;
   readonly maxAgeMs?: number;
   readonly maxClustersPerRun?: number;
+  // Hard CPU budget applied before duplicate/conflict scans. Keeps the O(n^2) passes bounded even
+  // when a scope contains far more accepted memories than one user-visible job should inspect.
+  readonly maxRecordsPerRun?: number;
   // Polled BEFORE each cluster is inspected. Returning `true` exits the engine with
   // `state: "canceled"` and the partial results accumulated so far. Polled at most once per
   // cluster so the cancellation cost is bounded by the cluster count, not by cluster size.
@@ -112,6 +119,8 @@ export interface ConsolidationResult {
   readonly staleFlags: readonly StaleFlag[];
   readonly reviewItems: readonly ReviewItem[];
   readonly clustersInspected: number;
+  readonly recordsInspected: number;
+  readonly truncated: boolean;
   // The engine is pure (no clock reads), so `elapsedMs` is always `0` from `runConsolidation`.
   // The caller computes real wall-clock elapsed at the job-transition site via
   // `completedAt - startedAt` and pins it on the `ConsolidationJob`.
