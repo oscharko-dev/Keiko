@@ -64,7 +64,10 @@ function RunRow({
   deleting,
 }: {
   readonly run: QualityIntelligenceUiRunSummary;
-  readonly onOpen: (id: string) => void;
+  readonly onOpen: (
+    id: string,
+    recheckableSources?: readonly QualityIntelligenceInlineSource[],
+  ) => void;
   readonly onDelete: (id: string) => void;
   readonly deleting: boolean;
 }): ReactNode {
@@ -116,7 +119,9 @@ function RunRow({
         className="qi-run-item"
         style={{ flex: 1 }}
         onClick={() => {
-          onOpen(run.id);
+          // Historical run-list rows do not know the original source handles; pass an explicit empty
+          // set so the card never borrows whichever source happens to be connected now (#744).
+          onOpen(run.id, []);
         }}
         // uiux-fix F030 C270: aria-label REPLACES the computed name from content — a bare
         // "Open run <id>" hid status, date and case count from screen-reader users. Compose

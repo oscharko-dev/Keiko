@@ -137,13 +137,22 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
       }
       // Epic #270 — QI run cards are identified by runId: opening a run that already has a card
       // focuses it instead of stacking a duplicate (the per-run "n+1" model is per-run, not per-click).
+      // Merge the incoming cfg while focusing so a restored card can receive fresh connected-source
+      // handles when the user reopens it from the connected QI hub (Issue #744 drift re-check).
       const dedupeRunId = type === "qiRun" ? cfg?.["runId"] : undefined;
       if (typeof dedupeRunId === "string" && dedupeRunId.length > 0) {
         const existing = list.find((w) => w.type === "qiRun" && w.cfg["runId"] === dedupeRunId);
         if (existing !== undefined) {
           createdId = existing.id;
           return list.map((w) =>
-            w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+            w.id === existing.id
+              ? {
+                  ...w,
+                  cfg: cfg === undefined ? w.cfg : { ...w.cfg, ...cfg },
+                  minimized: false,
+                  z: ++zc.current,
+                }
+              : w,
           );
         }
       }
