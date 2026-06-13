@@ -53,6 +53,9 @@ type EvidenceAtom = QI.QualityIntelligenceEvidenceAtom;
 export interface QualityIntelligenceIngestedAtom {
   readonly atom: EvidenceAtom;
   readonly canonicalText: string;
+  /** Optional opaque metadata for mapping an edited source atom to its current replacement. */
+  readonly replacementGroupId?: string;
+  readonly replacementOrdinal?: number;
 }
 
 export interface QualityIntelligenceGenerationPortArgs {
@@ -165,6 +168,8 @@ function atomFingerprintsFor(ingestedAtoms: readonly QualityIntelligenceIngested
   readonly atomId: string;
   readonly envelopeId: string;
   readonly canonicalHashSha256Hex: string;
+  readonly replacementGroupId?: string;
+  readonly replacementOrdinal?: number;
 }[] {
   return Object.freeze(
     ingestedAtoms.map((entry) =>
@@ -172,6 +177,12 @@ function atomFingerprintsFor(ingestedAtoms: readonly QualityIntelligenceIngested
         atomId: String(entry.atom.id),
         envelopeId: String(entry.atom.sourceEnvelopeId),
         canonicalHashSha256Hex: entry.atom.canonicalHashSha256Hex,
+        ...(entry.replacementGroupId !== undefined
+          ? { replacementGroupId: entry.replacementGroupId }
+          : {}),
+        ...(entry.replacementOrdinal !== undefined
+          ? { replacementOrdinal: entry.replacementOrdinal }
+          : {}),
       }),
     ),
   );

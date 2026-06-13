@@ -240,8 +240,19 @@ describe("connected run source window cfg (#744)", () => {
         { kind: "workspace", label: "specs", path: "/abs/specs" },
       ]),
     ).toEqual({
-      connectedSourcesJson: JSON.stringify([{ kind: "workspace", label: "specs", path: "/abs/specs" }]),
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
     });
+  });
+
+  it("serializes explicit empty inline sources so reopened run cards clear stale handles", () => {
+    expect(
+      connectedRunSourcesCfgFromInlineSources([
+        { kind: "requirements", label: "paste", text: "do not carry raw text" },
+      ]),
+    ).toEqual({ connectedSourcesJson: "[]" });
+    expect(connectedRunSourcesFromWindowCfg({ connectedSourcesJson: "[]" })).toEqual([]);
   });
 
   it("parses the connectedSourcesJson field when present", () => {
@@ -249,9 +260,9 @@ describe("connected run source window cfg (#744)", () => {
       { kind: "workspace" as const, label: "specs", path: "/abs/specs" },
       { kind: "figma-snapshot" as const, label: "fig-run-1", snapshotRunId: "fig-run-1" },
     ];
-    expect(connectedRunSourcesFromWindowCfg({ connectedSourcesJson: JSON.stringify(sources) })).toEqual(
-      sources,
-    );
+    expect(
+      connectedRunSourcesFromWindowCfg({ connectedSourcesJson: JSON.stringify(sources) }),
+    ).toEqual(sources);
   });
 
   it("falls back to legacy connectedFilePath / connectedRoot cfg when JSON is absent", () => {
@@ -260,9 +271,7 @@ describe("connected run source window cfg (#744)", () => {
         connectedRoot: "/abs/specs",
         connectedFilePath: "flows/payments.md",
       }),
-    ).toEqual([
-      { kind: "file", label: "payments.md", path: "/abs/specs/flows/payments.md" },
-    ]);
+    ).toEqual([{ kind: "file", label: "payments.md", path: "/abs/specs/flows/payments.md" }]);
   });
 
   it("round-trips legacy cfg into a carried connectedSourcesJson for a regenerated run", () => {
@@ -277,7 +286,9 @@ describe("connected run source window cfg (#744)", () => {
   it("falls back to legacy cfg when connectedSourcesJson is malformed or not a connected-source array", () => {
     expect(
       connectedRunSourcesFromWindowCfg({
-        connectedSourcesJson: JSON.stringify([{ kind: "requirements", label: "paste", text: "raw" }]),
+        connectedSourcesJson: JSON.stringify([
+          { kind: "requirements", label: "paste", text: "raw" },
+        ]),
         connectedRoot: "/abs/specs",
       }),
     ).toEqual([{ kind: "workspace", label: "specs", path: "/abs/specs" }]);

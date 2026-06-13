@@ -213,6 +213,12 @@ function seedRunFromSources(args: {
         atomId: String(entry.atom.id),
         envelopeId: String(entry.atom.sourceEnvelopeId),
         canonicalHashSha256Hex: entry.atom.canonicalHashSha256Hex,
+        ...(entry.replacementGroupId !== undefined
+          ? { replacementGroupId: entry.replacementGroupId }
+          : {}),
+        ...(entry.replacementOrdinal !== undefined
+          ? { replacementOrdinal: entry.replacementOrdinal }
+          : {}),
       })),
     },
     { evidenceDir },
@@ -226,6 +232,39 @@ function seedRunFromSources(args: {
     redact: (value: unknown): unknown => value,
   });
   return ingestion;
+}
+
+type CandidatesArtifact = NonNullable<ReturnType<typeof loadQualityIntelligenceCandidates>>;
+
+function loadRequiredCandidatesArtifact(runId: string): CandidatesArtifact {
+  const artifact = loadQualityIntelligenceCandidates(runId, { evidenceDir });
+  expect(artifact).toBeDefined();
+  if (artifact === undefined) throw new Error(`Missing candidates artifact for ${runId}`);
+  return artifact;
+}
+
+function expectWorkspaceMarkdownRegenerationArtifact(args: {
+  readonly runId: string;
+  readonly changedAtomId: string;
+  readonly unrelatedAddedAtomId: string;
+}): void {
+  const artifact = loadRequiredCandidatesArtifact(args.runId);
+  const candidateIds = artifact.candidates.map((candidate) => candidate.id);
+  expect(candidateIds).toContain("cand-doc-fresh");
+  expect(candidateIds).not.toContain("cand-doc-stale");
+  expect(artifact.editedRevisions?.map((revision) => revision.candidateId)).toEqual([
+    "cand-doc-fresh",
+  ]);
+  const regenerated = artifact.candidates.filter((candidate) => candidate.id !== "cand-doc-fresh");
+  expect(regenerated).toHaveLength(1);
+  const [regeneratedCandidate] = regenerated;
+  expect(regeneratedCandidate).toBeDefined();
+  if (regeneratedCandidate === undefined) {
+    throw new Error("Expected one regenerated candidate");
+  }
+  const atomIds = regeneratedCandidate.derivedFromAtomIds.map(String);
+  expect(atomIds).toContain(args.changedAtomId);
+  expect(atomIds).not.toContain(args.unrelatedAddedAtomId);
 }
 
 // ─── Test lifecycle ───────────────────────────────────────────────────────────
@@ -1158,6 +1197,104 @@ describe("handleQiRegenerateStale — requirement replacements are positional (#
         candidate.derivedFromAtomIds.map(String).includes(unrelatedAddedAtomId),
       ),
     ).toBe(false);
+  });
+
+  it("regenerates only the edited requirement line inside a workspace Markdown document", async () => {
+    const runId = "run-regen-workspace-markdown-requirement";
+    const dir = mkdtempSync(join(tmpdir(), "qi-regen-doc-"));
+    try {
+      const specPath = join(dir, "fachkonzept.md");
+      const originalText = [
+        "# Fachkonzept",
+        "",
+        "Login must work reliably for every registered user.",
+        "Payments must support card capture for approved orders.",
+      ].join("\n");
+      const currentText = [
+        "# Fachkonzept",
+        "",
+        "Reports must export CSV summaries for finance users.",
+        "Login must work reliably for every registered user.",
+        "Payments must support card capture and PayPal for approved orders.",
+      ].join("\n");
+      writeFileSync(specPath, originalText, "utf8");
+      const seeded = ingestInlineSources({
+        request: { sources: [{ kind: "workspace", label: "Repo", path: dir }] },
+        runId,
+        registeredAt: "2026-06-09T10:00:00.000Z",
+      });
+      expect(seeded.ingestedAtoms).toHaveLength(2);
+      seedRunFromSources({
+        runId,
+        sources: [{ kind: "workspace", label: "Repo", path: dir }],
+        candidates: [
+          qiCandidate(runId, "cand-doc-fresh", "Login test", [
+            String(seeded.ingestedAtoms[0]?.atom.id),
+          ]),
+          qiCandidate(runId, "cand-doc-stale", "Payment test", [
+            String(seeded.ingestedAtoms[1]?.atom.id),
+          ]),
+        ],
+        editedRevisions: [
+          {
+            candidateId: "cand-doc-fresh",
+            provenance: {
+              editedAt: "2026-06-09T10:02:00.000Z",
+              editedBy: "human",
+              editorLabel: "Reviewer A",
+            },
+            editedFields: { title: "Login test (edited)" },
+          },
+        ],
+      });
+      const beforeManifest = JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }));
+      const beforeArtifact = JSON.stringify(
+        loadQualityIntelligenceCandidates(runId, { evidenceDir }),
+      );
+
+      writeFileSync(specPath, currentText, "utf8");
+      const current = ingestInlineSources({
+        request: { sources: [{ kind: "workspace", label: "Repo", path: dir }] },
+        runId,
+        registeredAt: "2026-06-09T10:00:00.000Z",
+      });
+      expect(current.ingestedAtoms).toHaveLength(3);
+      const unrelatedAddedAtomId = String(current.ingestedAtoms[0]?.atom.id);
+      const changedAtomId = String(current.ingestedAtoms[2]?.atom.id);
+
+      const result = asResult(
+        await handleQiRegenerateStale(
+          ctx(
+            "regenerate-stale",
+            runId,
+            makeReq({ sources: [{ kind: "workspace", label: "Repo", path: dir }] }),
+          ),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        runId: string;
+        regeneratedCount: number;
+        preservedCount: number;
+      };
+      expect(body.regeneratedCount).toBe(1);
+      expect(body.preservedCount).toBe(1);
+      expect(JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }))).toBe(
+        beforeManifest,
+      );
+      expect(JSON.stringify(loadQualityIntelligenceCandidates(runId, { evidenceDir }))).toBe(
+        beforeArtifact,
+      );
+      expectWorkspaceMarkdownRegenerationArtifact({
+        runId: body.runId,
+        changedAtomId,
+        unrelatedAddedAtomId,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

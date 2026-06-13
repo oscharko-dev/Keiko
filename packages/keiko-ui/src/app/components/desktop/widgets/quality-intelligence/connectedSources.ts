@@ -95,8 +95,9 @@ export function connectedRunSourcesCfgFromInlineSources(
   sources: readonly QualityIntelligenceInlineSource[],
 ): Record<string, string> {
   // Never serialize pasted requirements text into a window cfg; only portable source handles can ride
-  // through regenerated/opened run cards.
-  return connectedRunSourcesCfgFromSources(sources.filter(isConnectedRunSource));
+  // through regenerated/opened run cards. An explicit empty filtered set is still serialized so
+  // reopening an existing qiRun card from history clears any previously carried handles.
+  return { [CONNECTED_SOURCES_CFG_KEY]: JSON.stringify(sources.filter(isConnectedRunSource)) };
 }
 
 export function connectedRunSourcesFromWindowCfg(
