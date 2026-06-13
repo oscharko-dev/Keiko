@@ -110,7 +110,12 @@ function probeHost(compilerOptions, probeFile, probeText) {
 }
 
 function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
-  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts");
+  // TypeScript normalises program filenames to forward slashes internally, and the custom compiler
+  // host below matches the in-memory probe by exact string (`fileName === probeFile`). On Windows
+  // `join` yields backslashes, so TS would look up `C:/.../probe.ts` while the host holds
+  // `C:\...\probe.ts` → no match → "probe file not found". Use a forward-slash path so the host and
+  // `program.getSourceFile` agree with TS's normalisation on every OS (POSIX is already `/`).
+  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts").replace(/\\/gu, "/");
   const probeText =
     `export * from ${JSON.stringify(specifier)};\n` +
     `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
@@ -141,8 +146,10 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
 }
 
 function packRoot() {
-  // The default pack runs the full `prepack` chain (clean + build + every release gate). The
-  // cross-platform runtime smoke (#284 AC4) sets KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 to pack the
+  // BEHAVIOURAL BRANCH (env-gated, opt-in): default behaviour is unchanged — the gating Linux
+  // `build-scan-sbom-smoke` job leaves the flag unset and packs with the full `prepack` chain
+  // (clean + build + every release gate). ONLY the cross-platform runtime smoke (#284 AC4) opts in
+  // by setting KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1, which packs the
   // ALREADY-BUILT dist (assembled by the job's explicit build / prepare:bin / build:ui steps)
   // WITHOUT re-running that chain: the prepack gates (arch-check, package-surface, supply-chain)
   // are the Linux publish gate — they run on the gating `build-scan-sbom-smoke` job and several
@@ -191,9 +198,15 @@ function assertCliExecutable(tmp) {
   if (!existsSync(cliEntry)) {
     fail(`installed tarball missing CLI entry at ${cliEntry}`);
   }
-  const mode = statSync(cliEntry).mode;
-  if ((mode & 0o111) === 0) {
-    fail(`installed CLI entry ${cliEntry} is not executable (mode ${mode.toString(8)})`);
+  // The POSIX executable bit is meaningless on Windows: NTFS has no `0o111`, Node's statSync reports
+  // a fixed `100666`, and executability is determined by file extension / PATHEXT. The CLI's *actual*
+  // runnability is verified cross-platform by assertCliVersionAndHelp (it runs `node <bin> --version`
+  // / `--help`). Only enforce the exec bit on the platforms where it is a real concept.
+  if (process.platform !== "win32") {
+    const mode = statSync(cliEntry).mode;
+    if ((mode & 0o111) === 0) {
+      fail(`installed CLI entry ${cliEntry} is not executable (mode ${mode.toString(8)})`);
+    }
   }
 }
 
@@ -327,6 +340,13 @@ async function assertQiRouteReachable(baseUrl) {
   // is deterministic and offline — exactly the path handling most likely to break on Windows. A QI
   // run / evidence WRITE is model-gated (Model Gateway) and out of an offline smoke; the read seam
   // is what this asserts cross-platform.
+  //
+  // Test layering: the handler (handleListQiRuns) is already unit-tested in keiko-server's
+  // uiRoutes.test.ts (populated, empty-`[]`, and limit-boundary cases), so the response SHAPE is
+  // covered at the unit level. This assertion is deliberately integration-only — it verifies a
+  // property a unit test cannot express: that the route is reachable and the evidence-dir path
+  // resolves on the packed artifact, per OS. The `!Array.isArray` check also fails closed on a
+  // null / malformed `runs` shape, so the empty and the malformed cases both surface clearly.
   const res = await globalThis.fetch(`${baseUrl}/api/quality-intelligence/runs`);
   if (!res.ok) {
     fail(`keiko ui GET /api/quality-intelligence/runs exited with HTTP ${String(res.status)}`);
@@ -339,6 +359,23 @@ async function assertQiRouteReachable(baseUrl) {
   }
 }
 
+// Compare two absolute paths for equality. On Windows paths are case-insensitive and may differ in
+// separator (`\` vs `/`) or drive-letter case between `realpathSync` and the server's resolved path,
+// so normalise both before comparing there; POSIX comparison stays exact (case-sensitive).
+//
+// Test layering for the cross-platform path helpers (this `samePath` and the forward-slash
+// `probeFile` above): they are deliberately covered by the CI matrix itself rather than a unit test.
+// This script IS the integration test, and each platform branch is exercised on its own runner —
+// the `win32` branches by `cross-platform-smoke (windows-latest)`, the POSIX branches by the
+// `(macos-latest)` leg and the gating Linux `build-scan-sbom-smoke` job. A unit test would mock the
+// platform/fs and assert against the harness, not the product, so it is intentionally not added.
+function samePath(a, b) {
+  if (a === undefined || b === undefined) return false;
+  if (process.platform !== "win32") return a === b;
+  const norm = (p) => String(p).replace(/\\/gu, "/").toLowerCase();
+  return norm(a) === norm(b);
+}
+
 async function assertUiLaunchProject(baseUrl, tmp) {
   const expectedProjectPath = realpathSync(tmp);
   const projectsRes = await globalThis.fetch(`${baseUrl}/api/projects`);
@@ -347,7 +384,7 @@ async function assertUiLaunchProject(baseUrl, tmp) {
   }
   const projectsPayload = await projectsRes.json();
   const launchProject = projectsPayload.projects?.[0];
-  if (launchProject?.path !== expectedProjectPath) {
+  if (!samePath(launchProject?.path, expectedProjectPath)) {
     fail(`keiko ui did not select launch cwd; first project was ${String(launchProject?.path)}`);
   }
   if (launchProject.available !== true) {
