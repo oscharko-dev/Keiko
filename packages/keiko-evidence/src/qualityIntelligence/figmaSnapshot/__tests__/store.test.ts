@@ -1,4 +1,12 @@
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -344,6 +352,37 @@ describe("createNodeFigmaSnapshotStore — listByScope", () => {
     expect(() => store.listByScope("KEY123", "0:1")).not.toThrow();
     // Only the valid record is returned.
     expect(store.listByScope("KEY123", "0:1")).toHaveLength(1);
+  });
+
+  it("skips symlinked record files when scanning a scope", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const qiDir = join(dir, "qi");
+    const outsideRecord = join(dir, "outside-snapshot.json");
+    writeFileSync(
+      outsideRecord,
+      JSON.stringify({
+        runId: RUN_ID_2,
+        provenance: {
+          fileKey: "KEY123",
+          nodeId: "0:1",
+          version: "v-linked",
+          fetchedAt: "2026-06-20T00:00:00.000Z",
+        },
+        integrityHash: "f".repeat(64),
+      }),
+      "utf8",
+    );
+    try {
+      symlinkSync(outsideRecord, join(qiDir, `${RUN_ID_2}.figma-snapshot.json`));
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const results = store.listByScope("KEY123", "0:1");
+
+    expect(results.map((entry) => entry.runId)).toEqual([RUN_ID]);
   });
 });
 

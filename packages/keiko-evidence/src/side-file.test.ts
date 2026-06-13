@@ -123,6 +123,21 @@ describe("writeSideFile containment", () => {
     expect(after.toString()).toBe("OWNED");
   });
 
+  it("refuses a pre-planted symlink at the per-run side-file directory", async () => {
+    await writeFile(join(outsideDir, "victim.png"), Buffer.from("OWNED"));
+    try {
+      await symlink(outsideDir, join(baseDir, "run-dir-link"), "dir");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    expect(() =>
+      writeSideFile(baseDir, "run-dir-link", "browser-1.png", Buffer.from("clean")),
+    ).toThrow(EvidenceWriteError);
+    const after = await readFile(join(outsideDir, "victim.png"));
+    expect(after.toString()).toBe("OWNED");
+  });
+
   it("refuses a path that lexically escapes via concatenation (name is a single segment)", () => {
     expect(() => writeSideFile(baseDir, "run-x", "../escape.png", Buffer.from("x"))).toThrow(
       EvidenceWriteError,

@@ -13,6 +13,7 @@
 // NOTE: regenerate-stale exercises the full model-routed workflow. In the integration
 // test context the config has no providers, so #761 now expects a deterministic baseline run.
 
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,6 +86,16 @@ function ctx(
     params: { id: runId },
     url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}/${handler}`),
   };
+}
+
+function closableCtx(
+  handler: "re-check" | "regenerate-stale",
+  runId: string,
+  req: IncomingMessage,
+): RouteContext {
+  const res = new EventEmitter() as RouteContext["res"];
+  Object.defineProperty(res, "writableEnded", { value: false, configurable: true });
+  return { ...ctx(handler, runId, req), res };
 }
 
 function asResult(outcome: RouteResult | typeof STREAMING): RouteResult {
@@ -848,6 +859,90 @@ describe("handleQiRegenerateStale — no stale candidates still materialises a n
   });
 });
 
+describe("handleQiRegenerateStale — candidate artifact persistence (#735)", () => {
+  it("does not persist a new run after the client response closes", async () => {
+    const runId = "run-regen-client-closed";
+    const source = {
+      kind: "requirements",
+      label: "Spec",
+      text: "Login must work reliably",
+    } as const;
+    const seeded = ingestInlineSources({
+      request: { sources: [source] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [source],
+      candidates: [
+        qiCandidate(runId, "cand-client-closed-login", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+      ],
+    });
+    const beforeRunIds = listQualityIntelligenceRuns({ evidenceDir });
+    const c = closableCtx("regenerate-stale", runId, makeReq({ sources: [source] }));
+
+    const pending = handleQiRegenerateStale(c, deps(evidenceDir));
+    c.res.emit("close");
+    const result = asResult(await pending);
+
+    expect(result.status).toBe(499);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_REQUEST_CANCELLED");
+    expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(beforeRunIds);
+  });
+
+  it("does not expose a new run when the candidate artifact write fails", async () => {
+    const runId = "run-regen-artifact-write-fails";
+    const source = {
+      kind: "requirements",
+      label: "Spec",
+      text: "Login must work reliably",
+    } as const;
+    const seeded = ingestInlineSources({
+      request: { sources: [source] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [source],
+      candidates: [
+        qiCandidate(runId, "cand-artifact-fail-login", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+      ],
+    });
+    const beforeRunIds = listQualityIntelligenceRuns({ evidenceDir });
+    const beforeManifest = JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }));
+    const beforeArtifact = JSON.stringify(
+      loadQualityIntelligenceCandidates(runId, { evidenceDir }),
+    );
+
+    const failingDeps: UiHandlerDeps = {
+      ...deps(evidenceDir),
+      redactor: () => {
+        throw new Error("candidate artifact redaction failed");
+      },
+    };
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx("regenerate-stale", runId, makeReq({ sources: [source] })),
+        failingDeps,
+      ),
+    );
+
+    expect(result.status).toBe(500);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_REGEN_FAILED");
+    expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(beforeRunIds);
+    expect(JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }))).toBe(beforeManifest);
+    expect(JSON.stringify(loadQualityIntelligenceCandidates(runId, { evidenceDir }))).toBe(
+      beforeArtifact,
+    );
+  });
+});
+
 describe("handleQiRegenerateStale — malformed candidates companion", () => {
   it("returns 500 QI_REGEN_FAILED when the candidates companion is corrupted", async () => {
     writeFileSync(
@@ -1008,6 +1103,56 @@ describe("handleQiReCheck — requirement drift is atom-aware (#798)", () => {
         candidateId: "cand-deleted-line",
         reason: "source-removed",
       }),
+    ]);
+  });
+
+  it("classifies an empty current requirements source as all orphaned-stale", async () => {
+    const runId = "run-req-current-empty";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: {
+        sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-empty-login", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-empty-mfa", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+
+    const result = asResult(
+      await handleQiReCheck(
+        ctx(
+          "re-check",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: " \n\t " }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      staleCount: number;
+      fresh: readonly string[];
+      changedStale: readonly { candidateId: string; reason: string; envelopeId: string }[];
+      orphanedStale: readonly { candidateId: string; reason: string; envelopeId: string }[];
+    };
+    expect(body.staleCount).toBe(2);
+    expect(body.fresh).toEqual([]);
+    expect(body.changedStale).toEqual([]);
+    expect(body.orphanedStale).toEqual([
+      expect.objectContaining({ candidateId: "cand-empty-login", reason: "source-removed" }),
+      expect.objectContaining({ candidateId: "cand-empty-mfa", reason: "source-removed" }),
     ]);
   });
 });
