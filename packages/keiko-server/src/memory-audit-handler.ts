@@ -79,11 +79,19 @@ export function auditRunIdFor(nowMs: number): string {
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 
-// Appends a single audit event to the date-bucketed manifest. The built-in evidence stores
-// expose an atomic update path; fallback stores still get parse-safe get+put behavior.
-function appendAuditEvent(store: EvidenceStore, runId: string, event: MemoryAuditEvent): void {
+// Appends audit events to the date-bucketed manifest. The built-in evidence stores expose an
+// atomic update path; fallback stores still get parse-safe get+put behavior. Batch callers should
+// pass every event for one operation at once so the daily JSON manifest is parsed and rewritten once.
+function appendAuditEvents(
+  store: EvidenceStore,
+  runId: string,
+  events: readonly MemoryAuditEvent[],
+): void {
+  if (events.length === 0) {
+    return;
+  }
   const append = (existingJson: string | undefined): string =>
-    JSON.stringify([...parseExistingEvents(existingJson), event]);
+    JSON.stringify([...parseExistingEvents(existingJson), ...events]);
 
   if (store.update !== undefined) {
     store.update(runId, append);
@@ -139,11 +147,9 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
       return;
     }
     try {
-      appendAuditEvent(
-        options.evidenceStore,
-        auditRunIdFor(auditEvent.occurredAt),
+      appendAuditEvents(options.evidenceStore, auditRunIdFor(auditEvent.occurredAt), [
         sanitizeAuditEvent(auditEvent, options.redactString),
-      );
+      ]);
     } catch (error) {
       onPersistError(error);
     }
@@ -223,6 +229,16 @@ export function recordMemoryAudit(
   options: RecordMemoryAuditOptions,
   event: MemoryAuditEvent,
 ): void {
+  recordMemoryAudits(options, [event]);
+}
+
+export function recordMemoryAudits(
+  options: RecordMemoryAuditOptions,
+  events: readonly MemoryAuditEvent[],
+): void {
+  if (events.length === 0) {
+    return;
+  }
   const redactString = options.redactString ?? ((input: string): string => input);
   const onPersistError =
     options.onPersistError ??
@@ -230,14 +246,22 @@ export function recordMemoryAudit(
       // eslint-disable-next-line no-console
       console.error("memory-audit-handler: direct emission failed", error);
     });
-  try {
-    appendAuditEvent(
-      options.evidenceStore,
-      auditRunIdFor(event.occurredAt),
-      sanitizeAuditEvent(event, redactString),
-    );
-  } catch (error) {
-    onPersistError(error);
+  const eventsByRunId = new Map<string, MemoryAuditEvent[]>();
+  for (const event of events) {
+    const runId = auditRunIdFor(event.occurredAt);
+    const bucket = eventsByRunId.get(runId);
+    if (bucket === undefined) {
+      eventsByRunId.set(runId, [sanitizeAuditEvent(event, redactString)]);
+    } else {
+      bucket.push(sanitizeAuditEvent(event, redactString));
+    }
+  }
+  for (const [runId, bucket] of eventsByRunId) {
+    try {
+      appendAuditEvents(options.evidenceStore, runId, bucket);
+    } catch (error) {
+      onPersistError(error);
+    }
   }
 }
 

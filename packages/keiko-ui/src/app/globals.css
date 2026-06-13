@@ -1281,8 +1281,9 @@ button {
   color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
 }
 .auto-toggle {
-  width: 30px;
-  height: 18px;
+  width: 42px;
+  height: 24px;
+  padding: 0;
   border-radius: 999px;
   background: var(--inset);
   border: 1px solid var(--line);
@@ -1293,10 +1294,10 @@ button {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 12px;
-  height: 12px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: var(--fg-dim);
+  background: var(--fg);
   transition:
     left 0.15s,
     background 0.15s;
@@ -1306,8 +1307,8 @@ button {
   border-color: var(--accent-line);
 }
 .auto-toggle.on span {
-  left: 14px;
-  background: var(--accent);
+  left: 20px;
+  background: var(--accent-bright);
 }
 .mob {
   text-align: center;

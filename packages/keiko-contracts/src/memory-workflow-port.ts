@@ -32,8 +32,11 @@ export interface MemoryUsedEvent {
   readonly reason: string;
 }
 
-// Emitted when a candidate memory was intentionally left out (budget, sensitivity, conflict).
-// One event per omitted memory so the UI can render per-item omission reasons.
+// Emitted when the memory port intentionally leaves a candidate memory out of the assembled
+// context (budget, sensitivity, conflict). One event per omitted memory lets the UI render
+// per-item omission reasons. Workflows do not infer omitted IDs from MemoryWorkflowContext;
+// the port implementation that runs retrieval owns this event because it has access to the
+// included and omitted result sets before the context is reduced to prompt text.
 export interface MemoryOmittedEvent {
   readonly memoryId: MemoryId;
   readonly reason: string;
@@ -63,8 +66,10 @@ export interface MemoryWorkflowPort {
   // so a port can implement context-only and skip emit hooks. Workflow calls this exactly
   // once per run, AFTER getContextForWorkflow resolves with a non-empty includedMemoryIds.
   readonly onMemoryUsed?: (event: MemoryUsedEvent) => void;
-  // Notify the host that a candidate memory was omitted. Optional. Caller may emit zero or
-  // more of these per run.
+  // Optional host-side hook for direct port implementations that already know omitted memory
+  // IDs. The in-tree workflow port emits workflow-omitted audit evidence during
+  // getContextForWorkflow; workflow packages MUST NOT fabricate omission events from the
+  // reduced MemoryWorkflowContext.
   readonly onMemoryOmitted?: (event: MemoryOmittedEvent) => void;
   // Notify the host that a memory write candidate exists for review. Optional. Emitted at
   // most once per run, and ONLY when the run reached a terminal success or correction.
