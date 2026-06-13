@@ -47,6 +47,10 @@ export function baseName(p: string): string {
   return parts.length > 0 ? (parts[parts.length - 1] ?? p) : p;
 }
 
+// Recognises POSIX, drive-letter, and UNC (\\server\share, //server/share) absolute paths. The UNC
+// arms are intentionally broader than workspaceActions' isAbsoluteRoot, which gates the connected
+// ROOT and rejects UNC: a UNC root is therefore filtered out before it can ever reach here, so this
+// only ever classifies a focused activeFilePath. Keep both in sync if UNC roots become reachable.
 function isAbsoluteBrowserPath(path: string): boolean {
   return (
     path.startsWith("/") ||
@@ -83,7 +87,12 @@ export function resolveConnectedFilePath(
   if (root.length === 0) return null;
   const joinedRoot = trimTrailingSeparators(root);
   const relativePath = toPortablePath(candidate).replace(/^\/+/u, "");
-  return `${joinedRoot}/${relativePath}`;
+  // A drive root canonicalises to "C:/" — the trailing slash is RETAINED on purpose so it stays the
+  // drive ROOT and not the drive-relative "C:" (see trimTrailingSeparators). Unconditionally inserting
+  // "/" here would then double the separator ("C://docs/file.md"). Only add the separator when the
+  // root does not already end in one, so the resolved path is both absolute AND correctly formed (AC3).
+  const separator = joinedRoot.endsWith("/") ? "" : "/";
+  return `${joinedRoot}${separator}${relativePath}`;
 }
 
 function sourceKey(source: ConnectedRunSource): string {

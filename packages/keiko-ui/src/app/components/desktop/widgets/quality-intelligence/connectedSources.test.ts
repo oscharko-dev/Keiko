@@ -160,4 +160,19 @@ describe("resolveConnectedFilePath", () => {
     expect(resolveConnectedFilePath("/root", null)).toBeNull();
     expect(resolveConnectedFilePath("/root", "   ")).toBeNull();
   });
+
+  it("joins onto a Windows backslash root with a normalised single separator", () => {
+    expect(resolveConnectedFilePath("C:\\work", "docs\\spec.md")).toBe("C:/work/docs/spec.md");
+  });
+
+  it("does not double the separator when the root is a bare drive root (#714 AC3 — absolute AND correct)", () => {
+    // "C:\\" canonicalises to "C:/" (drive root keeps its slash); the join must not yield "C://docs".
+    expect(resolveConnectedFilePath("C:\\", "docs/spec.md")).toBe("C:/docs/spec.md");
+    expect(resolveConnectedFilePath("C:/", "docs/spec.md")).toBe("C:/docs/spec.md");
+  });
+
+  it("joins onto the POSIX filesystem root without a double separator", () => {
+    // trimTrailingSeparators("/") -> "" ; the separator guard then re-adds exactly one "/".
+    expect(resolveConnectedFilePath("/", "docs/spec.md")).toBe("/docs/spec.md");
+  });
 });
