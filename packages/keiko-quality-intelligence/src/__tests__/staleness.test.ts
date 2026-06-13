@@ -127,6 +127,26 @@ describe("compareStaleness — source-removed", () => {
     expect(result.orphanedStale[0]?.candidateId).toBe("tc-2");
     expect(result.orphanedStale[0]?.reason).toBe("source-removed");
   });
+
+  it("marks a deleted requirement atom orphanedStale when the envelope still exists", () => {
+    const args: CompareStalenessArgs = {
+      oldFingerprints: [fp("qi-src-req-old", "req-hash-old")],
+      oldAtomFingerprints: [
+        atomFp("atom-req-1", "qi-src-req-old", "hash-req-1"),
+        atomFp("atom-req-2", "qi-src-req-old", "hash-req-2"),
+      ],
+      evidenceRefs: [ref("qi-src-req-old", "atom-req-1"), ref("qi-src-req-old", "atom-req-2")],
+      candidates: [cand("tc-1", "atom-req-1"), cand("tc-2", "atom-req-2")],
+      currentFingerprints: [fp("qi-src-req-old", "req-hash-new")],
+      currentAtomFingerprints: [atomFp("atom-req-1", "qi-src-req-old", "hash-req-1")],
+    };
+    const result = compareStaleness(args);
+    expect(result.fresh).toEqual(["tc-1"]);
+    expect(result.changedStale).toHaveLength(0);
+    expect(result.orphanedStale).toEqual([
+      { candidateId: "tc-2", reason: "source-removed", envelopeId: "qi-src-req-old" },
+    ]);
+  });
 });
 
 describe("compareStaleness — new source in current (no false positives)", () => {
