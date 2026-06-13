@@ -209,12 +209,24 @@ function assertRealPathNotDenied(absPath: string, label: string, noun: string): 
   }
 }
 
-const envelopeIdFor = (
+// Escape the field delimiter ("|") and the escape character ("\") in each user/path-controlled
+// field so a label or content value can never inject a raw delimiter and forge another source's
+// envelope id. The strictly-increasing loop index already disambiguates sources today; escaping
+// makes the pre-image injective on its own — robust even if the fields were ever reordered —
+// closing the latent cross-source provenance-spoofing surface flagged by the #732 composition
+// security audit. A value with no "\" or "|" encodes to itself, so clean labels/paths keep their
+// existing envelope id (and the atom ids derived from it), preserving re-check stability.
+const escapeEnvelopeField = (value: string): string =>
+  value.split("\\").join("\\\\").split("|").join("\\|");
+
+export const envelopeIdFor = (
   index: number,
   label: string,
   content: string,
 ): QI.QualityIntelligenceSourceEnvelopeId => {
-  const digest = sha256Hex(`qi-src-v1|${String(index)}|${label}|${content}`).slice(0, 24);
+  const digest = sha256Hex(
+    `qi-src-v1|${String(index)}|${escapeEnvelopeField(label)}|${escapeEnvelopeField(content)}`,
+  ).slice(0, 24);
   return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(`qi-src-${digest}`);
 };
 
