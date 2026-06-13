@@ -134,6 +134,9 @@ export interface MemoryVaultStore {
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
+  readonly getEmbeddings: (
+    memoryIds: readonly MemoryId[],
+  ) => ReadonlyMap<MemoryId, MemoryEmbeddingRow>;
   readonly listTombstonesByScope: (scope: MemoryScope) => readonly MemoryTombstone[];
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the

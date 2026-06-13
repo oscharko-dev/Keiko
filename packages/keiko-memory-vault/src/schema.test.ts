@@ -84,6 +84,10 @@ describe("runMigrations", () => {
     expect(tombstoneColumns.map((column) => column.name)).toEqual(
       expect.arrayContaining(["reviewer_id", "original_status"]),
     );
+    const retrievalIndex = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name = ?")
+      .get("idx_memories_scope_created") as { name?: string } | undefined;
+    expect(retrievalIndex?.name).toBe("idx_memories_scope_created");
     db.close();
   });
 
@@ -113,9 +117,12 @@ describe("runMigrations", () => {
       .all() as unknown as readonly { name: string }[];
     expect(idx.map((i) => i.name)).toEqual([
       "idx_edges_from",
+      "idx_edges_from_created",
       "idx_edges_to",
+      "idx_edges_to_created",
       "idx_memories_pinned",
       "idx_memories_scope",
+      "idx_memories_scope_created",
       "idx_memories_scope_status",
       "idx_memories_scope_type",
       "idx_memories_updated_at",

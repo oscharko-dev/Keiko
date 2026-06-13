@@ -94,8 +94,9 @@ describe("assembleContextBlock — caps and pressure", () => {
       body: "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi",
     });
     const ranked = [included("long")];
-    // budget 8 tokens, maxIncluded 1 -> per-entry ~ 8 tokens -> ~6 words after the 1.3x.
-    const result = assembleContextBlock(ranked, [record], { budgetTokens: 8, maxIncluded: 1 });
+    // budget 16 tokens, maxIncluded 1 -> includes rendered header/reason overhead and still clips
+    // the long body on a word boundary.
+    const result = assembleContextBlock(ranked, [record], { budgetTokens: 16, maxIncluded: 1 });
     const entry = result.contextBlock.memories[0];
     expect(entry?.bodyExcerpt.endsWith("…")).toBe(true);
     // Excerpt strictly shorter than the original body.
@@ -109,5 +110,16 @@ describe("assembleContextBlock — caps and pressure", () => {
     const ranked = records.map((r) => included(r.id));
     const result = assembleContextBlock(ranked, records, { budgetTokens: 20, maxIncluded: 50 });
     expect(result.budget.used).toBeLessThanOrEqual(result.budget.tokens);
+  });
+
+  it("charges the rendered header and inclusion reason against the budget", () => {
+    const records = [
+      buildRecord({ id: "a", body: "alpha beta gamma" }),
+      buildRecord({ id: "b", body: "delta epsilon zeta" }),
+    ];
+    const ranked = records.map((r) => included(r.id));
+    const result = assembleContextBlock(ranked, records, { budgetTokens: 18, maxIncluded: 2 });
+    expect(result.budget.used).toBe(estimateTokens(result.contextBlock.text));
+    expect(estimateTokens(result.contextBlock.text)).toBeLessThanOrEqual(result.budget.tokens);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { investigateBug } from "./workflow.js";
 import type { BugInvestigationDeps, BugInvestigationInput } from "./types.js";
+import type { MemoryId, MemoryUsedEvent, MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
 import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
 import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
 
@@ -132,5 +133,32 @@ describe("investigateBug (AC #2 SDK / AC #4/#5/#7)", () => {
     expect(types).toContain("bug:started");
     expect(types).toContain("bug:completed");
     expect(types).toContain("bug:failure:parsed");
+  });
+
+  it("injects retrieved workflow memory into the model prompt", async () => {
+    const model = scriptedModel([response({ content: FIX_DIFF })]);
+    const used: MemoryUsedEvent[] = [];
+    const memoryPort: MemoryWorkflowPort = {
+      getContextForWorkflow: (scopes, queryText, budgetTokens) => {
+        expect(scopes.map((scope) => scope.kind)).toEqual(["workflow"]);
+        expect(queryText).toBe("half returns wrong value");
+        expect(budgetTokens).toBe(2_048);
+        return Promise.resolve({
+          text: "# Relevant memories\n- (workflow lesson) Keep half() fixes minimal.",
+          includedMemoryIds: ["mem-workflow" as MemoryId],
+        });
+      },
+      onMemoryUsed: (event) => {
+        used.push(event);
+      },
+    };
+
+    await investigateBug(input(), deps(model.port, { memoryPort }));
+
+    const userMessage = model.lastMessages().find((message) => message.role === "user");
+    expect(userMessage?.content).toContain("Memory context (governed, scoped):");
+    expect(userMessage?.content).toContain("Keep half() fixes minimal.");
+    expect(used).toHaveLength(1);
+    expect(used[0]?.memoryIds).toEqual(["mem-workflow" as MemoryId]);
   });
 });

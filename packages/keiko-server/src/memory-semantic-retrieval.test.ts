@@ -95,6 +95,18 @@ function embeddingAdapter(): (req: OpenAIEmbeddingRequest) => Promise<OpenAIEmbe
     });
 }
 
+function countingEmbeddingAdapter(
+  calls: string[],
+): (req: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
+  return (req) => {
+    calls.push(req.input);
+    return Promise.resolve({
+      ok: true as const,
+      value: { vector: vectorFor(req.input), modelId: EMBEDDING_MODEL },
+    });
+  };
+}
+
 function embeddingConfig(includeEmbeddingModel: boolean): GatewayConfig {
   const providers = [
     {
@@ -199,7 +211,11 @@ interface SendResult {
   };
 }
 
-async function sendChat(chatId: string, content: string): Promise<SendResult> {
+async function sendChat(
+  chatId: string,
+  content: string,
+  memory: Record<string, unknown> = { enabled: true, context: {} },
+): Promise<SendResult> {
   const res = await fetch(`${base()}/api/desktop/chat`, {
     method: "POST",
     headers: POST_JSON_HEADERS,
@@ -208,7 +224,7 @@ async function sendChat(chatId: string, content: string): Promise<SendResult> {
       projectPath: projectDir,
       modelId: CHAT_MODEL,
       content,
-      memory: { enabled: true, context: {} },
+      memory,
     }),
   });
   expect(res.status).toBe(200);
@@ -312,15 +328,101 @@ describe("semantic memory retrieval (#204)", () => {
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
     // Lexically matching memory WITHOUT an embedding — must still be retrievable on the lexical
-    // signal even though its semantic subscore is 0.
+    // signal without sending the query to an embedding provider that has no stored vector to compare.
     insertAccepted(vault, "mem-lex", "Keiko product name");
-    await restart(deps({ memoryVault: vault }, true));
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+      ),
+    );
 
     const chatId = await createChat();
     const result = await sendChat(chatId, "Keiko product name");
 
     const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
     expect(ids).toContain("mem-lex");
+    expect(embeddingCalls).toEqual([]);
+    vault.close();
+  });
+
+  it("does not embed the query when budgetTokens is zero", async () => {
+    const memoryDir = join(tmp, "vault-zero-budget");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    insertAccepted(vault, "mem-package-manager", "Use pnpm for installs");
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+      ),
+    );
+
+    const chatId = await createChat();
+    const result = await sendChat(chatId, "Which package manager should I use?", {
+      enabled: true,
+      budgetTokens: 0,
+      context: {},
+    });
+
+    expect(result.memory?.context.memories).toEqual([]);
+    expect(embeddingCalls).toEqual([]);
+    vault.close();
+  });
+
+  it("does not embed the query when scoped vaults are empty", async () => {
+    const memoryDir = join(tmp, "vault-empty-semantic");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+      ),
+    );
+
+    const chatId = await createChat();
+    const result = await sendChat(chatId, "Which package manager should I use?");
+
+    expect(result.memory?.context.memories).toEqual([]);
+    expect(embeddingCalls).toEqual([]);
+    vault.close();
+  });
+
+  it("does not embed the query when all scoped memories are suppressed", async () => {
+    const memoryDir = join(tmp, "vault-suppressed-semantic");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    const record = insertAccepted(vault, "mem-superseded", "Use yarn for installs");
+    vault.updateMemory(record.id, { status: "superseded" }, Date.now() + 1);
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+      ),
+    );
+
+    const chatId = await createChat();
+    const result = await sendChat(chatId, "Which package manager should I use?");
+
+    expect(result.memory?.context.memories).toEqual([]);
+    expect(embeddingCalls).toEqual([]);
     vault.close();
   });
 });
