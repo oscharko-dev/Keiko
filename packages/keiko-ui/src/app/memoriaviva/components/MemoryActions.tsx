@@ -251,7 +251,7 @@ export function MemoryActions({
           setNotice(null);
           setShowDelete(true);
         }}
-        aria-label="Hard-delete this memory record"
+        aria-label="Delete this memory record"
       >
         Delete
       </button>
