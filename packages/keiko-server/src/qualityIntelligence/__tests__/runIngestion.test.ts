@@ -965,6 +965,24 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
     expect(totalBytes).toBeLessThanOrEqual(196_608 + 40 * 64);
     expect(result.ingestedAtoms.length).toBeLessThan(40);
   });
+
+  // ── Coded-error distinction: present-but-unusable corpus (AC2, Issue #717) ──
+  // buildCapsuleSource has TWO distinct empty guards: QI_CAPSULE_UNAVAILABLE when the resolver
+  // returns no documents at all, and QI_SOURCE_EMPTY when documents exist but every one trims to
+  // nothing after redact()+truncate (processCapsuleDocs skips whitespace-only docs). The first is
+  // pinned above ("resolver returns no documents"); this pins the second so the user-actionable
+  // distinction cannot silently collapse to the wrong code under mutation.
+  it("throws QI_SOURCE_EMPTY (not QI_CAPSULE_UNAVAILABLE) when a non-empty capsule trims to whitespace-only", () => {
+    const docs = [{ documentId: "blank-1", text: "   \n\t  " }];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    try {
+      ingestInlineSources(inputWithResolver([capsuleSource("Blank", "cap-ws")], resolver));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
+  });
 });
 
 // ─── Capsule-set source (Epic #710, Issue #716/#718) ──────────────────────────
@@ -1012,6 +1030,22 @@ describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
     ];
     ingest(inputWithResolver([capsuleSetSource("Set", "set-y")], capsule, capsuleSet));
     expect(capsuleCalls).toBe(0);
+  });
+
+  // Same two-state guard as the single-capsule path: a set whose expanded corpus exists but trims to
+  // whitespace-only must surface QI_SOURCE_EMPTY, not the QI_CAPSULE_UNAVAILABLE used for unknown/empty
+  // sets. Pins the shared buildCapsuleSource code for the capsule-set entry point too (AC2).
+  it("throws QI_SOURCE_EMPTY (not QI_CAPSULE_UNAVAILABLE) when a non-empty capsule-set trims to whitespace-only", () => {
+    const setDocs = [{ documentId: "blank-m1", text: "   \n\t  " }];
+    try {
+      ingestInlineSources(
+        inputWithResolver([capsuleSetSource("BlankSet", "set-ws")], undefined, () => setDocs),
+      );
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
   });
 });
 
