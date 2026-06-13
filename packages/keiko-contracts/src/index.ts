@@ -677,6 +677,10 @@ export type {
   TestQualityJudgeVerdict,
 } from "./qualityIntelligence/index.js";
 export {
+  TEST_QUALITY_RUBRIC_DIMENSIONS,
+  TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
+} from "./qualityIntelligence/index.js";
+export {
   assertExportBundleInvariant,
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,

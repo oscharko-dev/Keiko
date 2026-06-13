@@ -47,6 +47,13 @@ describe("installable-package-smoke script", () => {
     expect(source).toMatch(/timeout:\s*NPM_INSTALL_TIMEOUT_MS/);
   });
 
+  it("allows a longer bounded `npm install` timeout on Windows runners", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    expect(source).toContain("DEFAULT_NPM_INSTALL_TIMEOUT_MS = 90_000");
+    expect(source).toContain("WINDOWS_NPM_INSTALL_TIMEOUT_MS = 300_000");
+    expect(source).toMatch(/process\.platform\s*===\s*"win32"/);
+  });
+
   it("cleans up the tmpdir even on failure", () => {
     const source = readFileSync(scriptPath, "utf8");
     expect(source).toMatch(/\bfinally\s*{[\s\S]*?rmSync\([^)]*tmp/);

@@ -158,3 +158,57 @@ describe("traceability readability (#790)", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// T3 — all-uncovered run placeholder (currently mutation-blind)
+// ---------------------------------------------------------------------------
+// When every row has coveringCandidateIds: [] the Tests→Requirements section
+// must emit the placeholder row "| — | — | — | 0 |" because there are no
+// reverse rows to invert. RED if the reverseRows.length === 0 guard is removed.
+
+describe("T3: all-uncovered run emits placeholder in Tests→Requirements section", () => {
+  const allUncovered: readonly QualityIntelligenceTraceabilityRow[] = [
+    { atomId: "atom-1", status: "uncovered", confidence: 0, coveringCandidateIds: [] },
+    { atomId: "atom-2", status: "uncovered", confidence: 0, coveringCandidateIds: [] },
+  ];
+
+  it("Markdown: Tests→Requirements section contains the placeholder row", () => {
+    const md = adaptToTraceabilityMarkdown(allUncovered);
+    const reverseIdx = md.indexOf("## Tests → Requirements");
+    const reverseSection = md.slice(reverseIdx);
+    expect(reverseSection).toContain("| — | — | — | 0 |");
+  });
+
+  it("Markdown: placeholder is the only data row in Tests→Requirements section", () => {
+    const md = adaptToTraceabilityMarkdown(allUncovered);
+    const reverseIdx = md.indexOf("## Tests → Requirements");
+    const reverseSection = md.slice(reverseIdx);
+    const dataLines = reverseSection
+      .split("\n")
+      .filter((l) => l.startsWith("|") && !l.includes("---"));
+    // header row + 1 placeholder data row = 2 total
+    expect(dataLines).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T4 — CSV blank-line separator between the two sections (cheap invariant)
+// ---------------------------------------------------------------------------
+// The blank-line separator (\r\n) between Requirements→Tests and
+// Tests→Requirements sections must be present so tools that consume the CSV
+// can split the two logical tables.
+
+describe("T4: CSV contains blank-line separator between sections", () => {
+  it("contains a bare \\r\\n separator between sections", () => {
+    const csv = adaptToTraceabilityCsv(rows);
+    expect(csv).toContain("\r\n\r\n");
+  });
+
+  it("blank separator appears between Requirements and Tests sections", () => {
+    const csv = adaptToTraceabilityCsv(rows);
+    const reqIdx = csv.indexOf("Requirements to tests");
+    const testsIdx = csv.indexOf("Tests to requirements");
+    const between = csv.slice(reqIdx, testsIdx);
+    expect(between).toContain("\r\n\r\n");
+  });
+});
