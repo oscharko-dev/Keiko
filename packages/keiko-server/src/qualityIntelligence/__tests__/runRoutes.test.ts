@@ -313,19 +313,26 @@ describe("handleStartQiRun — figma-snapshot source validation (Issue #754)", (
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
   });
 
-  it("starts the SSE stream (not a 400) when a valid snapshotRunId is provided", async () => {
+  it("commits to the SSE stream when a valid snapshotRunId is provided", async () => {
+    // Parsing succeeds, so the handler commits to the SSE path (STREAMING) before the run executes;
+    // with no evidenceDir the run then fails and emits a streamed error event — never a 400. Asserting
+    // STREAMING unconditionally is mutation-meaningful: a parser that wrongly returned a RouteResult
+    // here would fail this test instead of passing a dead conditional.
+    const res = new MockResponse();
     const outcome = await handleStartQiRun(
       ctx(
         makeReq({
           sources: [{ kind: "figma-snapshot", label: "My snapshot", snapshotRunId: "snap-abc-1" }],
         }),
-        new MockResponse(),
+        res,
       ),
       deps(),
     );
-    if (outcome !== STREAMING) {
-      expect(outcome.status).not.toBe(400);
-    }
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
+    expect(res.ended).toBe(true);
+    expect(res.chunks.join("")).toContain('"type":"error"');
   });
 });
 
