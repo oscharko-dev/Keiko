@@ -82,6 +82,10 @@ function StatusBadge({ status }: { readonly status: string }): ReactNode {
   return <span className={`mc-badge ${cls}`}>{status}</span>;
 }
 
+function formatConfidence(confidence: number): string {
+  return `${(confidence * 100).toFixed(0)}% confidence`;
+}
+
 // ---------------------------------------------------------------------------
 // MemoryRow
 // ---------------------------------------------------------------------------
@@ -99,6 +103,11 @@ function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
           <div className="mc-row-meta">
             <span className="mc-row-type">{TYPE_LABELS[record.type]}</span>
             <span className="mc-row-scope">{SCOPE_LABELS[record.scope.kind]}</span>
+            <span className="mc-row-source">Source {record.provenance.sourceKind}</span>
+            <span className="mc-row-confidence">
+              {formatConfidence(record.provenance.confidence)}
+            </span>
+            <span className="mc-row-sensitivity">Sensitivity {record.provenance.sensitivity}</span>
             {record.pinned ? (
               // Same badge as the detail page — a bare accent-coloured "P" was
               // cryptic, failed light-theme contrast (2.41:1), and aria-label on

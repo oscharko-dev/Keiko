@@ -566,17 +566,6 @@ export function WindowFrame({
         <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
           <button
             type="button"
-            className="win-traffic-btn win-traffic-close"
-            title="Close"
-            aria-label={`Close ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={closeWithFocusRestore}
-          />
-          <button
-            type="button"
             className="win-traffic-btn win-traffic-minimize"
             title="Minimize"
             aria-label={`Minimize ${def.title} window`}
@@ -596,6 +585,17 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={() => api.maximize(win.id)}
+          />
+          <button
+            type="button"
+            className="win-traffic-btn win-traffic-close"
+            title="Close"
+            aria-label={`Close ${def.title} window`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={closeWithFocusRestore}
           />
         </div>
       </header>

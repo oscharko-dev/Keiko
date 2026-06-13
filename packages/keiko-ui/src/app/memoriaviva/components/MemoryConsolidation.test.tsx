@@ -119,6 +119,14 @@ describe("MemoryConsolidation", () => {
     vi.clearAllMocks();
   });
 
+  it("renders the initial empty job state", () => {
+    render(
+      <MemoryConsolidation startJobImpl={vi.fn()} fetchJobImpl={vi.fn()} cancelJobImpl={vi.fn()} />,
+    );
+
+    expect(screen.getByText("No consolidation job started yet.")).toBeInTheDocument();
+  });
+
   it("starts a job with explicit settings and renders polled results", async () => {
     const startJobImpl = vi.fn().mockResolvedValue(runningJob());
     const fetchJobImpl = vi.fn().mockResolvedValue(completedJob());

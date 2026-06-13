@@ -135,9 +135,9 @@ export function MemoryActions({
             aria-disabled={busy !== null}
             aria-busy={busy === "accept"}
             onClick={handleAccept}
-            aria-label="Accept this memory proposal"
+            aria-label="Approve this memory proposal"
           >
-            {busy === "accept" ? "Accepting…" : "Accept"}
+            {busy === "accept" ? "Approving…" : "Approve"}
           </button>
           <button
             type="button"

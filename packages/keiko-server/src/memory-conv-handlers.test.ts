@@ -6,7 +6,7 @@
 //   - POST /api/memory/capture-from-conversation → handleMemoryCaptureFromConversation
 //
 // These tests intentionally do NOT spin up the HTTP server — the dispatch layer is shared
-// with the Memory Center routes (#211) and is already covered by routes.test.ts.
+// with the MemoriaViva routes (#211) and is already covered by routes.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";

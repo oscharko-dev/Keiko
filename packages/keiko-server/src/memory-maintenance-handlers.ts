@@ -4,7 +4,7 @@
 // POST /api/memory/maintenance runs a bounded, synchronous pass:
 //   1. Load every memory (all scopes) + the access stats.
 //   2. Run consolidation on the accepted subset; persist auto-applicable relationship edges and
-//      return unresolved review items for Memory Center or CLI operators. Conflict and merge review
+//      return unresolved review items for MemoriaViva or CLI operators. Conflict and merge review
 //      items are NEVER auto-applied here.
 //   3. Compute the maintenance plan and apply it: promote (-> accepted), reinforce / decay
 //      (confidence patch), archive (-> archived), forget (vault delete + tombstone + reason).

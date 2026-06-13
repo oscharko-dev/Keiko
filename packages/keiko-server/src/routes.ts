@@ -308,7 +308,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
   },
-  // Issues #209/#211 — Memory Center governance routes (Epic #204).
+  // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
   { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
@@ -342,7 +342,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/memory/capture-from-conversation",
     handler: handleMemoryCaptureFromConversation,
   },
-  // Issue #208 — explicit consolidation jobs for the Memory Center review surface.
+  // Issue #208 — explicit consolidation jobs for the MemoriaViva review surface.
   {
     method: "POST",
     pattern: "/api/memory/consolidation/jobs",

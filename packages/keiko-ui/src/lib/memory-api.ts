@@ -1,5 +1,5 @@
-// Issue #211 — typed BFF helpers for the Memory Center surface.
-// Wraps the Memory Center /api/memory/* routes from packages/keiko-server/src/memory-handlers.ts.
+// Issue #211 — typed BFF helpers for the MemoriaViva surface.
+// Wraps the MemoriaViva /api/memory/* routes from packages/keiko-server/src/memory-handlers.ts.
 // Browser-safe: imports only from @oscharko-dev/keiko-contracts (ADR-0019 rule 8).
 // CSRF header added automatically for all mutating methods.
 

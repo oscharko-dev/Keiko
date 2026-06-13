@@ -1,4 +1,4 @@
-// Memory Center BFF route handlers (Issue #211 / Epic #204).
+// MemoriaViva BFF route handlers (Issue #211 / Epic #204).
 //
 // These handlers wire the /api/memory/* routes to the three memory packages:
 //   - @oscharko-dev/keiko-memory-vault   → persistence (list / get / update / delete)
@@ -65,10 +65,10 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_MEMORY_BODY_BYTES = 64_000;
-const DEFAULT_REVIEWER_ID = "memory-center-ui" as MemoryReviewerId;
+const DEFAULT_REVIEWER_ID = "memoriaviva-ui" as MemoryReviewerId;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_LIST_LIMIT = 50;
-const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted"];
+const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
 
@@ -277,6 +277,30 @@ function listMemoriesAcrossScopes(
   return sortMemories(filtered);
 }
 
+function isStaleReviewCandidate(record: MemoryRecord): boolean {
+  return (
+    record.staleReason !== undefined &&
+    record.status !== "proposed" &&
+    record.status !== "conflicted" &&
+    record.status !== "expired" &&
+    record.status !== "rejected" &&
+    record.status !== "archived" &&
+    record.status !== "forgotten"
+  );
+}
+
+function listReviewQueueMemories(vault: MemoryVaultStore): readonly MemoryRecord[] {
+  const byStatus = listMemoriesAcrossScopes(vault, {
+    statuses: REVIEW_QUEUE_STATUSES,
+  });
+  const stale = listMemoriesAcrossScopes(vault, {}).filter(isStaleReviewCandidate);
+  const byId = new Map<MemoryId, MemoryRecord>();
+  for (const record of [...byStatus, ...stale]) {
+    byId.set(record.id, record);
+  }
+  return sortMemories([...byId.values()]);
+}
+
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────
 
 interface ListParams {
@@ -374,9 +398,7 @@ export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps)
   if (isRouteResult(vault)) return vault;
 
   try {
-    const proposed = listMemoriesAcrossScopes(vault, {
-      statuses: REVIEW_QUEUE_STATUSES,
-    });
+    const proposed = listReviewQueueMemories(vault);
     return {
       status: 200,
       body: {
@@ -747,7 +769,7 @@ function parseForgetSelectionInput(
 ): ForgetSelectionInput | RouteResult {
   const destructive = parseDestructiveInput(
     raw,
-    "user-initiated selective forget from Memory Center",
+    "user-initiated selective forget from MemoriaViva",
   );
   if (isRouteResult(destructive)) return destructive;
   const selector = parseForgetSelector(raw.selector);
@@ -841,7 +863,7 @@ export async function handleForgetMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const input = parseDestructiveInput(body, "user-initiated forget from Memory Center");
+  const input = parseDestructiveInput(body, "user-initiated forget from MemoriaViva");
   if (isRouteResult(input)) return input;
 
   try {
@@ -897,7 +919,7 @@ export async function handleDeleteMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const input = parseDestructiveInput(body, "user-initiated delete from Memory Center");
+  const input = parseDestructiveInput(body, "user-initiated delete from MemoriaViva");
   if (isRouteResult(input)) return input;
 
   try {
@@ -952,7 +974,7 @@ function parseConflictResolutionInput(
   const reason =
     typeof raw.reason === "string" && raw.reason.trim().length > 0
       ? raw.reason.trim()
-      : "conflict resolved from Memory Center";
+      : "conflict resolved from MemoriaViva";
   const winner = raw.winner as MemoryId;
   const losers = raw.losers.map((id) => id as MemoryId);
   if (uniqueIds([winner, ...losers]).length !== 1 + losers.length) {

@@ -102,7 +102,7 @@ export function LeftRail({
             onClick={() => onTool(tool.id)}
           />
         ))}
-        {/* Issue #211 — MemoriaViva is a page route, not a window tool */}
+        {/* Issue #211 — MemoriaViva is a page route, not a window tool. */}
         <Link
           href="/memoriaviva"
           className="rail-btn"

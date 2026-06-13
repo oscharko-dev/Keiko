@@ -100,7 +100,7 @@ export async function investigateBug(
   // Memory write-candidate (Issue #213): emit ONLY for terminal success outcomes
   // (fix-applied / fix-proposed / investigation-only). NO-OP for cancelled / failed /
   // rejected, and NO-OP when no port is injected. Emitted before emitCompleted so the audit
-  // ledger and Memory Center UI see the candidate alongside the run-completed event.
+  // ledger and MemoriaViva UI see the candidate alongside the run-completed event.
   emitMemoryWriteCandidate(state.deps.memoryPort, report);
   return emitCompleted(state, report);
 }

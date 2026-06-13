@@ -1,7 +1,7 @@
 // Public type surface for @oscharko-dev/keiko-memory-governance (Epic #204 child #209).
 // Pure types only — no IO, no clock, no randomness. Every function exported from this
 // package consumes a `GovernanceContext` instead of reading the wall clock or generating
-// a reviewer id internally; the caller (BFF route handler, Memory Center UI, workflow
+// a reviewer id internally; the caller (BFF route handler, MemoriaViva UI, workflow
 // orchestrator) is the authoritative source of both.
 
 import type {

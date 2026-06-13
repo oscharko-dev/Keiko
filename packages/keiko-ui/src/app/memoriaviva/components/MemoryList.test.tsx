@@ -155,6 +155,25 @@ describe("MemoryList — populated state", () => {
     });
   });
 
+  it("renders provenance, confidence, and sensitivity metadata in each row", async () => {
+    const record = makeRecord({
+      id: makeMemoryId(9),
+      body: "Metadata memory",
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: 1_700_000_000_000,
+        confidence: 0.87,
+        sensitivity: "confidential",
+      },
+    });
+    render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Source explicit-user-instruction")).toBeInTheDocument();
+      expect(screen.getByText("87% confidence")).toBeInTheDocument();
+      expect(screen.getByText("Sensitivity confidential")).toBeInTheDocument();
+    });
+  });
+
   it("links each row to /memoriaviva/detail?id=:id", async () => {
     const record = makeRecord({ id: makeMemoryId(42), body: "Linked memory" });
     render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);

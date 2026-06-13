@@ -106,7 +106,7 @@ export const MEMORY_TYPES: readonly MemoryType[] = [
 
 // ─── Sensitivity ──────────────────────────────────────────────────────────────
 // Capture (#207) and audit (#214) MUST honour the sensitivity contract:
-//  - "public":       safe for evidence persistence and Memory Center display.
+//  - "public":       safe for evidence persistence and MemoriaViva display.
 //  - "confidential": requires explicit user approval before persistence; redacted from
 //                    audit ledger summaries by default.
 //  - "restricted":   rejected by default; capture policy in #207 may further refine.

@@ -5,7 +5,7 @@
 //
 // Boundary intent: workflow packages (`keiko-workflows`, future `keiko-evaluations`) accept
 // an OPTIONAL `MemoryWorkflowPort` so they can compose pre-run memory context and emit
-// post-run lifecycle events for the audit ledger and Memory Center UI. Memory is READ-ONLY
+// post-run lifecycle events for the audit ledger and MemoriaViva UI. Memory is READ-ONLY
 // from the workflow's perspective — the port cannot grant write/execution authority. Apply
 // gates (#6 applyEnabled, patch limits, scope guards) remain the sole write surface
 // (epic §Architecture Invariants 1+2). The workflow remains fully backward-compatible when
@@ -25,7 +25,7 @@ export interface MemoryWorkflowContext {
 
 // Emitted by the port (NOT the workflow) when a context block was successfully assembled.
 // `reason` is a short human-readable label (e.g. "scope-match", "pinned-include") used by
-// the Memory Center UI to explain why a memory was surfaced for this run.
+// MemoriaViva to explain why a memory was surfaced for this run.
 export interface MemoryUsedEvent {
   readonly memoryIds: readonly MemoryId[];
   readonly scopes: readonly MemoryScope[];
