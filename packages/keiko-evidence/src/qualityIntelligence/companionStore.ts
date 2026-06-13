@@ -21,11 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
@@ -69,11 +65,29 @@ function realBaseForRead(baseDir: string, fs: WorkspaceFs): string | undefined {
   }
 }
 
-function containedPath(runId: string, suffix: string, realBase: string, fs: WorkspaceFs): string {
+function lexicalArtifactPath(runId: string, suffix: string, realBase: string): string {
   assertValidRunId(runId);
   const name = `${runId}${suffix}`;
-  const lexical = resolveWithinWorkspace(realBase, name);
-  return assertContainedRealPath(fs, realBase, lexical, name);
+  return resolveWithinWorkspace(realBase, name);
+}
+
+function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
+  try {
+    const stat = fs.stat(path);
+    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
+  } catch (error) {
+    throw new EvidenceReadError(
+      `cannot inspect QI companion: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+function assertWritableArtifactEntry(target: string, fs: WorkspaceFs): void {
+  const entry = lstatSync(target, { throwIfNoEntry: false });
+  if (entry === undefined) return;
+  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+    throw new EvidenceWriteError("cannot overwrite a non-ledger QI companion artifact");
+  }
 }
 
 function atomicWrite(target: string, json: string, randomSuffix: () => string): void {
@@ -106,6 +120,7 @@ function readArtifactFile<T>(
   if (realBase === undefined) return undefined;
   const target = join(realBase, `${runId}${suffix}`);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
+  if (!isSingleLinkRegularFile(target, fs)) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(target, "utf8"));
@@ -126,8 +141,9 @@ function deleteArtifactFile(
   assertValidRunId(runId);
   const realBase = realBaseForRead(baseDir, fs);
   if (realBase === undefined) return false;
-  const target = containedPath(runId, suffix, realBase, fs);
+  const target = lexicalArtifactPath(runId, suffix, realBase);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return false;
+  if (!isSingleLinkRegularFile(target, fs)) return false;
   rmSync(target, { force: true });
   return true;
 }
@@ -149,8 +165,8 @@ export function createNodeContainedJsonArtifactStore<T>(
     record: (runId: string, value: T): string => {
       assertValidRunId(runId);
       const realBase = realBaseForWrite(baseDir, fs);
-      const target = containedPath(runId, suffix, realBase, fs);
-      rmSync(target, { force: true });
+      const target = lexicalArtifactPath(runId, suffix, realBase);
+      assertWritableArtifactEntry(target, fs);
       atomicWrite(target, JSON.stringify(value), randomSuffix);
       return target;
     },
@@ -162,7 +178,7 @@ export function createNodeContainedJsonArtifactStore<T>(
       const realBase = realBaseForRead(baseDir, fs);
       return realBase === undefined
         ? join(resolve(baseDir), `${runId}${suffix}`)
-        : containedPath(runId, suffix, realBase, fs);
+        : lexicalArtifactPath(runId, suffix, realBase);
     },
   };
 }
@@ -174,9 +190,9 @@ export function createNodeContainedJsonArtifactStore<T>(
  * that live alongside the run manifest. EXACT-suffix matching is mandatory: a non-leading `.` is a
  * legal runId character (`assertValidRunId`), so `run-1` and `run-1.2` can coexist and a prefix
  * (`startsWith`) sweep would let deleting `run-1` destroy `run-1.2`'s companion. By deriving the
- * full `${runId}${suffix}` name and resolving it through `assertContainedRealPath`, the delete is
- * collision-free, realpath-contained, and symlink-refusing (`deleteArtifactFile` lstat-gates
- * `isFile`, which is false for a symlink). Returns true iff a regular file was removed.
+ * full `${runId}${suffix}` name from the validated run id, the delete is collision-free,
+ * realpath-contained at the base, and symlink-refusing (`deleteArtifactFile` lstat-gates `isFile`,
+ * which is false for a symlink). Returns true iff a regular single-link file was removed.
  *
  * Intentionally NOT re-exported from the package barrel — it is an internal seam consumed only by
  * the deletion path, so the published surface stays unchanged.

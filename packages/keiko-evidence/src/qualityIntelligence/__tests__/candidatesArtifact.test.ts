@@ -6,7 +6,7 @@
 // are rejected with typed reasons; multiple edits accumulate revisions; the row reflects the latest
 // edit. No mocks — pure function + real fs.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -17,7 +17,7 @@ import {
   recordQualityIntelligenceCandidates,
 } from "../candidatesArtifact.js";
 import { QI_SUBDIR } from "../store.js";
-import { EvidenceReadError } from "../../errors.js";
+import { EvidenceReadError, EvidenceWriteError } from "../../errors.js";
 
 type Candidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
 type EditProvenance = QualityIntelligence.QualityIntelligenceCandidateEditProvenance;
@@ -140,6 +140,31 @@ describe("applyQualityIntelligenceCandidateEdit — persistence", () => {
     const tc2 = reloaded?.candidates.find((c) => c.id === "tc-2");
     expect(tc1?.steps).toEqual(["step-a"]);
     expect(tc2?.title).toBe("Original tc-2");
+  });
+});
+
+describe("recordQualityIntelligenceCandidates — symlink overwrite hardening", () => {
+  it("refuses to overwrite an existing symlinked candidates artifact", () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-cand-victim-"));
+    try {
+      const victim = join(outside, "victim.json");
+      writeFileSync(victim, "ORIGINAL", "utf8");
+      rmSync(artifactPath(evidenceDir), { force: true });
+      symlinkSync(victim, artifactPath(evidenceDir));
+
+      expect(() =>
+        recordQualityIntelligenceCandidates({
+          runId: RUN_ID,
+          generatedAt: "2026-06-08T10:01:00.000Z",
+          candidates: [seedCandidate("tc-3")],
+          evidenceDir,
+          redact: identityRedact,
+        }),
+      ).toThrow(EvidenceWriteError);
+      expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
