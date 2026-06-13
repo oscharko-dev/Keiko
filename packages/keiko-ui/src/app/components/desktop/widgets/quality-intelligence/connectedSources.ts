@@ -67,7 +67,14 @@ function toPortablePath(path: string): string {
 function trimTrailingSeparators(path: string): string {
   if (/^[A-Za-z]:[/\\]?$/u.test(path)) return path.replaceAll("\\", "/");
   if (/^\/\/[^/]+\/[^/]+$/u.test(toPortablePath(path))) return toPortablePath(path);
-  return toPortablePath(path).replace(/\/+$/u, "");
+  const trimmed = toPortablePath(path).replace(/\/+$/u, "");
+  // A lone POSIX root ("/", "//", "\") is all-separator: stripping it would collapse the root to ""
+  // and the server's detectWorkspaceAt("") would then resolve to its OWN cwd, silently ingesting the
+  // WRONG directory instead of the connected root. Keep the root as "/" so a folder source rooted at
+  // the filesystem root stays absolute AND correctly formed (the #714 AC the resolveConnectedFilePath
+  // join guard already enforces for the file path, applied to the root too). Guard on `path.length`
+  // so a genuinely empty input is left as "" (unchanged) rather than fabricated into a root.
+  return trimmed.length === 0 && path.length > 0 ? "/" : trimmed;
 }
 
 /**

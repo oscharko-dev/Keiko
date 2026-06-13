@@ -141,6 +141,17 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
     const sources = buildConnectedRunSources({ connectedRoot: "/single" });
     expect(sources).toEqual([{ kind: "workspace", label: "single", path: "/single" }]);
   });
+
+  it("keeps a POSIX filesystem-root folder as '/', never collapsing it to an empty path", () => {
+    // Regression: trimTrailingSeparators("/") used to strip the root's only separator to "", so the
+    // server received path:"" and detectWorkspaceAt("") resolved to its OWN cwd — silently ingesting
+    // the wrong directory. The folder-source path never passes through resolveConnectedFilePath's
+    // separator guard, so the root must be preserved here. A non-empty, absolute path is required.
+    const sources = buildConnectedRunSources({ connectedRoot: "/" });
+    // toEqual pins path to "/" exactly — the pre-fix bug emitted path:"" (which the server's
+    // detectWorkspaceAt("") would resolve to its own cwd), so this fails if the root collapses.
+    expect(sources).toEqual([{ kind: "workspace", label: "/", path: "/" }]);
+  });
 });
 
 describe("resolveConnectedFilePath", () => {
@@ -172,7 +183,8 @@ describe("resolveConnectedFilePath", () => {
   });
 
   it("joins onto the POSIX filesystem root without a double separator", () => {
-    // trimTrailingSeparators("/") -> "" ; the separator guard then re-adds exactly one "/".
+    // trimTrailingSeparators("/") keeps the root as "/"; the separator guard then adds none, so the
+    // join stays a single-separator "/docs/spec.md" (absolute AND correctly formed — #714 AC3).
     expect(resolveConnectedFilePath("/", "docs/spec.md")).toBe("/docs/spec.md");
   });
 });
