@@ -333,6 +333,8 @@ describe("handleQiEditCandidate — valid edit", () => {
     await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir));
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.candidates[0]?.title).toBe("Persisted title");
+    // The edit REPLACES the matched row in place — it must not append a duplicate.
+    expect(reloaded?.candidates).toHaveLength(1);
   });
 
   it("applies the mandatory redactor to edited fields before persist", async () => {

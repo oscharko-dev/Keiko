@@ -4,7 +4,7 @@
 // the handler directly. Verifies local adapters, unknown adapter, TMS dry-run/live,
 // no-candidates, and formula-injection safety. Pure function + real fs.
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -28,7 +28,9 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { handleQiExport } from "../exportRoutes.js";
-import { applyReviewDecision } from "../reviewStore.js";
+import { handleQiEditCandidate } from "../editRoutes.js";
+import { handleGetQiRun } from "../uiRoutes.js";
+import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -752,6 +754,102 @@ describe("handleQiExport — reflects an inline candidate edit", () => {
     expect(body).toContain("Curated login title");
     expect(body).toContain("Authenticate");
     expect(body).not.toContain("User can log in with valid credentials");
+    // The edit REPLACED the seeded steps — none of the superseded step text may survive the export.
+    expect(body).not.toContain("Enter email");
+    expect(body).not.toContain("Enter password");
+    expect(body).not.toContain("Click Submit");
+  });
+});
+
+// ─── Live chain through the REAL route handlers (Epic #712 / Issue #728) ────────────────
+//
+// Issue #728 demands a LIVE edit → persist → reload → export proof through the real wiring,
+// not piecewise. The composition above injects the edit via the evidence library function,
+// bypassing the HTTP edit route (its validation, redactor threading, and audit write). This
+// case drives the edit through `handleQiEditCandidate`, confirms the immutable
+// `<runId>.qi.json` manifest is byte-unchanged by the edit, that the run-detail GET handler
+// reflects the curated text (the export route reads a SEPARATE projection from the edit
+// route — a write-here/read-there drift surface), and that every text + binary export format
+// carries the edited title and drops the superseded original. The `.review.json` edit audit
+// is asserted so the edit is provably audited end-to-end.
+
+const MANIFEST_FILE = (dir: string): string => join(dir, "qi", `${RUN_ID}.qi.json`);
+
+function editCtx(runId: string, body: Record<string, unknown>): RouteContext {
+  return {
+    req: makeReq(body),
+    res: {} as RouteContext["res"],
+    params: { id: runId },
+    url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}/edit`),
+  };
+}
+
+function detailCtx(runId: string): RouteContext {
+  return {
+    req: makeRawReq(""),
+    res: {} as RouteContext["res"],
+    params: { id: runId },
+    url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}`),
+  };
+}
+
+describe("handleQiEditCandidate → handleGetQiRun → handleQiExport (Issue #728 live chain)", () => {
+  it("edits via the real route, keeps the manifest byte-identical, and flows the curated text into reload + every export format", async () => {
+    const manifestBefore = readFileSync(MANIFEST_FILE(evidenceDir));
+
+    // 1. Edit through the REAL HTTP route (not the evidence function).
+    const edit = asResult(
+      await handleQiEditCandidate(
+        editCtx(RUN_ID, {
+          candidateId: "cand-001",
+          edited: { title: "Curated login title" },
+          editorLabel: "Alice",
+        }),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // 2. AC3: the immutable run manifest is byte-identical — the edit touched only the candidate artifact.
+    expect(readFileSync(MANIFEST_FILE(evidenceDir)).equals(manifestBefore)).toBe(true);
+
+    // 3. AC1: the run-detail GET handler (its own projection) reflects the persisted edit.
+    const reloaded = asResult(handleGetQiRun(detailCtx(RUN_ID), deps(evidenceDir)));
+    expect(reloaded.status).toBe(200);
+    const reloadedRows = (reloaded.body as { candidates: readonly { id: string; title: string }[] })
+      .candidates;
+    expect(reloadedRows.find((c) => c.id === "cand-001")?.title).toBe("Curated login title");
+
+    // 4. AC2: every TEXT export format carries the edited title and drops the original.
+    for (const adapter of ["markdown", "csv", "plain-text"]) {
+      const result = asResult(
+        await handleQiExport(ctx(RUN_ID, makeReq({ adapter, dryRun: false })), deps(evidenceDir)),
+      );
+      expect(result.status).toBe(200);
+      const body = (result.body as { body: string }).body;
+      expect(body).toContain("Curated login title");
+      expect(body).not.toContain("User can log in with valid credentials");
+    }
+
+    // 5. AC2 (binary path): the STORE-method ZIP bundle carries the edited title verbatim.
+    const zip = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(zip.status).toBe(200);
+    const zipBody = zip.body as { body: string; encoding: string };
+    expect(zipBody.encoding).toBe("base64");
+    const decoded = Buffer.from(zipBody.body, "base64").toString("latin1");
+    expect(decoded).toContain("Curated login title");
+    expect(decoded).not.toContain("User can log in with valid credentials");
+
+    // 6. AC4: the edit is audited in the review companion.
+    const review = loadRunReviewState(RUN_ID, evidenceDir);
+    const editEntries = (review?.auditLog ?? []).filter((entry) => entry.action === "edit");
+    expect(editEntries).toHaveLength(1);
+    expect(editEntries[0]?.candidateId).toBe("cand-001");
   });
 });
 
