@@ -586,6 +586,53 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("reads an explicitly connected single file even when the question has no lexical hit", async () => {
+    mkdirSync(join(ROOT, "src/pages"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/pages/index.vue"),
+      "<template>\n" +
+        '  <main class="landing-page">\n' +
+        "    <h1>Willkommen</h1>\n" +
+        "  </main>\n" +
+        "</template>\n" +
+        "\n" +
+        '<script setup lang="ts">\n' +
+        "const title = 'Digitalisierung';\n" +
+        "</script>\n",
+    );
+    writeFileSync(
+      join(ROOT, "src/pages/sibling.vue"),
+      "<template>\n  <section>optimieren code sibling decoy</section>\n</template>\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "files",
+          relativePaths: ["src/pages/index.vue"],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Kannst du diesen Code optimieren?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(["src/pages/index.vue"]);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("<template>")),
+    ).toBe(true);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("Digitalisierung")),
+    ).toBe(true);
+    expect(JSON.stringify(out.pack)).not.toContain("sibling decoy");
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(false);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("adds a no-evidence uncertainty marker when retrieval finds no matching atoms", async () => {
     const out = await runGroundedExploration(
       input({
