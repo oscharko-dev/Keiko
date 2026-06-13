@@ -22,11 +22,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 import { assertValidRunId } from "./runid.js";
@@ -132,13 +128,14 @@ function existingBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
   }
 }
 
-// Returns the realpath-contained absolute path of <runId>.json inside the base dir, or throws if it
-// would escape. The runId is validated first so no separator/`..`/NUL can reach the join.
-function containedManifestPath(runId: string, realBase: string, fs: WorkspaceFs): string {
+// Returns the lexical absolute path of <runId>.json inside the already-real base dir. The runId is
+// validated first so no separator/`..`/NUL can reach the join. Final manifest operations must target
+// this ledger entry directly and then lstat it; using the entry realpath would follow in-base
+// symlinks and mutate a different manifest.
+function lexicalManifestPath(runId: string, realBase: string): string {
   assertValidRunId(runId);
   assertManifestFilenameFits(runId);
-  const lexical = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_SUFFIX}`);
-  return assertContainedRealPath(fs, realBase, lexical, `${runId}${MANIFEST_SUFFIX}`);
+  return resolveWithinWorkspace(realBase, `${runId}${MANIFEST_SUFFIX}`);
 }
 
 function isManifestName(name: string): boolean {
@@ -204,12 +201,23 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
   }
 }
 
+function assertWritableLedgerEntry(target: string, fs: WorkspaceFs): void {
+  const entry = lstatSync(target, { throwIfNoEntry: false });
+  if (entry === undefined) {
+    return;
+  }
+  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+    throw new EvidenceWriteError("cannot overwrite a non-ledger evidence manifest");
+  }
+}
+
 function reportLocation(baseDir: string, fs: WorkspaceFs, runId: string): string {
   assertValidRunId(runId);
+  assertManifestFilenameFits(runId);
   const realBase = existingBaseDir(baseDir, fs);
   return realBase === undefined
     ? join(resolve(baseDir), `${runId}${MANIFEST_SUFFIX}`)
-    : containedManifestPath(runId, realBase, fs);
+    : lexicalManifestPath(runId, realBase);
 }
 
 function putManifest(
@@ -220,7 +228,8 @@ function putManifest(
   json: string,
 ): string {
   const realBase = prepareBaseDir(baseDir, fs);
-  const target = containedManifestPath(runId, realBase, fs);
+  const target = lexicalManifestPath(runId, realBase);
+  assertWritableLedgerEntry(target, fs);
   atomicWrite(target, json, randomSuffix);
   return target;
 }
@@ -270,14 +279,10 @@ function acquireManifestLock(realBase: string, runId: string): () => void {
     try {
       fd = openSync(lockPath, "wx");
     } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-      if (code !== "EEXIST" || Date.now() >= deadline) {
-        throw new EvidenceWriteError(
-          `evidence update lock failed: ${error instanceof Error ? error.message : "unknown"}`,
-        );
-      }
-      sleepSync(MANIFEST_LOCK_POLL_MS);
+      if (retryManifestLock(error, lockPath, deadline)) continue;
+      throw new EvidenceWriteError(
+        `evidence update lock failed: ${error instanceof Error ? error.message : "unknown"}`,
+      );
     }
   }
 
@@ -288,6 +293,36 @@ function acquireManifestLock(realBase: string, runId: string): () => void {
       rmSync(lockPath, { force: true });
     }
   };
+}
+
+function retryManifestLock(error: unknown, lockPath: string, deadline: number): boolean {
+  if (errorCode(error) !== "EEXIST") {
+    return false;
+  }
+  if (lockIsStale(lockPath)) {
+    rmSync(lockPath, { force: true });
+    return true;
+  }
+  if (Date.now() >= deadline) {
+    return false;
+  }
+  sleepSync(MANIFEST_LOCK_POLL_MS);
+  return true;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function lockIsStale(lockPath: string): boolean {
+  try {
+    return Date.now() - lstatSync(lockPath).mtimeMs >= MANIFEST_LOCK_TIMEOUT_MS;
+  } catch {
+    return true;
+  }
 }
 
 function readManifestForUpdate(target: string, fs: WorkspaceFs): string | undefined {
@@ -318,7 +353,7 @@ function updateManifest(
   update: (existingJson: string | undefined) => string,
 ): string {
   const realBase = prepareBaseDir(baseDir, fs);
-  const target = containedManifestPath(runId, realBase, fs);
+  const target = lexicalManifestPath(runId, realBase);
   const releaseLock = acquireManifestLock(realBase, runId);
   try {
     atomicWrite(target, update(readManifestForUpdate(target, fs)), randomSuffix);
@@ -333,7 +368,7 @@ function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
   if (realBase === undefined) {
     return;
   }
-  const target = containedManifestPath(runId, realBase, fs);
+  const target = lexicalManifestPath(runId, realBase);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return;
   }

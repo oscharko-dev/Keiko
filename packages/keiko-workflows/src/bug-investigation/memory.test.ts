@@ -96,6 +96,15 @@ describe("acquireMemoryContext", () => {
     expect(event?.reason).toBe("bug-investigation:pre-prompt");
   });
 
+  it("does not fabricate omitted-memory events from the reduced workflow context", async () => {
+    const onMemoryOmitted = vi.fn();
+    const port = makePort({ onMemoryOmitted });
+
+    await acquireMemoryContext(port, { description: "bug" }, WORKSPACE_ROOT);
+
+    expect(onMemoryOmitted).not.toHaveBeenCalled();
+  });
+
   it("returns context when onMemoryUsed is absent on the port", async () => {
     const port: MemoryWorkflowPort = {
       getContextForWorkflow: vi.fn().mockResolvedValue({

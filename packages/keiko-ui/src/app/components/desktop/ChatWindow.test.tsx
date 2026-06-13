@@ -339,13 +339,34 @@ describe("ChatWindow memory disclosure", () => {
 
     const disclosureButton = screen.getByRole("button", { name: /1 memories included/i });
     expect(disclosureButton).toHaveAttribute("aria-expanded", "false");
-    expect(disclosureButton).toHaveAttribute("aria-controls", "chat-memory-disclosure");
+    expect(disclosureButton.getAttribute("aria-controls")).toContain("chat-memory-disclosure");
     await user.click(disclosureButton);
     expect(disclosureButton).toHaveAttribute("aria-expanded", "true");
+    const disclosureId = disclosureButton.getAttribute("aria-controls");
+    expect(disclosureId).toBeTruthy();
+    expect(document.getElementById(disclosureId ?? "")).toBeInTheDocument();
     expect(screen.getByText("Use pnpm")).toBeInTheDocument();
     expect(screen.getByText("explicit-user-instruction")).toBeInTheDocument();
     expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
+  });
+
+  it("uses unique disclosure ids for multiple chat windows", () => {
+    render(
+      <>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat({ id: "chat-a" }) })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat({ id: "chat-b" }) })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </>,
+    );
+
+    const controls = screen
+      .getAllByRole("button", { name: /no memories included/i })
+      .map((button) => button.getAttribute("aria-controls"));
+    expect(new Set(controls).size).toBe(2);
   });
 });
 
@@ -560,6 +581,10 @@ describe("ChatWindow memory controls", () => {
     expect(screen.getByText("82%")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));
+    await waitFor(() => {
+      expect(screen.getByText("MemoriaViva proposal accepted.")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /1 memories included/i })).toHaveFocus();
   });
 
   it("routes proposed memory rejection from the conversation flow", async () => {

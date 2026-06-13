@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -107,6 +108,50 @@ describe("createNodeEvidenceStore", () => {
     expect(store.list()).toEqual(["run-1"]);
   });
 
+  it("removes a stale update lock before appending", () => {
+    const dir = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    store.put("run-1", "[1]");
+    const lockPath = join(dir, "run-1.lock");
+    writeFileSync(lockPath, "stale");
+    const staleDate = new Date(Date.now() - 10_000);
+    utimesSync(lockPath, staleDate, staleDate);
+
+    expect(store.update?.("run-1", (existing) => `${existing ?? "[]"},2`)).toMatch(/run-1\.json$/);
+    expect(store.get("run-1")).toBe("[1],2");
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("rejects update through an in-base symlinked manifest entry", () => {
+    const dir = freshDir();
+    const target = join(dir, "run-2.json");
+    writeFileSync(target, "[2]");
+    symlinkSync(target, join(dir, "run-1.json"));
+    const store = createNodeEvidenceStore(dir);
+
+    expect(() => store.update?.("run-1", (existing) => `${existing ?? "[]"},1`)).toThrow(
+      EvidenceWriteError,
+    );
+    expect(readFileSync(target, "utf8")).toBe("[2]");
+    expect(store.get("run-1")).toBeUndefined();
+    expect(store.list()).toEqual(["run-2"]);
+  });
+
+  it("rejects update of a hardlinked manifest entry", () => {
+    const base = freshDir();
+    const outside = freshDir();
+    const victim = join(outside, "victim.json");
+    const hardlink = join(base, "run-1.json");
+    writeFileSync(victim, "[1]");
+    linkSync(victim, hardlink);
+    const store = createNodeEvidenceStore(base);
+
+    expect(() => store.update?.("run-1", (existing) => `${existing ?? "[]"},2`)).toThrow(
+      EvidenceWriteError,
+    );
+    expect(readFileSync(victim, "utf8")).toBe("[1]");
+  });
+
   it("rejects an invalid runId before any write", () => {
     const store = createNodeEvidenceStore(freshDir());
     expect(() => store.put("../escape", "{}")).toThrow(InvalidRunIdError);
@@ -187,6 +232,19 @@ describe("createNodeEvidenceStore", () => {
     }).not.toThrow();
     expect(readFileSync(victim, "utf8")).toBe('{"evidenceSchemaVersion":"1"}');
     expect(existsSync(hardlink)).toBe(true);
+  });
+
+  it("refuses to overwrite an existing symlinked manifest entry", () => {
+    const base = freshDir();
+    const outside = freshDir();
+    const victim = join(outside, "victim.json");
+    writeFileSync(victim, "ORIGINAL");
+    symlinkSync(victim, join(base, "run-1.json"));
+    const store = createNodeEvidenceStore(base);
+
+    expect(() => store.put("run-1", '{"replacement":true}')).toThrow(EvidenceWriteError);
+    expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
+    expect(store.get("run-1")).toBeUndefined();
   });
 
   it("refuses to write through a pre-planted symlink at the temp path (O_EXCL, L1)", () => {
