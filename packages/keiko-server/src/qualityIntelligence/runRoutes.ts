@@ -17,6 +17,7 @@ import type {
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceRunStreamMessage,
+  QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
@@ -30,6 +31,7 @@ import {
 } from "../routes.js";
 import type { Redactor, UiHandlerDeps } from "../deps.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "./runExecution.js";
+import type { QiSkippedSource } from "./runIngestion.js";
 import { qiRunRegistry } from "./runRegistry.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -288,6 +290,16 @@ function classifyStartError(error: unknown): { readonly code: string; readonly m
 
 type WriteFn = (message: QualityIntelligenceRunStreamMessage) => void;
 
+// Project the internal QiSkippedSource[] (which also carries a free-text `message`) to exactly the
+// wire contract QualityIntelligenceSkippedSource[] ({label, kind, code}). Streaming `message`
+// verbatim would widen the browser-facing SSE surface — the `accepted` frame bypasses deps.redactor,
+// unlike `event` — so it is dropped here (Issue #730).
+function toWireSkippedSources(
+  skipped: readonly QiSkippedSource[],
+): readonly QualityIntelligenceSkippedSource[] {
+  return skipped.map((s) => ({ label: s.label, kind: s.kind, code: s.code }));
+}
+
 async function streamRunExecution(
   deps: UiHandlerDeps,
   request: QualityIntelligenceStartRunRequest,
@@ -316,7 +328,7 @@ async function streamRunExecution(
             ? { droppedSourceCount: accepted.droppedSourceCount }
             : {}),
           ...(accepted.skippedSources.length > 0
-            ? { skippedSources: accepted.skippedSources }
+            ? { skippedSources: toWireSkippedSources(accepted.skippedSources) }
             : {}),
         });
       },

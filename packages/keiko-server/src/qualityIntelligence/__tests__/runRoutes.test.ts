@@ -424,6 +424,144 @@ describe("handleStartQiRun — figma-snapshot source validation (Issue #754)", (
   });
 });
 
+// ─── SSE 'accepted' frame — multi-source wire shape (Issue #730) ─────────────────────────────────
+//
+// Existing tests all use `evidenceDir: undefined`, so `executeQiRun` throws QI_NO_EVIDENCE_DIR
+// BEFORE ingestion and the 'accepted' frame is never emitted. These tests supply a real temp dir
+// so ingestion runs and the 'accepted' frame IS emitted (it is written synchronously inside
+// `onAccepted`, before any model call, so it is present regardless of whether generation later
+// fails). The SSE chunks are `data: {...}\n\n` lines; we parse them into JSON frames and locate
+// the one with `type === "accepted"`.
+
+function parseSseFrames(chunks: readonly string[]): readonly Record<string, unknown>[] {
+  const raw = chunks.join("");
+  return raw
+    .split("\n\n")
+    .map((block) => block.trim())
+    .filter((block) => block.startsWith("data:"))
+    .map((block) => JSON.parse(block.slice("data:".length).trim()) as Record<string, unknown>);
+}
+
+describe("handleStartQiRun — SSE accepted frame wire shape (Issue #730)", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function depsWithEvidenceDir(evidenceDir: string): UiHandlerDeps {
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: createInMemoryUiStore(),
+      evidenceDir,
+    };
+  }
+
+  // B1 — 17 sources (cap is 16): accepted frame must carry droppedSourceCount === 1.
+  // Pins the `droppedSourceCount > 0` conditional emit in runRoutes.ts:315.
+  // A mutation removing the condition or emitting a falsy value causes `droppedSourceCount` to
+  // be absent (or 0) where this asserts it is exactly 1.
+  it("accepted frame carries droppedSourceCount === 1 when 17 requirements sources are submitted (cap = 16)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-b1-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+
+    const sources = Array.from({ length: 17 }, (_, i) => ({
+      kind: "requirements" as const,
+      label: `Src${String(i)}`,
+      text: `The system shall satisfy requirement number ${String(i)} for the audit trail.`,
+    }));
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    expect(accepted).toBeDefined();
+    expect(accepted?.droppedSourceCount).toBe(1);
+  });
+
+  // B2 — 2 valid sources: accepted frame must NOT contain `droppedSourceCount` at all.
+  // Pins the `> 0` guard: when none are dropped the key must be absent (not present as 0).
+  // A mutation that always spreads `{ droppedSourceCount: 0 }` would fail this test.
+  it("accepted frame has no droppedSourceCount key when only 2 sources are submitted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-b2-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+
+    const sources = [
+      { kind: "requirements" as const, label: "Alpha", text: "The system shall log every login." },
+      {
+        kind: "requirements" as const,
+        label: "Beta",
+        text: "The system shall enforce the daily transfer limit.",
+      },
+    ];
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    expect(accepted).toBeDefined();
+    // Key must be absent — not present as 0 — because zero drops must not widen the wire.
+    expect("droppedSourceCount" in (accepted ?? {})).toBe(false);
+  });
+
+  // B3 — 1 valid + 1 whitespace-only source: accepted frame must carry `skippedSources` with
+  // exactly one entry, and that entry's keys must be exactly ["code","kind","label"] (sorted).
+  // This pins the wire-shape projection in runRoutes.ts:325-329: the internal QiSkippedSource
+  // also has a `message` field, which the route MUST strip before emitting it on the SSE surface
+  // (the `accepted` frame bypasses the redactor). A mutation that leaks `message` into the frame
+  // would add an extra key and fail the `Object.keys(...).sort()` assertion.
+  it("accepted frame skippedSources entries have exactly {code,kind,label} keys — no message field leaked", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-b3-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+
+    const sources = [
+      {
+        kind: "requirements" as const,
+        label: "GoodSource",
+        text: "The system shall validate every input field before persisting data.",
+      },
+      // Whitespace-only text → ingests to nothing → skipped with QI_SOURCE_EMPTY.
+      { kind: "requirements" as const, label: "BlankSource", text: "   \n\t  " },
+    ];
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    expect(accepted).toBeDefined();
+
+    const skipped = accepted?.skippedSources as readonly Record<string, unknown>[];
+    expect(Array.isArray(skipped)).toBe(true);
+    expect(skipped).toHaveLength(1);
+
+    const entry = skipped[0];
+    expect(entry).toBeDefined();
+    // Exact key-set: {code, kind, label} — message must NOT appear on the wire.
+    expect(Object.keys(entry ?? {}).sort()).toEqual(["code", "kind", "label"]);
+  });
+});
+
 describe("toStreamEvent — reasonSummary redaction backstop (#279 AC3)", () => {
   // The workflow already produces a fail-closed, secret-free reasonSummary, but the SSE writer is
   // the one QI surface with no other redaction. This proves the redactor is actually applied to the

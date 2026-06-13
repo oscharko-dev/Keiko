@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
@@ -1398,5 +1399,145 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
       rmSync(wsDir, { recursive: true, force: true });
       rmSync(fileDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── Capsule / capsule-set byte-budget at n > 1 (Issue #730 byte containment) ──────────────────
+//
+// Existing capsule byte tests either run at n=1 (where perSourceByteBudget(1) === 196 608 so the
+// byteBudget param to processCapsuleDocs is always inert) or use a tiny corpus far below the per-run
+// budget. A mutation that drops `byteBudget` from processCapsuleDocs would be invisible to both.
+// These tests use n=2 so perSourceByteBudget(2) = floor(196608/2) = 98 304 < 196 608, making the
+// byteBudget param load-bearing. They mirror the figma-snapshot multi-source composition test
+// (runIngestionFigmaSnapshot.test.ts:345) for the capsule and capsule-set entry points.
+
+// UTF-8 byte length helper (mirrors the implementation's TextEncoder counter).
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+describe("ingestInlineSources — capsule byte budget at n=2 (Issue #730 containment)", () => {
+  // C1: capsule source, n=2.
+  //
+  // Build a capsule corpus that would exceed perSourceByteBudget(2) = 98 304 if byteBudget is
+  // ignored, then connect a second source so the capsule must share the global pool.
+  //
+  // Corpus: 30 docs × 5 000 bytes each = 150 000 raw bytes > 98 304 (our fair share).
+  // Each doc fits within CAPSULE_MAX_BYTES_PER_DOCUMENT (16 384), so the per-doc cap never fires;
+  // only the per-run budget gate inside processCapsuleDocs limits intake here.
+  //
+  // Slack: each accepted document contributes its documentId prefix + "\n" (at most ~20 bytes per
+  // doc) on top of the body bytes. We allow 30 × 20 = 600 bytes of prefix overhead.
+  it(
+    "capsule source paired with a second source stays within perSourceByteBudget(2) = 98 304 " +
+      "(mutation-proof: fails if byteBudget is dropped from processCapsuleDocs)",
+    () => {
+      // 30 docs × 5 000 bytes = 150 000 raw bytes > perSourceByteBudget(2) = 98 304.
+      const largeDocs = Array.from({ length: 30 }, (_, i) => ({
+        documentId: `cap-doc-${String(i)}`,
+        text: "C".repeat(5_000),
+      }));
+      const capsuleResolver = (_id: string): readonly { documentId: string; text: string }[] =>
+        largeDocs;
+
+      // Pair: capsule + requirements (n=2 → byteBudget = floor(196608/2) = 98 304)
+      const pair = ingest(
+        inputWithResolver(
+          [capsuleSource("BigCapsule", "cap-byte-c1"), requirementsSource("R", VALID_TEXT)],
+          capsuleResolver,
+        ),
+      );
+
+      const capsuleEnvId = pair.envelopes.find((e) => e.kind === "local-knowledge-capsule")?.id;
+      expect(capsuleEnvId).toBeDefined();
+      const capsuleAtoms = pair.ingestedAtoms.filter(
+        (a) => String(a.atom.sourceEnvelopeId) === String(capsuleEnvId),
+      );
+
+      // Sum the UTF-8 byte length of every capsule atom's canonical text.
+      const capsuleTotalBytes = capsuleAtoms.reduce(
+        (sum, a) => sum + utf8ByteLength(a.canonicalText),
+        0,
+      );
+      // Must not exceed the fair share (98 304) plus prefix overhead (30 docs × 20 bytes slack).
+      // Prefix overhead comment: each accepted doc contributes "cap-doc-N\n" ≤ 12 bytes on top
+      // of the (possibly truncated) body — we allow 30 × 20 = 600 bytes of headroom.
+      expect(capsuleTotalBytes).toBeLessThanOrEqual(98_304 + 600); // floor(196608/2) + prefix slack
+
+      // Mutation-robustness: the same capsule connected ALONE (n=1, full budget) must produce
+      // MORE capsule bytes than when paired. If byteBudget is dropped from processCapsuleDocs the
+      // pair total would equal the lone total, making the comparison fail.
+      const lone = ingest(
+        inputWithResolver([capsuleSource("BigCapsule", "cap-byte-c1")], capsuleResolver),
+      );
+      const loneCapsuleAtoms = lone.ingestedAtoms;
+      const loneTotalBytes = loneCapsuleAtoms.reduce(
+        (sum, a) => sum + utf8ByteLength(a.canonicalText),
+        0,
+      );
+      expect(loneTotalBytes).toBeGreaterThan(capsuleTotalBytes);
+    },
+  );
+
+  // C2: capsule-set source, n=2.
+  //
+  // Same large-corpus scenario via the capsule-set entry point (ingestCapsuleSet →
+  // buildCapsuleSource → processCapsuleDocs), confirming the byteBudget flows through the
+  // capsule-set path as well. Belt-and-suspenders for the second entry point.
+  it(
+    "capsule-set source paired with a second source stays within perSourceByteBudget(2) = 98 304 " +
+      "(belt-and-suspenders: capsule-set entry point also routes through processCapsuleDocs)",
+    () => {
+      // Same 30 × 5 000 byte corpus, routed through the capsule-set resolver.
+      const largeDocs = Array.from({ length: 30 }, (_, i) => ({
+        documentId: `set-doc-${String(i)}`,
+        text: "C".repeat(5_000),
+      }));
+      const capsuleSetResolver = (_id: string): readonly { documentId: string; text: string }[] =>
+        largeDocs;
+
+      // Pair: capsule-set + requirements (n=2 → byteBudget = floor(196608/2) = 98 304)
+      const pair = ingest(
+        inputWithResolver(
+          [capsuleSetSource("BigSet", "set-byte-c2"), requirementsSource("R", VALID_TEXT)],
+          undefined,
+          capsuleSetResolver,
+        ),
+      );
+
+      const capsuleEnvId = pair.envelopes.find((e) => e.kind === "local-knowledge-capsule")?.id;
+      expect(capsuleEnvId).toBeDefined();
+      const capsuleAtoms = pair.ingestedAtoms.filter(
+        (a) => String(a.atom.sourceEnvelopeId) === String(capsuleEnvId),
+      );
+
+      const capsuleTotalBytes = capsuleAtoms.reduce(
+        (sum, a) => sum + utf8ByteLength(a.canonicalText),
+        0,
+      );
+      // Same slack reasoning as C1: 30 docs × 20 bytes prefix overhead = 600 bytes.
+      expect(capsuleTotalBytes).toBeLessThanOrEqual(98_304 + 600); // floor(196608/2) + prefix slack
+    },
+  );
+});
+
+// ─── AC3 Chat-parity: QI source cap matches DEFAULT_GROUNDING_LIMITS (Issue #730) ──────────────
+//
+// Issue #730 stop-condition: "the QI source cap diverges from Chat's MAX_CONNECTED_SOURCES". The
+// QI cap (MAX_QI_SOURCES = 16) is a local constant; DEFAULT_GROUNDING_LIMITS.maxConnectedSources
+// is the Chat-side value. If either side drifts the test fails — the constant is the single source
+// of truth for the cap, so this test is the only executable guard against divergence.
+
+describe("ingestInlineSources — AC3 Chat-parity source cap (Issue #730)", () => {
+  it("ingests exactly DEFAULT_GROUNDING_LIMITS.maxConnectedSources sources and drops 1 when one over", () => {
+    // Build maxConnectedSources + 1 valid requirements sources so the cap fires exactly once.
+    const cap = DEFAULT_GROUNDING_LIMITS.maxConnectedSources;
+    const sources = Array.from({ length: cap + 1 }, (_, i) => manyReqs(`Chat${String(i)}`, 3));
+    const result = ingest(input(sources));
+
+    // Exactly `cap` sources ingested — the overflow is silently dropped (not an error).
+    expect(result.sourceSummaries.length).toBe(cap);
+    // Exactly 1 dropped — mutation check: a cap of `cap+1` would give droppedSourceCount=0.
+    expect(result.droppedSourceCount).toBe(1);
   });
 });
