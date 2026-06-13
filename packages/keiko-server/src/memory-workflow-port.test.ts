@@ -58,22 +58,31 @@ function readAuditEvents(store: EvidenceStore, nowMs: number): readonly Record<s
   return raw === undefined ? [] : (JSON.parse(raw) as readonly Record<string, unknown>[]);
 }
 
-function insertProjectMemory(vault: MemoryVaultStore, body: string): MemoryRecord {
+function insertProjectMemory(
+  vault: MemoryVaultStore,
+  body: string,
+  options: {
+    readonly id?: string;
+    readonly projectId?: string;
+    readonly status?: MemoryRecord["status"];
+    readonly confidence?: number;
+  } = {},
+): MemoryRecord {
   const now = 1_700_000_000_000;
   return vault.insertMemory({
-    id: memoryId("mem-project-1"),
+    id: memoryId(options.id ?? "mem-project-1"),
     schemaVersion: "1",
-    scope: { kind: "project", projectId: projectId("/repo") },
+    scope: { kind: "project", projectId: projectId(options.projectId ?? "/repo") },
     type: "preference",
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
       capturedAt: now,
-      confidence: 0.9,
+      confidence: options.confidence ?? 0.9,
       sensitivity: "public",
     },
     validity: { validFrom: now },
-    status: "accepted",
+    status: options.status ?? "accepted",
     pinned: false,
     tags: [],
     createdAt: now,
@@ -123,6 +132,73 @@ describe("createWorkflowMemoryPort", () => {
     vault.close();
   });
 
+  it("does not retrieve workflow memory across project scopes", async () => {
+    const { dir, vault } = createVault();
+    cleanup.push(dir);
+    insertProjectMemory(vault, "Project alpha uses pnpm for installs.", {
+      projectId: "/repo-a",
+    });
+    const evidenceStore = createEvidenceStore();
+    const nowMs = 1_710_000_000_000;
+    const port = createWorkflowMemoryPort({
+      vault,
+      evidenceStore,
+      runId: runId("wr-scope"),
+      redactString: (value) => value,
+      now: () => nowMs,
+    });
+
+    const context = await port.getContextForWorkflow(
+      [{ kind: "project", projectId: projectId("/repo-b") }],
+      "pnpm installs",
+      2048,
+    );
+
+    expect(context.text).toBe("");
+    expect(context.includedMemoryIds).toEqual([]);
+    expect(readAuditEvents(evidenceStore, nowMs)).toEqual([]);
+    vault.close();
+  });
+
+  it("records memory:workflow-omitted audit events without memory bodies", async () => {
+    const { dir, vault } = createVault();
+    cleanup.push(dir);
+    insertProjectMemory(vault, "Project alpha uses pnpm for installs.", {
+      id: "mem-included",
+    });
+    insertProjectMemory(vault, "Project alpha stores an obsolete private lesson.", {
+      id: "mem-rejected",
+      status: "rejected",
+    });
+    const evidenceStore = createEvidenceStore();
+    const nowMs = 1_710_000_000_000;
+    const port = createWorkflowMemoryPort({
+      vault,
+      evidenceStore,
+      runId: runId("wr-omitted"),
+      redactString: (value) => value,
+      now: () => nowMs,
+    });
+
+    await port.getContextForWorkflow(
+      [{ kind: "project", projectId: projectId("/repo") }],
+      "pnpm installs",
+      2048,
+    );
+
+    const events = readAuditEvents(evidenceStore, nowMs);
+    expect(events.some((event) => event.kind === "memory:retrieved")).toBe(true);
+    const omitted = events.find((event) => event.kind === "memory:workflow-omitted");
+    expect(omitted).toMatchObject({
+      kind: "memory:workflow-omitted",
+      workflowRunId: "wr-omitted",
+      omittedMemoryId: "mem-rejected",
+      reason: "suppressed-by-status",
+    });
+    expect(JSON.stringify(events)).not.toContain("obsolete private lesson");
+    vault.close();
+  });
+
   it("records a memory:workflow-used audit event", () => {
     const { dir, vault } = createVault();
     cleanup.push(dir);
@@ -141,7 +217,9 @@ describe("createWorkflowMemoryPort", () => {
     }
     port.onMemoryUsed({
       memoryIds: [memoryId("mem-used-1")],
-      scopes: [{ kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") }],
+      scopes: [
+        { kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") },
+      ],
       reason: "bug-investigation:pre-prompt",
     });
 
@@ -172,7 +250,7 @@ describe("createWorkflowMemoryPort", () => {
     }
     port.onMemoryWriteCandidate({
       proposalSummary: "the test runner is vitest",
-      scope: { kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") },
+      scope: { kind: "project", projectId: projectId("/repo") },
       source: "workflow-success",
     });
 
@@ -181,10 +259,17 @@ describe("createWorkflowMemoryPort", () => {
       .find((record) => record.status === "proposed");
     expect(proposed).toBeDefined();
     expect(proposed?.body).toBe("the test runner is vitest");
-    expect(proposed?.scope).toEqual({
-      kind: "workflow",
-      workflowDefinitionId: "bug-investigation",
+    expect(proposed?.scope).toEqual({ kind: "project", projectId: "/repo" });
+    expect(proposed?.provenance.sourceWorkflowRunId).toBe("wr-3");
+    const events = readAuditEvents(evidenceStore, 1_710_000_000_000);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "memory:workflow-write-candidate",
+      workflowRunId: "wr-3",
+      source: "workflow-success",
+      proposedMemoryIds: [proposed?.id],
     });
+    expect(JSON.stringify(events)).not.toContain("the test runner is vitest");
     vault.close();
   });
 
@@ -205,11 +290,18 @@ describe("createWorkflowMemoryPort", () => {
     }
     port.onMemoryWriteCandidate({
       proposalSummary: "the private support email is developer@example.com",
-      scope: { kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") },
+      scope: { kind: "project", projectId: projectId("/repo") },
       source: "workflow-correction",
     });
 
     expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    const events = readAuditEvents(evidenceStore, 1_710_000_000_000);
+    expect(events[0]).toMatchObject({
+      kind: "memory:workflow-write-candidate",
+      workflowRunId: "wr-4",
+      proposedMemoryIds: [],
+    });
+    expect(JSON.stringify(events)).not.toContain("developer@example.com");
     vault.close();
   });
 
@@ -231,7 +323,7 @@ describe("createWorkflowMemoryPort", () => {
     }
     port.onMemoryWriteCandidate({
       proposalSummary: "CustomerOmega requires SSO for releases",
-      scope: { kind: "workflow", workflowDefinitionId: workflowDefinitionId("bug-investigation") },
+      scope: { kind: "project", projectId: projectId("/repo") },
       source: "workflow-success",
     });
 

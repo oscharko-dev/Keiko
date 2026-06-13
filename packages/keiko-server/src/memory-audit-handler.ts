@@ -28,16 +28,11 @@
 // edges + embeddings encode structural derivations the body-level audit already covers
 // via the related record mutations).
 //
-// "memory:retrieved" and "memory:workflow-used" kinds are NOT vault-derived. The
-// `recordMemoryAudit()` helper exported below is the single emission point for those
-// kinds; the retrieval and workflow packages adopt the audit boundary in a follow-up.
+// Retrieval/workflow-specific kinds are NOT vault-derived. The `recordMemoryAudit()`
+// helper exported below is the single emission point for those direct audit signals.
 
 import { randomUUID } from "node:crypto";
-import type {
-  MemoryAuditEvent,
-  MemoryId,
-  MemoryStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
 import {
@@ -204,8 +199,8 @@ function updateStateCache(
 }
 
 // ─── Direct emission helper ───────────────────────────────────────────────────
-// Used by future retrieval (#210) and workflow (#213) wiring to emit
-// `memory:retrieved` and `memory:workflow-used` directly, bypassing the vault bridge.
+// Used by retrieval (#210) and workflow (#213) wiring to emit direct audit events,
+// bypassing the vault bridge when no structural vault mutation exists.
 // Failures are swallowed and reported through the same channel as the bridge.
 
 export interface RecordMemoryAuditOptions {
