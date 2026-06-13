@@ -6,7 +6,13 @@
 // gap from the #729 review).
 
 import { describe, expect, it } from "vitest";
-import { buildConnectedRunSources, resolveConnectedFilePath } from "./connectedSources";
+import {
+  buildConnectedRunSources,
+  connectedRunSourcesCfgFromInlineSources,
+  connectedRunSourcesCfgFromSources,
+  connectedRunSourcesFromWindowCfg,
+  resolveConnectedFilePath,
+} from "./connectedSources";
 import { MAX_SCOPES } from "../../hooks/workspaceActions";
 
 describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
@@ -209,5 +215,71 @@ describe("resolveConnectedFilePath", () => {
     // trimTrailingSeparators("/") keeps the root as "/"; the separator guard then adds none, so the
     // join stays a single-separator "/docs/spec.md" (absolute AND correctly formed — #714 AC3).
     expect(resolveConnectedFilePath("/", "docs/spec.md")).toBe("/docs/spec.md");
+  });
+});
+
+describe("connected run source window cfg (#744)", () => {
+  it("serializes connected run sources into the qiRun scalar cfg field", () => {
+    const sources = [
+      { kind: "file" as const, label: "Fachkonzept.md", path: "/abs/Fachkonzept.md" },
+      { kind: "capsule" as const, label: "cap-a", capsuleId: "cap-a" },
+    ];
+    expect(connectedRunSourcesCfgFromSources(sources)).toEqual({
+      connectedSourcesJson: JSON.stringify(sources),
+    });
+  });
+
+  it("returns no cfg field for an empty source set", () => {
+    expect(connectedRunSourcesCfgFromSources([])).toEqual({});
+  });
+
+  it("filters requirements text out of inline sources before serializing window cfg", () => {
+    expect(
+      connectedRunSourcesCfgFromInlineSources([
+        { kind: "requirements", label: "paste", text: "do not carry raw text" },
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    ).toEqual({
+      connectedSourcesJson: JSON.stringify([{ kind: "workspace", label: "specs", path: "/abs/specs" }]),
+    });
+  });
+
+  it("parses the connectedSourcesJson field when present", () => {
+    const sources = [
+      { kind: "workspace" as const, label: "specs", path: "/abs/specs" },
+      { kind: "figma-snapshot" as const, label: "fig-run-1", snapshotRunId: "fig-run-1" },
+    ];
+    expect(connectedRunSourcesFromWindowCfg({ connectedSourcesJson: JSON.stringify(sources) })).toEqual(
+      sources,
+    );
+  });
+
+  it("falls back to legacy connectedFilePath / connectedRoot cfg when JSON is absent", () => {
+    expect(
+      connectedRunSourcesFromWindowCfg({
+        connectedRoot: "/abs/specs",
+        connectedFilePath: "flows/payments.md",
+      }),
+    ).toEqual([
+      { kind: "file", label: "payments.md", path: "/abs/specs/flows/payments.md" },
+    ]);
+  });
+
+  it("round-trips legacy cfg into a carried connectedSourcesJson for a regenerated run", () => {
+    const sources = connectedRunSourcesFromWindowCfg({
+      connectedRoot: "/abs/specs",
+      connectedFilePath: "flows/payments.md",
+    });
+    const carried = connectedRunSourcesCfgFromSources(sources);
+    expect(connectedRunSourcesFromWindowCfg(carried)).toEqual(sources);
+  });
+
+  it("falls back to legacy cfg when connectedSourcesJson is malformed or not a connected-source array", () => {
+    expect(
+      connectedRunSourcesFromWindowCfg({
+        connectedSourcesJson: JSON.stringify([{ kind: "requirements", label: "paste", text: "raw" }]),
+        connectedRoot: "/abs/specs",
+      }),
+    ).toEqual([{ kind: "workspace", label: "specs", path: "/abs/specs" }]);
   });
 });

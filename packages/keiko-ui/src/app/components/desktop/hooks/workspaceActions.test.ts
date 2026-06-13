@@ -746,6 +746,25 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     expect(h.cards()).toHaveLength(1);
   });
 
+  it("merges incoming cfg into the existing card when the same runId is reopened", () => {
+    const h = harness();
+    const id1 = h.add("qiRun", { runId: "qi-run-1" });
+    const id2 = h.add("qiRun", {
+      runId: "qi-run-1",
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.cards()[0]?.cfg).toMatchObject({
+      runId: "qi-run-1",
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+  });
+
   it("opens a separate card for a different runId", () => {
     const h = harness();
     h.add("qiRun", { runId: "qi-run-1" });
