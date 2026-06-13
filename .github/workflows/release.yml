@@ -145,7 +145,20 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          node -e "const { version } = require('./package.json'); const tag = process.env.NPM_DIST_TAG; const releaseTag = process.env.RELEASE_TAG; if (releaseTag !== `v${version}`) throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`); if (!['beta', 'next', 'latest'].includes(tag)) throw new Error('Unsupported npm dist-tag: ' + tag); if (version.includes('-') && tag === 'latest') throw new Error('Prerelease versions must not be published with the latest dist-tag.');"
+          node <<'NODE'
+          const { version } = require("./package.json");
+          const tag = process.env.NPM_DIST_TAG;
+          const releaseTag = process.env.RELEASE_TAG;
+          if (releaseTag !== `v${version}`) {
+            throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
+          }
+          if (!["beta", "next", "latest"].includes(tag)) {
+            throw new Error(`Unsupported npm dist-tag: ${tag}`);
+          }
+          if (version.includes("-") && tag === "latest") {
+            throw new Error("Prerelease versions must not be published with the latest dist-tag.");
+          }
+          NODE
       - name: Publish package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
