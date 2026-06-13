@@ -5,7 +5,7 @@
 // stays "1" (additive manifest field consumed by callers).
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SideFileWriteResult } from "@oscharko-dev/keiko-contracts";
 import {
@@ -63,6 +63,13 @@ function ensureDir(absolute: string): void {
   }
 }
 
+function assertRealDirectoryEntry(absolute: string): void {
+  const stat = lstatSync(absolute, { throwIfNoEntry: false });
+  if (stat === undefined || !stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new EvidenceWriteError("side-file run directory must be a real directory");
+  }
+}
+
 function atomicWriteBytes(target: string, data: Buffer, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
@@ -94,11 +101,19 @@ export function writeSideFile(
   const fs = options.fs ?? nodeWorkspaceFs;
   const randomSuffix = options.randomSuffix ?? randomUUID;
   ensureDir(baseDir);
-  const runDir = join(baseDir, runId);
+  const realBase = fs.realPath(baseDir);
+  const runDir = join(realBase, runId);
+  const existingRunDir = lstatSync(runDir, { throwIfNoEntry: false });
+  if (
+    existingRunDir !== undefined &&
+    (!existingRunDir.isDirectory() || existingRunDir.isSymbolicLink())
+  ) {
+    throw new EvidenceWriteError("side-file run directory must be a real directory");
+  }
   ensureDir(runDir);
-  const realRunDir = fs.realPath(runDir);
-  const lexicalTarget = resolveWithinWorkspace(realRunDir, name);
-  const absoluteTarget = assertContainedRealPath(fs, realRunDir, lexicalTarget, name);
+  assertRealDirectoryEntry(runDir);
+  const lexicalTarget = resolveWithinWorkspace(realBase, join(runId, name));
+  const absoluteTarget = assertContainedRealPath(fs, realBase, lexicalTarget, `${runId}/${name}`);
   const sha256 = createHash("sha256").update(data).digest("hex");
   atomicWriteBytes(absoluteTarget, data, randomSuffix);
   return {
