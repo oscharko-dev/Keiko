@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
@@ -983,6 +984,104 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
     }
   });
+
+  // ── Integrity hash provenance derives from the REDACTED corpus, never the raw text (Issue #719) ──
+  // The envelope's integrityHashSha256Hex is computed over the post-redaction joined corpus
+  // (processCapsuleDocs runs redact() before buildCapsuleSource joins the document text). No existing
+  // test pins this: a mutation that hashed the raw resolver text would survive AND would let a secret
+  // be reconstructed/confirmed from the audit-ledger hash input. This anchors the hash to the bytes
+  // the model actually sees.
+  it("derives the envelope integrity hash from the REDACTED corpus, not the raw capsule text", () => {
+    const awsAccessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const rawText = `service config\naws_access_key_id=${awsAccessKeyId}\nendpoint=/v1/run`;
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => [
+      { documentId: "cfg", text: rawText },
+    ];
+    const result = ingest(inputWithResolver([capsuleSource("Cfg", "cap-hash")], resolver));
+    const hash = result.envelopes[0]?.provenance.integrityHashSha256Hex;
+    // The stored hash equals the hash of the single document's redacted text (the corpus the model
+    // actually sees), and is NOT the hash of the raw secret-bearing text.
+    expect(hash).toBe(sha256Hex(redact(rawText)));
+    expect(hash).not.toBe(sha256Hex(rawText));
+  });
+
+  // ── Drift correctness: a capsule atom id is keyed by documentId, never corpus position (Epic #735) ──
+  // capsuleDocAtom derives the atom id from (envelopeId, documentId) only. Adding or removing a sibling
+  // document must NOT shift an unchanged document's atom id, or re-ingestion would false-orphan its
+  // existing candidates. The runIngestion.ts comment asserts this invariant; this pins it executably
+  // (parity with the workspace stability test) so a regression to a position-indexed id is caught.
+  it("keeps an unchanged capsule document's atom id stable when a sibling document is prepended", () => {
+    const stable = {
+      documentId: "stable-req",
+      text: "The system shall validate every input field.",
+    };
+    const before = ingest(inputWithResolver([capsuleSource("Spec", "cap-drift")], () => [stable]));
+    const after = ingest(
+      inputWithResolver([capsuleSource("Spec", "cap-drift")], () => [
+        { documentId: "new-req", text: "A newly added requirement appears first." },
+        stable,
+      ]),
+    );
+    const beforeAtom = before.ingestedAtoms[0];
+    const afterAtom = after.ingestedAtoms.find((a) => a.canonicalText.startsWith("stable-req\n"));
+    expect(beforeAtom?.atom.id).toBeDefined();
+    // Same id and same content hash regardless of the sibling's presence or the doc's new position.
+    expect(afterAtom?.atom.id).toBe(beforeAtom?.atom.id);
+    expect(afterAtom?.atom.canonicalHashSha256Hex).toBe(beforeAtom?.atom.canonicalHashSha256Hex);
+  });
+
+  // ── Grounding fidelity: a blank middle document is skipped without dropping its neighbours ──
+  // processCapsuleDocs uses `continue` (not `break`) when a document trims to nothing after
+  // redaction, so a blank document between two usable ones must not truncate the corpus. A
+  // continue→break mutation would silently drop every document after the first blank — a
+  // grounded-generation data-loss bug.
+  it("skips a blank middle capsule document while keeping the documents around it", () => {
+    const docs = [
+      { documentId: "before", text: "The system shall enforce a daily transfer limit." },
+      { documentId: "blank", text: "   \n\t  " },
+      { documentId: "after", text: "The system shall record every login attempt." },
+    ];
+    const result = ingest(inputWithResolver([capsuleSource("Mixed", "cap-mixed")], () => docs));
+    expect(result.ingestedAtoms.length).toBe(2);
+    const firstLines = result.ingestedAtoms.map((a) => a.canonicalText.split("\n")[0]);
+    expect(firstLines).toContain("before");
+    expect(firstLines).toContain("after");
+    expect(firstLines).not.toContain("blank");
+  });
+
+  // ── Folder/file binding UNAFFECTED by capsule co-connection (Issue #719 acceptance criterion) ──
+  // Connecting a capsule alongside a folder must not alter the folder's atoms. With folder content
+  // that fits the (now byte-shared) budget, the workspace atom's id, content, and content hash must
+  // be byte-identical to the lone-folder run — proving the capsule path never contaminates or
+  // re-identifies the workspace atom.
+  it("leaves the folder atom byte-identical when a capsule source is connected alongside it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-719-folder-"));
+    writeFileSync(
+      join(dir, "spec.md"),
+      "The system shall throttle repeated failed logins.\n",
+      "utf8",
+    );
+    try {
+      const alone = ingest(input([{ kind: "workspace", label: "Spec", path: dir }]));
+      const withCapsule = ingest(
+        inputWithResolver(
+          [{ kind: "workspace", label: "Spec", path: dir }, capsuleSource("Cap", "cap-co")],
+          () => [{ documentId: "d1", text: "An unrelated capsule requirement." }],
+        ),
+      );
+      const aloneAtom = alone.ingestedAtoms[0];
+      const wsEnvId = withCapsule.envelopes.find((e) => e.kind === "repository-context")?.id;
+      const wsAtom = withCapsule.ingestedAtoms.find(
+        (a) => String(a.atom.sourceEnvelopeId) === String(wsEnvId),
+      );
+      expect(aloneAtom?.atom.id).toBeDefined();
+      expect(wsAtom?.atom.id).toBe(aloneAtom?.atom.id);
+      expect(wsAtom?.canonicalText).toBe(aloneAtom?.canonicalText);
+      expect(wsAtom?.atom.canonicalHashSha256Hex).toBe(aloneAtom?.atom.canonicalHashSha256Hex);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Capsule-set source (Epic #710, Issue #716/#718) ──────────────────────────
@@ -1045,6 +1144,32 @@ describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(QiIngestionError);
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
+  });
+
+  // ── Redaction parity across capsule-set members (Issue #719 — leakage stop-condition) ──
+  // The single-capsule redaction test (cap-secret) exercises ONE document. processCapsuleDocs runs
+  // for EVERY member of an expanded set, so this plants a distinct secret in TWO members and proves
+  // both are scrubbed. A mutation that redacted only the first member (or dropped redact() on the
+  // capsule-set path) would leak the second member's secret into an atom the model sees — exactly
+  // the leakage the issue's stop-condition guards against.
+  it("redacts secrets in EVERY capsule-set member document, not only the first", () => {
+    const bearerToken = ["sk-", "live-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"].join("");
+    const awsAccessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const setDocs = [
+      { documentId: "m1", text: `Member one config. Authorization: Bearer ${bearerToken}` },
+      { documentId: "m2", text: `Member two config. aws_access_key_id=${awsAccessKeyId}` },
+    ];
+    const result = ingest(
+      inputWithResolver([capsuleSetSource("SecSet", "set-secret")], undefined, () => setDocs),
+    );
+    expect(result.ingestedAtoms.length).toBe(2);
+    const joined = result.ingestedAtoms.map((a) => a.canonicalText).join("\n");
+    expect(joined).not.toContain(bearerToken);
+    expect(joined).not.toContain(awsAccessKeyId);
+    expect(joined).toContain("[REDACTED]");
+    for (const a of result.ingestedAtoms) {
+      expect(a.atom.redactionStatus).toBe("redacted");
     }
   });
 });
