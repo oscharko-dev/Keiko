@@ -1024,6 +1024,11 @@ export interface IngestInlineSourcesInput {
   readonly request: QualityIntelligenceStartRunRequest;
   readonly runId: string;
   readonly registeredAt: string;
+  /**
+   * Drift-only mode: an existing run whose current source is now empty must still be comparable so all
+   * old candidates classify as orphaned-stale. Initial run creation keeps the strict non-empty guard.
+   */
+  readonly allowEmpty?: boolean | undefined;
   /** Optional capsule resolver (Epic #710, Issue #717). Absent → capsule sources throw QI_CAPSULE_UNAVAILABLE. */
   readonly capsuleResolver?: CapsuleResolver | undefined;
   /**
@@ -1106,6 +1111,37 @@ function ingestSourceInto(
   });
 }
 
+function emptyDriftIngestionResult(
+  input: IngestInlineSourcesInput,
+  droppedSourceCount: number,
+  skippedSources: readonly QiSkippedSource[],
+): QiIngestionResult {
+  return {
+    envelopes: [],
+    ingestedAtoms: [],
+    provenanceRefs: {
+      envelopeIds: [],
+      auditSummaryId: auditSummaryIdFor(input.runId),
+    },
+    sourceSummaries: [],
+    droppedSourceCount,
+    skippedSources,
+  };
+}
+
+function allowEmptyDriftIngestion(
+  input: IngestInlineSourcesInput,
+  acc: IngestAccumulator,
+  droppedSourceCount: number,
+): QiIngestionResult | undefined {
+  if (input.allowEmpty !== true) return undefined;
+  const blockingSkip = acc.skippedSources.find((source) => source.code !== "QI_SOURCE_EMPTY");
+  if (blockingSkip !== undefined) {
+    throw new QiIngestionError(blockingSkip.code, blockingSkip.message);
+  }
+  return emptyDriftIngestionResult(input, droppedSourceCount, acc.skippedSources);
+}
+
 export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestionResult {
   // Read through the typed property in the loop: `Array.isArray` would widen a local binding of the
   // readonly union array to `any[]`, so the guard checks length on the typed property directly.
@@ -1139,6 +1175,8 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
     ingestSourceInto(acc, source, i, input, budgets);
   }
   if (acc.ingestedAtoms.length === 0) {
+    const emptyDrift = allowEmptyDriftIngestion(input, acc, droppedSourceCount);
+    if (emptyDrift !== undefined) return emptyDrift;
     throw (
       acc.firstSkipError ??
       new QiIngestionError("QI_SOURCE_EMPTY", "No usable evidence was produced from the sources.")

@@ -107,16 +107,49 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     req.on("error", reject);
   });
 
-function requestAbortSignal(req: IncomingMessage): AbortSignal {
+interface RequestAbortScope {
+  readonly signal: AbortSignal;
+  readonly dispose: () => void;
+}
+
+function cancellationResult(signal: AbortSignal): RouteResult | null {
+  return signal.aborted
+    ? errorResult(499, "QI_REQUEST_CANCELLED", "Quality Intelligence request was cancelled.")
+    : null;
+}
+
+function requestAbortSignal(ctx: RouteContext): RequestAbortScope {
   const controller = new AbortController();
-  if (req.destroyed) {
-    controller.abort();
-    return controller.signal;
+  const abort = (): void => {
+    if (!controller.signal.aborted) {
+      controller.abort("quality intelligence request cancelled");
+    }
+  };
+  const abortOnIncompleteRequestClose = (): void => {
+    if (!ctx.req.complete) abort();
+  };
+  const abortOnResponseClose = (): void => {
+    if (!ctx.res.writableEnded) abort();
+  };
+  if (ctx.req.destroyed) {
+    abort();
+    return { signal: controller.signal, dispose: () => undefined };
   }
-  req.once("aborted", () => {
-    controller.abort();
-  });
-  return controller.signal;
+  ctx.req.once("aborted", abort);
+  ctx.req.once("close", abortOnIncompleteRequestClose);
+  if (typeof ctx.res.once === "function") {
+    ctx.res.once("close", abortOnResponseClose);
+  }
+  return {
+    signal: controller.signal,
+    dispose: (): void => {
+      ctx.req.off("aborted", abort);
+      ctx.req.off("close", abortOnIncompleteRequestClose);
+      if (typeof ctx.res.off === "function") {
+        ctx.res.off("close", abortOnResponseClose);
+      }
+    },
+  };
 }
 
 function validateCapsuleSource(
@@ -428,6 +461,7 @@ function ingestSourcesForDrift(
         request: { sources },
         runId: ingestRunId,
         registeredAt: new Date().toISOString(),
+        allowEmpty: true,
         capsuleResolver: makeCapsuleResolver(deps),
         // Drift must see the board's LATEST snapshot, not the pinned immutable record — a pinned
         // write-once runId can never drift under its own identity (#735). Generate keeps pinning.
@@ -1306,6 +1340,14 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     regeneratedCandidates: args.regeneratedCandidates,
     regeneratedManifest: args.regeneratedManifest,
   });
+  recordMergedCandidatesArtifact({
+    deps: args.deps,
+    evidenceDir: args.evidenceDir,
+    newRunId: args.newRunId,
+    completedAt: args.completedAt,
+    mergedCandidates,
+    preservedEditedRevisions: args.preservedEditedRevisions,
+  });
   recordMergedManifest(args.evidenceDir, {
     newRunId: args.newRunId,
     requestedAt: args.requestedAt,
@@ -1318,14 +1360,6 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     completedAt: args.completedAt,
     findings,
     coverageMatrix: coverage.coverageMatrix,
-  });
-  recordMergedCandidatesArtifact({
-    deps: args.deps,
-    evidenceDir: args.evidenceDir,
-    newRunId: args.newRunId,
-    completedAt: args.completedAt,
-    mergedCandidates,
-    preservedEditedRevisions: args.preservedEditedRevisions,
   });
 }
 
@@ -1435,6 +1469,21 @@ function persistRegenerationResult(args: {
   });
 }
 
+function regenerationSuccessResult(args: {
+  readonly newRunId: string;
+  readonly regeneratedCount: number;
+  readonly preservedCount: number;
+}): RouteResult {
+  return {
+    status: 200,
+    body: {
+      runId: args.newRunId,
+      regeneratedCount: args.regeneratedCount,
+      preservedCount: args.preservedCount,
+    },
+  };
+}
+
 async function regenerateFromDrift(args: {
   readonly deps: UiHandlerDeps;
   readonly evidenceDir: string;
@@ -1447,6 +1496,8 @@ async function regenerateFromDrift(args: {
   const narrowed = narrowRegeneration(drift);
   const immediate = immediateRegenerationResult(narrowed);
   if (immediate !== null) return immediate;
+  const cancelledBeforeRegeneration = cancellationResult(signal);
+  if (cancelledBeforeRegeneration !== null) return cancelledBeforeRegeneration;
   const profile = resolveProfile(drift.manifest.policyProfileIds[0]);
   const regenerated = await regenerateCandidateSlice({
     deps,
@@ -1458,6 +1509,8 @@ async function regenerateFromDrift(args: {
     signal,
   });
   if (!regenerated.ok) return regenerated.result;
+  const cancelledBeforePersist = cancellationResult(signal);
+  if (cancelledBeforePersist !== null) return cancelledBeforePersist;
   const budgetError = assertMergedCandidateBudget(
     narrowed.preservedCandidates,
     regenerated.value.candidates,
@@ -1473,14 +1526,11 @@ async function regenerateFromDrift(args: {
     profile,
     regenerated: regenerated.value,
   });
-  return {
-    status: 200,
-    body: {
-      runId: newRunId,
-      regeneratedCount: regenerated.value.candidates.length,
-      preservedCount: narrowed.preservedCandidates.length,
-    },
-  };
+  return regenerationSuccessResult({
+    newRunId,
+    regeneratedCount: regenerated.value.candidates.length,
+    preservedCount: narrowed.preservedCandidates.length,
+  });
 }
 
 export async function handleQiReCheck(
@@ -1536,7 +1586,7 @@ export async function handleQiRegenerateStale(
   }
   const newRunId = `qi-run-${randomUUID()}`;
   const requestedAt = new Date().toISOString();
-  const signal = requestAbortSignal(ctx.req);
+  const abortScope = requestAbortSignal(ctx);
   try {
     const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps);
     if (!drift.ok) return drift.result;
@@ -1546,10 +1596,12 @@ export async function handleQiRegenerateStale(
       newRunId,
       requestedAt,
       drift: drift.value,
-      signal,
+      signal: abortScope.signal,
     });
   } catch {
     return errorResult(500, "QI_REGEN_FAILED", "Failed to regenerate stale candidates.");
+  } finally {
+    abortScope.dispose();
   }
 }
 

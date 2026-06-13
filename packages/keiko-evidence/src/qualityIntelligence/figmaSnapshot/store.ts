@@ -29,6 +29,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
+  type Dirent,
   chmodSync,
   lstatSync,
   mkdirSync,
@@ -189,6 +190,39 @@ function assertSnapshotAbsent(target: string): void {
   if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
     throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
   }
+}
+
+function runIdFromSnapshotName(name: string): string | undefined {
+  if (!name.endsWith(SNAPSHOT_SUFFIX)) return undefined;
+  const runId = name.slice(0, -SNAPSHOT_SUFFIX.length);
+  try {
+    assertValidRunId(runId);
+    return runId;
+  } catch {
+    return undefined;
+  }
+}
+
+interface SnapshotRecordFile {
+  readonly runId: string;
+  readonly path: string;
+}
+
+function snapshotRecordFiles(baseDir: string): readonly SnapshotRecordFile[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: SnapshotRecordFile[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.isSymbolicLink()) continue;
+    const runId = runIdFromSnapshotName(entry.name);
+    if (runId === undefined) continue;
+    files.push({ runId, path: join(baseDir, entry.name) });
+  }
+  return files;
 }
 
 // Write-once: O_EXCL ("wx") refuses if a record for this runId already exists, closing the TOCTOU
@@ -357,19 +391,11 @@ export function enforceFigmaSnapshotRetention(
   const dirStat = lstatSync(qiDir, { throwIfNoEntry: false });
   if (!dirStat?.isDirectory()) return;
   // Scan for snapshot records and sort by fetchedAt ascending so we remove the oldest first.
-  let entries: string[];
-  try {
-    entries = readdirSync(qiDir);
-  } catch {
-    return;
-  }
   const records: { runId: string; fetchedAt: string }[] = [];
-  for (const name of entries) {
-    if (!name.endsWith(SNAPSHOT_SUFFIX)) continue;
-    const runId = name.slice(0, -SNAPSHOT_SUFFIX.length);
-    const fetchedAt = readFetchedAt(join(qiDir, name));
+  for (const file of snapshotRecordFiles(qiDir)) {
+    const fetchedAt = readFetchedAt(file.path);
     // Unparseable records are skipped — do not evict conservatively.
-    if (fetchedAt !== undefined) records.push({ runId, fetchedAt });
+    if (fetchedAt !== undefined) records.push({ runId: file.runId, fetchedAt });
   }
   // Sort oldest first (ascending fetchedAt) so we evict the oldest beyond the cap.
   records.sort((a, b) => (a.fetchedAt < b.fetchedAt ? -1 : a.fetchedAt > b.fetchedAt ? 1 : 0));
@@ -464,16 +490,9 @@ function listByScopeOp(
 ): readonly FigmaSnapshotScopeEntry[] {
   const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realBase === undefined) return [];
-  let entries: string[];
-  try {
-    entries = readdirSync(realBase);
-  } catch {
-    return [];
-  }
   const results: FigmaSnapshotScopeEntry[] = [];
-  for (const name of entries) {
-    if (!name.endsWith(SNAPSHOT_SUFFIX)) continue;
-    const entry = parseScopeEntry(join(realBase, name), fileKey, nodeId);
+  for (const file of snapshotRecordFiles(realBase)) {
+    const entry = parseScopeEntry(file.path, fileKey, nodeId);
     if (entry !== null) results.push(entry);
   }
   results.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
