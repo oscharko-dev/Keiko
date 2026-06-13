@@ -37,7 +37,7 @@ import {
   listIncomingEdgeRows,
   listOutgoingEdgeRows,
 } from "./edges.js";
-import { getEmbeddingRow, upsertEmbeddingRow } from "./embeddings.js";
+import { getEmbeddingRow, getEmbeddingRows, upsertEmbeddingRow } from "./embeddings.js";
 import { getAccessStatsRows, recordAccessRows, type MemoryAccessStat } from "./access.js";
 import { insertTombstoneRow, listTombstonesByScopeRows } from "./tombstones.js";
 import {
@@ -360,6 +360,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEdge"
   | "upsertEmbedding"
   | "getEmbedding"
+  | "getEmbeddings"
   | "listTombstonesByScope"
   | "recordAccess"
   | "getAccessStats"
@@ -399,6 +400,8 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
       getEmbeddingRow(db, memoryId, opts.cipher),
+    getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>
+      getEmbeddingRows(db, memoryIds, opts.cipher),
     listTombstonesByScope: (scope: MemoryScope): readonly MemoryTombstone[] => {
       gateMemoryScope(scope);
       return listTombstonesByScopeRows(db, scope, opts.cipher);

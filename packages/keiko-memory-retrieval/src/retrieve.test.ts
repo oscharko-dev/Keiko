@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { retrieveMemoryContext } from "./retrieve.js";
 import { RetrievalError } from "./errors.js";
 import type { MemoryQueryPort, MemoryRetrievalRequest } from "./types.js";
-import { buildRecord, memoryId, projectScope, userScope } from "./_support.js";
+import { buildEdge, buildRecord, memoryId, projectScope, userScope } from "./_support.js";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 
 const now = 7 * 86_400_000;
@@ -483,5 +483,20 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
       memoryId: memoryId("schedule"),
       reason: "below-threshold",
     });
+  });
+
+  it("uses incoming graph edges when computing graph proximity", () => {
+    const anchor = buildRecord({ id: "anchor", pinned: true, updatedAt: now });
+    const linked = buildRecord({ id: "linked", updatedAt: now - 1 });
+    const port: MemoryQueryPort = {
+      listByScope: () => [anchor, linked],
+      listIncomingEdges: (id) =>
+        id === memoryId("linked") ? [buildEdge({ from: "anchor", to: "linked" })] : [],
+    };
+
+    const result = retrieveMemoryContext(baseRequest({ budgetTokens: 500 }), port);
+
+    const linkedEntry = result.included.find((entry) => entry.memoryId === memoryId("linked"));
+    expect(linkedEntry?.subscores.graph).toBeGreaterThan(0);
   });
 });

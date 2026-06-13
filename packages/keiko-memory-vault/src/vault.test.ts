@@ -528,6 +528,23 @@ describe("update + delete error paths", () => {
     }).toThrow(MemoryStorageError);
     v.close();
   });
+
+  it("bulk-reads embeddings through the vault port", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    v.upsertEmbedding("m1" as MemoryId, {
+      provider: "p",
+      modelId: "m",
+      metric: "cosine",
+      vector: new Float32Array([1, 0]),
+    });
+    const rows = v.getEmbeddings(["m1" as MemoryId, "m2" as MemoryId, "missing" as MemoryId]);
+    expect([...rows.keys()]).toEqual(["m1" as MemoryId]);
+    expect(Array.from(rows.get("m1" as MemoryId)?.vector ?? [])).toEqual([1, 0]);
+    v.close();
+  });
 });
 
 describe("boundary redaction is applied at insert + update", () => {
