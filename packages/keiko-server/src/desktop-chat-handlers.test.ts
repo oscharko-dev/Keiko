@@ -529,9 +529,7 @@ describe("desktop chat routes", () => {
     const body = (await sendRes.json()) as {
       memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions).toEqual([
-      { kind: "rejected", reason: "customer-identifier" },
-    ]);
+    expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
     expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
@@ -591,6 +589,7 @@ describe("desktop chat routes", () => {
     );
     expect(acceptRes.status).toBe(200);
     expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
+    const acceptedMemory = memoryVault.getMemory(proposalId as MemoryId);
 
     const createChatB = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -613,10 +612,27 @@ describe("desktop chat routes", () => {
     expect(recallRes.status).toBe(200);
     const recallBody = (await recallRes.json()) as {
       messages: { role: string; content: string }[];
-      memory?: { context: { memories: { bodyExcerpt: string }[] } };
+      memory?: {
+        context: {
+          memories: {
+            bodyExcerpt: string;
+            sourceKind: string;
+            sensitivity: string;
+            confidence: number;
+            status: string;
+            capturedAt: number;
+          }[];
+        };
+      };
     };
     expect(recallBody.memory?.context.memories).toHaveLength(1);
-    expect(recallBody.memory?.context.memories[0]?.bodyExcerpt).toContain("Paul");
+    const recalled = recallBody.memory?.context.memories[0];
+    expect(recalled?.bodyExcerpt).toContain("Paul");
+    expect(recalled?.sourceKind).toBe(acceptedMemory?.provenance.sourceKind);
+    expect(recalled?.sensitivity).toBe(acceptedMemory?.provenance.sensitivity);
+    expect(recalled?.confidence).toBe(acceptedMemory?.provenance.confidence);
+    expect(recalled?.status).toBe(acceptedMemory?.status);
+    expect(recalled?.capturedAt).toBe(acceptedMemory?.provenance.capturedAt);
     expect(recallBody.messages[1]?.content).toBe("Paul");
     expect(seenRequests[2]?.messages.at(-1)?.content).toContain("The user's name is Paul.");
     memoryVault.close();

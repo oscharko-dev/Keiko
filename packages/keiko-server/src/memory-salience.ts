@@ -14,6 +14,7 @@ import type { MemoryId, MemoryProposalId, MemoryScope } from "@oscharko-dev/keik
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   extractSalientMemories,
+  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -152,7 +153,7 @@ export async function captureSalientFromTurn(
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   modelId: string,
-  assistantText: string,
+  _assistantText: string,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   const vault = deps.memoryVault;
   if (request.memory === undefined || !request.memory.enabled || vault === undefined) {
@@ -163,13 +164,16 @@ export async function captureSalientFromTurn(
     if (callModel === null) {
       return [];
     }
+    const policy = memoryCapturePolicyForDeps(deps);
+    if (memoryTextEgressRejectionReason(request.content, policy) !== null) {
+      return [];
+    }
     const outcomes = await extractSalientMemories(
       {
         userText: request.content,
-        assistantText,
         existingBodies: gatherExistingBodies(vault, context),
         context: buildSalienceContext(context),
-        policy: memoryCapturePolicyForDeps(deps),
+        policy,
       },
       {
         callModel,

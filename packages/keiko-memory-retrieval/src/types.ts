@@ -21,6 +21,9 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemorySensitivity,
+  MemorySourceKind,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -112,6 +115,12 @@ export interface MemoryContextBlockEntry {
   readonly memoryId: MemoryId;
   readonly bodyExcerpt: string;
   readonly inclusionReason: string;
+  readonly sourceKind: MemorySourceKind;
+  readonly captureRationale?: string | undefined;
+  readonly sensitivity: MemorySensitivity;
+  readonly confidence: number;
+  readonly status: MemoryStatus;
+  readonly capturedAt: number;
 }
 
 export interface MemoryContextBlock {

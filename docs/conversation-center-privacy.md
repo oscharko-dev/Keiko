@@ -17,6 +17,9 @@ configured model gateway, what is never transmitted, and how to delete it.
 - **Document extraction context.** Issue #148 extracted text from documents you
   attach is composed into the model request body once and is not stored on the
   chat row. It travels with the next send and is then forgotten by the BFF.
+- **MemoriaViva records.** Governed memories are stored in the local memory
+  vault. Conversation Center requests receive only scoped excerpts and
+  provenance metadata for the memories selected for the current turn.
 - **Evidence runs.** Workflow runs launched from the Conversation Center (Issue
   #153) write redacted JSON manifests under `KEIKO_EVIDENCE_DIR` (default:
   `./.keiko/evidence/`). The manifest pins workflow kind, model id, usage, and
@@ -25,9 +28,12 @@ configured model gateway, what is never transmitted, and how to delete it.
 
 ## What is sent to the model gateway
 
-A single send carries:
+The primary chat request carries:
 
 - **Your draft message** (the text you typed).
+- **Included memory context** when MemoriaViva is enabled and relevant scoped
+  memories are selected for the turn. The system prompt treats those memory
+  excerpts as untrusted reference data, not instructions.
 - **Extracted document text** for attachments the selected model supports.
   Extraction runs locally and is redacted by `redact()` from
   `@oscharko-dev/keiko-security`
@@ -40,6 +46,22 @@ A single send carries:
 
 That request goes directly to your configured provider endpoint. There is no
 Keiko-hosted relay, no telemetry beacon, no analytics ping.
+
+When MemoriaViva is enabled, Keiko may make additional calls to the configured
+model gateway for memory-specific processing:
+
+- **Semantic retrieval ranking.** If an embedding model is configured and the
+  turn text passes the memory capture safety check, Keiko may embed the current
+  user draft to rank already-stored local memories. If the text looks like a
+  credential, provider endpoint, raw log, configured customer identifier, or
+  non-public memory candidate, Keiko skips this embedding call and falls back to
+  deterministic local retrieval signals.
+- **Salience learning.** After a completed response, Keiko may ask the selected
+  chat model to propose durable user-stated facts for review. This call uses the
+  user draft only; assistant output is not forwarded into the salience prompt.
+  The same memory capture safety check suppresses this call for unsafe turn
+  text, and proposed memories still require governed review before they can be
+  recalled.
 
 ## What is never transmitted to a model
 
@@ -55,6 +77,9 @@ Keiko-hosted relay, no telemetry beacon, no analytics ping.
 - **Raw error bodies from the provider.** The BFF runs `redact()` over every
   conversation error message before it is returned to the UI; `sk-…`,
   `ghp_…`, `AKIA…`, `Bearer …` and configured literal secrets are scrubbed.
+- **Assistant output for MemoriaViva salience learning.** Conversation replies
+  are stored in chat history, but they are not forwarded to the separate
+  salience-learning model call.
 
 ## How to delete conversation data
 

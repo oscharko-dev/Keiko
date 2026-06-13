@@ -250,8 +250,22 @@ describe("handleMemoryRetrieveContext", () => {
     );
     expect(result.status).toBe(200);
     const body = asJson(result);
-    const block = body.contextBlock as { text: string; memories: readonly unknown[] };
+    const block = body.contextBlock as {
+      text: string;
+      memories: readonly {
+        sourceKind: string;
+        sensitivity: string;
+        confidence: number;
+        status: string;
+        capturedAt: number;
+      }[];
+    };
     expect(block.memories).toHaveLength(1);
+    expect(block.memories[0]?.sourceKind).toBe("explicit-user-instruction");
+    expect(block.memories[0]?.sensitivity).toBe("public");
+    expect(block.memories[0]?.confidence).toBe(0.9);
+    expect(block.memories[0]?.status).toBe("accepted");
+    expect(block.memories[0]?.capturedAt).toBeGreaterThan(0);
     expect(block.text.length).toBeGreaterThan(0);
     expect(body.included).toHaveLength(1);
   });
@@ -578,12 +592,10 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(asJson(result).outcomes).toEqual([
-      { kind: "rejected", reason: "provider-base-url" },
-    ]);
-    expect(vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true })).toEqual(
-      [],
-    );
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "provider-base-url" }]);
+    expect(
+      vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true }),
+    ).toEqual([]);
   });
 
   it("rejects raw log excerpts at the capture boundary and persists nothing", async () => {
@@ -598,12 +610,10 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(asJson(result).outcomes).toEqual([
-      { kind: "rejected", reason: "raw-log-content" },
-    ]);
-    expect(vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true })).toEqual(
-      [],
-    );
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "raw-log-content" }]);
+    expect(
+      vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true }),
+    ).toEqual([]);
   });
 
   it("blocks confidential candidates instead of durably persisting them before approval", async () => {
@@ -639,9 +649,7 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(asJson(result).outcomes).toEqual([
-      { kind: "rejected", reason: "customer-identifier" },
-    ]);
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
     expect(vault.listMemories({ includeExpired: true })).toEqual([]);
   });
 
