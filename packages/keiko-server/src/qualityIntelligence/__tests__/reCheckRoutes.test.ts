@@ -317,6 +317,73 @@ describe("handleQiReCheck — malformed body", () => {
   });
 });
 
+// ─── re-check / regenerate-stale: capsule connector source parse (Epic #710) ────
+//
+// The re-check route carries its OWN copy of validateCapsuleSource / validateCapsuleSetSource
+// (reCheckRoutes.ts), separate from the start-run parser (runRoutes.ts). Epic #710's capsule
+// flow includes drift re-check of a capsule-sourced run, so this copy must (a) accept the same
+// capsule / capsule-set shapes the start-run parser does and (b) reject malformed ids the same
+// way — otherwise a capsule run that generates fine would silently fail (or wrongly succeed) on
+// re-check. Before these tests the re-check capsule parse path had zero coverage, so deleting a
+// connector-kind branch or a trim guard here passed CI undetected.
+//
+// deps() configures no Local Knowledge store, so a WELL-FORMED capsule source parses and reaches
+// ingestion, where the absent resolver throws a coded QI_CAPSULE_UNAVAILABLE (400) — distinct
+// from the parse-level QI_BAD_SOURCE (400) a MALFORMED source produces. That code distinction is
+// what makes these mutation-effective: dropping the capsule branch turns the accept case into
+// QI_BAD_SOURCE; dropping the trim guard turns the reject case into QI_CAPSULE_UNAVAILABLE.
+describe("handleQiReCheck — capsule connector sources (Epic #710)", () => {
+  it("accepts a well-formed capsule source at parse, surfacing ingestion-level QI_CAPSULE_UNAVAILABLE (not parse-level QI_BAD_SOURCE)", async () => {
+    const body = { sources: [{ kind: "capsule", label: "Product KB", capsuleId: "cap-abc" }] };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CAPSULE_UNAVAILABLE");
+  });
+
+  it("accepts a well-formed capsule-set source at parse, surfacing ingestion-level QI_CAPSULE_UNAVAILABLE", async () => {
+    const body = { sources: [{ kind: "capsule-set", label: "All KBs", capsuleSetId: "set-abc" }] };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CAPSULE_UNAVAILABLE");
+  });
+
+  it("rejects a whitespace-only capsuleId at parse with QI_BAD_SOURCE (trim guard)", async () => {
+    const body = { sources: [{ kind: "capsule", label: "Product KB", capsuleId: "   " }] };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_SOURCE");
+  });
+
+  it("rejects an empty capsuleSetId at parse with QI_BAD_SOURCE (trim guard)", async () => {
+    const body = { sources: [{ kind: "capsule-set", label: "All KBs", capsuleSetId: "" }] };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_SOURCE");
+  });
+});
+
+describe("handleQiRegenerateStale — capsule connector sources (Epic #710)", () => {
+  it("routes a well-formed capsule source through the same capsule ingestion path (QI_CAPSULE_UNAVAILABLE)", async () => {
+    const body = { sources: [{ kind: "capsule", label: "Product KB", capsuleId: "cap-abc" }] };
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx("regenerate-stale", RUN_ID, makeReq(body)),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CAPSULE_UNAVAILABLE");
+  });
+});
+
 describe("handleQiReCheck — malformed candidates companion", () => {
   it("returns 500 QI_RECHECK_FAILED when the candidates companion is corrupted", async () => {
     writeFileSync(
