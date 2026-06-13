@@ -618,6 +618,106 @@ describe("linkedConnectorCapsuleSetIds (Epic #710 #718)", () => {
   });
 });
 
+// ─── Epic #750 #756 — linkedFigmaSnapshotRunIds ──────────────────────────────
+//
+// The Figma Snapshot reader is the direct parallel of the connector capsule reader above (same
+// dedupe / cap / window-type-exclusion / blank-skip semantics) but reads cfg.snapshotRunId from
+// "figma" windows. It previously had ZERO coverage, so a regression in the window-type filter, the
+// blank guard, the dedupe set, or the MAX_SCOPES cap was invisible.
+describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
+  it("returns empty when the quality window has no connections", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("returns the snapshotRunId from a connected Figma Snapshot window", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-abc" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-abc"]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-xyz" }, "fig-1")],
+      [conn("fig-1", "quality")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-xyz"]);
+  });
+
+  it("returns multiple snapshot run ids for multiple connected Figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-1" }, "f1"),
+        win("figma", { snapshotRunId: "fig-2" }, "f2"),
+      ],
+      [conn("quality", "f1"), conn("quality", "f2")],
+    );
+    const ids = linkedFigmaSnapshotRunIds("quality");
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain("fig-1");
+    expect(ids).toContain("fig-2");
+  });
+
+  it("ignores connections to non-figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+        win("files", { resolvedRoot: "/data" }, "files-1"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "files-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with an empty snapshotRunId", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with a whitespace-only snapshotRunId (parity with the capsule reader's trim guard)", () => {
+    // A blank run id would reach the server and be rejected; the reader trims and treats it as "no
+    // selection" so Generate never sends an unusable figma-snapshot source.
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "   " }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("deduplicates the same snapshotRunId from two figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-1"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-2"),
+      ],
+      [conn("quality", "fig-1"), conn("quality", "fig-2")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-dup"]);
+  });
+
+  it("caps the snapshot list at MAX_SCOPES when more than 16 figma windows are bound", () => {
+    // Mirrors the capsule reader cap: without this an off-by-one regression in the
+    // `ids.length >= MAX_SCOPES` break would let 17+ figma sources through to Generate.
+    const figmas = Array.from({ length: 20 }, (_unused, i) =>
+      win("figma", { snapshotRunId: `fig-${String(i)}` }, `fig-${String(i)}`),
+    );
+    const conns = figmas.map((w) => conn("quality", w.id));
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...figmas],
+      conns,
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toHaveLength(MAX_SCOPES);
+  });
+});
+
 describe("makeMutations.add — QI run-card dedup (#270)", () => {
   function harness(): {
     add: ReturnType<typeof makeMutations>["add"];
