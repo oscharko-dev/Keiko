@@ -6,6 +6,9 @@
 // Deterministic — no network, no filesystem: the snapshot LOADER is injected as a pure stub so the
 // tests synthesise a FigmaSnapshotRecord directly (synthetic fixtures only, never a real board).
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
@@ -550,5 +553,110 @@ describe("figma-snapshot ingestion — accessibility composition (#812)", () => 
     expect(loginText).toContain("(navigation)");
     expect(loginText).toContain("(a11y)");
     expect(loginText).toContain("(screen-render)");
+  });
+});
+
+// ─── Four-kind composition including figma-snapshot (Issue #732) ─────────────────
+//
+// Both capsule and figma-snapshot build atoms through capsuleDocAtom; this test guards against
+// cross-wiring — figma atoms stamped with the capsule envelopeId (or vice versa) — which the
+// existing per-kind tests cannot detect in isolation. It also ensures all four kinds produce
+// attributable envelopes in a single composed run (mutation: drop any kind → size ≠ 4).
+
+describe("figma-snapshot ingestion — four-kind cross-source composition (Issue #732)", () => {
+  // Mutation caught: cross-wiring figma atoms to the capsule envelopeId (or vice versa), since
+  // both kinds use the shared capsuleDocAtom path — a permutation invisible to per-kind tests
+  // in isolation. Also catches dropping any kind (envelopes.length would be ≠ 4).
+  it("attributes atoms to their correct envelope across all four source kinds (cross-wire guard)", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-732-figma-ws-"));
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-732-figma-file-"));
+    try {
+      // Single-sentence .md → exactly 1 atom each (split.length <= 1 → workspaceAtom fallback).
+      writeFileSync(
+        join(wsDir, "login.md"),
+        "The WORKSPACEONLYMARKER login screen shall validate credentials.",
+        "utf8",
+      );
+      const filePath = join(fileDir, "transfer.md");
+      writeFileSync(filePath, "The FILEONLYMARKER transfer shall enforce the daily limit.", "utf8");
+
+      const capsuleDoc = {
+        documentId: "cap-doc-732",
+        text: "The CAPSULEONLYMARKER rule requires session expiry enforcement.",
+      } as const;
+
+      const figmaRec = record([screenRow("screen-login", loginScreen())]);
+
+      const result = ingestInlineSources(
+        input(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            { kind: "capsule", label: "PolicyCap", capsuleId: "cap-732" },
+            figmaSource("FigmaSnap", "snap-1"),
+          ],
+          {
+            figmaSnapshotLoader: loaderFor(figmaRec),
+            capsuleResolver: {
+              capsule: () => [capsuleDoc],
+              capsuleSet: () => [],
+            },
+          },
+        ),
+      );
+
+      // (1) All four source kinds produce their own envelope.
+      expect(result.envelopes.length).toBe(4);
+
+      // (2) sourceSummaries lists all four kinds in source order.
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual([
+        "workspace",
+        "file",
+        "capsule",
+        "figma-snapshot",
+      ]);
+
+      // (3) Envelope kinds and origins are correctly stamped per kind.
+      expect(result.envelopes.map((e) => e.kind)).toEqual([
+        "repository-context",
+        "repository-context",
+        "local-knowledge-capsule",
+        "figma-evidence",
+      ]);
+      expect(result.envelopes[2]?.provenance.origin).toBe("local-knowledge-capsule:cap-732");
+      expect(result.envelopes[3]?.provenance.origin).toBe("figma-snapshot:snap-1");
+
+      // (4) Every atom maps back to one of the four envelopes, and all four are cited.
+      const envelopeIds = new Set(result.envelopes.map((e) => String(e.id)));
+      for (const a of result.ingestedAtoms) {
+        expect(envelopeIds.has(String(a.atom.sourceEnvelopeId))).toBe(true);
+      }
+      const cited = new Set(result.ingestedAtoms.map((a) => String(a.atom.sourceEnvelopeId)));
+      expect(cited.size).toBe(4);
+
+      // (5) CROSS-WIRE GUARD: capsule and figma both flow through capsuleDocAtom; verify their
+      // atoms carry only their own content and never the other kind's content.
+      const capEnv = result.envelopes[2];
+      const figmaEnv = result.envelopes[3];
+      expect(capEnv).toBeDefined();
+      expect(figmaEnv).toBeDefined();
+
+      const capTexts = result.ingestedAtoms
+        .filter((a) => String(a.atom.sourceEnvelopeId) === String(capEnv?.id))
+        .map((a) => a.canonicalText);
+      expect(capTexts.length).toBeGreaterThanOrEqual(1);
+      expect(capTexts.every((t) => t.includes("CAPSULEONLYMARKER"))).toBe(true);
+      expect(capTexts.some((t) => t.includes("Screen: Login [screen-login]"))).toBe(false);
+
+      const figmaTexts = result.ingestedAtoms
+        .filter((a) => String(a.atom.sourceEnvelopeId) === String(figmaEnv?.id))
+        .map((a) => a.canonicalText);
+      expect(figmaTexts.length).toBeGreaterThanOrEqual(1);
+      expect(figmaTexts.every((t) => t.includes("Screen: Login [screen-login]"))).toBe(true);
+      expect(figmaTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
   });
 });
