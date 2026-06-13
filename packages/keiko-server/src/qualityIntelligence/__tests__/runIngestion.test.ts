@@ -491,6 +491,27 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(displayLabel).not.toContain("\n");
     expect(displayLabel).toBe("passwd root:x:0:0:injected second line");
   });
+
+  it("drops bidi-override, zero-width, and C1 spoofing code points from a source label (Epic #729)", () => {
+    // Epic #729 display-surface hardening, symmetric with the candidate-text scrubber
+    // (stripUnsafeFormatChars / isUnsafeFormatCodePoint). sanitiseLabel maps C0/DEL to a space (so the
+    // label stays single-line) and DROPS bidi overrides (RLO U+202E), zero-width (ZWSP U+200B), BOM,
+    // and C1 controls (NEL U+0085) so a crafted filename / capsule id cannot reorder or hide content in
+    // the browser-streamed displayLabel. Vectors are built via String.fromCodePoint so the test source
+    // stays pure ASCII (no invisible literals in the file).
+    const RLO = String.fromCodePoint(0x202e);
+    const ZWSP = String.fromCodePoint(0x200b);
+    const NEL = String.fromCodePoint(0x0085);
+    const label = `Spec${RLO}${ZWSP}${NEL}A\tB`;
+    const result = ingestInlineSources(input([requirementsSource(label, VALID_TEXT)]));
+    const displayLabel = result.envelopes[0]?.displayLabel ?? "";
+    // The invisible / reordering code points are gone entirely…
+    expect(displayLabel).not.toContain(RLO);
+    expect(displayLabel).not.toContain(ZWSP);
+    expect(displayLabel).not.toContain(NEL);
+    // …the C0 TAB collapsed to a space (single-line preserved) and the visible text survives in order.
+    expect(displayLabel).toBe("SpecA B");
+  });
 });
 
 // ─── Happy path: envelopes and atoms ─────────────────────────────────────────
