@@ -40,6 +40,7 @@ import {
   type QualityIntelligenceFindingRow,
 } from "@oscharko-dev/keiko-evidence";
 import {
+  QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS,
   excerptsByAtomId,
   runQualityIntelligenceModelRoutedTestDesign,
 } from "@oscharko-dev/keiko-workflows";
@@ -105,6 +106,18 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     });
     req.on("error", reject);
   });
+
+function requestAbortSignal(req: IncomingMessage): AbortSignal {
+  const controller = new AbortController();
+  if (req.destroyed) {
+    controller.abort();
+    return controller.signal;
+  }
+  req.once("aborted", () => {
+    controller.abort();
+  });
+  return controller.signal;
+}
 
 function validateCapsuleSource(
   label: string,
@@ -479,6 +492,16 @@ async function computeDrift(
   const ingested = ingestSourcesForDrift(parsed.sources, ingestRunId, deps);
   if (!ingested.ok) return { ok: false, result: ingested.result };
   const oldArtifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
+  if (oldArtifact === undefined && loaded.manifest.totals.candidates > 0) {
+    return {
+      ok: false,
+      result: errorResult(
+        500,
+        "QI_CANDIDATES_MISSING",
+        "The candidate artifact for this Quality Intelligence run is missing.",
+      ),
+    };
+  }
   return {
     ok: true,
     value: buildDriftContext(parsed.sources, loaded.manifest, ingested.ingestion, oldArtifact),
@@ -510,6 +533,7 @@ interface OldAtomIndexes {
     { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }
   >;
   readonly idsByEnvelope: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly idsInEnvelope: ReadonlyMap<string, readonly string[]>;
 }
 
 function collectStaleIds(staleness: DriftContext["staleness"]): ReadonlySet<string> {
@@ -586,6 +610,7 @@ function buildOldAtomIndexes(atomFingerprints: readonly AtomFingerprintRow[]): O
     ),
   );
   const idsByEnvelope = new Map<string, Set<string>>();
+  const idsInEnvelope = new Map<string, string[]>();
   for (const fp of atomFingerprints) {
     const ids = idsByEnvelope.get(fp.envelopeId);
     if (ids === undefined) {
@@ -593,20 +618,31 @@ function buildOldAtomIndexes(atomFingerprints: readonly AtomFingerprintRow[]): O
     } else {
       ids.add(fp.atomId);
     }
+    const orderedIds = idsInEnvelope.get(fp.envelopeId);
+    if (orderedIds === undefined) {
+      idsInEnvelope.set(fp.envelopeId, [fp.atomId]);
+    } else {
+      orderedIds.push(fp.atomId);
+    }
   }
-  return { byId, idsByEnvelope };
+  return { byId, idsByEnvelope, idsInEnvelope };
 }
 
-function addReplacementRequirementAtoms(
+function addPositionalReplacementRequirementAtom(
+  atomId: string,
   envelopeId: string,
   current: CurrentAtomIndexes,
   old: OldAtomIndexes,
   atomIdsToRegenerate: Set<string>,
 ): void {
   const oldIds = old.idsByEnvelope.get(envelopeId) ?? new Set<string>();
-  for (const replacement of current.byEnvelope.get(envelopeId) ?? []) {
-    const replacementId = String(replacement.atom.id);
-    if (!oldIds.has(replacementId)) atomIdsToRegenerate.add(replacementId);
+  const oldIdsInEnvelope = old.idsInEnvelope.get(envelopeId) ?? [];
+  const currentAtomsInEnvelope = current.byEnvelope.get(envelopeId) ?? [];
+  const oldIndex = oldIdsInEnvelope.indexOf(atomId);
+  const replacement = oldIndex >= 0 ? currentAtomsInEnvelope[oldIndex] : undefined;
+  const replacementId = replacement === undefined ? undefined : String(replacement.atom.id);
+  if (replacementId !== undefined && !oldIds.has(replacementId)) {
+    atomIdsToRegenerate.add(replacementId);
   }
 }
 
@@ -629,7 +665,13 @@ function addRegenerationAtomsForCandidate(
     }
     if (oldAtom === undefined || !current.envelopeIds.has(oldAtom.envelopeId)) continue;
     if (!oldAtom.envelopeId.startsWith(REQUIREMENTS_ENVELOPE_PREFIX)) continue;
-    addReplacementRequirementAtoms(oldAtom.envelopeId, current, old, atomIdsToRegenerate);
+    addPositionalReplacementRequirementAtom(
+      atomId,
+      oldAtom.envelopeId,
+      current,
+      old,
+      atomIdsToRegenerate,
+    );
   }
 }
 
@@ -686,9 +728,11 @@ function regenWorkflowDeps(
   target: { readonly kind: "baseline" } | { readonly kind: "model"; readonly modelId: string },
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
   capture: (cands: readonly QiTestCaseCandidate[], generatedAt: string) => void,
+  signal: AbortSignal,
 ): QualityIntelligenceModelRoutedTestDesignDeps {
   return {
     sink: { emit: () => undefined },
+    signal,
     evidenceStore,
     candidatesSink: {
       record: (cands, generatedAt): void => {
@@ -720,9 +764,19 @@ async function executeScopedWorkflow(args: {
   readonly ingestion: QiIngestion;
   readonly atomsToRegenerate: readonly QualityIntelligenceIngestedAtom[];
   readonly profile: PolicyProfile;
+  readonly signal: AbortSignal;
 }): Promise<RouteResult | null> {
-  const { deps, target, evidenceStore, capture, plan, ingestion, atomsToRegenerate, profile } =
-    args;
+  const {
+    deps,
+    target,
+    evidenceStore,
+    capture,
+    plan,
+    ingestion,
+    atomsToRegenerate,
+    profile,
+    signal,
+  } = args;
   try {
     const summary = await runQualityIntelligenceModelRoutedTestDesign(
       {
@@ -732,7 +786,7 @@ async function executeScopedWorkflow(args: {
         provenanceRefs: ingestion.provenanceRefs,
         profile,
       },
-      regenWorkflowDeps(deps, target, evidenceStore, capture),
+      regenWorkflowDeps(deps, target, evidenceStore, capture, signal),
     );
     return summary.status === "succeeded"
       ? null
@@ -774,8 +828,10 @@ async function runScopedEphemeral(args: {
   readonly ingestion: QiIngestion;
   readonly atomsToRegenerate: readonly QualityIntelligenceIngestedAtom[];
   readonly profile: PolicyProfile;
+  readonly signal: AbortSignal;
 }): Promise<RegenOutcome> {
-  const { deps, target, newRunId, requestedAt, ingestion, atomsToRegenerate, profile } = args;
+  const { deps, target, newRunId, requestedAt, ingestion, atomsToRegenerate, profile, signal } =
+    args;
   const evidenceStore = createInMemoryQualityIntelligenceLocalStore();
   let generatedCandidates: readonly QiTestCaseCandidate[] = [];
   let generatedAt: string | undefined;
@@ -791,6 +847,7 @@ async function runScopedEphemeral(args: {
     ingestion,
     atomsToRegenerate,
     profile,
+    signal,
   });
   if (failure !== null) return { ok: false, result: failure };
   return finalizeScopedWorkflow(evidenceStore, newRunId, generatedCandidates, generatedAt);
@@ -805,6 +862,19 @@ function buildMergedCandidates(
     ...preservedCandidates.map((candidate) => rowToCandidate(candidate, newRunId)),
     ...regeneratedCandidates,
   ];
+}
+
+function assertMergedCandidateBudget(
+  preservedCandidates: readonly QualityIntelligenceCandidateRow[],
+  regeneratedCandidates: readonly QiTestCaseCandidate[],
+): RouteResult | null {
+  const limit = QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxCandidatesPerRun;
+  if (preservedCandidates.length + regeneratedCandidates.length <= limit) return null;
+  return errorResult(
+    409,
+    "QI_REGEN_CANDIDATE_CAP_EXCEEDED",
+    "Regenerating the stale tests would exceed the per-run candidate limit. Reduce the stale scope or start a fresh QI run against the current source.",
+  );
 }
 
 function buildCoverageArtifacts(
@@ -1018,17 +1088,7 @@ type RegeneratedSliceOutcome =
   | { readonly ok: true; readonly value: RegeneratedSlice }
   | { readonly ok: false; readonly result: RouteResult };
 
-function immediateRegenerationResult(
-  id: string,
-  drift: DriftContext,
-  narrowed: NarrowedRegeneration,
-): RouteResult | null {
-  if (narrowed.staleIds.size === 0) {
-    return {
-      status: 200,
-      body: { runId: id, regeneratedCount: 0, preservedCount: drift.oldCandidates.length },
-    };
-  }
+function immediateRegenerationResult(narrowed: NarrowedRegeneration): RouteResult | null {
   if (narrowed.legacyRequirementsFallback) {
     return errorResult(
       409,
@@ -1041,7 +1101,7 @@ function immediateRegenerationResult(
   // regenerate), persisting the merge would silently drop the entire run. This is the catastrophic
   // shape an atom-id scheme drift would take; fail closed with an actionable error instead (Epic
   // #735 drift correctness). The legitimate "some tests orphaned, some preserved" case keeps
-  // preserved > 0 and is unaffected; a no-drift run already returned above.
+  // preserved > 0 and is unaffected.
   if (narrowed.preservedCandidates.length === 0 && narrowed.atomsToRegenerate.length === 0) {
     return errorResult(
       409,
@@ -1068,6 +1128,7 @@ async function regenerateCandidateSlice(args: {
   readonly drift: DriftContext;
   readonly narrowed: NarrowedRegeneration;
   readonly profile: PolicyProfile;
+  readonly signal: AbortSignal;
 }): Promise<RegeneratedSliceOutcome> {
   if (args.narrowed.atomsToRegenerate.length === 0) {
     return {
@@ -1083,6 +1144,7 @@ async function regenerateCandidateSlice(args: {
     ingestion: args.drift.ingestion,
     atomsToRegenerate: args.narrowed.atomsToRegenerate,
     profile: args.profile,
+    signal: args.signal,
   });
   return outcome.ok
     ? {
@@ -1096,17 +1158,43 @@ async function regenerateCandidateSlice(args: {
     : outcome;
 }
 
-async function regenerateFromDrift(args: {
+function persistRegenerationResult(args: {
   readonly deps: UiHandlerDeps;
-  readonly id: string;
   readonly evidenceDir: string;
   readonly newRunId: string;
   readonly requestedAt: string;
   readonly drift: DriftContext;
+  readonly narrowed: NarrowedRegeneration;
+  readonly profile: PolicyProfile;
+  readonly regenerated: RegeneratedSlice;
+}): void {
+  persistMergedRun({
+    deps: args.deps,
+    evidenceDir: args.evidenceDir,
+    newRunId: args.newRunId,
+    requestedAt: args.requestedAt,
+    profile: args.profile,
+    oldManifest: args.drift.manifest,
+    ingestion: args.drift.ingestion,
+    preservedCandidates: args.narrowed.preservedCandidates,
+    preservedEditedRevisions: args.narrowed.preservedEditedRevisions,
+    regeneratedCandidates: args.regenerated.candidates,
+    regeneratedManifest: args.regenerated.manifest,
+    completedAt: args.regenerated.completedAt,
+  });
+}
+
+async function regenerateFromDrift(args: {
+  readonly deps: UiHandlerDeps;
+  readonly evidenceDir: string;
+  readonly newRunId: string;
+  readonly requestedAt: string;
+  readonly drift: DriftContext;
+  readonly signal: AbortSignal;
 }): Promise<RouteResult> {
-  const { deps, id, evidenceDir, newRunId, requestedAt, drift } = args;
+  const { deps, evidenceDir, newRunId, requestedAt, drift, signal } = args;
   const narrowed = narrowRegeneration(drift);
-  const immediate = immediateRegenerationResult(id, drift, narrowed);
+  const immediate = immediateRegenerationResult(narrowed);
   if (immediate !== null) return immediate;
   const profile = resolveProfile(drift.manifest.policyProfileIds[0]);
   const regenerated = await regenerateCandidateSlice({
@@ -1116,21 +1204,23 @@ async function regenerateFromDrift(args: {
     drift,
     narrowed,
     profile,
+    signal,
   });
   if (!regenerated.ok) return regenerated.result;
-  persistMergedRun({
+  const budgetError = assertMergedCandidateBudget(
+    narrowed.preservedCandidates,
+    regenerated.value.candidates,
+  );
+  if (budgetError !== null) return budgetError;
+  persistRegenerationResult({
     deps,
     evidenceDir,
     newRunId,
     requestedAt,
+    drift,
+    narrowed,
     profile,
-    oldManifest: drift.manifest,
-    ingestion: drift.ingestion,
-    preservedCandidates: narrowed.preservedCandidates,
-    preservedEditedRevisions: narrowed.preservedEditedRevisions,
-    regeneratedCandidates: regenerated.value.candidates,
-    regeneratedManifest: regenerated.value.manifest,
-    completedAt: regenerated.value.completedAt,
+    regenerated: regenerated.value,
   });
   return {
     status: 200,
@@ -1195,16 +1285,17 @@ export async function handleQiRegenerateStale(
   }
   const newRunId = `qi-run-${randomUUID()}`;
   const requestedAt = new Date().toISOString();
+  const signal = requestAbortSignal(ctx.req);
   try {
     const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps);
     if (!drift.ok) return drift.result;
     return await regenerateFromDrift({
       deps,
-      id,
       evidenceDir,
       newRunId,
       requestedAt,
       drift: drift.value,
+      signal,
     });
   } catch {
     return errorResult(500, "QI_REGEN_FAILED", "Failed to regenerate stale candidates.");

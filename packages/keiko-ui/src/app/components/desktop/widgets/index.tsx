@@ -29,8 +29,12 @@ import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
 import { ConnectorGraph } from "../../../local-knowledge/connector-graph";
-import { buildConnectedRunSources } from "./quality-intelligence/connectedSources";
-import type { QualityIntelligenceInlineSource } from "@oscharko-dev/keiko-contracts";
+import {
+  buildConnectedRunSources,
+  connectedRunSourcesCfgFromInlineSources,
+  connectedRunSourcesCfgFromSources,
+  connectedRunSourcesFromWindowCfg,
+} from "./quality-intelligence/connectedSources";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -40,31 +44,6 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   const v = cfg[key];
   return typeof v === "boolean" ? v : undefined;
-}
-
-// Reconstruct the inline sources a qiRun window's run was launched from so the run card can re-check
-// drift (Epic #735). The hub serialises the connected source set (file / folders / capsules /
-// capsule-sets / figma snapshots, in the RunLauncher's exact order) into `connectedSourcesJson` when
-// it opens the run; we parse it here so re-check sees byte-identical sources and an unchanged source
-// reports no drift. Older windows that carry only the single connectedFilePath/connectedRoot scalars
-// fall back to reconstructing a single source. Empty → the card hides the drift affordance.
-function qiConnectedSources(
-  cfg: Record<string, unknown>,
-): readonly QualityIntelligenceInlineSource[] {
-  const json = str(cfg, "connectedSourcesJson");
-  if (json !== undefined && json.length > 0) {
-    try {
-      const parsed: unknown = JSON.parse(json);
-      // The server re-validates every source entry, so a light array guard is enough here.
-      if (Array.isArray(parsed)) return parsed as readonly QualityIntelligenceInlineSource[];
-    } catch {
-      // fall through to the legacy single-source reconstruction
-    }
-  }
-  return buildConnectedRunSources({
-    connectedFilePath: str(cfg, "connectedFilePath") ?? null,
-    connectedRoot: str(cfg, "connectedRoot") ?? null,
-  });
 }
 
 // Serialise the currently-connected source set (Files folders/file, Connector capsules, Figma
@@ -80,7 +59,7 @@ function connectedSourcesCfgFromCtx(ctx: WindowRenderContext): Record<string, st
     connectedCapsuleSetIds: ctx.linkedCapsuleSetIds,
     connectedFigmaSnapshotRunIds: ctx.linkedFigmaSnapshotRunIds,
   });
-  return sources.length > 0 ? { connectedSourcesJson: JSON.stringify(sources) } : {};
+  return connectedRunSourcesCfgFromSources(sources);
 }
 
 function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
@@ -194,8 +173,8 @@ registerWindowRender("quality", (_cfg, ctx) => (
   <QiHubPanel
     openRun={(runId, recheckableSources) => {
       const sourceCfg =
-        recheckableSources !== undefined && recheckableSources.length > 0
-          ? { connectedSourcesJson: JSON.stringify(recheckableSources) }
+        recheckableSources !== undefined
+          ? connectedRunSourcesCfgFromInlineSources(recheckableSources)
           : connectedSourcesCfgFromCtx(ctx);
       ctx.openWindow("qiRun", { runId, ...sourceCfg });
     }}
@@ -216,11 +195,11 @@ registerWindowRender("qiRun", (cfg, ctx) => {
       </div>
     );
   }
-  const connectedSources = qiConnectedSources(cfg);
+  const connectedSources = connectedRunSourcesFromWindowCfg(cfg);
   // A regeneration writes a NEW immutable run; open it on the canvas so the user sees the merged
   // (fresh + regenerated) tests, carrying the same connected sources so the new card can itself
   // re-check drift (Epic #735, Issue #744 "refreshed card"). The original run card is left intact.
-  const carried = str(cfg, "connectedSourcesJson");
+  const sourceCfg = connectedRunSourcesCfgFromSources(connectedSources);
   return (
     <QiRunCard
       runId={runId}
@@ -228,7 +207,7 @@ registerWindowRender("qiRun", (cfg, ctx) => {
       onRegenerated={(result) => {
         ctx.openWindow("qiRun", {
           runId: result.runId,
-          ...(carried !== undefined && carried.length > 0 ? { connectedSourcesJson: carried } : {}),
+          ...sourceCfg,
         });
       }}
     />
