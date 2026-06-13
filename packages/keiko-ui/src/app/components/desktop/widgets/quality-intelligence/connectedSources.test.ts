@@ -170,4 +170,9 @@ describe("resolveConnectedFilePath", () => {
     expect(resolveConnectedFilePath("C:\\", "docs/spec.md")).toBe("C:/docs/spec.md");
     expect(resolveConnectedFilePath("C:/", "docs/spec.md")).toBe("C:/docs/spec.md");
   });
+
+  it("joins onto the POSIX filesystem root without a double separator", () => {
+    // trimTrailingSeparators("/") -> "" ; the separator guard then re-adds exactly one "/".
+    expect(resolveConnectedFilePath("/", "docs/spec.md")).toBe("/docs/spec.md");
+  });
 });
