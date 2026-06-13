@@ -94,7 +94,11 @@ const isEditedBy = (
 
 // An edited list field persists as an array of non-blank strings — the edit route rejects blank
 // ("") items before persist (editRoutes.ts isListField). Empty arrays are accepted on read so a
-// legitimately-cleared preconditions/tags list still loads: strict on write, fail-open on read.
+// legitimately-cleared preconditions/tags list still loads: strict on write, fail-open on read. The
+// route additionally enforces minItems:1 for steps/expectedResults, but that is a write-time domain
+// rule (a body must have at least one step); on read we stay deliberately fail-open for every list
+// field here — this validator only gates the provenance log shape, never the candidate row itself
+// (rows carry the merged effective value, validated separately by isStringArray).
 const isListOfNonBlankStrings = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
 
@@ -370,9 +374,21 @@ export const applyQualityIntelligenceCandidateEdit = (
   const candidates = artifact.candidates.map((row) =>
     row.id === input.candidateId ? updatedRow : row,
   );
+  // Redact the provenance label before persist: `editorLabel` is the one user-controlled free-text
+  // field of the provenance (the edit route derives it from the request body) and is stored as a
+  // string leaf of the candidates artifact — never write an unredacted label to disk. This restores
+  // parity with recordQualityIntelligenceCandidates (which redacts the whole editedRevisions[]) and
+  // upholds the file-level "every string leaf redacted before persist" invariant. Only the label is
+  // routed through the redactor: `editedAt` (machine ISO timestamp) and `editedBy` (closed enum) are
+  // server-set, carry no secret, and must stay byte-exact so the strict read validator still accepts
+  // them. `candidateId` likewise stays the matched row id so the revision keeps referencing its row.
+  const redactedProvenance: EditProvenance = {
+    ...input.provenance,
+    editorLabel: input.redact(input.provenance.editorLabel) as string,
+  };
   const revision: EditedRevision = {
     candidateId: input.candidateId,
-    provenance: input.provenance,
+    provenance: redactedProvenance,
     editedFields: redactedFields,
   };
   store.record(input.runId, {
