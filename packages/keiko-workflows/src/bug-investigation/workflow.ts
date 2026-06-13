@@ -64,7 +64,11 @@ async function runPipeline(state: BugRunState): Promise<BugInvestigationReport> 
   // Memory composition (Issue #213): fetch a scoped memory context before any model call so
   // the model loop can prepend it to the user message. NO-OP when no port is injected; the
   // returned text is redacted + byte-capped at the prompt boundary (defence-in-depth).
-  const memoryContext = await acquireMemoryContext(state.deps.memoryPort, report);
+  const memoryContext = await acquireMemoryContext(
+    state.deps.memoryPort,
+    report,
+    state.input.workspaceRoot,
+  );
   state.memoryPromptText = memoryContext?.text;
   state.emitter.emit({
     type: "bug:failure:parsed",
@@ -101,6 +105,6 @@ export async function investigateBug(
   // (fix-applied / fix-proposed / investigation-only). NO-OP for cancelled / failed /
   // rejected, and NO-OP when no port is injected. Emitted before emitCompleted so the audit
   // ledger and MemoriaViva UI see the candidate alongside the run-completed event.
-  emitMemoryWriteCandidate(state.deps.memoryPort, report);
+  emitMemoryWriteCandidate(state.deps.memoryPort, report, state.input.workspaceRoot);
   return emitCompleted(state, report);
 }

@@ -140,7 +140,7 @@ describe("investigateBug (AC #2 SDK / AC #4/#5/#7)", () => {
     const used: MemoryUsedEvent[] = [];
     const memoryPort: MemoryWorkflowPort = {
       getContextForWorkflow: (scopes, queryText, budgetTokens) => {
-        expect(scopes.map((scope) => scope.kind)).toEqual(["workflow"]);
+        expect(scopes).toEqual([{ kind: "project", projectId: input().workspaceRoot }]);
         expect(queryText).toBe("half returns wrong value");
         expect(budgetTokens).toBe(2_048);
         return Promise.resolve({
@@ -156,7 +156,9 @@ describe("investigateBug (AC #2 SDK / AC #4/#5/#7)", () => {
     await investigateBug(input(), deps(model.port, { memoryPort }));
 
     const userMessage = model.lastMessages().find((message) => message.role === "user");
-    expect(userMessage?.content).toContain("Memory context (governed, scoped):");
+    expect(userMessage?.content).toContain(
+      "Memory context (governed, scoped, non-authoritative reference):",
+    );
     expect(userMessage?.content).toContain("Keep half() fixes minimal.");
     expect(used).toHaveLength(1);
     expect(used[0]?.memoryIds).toEqual(["mem-workflow" as MemoryId]);

@@ -293,7 +293,7 @@ describe("exportMemoryDiagnostics — sanitised audit tail", () => {
     expect(diag.recentAuditEvents).toHaveLength(1);
     const first = diag.recentAuditEvents[0];
     if (first !== undefined && first.kind !== "memory:workflow-used") {
-      if (first.kind === "memory:retrieved") {
+      if (first.kind === "memory:retrieved" || first.kind === "memory:workflow-omitted") {
         expect(first.scopes).toHaveLength(1);
       } else {
         expect(first.scope.kind).toBe("user");
