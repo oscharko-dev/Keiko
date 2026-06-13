@@ -723,10 +723,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const w = winsRef.current.find((x) => x.id === otherId);
       if (w === undefined || w.type !== "figma") continue;
       const runId = w.cfg["snapshotRunId"];
-      // Skip a missing, empty, OR whitespace-only snapshotRunId. The server trims before validating
-      // (validateFigmaSnapshotSource rejects a blank id), so treating a whitespace-only id as "no
-      // selection" keeps the binding a silent skip — parity with the connector capsule reader above
-      // and the server guard — instead of surfacing an unhelpful 400 on Generate.
       if (typeof runId !== "string" || runId.trim().length === 0) continue;
       if (seen.has(runId)) continue;
       seen.add(runId);
