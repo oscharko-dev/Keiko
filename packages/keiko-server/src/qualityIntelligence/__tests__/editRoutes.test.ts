@@ -869,4 +869,29 @@ describe("handleQiEditCandidate — strips bidi/zero-width/control chars before 
       loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.editedRevisions ?? [],
     ).toHaveLength(0);
   });
+
+  it("measures MAX_TITLE_LEN on the cleaned title, so zero-width padding cannot smuggle it past the cap", async () => {
+    // 256 visible chars (exactly MAX_TITLE_LEN) + zero-width padding → raw length 258. Because the
+    // route normalises BEFORE the length check, the cleaned 256-char title is accepted and persisted.
+    // Were normalisation applied AFTER validation, the raw 258-length title would be rejected (400) —
+    // this pins the normalise-before-validate ordering in the title-length direction.
+    const cleanTitle = "A".repeat(256);
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: `${cleanTitle}${ZWSP}${BOM}` },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.candidates[0]?.title).toBe(
+      cleanTitle,
+    );
+  });
 });
