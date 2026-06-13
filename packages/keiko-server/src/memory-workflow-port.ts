@@ -15,7 +15,7 @@ import type {
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { recordMemoryAudit, recordMemoryAudits } from "./memory-audit-handler.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
@@ -30,35 +30,50 @@ interface WorkflowMemoryPortOptions {
   readonly now?: (() => number) | undefined;
 }
 
-function recordRetrievedAudit(
-  options: WorkflowMemoryPortOptions,
-  now: () => number,
+function buildRetrievedAudit(
+  occurredAt: number,
   scopes: readonly MemoryScope[],
   matchedMemoryIds: readonly MemoryId[],
-): void {
+): MemoryAuditEvent | undefined {
   if (matchedMemoryIds.length === 0) {
-    return;
+    return undefined;
   }
-  recordMemoryAudit(
-    {
-      evidenceStore: options.evidenceStore,
-      redactString: options.redactString,
-      now,
-    },
-    {
-      schemaVersion: "1",
-      kind: "memory:retrieved",
-      eventId: randomUUID(),
-      occurredAt: now(),
-      initiatorSurface: "workflow",
-      summary:
-        matchedMemoryIds.length === 1
-          ? "Retrieved 1 memory for workflow context."
-          : `Retrieved ${String(matchedMemoryIds.length)} memories for workflow context.`,
-      scopes,
-      matchedMemoryIds,
-    },
-  );
+  return {
+    schemaVersion: "1",
+    kind: "memory:retrieved",
+    eventId: randomUUID(),
+    occurredAt,
+    initiatorSurface: "workflow",
+    summary:
+      matchedMemoryIds.length === 1
+        ? "Retrieved 1 memory for workflow context."
+        : `Retrieved ${String(matchedMemoryIds.length)} memories for workflow context.`,
+    scopes,
+    matchedMemoryIds,
+  };
+}
+
+function buildWorkflowOmittedAudit(
+  options: WorkflowMemoryPortOptions,
+  occurredAt: number,
+  event: {
+    readonly memoryId: MemoryId;
+    readonly reason: string;
+    readonly scopes: readonly MemoryScope[];
+  },
+): MemoryAuditEvent {
+  return {
+    schemaVersion: "1",
+    kind: "memory:workflow-omitted",
+    eventId: randomUUID(),
+    occurredAt,
+    initiatorSurface: "workflow",
+    summary: `Workflow omitted memory (${event.reason}).`,
+    workflowRunId: options.runId,
+    scopes: event.scopes,
+    omittedMemoryId: event.memoryId,
+    reason: event.reason,
+  };
 }
 
 function recordWorkflowOmittedAudit(
@@ -76,18 +91,39 @@ function recordWorkflowOmittedAudit(
       redactString: options.redactString,
       now,
     },
+    buildWorkflowOmittedAudit(options, now(), event),
+  );
+}
+
+function recordWorkflowRetrievalAudits(
+  options: WorkflowMemoryPortOptions,
+  now: () => number,
+  scopes: readonly MemoryScope[],
+  matchedMemoryIds: readonly MemoryId[],
+  omittedMemories: readonly { readonly memoryId: MemoryId; readonly reason: string }[],
+): void {
+  const occurredAt = now();
+  const events: MemoryAuditEvent[] = [];
+  const retrievedEvent = buildRetrievedAudit(occurredAt, scopes, matchedMemoryIds);
+  if (retrievedEvent !== undefined) {
+    events.push(retrievedEvent);
+  }
+  for (const omitted of omittedMemories) {
+    events.push(
+      buildWorkflowOmittedAudit(options, occurredAt, {
+        memoryId: omitted.memoryId,
+        reason: omitted.reason,
+        scopes,
+      }),
+    );
+  }
+  recordMemoryAudits(
     {
-      schemaVersion: "1",
-      kind: "memory:workflow-omitted",
-      eventId: randomUUID(),
-      occurredAt: now(),
-      initiatorSurface: "workflow",
-      summary: `Workflow omitted memory (${event.reason}).`,
-      workflowRunId: options.runId,
-      scopes: event.scopes,
-      omittedMemoryId: event.memoryId,
-      reason: event.reason,
+      evidenceStore: options.evidenceStore,
+      redactString: options.redactString,
+      now,
     },
+    events,
   );
 }
 
@@ -222,19 +258,13 @@ function createWorkflowContextGetter(
       },
       queryPort,
     );
-    recordRetrievedAudit(
+    recordWorkflowRetrievalAudits(
       options,
       now,
       scopes,
       result.included.map((item) => item.memoryId),
+      result.omitted,
     );
-    for (const omitted of result.omitted) {
-      recordWorkflowOmittedAudit(options, now, {
-        memoryId: omitted.memoryId,
-        reason: omitted.reason,
-        scopes,
-      });
-    }
     return Promise.resolve({
       text: result.contextBlock.text,
       includedMemoryIds: result.contextBlock.memories.map((item) => item.memoryId),

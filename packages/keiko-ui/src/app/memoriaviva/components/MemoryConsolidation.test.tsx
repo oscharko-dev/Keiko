@@ -160,6 +160,7 @@ describe("MemoryConsolidation", () => {
       expect(screen.getByText(/mem-stale/i)).toBeInTheDocument();
       expect(screen.getByText(/derived-from/i)).toBeInTheDocument();
     });
+    expect(screen.getByLabelText("Consolidation job status")).not.toHaveAttribute("aria-live");
     expect(screen.getByRole("status")).toHaveTextContent("completed");
   });
 
