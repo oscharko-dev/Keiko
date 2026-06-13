@@ -74,6 +74,7 @@ interface EngineContext {
   readonly evidence?: EvidencePersistContext | undefined;
   readonly memoryVault?: MemoryVaultStore | undefined;
   readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
+  readonly memoryCustomerIdentifierMatchers?: readonly RegExp[] | undefined;
 }
 
 // Assembles the workflow/task input by overlaying the request-level fields onto the client `input`
@@ -216,6 +217,9 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
             evidenceStore: ctx.evidence.store,
             runId,
             redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
+            ...(ctx.memoryCustomerIdentifierMatchers === undefined
+              ? {}
+              : { customerIdentifierMatchers: ctx.memoryCustomerIdentifierMatchers }),
           }),
         }
       : {}),

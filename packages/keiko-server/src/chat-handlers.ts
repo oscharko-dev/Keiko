@@ -50,6 +50,11 @@ import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
+import {
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+  SENSITIVE_MEMORY_REJECTION_REASON,
+} from "./memory-capture-policy.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import {
   conversationMemoryScopes,
@@ -776,6 +781,9 @@ async function captureActionFromOutcome(
   switch (outcome.kind) {
     case "candidate": {
       if (deps.memoryVault === undefined) return null;
+      if (!isPersistableMemoryCandidate(outcome)) {
+        return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+      }
       const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
       const record = buildMemoryRecordFromProposal(proposalId, outcome);
       if (record === null) return null;
@@ -818,7 +826,9 @@ async function captureMemoryActions(
     return [];
   }
   const outcomes = extractCandidatesFromUserText(request.content, buildCaptureContext(context), {
-    resolver: createMemoryTargetResolver(deps.memoryVault),
+    ...memoryCapturePolicyForDeps(deps, {
+      resolver: createMemoryTargetResolver(deps.memoryVault),
+    }),
   });
   const actions: ConversationMemoryActionWire[] = [];
   for (const outcome of outcomes) {
