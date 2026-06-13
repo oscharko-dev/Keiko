@@ -10,8 +10,10 @@
 // only real `<runId>.json` files and never follows a symlink (lstat skip).
 
 import {
+  closeSync,
   readdirSync,
   readFileSync,
+  openSync,
   lstatSync,
   mkdirSync,
   renameSync,
@@ -30,15 +32,26 @@ import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./erro
 import { assertValidRunId } from "./runid.js";
 
 const MANIFEST_SUFFIX = ".json";
+const MANIFEST_LOCK_SUFFIX = ".lock";
+const MANIFEST_LOCK_TIMEOUT_MS = 5_000;
+const MANIFEST_LOCK_POLL_MS = 25;
 
 // POSIX limits filenames to 255 bytes. Exceeding this causes an ENAMETOOLONG error whose message
 // includes the absolute path. Guard before any fs call so no path ever leaks (CWE-209).
 const POSIX_FILENAME_LIMIT = 255;
 
-function assertManifestFilenameFits(runId: string): void {
-  if (runId.length + MANIFEST_SUFFIX.length > POSIX_FILENAME_LIMIT) {
+function assertEvidenceFilenameFits(runId: string, suffix: string): void {
+  if (runId.length + suffix.length > POSIX_FILENAME_LIMIT) {
     throw new InvalidRunIdError("runId produces a filename that exceeds the filesystem limit");
   }
+}
+
+function assertManifestFilenameFits(runId: string): void {
+  assertEvidenceFilenameFits(runId, MANIFEST_SUFFIX);
+}
+
+function assertLockFilenameFits(runId: string): void {
+  assertEvidenceFilenameFits(runId, MANIFEST_LOCK_SUFFIX);
 }
 
 // The workspace-relative default evidence base dir (ADR-0010 D4): predictable, local, .gitignored.
@@ -67,6 +80,12 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
     put: (runId: string, json: string): string => {
       assertValidRunId(runId);
       data.set(runId, json);
+      return `${runId}${MANIFEST_SUFFIX}`;
+    },
+    update: (runId: string, update: (existingJson: string | undefined) => string): string => {
+      assertValidRunId(runId);
+      const next = update(data.get(runId));
+      data.set(runId, next);
       return `${runId}${MANIFEST_SUFFIX}`;
     },
     list: (): readonly string[] => [...data.keys()].sort(),
@@ -234,6 +253,81 @@ function getManifest(baseDir: string, fs: WorkspaceFs, runId: string): string | 
   }
 }
 
+function sleepSync(ms: number): void {
+  const waitBuffer = new SharedArrayBuffer(4);
+  const waitView = new Int32Array(waitBuffer);
+  Atomics.wait(waitView, 0, 0, ms);
+}
+
+function acquireManifestLock(realBase: string, runId: string): () => void {
+  assertValidRunId(runId);
+  assertLockFilenameFits(runId);
+  const lockPath = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_LOCK_SUFFIX}`);
+  const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
+  let fd: number | undefined;
+
+  while (fd === undefined) {
+    try {
+      fd = openSync(lockPath, "wx");
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      if (code !== "EEXIST" || Date.now() >= deadline) {
+        throw new EvidenceWriteError(
+          `evidence update lock failed: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+      sleepSync(MANIFEST_LOCK_POLL_MS);
+    }
+  }
+
+  return (): void => {
+    try {
+      closeSync(fd);
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
+  };
+}
+
+function readManifestForUpdate(target: string, fs: WorkspaceFs): string | undefined {
+  try {
+    const entry = lstatSync(target, { throwIfNoEntry: false });
+    if (entry === undefined) {
+      return undefined;
+    }
+    if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+      throw new EvidenceWriteError("cannot update a non-ledger evidence manifest");
+    }
+    return readFileSync(target, "utf8");
+  } catch (error) {
+    if (error instanceof EvidenceWriteError) {
+      throw error;
+    }
+    throw new EvidenceReadError(
+      `cannot read evidence manifest: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+function updateManifest(
+  baseDir: string,
+  fs: WorkspaceFs,
+  randomSuffix: () => string,
+  runId: string,
+  update: (existingJson: string | undefined) => string,
+): string {
+  const realBase = prepareBaseDir(baseDir, fs);
+  const target = containedManifestPath(runId, realBase, fs);
+  const releaseLock = acquireManifestLock(realBase, runId);
+  try {
+    atomicWrite(target, update(readManifestForUpdate(target, fs)), randomSuffix);
+    return target;
+  } finally {
+    releaseLock();
+  }
+}
+
 function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
   const realBase = existingBaseDir(baseDir, fs);
   if (realBase === undefined) {
@@ -257,6 +351,8 @@ export function createNodeEvidenceStore(
   return {
     put: (runId: string, json: string): string =>
       putManifest(baseDir, fs, randomSuffix, runId, json),
+    update: (runId: string, update: (existingJson: string | undefined) => string): string =>
+      updateManifest(baseDir, fs, randomSuffix, runId, update),
     list: (): readonly string[] => listManifests(baseDir, fs),
     get: (runId: string): string | undefined => getManifest(baseDir, fs, runId),
     location: (runId: string): string => reportLocation(baseDir, fs, runId),

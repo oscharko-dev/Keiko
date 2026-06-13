@@ -61,6 +61,13 @@ describe("createInMemoryEvidenceStore", () => {
       store.delete("a/b");
     }).toThrow(InvalidRunIdError);
   });
+
+  it("updates an existing manifest through one serialized callback", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-1", '["a"]');
+    expect(store.update?.("run-1", (existing) => `${existing ?? "[]"}+b`)).toBe("run-1.json");
+    expect(store.get("run-1")).toBe('["a"]+b');
+  });
 });
 
 describe("createNodeEvidenceStore", () => {
@@ -89,6 +96,15 @@ describe("createNodeEvidenceStore", () => {
     const store = createNodeEvidenceStore(dir);
     store.put("run-1", "{}");
     expect(store.list()).toEqual(["run-1"]); // only the final <runId>.json, no *.tmp
+  });
+
+  it("updates an existing manifest without leaving lock files behind", () => {
+    const dir = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    store.put("run-1", "[1]");
+    expect(store.update?.("run-1", (existing) => `${existing ?? "[]"},2`)).toMatch(/run-1\.json$/);
+    expect(store.get("run-1")).toBe("[1],2");
+    expect(store.list()).toEqual(["run-1"]);
   });
 
   it("rejects an invalid runId before any write", () => {

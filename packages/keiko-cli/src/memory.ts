@@ -35,7 +35,8 @@ import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
-  keiko memory maintain [--memory-dir PATH]   Run a bounded consolidate + decay + forget pass.
+  keiko memory maintain [--memory-dir PATH] [--evidence-dir PATH]
+                                              Run a bounded consolidate + decay + forget pass.
   keiko memory stats [--memory-dir PATH]      Print memory counts by status and scope.
   keiko memory diagnostics [--memory-dir PATH] [--evidence-dir PATH] [--last N]
                                               Print redacted local diagnostics JSON.
@@ -217,8 +218,10 @@ function runMaintain(
   deps: MemoryCliDeps,
 ): number {
   const vault = resolveVault(args, env, deps);
+  const evidenceDir = resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
+  const evidenceStore = deps.evidenceStore ?? createNodeEvidenceStore(evidenceDir);
   try {
-    const counts = runMemoryMaintenance(vault);
+    const counts = runMemoryMaintenance(vault, evidenceStore);
     io.out(renderMaintenanceReport(counts));
     return 0;
   } finally {

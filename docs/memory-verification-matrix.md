@@ -3,24 +3,24 @@
 This document is the closure-evidence artifact for Epic
 [#204](https://github.com/oscharko-dev/Keiko/issues/204). It maps every
 epic-level acceptance criterion to the package, file, and test that
-satisfies it, and records the integration evidence that was run before
-the epic branch was opened for human review.
+satisfies it, and records the integration evidence used to keep the
+Enterprise Memory Vault releasable on `release/0.2.0`.
 
-It is retained as historical closure evidence. It does not replace the
-current modular-baseline verification index or the current local runtime
-state contract for the live `0.2.0` product.
+It is retained as release evidence for the memory product area. It does not
+replace the current modular-baseline verification index or the current local
+runtime state contract for the live `0.2.0` product.
 
 ## Target outcomes (from epic #204)
 
-| #   | Target outcome                                                                                                                                                                                           | Where satisfied                                                                                    |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 1   | Local Enterprise Memory Vault with typed records, temporal-graph relationships, optional embeddings, provenance, confidence, sensitivity, namespace scopes                                               | `@oscharko-dev/keiko-memory-vault` (#206) + `@oscharko-dev/keiko-contracts/memory*` (#205)         |
-| 2   | Durable memory candidate capture from explicit instructions, accepted workflow corrections, repeated preferences, reviewed reflection outputs                                                            | `@oscharko-dev/keiko-memory-capture` (#207)                                                        |
-| 3   | Consolidate, link, update, supersede, selectively forget without unbounded hidden background activity                                                                                                    | `@oscharko-dev/keiko-memory-consolidation` (#208) + `@oscharko-dev/keiko-memory-governance` (#209) |
-| 4   | Compact memory context block for Conversation Center and workflows with included-memory explanations                                                                                                     | `@oscharko-dev/keiko-memory-retrieval` (#210)                                                      |
-| 5   | Inspect, edit, approve, reject, pin, archive, delete, audit memory through MemoriaViva                                                                                                                   | MemoriaViva routes + UI (#211)                                                                     |
-| 6   | Conversation Center uses memory before PWA work, without implementing memory logic inside chat UI                                                                                                        | Conv Center BFF routes (#212)                                                                      |
-| 7   | Verification matrix tests accurate retrieval, long-range understanding, test-time learning, selective forgetting, stale-memory, blocked-memory suppression, cross-scope isolation, and error propagation | `tests/memory-eval/` (#215) + this document                                                        |
+| #   | Target outcome                                                                                                                                                                                                                                | Where satisfied                                                                                    |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 1   | Local Enterprise Memory Vault with typed records, temporal-graph relationships, optional embeddings, provenance, confidence, sensitivity, namespace scopes                                                                                    | `@oscharko-dev/keiko-memory-vault` (#206) + `@oscharko-dev/keiko-contracts/memory*` (#205)         |
+| 2   | Durable memory candidate capture from explicit instructions, accepted workflow corrections, repeated preferences, reviewed reflection outputs                                                                                                 | `@oscharko-dev/keiko-memory-capture` (#207)                                                        |
+| 3   | Consolidate, link, update, supersede, selectively forget without unbounded hidden background activity                                                                                                                                         | `@oscharko-dev/keiko-memory-consolidation` (#208) + `@oscharko-dev/keiko-memory-governance` (#209) |
+| 4   | Compact memory context block for Conversation Center and workflows with included-memory explanations                                                                                                                                          | `@oscharko-dev/keiko-memory-retrieval` (#210)                                                      |
+| 5   | Inspect, edit, approve, reject, pin, archive, delete, audit memory through MemoriaViva                                                                                                                                                        | MemoriaViva routes + UI (#211)                                                                     |
+| 6   | Conversation Center uses memory before PWA work, without implementing memory logic inside chat UI                                                                                                                                             | Conv Center BFF routes (#212)                                                                      |
+| 7   | Verification matrix tests accurate retrieval, long-range understanding, governed test-time learning, selective forgetting, stale-memory, blocked-memory suppression, cross-scope isolation, workspace-scale boundaries, and error propagation | `tests/memory-eval/` (#215) + this document                                                        |
 
 ## Architecture invariants
 
@@ -48,17 +48,18 @@ eval runner (`tests/memory-eval/eval-runner.test.ts`) can emit a local
 runner records pass/fail for each synthetic-fixture scenario during every test
 run, and JSON artifact emission remains opt-in.
 
-| Scenario                   | AC covered                                                                       |
-| -------------------------- | -------------------------------------------------------------------------------- |
-| `accurate-retrieval`       | Top-1 retrieval matches the queried preference                                   |
-| `long-range-understanding` | Graph-proximity subscore lifts linked memories                                   |
-| `test-time-learning`       | Captured during run, retrievable next                                            |
-| `correction-handling`      | Newer correction outranks older fact                                             |
-| `selective-forgetting`     | `selectMemoriesForForget` removes targeted memories from retrieval               |
-| `cross-scope-isolation`    | Request scope `A` never includes memories from scope `B`                         |
-| `no-memory-mode`           | `maxIncluded=0` / `budgetTokens=0` yields empty context block                    |
-| `error-propagation`        | Vault validator + retrieval port wrap invalid input as typed errors, not crashes |
-| `suppressed-memory`        | Low-confidence, expired, rejected, and conflicted memories are omitted           |
+| Scenario                   | AC covered                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `accurate-retrieval`       | Top-1 retrieval matches the queried preference                                               |
+| `long-range-understanding` | Graph-proximity subscore lifts linked memories                                               |
+| `test-time-learning`       | Captured proposal is suppressed until explicit acceptance, then retrievable on the next call |
+| `correction-handling`      | Newer correction outranks older fact                                                         |
+| `selective-forgetting`     | `selectMemoriesForForget` removes targeted memories from retrieval                           |
+| `cross-scope-isolation`    | Request scope `A` never includes memories from scope `B`                                     |
+| `no-memory-mode`           | `maxIncluded=0` / `budgetTokens=0` yields empty context block                                |
+| `error-propagation`        | Vault validator + retrieval port wrap invalid input as typed errors, not crashes             |
+| `suppressed-memory`        | Low-confidence, expired, rejected, and conflicted memories are omitted                       |
+| `workspace-scale-boundary` | Workspace-only retrieval honours the 500-record fetch cap without cross-workspace leakage    |
 
 Determinism is asserted on every test run by executing the scorecard twice and
 comparing byte-equal JSON output.
@@ -88,6 +89,18 @@ count on the merged tree.
 
 Memory test totals at epic-branch HEAD: 3,861 tests + 1 skipped across 278 test files.
 
+The `release/0.2.0` line carries later #215 hardening from PR
+[#1052](https://github.com/oscharko-dev/Keiko/pull/1052):
+
+- the scorecard now records 10/10 passing scenarios, including
+  `workspace-scale-boundary`;
+- `test-time-learning` models the governed proposal path by suppressing a
+  proposed record until explicit acceptance;
+- fixture validation rejects obvious secret, customer-data, private-log, and
+  credential markers before scorecard evidence is generated;
+- vault-backed eval scenarios use a deterministic test key so local verification
+  does not depend on platform keychain state.
+
 ## Additional closure notes
 
 ### Issue #208 release hardening
@@ -108,12 +121,28 @@ consolidation contract:
   provenance and audit history.
 
 The following notes clarify how Issue #216 closure evidence maps to the current
-`dev` integration and release surfaces:
+`release/0.2.0` integration and release surfaces:
 
-- **Fresh packed-artifact install verification** — the root `scripts/installable-package-smoke.mjs` remains the generic tarball-install gate, and `scripts/installable-memory-smoke.mjs` adds the memory-specific packaged-artifact flow (shipped UI/BFF start, page fetch, create/use/correct/forget/delete, scope isolation, restart persistence). `.github/workflows/ci.yml` runs both `npm run smoke:install` and `npm run smoke:install:memory` for pushes to `dev` and pull requests targeting `dev`.
-- **Package-surface verification** — `scripts/check-package-surface.mjs` remains part of the root release chain (`prepack` / `prepublishOnly`), and `.github/workflows/ci.yml` also runs `npm run check:package-surface` on pull requests targeting `dev`.
+- **Fresh packed-artifact install verification** — the root `scripts/installable-package-smoke.mjs` remains the generic tarball-install gate, and `scripts/installable-memory-smoke.mjs` adds the memory-specific packaged-artifact flow (shipped UI/BFF start, page fetch, create/use/correct/forget/delete, scope isolation, restart persistence). `.github/workflows/ci.yml` runs both `npm run smoke:install` and `npm run smoke:install:memory` for pushes to `dev` and `release/**`, and for pull requests targeting `dev` or `release/**`.
+- **Release workflow verification** — `.github/workflows/release.yml` runs `npm run smoke:install:memory` after build, UI static export, package-surface verification, and generic installable-package smoke, before security audit and SBOM generation.
+- **Package-surface verification** — `scripts/check-package-surface.mjs` remains part of the root release chain (`prepack` / `prepublishOnly`), CI build/smoke, UI package-surface, and the release workflow.
 - **Final regression evidence artifact** — the deterministic eval runner executes on every `npm test` run; writing `tests/memory-eval/scorecard.json` is optional and enabled only when `KEIKO_WRITE_MEMORY_EVAL_SCORECARD=1` is set.
 - **Conversation Center memory toggle UI affordance** — the current Conversation Center UI already ships a memory enable/disable toggle and budget control in `packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx`, alongside the BFF routes from #212.
+- **No duplicate memory implementation** — user-facing memory remains MemoriaViva (`/memoriaviva`, `/api/memory/*`, governed vault/audit/retention) plus the Conversation Center disclosure/toggle over the same BFF retrieval path. The desktop Twin panel has regression coverage ensuring it does not expose a separate localStorage-backed memory store.
+
+## Current Issue #216 release verification checklist
+
+The final release verification run for Issue #216 should attach the following
+evidence to the release PR and the GitHub issue before closure:
+
+| Requirement                                                                                       | Evidence source                                                                                                                |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Packed artifact can create, use, correct, forget, and delete memory from a clean sandbox          | `npm run smoke:install:memory`                                                                                                 |
+| Memory remains available after Keiko restart when not deleted                                     | `scripts/installable-memory-smoke.mjs` restart assertion                                                                       |
+| Conversation Center shows included memory context and supports memory-off mode                    | `scripts/installable-memory-smoke.mjs` prompt/context assertions plus browser smoke of `ChatWindow` memory disclosure          |
+| Deleted or out-of-scope memory is not included in model calls                                     | `scripts/installable-memory-smoke.mjs`, `tests/memory-eval`, and server memory context tests                                   |
+| PWA epic can proceed with memory behavior already implemented and verified                        | green CI/build/UI/package gates on the release PR                                                                              |
+| Evidence excludes customer data, private logs, secrets, real credentials, and private screenshots | synthetic fixtures, temporary fake provider, no committed scorecard, and issue/PR comments without screenshots or runtime logs |
 
 ## Closure request
 
