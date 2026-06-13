@@ -1,8 +1,10 @@
 // Unit tests for handleStartQiRun source validation.
 //
 // Covers the single-file absolute-path guard (Epic #709/#791) and the capsule source parsing path
-// (Epic #710, Issue #716): a valid capsuleId parses cleanly; a missing/empty/whitespace capsuleId
-// returns 400. The SSE execution contracts live in runExecution.test.ts.
+// (Epic #710, Issue #716): a valid capsule/capsule-set id parses cleanly and commits to the SSE
+// stream; a missing/empty/whitespace/non-string id returns 400 QI_BAD_REQUEST, while a missing label
+// (outer shape failure) returns 400 QI_BAD_SOURCE. The SSE execution contracts live in
+// runExecution.test.ts.
 
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -193,7 +195,9 @@ describe("handleStartQiRun — capsule source validation (Issue #716)", () => {
       ),
     );
     expect(result.status).toBe(400);
-    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+    const error = (result.body as { error: { code: string; message: string } }).error;
+    expect(error.code).toBe("QI_BAD_REQUEST");
+    expect(error.message).toMatch(/capsuleId/);
   });
 
   it("returns 400 QI_BAD_REQUEST when capsuleId is an empty string", async () => {
@@ -224,19 +228,70 @@ describe("handleStartQiRun — capsule source validation (Issue #716)", () => {
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
   });
 
-  it("starts the SSE stream (not a 400) when a valid capsuleId is provided", async () => {
-    // With no evidenceDir the run will fail with QI_NO_EVIDENCE_DIR, but the key assertion is that
-    // parsing succeeds (no 400) — the stream has started (STREAMING) or a non-400 result is returned.
+  // A JSON body can carry a non-string capsuleId (number / array / null); the `typeof !== "string"`
+  // guard must reject it. Without these the guard could be mutated to `!== "number"` undetected.
+  it("returns 400 QI_BAD_REQUEST when capsuleId is a non-string number", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule", label: "My Capsule", capsuleId: 123 }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("returns 400 QI_BAD_REQUEST when capsuleId is a non-string array", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule", label: "My Capsule", capsuleId: [] }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("returns 400 QI_BAD_SOURCE (not QI_BAD_REQUEST) when a capsule source has no label", async () => {
+    // A missing label fails the outer shape guard (validateSource) before the capsule field check,
+    // so it surfaces as QI_BAD_SOURCE — this pins the boundary between the two coded errors.
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule", capsuleId: "cap-abc-123" }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_SOURCE");
+  });
+
+  it("commits to the SSE stream when a valid capsuleId is provided", async () => {
+    // Parsing succeeds, so the handler commits to the SSE path (STREAMING) before the run executes;
+    // with no evidenceDir the run then fails and emits a streamed error event — never a 400.
+    // Asserting STREAMING unconditionally is the mutation-meaningful check: a parser that wrongly
+    // returned any RouteResult here would fail this test instead of passing a dead conditional.
+    const res = new MockResponse();
     const outcome = await handleStartQiRun(
       ctx(
         makeReq({ sources: [{ kind: "capsule", label: "My Capsule", capsuleId: "cap-abc-123" }] }),
-        new MockResponse(),
+        res,
       ),
       deps(),
     );
-    if (outcome !== STREAMING) {
-      expect(outcome.status).not.toBe(400);
-    }
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
+    expect(res.ended).toBe(true);
+    expect(res.chunks.join("")).toContain('"type":"error"');
   });
 });
 
@@ -245,6 +300,22 @@ describe("handleStartQiRun — capsule-set source validation (Issue #716/#718)",
     const result = asResult(
       await handleStartQiRun(
         ctx(makeReq({ sources: [{ kind: "capsule-set", label: "My Set" }] }), new MockResponse()),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    const error = (result.body as { error: { code: string; message: string } }).error;
+    expect(error.code).toBe("QI_BAD_REQUEST");
+    expect(error.message).toMatch(/capsuleSetId/);
+  });
+
+  it("returns 400 QI_BAD_REQUEST when capsuleSetId is an empty string", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule-set", label: "My Set", capsuleSetId: "" }] }),
+          new MockResponse(),
+        ),
         deps(),
       ),
     );
@@ -266,19 +337,36 @@ describe("handleStartQiRun — capsule-set source validation (Issue #716/#718)",
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
   });
 
-  it("starts the SSE stream (not a 400) when a valid capsuleSetId is provided", async () => {
+  it("returns 400 QI_BAD_REQUEST when capsuleSetId is a non-string number", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule-set", label: "My Set", capsuleSetId: 99 }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("commits to the SSE stream when a valid capsuleSetId is provided", async () => {
+    const res = new MockResponse();
     const outcome = await handleStartQiRun(
       ctx(
         makeReq({
           sources: [{ kind: "capsule-set", label: "My Set", capsuleSetId: "set-abc-123" }],
         }),
-        new MockResponse(),
+        res,
       ),
       deps(),
     );
-    if (outcome !== STREAMING) {
-      expect(outcome.status).not.toBe(400);
-    }
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
+    expect(res.ended).toBe(true);
+    expect(res.chunks.join("")).toContain('"type":"error"');
   });
 });
 
