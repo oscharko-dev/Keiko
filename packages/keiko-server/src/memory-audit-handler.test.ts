@@ -222,6 +222,28 @@ describe("createMemoryAuditHandler", () => {
     expect(errors).toHaveLength(1);
   });
 
+  it("preserves a corrupt audit manifest instead of resetting it", () => {
+    const store = createInMemoryEvidenceStore();
+    const runId = auditRunIdFor(FIXED_NOW);
+    const corruptJson = "{not valid json";
+    store.put(runId, corruptJson);
+    const errors: unknown[] = [];
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+      onPersistError: (e) => {
+        errors.push(e);
+      },
+    });
+    expect(() => {
+      handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
+    }).not.toThrow();
+    expect(errors).toHaveLength(1);
+    expect(store.get(runId)).toBe(corruptJson);
+  });
+
   it("redacts credential-shaped tokens in the summary using the audit redactor", () => {
     const store = createInMemoryEvidenceStore();
     // Fragmented literal: a real `sk-` + project-shaped key. Built piecewise so the

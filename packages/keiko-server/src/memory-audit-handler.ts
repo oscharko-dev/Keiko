@@ -11,12 +11,15 @@
 //   3. Appends the audit event to a date-bucketed JSON manifest in the existing
 //      keiko-evidence ledger (runId = `memory-audit-YYYY-MM-DD`).
 //
-// Persistence shape: ONE manifest per UTC date. `EvidenceStore.put()` overwrites, so the
-// handler reads-appends-writes. Single-process BFF makes this safe; documented limit.
-// A multi-process deployment would lose audit events under concurrent writes.
+// Persistence shape: ONE manifest per UTC date. Stores that expose `EvidenceStore.update()`
+// serialize the read-append-write step so concurrent audit appenders do not drop events.
+// Custom stores without that optional method still work through get+put, but the built-in
+// Node and in-memory stores use the safer update path.
 //
 // Failure mode: persistence errors are caught and logged to console.error; the handler
 // never throws. An audit-persistence failure must NEVER break the user's memory mutation.
+// Corrupt audit manifests are never reset or overwritten; append attempts fail closed and
+// preserve the existing artifact for operator investigation.
 //
 // Known limitation: the `previousStatus` map is in-memory only. After a server restart the
 // first `memory:updated` for any record lacks transition context and is classified as a
@@ -76,14 +79,18 @@ export function auditRunIdFor(nowMs: number): string {
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 
-// Appends a single audit event to the date-bucketed manifest. Read-existing-or-empty,
-// parse-or-reset (corrupt-file safe: a parse failure starts a fresh array; the audit
-// ledger is append-only by intent, but a corrupt manifest must not break ongoing audit).
+// Appends a single audit event to the date-bucketed manifest. The built-in evidence stores
+// expose an atomic update path; fallback stores still get parse-safe get+put behavior.
 function appendAuditEvent(store: EvidenceStore, runId: string, event: MemoryAuditEvent): void {
-  const existing = store.get(runId);
-  const list = parseExistingEvents(existing);
-  list.push(event);
-  store.put(runId, JSON.stringify(list));
+  const append = (existingJson: string | undefined): string =>
+    JSON.stringify([...parseExistingEvents(existingJson), event]);
+
+  if (store.update !== undefined) {
+    store.update(runId, append);
+    return;
+  }
+
+  store.put(runId, append(store.get(runId)));
 }
 
 function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
@@ -92,15 +99,17 @@ function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
   }
   try {
     const parsed: unknown = JSON.parse(json);
-    if (Array.isArray(parsed)) {
-      // We trust the manifest is what we wrote; a hostile editor of the file could plant
-      // arbitrary JSON, but the file is in the contained evidence dir and the worst case
-      // is that the next read sees a corrupt list — handled by the catch.
-      return parsed as MemoryAuditEvent[];
+    if (!Array.isArray(parsed)) {
+      throw new Error("memory audit manifest has unexpected shape");
     }
-    return [];
-  } catch {
-    return [];
+    return parsed as MemoryAuditEvent[];
+  } catch (error) {
+    throw new Error(
+      `memory audit manifest is corrupt; refusing to overwrite existing audit evidence: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+      { cause: error },
+    );
   }
 }
 

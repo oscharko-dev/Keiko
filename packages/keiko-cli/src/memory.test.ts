@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryRecord,
+  MemoryUserId,
+} from "@oscharko-dev/keiko-contracts";
 import { runMemoryCli } from "./memory.js";
 import type { CliIo } from "./runner.js";
 
@@ -173,6 +178,28 @@ describe("runMemoryCli maintain", () => {
     expect(out).toContain("Memory maintenance complete.");
     expect(out).toContain("forgotten:         1");
     expect(vault.getMemory(mid("m"))).toBeUndefined();
+  });
+
+  it("persists memory audit evidence for maintenance mutations", () => {
+    const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
+    insert(vault, {
+      id: "m",
+      status: "accepted",
+      createdAt: Date.now() - 864e5,
+      validUntil: Date.now() - 1,
+    });
+    const cap = capture();
+    expect(runMemoryCli(["maintain"], cap.io, {}, { vault, evidenceStore })).toBe(0);
+    const runIds = evidenceStore.list();
+    expect(runIds).toHaveLength(1);
+    const runId = runIds[0];
+    expect(runId).toBeDefined();
+    if (runId === undefined) {
+      throw new Error("expected a memory audit evidence manifest");
+    }
+    const events = JSON.parse(evidenceStore.get(runId) ?? "[]") as MemoryAuditEvent[];
+    expect(events.map((event) => event.kind)).toContain("memory:forgotten");
   });
 });
 
