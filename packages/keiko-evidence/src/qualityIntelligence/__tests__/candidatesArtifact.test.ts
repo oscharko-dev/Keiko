@@ -39,6 +39,21 @@ const upcaseRedact = (value: unknown): unknown => {
   return value;
 };
 
+// A targeted redactor that scrubs only the secret token `SECRET` from every string leaf, modelling
+// the real audit redactor (which scrubs secret-shaped substrings and leaves enums / ISO dates / plain
+// labels intact). Used to assert provenance redaction without corrupting the `editedBy` enum or
+// `editedAt` timestamp the way an uppercase-everything double would.
+const tokenRedact = (value: unknown): unknown => {
+  if (typeof value === "string") return value.split("SECRET").join("[REDACTED]");
+  if (Array.isArray(value)) return value.map(tokenRedact);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, tokenRedact(v)]),
+    );
+  }
+  return value;
+};
+
 function seedCandidate(id: string): Candidate {
   return {
     id: id as Candidate["id"],
@@ -147,7 +162,7 @@ describe("applyQualityIntelligenceCandidateEdit — redaction", () => {
     expect(row?.title).toBe("SECRET-TOKEN");
   });
 
-  it("stores the redacted (not raw) text in the appended revision provenance", () => {
+  it("stores the redacted (not raw) edited fields in the appended revision", () => {
     applyQualityIntelligenceCandidateEdit({
       runId: RUN_ID,
       candidateId: "tc-1",
@@ -158,6 +173,33 @@ describe("applyQualityIntelligenceCandidateEdit — redaction", () => {
     });
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.editedRevisions?.[0]?.editedFields.title).toBe("RAW-VALUE");
+  });
+
+  it("redacts the appended revision provenance label before persist", () => {
+    // editorLabel is user-controlled free text from the wire (editRoutes parseEditorLabel) and is
+    // persisted into the candidates artifact alongside the edited body. It must pass through the
+    // mandatory redactor BEFORE reaching disk — parity with recordQualityIntelligenceCandidates,
+    // which redacts the whole editedRevisions[] (provenance included). Without that, a secret-shaped
+    // label reaches `<runId>.candidates.json` unredacted (redaction-before-persist bypass).
+    applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "tc-1",
+      editedFields: { title: "raw-value" },
+      provenance: {
+        editedAt: "2026-06-08T12:00:00.000Z",
+        editedBy: "human",
+        editorLabel: "SECRET",
+      },
+      evidenceDir,
+      redact: tokenRedact,
+    });
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    const rev = reloaded?.editedRevisions?.[0];
+    expect(rev?.provenance.editorLabel).toBe("[REDACTED]");
+    // The enum + timestamp carry no secret shape and must survive redaction unchanged, so the
+    // strict read validator (isEditedRevision) still accepts the reloaded artifact.
+    expect(rev?.provenance.editedBy).toBe("human");
+    expect(rev?.provenance.editedAt).toBe("2026-06-08T12:00:00.000Z");
   });
 });
 
