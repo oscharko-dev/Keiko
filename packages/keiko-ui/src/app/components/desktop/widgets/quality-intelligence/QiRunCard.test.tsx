@@ -2,7 +2,7 @@
 // the generated test cases, routes per-candidate review decisions, and shows coverage intelligence
 // (coverage % badge and gap radar for uncovered/weakly-covered atoms).
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QiRunCard } from "./QiRunCard";
@@ -615,5 +615,110 @@ describe("QiRunCard — progressive rendering of large lists (#280)", () => {
 
     expect(screen.getByText("Requirement 24")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /show more gaps/i })).not.toBeInTheDocument();
+  });
+
+  it("surfaces uncovered gaps before weakly-covered ones regardless of server atomId order", async () => {
+    // The server emits coverageByAtom sorted by atomId, NOT by severity. Here two weakly-covered
+    // atoms bracket the uncovered one in atomId order; the gap radar must still list the uncovered
+    // (most severe) gap first so it never falls below the INITIAL_VISIBLE_ROWS fold on large runs.
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      {
+        atomId: "atom-1",
+        status: "weakly-covered",
+        confidence: 0.5,
+        requirementExcerptRedacted: "Weak one",
+      },
+      {
+        atomId: "atom-2",
+        status: "uncovered",
+        confidence: 0,
+        requirementExcerptRedacted: "Gap two",
+      },
+      {
+        atomId: "atom-3",
+        status: "weakly-covered",
+        confidence: 0.4,
+        requirementExcerptRedacted: "Weak three",
+      },
+    ];
+    const detail = makeDetail("qi-run-cov-order", [], atoms, 0);
+    render(<QiRunCard runId="qi-run-cov-order" fetchDetailImpl={fetchOk(detail)} />);
+    const list = await screen.findByLabelText("Uncovered and weakly covered atoms");
+    const labels = within(list)
+      .getAllByRole("listitem")
+      .map((li) => li.getAttribute("aria-label"));
+    // uncovered (atom-2) first; the weakly-covered atoms keep their stable atomId order afterwards.
+    expect(labels).toEqual([
+      'Requirement "Gap two" (atom atom-2): Uncovered',
+      'Requirement "Weak one" (atom atom-1): Weakly covered',
+      'Requirement "Weak three" (atom atom-3): Weakly covered',
+    ]);
+  });
+
+  it("hides the coverage panel entirely when coverageByAtom is empty", async () => {
+    const detail = makeDetail("qi-run-cov-empty", [makeCandidate("tc-1", "A test")], [], 0);
+    render(<QiRunCard runId="qi-run-cov-empty" fetchDetailImpl={fetchOk(detail)} />);
+    // The card still renders (the candidate appears), but the coverage panel is suppressed.
+    expect(await screen.findByText("A test")).toBeInTheDocument();
+    expect(screen.queryByTestId("qi-coverage-pct")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("qi-coverage-summary")).not.toBeInTheDocument();
+  });
+
+  it("shows the badge but hides the gap radar when every requirement is covered", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-1", status: "covered", confidence: 0.9 },
+      { atomId: "atom-2", status: "covered", confidence: 0.95 },
+    ];
+    const detail = makeDetail("qi-run-cov-all", [], atoms, 100);
+    render(<QiRunCard runId="qi-run-cov-all" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByTestId("qi-coverage-pct")).toHaveTextContent("100%");
+    expect(screen.getByTestId("qi-coverage-summary")).toHaveTextContent(
+      "2 of 2 requirements covered",
+    );
+    expect(screen.getByTestId("qi-coverage-summary")).toHaveTextContent("0 gaps");
+    expect(screen.queryByLabelText("Gap radar")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Uncovered and weakly covered atoms")).not.toBeInTheDocument();
+  });
+
+  it("excludes covered atoms from the gap radar list", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-covered", status: "covered", confidence: 0.9 },
+      { atomId: "atom-gap", status: "uncovered", confidence: 0 },
+    ];
+    const detail = makeDetail("qi-run-cov-excl", [], atoms, 50);
+    render(<QiRunCard runId="qi-run-cov-excl" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByLabelText(/Atom atom-gap: Uncovered/i)).toBeInTheDocument();
+    // The covered atom must never appear as a gap row.
+    expect(screen.queryByLabelText(/Atom atom-covered:/i)).not.toBeInTheDocument();
+    const list = screen.getByLabelText("Uncovered and weakly covered atoms");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("renders the server coverage percentage and a matching covered/total summary for partial coverage", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-1", status: "covered", confidence: 0.9 },
+      { atomId: "atom-2", status: "uncovered", confidence: 0 },
+      { atomId: "atom-3", status: "weakly-covered", confidence: 0.5 },
+      { atomId: "atom-4", status: "uncovered", confidence: 0 },
+    ];
+    // 25 distinguishes the server percentage from coveredCount (1), total (4), and gap count (3).
+    const detail = makeDetail("qi-run-cov-25", [], atoms, 25);
+    render(<QiRunCard runId="qi-run-cov-25" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByTestId("qi-coverage-pct")).toHaveTextContent("25%");
+    const summary = screen.getByTestId("qi-coverage-summary");
+    expect(summary).toHaveTextContent("1 of 4 requirements covered");
+    expect(summary).toHaveTextContent("3 gaps");
+  });
+
+  it("uses the singular 'gap' label when exactly one requirement is a gap", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-1", status: "covered", confidence: 0.9 },
+      { atomId: "atom-2", status: "uncovered", confidence: 0 },
+    ];
+    const detail = makeDetail("qi-run-cov-1gap", [], atoms, 50);
+    render(<QiRunCard runId="qi-run-cov-1gap" fetchDetailImpl={fetchOk(detail)} />);
+    const summary = await screen.findByTestId("qi-coverage-summary");
+    expect(summary).toHaveTextContent("1 gap");
+    expect(summary).not.toHaveTextContent("1 gaps");
   });
 });
