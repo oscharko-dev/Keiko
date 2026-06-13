@@ -22,6 +22,7 @@ import {
   createMemoryAuditHandler,
   createNoopMemoryAuditHandler,
   recordMemoryAudit,
+  recordMemoryAudits,
 } from "./memory-audit-handler.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -479,6 +480,45 @@ describe("recordMemoryAudit", () => {
     const events = readEvents(store, beforeMidnight);
     expect(events).toHaveLength(1);
     expect(store.get(auditRunIdFor(afterMidnight))).toBeUndefined();
+  });
+});
+
+describe("recordMemoryAudits", () => {
+  it("appends same-day events through one serialized store update", () => {
+    const backing = createInMemoryEvidenceStore();
+    let updateCount = 0;
+    const store: EvidenceStore = {
+      put: backing.put,
+      get: backing.get,
+      list: backing.list,
+      location: backing.location,
+      delete: backing.delete,
+      update: (runId, update) => {
+        updateCount += 1;
+        return backing.update?.(runId, update) ?? backing.put(runId, update(backing.get(runId)));
+      },
+    };
+    const event = (id: string, memoryId: string): MemoryAuditEvent => ({
+      schemaVersion: "1",
+      kind: "memory:workflow-omitted",
+      eventId: id,
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: "Workflow omitted memory (below-threshold).",
+      workflowRunId: "wr-1",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
+      omittedMemoryId: brandedMemoryId(memoryId),
+      reason: "below-threshold",
+    });
+
+    recordMemoryAudits({ evidenceStore: store, now: () => FIXED_NOW }, [
+      event("evt-1", "mem-1"),
+      event("evt-2", "mem-2"),
+    ]);
+
+    expect(updateCount).toBe(1);
+    const events = readEvents(store, FIXED_NOW);
+    expect(events.map((entry) => entry.eventId)).toEqual(["evt-1", "evt-2"]);
   });
 });
 

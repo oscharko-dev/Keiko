@@ -264,6 +264,20 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+describe("Conversation memory switch target size (WCAG 2.5.8)", () => {
+  it(".auto-toggle is at least 24px tall and has a larger hit area", () => {
+    const block = cssBlock(".auto-toggle {");
+    expect(block).toContain("width: 42px");
+    expect(block).toContain("height: 24px");
+  });
+
+  it(".auto-toggle thumb uses the enlarged 18px geometry", () => {
+    const block = cssBlock(".auto-toggle span");
+    expect(block).toContain("width: 18px");
+    expect(block).toContain("height: 18px");
+  });
+});
+
 // ─── Fix 4: dense desktop text clarity ───────────────────────────────────────
 
 describe("Fix 4 — dense desktop text clarity", () => {

@@ -403,7 +403,6 @@ export function MemoryConsolidation({
 
         <section
           aria-label="Consolidation job status"
-          aria-live="polite"
           style={{
             display: "grid",
             gap: 16,
@@ -426,7 +425,12 @@ export function MemoryConsolidation({
               >
                 <div>
                   <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>State</div>
-                  <div role="status" style={{ fontWeight: 700, textTransform: "capitalize" }}>
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                    style={{ fontWeight: 700, textTransform: "capitalize" }}
+                  >
                     {activeJob.state}
                   </div>
                 </div>
