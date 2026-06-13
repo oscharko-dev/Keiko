@@ -418,6 +418,26 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     }
   });
 
+  it("ingests through a benign-named symlinked parent that resolves to a non-denied dir", () => {
+    // Positive companion to the denied-symlink case above. assertRealPathNotDenied must ADD a denial
+    // ONLY when the symlink-resolved path lands in a protected location — a benign directory symlink
+    // whose real target is an ordinary, non-denied dir must still ingest. This pins the guard against
+    // a mutation that throws on EVERY realpath divergence (dropping the `isDenied(realPath)`
+    // condition), which would silently break legitimate symlinked working directories. The check is
+    // deterministic across platforms: it creates the divergence explicitly rather than relying on a
+    // symlinked tmpdir (e.g. macOS `/var` -> `/private/var`), which is absent on Linux CI.
+    const dir = makeDir();
+    const realDir = join(dir, "real-specs");
+    mkdirSync(realDir);
+    writeFile(realDir, "spec.md", "# Spec\nThe system shall record an audit entry.\n");
+    symlinkSync(realDir, join(dir, "linked")); // benign-named link -> non-denied real dir
+    const viaLink = join(dir, "linked", "spec.md");
+    const result = ingest(input([fileSource("Linked", viaLink)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.envelopes[0]?.provenance.origin).toBe("file");
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("audit entry")).toBe(true);
+  });
+
   it("rejects a best-effort PDF whose decoded text is binary noise (NUL byte)", () => {
     // A real PDF's prose lives in compressed streams; decoded as UTF-8 it is binary noise carrying
     // a NUL byte. Reject with a coded error rather than ingest garbage (#713: never partial ingest).
@@ -452,6 +472,22 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     const result = ingest(input([fileSource("TextPdf", path)]));
     expect(result.ingestedAtoms).toHaveLength(1);
     expect(result.ingestedAtoms[0]?.canonicalText.includes("Prüfziffer")).toBe(true);
+  });
+
+  it("strips control characters from a path-shaped multi-line label so displayLabel stays single-line", () => {
+    // #277/#278 envelope display-surface invariant + #715 single-file security re-audit. A label whose
+    // first line LOOKS like an absolute path must not smuggle a trailing line of content past the
+    // basename-collapse into the browser-streamed displayLabel: the collapse splits on "/" only, so
+    // without the control-char strip a "\n<more content>" would survive inside the final segment and
+    // emit a MULTI-LINE label. sanitiseLabel now replaces every control char with a space first.
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.md", "# Spec\nThe system shall log every access.\n");
+    const result = ingest(
+      input([fileSource("/etc/passwd\nroot:x:0:0:injected second line", path)]),
+    );
+    const displayLabel = result.envelopes[0]?.displayLabel ?? "";
+    expect(displayLabel).not.toContain("\n");
+    expect(displayLabel).toBe("passwd root:x:0:0:injected second line");
   });
 });
 

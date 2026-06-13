@@ -134,12 +134,31 @@ const CREDENTIAL_LABEL_SHAPES: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu,
 ];
 
+// Replace every control character (C0 range incl. tab/newline/CR, plus DEL) with a space using a
+// code-point scan — the `no-control-regex` lint rule forbids a control-range regex literal, and a
+// scan is the established in-package idiom (mirrors generationPort.scrubEvidenceText). Keeps a
+// label single-line.
+function collapseControlCharsToSpace(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const cp = ch.codePointAt(0) ?? 0;
+    out += cp <= 0x1f || cp === 0x7f ? " " : ch;
+  }
+  return out;
+}
+
 const sanitiseLabel = (label: string): string => {
   // Strip any URL authority — ANY scheme (http, file, s3, ftp, …), not just http(s) — plus the
   // well-known credential token shapes, so a browser-supplied label never carries a URL or secret
   // into the envelope display surface that is streamed back to the client (#277/#278).
   let cleaned = label.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, " ");
   for (const shape of CREDENTIAL_LABEL_SHAPES) cleaned = cleaned.replace(shape, " ");
+  // Replace every control character (newline, CR, tab, NUL, DEL, …) with a space so a multi-line or
+  // control-laden label can never carry a second line of content into the browser-streamed envelope
+  // displayLabel. Without this, the absolute-path basename-collapse below (which splits on "/" only)
+  // would keep a trailing "\n<more content>" glued inside the final path segment — defeating the
+  // basename defence and emitting a multi-line label (#277/#278 envelope display-surface invariant).
+  cleaned = collapseControlCharsToSpace(cleaned);
   cleaned = cleaned.trim();
   // Collapse an absolute POSIX / Windows-drive / UNC path label to its final segment so the
   // display label never leaks the filesystem layout (the basename is the useful display token).
