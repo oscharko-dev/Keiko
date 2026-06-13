@@ -1282,3 +1282,106 @@ describe("RunLauncher — multi-source connected-source list DOM (Issue #731 / E
     expect(within(list).getByText("set-1")).toBeInTheDocument();
   });
 });
+
+// ─── Connected figma-snapshot source (Epic #750 #756) ────────────────────────
+//
+// connectedFigmaSnapshotRunIds is wired RunLauncher → buildConnectedRunSources → the Generate
+// request, but had ZERO integration coverage. Mirrors the connected capsule-source suite: banner,
+// request shape, combined-count alongside a folder, and onRunCompleted recheckable propagation.
+describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () => {
+  const RUN_ID = "fig-run-test-abc";
+
+  it("enables Generate when a figma snapshot is connected and no manual input is present", () => {
+    render(<RunLauncher connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("renders the connected-source banner with 'Connected figma snapshot' and the run id", () => {
+    render(<RunLauncher connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected figma snapshot");
+    expect(banner).toHaveTextContent(RUN_ID);
+  });
+
+  it("calls startImpl with a figma-snapshot source when a figma snapshot is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "figma-snapshot", snapshotRunId: RUN_ID });
+  });
+
+  it("shows a combined count when a folder root and a figma snapshot are connected", () => {
+    render(<RunLauncher connectedRoots={["/work/docs"]} connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (2)");
+  });
+
+  it("appends the figma-snapshot source after a connected folder in the request", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedRoots={["/work/docs"]}
+        connectedFigmaSnapshotRunIds={[RUN_ID]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources).toHaveLength(2);
+    expect(req.sources[0]).toMatchObject({ kind: "workspace", path: "/work/docs" });
+    expect(req.sources[1]).toMatchObject({ kind: "figma-snapshot", snapshotRunId: RUN_ID });
+  });
+
+  it("passes the launched figma-snapshot source to onRunCompleted so the run card can re-check drift", async () => {
+    const user = userEvent.setup();
+    const acceptedRunId = "run-figma-123";
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: acceptedRunId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 2,
+      },
+      succeededDone(acceptedRunId),
+    ]);
+    const onRunCompleted = vi.fn();
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={onRunCompleted}
+        connectedFigmaSnapshotRunIds={[RUN_ID]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [
+        { kind: "figma-snapshot", label: RUN_ID, snapshotRunId: RUN_ID },
+      ]);
+    });
+  });
+
+  it("shows no connected-source banner when connectedFigmaSnapshotRunIds is empty", () => {
+    render(<RunLauncher connectedFigmaSnapshotRunIds={[]} />);
+    expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
+  });
+});

@@ -710,7 +710,9 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedConnectorSelectionIds(id, "capsule-set");
 
   // Epic #750 #756 — read the snapshotRunId stored in cfg of each connected Figma Snapshot window.
-  // Deduped and capped at MAX_SCOPES, matching the connector capsule reader above.
+  // Deduped and capped at MAX_SCOPES, matching the connector capsule reader above — including its
+  // whitespace-only skip: a blank run id would be rejected server-side, so treat it as "no selection"
+  // and skip it rather than emit an unusable figma-snapshot source on Generate.
   const linkedFigmaSnapshotRunIds: WorkspaceApi["linkedFigmaSnapshotRunIds"] = (id) => {
     const seen = new Set<string>();
     const ids: string[] = [];
@@ -721,7 +723,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const w = winsRef.current.find((x) => x.id === otherId);
       if (w === undefined || w.type !== "figma") continue;
       const runId = w.cfg["snapshotRunId"];
-      if (typeof runId !== "string" || runId.length === 0) continue;
+      if (typeof runId !== "string" || runId.trim().length === 0) continue;
       if (seen.has(runId)) continue;
       seen.add(runId);
       ids.push(runId);
