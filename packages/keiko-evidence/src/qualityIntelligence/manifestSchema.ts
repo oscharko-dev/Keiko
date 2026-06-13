@@ -128,6 +128,13 @@ export interface QualityIntelligenceAtomFingerprintRow {
   readonly atomId: string;
   readonly envelopeId: string;
   readonly canonicalHashSha256Hex: string;
+  /**
+   * Optional opaque key for finding the current replacement atom during targeted regeneration. This is
+   * a hash-derived metadata key, not raw source text or a local filesystem path.
+   */
+  readonly replacementGroupId?: string;
+  /** Stable ordinal within replacementGroupId for same-document requirement replacements. */
+  readonly replacementOrdinal?: number;
 }
 
 export interface QualityIntelligenceProvenanceRefs {

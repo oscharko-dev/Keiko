@@ -29,6 +29,8 @@ export interface CompareStalenessArgs {
     atomId: string;
     envelopeId: string;
     canonicalHashSha256Hex: string;
+    replacementGroupId?: string;
+    replacementOrdinal?: number;
   }[];
   /** Evidence refs from the manifest (atomId → envelopeId mapping). */
   readonly evidenceRefs: readonly { envelopeId: string; atomId: string }[];
@@ -41,6 +43,8 @@ export interface CompareStalenessArgs {
     atomId: string;
     envelopeId: string;
     canonicalHashSha256Hex: string;
+    replacementGroupId?: string;
+    replacementOrdinal?: number;
   }[];
 }
 
@@ -88,18 +92,32 @@ interface ClassifyContext {
   readonly envelopeOrder: readonly string[];
   readonly oldAtoms: ReadonlyMap<
     string,
-    { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }
+    {
+      readonly envelopeId: string;
+      readonly canonicalHashSha256Hex: string;
+      readonly replacementGroupId?: string;
+      readonly replacementOrdinal?: number;
+    }
   >;
   readonly currentAtoms: ReadonlyMap<
     string,
-    { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }
+    {
+      readonly envelopeId: string;
+      readonly canonicalHashSha256Hex: string;
+      readonly replacementGroupId?: string;
+      readonly replacementOrdinal?: number;
+    }
   >;
+  readonly currentReplacementAtomIdsByOldAtomId: ReadonlyMap<string, string>;
   readonly oldAtomIdsByEnvelope: ReadonlyMap<string, readonly string[]>;
   readonly currentAtomIdsByEnvelope: ReadonlyMap<string, readonly string[]>;
 }
 
 const UNKNOWN_ENVELOPE = "unknown";
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
+const ALIGN_INSERT_DELETE_COST = 3;
+const ALIGN_SUBSTITUTE_COST = 4;
+const ALIGN_CROSS_OLD_ATOM_COST = 10;
 
 const staleReason = (
   candidateId: string,
@@ -107,26 +125,186 @@ const staleReason = (
   envelopeId: string,
 ): StalenessReason => ({ candidateId, reason, envelopeId });
 
+interface AtomFingerprintEntry {
+  readonly atomId: string;
+  readonly envelopeId: string;
+  readonly canonicalHashSha256Hex: string;
+  readonly replacementGroupId?: string;
+  readonly replacementOrdinal?: number;
+}
+
+interface ReplacementEntry {
+  readonly atomId: string;
+  readonly canonicalHashSha256Hex: string;
+  readonly replacementGroupId: string;
+  readonly replacementOrdinal: number;
+}
+
 function buildAtomFingerprintMap(
-  fingerprints:
-    | readonly {
-        atomId: string;
-        envelopeId: string;
-        canonicalHashSha256Hex: string;
-      }[]
-    | undefined,
-): ReadonlyMap<string, { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }> {
+  fingerprints: readonly AtomFingerprintEntry[] | undefined,
+): ReadonlyMap<
+  string,
+  {
+    readonly envelopeId: string;
+    readonly canonicalHashSha256Hex: string;
+    readonly replacementGroupId?: string;
+    readonly replacementOrdinal?: number;
+  }
+> {
   const map = new Map<
     string,
-    { readonly envelopeId: string; readonly canonicalHashSha256Hex: string }
+    {
+      readonly envelopeId: string;
+      readonly canonicalHashSha256Hex: string;
+      readonly replacementGroupId?: string;
+      readonly replacementOrdinal?: number;
+    }
   >();
   for (const fp of fingerprints ?? []) {
     map.set(fp.atomId, {
       envelopeId: fp.envelopeId,
       canonicalHashSha256Hex: fp.canonicalHashSha256Hex,
+      ...(fp.replacementGroupId !== undefined ? { replacementGroupId: fp.replacementGroupId } : {}),
+      ...(fp.replacementOrdinal !== undefined ? { replacementOrdinal: fp.replacementOrdinal } : {}),
     });
   }
   return map;
+}
+
+function replacementEntriesByGroup(
+  fingerprints: readonly AtomFingerprintEntry[] | undefined,
+): ReadonlyMap<string, readonly ReplacementEntry[]> {
+  const groups = new Map<string, ReplacementEntry[]>();
+  for (const fp of fingerprints ?? []) {
+    if (fp.replacementGroupId === undefined || fp.replacementOrdinal === undefined) continue;
+    const entry: ReplacementEntry = {
+      atomId: fp.atomId,
+      canonicalHashSha256Hex: fp.canonicalHashSha256Hex,
+      replacementGroupId: fp.replacementGroupId,
+      replacementOrdinal: fp.replacementOrdinal,
+    };
+    const group = groups.get(fp.replacementGroupId);
+    if (group === undefined) {
+      groups.set(fp.replacementGroupId, [entry]);
+    } else {
+      group.push(entry);
+    }
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => a.replacementOrdinal - b.replacementOrdinal);
+  }
+  return groups;
+}
+
+function alignmentPairCost(
+  oldEntry: ReplacementEntry,
+  currentEntry: ReplacementEntry,
+  oldAtomIds: ReadonlySet<string>,
+): number {
+  if (oldEntry.atomId === currentEntry.atomId) return 0;
+  if (currentEntry.canonicalHashSha256Hex === oldEntry.canonicalHashSha256Hex) return 0;
+  return oldAtomIds.has(currentEntry.atomId) ? ALIGN_CROSS_OLD_ATOM_COST : ALIGN_SUBSTITUTE_COST;
+}
+
+function replacementEntryAt(entries: readonly ReplacementEntry[], index: number): ReplacementEntry {
+  const entry = entries[index];
+  if (entry === undefined) throw new Error("Replacement alignment index out of bounds.");
+  return entry;
+}
+
+function matrixValue(matrix: readonly (readonly number[])[], row: number, col: number): number {
+  const value = matrix[row]?.[col];
+  if (value === undefined) throw new Error("Replacement alignment matrix index out of bounds.");
+  return value;
+}
+
+function setMatrixValue(matrix: number[][], row: number, col: number, value: number): void {
+  const rowValues = matrix[row];
+  if (rowValues === undefined) {
+    throw new Error("Replacement alignment matrix index out of bounds.");
+  }
+  rowValues[col] = value;
+}
+
+function buildAlignmentCostMatrix(
+  oldEntries: readonly ReplacementEntry[],
+  currentEntries: readonly ReplacementEntry[],
+  oldAtomIds: ReadonlySet<string>,
+): readonly (readonly number[])[] {
+  const matrix: number[][] = Array.from({ length: oldEntries.length + 1 }, () =>
+    Array.from({ length: currentEntries.length + 1 }, () => 0),
+  );
+  for (let oldIndex = 1; oldIndex <= oldEntries.length; oldIndex += 1) {
+    setMatrixValue(matrix, oldIndex, 0, oldIndex * ALIGN_INSERT_DELETE_COST);
+  }
+  for (let currentIndex = 1; currentIndex <= currentEntries.length; currentIndex += 1) {
+    setMatrixValue(matrix, 0, currentIndex, currentIndex * ALIGN_INSERT_DELETE_COST);
+  }
+  for (let oldIndex = 1; oldIndex <= oldEntries.length; oldIndex += 1) {
+    for (let currentIndex = 1; currentIndex <= currentEntries.length; currentIndex += 1) {
+      const pairCost = alignmentPairCost(
+        replacementEntryAt(oldEntries, oldIndex - 1),
+        replacementEntryAt(currentEntries, currentIndex - 1),
+        oldAtomIds,
+      );
+      const pair = matrixValue(matrix, oldIndex - 1, currentIndex - 1) + pairCost;
+      const deletion = matrixValue(matrix, oldIndex - 1, currentIndex) + ALIGN_INSERT_DELETE_COST;
+      const insertion = matrixValue(matrix, oldIndex, currentIndex - 1) + ALIGN_INSERT_DELETE_COST;
+      setMatrixValue(matrix, oldIndex, currentIndex, Math.min(pair, deletion, insertion));
+    }
+  }
+  return matrix;
+}
+
+function alignReplacementEntries(
+  oldEntries: readonly ReplacementEntry[],
+  currentEntries: readonly ReplacementEntry[],
+): ReadonlyMap<string, string> {
+  const mapping = new Map<string, string>();
+  const oldAtomIds = new Set(oldEntries.map((entry) => entry.atomId));
+  const costs = buildAlignmentCostMatrix(oldEntries, currentEntries, oldAtomIds);
+  let oldIndex = oldEntries.length;
+  let currentIndex = currentEntries.length;
+  while (oldIndex > 0 && currentIndex > 0) {
+    const oldEntry = replacementEntryAt(oldEntries, oldIndex - 1);
+    const currentEntry = replacementEntryAt(currentEntries, currentIndex - 1);
+    const pairCost = alignmentPairCost(oldEntry, currentEntry, oldAtomIds);
+    const currentCost = matrixValue(costs, oldIndex, currentIndex);
+    const pair = matrixValue(costs, oldIndex - 1, currentIndex - 1) + pairCost;
+    const deletion = matrixValue(costs, oldIndex - 1, currentIndex) + ALIGN_INSERT_DELETE_COST;
+    const insertion = matrixValue(costs, oldIndex, currentIndex - 1) + ALIGN_INSERT_DELETE_COST;
+    if (pairCost === 0 && currentCost === pair) {
+      mapping.set(oldEntry.atomId, currentEntry.atomId);
+      oldIndex -= 1;
+      currentIndex -= 1;
+    } else if (currentCost === insertion) {
+      currentIndex -= 1;
+    } else if (currentCost === deletion) {
+      oldIndex -= 1;
+    } else {
+      mapping.set(oldEntry.atomId, currentEntry.atomId);
+      oldIndex -= 1;
+      currentIndex -= 1;
+    }
+  }
+  return mapping;
+}
+
+function buildReplacementAtomMap(
+  oldFingerprints: readonly AtomFingerprintEntry[] | undefined,
+  currentFingerprints: readonly AtomFingerprintEntry[] | undefined,
+): ReadonlyMap<string, string> {
+  const oldGroups = replacementEntriesByGroup(oldFingerprints);
+  const currentGroups = replacementEntriesByGroup(currentFingerprints);
+  const mapping = new Map<string, string>();
+  for (const [groupId, oldEntries] of oldGroups) {
+    const currentEntries = currentGroups.get(groupId);
+    if (currentEntries === undefined) continue;
+    for (const [oldAtomId, currentAtomId] of alignReplacementEntries(oldEntries, currentEntries)) {
+      mapping.set(oldAtomId, currentAtomId);
+    }
+  }
+  return mapping;
 }
 
 function buildAtomIdsByEnvelope(
@@ -150,6 +328,24 @@ function buildAtomIdsByEnvelope(
   return map;
 }
 
+function replacementAtomIdForMissingCurrentAtom(
+  atomId: string,
+  ctx: ClassifyContext,
+): string | undefined {
+  return ctx.currentReplacementAtomIdsByOldAtomId.get(atomId);
+}
+
+function positionalRequirementReplacementAtomId(
+  atomId: string,
+  envelopeId: string,
+  ctx: ClassifyContext,
+): string | undefined {
+  const oldAtomIds = ctx.oldAtomIdsByEnvelope.get(envelopeId) ?? [];
+  const currentAtomIds = ctx.currentAtomIdsByEnvelope.get(envelopeId) ?? [];
+  const oldIndex = oldAtomIds.indexOf(atomId);
+  return oldIndex >= 0 ? currentAtomIds[oldIndex] : undefined;
+}
+
 function classifyMissingCurrentAtom(
   candidateId: string,
   atomId: string,
@@ -159,13 +355,14 @@ function classifyMissingCurrentAtom(
   if (!ctx.currentMap.has(envelopeId)) {
     return staleReason(candidateId, "source-removed", envelopeId);
   }
+  const replacementAtomId = replacementAtomIdForMissingCurrentAtom(atomId, ctx);
+  if (replacementAtomId !== undefined && !ctx.oldAtoms.has(replacementAtomId)) {
+    return staleReason(candidateId, "source-changed", envelopeId);
+  }
   if (!envelopeId.startsWith(REQUIREMENTS_ENVELOPE_PREFIX)) {
     return staleReason(candidateId, "source-removed", envelopeId);
   }
-  const oldAtomIds = ctx.oldAtomIdsByEnvelope.get(envelopeId) ?? [];
-  const currentAtomIds = ctx.currentAtomIdsByEnvelope.get(envelopeId) ?? [];
-  const oldIndex = oldAtomIds.indexOf(atomId);
-  const currentAtomAtSamePosition = oldIndex >= 0 ? currentAtomIds[oldIndex] : undefined;
+  const currentAtomAtSamePosition = positionalRequirementReplacementAtomId(atomId, envelopeId, ctx);
   if (currentAtomAtSamePosition !== undefined && !ctx.oldAtoms.has(currentAtomAtSamePosition)) {
     return staleReason(candidateId, "source-changed", envelopeId);
   }
@@ -281,6 +478,10 @@ export function compareStaleness(args: CompareStalenessArgs): StalenessResult {
     envelopeOrder: envelopeOrderOf(args.evidenceRefs),
     oldAtoms: buildAtomFingerprintMap(args.oldAtomFingerprints),
     currentAtoms: buildAtomFingerprintMap(args.currentAtomFingerprints),
+    currentReplacementAtomIdsByOldAtomId: buildReplacementAtomMap(
+      args.oldAtomFingerprints,
+      args.currentAtomFingerprints,
+    ),
     oldAtomIdsByEnvelope: buildAtomIdsByEnvelope(args.oldAtomFingerprints),
     currentAtomIdsByEnvelope: buildAtomIdsByEnvelope(args.currentAtomFingerprints),
   };

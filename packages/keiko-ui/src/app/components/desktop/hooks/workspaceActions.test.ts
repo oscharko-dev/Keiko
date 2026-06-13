@@ -765,6 +765,24 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     });
   });
 
+  it("overwrites carried source handles with an explicit empty set when a run row is reopened", () => {
+    const h = harness();
+    const staleHandles = JSON.stringify([
+      { kind: "workspace", label: "specs", path: "/abs/specs" },
+    ]);
+    const id1 = h.add("qiRun", {
+      runId: "qi-run-1",
+      connectedSourcesJson: staleHandles,
+    });
+    const id2 = h.add("qiRun", { runId: "qi-run-1", connectedSourcesJson: "[]" });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.cards()[0]?.cfg).toMatchObject({
+      runId: "qi-run-1",
+      connectedSourcesJson: "[]",
+    });
+  });
+
   it("opens a separate card for a different runId", () => {
     const h = harness();
     h.add("qiRun", { runId: "qi-run-1" });

@@ -262,6 +262,11 @@ const requirementsEnvelopeIdFor = (index: number): QI.QualityIntelligenceSourceE
 const stableLocalRef = (prefix: string, value: string): string =>
   `${prefix}:${sha256Hex(value).slice(0, 24)}`;
 
+const replacementGroupIdFor = (
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  stableKey: string,
+): string => sha256Hex(`qi-replace-v1|${String(envelopeId)}|${stableKey}`);
+
 const auditSummaryIdFor = (runId: string): QI.QualityIntelligenceAuditSummaryId =>
   QualityIntelligence.asQualityIntelligenceAuditSummaryId(
     `qi-audit-${sha256Hex(runId).slice(0, 24)}`,
@@ -305,7 +310,16 @@ function ingestRequirements(
     },
     localRef: `req:${String(index)}`,
   };
-  return { envelope, atoms };
+  return {
+    envelope,
+    atoms: atoms.map((entry, ordinal) =>
+      Object.freeze({
+        ...entry,
+        replacementGroupId: replacementGroupIdFor(envelopeId, `requirements:${String(index)}`),
+        replacementOrdinal: ordinal,
+      }),
+    ),
+  };
 }
 
 const WORKSPACE_BUDGET_BYTES = 196_608;
@@ -374,7 +388,7 @@ function documentRequirementAtoms(
   );
   if (split.length <= 1) return Object.freeze([]);
   return Object.freeze(
-    split.map((requirement) => {
+    split.map((requirement, ordinal) => {
       const canonicalText = `${entry.path}\n${requirement.canonicalText}`;
       const atom: QI.QualityIntelligenceRequirementAtom = {
         kind: "requirement",
@@ -384,7 +398,12 @@ function documentRequirementAtoms(
         redactionStatus: "redacted",
         lifecycleStatus: "draft",
       };
-      return Object.freeze({ atom: Object.freeze(atom), canonicalText });
+      return Object.freeze({
+        atom: Object.freeze(atom),
+        canonicalText,
+        replacementGroupId: replacementGroupIdFor(envelopeId, `document:${entry.path}`),
+        replacementOrdinal: ordinal,
+      });
     }),
   );
 }
