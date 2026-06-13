@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverFiles, discoverWithStats, readWorkspaceFile } from "./discovery.js";
-import { detectWorkspace } from "./detect.js";
+import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 import {
   FileTooLargeError,
   PathDeniedError,
@@ -117,6 +117,18 @@ describe("discoverFiles", () => {
     }
   });
 
+  it("refuses to walk a benign-named root that is a symlink into a denied dir", () => {
+    // Discovery does not realpath-contain the ROOT, so a "docs" -> ".aws" symlink would otherwise list
+    // the credential dir's files. The walk is refused (denied counted, zero files), never listed.
+    const aws = join(dir, ".aws");
+    mkdirSync(aws);
+    writeFileSync(join(aws, "credentials.md"), "aws_secret should never be listed", "utf8");
+    symlinkSync(aws, join(dir, "docs"));
+    const ws = detectWorkspaceAt(join(dir, "docs"));
+    expect(discoverFiles(ws, DEFAULT_DISCOVERY_OPTIONS)).toEqual([]);
+    expect(discoverWithStats(ws, DEFAULT_DISCOVERY_OPTIONS).stats.denied).toBeGreaterThanOrEqual(1);
+  });
+
   it("does not follow an internal symlink-to-file, but keeps the real target", () => {
     // Conservative, environment-independent behavior: a symlink is never traversed. The real
     // file is still found and discovery never throws. (Escaping symlinks are covered above.)
@@ -187,6 +199,41 @@ describe("readWorkspaceFile", () => {
     file(".env", "SECRET=1");
     symlinkSync(join(dir, ".env"), join(dir, "alias.env"));
     expect(() => readWorkspaceFile(detectWorkspace(dir), "alias.env")).toThrow(PathDeniedError);
+  });
+
+  it("refuses to read inside a benign-named root that is a symlink into a denied dir", () => {
+    // A directory symlink whose name is innocuous ("docs") but whose REAL target is a denied
+    // credential dir (".aws") must not read through: the relative deny checks only see the basename,
+    // and the realpath'd ROOT (where ".aws" lives) is invisible to them. Pins the symlinked-root guard.
+    const aws = join(dir, ".aws");
+    mkdirSync(aws);
+    writeFileSync(join(aws, "config.md"), "aws_session_token opaque-bare-token-not-shaped", "utf8");
+    symlinkSync(aws, join(dir, "docs")); // benign-named link -> denied real dir
+    expect(() => readWorkspaceFile(detectWorkspaceAt(join(dir, "docs")), "config.md")).toThrow(
+      PathDeniedError,
+    );
+  });
+
+  it("still reads a root whose own path contains a denied-named ANCESTOR but is not symlinked", () => {
+    // False-positive guard: a non-symlinked root that merely sits under a denied-named ancestor (e.g.
+    // the product's own ".cache"/".claude" worktree) must keep working — the guard only fires when a
+    // SYMLINK adds the denial (real root denied while lexical root is not), never on a lexical ancestor.
+    const nested = join(dir, ".cache", "proj");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "notes.md"), "ordinary project notes", "utf8");
+    const content = readWorkspaceFile(detectWorkspaceAt(nested), "notes.md");
+    expect(content.text).toBe("ordinary project notes");
+  });
+
+  it("still reads through a benign-named root symlink whose real target is NOT denied", () => {
+    // Positive control: a root symlink that resolves to an ordinary directory must keep reading — the
+    // guard must not over-block legitimate symlinked workspaces (only denied real targets are refused).
+    const real = join(dir, "realdocs");
+    mkdirSync(real);
+    writeFileSync(join(real, "spec.md"), "the system shall validate input", "utf8");
+    symlinkSync(real, join(dir, "linked"));
+    const content = readWorkspaceFile(detectWorkspaceAt(join(dir, "linked")), "spec.md");
+    expect(content.text).toBe("the system shall validate input");
   });
 
   it("refuses to read hard-linked aliases for context ingestion", () => {
