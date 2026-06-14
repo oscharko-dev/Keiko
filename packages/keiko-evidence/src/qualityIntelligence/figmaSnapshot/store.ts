@@ -15,7 +15,9 @@
 // (the server builder never places it on the in-memory snapshot); redaction is defense-in-depth.
 //
 // Integrity: load() recomputes the snapshot integrity hash and rejects a record whose persisted
-// `integrityHash` disagrees — tampered or truncated records are rejected at the read boundary.
+// `integrityHash` disagrees — tampered or truncated records are rejected at the read boundary. The
+// optional #752 artifacts (`links`, `tokens`) stay out of the drift hash but carry separate artifact
+// hashes when present; old un-hashed optional artifacts are omitted on load instead of being trusted.
 // NOTE: the PNG side-files are NOT re-hashed on load (they are served separately); the per-screen
 // `sha256` stored in the record serves as the tamper-evidence for each image.
 //
@@ -54,6 +56,7 @@ import { QI_SUBDIR } from "../store.js";
 import {
   FIGMA_SNAPSHOT_SCHEMA_VERSION,
   validateFigmaSnapshotRecord,
+  type FigmaSnapshotArtifactHashes,
   type FigmaSnapshotLinkRow,
   type FigmaSnapshotRecord,
   type FigmaSnapshotScreenRow,
@@ -138,6 +141,19 @@ function canonical(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
+const hashArtifact = (value: unknown): string => sha256Hex(canonical(value));
+
+const artifactHashesFor = (record: {
+  readonly links?: readonly FigmaSnapshotLinkRow[];
+  readonly tokens?: unknown;
+}): FigmaSnapshotArtifactHashes | undefined => {
+  const hashes: FigmaSnapshotArtifactHashes = {
+    ...(record.links !== undefined ? { links: hashArtifact(record.links) } : {}),
+    ...(record.tokens !== undefined ? { tokens: hashArtifact(record.tokens) } : {}),
+  };
+  return hashes.links === undefined && hashes.tokens === undefined ? undefined : hashes;
+};
+
 // Recompute the snapshot-level integrity hash from a loaded record.
 // This exactly mirrors hashSnapshot() in figmaSnapshotHash.ts:
 //   sha256( canonical({ screens: sorted [{integrityHash,screenId}], snapshotSchemaVersion, version }) )
@@ -153,6 +169,69 @@ function recomputeSnapshotIntegrityHash(record: FigmaSnapshotRecord): string {
       version: record.provenance.version ?? null,
     }),
   );
+}
+
+const EXTERNAL_LINK_TARGET = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|tel:|data:|javascript:)/iu;
+
+const isExternalLinkTarget = (targetNodeId: string): boolean =>
+  targetNodeId.startsWith("url:") || EXTERNAL_LINK_TARGET.test(targetNodeId);
+
+const safeLinkRows = (
+  links: readonly FigmaSnapshotLinkRow[] | undefined,
+): readonly FigmaSnapshotLinkRow[] | undefined =>
+  links?.filter((link) => !isExternalLinkTarget(link.targetNodeId));
+
+const omitUnverifiedArtifacts = (
+  record: FigmaSnapshotRecord,
+  omitLinks: boolean,
+  omitTokens: boolean,
+): FigmaSnapshotRecord => {
+  if (!omitLinks && !omitTokens) return record;
+  const omitted = new Set<string>([
+    ...(omitLinks ? ["links"] : []),
+    ...(omitTokens ? ["tokens"] : []),
+  ]);
+  return Object.fromEntries(
+    Object.entries(record).filter(([key]) => !omitted.has(key)),
+  ) as FigmaSnapshotRecord;
+};
+
+type ArtifactKind = "links" | "tokens";
+
+function verifyArtifactHash(
+  kind: ArtifactKind,
+  value: unknown,
+  actualHash: string | undefined,
+  runId: string,
+): boolean {
+  if (value === undefined) {
+    if (actualHash !== undefined) {
+      throw new EvidenceReadError(
+        `Figma snapshot integrity check failed for run ${runId}: ${kind} artifact missing`,
+      );
+    }
+    return false;
+  }
+  if (actualHash === undefined) return true;
+  if (actualHash !== hashArtifact(value)) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: ${kind} artifact hash mismatch`,
+    );
+  }
+  return false;
+}
+
+function verifyOptionalArtifactHashes(
+  record: FigmaSnapshotRecord,
+  runId: string,
+): FigmaSnapshotRecord {
+  const actual = record.artifactHashes;
+  const omitLinks = verifyArtifactHash("links", record.links, actual?.links, runId);
+  const omitTokens = verifyArtifactHash("tokens", record.tokens, actual?.tokens, runId);
+
+  // Older records predate artifact hashes. The optional fields remain schema-valid, but we do not
+  // trust them for downstream generation without their own tamper evidence.
+  return omitUnverifiedArtifacts(record, omitLinks, omitTokens);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -278,6 +357,7 @@ function assembleRecord(
   input: RecordFigmaSnapshotInput,
   screenRows: readonly FigmaSnapshotScreenRow[],
 ): FigmaSnapshotRecord {
+  const links = safeLinkRows(input.links);
   const draft: FigmaSnapshotRecord = {
     figmaSnapshotSchemaVersion: FIGMA_SNAPSHOT_SCHEMA_VERSION,
     runId: input.runId,
@@ -291,13 +371,18 @@ function assembleRecord(
     skippedScreens: input.skippedScreens as readonly FigmaSnapshotSkippedScreenRow[],
     // Omit `links`/`tokens` entirely when absent so an older snapshot stays byte-minimal and the
     // optional fields never serialise as `undefined` (exactOptionalPropertyTypes-safe).
-    ...(input.links !== undefined ? { links: input.links } : {}),
+    ...(links !== undefined ? { links } : {}),
     ...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
     integrityHash: input.integrityHash,
     redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
   };
   const { redacted, summary } = redactQualityIntelligenceEvidence(draft);
-  return { ...redacted, redactionSummary: summary };
+  const artifactHashes = artifactHashesFor(redacted);
+  return {
+    ...redacted,
+    ...(artifactHashes !== undefined ? { artifactHashes } : {}),
+    redactionSummary: summary,
+  };
 }
 
 // Parse one raw JSON string from a snapshot record file into a scope entry, or null when the
@@ -480,7 +565,7 @@ function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
       `Figma snapshot integrity check failed for run ${runId}: hash mismatch`,
     );
   }
-  return rec;
+  return verifyOptionalArtifactHashes(rec, runId);
 }
 
 function listByScopeOp(
