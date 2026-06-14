@@ -36,6 +36,7 @@ import { createUiServer, UI_HOST } from "../../server.js";
 import {
   EXPECTED_FIGMA_SCOPES,
   FigmaConnectorError,
+  SCOPED_PAGINATION_LIMIT_CEILINGS,
   type FigmaConnectorErrorCode,
   type FigmaHttpPort,
   type FigmaRenderPort,
@@ -45,6 +46,7 @@ import {
   handleFigmaLoadSnapshot,
   handleFigmaRevokeToken,
   handleFigmaTriggerSnapshot,
+  figmaPaginationFromEnv,
   makeInFlightMap,
   resetInFlightMap,
   type FigmaSnapshotSummary,
@@ -484,6 +486,20 @@ describe("env var parsing — KEIKO_FIGMA_REQUEST_TIMEOUT_MS", () => {
     const parsed = value !== undefined ? Number(value) : undefined;
     const result = parsed !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : 60_000;
     expect(result).toBe(expected);
+  });
+});
+
+describe("env var parsing — KEIKO_FIGMA_* scoped pagination limits", () => {
+  it("clamps extreme positive overrides to hard safety ceilings", () => {
+    expect(
+      figmaPaginationFromEnv({
+        KEIKO_FIGMA_PAGE_DEPTH: "999",
+        KEIKO_FIGMA_MAX_NODES_PER_SCREEN: "999999",
+        KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN: "999999",
+        KEIKO_FIGMA_MAX_SCREENS_DEEP: "999999",
+        KEIKO_FIGMA_FETCH_CONCURRENCY: "999",
+      }),
+    ).toEqual(SCOPED_PAGINATION_LIMIT_CEILINGS);
   });
 });
 

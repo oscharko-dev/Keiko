@@ -17,7 +17,8 @@ export const mapWithConcurrency = async <T, R>(
   worker: (item: T, index: number) => Promise<R>,
 ): Promise<readonly R[]> => {
   if (items.length === 0) return [];
-  const cap = Math.max(1, Math.min(limit, items.length));
+  const safeLimit = Number.isInteger(limit) && limit >= 1 ? limit : 1;
+  const cap = Math.max(1, Math.min(safeLimit, items.length));
   const results = new Array<R>(items.length);
   let next = 0;
 

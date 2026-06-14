@@ -27,6 +27,7 @@ import { classifyTokenFailure, resolveFigmaToken } from "./figmaTokenSource.js";
 import {
   DEFAULT_SCOPED_PAGINATION_LIMITS,
   paginateScopedDocument,
+  resolveScopedPaginationLimits,
   type FigmaScopeCoverage,
   type RawFigmaNode,
   type ScopedNodeFetcher,
@@ -333,7 +334,10 @@ export const createFigmaConnector = (deps: FigmaConnectorDeps): FigmaConnector =
     maxNodeCount: deps.config?.maxNodeCount ?? DEFAULT_MAX_NODE_COUNT,
     retryPolicy: deps.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY,
     sleep: deps.sleep ?? realFigmaRetrySleep,
-    paginationLimits: { ...DEFAULT_SCOPED_PAGINATION_LIMITS, ...deps.config?.pagination },
+    paginationLimits: resolveScopedPaginationLimits({
+      ...DEFAULT_SCOPED_PAGINATION_LIMITS,
+      ...deps.config?.pagination,
+    }),
   };
   return {
     fetchScopedNodes: (url, options = {}) => doFetchScopedNodes(rt, url, options),
