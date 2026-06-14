@@ -131,7 +131,7 @@ export type QiMultimodalSelection =
  * Resolve the image-input (multimodal) model for a vision-augmented stage (Issue #810).
  *
  * Selection is capability-driven: the cheapest configured chat model that advertises
- * supportsImageInput is chosen by `selectConfiguredModel`. When no configured model offers
+ * supportsImageInput is chosen by capability. When no configured model offers
  * image input, this returns a TYPED "unavailable" so the caller degrades gracefully to the
  * deterministic IR-only baseline — never a silent text-model substitution that would pretend
  * to have seen the image. No model id is hard-coded.
@@ -140,15 +140,14 @@ export function resolveQiMultimodalSelection(deps: UiHandlerDeps): QiMultimodalS
   if (deps.config === undefined) {
     return { kind: "unavailable" };
   }
-  const modelId = selectConfiguredModel(deps.config, { kind: "chat", supportsImageInput: true });
-  if (modelId === undefined) {
+  const selected = pickLowestCostChat(
+    listConfiguredCapabilities(deps.config),
+    (capability) => capability.supportsImageInput,
+  );
+  if (selected === undefined) {
     return { kind: "unavailable" };
   }
-  const capability = findConfiguredCapability(deps.config, modelId);
-  if (capability === undefined) {
-    return { kind: "unavailable" };
-  }
-  return { kind: "model", modelId, capability };
+  return { kind: "model", modelId: selected.id, capability: selected };
 }
 
 /**
