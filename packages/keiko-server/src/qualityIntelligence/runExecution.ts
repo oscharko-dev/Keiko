@@ -23,14 +23,14 @@ import {
   type QualityIntelligenceModelRoutedTestDesignDeps,
 } from "@oscharko-dev/keiko-workflows";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
-import type { UiHandlerDeps } from "../deps.js";
+import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
-import { createQiJudgePort } from "./judgePort.js";
-import { resolveQiTestDesignSelection } from "./modelSelection.js";
+import { createQiJudgePort, QiJudgeError } from "./judgePort.js";
+import { resolveQiTestDesignSelection, selectModelForQiCapability } from "./modelSelection.js";
 
 // Mirrors the stages the model-routed workflow actually emits (descriptors.ts stageNames), so the
 // run plan the UI renders matches the live stage:started/completed events — including the
@@ -137,7 +137,8 @@ function buildRunPlan(input: ExecuteQiRunInput): QI.QualityIntelligenceRunPlan {
 /**
  * Execute a QI run end to end. Throws `QiIngestionError` / `QiGenerationError` (safe, coded) when
  * the request cannot start; otherwise returns the run summary after the workflow reaches a terminal
- * state. `onAccepted` fires once, after ingestion + model resolution succeed and before generation.
+ * state. `onAccepted` fires once, after ingestion + model/judge resolution succeed and before
+ * generation.
  */
 export async function executeQiRun(
   input: ExecuteQiRunInput,
@@ -157,6 +158,7 @@ export async function executeQiRun(
     figmaVision: makeFigmaVisionHintProvider(deps),
   });
   const { modelId, generate } = resolveExecutionStrategy(deps, request);
+  const judge = buildJudgePortForModelRun(deps, modelId, request.modelId);
   const profile = resolveProfile(request.profileId);
 
   input.onAccepted(buildAccepted(input, ingestion, modelId));
@@ -175,6 +177,7 @@ export async function executeQiRun(
       evidenceDir,
       modelId,
       generate,
+      judge,
       onEvent: input.onEvent,
       signal: input.signal,
     }),
@@ -187,20 +190,25 @@ interface WorkflowDepsInput {
   readonly evidenceDir: string;
   readonly modelId?: string | undefined;
   readonly generate: ReturnType<typeof createQiGenerationPort>;
+  readonly judge?: ReturnType<typeof createQiJudgePort> | undefined;
   readonly onEvent: (event: QI.QualityIntelligenceRunEvent) => void;
   readonly signal: AbortSignal;
 }
 
-function buildJudgePortIfAvailable(
+function buildJudgePortForModelRun(
   deps: UiHandlerDeps,
   modelId: string | undefined,
+  requestedModelId: string | undefined,
 ): ReturnType<typeof createQiJudgePort> | undefined {
   if (modelId === undefined) return undefined;
+  const judgeModelId = selectModelForQiCapability(deps, "qi:judge-logic", requestedModelId);
   try {
-    return createQiJudgePort(deps, modelId);
-  } catch {
-    // Judge port creation failures are non-fatal: the judge stage is optional.
-    return undefined;
+    return createQiJudgePort(deps, judgeModelId);
+  } catch (error) {
+    if (error instanceof QiJudgeError) {
+      throw new QiGenerationError(error.code, error.message);
+    }
+    throw error;
   }
 }
 
@@ -222,7 +230,8 @@ function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRou
       },
     },
     generate: args.generate,
-    judge: buildJudgePortIfAvailable(args.deps, args.modelId),
+    judge: args.judge,
+    redaction: { additionalSecrets: currentRedactionSecrets(args.deps) },
     signal: args.signal,
   };
 }

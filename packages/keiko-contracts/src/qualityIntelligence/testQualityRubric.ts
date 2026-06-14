@@ -39,13 +39,13 @@ export interface TestQualityRubricDimension {
   readonly name: TestQualityDimensionName;
   /** Integer in [0, 100]. 0 = worst; 100 = best. */
   readonly score: number;
-  /** Human-readable rationale for the score; already redacted by the producer. */
+  /** Human-readable rationale for the score; redact before persistence or browser projection. */
   readonly rationale: string;
 }
 
 export interface TestQualityJudgeVerdict {
   readonly verdict: "weak" | "strong";
   readonly dimensions: readonly TestQualityRubricDimension[];
-  /** Aggregated explanation; already redacted by the producer. */
+  /** Aggregated explanation; redact before persistence or browser projection. */
   readonly overallRationale: string;
 }
