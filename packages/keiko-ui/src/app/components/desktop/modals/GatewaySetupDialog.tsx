@@ -46,6 +46,7 @@ export function GatewaySetupDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
@@ -61,6 +62,9 @@ export function GatewaySetupDialog({
     triggerRef.current = document.activeElement as HTMLElement | null;
     baseUrlRef.current?.focus();
     return () => {
+      if (reloadTimerRef.current !== undefined) {
+        window.clearTimeout(reloadTimerRef.current);
+      }
       triggerRef.current?.focus?.();
     };
   }, []);
@@ -144,7 +148,7 @@ export function GatewaySetupDialog({
       setSuccess(
         `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…`,
       );
-      window.setTimeout(() => window.location.reload(), 800);
+      reloadTimerRef.current = window.setTimeout(() => window.location.reload(), 800);
     } catch (caught) {
       const details = errorDetails(caught);
       setError(details.message);
