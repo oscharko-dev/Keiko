@@ -264,6 +264,33 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
+  it("quality score tiers use the state tokens that are contrast-pinned in both themes", () => {
+    const highBlock = cssBlock(".qi-quality-high {");
+    expect(highBlock).toContain("background: var(--accent-dim)");
+    expect(highBlock).toContain("color: var(--accent-text)");
+
+    const midBlock = cssBlock(".qi-quality-mid {");
+    expect(midBlock).toContain("background: color-mix(in oklch, var(--warn) 20%, transparent)");
+    expect(midBlock).toContain("color: var(--warn)");
+
+    const lowBlock = cssBlock(".qi-quality-low {");
+    expect(lowBlock).toContain("background: color-mix(in oklch, var(--danger) 22%, transparent)");
+    expect(lowBlock).toContain("color: var(--fg)");
+  });
+
+  it("weak-test flag text stays on primary or muted foreground tokens over a card-tinted surface", () => {
+    const flagBlock = cssBlock(".qi-weak-flag {");
+    expect(flagBlock).toContain("background: color-mix(in oklch, var(--danger) 10%, var(--card))");
+
+    const badgeBlock = cssBlock(".qi-weak-flag-badge {");
+    expect(badgeBlock).toContain("color: var(--fg)");
+
+    const reasonBlock = cssBlock(".qi-weak-flag-reason {");
+    expect(reasonBlock).toContain("color: var(--fg-muted)");
+  });
+});
+
 describe("Conversation memory switch target size (WCAG 2.5.8)", () => {
   it(".auto-toggle is at least 24px tall and has a larger hit area", () => {
     const block = cssBlock(".auto-toggle {");

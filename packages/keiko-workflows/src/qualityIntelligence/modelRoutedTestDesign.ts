@@ -359,6 +359,9 @@ function candidateSummaryText(candidate: Candidate): string {
 }
 
 const JUDGE_SUMMARY_DIMENSION_LIMIT = 2;
+const FINDING_KIND_TRUNCATION_PRIORITY: Readonly<Record<string, number>> = {
+  "test-quality": 0,
+};
 
 const JUDGE_DIMENSION_LABEL: Readonly<Record<QI.TestQualityDimensionName, string>> = {
   verifiability: "Verifiability",
@@ -427,6 +430,10 @@ function buildTestQualityFinding(
     summary: rationale,
     evidenceAtomIds: Object.freeze([...candidate.derivedFromAtomIds]),
   });
+}
+
+function findingTruncationPriority(finding: QI.QualityIntelligenceValidationFinding): number {
+  return FINDING_KIND_TRUNCATION_PRIORITY[finding.kind] ?? 1;
 }
 
 interface JudgeStageResult {
@@ -641,8 +648,9 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     );
     // Order by severity (critical -> low) BEFORE truncation so that, if the run hits the
     // per-run findings cap, the most severe findings — uncovered-requirement gaps included —
-    // always survive the cut rather than being dropped by array position (Array.sort is stable,
-    // so same-severity insertion order is preserved).
+    // always survive the cut rather than being dropped by array position. Within a severity tier,
+    // keep test-quality findings first because #748 weak-test flags are projected exclusively from
+    // those candidate-scoped findings; stable sort preserves original order for all remaining ties.
     const allFindings: readonly QI.QualityIntelligenceValidationFinding[] = [
       ...gapFindings,
       ...rawFindings,
@@ -652,7 +660,8 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       .sort(
         (a, b) =>
           QI.QUALITY_INTELLIGENCE_SEVERITY_RANK[a.severity] -
-          QI.QUALITY_INTELLIGENCE_SEVERITY_RANK[b.severity],
+            QI.QUALITY_INTELLIGENCE_SEVERITY_RANK[b.severity] ||
+          findingTruncationPriority(a) - findingTruncationPriority(b),
       );
     const findings = truncateFindings(allFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);

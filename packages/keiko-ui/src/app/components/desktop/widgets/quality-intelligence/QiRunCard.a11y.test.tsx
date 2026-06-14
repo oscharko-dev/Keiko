@@ -1,6 +1,6 @@
-// a11y smoke tests for the QI Coverage / Gap-Radar panel (Epic #734, Issue #739 — "coverage states
-// accessible (text + ARIA, NOT colour alone)"). jest-axe runs the WCAG 2.2 AA rule set; the panel
-// MUST emit zero violations whether the run is fully covered or has uncovered/weakly-covered gaps.
+// a11y smoke tests for the composed QI run card. jest-axe runs the WCAG 2.2 AA rule set across
+// coverage states (Epic #734 / Issue #739), #748 quality badges + weak-test rationale flags, and
+// inline-edit composition.
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -18,6 +18,7 @@ function makeDetail(
   coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[],
   coveragePercentage: number,
   candidates: readonly QualityIntelligenceUiCandidate[] = [],
+  qualityScore: number | null = null,
 ): QualityIntelligenceUiRunDetail {
   return {
     id: runId,
@@ -33,7 +34,7 @@ function makeDetail(
     manifestSchemaVersion: 1,
     coveragePercentage,
     coverageByAtom,
-    qualityScore: null,
+    qualityScore,
     drift: {
       status: "unavailable",
       sourceFingerprintCount: 0,
@@ -53,7 +54,7 @@ const fetchOk = (
       detail,
     ) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRunDetail;
 
-describe("QiRunCard coverage panel — a11y (WCAG 2.2 AA)", () => {
+describe("QiRunCard — a11y (WCAG 2.2 AA)", () => {
   beforeEach(() => {
     window.localStorage.clear();
   });
@@ -88,6 +89,43 @@ describe("QiRunCard coverage panel — a11y (WCAG 2.2 AA)", () => {
     // Both the visible label and an accessible name carry the status — colour is decorative only.
     expect(await screen.findByLabelText(/Atom atom-weak: Weakly covered/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Atom atom-gap: Uncovered/i)).toBeInTheDocument();
+  });
+
+  // Issue #748: the quality badge and weak-test rationale note live on the composed run card, so
+  // scan that composed surface rather than only isolated helpers.
+  it("has no violations with a quality score and weak-test rationale visible", async () => {
+    const candidate: QualityIntelligenceUiCandidate = {
+      id: "tc-a11y-weak",
+      derivedFromAtomIds: ["atom-weak"],
+      title: "Validate checkout shipping total",
+      preconditions: ["Cart has one shippable item"],
+      steps: ["Open checkout", "Wait for the order total"],
+      expectedResults: ["The total includes shipping"],
+      priority: "P1",
+      riskClass: "functional",
+      tags: ["checkout"],
+      status: "proposed",
+      reviewState: "open",
+      weakTestFlag: {
+        severity: "high",
+        rationale:
+          "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
+      },
+    };
+    const { container } = render(
+      <QiRunCard
+        runId="qi-run-a11y-quality"
+        fetchDetailImpl={fetchOk(makeDetail("qi-run-a11y-quality", [], 0, [candidate], 42))}
+      />,
+    );
+
+    expect(await screen.findByTestId("qi-quality-badge")).toHaveTextContent("42 out of 100");
+    expect(
+      screen.getByRole("note", {
+        name: /Weak test flagged by the quality judge: AC fidelity: Misses the stated acceptance criteria/i,
+      }),
+    ).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   // Issue #727 (Epic #712): the inline edit form must emit no axe violations on the FULL composed
