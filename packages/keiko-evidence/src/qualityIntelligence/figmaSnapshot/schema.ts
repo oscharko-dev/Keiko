@@ -3,12 +3,14 @@
 // The immutable, redaction-safe on-disk shape of a Figma Snapshot. It mirrors the QI evidence
 // manifest posture: a breaking change introduces a NEW `figmaSnapshotSchemaVersion` literal rather
 // than mutating this one; every string leaf has passed through redaction before persist; NO token,
-// NO secret, NO outbound url, NO header reaches this shape.
+// NO secret, NO outbound Figma/render URL, NO header reaches this shape.
 //
 // The rendered PNG bytes do NOT live inline — they are written as binary side-files and referenced
 // here by relative path + sha256 (the same tamper-evidence pattern as ADR-0017 side-files). The
 // integrity hashes are computed by the server builder over the in-memory Snapshot BEFORE persist
-// and are reproduced here verbatim, so a loaded record can be drift-checked against #735.
+// and are reproduced here verbatim, so a loaded record can be drift-checked against #735. Optional
+// #752 metadata (`links`, `tokens`) keeps separate artifact hashes: they are not drift identity, but
+// downstream consumers must not trust a tampered artifact under an otherwise-valid drift hash.
 //
 // `irJson` is the structural Screen-IR (#752) serialised as an opaque JSON value. It is design
 // CONTENT — the artifact's purpose — and is kept (not redacted away); only secrets are stripped.
@@ -54,7 +56,7 @@ export interface FigmaSnapshotScreenRow {
  * a record without `links` (e.g. an older snapshot) is still valid and the navigation derivation
  * degrades to zero nav items. NOT part of any integrity hash — `links` is non-identity design
  * metadata, so adding it does not change the drift hash (#735). Node ids + trigger are design content
- * (already redaction-safe); no token, secret, or url ever reaches this shape.
+ * (already redaction-safe); no token, secret, or outbound URL ever reaches this shape.
  */
 export interface FigmaSnapshotLinkRow {
   readonly sourceNodeId: string;
@@ -76,6 +78,12 @@ export interface FigmaSnapshotRedactionSummary {
   readonly patternsMatched: Readonly<Record<string, number>>;
 }
 
+/** Tamper-evidence for optional #752 artifacts that are hash-neutral for drift identity. */
+export interface FigmaSnapshotArtifactHashes {
+  readonly links?: string;
+  readonly tokens?: string;
+}
+
 export interface FigmaSnapshotRecord {
   readonly figmaSnapshotSchemaVersion: typeof FIGMA_SNAPSHOT_SCHEMA_VERSION;
   readonly runId: string;
@@ -91,9 +99,11 @@ export interface FigmaSnapshotRecord {
    * fields they come from are pruned out of the lean per-screen IR). OPTIONAL + additive: a record
    * without `tokens` (an older snapshot) is still valid and code-gen emits an empty token table. NOT
    * part of any integrity hash — design tokens are non-identity design metadata, so adding them does
-   * not change the drift hash (#735). Design content (no token/secret/url ever reaches this shape).
+   * not change the drift hash (#735). Design content (no token/secret/outbound URL reaches this shape).
    */
   readonly tokens?: unknown;
+  /** Separate integrity hashes for optional hash-neutral artifacts (`links`/`tokens`) when present. */
+  readonly artifactHashes?: FigmaSnapshotArtifactHashes;
   readonly integrityHash: string;
   readonly redactionSummary: FigmaSnapshotRedactionSummary;
 }
@@ -106,13 +116,29 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "skippedScreens",
   "links",
   "tokens",
+  "artifactHashes",
   "integrityHash",
   "redactionSummary",
 ]);
 
+const ALLOWED_ARTIFACT_HASH_KEYS: ReadonlySet<string> = new Set<string>(["links", "tokens"]);
+
 export interface FigmaSnapshotValidationResult {
   readonly ok: boolean;
   readonly reason: string | undefined;
+}
+
+function validateArtifactHashes(value: unknown): FigmaSnapshotValidationResult | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, reason: "artifactHashes must be an object" };
+  }
+  for (const key of Object.keys(value)) {
+    if (!ALLOWED_ARTIFACT_HASH_KEYS.has(key)) {
+      return { ok: false, reason: `unknown artifactHashes key: ${key}` };
+    }
+  }
+  return undefined;
 }
 
 // Strict-schema gate for a deserialised snapshot record: schema-version literal + closed key set.
@@ -136,5 +162,7 @@ export function validateFigmaSnapshotRecord(value: unknown): FigmaSnapshotValida
   if (!Array.isArray(record.screens) || !Array.isArray(record.skippedScreens)) {
     return { ok: false, reason: "screens and skippedScreens must be arrays" };
   }
+  const artifactHashesValidation = validateArtifactHashes(record.artifactHashes);
+  if (artifactHashesValidation !== undefined) return artifactHashesValidation;
   return { ok: true, reason: undefined };
 }

@@ -26,16 +26,19 @@ const channel = (value: number): string =>
 /**
  * Whether a Figma paint contributes a visible colour. Figma omits `visible` when a paint is shown, so
  * only an explicit `visible:false` hides it (mirrors {@link isHidden} for nodes). A paint-level
- * `opacity:0` or a SOLID `color.a:0` is fully transparent and likewise contributes no visible colour.
+ * `opacity <= 0` or a SOLID `color.a <= 0` is fully transparent and likewise contributes no visible colour.
  * Used so neither the reported text/background colour (#812) nor an extracted colour token (#752) is
  * ever taken from a paint that does not render.
  */
 export const isVisiblePaint = (paint: Record<string, unknown>): boolean => {
   if (paint.visible === false) return false;
   const opacity = readNumber(paint.opacity);
-  if (opacity === 0) return false;
+  if (opacity !== undefined && opacity <= 0) return false;
   const color = asNode(paint.color);
-  if (color !== undefined && readNumber(color.a) === 0) return false;
+  if (color !== undefined) {
+    const alpha = readNumber(color.a);
+    if (alpha !== undefined && alpha <= 0) return false;
+  }
   return true;
 };
 
@@ -47,7 +50,9 @@ export const paintColorToHex = (paint: Record<string, unknown>): string | undefi
   const g = readNumber(color.g);
   const b = readNumber(color.b);
   if (r === undefined || g === undefined || b === undefined) return undefined;
-  const a = readNumber(color.a) ?? 1;
+  const colorAlpha = readNumber(color.a) ?? 1;
+  const paintOpacity = readNumber(paint.opacity) ?? 1;
+  const a = Math.min(1, Math.max(0, colorAlpha)) * Math.min(1, Math.max(0, paintOpacity));
   const base = `#${channel(r)}${channel(g)}${channel(b)}`;
   return a < 1 ? `${base}${channel(a)}` : base;
 };

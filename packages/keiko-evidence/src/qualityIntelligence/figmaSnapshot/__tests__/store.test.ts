@@ -58,6 +58,15 @@ afterEach(() => {
 
 const png = (seed: number): Uint8Array => new Uint8Array([0x89, 0x50, seed, seed + 1]);
 
+const snapshotFile = (runId = RUN_ID): string => join(dir, "qi", `${runId}.figma-snapshot.json`);
+
+const readSnapshotFile = (runId = RUN_ID): Record<string, unknown> =>
+  JSON.parse(readFileSync(snapshotFile(runId), "utf8")) as Record<string, unknown>;
+
+const writeSnapshotFile = (raw: Record<string, unknown>, runId = RUN_ID): void => {
+  writeFileSync(snapshotFile(runId), JSON.stringify(raw), "utf8");
+};
+
 const baseInput = (): RecordFigmaSnapshotInput => ({
   runId: RUN_ID,
   provenance: {
@@ -178,6 +187,28 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(loaded.links).toEqual([
       { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
     ]);
+    expect(loaded.artifactHashes?.links).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("filters external URL targets out of persisted inter-screen links", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "I4:99" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "url:https://example.com" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "https://example.com" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "mailto:user@example.com" },
+      ],
+    });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.links).toEqual([
+      { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
+      { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "I4:99" },
+    ]);
+    expect(JSON.stringify(loaded)).not.toContain("https://example.com");
   });
 
   it("omits `links` from the persisted record when none are provided (older snapshot)", () => {
@@ -212,6 +243,68 @@ describe("createNodeFigmaSnapshotStore", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
     }
+  });
+
+  it("round-trips optional design tokens with an artifact hash when provided", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const tokens = {
+      colors: [{ id: "color:#000000", kind: "color", value: "#000000" }],
+      typography: [],
+      spacing: [],
+      radius: [],
+    };
+    store.record({ ...baseInput(), tokens });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.tokens).toEqual(tokens);
+    expect(loaded.artifactHashes?.tokens).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("rejects a record whose links artifact was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+    });
+
+    const raw = readSnapshotFile();
+    raw.links = [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:999" }];
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose tokens artifact was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      tokens: { colors: [], typography: [], spacing: [], radius: [] },
+    });
+
+    const raw = readSnapshotFile();
+    raw.tokens = { colors: [{ id: "color:#ff0000", kind: "color", value: "#ff0000" }] };
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("omits old optional links/tokens when artifact hashes are missing", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+      tokens: { colors: [], typography: [], spacing: [], radius: [] },
+    });
+
+    const raw = readSnapshotFile();
+    const legacy = Object.fromEntries(
+      Object.entries(raw).filter(([key]) => key !== "artifactHashes"),
+    );
+    writeSnapshotFile(legacy);
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.links).toBeUndefined();
+    expect(loaded.tokens).toBeUndefined();
   });
 });
 
