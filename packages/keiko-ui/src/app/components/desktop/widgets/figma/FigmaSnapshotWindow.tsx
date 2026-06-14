@@ -31,6 +31,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import Image from "next/image";
 import { ApiError } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
@@ -197,11 +198,14 @@ function ScreenCard({
       className="figma-snapshot-screen-card"
       aria-label={`Screen ${String(index + 1)}: ${name}`}
     >
-      <img
+      <Image
         className="figma-snapshot-screen-image"
         src={imageSrc}
         alt={`Captured preview for ${name}`}
         loading="lazy"
+        width={72}
+        height={54}
+        unoptimized
       />
       <div className="figma-snapshot-screen-meta">
         {/* uiux-fix F045 C252: the name is ellipsised user content — title makes the
