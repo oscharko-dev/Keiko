@@ -15,6 +15,7 @@ import {
   QualityIntelligenceHardening,
   QualityIntelligenceFigma,
   isUnsafeFormatCodePoint,
+  stripUnsafeFormatChars,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   detectWorkspaceAt,
@@ -985,6 +986,16 @@ function figmaDocumentId(screenId: string, screenName: string): string {
   return `${screenId} (${truncateToUtf8Bytes(safeName, MAX_LABEL_CHARS)})`;
 }
 
+// Strip Unicode bidi-override / zero-width / C1 spoofing code points from the untrusted Figma-derived
+// atom text BEFORE secret redaction. Two reasons for this order (the #734 strip-before-redact rule):
+// stripping first DE-OBFUSCATES a zero-width-split secret so the redactor can still match it, and it
+// removes the bidi/zero-width chars that would otherwise ride a Figma screen name or prototype trigger
+// verbatim into the QI atom text and every downstream export (bidi-spoofing of generated test titles).
+// Symmetric with the candidate-text path (buildRequirementExcerpt) and the source-label path
+// (sanitiseLabel / stripUnsafeLabelChars). TAB/LF/CR are preserved so the multi-line baseline structure
+// stays intact; clean inputs are byte-identical, so the atom hash and budget accounting are unchanged.
+const redactFigmaAtomText = (text: string): string => redact(stripUnsafeFormatChars(text));
+
 // Derive the redacted, budget-capped canonical text for every parseable screen. Each screen's
 // deterministic structural baseline (#754) is augmented additively with its navigation/flow test
 // items (#811) AND its accessibility test items (#812) — concatenated, neither replacing the other —
@@ -1011,9 +1022,12 @@ function figmaScreenDocs(
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
     const augmented = visionAugmentedScreenText(baseline, ir, record, row, vision);
-    const capped = truncateToUtf8Bytes(redact(augmented.text), perDocBudget);
+    const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
     if (capped.trim().length === 0) continue;
-    const fingerprintText = truncateToUtf8Bytes(redact(augmented.fingerprintText), perDocBudget);
+    const fingerprintText = truncateToUtf8Bytes(
+      redactFigmaAtomText(augmented.fingerprintText),
+      perDocBudget,
+    );
     const bytes = utf8ByteLength(capped);
     if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
     docs.push({
@@ -1042,9 +1056,12 @@ async function figmaScreenDocsAsync(
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
     const augmented = await visionAugmentedScreenTextAsync(baseline, ir, record, row, vision);
-    const capped = truncateToUtf8Bytes(redact(augmented.text), perDocBudget);
+    const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
     if (capped.trim().length === 0) continue;
-    const fingerprintText = truncateToUtf8Bytes(redact(augmented.fingerprintText), perDocBudget);
+    const fingerprintText = truncateToUtf8Bytes(
+      redactFigmaAtomText(augmented.fingerprintText),
+      perDocBudget,
+    );
     const bytes = utf8ByteLength(capped);
     if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
     docs.push({

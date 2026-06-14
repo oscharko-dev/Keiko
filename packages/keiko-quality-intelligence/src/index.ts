@@ -55,6 +55,7 @@ export {
   isUnsafeFormatCodePoint,
   normaliseCandidateText,
   normaliseText,
+  stripUnsafeFormatChars,
 } from "./domain/assertions.js";
 
 export {
