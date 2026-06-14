@@ -4,6 +4,7 @@ import {
   isVisiblePaint,
   paintColorToHex,
   parseHexRgb,
+  parseHexRgba,
 } from "../../domain/figma/color.js";
 import type { FigmaSourceNode } from "../../domain/figma/sourceNode.js";
 
@@ -98,5 +99,19 @@ describe("parseHexRgb", () => {
   });
   it("returns undefined for a malformed value", () => {
     expect(parseHexRgb("not-a-hex")).toBeUndefined();
+  });
+});
+
+describe("parseHexRgba", () => {
+  it("parses #RRGGBB with an opaque alpha", () => {
+    expect(parseHexRgba("#ff8000")).toEqual({ r: 255, g: 128, b: 0, a: 1 });
+  });
+
+  it("parses a trailing alpha pair instead of dropping it", () => {
+    const parsed = parseHexRgba("#ff000080");
+    expect(parsed?.r).toBe(255);
+    expect(parsed?.g).toBe(0);
+    expect(parsed?.b).toBe(0);
+    expect(parsed?.a).toBeCloseTo(128 / 255, 10);
   });
 });

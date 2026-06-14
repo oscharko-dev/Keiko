@@ -32,11 +32,15 @@ export type StructuralTestCategory =
   | "a11y"
   | "coverage-notice";
 
+export type StructuralTestOutcome = "pass" | "fail" | "expectation";
+
 /** One deterministic, per-screen-attributable test item derived from the Screen-IR. */
 export interface StructuralTestItem {
   readonly id: string;
   readonly title: string;
   readonly category: StructuralTestCategory;
+  /** Optional machine-readable result semantics for derived checks. */
+  readonly outcome?: StructuralTestOutcome;
   /** Screen provenance so a generated test is attributable to its origin screen. */
   readonly screenId: string;
   readonly screenName: string;

@@ -117,11 +117,12 @@ export const figmaTokenStoreFor = (
 };
 
 // Count deterministic a11y findings (#812) on the cleaned IR — the metric the #760 audit surfaces.
-// Coverage-notice items are excluded: they record what could NOT be checked, not a finding.
+// Passing checks, generic expectations, and coverage notices are excluded: they record test cases or
+// unverified coverage, not confirmed a11y findings.
 const a11yFindingsCount = (ir: ScreenIrResult): number => {
   let count = 0;
   for (const items of QualityIntelligenceFigma.deriveA11yTestItemsByScreen(ir.screens).values()) {
-    for (const item of items) if (item.category === "a11y") count += 1;
+    for (const item of items) if (item.category === "a11y" && item.outcome === "fail") count += 1;
   }
   return count;
 };
