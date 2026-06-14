@@ -39,6 +39,8 @@ import {
   type FigmaConnectorErrorCode,
   type FigmaHttpPort,
   type FigmaRenderPort,
+  deriveFigmaScopeRef,
+  loadFigmaConnectorAudit,
 } from "../figma/index.js";
 import type { RouteContext } from "../../routes.js";
 import {
@@ -401,6 +403,43 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
   });
 });
 
+// ─── #760 consent-required response carries display-only least-privilege scopes ──
+//
+// A FIGMA_CONSENT_REQUIRED 428 response must surface the exact read-only scopes the operator is
+// consenting to (EXPECTED_FIGMA_SCOPES) so the UI can show least-privilege before acknowledgement.
+// The matrix test above only pins status+code; nothing asserts the `scopes` body field, so a mutant
+// dropping the `scopes: EXPECTED_FIGMA_SCOPES` spread in figmaErrorBody would survive. This pins it,
+// proves the list is non-empty, and forbids any write/admin scope from leaking into the hint.
+describe("POST /api/figma/snapshots — consent-required scopes (#760)", () => {
+  it("428 body carries the canonical read-only scopes and no write/admin scope", async () => {
+    // Arrange: do NOT record consent so the gate fires before egress, then force the coded reject.
+    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    spy.mockRejectedValueOnce(new FigmaConnectorError("FIGMA_CONSENT_REQUIRED"));
+
+    try {
+      // Act
+      const result = await handleFigmaTriggerSnapshot(
+        makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false })),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      );
+
+      // Assert
+      expect(result.status).toBe(428);
+      const body = result.body as { error: { code: string }; scopes?: readonly string[] };
+      expect(body.error.code).toBe("FIGMA_CONSENT_REQUIRED");
+      expect(body.scopes).toEqual(EXPECTED_FIGMA_SCOPES);
+      expect(body.scopes?.length ?? 0).toBeGreaterThan(0);
+      for (const scope of body.scopes ?? []) {
+        expect(scope).not.toContain("write");
+        expect(scope).not.toContain("admin");
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 // ─── #758 SEC-3: re-key messages list the canonical least-privilege scopes ────
 //
 // FIGMA_TOKEN_MISSING / FIGMA_INSUFFICIENT_SCOPE operator messages must reference exactly the
@@ -587,6 +626,13 @@ describe("DELETE /api/figma/token", () => {
     const body = (await res.json()) as { code: string; message: string };
     expect(body.code).toBe("FIGMA_TOKEN_REVOKED_OK");
     expect(typeof body.message).toBe("string");
+
+    // #760 audit: the revoke handler must record an observed connector action through
+    // observeFigmaRevoke under the canonical deriveFigmaScopeRef("vault","token") ledger. Commenting
+    // out that call (or its inner store.revoke) leaves no audit entry, failing this assertion. We
+    // read the SAME evidenceDir the handler was given (the server harness wires it via makeDeps).
+    const audit = loadFigmaConnectorAudit(deriveFigmaScopeRef("vault", "token"), evidenceDir);
+    expect(audit?.auditLog.at(-1)).toMatchObject({ action: "revoke", outcome: "ok" });
   });
 
   it("returns 503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
@@ -759,6 +805,18 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
     const persistedRunId = postBody.runId;
     expect(typeof persistedRunId).toBe("string");
     expect(persistedRunId.startsWith("fs-")).toBe(true);
+
+    // #760 observability: a freshly-built snapshot (POST 201) must carry a numeric `metrics` object.
+    // A mutant dropping the `...(metrics !== undefined ? { metrics } : {})` spread in recordToSummary
+    // would leave metrics undefined and fail here. Each pinned field is typed as a number, and the
+    // serialised metrics must never leak a PAT (`figd_`) or a figma.com URL (governance pin #760).
+    const postMetrics = postBody.metrics;
+    expect(postMetrics).toBeDefined();
+    expect(typeof postMetrics?.screenCount).toBe("number");
+    expect(typeof postMetrics?.renderCount).toBe("number");
+    expect(typeof postMetrics?.designTokenCount).toBe("number");
+    expect(typeof postMetrics?.augmentation.modelAugmentedShare).toBe("number");
+    expect(JSON.stringify(postMetrics)).not.toMatch(/figd_|figma\.com/);
 
     // Act: load the same record via the GET handler.
     const ctx = makeGetCtx(persistedRunId);

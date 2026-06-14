@@ -24,6 +24,13 @@ import type { FigmaScopeRef } from "./figmaScopeRef.js";
 export const FIGMA_AUDIT_SCHEMA_VERSION = 1 as const;
 const FIGMA_AUDIT_SUFFIX = ".figma-audit.json";
 
+/**
+ * The four AC1-audited connector actions (Issue #760). `"snapshot"`, `"resnapshot"`, and `"revoke"`
+ * are emitted at their respective operations. `"connect"` is emitted exactly once — at the operator's
+ * first read-only-scope acknowledgement (acknowledgeReadOnly on the first build for a scope), by the
+ * orchestration's `gateConsent` (figmaSnapshotOrchestration.ts) — the durable record of the operator
+ * establishing the connection. Re-acknowledging an already-consented scope emits no further connect.
+ */
 export type FigmaConnectorAction = "connect" | "snapshot" | "resnapshot" | "revoke";
 export type FigmaConnectorOutcome = "ok" | "error";
 
