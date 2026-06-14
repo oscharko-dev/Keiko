@@ -14,9 +14,18 @@ import type {
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
 import { CandidateEditForm } from "./CandidateEditForm";
-import { ReviewBadge, WeakTestFlag } from "./qiShared";
+import {
+  CandidateQualityVerdictNote,
+  ReviewBadge,
+  WeakTestFlag,
+  type CandidateQualityVerdict,
+} from "./qiShared";
 
 const INITIAL_VISIBLE = 25;
+
+type CandidateWithQualityVerdict = QualityIntelligenceUiCandidate & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+};
 
 export type QiReviewAction = "approve" | "reject" | "request-changes" | "reopen";
 
@@ -193,7 +202,7 @@ function CandidateView({
   editButtonRef,
   pendingReview,
 }: {
-  readonly candidate: QualityIntelligenceUiCandidate;
+  readonly candidate: CandidateWithQualityVerdict;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onStartEdit?: (() => void) | undefined;
   readonly actionsDisabled?: boolean;
@@ -212,6 +221,9 @@ function CandidateView({
         </div>
       </div>
       {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
+      {candidate.qualityVerdict !== undefined ? (
+        <CandidateQualityVerdictNote verdict={candidate.qualityVerdict} />
+      ) : null}
       <StringList items={candidate.preconditions} label="Preconditions" />
       <StringList items={candidate.steps} label="Steps" />
       <StringList items={candidate.expectedResults} label="Expected results" />
@@ -263,7 +275,7 @@ function CandidateCard({
   describedBy,
   pendingReview,
 }: {
-  readonly candidate: QualityIntelligenceUiCandidate;
+  readonly candidate: CandidateWithQualityVerdict;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;

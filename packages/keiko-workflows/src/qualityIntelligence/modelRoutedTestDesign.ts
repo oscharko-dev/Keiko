@@ -113,6 +113,17 @@ export interface QualityIntelligenceJudgeResult extends QI.TestQualityJudgeVerdi
   readonly gatewayCallCount?: number;
 }
 
+interface CandidateQualityVerdict {
+  readonly verdict: QI.TestQualityJudgeVerdict["verdict"];
+  readonly score: number;
+  readonly dimensions: readonly QI.TestQualityRubricDimension[];
+  readonly overallRationale: string;
+}
+
+type CandidateWithQualityVerdict = Candidate & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+};
+
 /** Abstract model-judge seam (Epic #736, Issue #747). The server backs it with the gateway judge port. */
 export interface QualityIntelligenceJudgePort {
   readonly judge: (
@@ -360,6 +371,7 @@ async function generateCandidates(
 function candidateSummaryText(candidate: Candidate): string {
   const parts = [
     `Title: ${candidate.title}`,
+    `Preconditions: ${candidate.preconditions.join("; ")}`,
     `Steps: ${candidate.steps.join("; ")}`,
     `Expected: ${candidate.expectedResults.join("; ")}`,
   ];
@@ -447,11 +459,13 @@ function findingTruncationPriority(finding: QI.QualityIntelligenceValidationFind
 interface JudgeStageResult {
   readonly findings: readonly QI.QualityIntelligenceTestQualityFinding[];
   readonly qualityScore: number | null;
+  readonly candidateQualityVerdicts: ReadonlyMap<string, CandidateQualityVerdict>;
 }
 
 const EMPTY_JUDGE_RESULT: JudgeStageResult = Object.freeze({
   findings: Object.freeze([]),
   qualityScore: null,
+  candidateQualityVerdicts: new Map(),
 });
 
 // Bounded concurrency for the per-candidate judge calls: cuts the wall-clock of judging a large run
@@ -467,6 +481,17 @@ function isCancellationError(ctx: RunContext, error: unknown): boolean {
 interface JudgeOutcome {
   readonly strong: boolean;
   readonly finding: QI.QualityIntelligenceTestQualityFinding | null;
+  readonly qualityVerdict: CandidateQualityVerdict;
+}
+
+interface JudgeSlots {
+  readonly findingSlots: (QI.QualityIntelligenceTestQualityFinding | undefined)[];
+  readonly verdictSlots: (CandidateQualityVerdict | undefined)[];
+}
+
+interface JudgeCounts {
+  readonly strongCount: number;
+  readonly verdictCount: number;
 }
 
 const JUDGE_ERROR_RATIONALE =
@@ -483,7 +508,42 @@ function buildSyntheticWeakJudgeOutcome(
   return {
     strong: false,
     finding: buildTestQualityFinding(ctx.plan.id, candidate, 0, rationale, ordinal),
+    qualityVerdict: syntheticWeakQualityVerdict(rationale),
   };
+}
+
+function cloneDimensions(
+  dimensions: readonly QI.TestQualityRubricDimension[],
+): readonly QI.TestQualityRubricDimension[] {
+  return Object.freeze(dimensions.map((dimension) => Object.freeze({ ...dimension })));
+}
+
+function qualityVerdictFromJudge(
+  verdict: QI.TestQualityJudgeVerdict,
+  score: number,
+): CandidateQualityVerdict {
+  return Object.freeze({
+    verdict: verdict.verdict,
+    score,
+    dimensions: cloneDimensions(verdict.dimensions),
+    overallRationale: verdict.overallRationale,
+  });
+}
+
+function syntheticWeakQualityVerdict(rationale: string): CandidateQualityVerdict {
+  const dimensions = QI.TEST_QUALITY_RUBRIC_DIMENSIONS.map((name) =>
+    Object.freeze<QI.TestQualityRubricDimension>({
+      name,
+      score: 0,
+      rationale,
+    }),
+  );
+  return Object.freeze({
+    verdict: "weak",
+    score: 0,
+    dimensions: Object.freeze(dimensions),
+    overallRationale: rationale,
+  });
 }
 
 /**
@@ -515,16 +575,113 @@ async function judgeOneCandidate(
     ctx.modelGatewayCallCount += 1;
     return buildSyntheticWeakJudgeOutcome(ctx, candidate, ordinal, JUDGE_ERROR_RATIONALE);
   }
-  if (verdict.verdict === "strong") return { strong: true, finding: null };
+  const score = scoreFromDimensions(verdict.dimensions);
+  const qualityVerdict = qualityVerdictFromJudge(verdict, score);
+  if (verdict.verdict === "strong") return { strong: true, finding: null, qualityVerdict };
   return {
     strong: false,
     finding: buildTestQualityFinding(
       ctx.plan.id,
       candidate,
-      scoreFromDimensions(verdict.dimensions),
+      score,
       judgeRationaleSummary(verdict),
       ordinal,
     ),
+    qualityVerdict,
+  };
+}
+
+function makeJudgeSlots(candidateCount: number): JudgeSlots {
+  return {
+    findingSlots: Array.from({ length: candidateCount }, () => undefined),
+    verdictSlots: Array.from({ length: candidateCount }, () => undefined),
+  };
+}
+
+function recordJudgeOutcome(slots: JudgeSlots, index: number, outcome: JudgeOutcome): boolean {
+  slots.verdictSlots[index] = outcome.qualityVerdict;
+  if (outcome.finding !== null) slots.findingSlots[index] = outcome.finding;
+  return outcome.strong;
+}
+
+async function judgeCandidates(
+  ctx: RunContext,
+  candidates: readonly Candidate[],
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
+  judge: QualityIntelligenceJudgePort,
+  slots: JudgeSlots,
+): Promise<JudgeCounts> {
+  let strongCount = 0;
+  let verdictCount = 0;
+  let cursor = 0;
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = cursor;
+      cursor += 1;
+      if (i >= candidates.length) return;
+      const candidate = candidates[i];
+      if (candidate === undefined) continue;
+      const outcome = await judgeOneCandidate(ctx, candidate, i, ingestedAtoms, judge);
+      verdictCount += 1;
+      if (recordJudgeOutcome(slots, i, outcome)) strongCount += 1;
+    }
+  };
+
+  if (candidates.length > 0) {
+    await Promise.all(
+      Array.from({ length: Math.min(JUDGE_CONCURRENCY, candidates.length) }, () => worker()),
+    );
+  }
+  return { strongCount, verdictCount };
+}
+
+function recordBudgetOverflow(
+  ctx: RunContext,
+  candidates: readonly Candidate[],
+  startIndex: number,
+  slots: JudgeSlots,
+): number {
+  let verdictCount = 0;
+  for (let i = startIndex; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    if (candidate === undefined) continue;
+    const outcome = buildSyntheticWeakJudgeOutcome(ctx, candidate, i, JUDGE_BUDGET_RATIONALE);
+    verdictCount += 1;
+    recordJudgeOutcome(slots, i, outcome);
+  }
+  return verdictCount;
+}
+
+function candidateQualityVerdictMap(
+  candidates: readonly Candidate[],
+  slots: JudgeSlots,
+): ReadonlyMap<string, CandidateQualityVerdict> {
+  const candidateQualityVerdicts = new Map<string, CandidateQualityVerdict>();
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    const qualityVerdict = slots.verdictSlots[i];
+    if (candidate !== undefined && qualityVerdict !== undefined) {
+      candidateQualityVerdicts.set(String(candidate.id), qualityVerdict);
+    }
+  }
+  return candidateQualityVerdicts;
+}
+
+function buildJudgeStageResult(
+  candidates: readonly Candidate[],
+  slots: JudgeSlots,
+  counts: JudgeCounts,
+): JudgeStageResult {
+  const findings = slots.findingSlots.filter(
+    (f): f is QI.QualityIntelligenceTestQualityFinding => f !== undefined,
+  );
+  const qualityScore =
+    counts.verdictCount === 0 ? null : (counts.strongCount / counts.verdictCount) * 100;
+  return {
+    findings: Object.freeze(findings),
+    qualityScore,
+    candidateQualityVerdicts: candidateQualityVerdictMap(candidates, slots),
   };
 }
 
@@ -549,51 +706,33 @@ async function runJudgeStage(
   if (candidates.length === 0) return EMPTY_JUDGE_RESULT;
   const budget = Math.max(0, ctx.limits.maxJudgeCallsPerRun);
   const judgeable = budget >= candidates.length ? candidates : candidates.slice(0, budget);
-
-  const findingSlots: (QI.QualityIntelligenceTestQualityFinding | undefined)[] = Array.from(
-    { length: candidates.length },
-    () => undefined,
-  );
-  let strongCount = 0;
-  let verdictCount = 0;
-  let cursor = 0;
-
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const i = cursor;
-      cursor += 1;
-      if (i >= judgeable.length) return;
-      const candidate = judgeable[i];
-      if (candidate === undefined) continue;
-      const outcome = await judgeOneCandidate(ctx, candidate, i, ingestedAtoms, judge);
-      verdictCount += 1;
-      if (outcome.strong) strongCount += 1;
-      else if (outcome.finding !== null) findingSlots[i] = outcome.finding;
-    }
-  };
-
-  if (judgeable.length > 0) {
-    await Promise.all(
-      Array.from({ length: Math.min(JUDGE_CONCURRENCY, judgeable.length) }, () => worker()),
-    );
-  }
-
-  for (let i = judgeable.length; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    if (candidate === undefined) continue;
-    const outcome = buildSyntheticWeakJudgeOutcome(ctx, candidate, i, JUDGE_BUDGET_RATIONALE);
-    verdictCount += 1;
-    if (outcome.finding !== null) findingSlots[i] = outcome.finding;
-  }
-
-  const findings = findingSlots.filter(
-    (f): f is QI.QualityIntelligenceTestQualityFinding => f !== undefined,
-  );
+  const slots = makeJudgeSlots(candidates.length);
+  const judged = await judgeCandidates(ctx, judgeable, ingestedAtoms, judge, slots);
+  const overflowVerdictCount = recordBudgetOverflow(ctx, candidates, judgeable.length, slots);
   // Per-run quality score = share of candidates with a strong judge outcome, as a percentage (#747).
   // Gateway errors and budget overflow produce explicit weak outcomes so unverified candidates cannot
   // be indistinguishable from strong candidates or inflate the run score.
-  const qualityScore = verdictCount === 0 ? null : (strongCount / verdictCount) * 100;
-  return { findings: Object.freeze(findings), qualityScore };
+  return buildJudgeStageResult(candidates, slots, {
+    strongCount: judged.strongCount,
+    verdictCount: judged.verdictCount + overflowVerdictCount,
+  });
+}
+
+function candidatesWithQualityVerdicts(
+  candidates: readonly Candidate[],
+  verdicts: ReadonlyMap<string, CandidateQualityVerdict>,
+): readonly Candidate[] {
+  if (verdicts.size === 0) return candidates;
+  return Object.freeze(
+    candidates.map((candidate): Candidate => {
+      const qualityVerdict = verdicts.get(String(candidate.id));
+      if (qualityVerdict === undefined) return candidate;
+      return Object.freeze<CandidateWithQualityVerdict>({
+        ...candidate,
+        qualityVerdict,
+      });
+    }),
+  );
 }
 
 /**
@@ -701,7 +840,10 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
           ? { modelParameters: generation.modelParameters }
           : {}),
       });
-      deps.candidatesSink.record(candidates, completedAt);
+      deps.candidatesSink.record(
+        candidatesWithQualityVerdicts(candidates, judgeResult.candidateQualityVerdicts),
+        completedAt,
+      );
       return Promise.resolve(result);
     });
     emit(ctx, { kind: "run:succeeded" });
