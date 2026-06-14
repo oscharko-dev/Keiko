@@ -46,7 +46,7 @@ export function GatewaySetupDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
-  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const reloadTimerRef = useRef<number | undefined>(undefined);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
