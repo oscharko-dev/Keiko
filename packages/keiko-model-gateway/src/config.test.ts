@@ -62,6 +62,35 @@ describe("parseGatewayConfig", () => {
     expect(config.circuitBreaker.failureThreshold).toBe(5);
   });
 
+  it("parses an optional Figma access token from local config", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      figma: { accessToken: "  figd_config-token  " },
+    });
+
+    expect(config.figma?.accessToken).toBe("figd_config-token");
+  });
+
+  it("rejects malformed Figma config without echoing token-like values", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        figma: "figd_bad-token",
+      }),
+    ).toThrow(/figma must be an object/);
+    try {
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        figma: { accessToken: 123 },
+      });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("figma.accessToken");
+      expect((error as Error).message).not.toContain("figd_bad-token");
+    }
+  });
+
   it("parses explicit enterprise egress settings and applies them to providers", () => {
     const raw = {
       ...(validRaw() as Record<string, unknown>),
@@ -490,6 +519,18 @@ describe("toSafeObject", () => {
     expect(serialised).not.toContain("proxy.internal.example");
     expect(serialised).not.toContain("internal-ca.pem");
     expect(serialised).not.toContain("egress");
+  });
+
+  it("omits Figma connector credentials", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      figma: { accessToken: "figd_config-token" },
+    });
+    const serialised = JSON.stringify(toSafeObject(config));
+
+    expect(serialised).not.toContain("figd_config-token");
+    expect(serialised).not.toContain("figma");
+    expect(serialised).not.toContain("accessToken");
   });
 
   it("preserves non-secret fields", () => {

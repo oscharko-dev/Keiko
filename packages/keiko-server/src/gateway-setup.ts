@@ -1,7 +1,7 @@
-// First-run gateway setup for non-technical UI users. The browser provides only a base URL and API
-// token; the loopback BFF builds the local provider config, performs a real chat-completions smoke
-// call, stores the resulting config on disk with private permissions, and updates the in-memory
-// runtime config without exposing credentials back to the browser.
+// First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
+// and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
+// chat-completions smoke call, stores the resulting config on disk with private permissions, and
+// updates the in-memory runtime config without exposing credentials back to the browser.
 
 import {
   chmodSync,
@@ -31,7 +31,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import type { UiHandlerDeps } from "./deps.js";
+import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 
 const MAX_BODY_BYTES = 64_000;
 // Issue #144: exported so discovery-normalization tests can pin the slice cap
@@ -57,6 +57,10 @@ class BodyTooLargeError extends Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRouteResult(value: unknown): value is RouteResult {
+  return isRecord(value) && typeof value.status === "number";
 }
 
 function readBody(req: RouteContext["req"]): Promise<string> {
@@ -129,6 +133,7 @@ interface ProviderRawOptions {
   readonly timeoutMs?: number | undefined;
   readonly maxRetries?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
+  readonly figmaAccessToken?: string | undefined;
 }
 
 function providerRaw(
@@ -155,9 +160,13 @@ function buildRawConfig(
   modelIds: readonly string[],
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
+  const figmaAccessToken = options.figmaAccessToken?.trim();
   return {
     providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    ...(figmaAccessToken !== undefined && figmaAccessToken.length > 0
+      ? { figma: { accessToken: figmaAccessToken } }
+      : {}),
   };
 }
 
@@ -369,6 +378,28 @@ function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
   return names;
 }
 
+interface ParsedOptionalString {
+  readonly ok: true;
+  readonly value?: string | undefined;
+}
+
+function parseOptionalTrimmedString(
+  value: unknown,
+  field: string,
+): ParsedOptionalString | RouteResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${field} must be a string.`),
+    };
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? { ok: true } : { ok: true, value: trimmed };
+}
+
 function validateSetupConnection(
   baseUrl: string,
   apiKey: string,
@@ -503,17 +534,26 @@ function isSymlink(path: string): boolean {
   }
 }
 
-function readSetupRequest(
-  raw: unknown,
-  env: EnvSource,
-):
-  | {
-      readonly baseUrl: string;
-      readonly apiKey: string;
-      readonly apiKeyHeaderName: string;
-      readonly deploymentNames: readonly string[];
+interface SetupRequest {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+  readonly deploymentNames: readonly string[];
+  readonly figmaAccessToken?: string | undefined;
+}
+
+function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
+  try {
+    return normalizeApiKeyHeaderName(value, "apiKeyHeaderName", DEFAULT_API_KEY_HEADER_NAME);
+  } catch (error) {
+    if (error instanceof ConfigInvalidError) {
+      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
     }
-  | RouteResult {
+    throw error;
+  }
+}
+
+function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
   }
@@ -522,33 +562,35 @@ function readSetupRequest(
   if (baseUrl.length === 0 || apiKey.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "baseUrl and apiKey are required.") };
   }
-  let apiKeyHeaderName: string;
-  try {
-    apiKeyHeaderName = normalizeApiKeyHeaderName(
-      raw.apiKeyHeaderName,
-      "apiKeyHeaderName",
-      DEFAULT_API_KEY_HEADER_NAME,
-    );
-  } catch (error) {
-    if (error instanceof ConfigInvalidError) {
-      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
-    }
-    throw error;
+  const apiKeyHeaderName = normalizeSetupApiKeyHeaderName(raw.apiKeyHeaderName);
+  if (isRouteResult(apiKeyHeaderName)) {
+    return apiKeyHeaderName;
   }
   const deploymentNames = parseDeploymentNames(raw.deploymentNames);
-  if ("status" in deploymentNames) {
+  if (isRouteResult(deploymentNames)) {
     return deploymentNames;
+  }
+  const figmaAccessToken = parseOptionalTrimmedString(raw.figmaAccessToken, "figmaAccessToken");
+  if (isRouteResult(figmaAccessToken)) {
+    return figmaAccessToken;
   }
   const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
-  return { baseUrl, apiKey, apiKeyHeaderName, deploymentNames };
+  return {
+    baseUrl,
+    apiKey,
+    apiKeyHeaderName,
+    deploymentNames,
+    figmaAccessToken: figmaAccessToken.value,
+  };
 }
 
-function safeError(error: unknown, secrets: readonly string[]): string {
+function safeError(error: unknown, secrets: readonly (string | undefined)[]): string {
+  const concreteSecrets = secrets.filter((secret): secret is string => secret !== undefined);
   if (error instanceof Error) {
-    return redact(error.message, secrets);
+    return redact(error.message, concreteSecrets);
   }
   return "Gateway setup failed.";
 }
@@ -564,6 +606,7 @@ async function verifySetupCandidate(
   apiKey: string,
   apiKeyHeaderName: string,
   deploymentNames: readonly string[],
+  figmaAccessToken: string | undefined,
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
   env: EnvSource,
@@ -572,7 +615,7 @@ async function verifySetupCandidate(
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(baseUrl, "candidate");
   const validationConfig = parseGatewayConfig(
-    buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+    buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName, figmaAccessToken }),
     env,
   );
   const candidateModelIds =
@@ -585,10 +628,14 @@ async function verifySetupCandidate(
     apiKeyHeaderName,
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
+    figmaAccessToken,
   });
   const candidateConfig = parseGatewayConfig(candidateRawConfig, env);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
-  const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, { apiKeyHeaderName });
+  const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, {
+    apiKeyHeaderName,
+    figmaAccessToken,
+  });
   const config = parseGatewayConfig(rawConfig, env);
   return { rawConfig, config, testedModelIds };
 }
@@ -659,6 +706,33 @@ function gatewayUnavailableResult(): RouteResult {
   };
 }
 
+async function trySetupCandidate(
+  baseUrl: string,
+  request: SetupRequest,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  tester: GatewaySetupTester,
+  discovery: GatewayModelDiscovery,
+): Promise<RouteResult> {
+  const verified = await verifySetupCandidate(
+    baseUrl,
+    request.apiKey,
+    request.apiKeyHeaderName,
+    request.deploymentNames,
+    request.figmaAccessToken,
+    tester,
+    discovery,
+    deps.env,
+  );
+  savePrivateJson(gatewayConfig.storagePath, verified.rawConfig);
+  gatewayConfig.set(verified.config, true);
+  return setupSuccessResult(verified.config, verified.testedModelIds);
+}
+
+function setupCandidateError(error: unknown, request: SetupRequest, baseUrl: string): string {
+  return safeError(error, [request.apiKey, request.baseUrl, request.figmaAccessToken, baseUrl]);
+}
+
 export async function handleGatewaySetup(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -666,6 +740,7 @@ export async function handleGatewaySetup(
   if (deps.gatewayConfig === undefined) {
     return gatewayUnavailableResult();
   }
+  const { gatewayConfig } = deps;
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
@@ -686,21 +761,10 @@ export async function handleGatewaySetup(
   const errors: string[] = [];
   for (const baseUrl of baseUrlCandidates) {
     try {
-      const verified = await verifySetupCandidate(
-        baseUrl,
-        request.apiKey,
-        request.apiKeyHeaderName,
-        request.deploymentNames,
-        tester,
-        discovery,
-        deps.env,
-      );
-      savePrivateJson(deps.gatewayConfig.storagePath, verified.rawConfig);
-      deps.gatewayConfig.set(verified.config, true);
-      return setupSuccessResult(verified.config, verified.testedModelIds);
+      return await trySetupCandidate(baseUrl, request, deps, gatewayConfig, tester, discovery);
     } catch (error) {
       errors.push(
-        `candidate ${String(errors.length + 1)}: ${safeError(error, [request.apiKey, request.baseUrl, baseUrl])}`,
+        `candidate ${String(errors.length + 1)}: ${setupCandidateError(error, request, baseUrl)}`,
       );
     }
   }

@@ -56,6 +56,8 @@ export interface GovernedSnapshotDeps {
   readonly acknowledgeReadOnly?: boolean;
   /** Deep scoped-pagination overrides (#837). */
   readonly pagination?: Partial<ScopedPaginationLimits>;
+  /** Optional Keiko config PAT alternate (#751). Vault remains higher precedence. */
+  readonly configToken?: string | undefined;
   /** Shared enterprise egress settings for Figma API + render downloads (#802). */
   readonly egress?: OutboundHttpEgressConfig | undefined;
   /**
@@ -141,6 +143,43 @@ const gateConsent = (deps: GovernedSnapshotDeps, scopeRef: FigmaScopeRef): void 
 type FigmaConnector = ReturnType<typeof createFigmaConnector>;
 type FigmaScopedResult = Awaited<ReturnType<FigmaConnector["fetchScopedNodesDeep"]>>;
 
+interface SnapshotPorts {
+  readonly httpPort: FigmaHttpPort;
+  readonly renderPort: FigmaRenderPort;
+}
+
+function snapshotPorts(deps: GovernedSnapshotDeps): SnapshotPorts {
+  return {
+    httpPort: deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress, undefined, deps.portOptions),
+    renderPort:
+      deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress, undefined, deps.portOptions),
+  };
+}
+
+function resolveBuildToken(deps: GovernedSnapshotDeps, vaultToken: string | undefined): string {
+  return resolveFigmaToken({
+    vaultToken,
+    configToken: deps.configToken,
+    envToken: deps.env.FIGMA_ACCESS_TOKEN,
+  });
+}
+
+function createGovernedConnector(
+  deps: GovernedSnapshotDeps,
+  httpPort: FigmaHttpPort,
+  vaultToken: string | undefined,
+): FigmaConnector {
+  return createFigmaConnector({
+    http: httpPort,
+    env: deps.env,
+    ...(vaultToken !== undefined ? { vaultToken } : {}),
+    config: {
+      ...(deps.configToken !== undefined ? { accessToken: deps.configToken } : {}),
+      pagination: deps.pagination ?? {},
+    },
+  });
+}
+
 // Deep scoped fetch with audit-on-failure: a fetch failure is recorded as a coded audit entry before
 // it propagates, so the audit ledger captures the action even when the egress never produced a build.
 const auditedDeepFetch = async (
@@ -180,22 +219,14 @@ export const governedSnapshotBuild = async (
   const target = parseFigmaTarget(boardLink);
   if (target === null) throw new FigmaConnectorError("FIGMA_MALFORMED_URL");
   const scopeRef = deriveFigmaScopeRef(target.fileKey, target.nodeId);
-  const httpPort =
-    deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress, undefined, deps.portOptions);
-  const renderPort =
-    deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress, undefined, deps.portOptions);
+  const { httpPort, renderPort } = snapshotPorts(deps);
   const vaultToken = readFigmaVaultToken(deps);
 
   gateConsent(deps, scopeRef);
 
   // Render-token (vault > config > env). Throws FIGMA_TOKEN_MISSING when nothing is configured.
-  const token = resolveFigmaToken({ vaultToken, envToken: deps.env.FIGMA_ACCESS_TOKEN });
-  const connector = createFigmaConnector({
-    http: httpPort,
-    env: deps.env,
-    ...(vaultToken !== undefined ? { vaultToken } : {}),
-    config: { pagination: deps.pagination ?? {} },
-  });
+  const token = resolveBuildToken(deps, vaultToken);
+  const connector = createGovernedConnector(deps, httpPort, vaultToken);
 
   const action = isResnapshot ? "resnapshot" : "snapshot";
   const scoped = await auditedDeepFetch(connector, boardLink, deps, scopeRef, action);

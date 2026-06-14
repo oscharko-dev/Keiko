@@ -14,6 +14,7 @@ import {
 import type {
   CircuitBreakerConfig,
   CostClass,
+  FigmaConnectorConfig,
   GatewayConfig,
   LatencyClass,
   ModelCapability,
@@ -746,6 +747,18 @@ function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
   return resolveGroundingLimits(partial);
 }
 
+function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefined {
+  if (!isRecord(raw) || raw.figma === undefined) {
+    return undefined;
+  }
+  const block = raw.figma;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("figma must be an object");
+  }
+  const accessToken = optionalTrimmedString(block.accessToken, "figma.accessToken");
+  return accessToken === undefined ? {} : { accessToken };
+}
+
 function parseCircuitBreaker(raw: unknown): CircuitBreakerConfig {
   const source = isRecord(raw) ? raw : {};
   return {
@@ -814,12 +827,14 @@ function buildGatewayConfig(
   const parsed = providersRaw.map((item, index) => parseProvider(item, index, env));
   const capabilities = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const grounding = parseGroundingLimits(raw);
+  const figma = parseFigmaConnectorConfig(raw);
   return {
     providers: providersWithEgress(parsed, egress),
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
     ...(capabilities.length === 0 ? {} : { capabilities }),
     ...(grounding !== undefined ? { grounding } : {}),
     ...(egress !== undefined ? { egress } : {}),
+    ...(figma !== undefined ? { figma } : {}),
   };
 }
 

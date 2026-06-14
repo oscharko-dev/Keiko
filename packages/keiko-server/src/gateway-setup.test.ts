@@ -102,6 +102,39 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("stores and activates an optional Figma PAT without returning it", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        figmaAccessToken: " figd_setup-config-token ",
+      }),
+      deps,
+    );
+
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBe("figd_setup-config-token");
+    expect(JSON.parse(saved) as Record<string, unknown>).toMatchObject({
+      figma: { accessToken: "figd_setup-config-token" },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("figd_setup-config-token");
+    expect(JSON.stringify(result.body)).not.toContain("figma");
+    deps.store.close();
+  });
+
   it("passes env egress to discovery and smoke tests without persisting topology", async () => {
     const uiDir = await tempDir("keiko-gw-ui-egress-");
     const evidenceDir = await tempDir("keiko-gw-ev-egress-");
