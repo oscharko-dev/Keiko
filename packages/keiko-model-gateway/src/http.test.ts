@@ -621,6 +621,29 @@ describe("mapProxyError (via OutboundHttpEgressError code assignment)", () => {
 // ---------------------------------------------------------------------------
 
 describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
+  async function assertBypassWithStubbedFetch(noProxy: string[], target: string): Promise<void> {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ via: "direct" }), {
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    ) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const response = await gatewayFetch(target, {
+        egress: {
+          httpProxy: "http://127.0.0.1:1",
+          noProxy,
+        },
+      });
+      expect(await response.json()).toEqual({ via: "direct" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }
+
   async function assertBypassProxy(noProxy: string[], targetPath: string): Promise<void> {
     let originHits = 0;
     let proxyHits = 0;
@@ -666,6 +689,14 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
     await assertBypassProxy([".127.0.0.1"], "/");
   });
 
+  it("bare domain rule bypasses subdomains", async () => {
+    await assertBypassWithStubbedFetch(["corp.example"], "http://api.corp.example/models");
+  });
+
+  it("leading-dot domain rule bypasses subdomains", async () => {
+    await assertBypassWithStubbedFetch([".corp.example"], "http://api.corp.example/models");
+  });
+
   it("host:port form bypasses only the specific port", async () => {
     let originHits = 0;
     let proxyHits = 0;
@@ -693,6 +724,32 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
     } finally {
       await close(proxy);
       await close(origin);
+    }
+  });
+
+  it("host:port form does not bypass subdomains without an exact host match", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response("should not be called")));
+    vi.stubGlobal("fetch", fetchMock);
+    let proxyHits = 0;
+    const proxy = createHttpServer((_req, res) => {
+      proxyHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "proxy" }));
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch("http://api.corp.example:1234/models", {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          noProxy: ["corp.example:1234"],
+        },
+      });
+      expect(await response.json()).toEqual({ via: "proxy" });
+      expect(proxyHits).toBe(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      await close(proxy);
     }
   });
 

@@ -177,6 +177,58 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("passes config-file-only egress to discovery and smoke tests without configured providers", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-file-egress-");
+    const evidenceDir = await tempDir("keiko-gw-ev-file-egress-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        egress: {
+          httpsProxy: "http://proxy.config.internal.example:8443",
+          noProxy: "localhost,.corp.example",
+          caBundlePath: "/etc/keiko/config-ca.pem",
+        },
+      }),
+      "utf8",
+    );
+    let discoveryEgress: unknown;
+    let testerEgress: unknown;
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: (_baseUrl, _apiKey, _apiKeyHeaderName, egress) => {
+        discoveryEgress = egress;
+        return Promise.resolve(["example-chat-model"]);
+      },
+      gatewaySetupTester: (config, modelIds) => {
+        testerEgress = config.egress;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    const expectedEgress = {
+      httpsProxy: "http://proxy.config.internal.example:8443/",
+      noProxy: ["localhost", ".corp.example"],
+      caBundlePath: "/etc/keiko/config-ca.pem",
+    };
+    expect(result.status).toBe(200);
+    expect(deps.config).toBeUndefined();
+    expect(discoveryEgress).toEqual(expectedEgress);
+    expect(testerEgress).toEqual(expectedEgress);
+    expect(currentGatewayConfig(deps)?.egress).toEqual(expectedEgress);
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).not.toContain("proxy.config.internal.example");
+    expect(saved).not.toContain("config-ca.pem");
+    expect(saved).not.toContain("egress");
+    deps.store.close();
+  });
+
   it("rejects a symlinked final gateway config target", async () => {
     const uiDir = await tempDir("keiko-gw-ui-link-target-");
     const evidenceDir = await tempDir("keiko-gw-ev-link-target-");
