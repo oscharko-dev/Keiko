@@ -13,8 +13,15 @@
 // Determinism + model-independence (#755 DoD): emission is pure and model-free, so the same stored
 // snapshot yields a byte-identical artifact; semantic naming (the only model-augmentation point) is
 // additive and absent here, so the structural defaults are used. Evidence-backed: the artifact is
-// persisted to the local evidence dir through the reused contained-store seam. Gated: CSRF + a valid
-// stored runId. No hidden external effects: nothing leaves the box, the snapshot is never mutated.
+// persisted to the local evidence dir through the reused contained-store seam. Gated: CSRF + host-check
+// + a valid stored runId (the dispatch layer enforces the state-changing-request guard for this POST).
+// No hidden external effects: nothing leaves the box, the snapshot is never mutated.
+//
+// Cancellable (#755 AC2): for the first slice this is moot by construction — the handler is a
+// synchronous, pure, microsecond computation with no run-registry entry, no model call, no streaming,
+// and no long-running external work to abort; a client disconnect simply drops the response. When a
+// future slice wires the SemanticNamingProvider to a gateway model call, that injected port is where
+// an AbortSignal threads through — no structural change to this route is required.
 
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

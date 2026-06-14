@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -107,6 +107,11 @@ afterEach(() => {
 const body = (result: ReturnType<typeof handleFigmaGenerateCode>): FigmaCodegenResponse =>
   (result as { body: FigmaCodegenResponse }).body;
 
+const ISO_EPOCH = "1970-01-01T00:00:00.000Z";
+
+const errCode = (result: ReturnType<typeof handleFigmaGenerateCode>): string =>
+  (result as { body: { error: { code: string } } }).body.error.code;
+
 describe("handleFigmaGenerateCode (#755)", () => {
   it("emits a reviewable html-css artifact for a stored snapshot", () => {
     seedSnapshot(dir, "fs-1");
@@ -153,5 +158,75 @@ describe("handleFigmaGenerateCode (#755)", () => {
 
   it("503s when no evidence dir is configured", () => {
     expect(handleFigmaGenerateCode(ctxFor("x"), {} as UiHandlerDeps).status).toBe(503);
+  });
+
+  it("422s when the snapshot has no parseable screen (FIGMA_CODEGEN_NO_SCREENS)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const img = { mimeType: "image/png" as const, bytes: new Uint8Array([0x89, 0x50]) };
+    // irJson is an opaque value; a non-object cannot be parsed into a Screen-IR → dropped → 0 screens.
+    store.record({
+      runId: "bad-1",
+      provenance: { fileKey: "KEY", nodeId: "0:1", version: undefined, fetchedAt: ISO_EPOCH },
+      integrityHash: hashSnapshot(1, undefined, [{ screenId: "s1", integrityHash: "h1" }]),
+      screens: [{ screenId: "s1", irJson: "not-an-object", integrityHash: "h1", image: img }],
+      skippedScreens: [],
+      links: [],
+      tokens: TOKENS,
+    });
+    const result = handleFigmaGenerateCode(ctxFor("bad-1"), depsFor(dir));
+    expect(result.status).toBe(422);
+    expect(errCode(result)).toBe("FIGMA_CODEGEN_NO_SCREENS");
+  });
+
+  it("500s when the stored snapshot cannot be read (FIGMA_INTERNAL)", () => {
+    seedSnapshot(dir, "corrupt-1");
+    // Corrupt the persisted record so the store throws at the read boundary (invalid JSON).
+    writeFileSync(join(dir, "qi", "corrupt-1.figma-snapshot.json"), "}{ not valid json");
+    const result = handleFigmaGenerateCode(ctxFor("corrupt-1"), depsFor(dir));
+    expect(result.status).toBe(500);
+    expect(errCode(result)).toBe("FIGMA_INTERNAL");
+  });
+
+  it("persists the reviewable artifact to the evidence dir (.figma-codegen.json)", () => {
+    seedSnapshot(dir, "persist-1");
+    expect(handleFigmaGenerateCode(ctxFor("persist-1"), depsFor(dir)).status).toBe(200);
+    const artifactFile = join(dir, "qi", "persist-1.figma-codegen.json");
+    expect(existsSync(artifactFile)).toBe(true);
+    const persisted = JSON.parse(readFileSync(artifactFile, "utf8")) as {
+      adapterName: string;
+      figmaCodegenSchemaVersion: number;
+      files: unknown[];
+    };
+    expect(persisted.adapterName).toBe("html-css");
+    expect(persisted.figmaCodegenSchemaVersion).toBe(1);
+    expect(persisted.files.length).toBeGreaterThan(0);
+  });
+
+  it("strips unsafe bidi/zero-width format chars from board content end-to-end", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const img = { mimeType: "image/png" as const, bytes: new Uint8Array([0x89, 0x50]) };
+    const RLO = String.fromCodePoint(0x202e); // right-to-left override
+    const ZWSP = String.fromCodePoint(0x200b); // zero-width space (secret-splitting)
+    store.record({
+      runId: "bidi-1",
+      provenance: { fileKey: "KEY", nodeId: "0:1", version: undefined, fetchedAt: ISO_EPOCH },
+      integrityHash: hashSnapshot(1, undefined, [{ screenId: "s1", integrityHash: "h1" }]),
+      screens: [
+        {
+          screenId: "s1",
+          irJson: screenIr("s1", [irNode("s1-title", "text", { text: `He${RLO}llo${ZWSP}` })]),
+          integrityHash: "h1",
+          image: img,
+        },
+      ],
+      skippedScreens: [],
+      links: [],
+      tokens: TOKENS,
+    });
+    const b = body(handleFigmaGenerateCode(ctxFor("bidi-1"), depsFor(dir)));
+    // bidi embedding/override (U+202A–U+202E), LRM/RLM + zero-width (U+200B–U+200F), and BOM (U+FEFF).
+    const UNSAFE_RE = /[\u200b-\u200f\u202a-\u202e\ufeff]/u;
+    for (const f of b.files) expect(UNSAFE_RE.test(f.contents)).toBe(false);
+    expect(b.files.some((f) => f.contents.includes("Hello"))).toBe(true);
   });
 });
