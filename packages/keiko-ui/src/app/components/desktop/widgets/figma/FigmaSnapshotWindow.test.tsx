@@ -658,6 +658,17 @@ describe("FigmaSnapshotWindow", () => {
       const results = await axe(container);
       expect(results).toHaveNoViolations();
     });
+
+    it("has no axe violations in building state (Cancel button visible) — #756 audit", async () => {
+      // A never-resolving trigger keeps buildState==="building" so the Cancel button renders.
+      const trigger = makeTrigger((_link) => new Promise<FigmaSnapshotSummary>(() => {}));
+      const { container } = renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      expect(screen.getByRole("button", { name: /cancel/iu })).toBeInTheDocument();
+      const results = await axe(container);
+      expect(results).toHaveNoViolations();
+    });
   });
 
   describe("read-only-scope consent (#760)", () => {

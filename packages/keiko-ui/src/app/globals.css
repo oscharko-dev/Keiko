@@ -9160,6 +9160,29 @@ select.dlg-input {
   margin: 0;
 }
 
+/* WCAG 2.5.8 target size + focus ring — parity with sibling figma buttons (#756 audit) */
+.figma-snapshot-cancel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.figma-snapshot-cancel-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  cursor: pointer;
+  outline-offset: 2px;
+  min-height: 24px; /* WCAG 2.5.8 */
+}
+.figma-snapshot-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
 /* ── Status / progress ────────────────────────────────────────────────────── */
 
 .figma-snapshot-status {
@@ -9406,6 +9429,40 @@ select.dlg-input {
 .figma-snapshot-scopes-note {
   margin: 6px 0 0;
   color: var(--fg-dim);
+}
+
+/* WCAG 2.5.8 target size + focus ring — parity with sibling figma buttons (#756 audit) */
+.figma-snapshot-revoke-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.figma-snapshot-revoke-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.figma-snapshot-revoke-btn,
+.figma-snapshot-revoke-confirm-btn,
+.figma-snapshot-revoke-cancel-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  cursor: pointer;
+  outline-offset: 2px;
+  min-height: 24px; /* WCAG 2.5.8 */
+}
+.figma-snapshot-revoke-btn:focus-visible,
+.figma-snapshot-revoke-confirm-btn:focus-visible,
+.figma-snapshot-revoke-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent);
 }
 
 /* ── Screen gallery ───────────────────────────────────────────────────────── */
