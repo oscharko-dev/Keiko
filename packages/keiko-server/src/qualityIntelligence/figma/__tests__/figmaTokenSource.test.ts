@@ -121,12 +121,12 @@ describe("classifyTokenFailure taxonomy (structural, generic)", () => {
     expect(classifyTokenFailure(407).code).toBe("FIGMA_PROXY_EGRESS_FAILED");
   });
 
-  it("maps a 502 bad-gateway to FIGMA_PROXY_EGRESS_FAILED", () => {
-    expect(classifyTokenFailure(502).code).toBe("FIGMA_PROXY_EGRESS_FAILED");
+  it("maps a direct upstream 502 bad-gateway to FIGMA_UPSTREAM_UNAVAILABLE", () => {
+    expect(classifyTokenFailure(502).code).toBe("FIGMA_UPSTREAM_UNAVAILABLE");
   });
 
-  it("maps a 504 gateway-timeout to FIGMA_PROXY_EGRESS_FAILED", () => {
-    expect(classifyTokenFailure(504).code).toBe("FIGMA_PROXY_EGRESS_FAILED");
+  it("maps a direct upstream 504 gateway-timeout to FIGMA_UPSTREAM_UNAVAILABLE", () => {
+    expect(classifyTokenFailure(504).code).toBe("FIGMA_UPSTREAM_UNAVAILABLE");
   });
 
   it("maps 404 to FIGMA_NOT_FOUND", () => {

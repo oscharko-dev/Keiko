@@ -17,8 +17,9 @@
 // Integrity: load() recomputes each persisted screen hash from the stored, redacted IR + image
 // sha256, verifies each PNG side-file against the stored sha256/byteLength, and then recomputes the
 // snapshot integrity hash. Tampered or truncated records are rejected at the read boundary. The
-// optional #752 artifacts (`links`, `tokens`) stay out of the drift hash but carry separate artifact
-// hashes when present; old un-hashed optional artifacts are omitted on load instead of being trusted.
+// optional artifacts (`links`, `tokens`, `metrics`) stay out of the drift hash but carry separate
+// artifact hashes when present; old un-hashed optional artifacts are omitted on load instead of being
+// trusted.
 //
 // Retention: `enforceFigmaSnapshotRetention` deletes snapshot records + their side-file dirs in
 // lock-step with the provided policy. Wiring: call it where the other QI retention enforcement
@@ -58,6 +59,7 @@ import {
   type FigmaSnapshotArtifactHashes,
   type FigmaSnapshotImageRef,
   type FigmaSnapshotLinkRow,
+  type FigmaSnapshotMetrics,
   type FigmaSnapshotRecord,
   type FigmaSnapshotScreenRow,
   type FigmaSnapshotSkippedScreenRow,
@@ -94,6 +96,8 @@ export interface RecordFigmaSnapshotInput {
   readonly links?: readonly FigmaSnapshotLinkRow[];
   /** Deterministic design-tokens artifact (#752), opaque, for design-to-code (#755). Optional. */
   readonly tokens?: unknown;
+  /** Numeric operational metrics (#760). Optional for older snapshots. */
+  readonly metrics?: FigmaSnapshotMetrics;
 }
 
 export interface RecordFigmaSnapshotResult {
@@ -203,12 +207,16 @@ const recomputeScreenIntegrityHash = (screen: FigmaSnapshotScreenRow): string =>
 const artifactHashesFor = (record: {
   readonly links?: readonly FigmaSnapshotLinkRow[];
   readonly tokens?: unknown;
+  readonly metrics?: FigmaSnapshotMetrics;
 }): FigmaSnapshotArtifactHashes | undefined => {
   const hashes: FigmaSnapshotArtifactHashes = {
     ...(record.links !== undefined ? { links: hashArtifact(record.links) } : {}),
     ...(record.tokens !== undefined ? { tokens: hashArtifact(record.tokens) } : {}),
+    ...(record.metrics !== undefined ? { metrics: hashArtifact(record.metrics) } : {}),
   };
-  return hashes.links === undefined && hashes.tokens === undefined ? undefined : hashes;
+  return hashes.links === undefined && hashes.tokens === undefined && hashes.metrics === undefined
+    ? undefined
+    : hashes;
 };
 
 // Recompute the snapshot-level integrity hash from a loaded record.
@@ -251,18 +259,20 @@ const omitUnverifiedArtifacts = (
   record: FigmaSnapshotRecord,
   omitLinks: boolean,
   omitTokens: boolean,
+  omitMetrics: boolean,
 ): FigmaSnapshotRecord => {
-  if (!omitLinks && !omitTokens) return record;
+  if (!omitLinks && !omitTokens && !omitMetrics) return record;
   const omitted = new Set<string>([
     ...(omitLinks ? ["links"] : []),
     ...(omitTokens ? ["tokens"] : []),
+    ...(omitMetrics ? ["metrics"] : []),
   ]);
   return Object.fromEntries(
     Object.entries(record).filter(([key]) => !omitted.has(key)),
   ) as FigmaSnapshotRecord;
 };
 
-type ArtifactKind = "links" | "tokens";
+type ArtifactKind = "links" | "tokens" | "metrics";
 
 function verifyArtifactHash(
   kind: ArtifactKind,
@@ -294,10 +304,11 @@ function verifyOptionalArtifactHashes(
   const actual = record.artifactHashes;
   const omitLinks = verifyArtifactHash("links", record.links, actual?.links, runId);
   const omitTokens = verifyArtifactHash("tokens", record.tokens, actual?.tokens, runId);
+  const omitMetrics = verifyArtifactHash("metrics", record.metrics, actual?.metrics, runId);
 
   // Older records predate artifact hashes. The optional fields remain schema-valid, but we do not
   // trust them for downstream generation without their own tamper evidence.
-  return omitUnverifiedArtifacts(record, omitLinks, omitTokens);
+  return omitUnverifiedArtifacts(record, omitLinks, omitTokens, omitMetrics);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -448,6 +459,7 @@ function assembleRecord(
     // optional fields never serialise as `undefined` (exactOptionalPropertyTypes-safe).
     ...(links !== undefined ? { links } : {}),
     ...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
+    ...(input.metrics !== undefined ? { metrics: input.metrics } : {}),
     integrityHash: input.integrityHash,
     redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
   };

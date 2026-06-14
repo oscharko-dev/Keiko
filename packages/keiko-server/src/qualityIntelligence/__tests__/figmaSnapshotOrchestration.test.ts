@@ -13,6 +13,7 @@ import {
   loadFigmaConnectorAudit,
   hasReadOnlyConsent,
   deriveFigmaScopeRef,
+  recordReadOnlyConsent,
   type FigmaHttpPort,
   type FigmaRenderPort,
 } from "../figma/index.js";
@@ -182,6 +183,26 @@ describe("governedSnapshotBuild — consent gate (#760)", () => {
     expect(rec.tokens).toHaveLength(0);
   });
 
+  it("does not touch the vault/keychain before read-only consent is recorded", async () => {
+    let keychainTouched = false;
+    const rec = httpPort();
+    await expect(
+      governedSnapshotBuild(
+        URL_OK,
+        depsWith({
+          httpPort: rec.port,
+          acknowledgeReadOnly: false,
+          keychainAccess: () => {
+            keychainTouched = true;
+            return undefined;
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "FIGMA_CONSENT_REQUIRED" });
+    expect(keychainTouched).toBe(false);
+    expect(rec.tokens).toHaveLength(0);
+  });
+
   it("records consent and proceeds when the read-only scope is acknowledged", async () => {
     await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
     const scopeRef = deriveFigmaScopeRef("KEY123", "0:1");
@@ -275,6 +296,42 @@ describe("governedSnapshotBuild — audit + metrics (#760)", () => {
     const audit = loadFigmaConnectorAudit(result.scopeRef, dir);
     const connects = (audit?.auditLog ?? []).filter((e) => e.action === "connect");
     expect(connects).toHaveLength(1);
+  });
+
+  it("recovers a missing connect audit when consent already exists", async () => {
+    const scopeRef = deriveFigmaScopeRef("KEY123", "0:1");
+    recordReadOnlyConsent({
+      scopeRef,
+      evidenceDir: dir,
+      acknowledgedBy: "operator",
+      now: "2026-06-08T00:00:00.000Z",
+    });
+    expect(loadFigmaConnectorAudit(scopeRef, dir)).toBeUndefined();
+
+    await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+
+    const audit = loadFigmaConnectorAudit(scopeRef, dir);
+    expect(audit?.auditLog[0]).toMatchObject({ action: "connect", outcome: "ok" });
+  });
+
+  it("audits a snapshot auth/setup failure after consent", async () => {
+    await expect(
+      governedSnapshotBuild(
+        URL_OK,
+        depsWith({
+          env: {},
+          configToken: undefined,
+          acknowledgeReadOnly: true,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "FIGMA_TOKEN_MISSING" });
+
+    const audit = loadFigmaConnectorAudit(deriveFigmaScopeRef("KEY123", "0:1"), dir);
+    expect(audit?.auditLog.at(-1)).toMatchObject({
+      action: "snapshot",
+      outcome: "error",
+      errorCode: "FIGMA_TOKEN_MISSING",
+    });
   });
 
   it("counts only failing deterministic a11y checks as a11y findings", async () => {

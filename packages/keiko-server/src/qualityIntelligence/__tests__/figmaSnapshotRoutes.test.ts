@@ -698,6 +698,16 @@ describe("POST /api/figma/snapshots — persist failure", () => {
       expect(result.status).toBe(500);
       const errorBody = result.body as { error: { code: string } };
       expect(errorBody.error.code).toBe("FIGMA_INTERNAL");
+      const audit = loadFigmaConnectorAudit(deriveFigmaScopeRef("KEY123", "0:1"), evidenceDir);
+      const snapshotEntries = (audit?.auditLog ?? []).filter(
+        (entry) => entry.action === "snapshot",
+      );
+      expect(snapshotEntries).toHaveLength(1);
+      expect(snapshotEntries[0]).toMatchObject({
+        action: "snapshot",
+        outcome: "error",
+        errorCode: "FIGMA_INTERNAL",
+      });
     } finally {
       orchSpy.mockRestore();
       storeSpy.mockRestore();
@@ -856,6 +866,7 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
     expect(typeof summary.screenCount).toBe("number");
     expect(typeof summary.skippedCount).toBe("number");
     expect(summary.reductionHint.length).toBeGreaterThan(0);
+    expect(summary.metrics).toEqual(postMetrics);
 
     // The projected screens array has the correct element shape (structural smoke check).
     expect(Array.isArray(summary.screens)).toBe(true);
