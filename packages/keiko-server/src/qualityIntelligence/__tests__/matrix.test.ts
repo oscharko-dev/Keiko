@@ -231,7 +231,7 @@ function runInput(runId: string): QualityIntelligenceModelRoutedTestDesignInput 
 }
 
 describe("Epic #761 reproducibility", () => {
-  it("produces identical candidate ids for identical inputs across model tiers", async () => {
+  it("produces identical candidate ids for identical inputs across model tiers and run ids", async () => {
     const idsA: string[] = [];
     const idsB: string[] = [];
     const a = await runQualityIntelligenceModelRoutedTestDesign(
@@ -243,7 +243,7 @@ describe("Epic #761 reproducibility", () => {
       ),
     );
     const b = await runQualityIntelligenceModelRoutedTestDesign(
-      runInput("qi-run-repro-001"),
+      runInput("qi-run-repro-001-b"),
       fixedGenerateDeps(
         createInMemoryQualityIntelligenceLocalStore(),
         { rawText: MODEL_OUTPUT, modelCallCount: 1, modelId: "tier-low", seedUsed: null },

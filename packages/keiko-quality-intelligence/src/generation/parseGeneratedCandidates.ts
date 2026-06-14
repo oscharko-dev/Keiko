@@ -162,8 +162,13 @@ const resolveDerivedAtomIds = (
   return fallback === undefined ? Object.freeze([]) : Object.freeze([fallback]);
 };
 
-const deriveCandidateId = (runId: RunId, index: number, title: string): string => {
-  const digest = sha256Hex(`qi-cand-v1|${String(runId)}|${String(index)}|${title}`).slice(0, 32);
+const deriveCandidateId = (
+  index: number,
+  title: string,
+  derivedFromAtomIds: readonly AtomId[],
+): string => {
+  const atomRefs = derivedFromAtomIds.map(String).join("|");
+  const digest = sha256Hex(`qi-cand-v2|${String(index)}|${title}|${atomRefs}`).slice(0, 32);
   return `qi-candidate-${digest}`;
 };
 
@@ -178,12 +183,17 @@ const buildCandidate = (
   if (title.length === 0 || steps.length === 0) return undefined;
   const expectedResults = toStringList(raw.expectedResults);
   const tags = toStringList(raw.tags);
+  const derivedFromAtomIds = resolveDerivedAtomIds(
+    raw.derivedFromEvidenceIndexes,
+    input.atomIds,
+    index,
+  );
   return Object.freeze<Candidate>({
     id: QualityIntelligence.asQualityIntelligenceTestCaseId(
-      deriveCandidateId(input.runId, index, title),
+      deriveCandidateId(index, title, derivedFromAtomIds),
     ),
     runId: input.runId,
-    derivedFromAtomIds: resolveDerivedAtomIds(raw.derivedFromEvidenceIndexes, input.atomIds, index),
+    derivedFromAtomIds,
     title,
     preconditions: toStringList(raw.preconditions),
     steps,

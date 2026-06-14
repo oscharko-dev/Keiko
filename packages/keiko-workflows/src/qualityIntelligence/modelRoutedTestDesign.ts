@@ -11,6 +11,7 @@ import {
   buildAtomCoverageStatuses,
   buildCoverageMap,
   buildRequirementExcerpt,
+  computeCandidateEquivalenceSignature,
   deduplicateCandidates,
   deriveIntent,
   designTestCaseCandidates,
@@ -265,6 +266,7 @@ function buildCoverageGapFinding(
 /** Candidates plus the attribution metadata of the model call that produced them (Epic #761). */
 interface GenerationOutput {
   readonly candidates: readonly Candidate[];
+  readonly reviewCandidates: readonly Candidate[];
   readonly modelId?: string | undefined;
   readonly seedUsed?: number | null;
   readonly modelParameters: Record<string, unknown> | undefined;
@@ -301,14 +303,58 @@ function parseModelCandidates(
   return truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates);
 }
 
+function appendModelDelta(
+  baseline: readonly Candidate[],
+  delta: readonly Candidate[],
+  limit: number,
+): readonly Candidate[] {
+  const baselineLimit = delta.length > 0 && limit > 0 ? Math.max(0, limit - 1) : limit;
+  const out: Candidate[] = [...baseline].slice(0, baselineLimit);
+  const seen = new Set(out.map((candidate) => computeCandidateEquivalenceSignature(candidate)));
+  let appendedDelta = 0;
+  for (const candidate of delta) {
+    const signature = computeCandidateEquivalenceSignature(candidate);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    out.push(candidate);
+    appendedDelta += 1;
+    if (out.length >= limit) break;
+  }
+  if (appendedDelta === 0) {
+    for (let index = baselineLimit; index < baseline.length && out.length < limit; index += 1) {
+      const candidate = baseline[index];
+      if (candidate === undefined) continue;
+      out.push(candidate);
+    }
+  }
+  return Object.freeze(out);
+}
+
+function selectReviewCandidates(
+  persisted: readonly Candidate[],
+  baseline: readonly Candidate[],
+  delta: readonly Candidate[],
+): readonly Candidate[] {
+  if (delta.length === 0) {
+    return Object.freeze([] as readonly Candidate[]);
+  }
+  const persistedIds = new Set(persisted.map((candidate) => String(candidate.id)));
+  const persistedDelta = delta.filter((candidate) => persistedIds.has(String(candidate.id)));
+  return persistedDelta.length > 0 ? Object.freeze(persistedDelta) : baseline;
+}
+
 function modelGenerationOutput(
   result: QualityIntelligenceGenerationPortResult,
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
   maxCandidates: number,
 ): GenerationOutput {
+  const baseline = deterministicBaselineCandidates(ctx, input);
+  const delta = parseModelCandidates(result, ctx, input, maxCandidates);
+  const candidates = appendModelDelta(baseline, delta, maxCandidates);
   return {
-    candidates: parseModelCandidates(result, ctx, input, maxCandidates),
+    candidates,
+    reviewCandidates: selectReviewCandidates(candidates, baseline, delta),
     ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
     ...(result.modelId !== undefined
       ? { seedUsed: result.seedUsed ?? null }
@@ -359,8 +405,10 @@ async function generateCandidates(
   }
   ctx.modelGatewayCallCount += result.modelCallCount;
   if (result.modelId === undefined && result.modelCallCount === 0) {
+    const candidates = deterministicBaselineCandidates(ctx, input);
     return {
-      candidates: deterministicBaselineCandidates(ctx, input),
+      candidates,
+      reviewCandidates: candidates,
       ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
       modelParameters: result.modelParameters,
     };
@@ -762,12 +810,13 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       generateCandidates(ctx, input, deps),
     );
     const candidates = generation.candidates;
+    const reviewCandidates = generation.reviewCandidates;
     emitCandidateProposed(ctx, candidates);
     const judge = deps.judge;
     const judgeResult = await withStage(ctx, "judge", async () => {
       if (judge === undefined) return EMPTY_JUDGE_RESULT;
       try {
-        return await runJudgeStage(ctx, candidates, input.ingestedAtoms, judge);
+        return await runJudgeStage(ctx, reviewCandidates, input.ingestedAtoms, judge);
       } catch (error) {
         // Cancellation must still abort the run; anything else is fail-soft so an optional judge
         // can never turn a successful generation into a failed run (Epic #736 augments-not-harms).
@@ -777,7 +826,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
     const coverageMap = await withStage(ctx, "coverage", async () =>
-      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates })),
+      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates: reviewCandidates })),
     );
     const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
     const excerptByAtomId = excerptsByAtomId(input.ingestedAtoms);
@@ -792,7 +841,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       }
     }
     const rawFindings = await withStage(ctx, "validate", async () =>
-      Promise.resolve(validateCandidates(input.plan.id, candidates)),
+      Promise.resolve(validateCandidates(input.plan.id, reviewCandidates)),
     );
     // Order by severity (critical -> low) BEFORE truncation so that, if the run hits the
     // per-run findings cap, the most severe findings — uncovered-requirement gaps included —
