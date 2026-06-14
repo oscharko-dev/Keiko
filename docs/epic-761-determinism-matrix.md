@@ -30,7 +30,7 @@ the adversarial test-quality judge, which uses the `qi:judge-logic` profile and 
 configured **structured-output** model. When an automatic run (no explicitly requested model) selects
 a chat-only generation model but no structured-output model is configured for the judge, the run
 fails fast with the typed, route-mapped `QI_CAPABILITY_UNAVAILABLE` error rather than silently
-skipping the judge — so a chat-only-only deployment must add at least one structured-output model to
+skipping the judge — so a chat-only deployment must add at least one structured-output model to
 use the automatic judged run. An explicitly requested chat-only generation model paired with a
 separate structured-output model still runs end to end.
 
