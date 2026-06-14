@@ -519,23 +519,33 @@ describe("executeQiRun — model selection", () => {
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("preferred-structured");
   });
 
-  it("does not accept a model run when no judge-capable model is configured", async () => {
+  it("accepts an automatic chat-only model run and skips an unavailable judge", async () => {
     const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
-    await expect(
-      executeQiRun(
-        makeInput(evidenceDir, {
-          onAccepted,
-          request: requestWithoutModel(),
-          deps: buildDeps({
-            evidenceDir,
-            config: buildConfig([
-              chatCapability("chat-only", { structuredOutput: false, costClass: "low" }),
-            ]),
-          }),
+    const { port, calls } = recordingSequencePort([COVERING_TWO_REQUIREMENTS_JSON]);
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-chat-only-no-judge",
+        onAccepted,
+        request: requestWithoutModel(),
+        deps: buildDeps({
+          evidenceDir,
+          modelPort: port,
+          config: buildConfig([
+            chatCapability("chat-only", { structuredOutput: false, costClass: "low" }),
+          ]),
         }),
-      ),
-    ).rejects.toMatchObject({ code: "QI_CAPABILITY_UNAVAILABLE" });
-    expect(onAccepted).not.toHaveBeenCalled();
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBeNull();
+    expect(summary.modelGatewayCallCount).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.modelId).toBe("chat-only");
+    expect(calls[0]?.responseFormat).toBeUndefined();
+    expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("chat-only");
+    const manifest = loadQualityIntelligenceRun("run-chat-only-no-judge", { evidenceDir });
+    expect(manifest?.qualityScore).toBeNull();
+    expect(testQualityFindingsFrom(manifest)).toHaveLength(0);
   });
 
   it("can use an explicit chat-only generation model with a separate judge-capable model", async () => {

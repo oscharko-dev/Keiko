@@ -125,6 +125,17 @@ export type QiMultimodalSelection =
       readonly capability: ModelCapability;
     };
 
+export type QiStrictCapabilitySelection =
+  | {
+      readonly kind: "model";
+      readonly modelId: string;
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly code: "QI_CAPABILITY_UNAVAILABLE";
+      readonly message: string;
+    };
+
 /**
  * Resolve the image-input (multimodal) model for a vision-augmented stage (Issue #810).
  *
@@ -145,6 +156,41 @@ export function resolveQiMultimodalSelection(deps: UiHandlerDeps): QiMultimodalS
   return { kind: "model", ...selected };
 }
 
+function unavailableCapabilitySelection(profileId: QiProfileId): QiStrictCapabilitySelection {
+  return {
+    kind: "unavailable",
+    code: "QI_CAPABILITY_UNAVAILABLE",
+    message: `No configured model satisfies the ${profileId} capability requirements.`,
+  };
+}
+
+/**
+ * Resolve a strict profile-compatible model without throwing for a missing capability. Callers that
+ * treat the profile as optional can degrade on the typed unavailable result; callers that require
+ * the capability should use selectModelForQiCapability below.
+ */
+export function resolveModelForQiCapability(
+  deps: UiHandlerDeps,
+  profileId: QiProfileId,
+  requested?: string,
+): QiStrictCapabilitySelection {
+  const trimmed = requested?.trim();
+  if (trimmed !== undefined && trimmed.length > 0) {
+    if (isRequestedModelCompatible(deps, trimmed, profileId)) {
+      return { kind: "model", modelId: trimmed };
+    }
+  }
+  if (deps.config === undefined) {
+    return unavailableCapabilitySelection(profileId);
+  }
+  const query = buildSelectionQuery(profileId);
+  const selected = selectConfiguredModel(deps.config, query);
+  if (selected === undefined) {
+    return unavailableCapabilitySelection(profileId);
+  }
+  return { kind: "model", modelId: selected };
+}
+
 /**
  * Resolve the model id to use for a given QI task profile. Never returns undefined; throws
  * QI_CAPABILITY_UNAVAILABLE when no configured model satisfies the profile requirements.
@@ -154,23 +200,7 @@ export function selectModelForQiCapability(
   profileId: QiProfileId,
   requested?: string,
 ): string {
-  const trimmed = requested?.trim();
-  if (trimmed !== undefined && trimmed.length > 0) {
-    if (isRequestedModelCompatible(deps, trimmed, profileId)) return trimmed;
-  }
-  if (deps.config === undefined) {
-    throw new QiGenerationError(
-      "QI_CAPABILITY_UNAVAILABLE",
-      `No configured model satisfies the ${profileId} capability requirements.`,
-    );
-  }
-  const query = buildSelectionQuery(profileId);
-  const selected = selectConfiguredModel(deps.config, query);
-  if (selected === undefined) {
-    throw new QiGenerationError(
-      "QI_CAPABILITY_UNAVAILABLE",
-      `No configured model satisfies the ${profileId} capability requirements.`,
-    );
-  }
-  return selected;
+  const selection = resolveModelForQiCapability(deps, profileId, requested);
+  if (selection.kind === "model") return selection.modelId;
+  throw new QiGenerationError(selection.code, selection.message);
 }
