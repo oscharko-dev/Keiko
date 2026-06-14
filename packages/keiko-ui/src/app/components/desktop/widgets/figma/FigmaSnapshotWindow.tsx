@@ -36,6 +36,7 @@ import { formatBytes, formatDate } from "@/lib/format";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
+  figmaSnapshotScreenImageUrl,
   generateFigmaCode,
   revokeFigmaToken,
 } from "@/lib/figma-snapshot-api";
@@ -179,6 +180,7 @@ interface ScreenCardProps {
   readonly screenId: string;
   readonly name: string;
   readonly irSummary: string;
+  readonly imageSrc: string;
   readonly imageByteLength: number;
 }
 
@@ -187,6 +189,7 @@ function ScreenCard({
   screenId,
   name,
   irSummary,
+  imageSrc,
   imageByteLength,
 }: ScreenCardProps): ReactNode {
   return (
@@ -194,22 +197,12 @@ function ScreenCard({
       className="figma-snapshot-screen-card"
       aria-label={`Screen ${String(index + 1)}: ${name}`}
     >
-      {/* uiux-fix F045 C378: the tile is a deliberate thumbnail surrogate (no image-serving
-          endpoint yet) — a frame glyph above the index reads as "screen N", not as a
-          failed image load. */}
-      <div className="figma-snapshot-screen-placeholder" aria-hidden="true">
-        <svg
-          className="figma-snapshot-screen-frame-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        >
-          <path d="M7 2v20M17 2v20M2 7h20M2 17h20" />
-        </svg>
-        <span className="figma-snapshot-screen-index">{String(index + 1)}</span>
-      </div>
+      <img
+        className="figma-snapshot-screen-image"
+        src={imageSrc}
+        alt={`Captured preview for ${name}`}
+        loading="lazy"
+      />
       <div className="figma-snapshot-screen-meta">
         {/* uiux-fix F045 C252: the name is ellipsised user content — title makes the
             full name reachable on hover for mouse users. */}
@@ -575,7 +568,7 @@ export function FigmaSnapshotWindow({
           />
           <span>
             I acknowledge the configured Figma PAT is read-only and least-privilege (
-            <code>files:read</code>).{" "}
+            <code>files:read</code>, <code>file_dev_resources:read</code>).{" "}
             <span className="figma-snapshot-consent-required">
               Required before the first snapshot of a board.
             </span>
@@ -777,10 +770,10 @@ export function FigmaSnapshotWindow({
             <summary className="figma-snapshot-scopes-summary">Required Figma PAT scopes</summary>
             <ul className="figma-snapshot-scopes-list">
               <li>
-                <code>file_read</code> — read design file structure and node metadata
+                <code>files:read</code> — read design file structure and node metadata
               </li>
               <li>
-                <code>files:read</code> — read file content (REST API scope)
+                <code>file_dev_resources:read</code> — read design dev-resource metadata
               </li>
             </ul>
             <p className="figma-snapshot-scopes-note">
@@ -851,6 +844,7 @@ export function FigmaSnapshotWindow({
                   screenId={screen.screenId}
                   name={screen.name}
                   irSummary={screen.irSummary}
+                  imageSrc={figmaSnapshotScreenImageUrl(summary.runId, i)}
                   imageByteLength={screen.imageByteLength}
                 />
               ))}

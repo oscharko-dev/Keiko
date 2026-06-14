@@ -244,6 +244,26 @@ describe("FigmaSnapshotWindow", () => {
       expect(screen.getByRole("article", { name: /screen 2/iu })).toBeInTheDocument();
     });
 
+    it("renders captured screen images from the token-free BFF route", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(
+          screen.getByRole("img", { name: /captured preview for screen 1/iu }),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.getByRole("img", { name: /captured preview for screen 1/iu })).toHaveAttribute(
+        "src",
+        "/api/figma/snapshots/fs-test-run-id-1234/screens/0/image",
+      );
+      expect(screen.getByRole("img", { name: /captured preview for screen 2/iu })).toHaveAttribute(
+        "src",
+        "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
+      );
+    });
+
     it("shows skipped-count notice when skippedCount > 0", async () => {
       const trigger = resolvingTrigger(MOCK_SUMMARY_WITH_SKIPPED);
       renderWindow({ triggerImpl: trigger });
@@ -624,6 +644,20 @@ describe("FigmaSnapshotWindow", () => {
       );
       // Security: no token input/field anywhere in the component.
       expect(screen.queryByRole("textbox", { name: /token/iu })).not.toBeInTheDocument();
+    });
+
+    it("shows the canonical read-only Figma PAT scopes", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(screen.getByText(/required figma pat scopes/iu)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByText(/required figma pat scopes/iu));
+      expect(screen.getAllByText("files:read").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("file_dev_resources:read").length).toBeGreaterThan(0);
+      expect(screen.queryByText("file_read")).not.toBeInTheDocument();
     });
   });
 
