@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
+import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
@@ -317,7 +318,9 @@ function childEnv(env: EnvSource): NodeJS.ProcessEnv {
   return next;
 }
 
-function cliEntryPath(): string {
+function cliEntryPath(cwd: string): string {
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  if (preferredLayout !== undefined) return preferredLayout.binPath;
   // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
   // re-exec'd children spawned by `keiko start` invoke the published bin rather
   // than the cli package barrel (which is not executable). The
@@ -378,12 +381,22 @@ function spawnUiProcess(
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
   const fd = openSync(logPath, "a", 0o600);
-  const uiEnv = childEnv({ ...env, KEIKO_STATE_DIR: options.stateDir });
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  const uiEnv = childEnv({
+    ...env,
+    KEIKO_STATE_DIR: options.stateDir,
+    ...(preferredLayout === undefined
+      ? {}
+      : {
+          KEIKO_CLI_BIN_PATH: preferredLayout.binPath,
+          KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
+        }),
+  });
   try {
     return {
       child: deps.spawnFn(
         process.execPath,
-        [cliEntryPath(), "ui", "--port", String(options.port), "--host", options.host],
+        [cliEntryPath(cwd), "ui", "--port", String(options.port), "--host", options.host],
         {
           cwd,
           detached: true,

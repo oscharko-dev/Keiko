@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -171,6 +171,78 @@ describe("runUiCli", () => {
     const code = await runUiCli([], io, {}, deps);
     expect(code).toBe(1);
     expect(err.join("")).toContain("build:ui");
+  });
+
+  it("prefers the built workspace checkout over a stale inherited global static root", async () => {
+    const { io, out } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-checkout-"));
+    const localStaticRoot = join(cwd, "dist", "ui", "static");
+    const localCliRoot = join(cwd, "dist", "cli");
+    const captured: { staticRoot?: string } = {};
+    try {
+      await writeFile(join(cwd, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
+      await mkdir(localStaticRoot, { recursive: true });
+      await mkdir(localCliRoot, { recursive: true });
+      await writeFile(join(localStaticRoot, "index.html"), "<html></html>", { encoding: "utf8" });
+      await writeFile(join(localCliRoot, "index.js"), "#!/usr/bin/env node\n", {
+        encoding: "utf8",
+      });
+      const code = await runUiCli(
+        [],
+        io,
+        { KEIKO_UI_STATIC_ROOT: "/opt/old-keiko/dist/ui/static" },
+        {
+          cwd,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          createServer: ({ staticRoot: resolvedStaticRoot }) => {
+            captured.staticRoot = resolvedStaticRoot;
+            return fakeServer({});
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(captured.staticRoot).toBe(localStaticRoot);
+      expect(out.join("")).toContain("http://127.0.0.1:1983");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("re-execs through the built workspace checkout instead of a stale parent bin", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-reexec-"));
+    const localStaticRoot = join(cwd, "dist", "ui", "static");
+    const localCliEntry = join(cwd, "dist", "cli", "index.js");
+    const spawned: { command: string; args: readonly string[] }[] = [];
+    try {
+      await writeFile(join(cwd, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
+      await mkdir(localStaticRoot, { recursive: true });
+      await mkdir(join(cwd, "dist", "cli"), { recursive: true });
+      await writeFile(join(localStaticRoot, "index.html"), "<html></html>", { encoding: "utf8" });
+      await writeFile(localCliEntry, "#!/usr/bin/env node\n", { encoding: "utf8" });
+      const code = await runUiCli(
+        [],
+        io,
+        {},
+        {
+          cwd,
+          currentExecArgv: () => [],
+          sqliteProbe: () => false,
+          spawnFn: (command, args) => {
+            spawned.push({ command, args });
+            const child = new EventEmitter() as EventEmitter & { kill: () => void };
+            child.kill = (): void => undefined;
+            queueMicrotask(() => child.emit("exit", 0, null));
+            return child as never;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]?.args).toContain(localCliEntry);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("starts the server, listens on the parsed port, and prints the URL", async () => {
