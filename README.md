@@ -330,7 +330,8 @@ The effective limits at runtime are visible via `GET /api/config` as `effectiveG
 
 ### Figma snapshot connector
 
-The Figma connector needs exactly one credential: a read-only personal access token (scopes `file_read` / `files:read`).
+The Figma connector needs exactly one credential: a read-only personal access token with
+`file_content:read` scope.
 
 | Variable                             | Purpose                                                                                                                                                                                                                   | Default |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |

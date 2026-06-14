@@ -655,9 +655,10 @@ describe("FigmaSnapshotWindow", () => {
         expect(screen.getByText(/required figma pat scopes/iu)).toBeInTheDocument(),
       );
       await user.click(screen.getByText(/required figma pat scopes/iu));
-      expect(screen.getAllByText("files:read").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("file_dev_resources:read").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("file_content:read").length).toBeGreaterThan(0);
       expect(screen.queryByText("file_read")).not.toBeInTheDocument();
+      expect(screen.queryByText("files:read")).not.toBeInTheDocument();
+      expect(screen.queryByText("file_dev_resources:read")).not.toBeInTheDocument();
     });
   });
 

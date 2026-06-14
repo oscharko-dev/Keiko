@@ -572,7 +572,7 @@ export function FigmaSnapshotWindow({
           />
           <span>
             I acknowledge the configured Figma PAT is read-only and least-privilege (
-            <code>files:read</code>, <code>file_dev_resources:read</code>).{" "}
+            <code>file_content:read</code>).{" "}
             <span className="figma-snapshot-consent-required">
               Required before the first snapshot of a board.
             </span>
@@ -774,10 +774,8 @@ export function FigmaSnapshotWindow({
             <summary className="figma-snapshot-scopes-summary">Required Figma PAT scopes</summary>
             <ul className="figma-snapshot-scopes-list">
               <li>
-                <code>files:read</code> — read design file structure and node metadata
-              </li>
-              <li>
-                <code>file_dev_resources:read</code> — read design dev-resource metadata
+                <code>file_content:read</code> — read design file structure, node metadata, and
+                rendered images
               </li>
             </ul>
             <p className="figma-snapshot-scopes-note">
