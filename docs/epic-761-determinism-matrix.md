@@ -72,6 +72,7 @@ text model that would pretend to have seen the image. The matrix pins both state
 | Evidence attribution for model runs               | `modelId` recorded; `seedUsed` is number or `null`      |
 | No-model baseline                                 | run succeeds; `modelId` and `seedUsed` are both omitted |
 | Explicit seeded run                               | requested seed is persisted only when actually applied  |
+| Multimodal model used during ingestion            | vision dispatches count toward `modelGatewayCallCount`  |
 | Multimodal removed (no image-input model)         | IR-only baseline; no model id recorded for the stage    |
 
 This means seeded reproducibility is now a real end-to-end path, not a placeholder field: a valid
