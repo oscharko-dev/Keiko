@@ -50,6 +50,41 @@ describe("buildRequirementExcerpt", () => {
     expect(excerpt).toContain("for S3");
   });
 
+  it("strips bidi, zero-width, and C0/C1 control code points from the audit-ready excerpt", () => {
+    // The excerpt feeds the coverage matrix, gap-finding summaries, and the CSV + Markdown
+    // traceability export (the "audit-ready" surfaces of Epic #734). Invisible / bidi / control
+    // characters must not ride through — symmetric with the candidate-text chokepoint. Built from
+    // code points (not literals) so the source stays pure ASCII and the spoof bytes are explicit.
+    const RLO = String.fromCodePoint(0x202e); // right-to-left override
+    const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+    const NUL = String.fromCodePoint(0x0000); // C0
+    const C1 = String.fromCodePoint(0x009b); // C1 control (CSI)
+    const NEL = String.fromCodePoint(0x0085); // C1 next-line
+    const dirty = `Lock${RLO}the${ZWSP} account${NUL} now${C1} done${NEL}here`;
+    const excerpt = buildRequirementExcerpt(dirty);
+    expect(excerpt).toBeDefined();
+    for (const spoof of [RLO, ZWSP, NUL, C1, NEL]) {
+      expect(excerpt).not.toContain(spoof);
+    }
+    // The legible words survive intact.
+    expect(excerpt).toContain("Lock");
+    expect(excerpt).toContain("account");
+    expect(excerpt).toContain("done");
+  });
+
+  it("de-obfuscates a zero-width-split secret BEFORE redaction so it cannot survive (strip-then-redact)", () => {
+    // A credential broken up by an interstitial zero-width character evades redact(), whose patterns
+    // match contiguous characters. Stripping the spoof FIRST rejoins the key so redact() scrubs it;
+    // redact-then-strip (or no strip at all) would leak the rejoined secret. This pins the ordering.
+    const ZWSP = String.fromCodePoint(0x200b);
+    const split = `use key AKIA${ZWSP}${"A".repeat(16)} for S3`;
+    const excerpt = buildRequirementExcerpt(split);
+    expect(excerpt).toContain("[REDACTED]");
+    expect(excerpt).not.toContain("AKIA");
+    expect(excerpt).not.toContain(ZWSP);
+    expect(excerpt).toContain("for S3");
+  });
+
   it("is deterministic", () => {
     const text = "The same input must always produce the same excerpt.";
     expect(buildRequirementExcerpt(text)).toBe(buildRequirementExcerpt(text));

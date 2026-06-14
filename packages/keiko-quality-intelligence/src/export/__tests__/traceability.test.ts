@@ -130,6 +130,20 @@ describe("adaptToTraceabilityCsv", () => {
     // The ABSENT placeholder is "—" (em-dash)
     expect(out).toContain("—");
   });
+
+  it("writes the weakly-covered status verbatim into the requirements row (Epic #734 D2/D3)", () => {
+    // The row() factory defaults to "covered"; the third CoverageStatus value, "weakly-covered",
+    // must reach the audit-ready export as a standalone status cell so an auditor can distinguish a
+    // weakly-covered requirement from a fully-covered one.
+    const r = row("atom-weak", ["tc-broad"], { status: "weakly-covered", confidence: 0.5 });
+    const out = adaptToTraceabilityCsv([r]);
+    const weakRow = out
+      .split("\r\n")
+      .find((line) => line.includes("atom-weak") && !line.includes("Requirement ID"));
+    expect(weakRow).toBeDefined();
+    // Standalone token (word boundary), not a substring of an id — mirrors #741.
+    expect(weakRow).toMatch(/(?<![a-z])weakly-covered(?![\w-])/u);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -213,6 +227,15 @@ describe("adaptToTraceabilityMarkdown", () => {
     const reverseIdx = out.indexOf("## Tests → Requirements");
     const reverseSection = out.slice(reverseIdx);
     expect(reverseSection).toContain("—");
+  });
+
+  it("renders the weakly-covered status verbatim in the requirements table (Epic #734 D2/D3)", () => {
+    const r = row("atom-weak", ["tc-broad"], { status: "weakly-covered", confidence: 0.5 });
+    const out = adaptToTraceabilityMarkdown([r]);
+    const reqSection = out.split("## Tests → Requirements")[0] ?? "";
+    const weakRow = reqSection.split("\n").find((line) => line.includes("atom-weak"));
+    expect(weakRow).toBeDefined();
+    expect(weakRow).toMatch(/(?<![a-z])weakly-covered(?![\w-])/u);
   });
 
   it("is deterministic: identical input yields byte-identical output", () => {

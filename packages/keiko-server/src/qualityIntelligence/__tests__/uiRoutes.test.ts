@@ -323,6 +323,27 @@ describe("handleGetQiRun", () => {
     expect(row2?.requirementExcerptRedacted).toBeUndefined();
   });
 
+  it("degrades a legacy run with no coverageMatrix to an empty coverageByAtom and 0% (Epic #734 D1)", () => {
+    // A run recorded before #738 has no coverageMatrix field. projectCoverageByAtom must early-return
+    // an empty array and computeCoveragePercentage must report 0 (not NaN / throw), so the run card
+    // degrades gracefully. The manifest() fixture deliberately omits coverageMatrix.
+    loadMock.mockReturnValue(manifest("run-legacy"));
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-legacy", { id: "run-legacy" }),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      coverageByAtom: readonly unknown[];
+      coveragePercentage: number;
+    };
+    expect(body.coverageByAtom).toEqual([]);
+    expect(body.coveragePercentage).toBe(0);
+  });
+
   it("projects drift metadata without exposing raw source fingerprints", () => {
     const withDrift = {
       ...(manifest("run-drift") as Record<string, unknown>),
