@@ -149,6 +149,19 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(ref.sha256).toBe(expectedSha256);
   });
 
+  it("loads verified render bytes for a stored image ref", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record(baseInput());
+    const loaded = loadOrThrow(store, RUN_ID);
+    const image = store.loadImage(RUN_ID, firstScreen(loaded).image);
+
+    expect(image.mimeType).toBe("image/png");
+    expect(Array.from(image.bytes)).toEqual(Array.from(png(10)));
+    expect(image.byteLength).toBe(png(10).length);
+    expect(image.sha256).toBe(firstScreen(loaded).image.sha256);
+  });
+
   it("is WRITE-ONCE: a second record for the same runId is refused", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
