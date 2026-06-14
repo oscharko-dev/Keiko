@@ -161,6 +161,24 @@ describe("createQiJudgePort — capability gate", () => {
     }
   });
 
+  // The qi:judge-logic profile requires structured-output. A configured chat model that lacks it must
+  // be rejected by the capability gate BEFORE any model port is built (#762 capability routing / #279
+  // AC2). This is the functional safety boundary that backstops the auto-selector: even if selection
+  // ever offered an incompatible model, the gate turns it into a typed error, never a bad dispatch.
+  it("throws QiJudgeError QI_JUDGE_MODEL_INCOMPATIBLE when the model lacks structured-output", () => {
+    const { deps, calls } = depsFor("chat-only-judge", "{}", {
+      config: configWithChatModel("chat-only-judge", { structuredOutput: false }),
+    });
+    try {
+      createQiJudgePort(deps, "chat-only-judge");
+      expect.fail("should throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiJudgeError);
+      expect((err as QiJudgeError).code).toBe("QI_JUDGE_MODEL_INCOMPATIBLE");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   it("throws QiJudgeError QI_JUDGE_MODEL_UNAVAILABLE when factory returns undefined", () => {
     const { deps } = depsFor("chat-model-1", "{}", {
       portFactory: (_id: string): undefined => undefined,

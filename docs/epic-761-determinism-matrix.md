@@ -18,12 +18,21 @@ Structured output is therefore a preference for `qi:test-design`, not a hard blo
 structured path still gets `json_schema` when the chosen model advertises response-format support;
 chat-only models degrade to the tolerant parser.
 
-| Capability set                            | Outcome                                |
-| ----------------------------------------- | -------------------------------------- |
-| chat + structured-output (single tier)    | selected                               |
-| chat + structured-output (multiple tiers) | lowest-cost structured tier selected   |
-| chat only (no structured-output)          | selected, tolerant-parser path         |
-| no model configured                       | successful no-model baseline run       |
+| Capability set                            | Outcome                              |
+| ----------------------------------------- | ------------------------------------ |
+| chat + structured-output (single tier)    | selected                             |
+| chat + structured-output (multiple tiers) | lowest-cost structured tier selected |
+| chat only (no structured-output)          | selected, tolerant-parser path       |
+| no model configured                       | successful no-model baseline run     |
+
+The table above describes the **test-design generation** strategy. A full automatic run also routes
+the adversarial test-quality judge, which uses the `qi:judge-logic` profile and therefore requires a
+configured **structured-output** model. When an automatic run (no explicitly requested model) selects
+a chat-only generation model but no structured-output model is configured for the judge, the run
+fails fast with the typed, route-mapped `QI_CAPABILITY_UNAVAILABLE` error rather than silently
+skipping the judge — so a chat-only deployment must add at least one structured-output model to
+use the automatic judged run. An explicitly requested chat-only generation model paired with a
+separate structured-output model still runs end to end.
 
 ## Determinism-first contract (Issue #763)
 
@@ -40,12 +49,12 @@ chat-only models degrade to the tolerant parser.
 
 ## Reproducibility (Issue #764)
 
-| Property                                          | Guarantee                                                |
-| ------------------------------------------------- | -------------------------------------------------------- |
-| Same inputs, different model tier → candidate ids | identical (content-hashed, model-independent)            |
-| Evidence attribution for model runs               | `modelId` recorded; `seedUsed` is number or `null`       |
-| No-model baseline                                 | run succeeds; `modelId` and `seedUsed` are both omitted  |
-| Explicit seeded run                               | requested seed is persisted only when actually applied   |
+| Property                                          | Guarantee                                               |
+| ------------------------------------------------- | ------------------------------------------------------- |
+| Same inputs, different model tier → candidate ids | identical (content-hashed, model-independent)           |
+| Evidence attribution for model runs               | `modelId` recorded; `seedUsed` is number or `null`      |
+| No-model baseline                                 | run succeeds; `modelId` and `seedUsed` are both omitted |
+| Explicit seeded run                               | requested seed is persisted only when actually applied  |
 
 This means seeded reproducibility is now a real end-to-end path, not a placeholder field: a valid
 start request can carry `seed`, the gateway request carries it when supported, and evidence records

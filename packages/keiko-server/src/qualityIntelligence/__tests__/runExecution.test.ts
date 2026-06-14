@@ -736,6 +736,38 @@ describe("executeQiRun — seed persistence", () => {
     expect(firstProjection.expectedResults).toEqual(secondProjection.expectedResults);
   });
 
+  // Exercises the LEFT disjunct of the seed guard (selection.kind === "baseline") in
+  // resolveExecutionStrategy: a seeded request with no model id AND no configured provider resolves to
+  // the deterministic baseline. The other seed-baseline test reaches the guard via the RIGHT disjunct
+  // (a configured model that cannot seed), so without this case the baseline disjunct is mutation-blind.
+  it("routes a seeded request to the deterministic baseline when no model is configured", async () => {
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: (_id: string): undefined => undefined,
+      store: createInMemoryUiStore(),
+      evidenceDir,
+    };
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        request: determinismAuditRequest(),
+        runId: "run-seeded-no-config",
+        deps,
+        onAccepted,
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    expect(summary.modelGatewayCallCount).toBe(0);
+    expect(summary.qualityScore).toBeNull();
+    expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBeUndefined();
+    expectSeededBaselineManifest("run-seeded-no-config", evidenceDir);
+  });
+
   it("persists the applied seed when the selected model advertises seeding support", async () => {
     let seenSeed: number | undefined;
     const port: ModelPort = {
