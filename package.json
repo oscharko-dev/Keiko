@@ -32,6 +32,9 @@
   "scripts": {
     "build:packages": "tsc -b tsconfig.packages.json",
     "build": "npm run build:packages && tsc -p tsconfig.build.json",
+    "keiko:start": "node dist/cli/index.js start",
+    "keiko:stop": "node dist/cli/index.js stop",
+    "keiko:status": "node dist/cli/index.js status",
     "typecheck": "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
