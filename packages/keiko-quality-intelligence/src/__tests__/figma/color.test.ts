@@ -33,6 +33,13 @@ describe("paintColorToHex", () => {
     expect(paintColorToHex({ color: { r: 1, g: 0, b: 0, a: 1 } })).toBe("#ff0000");
   });
 
+  it("multiplies colour alpha by paint opacity", () => {
+    expect(paintColorToHex({ color: { r: 1, g: 0, b: 0, a: 1 }, opacity: 0.5 })).toBe("#ff000080");
+    expect(paintColorToHex({ color: { r: 0, g: 0, b: 1, a: 0.5 }, opacity: 0.5 })).toBe(
+      "#0000ff40",
+    );
+  });
+
   it("returns undefined for a paint with no colour", () => {
     expect(paintColorToHex({ type: "SOLID" })).toBeUndefined();
   });
@@ -47,8 +54,9 @@ describe("isVisiblePaint", () => {
     expect(isVisiblePaint(solid(0, 0, 0, { visible: false }))).toBe(false);
   });
 
-  it("rejects a fully-transparent paint (opacity:0 or color.a:0)", () => {
+  it("rejects a fully-transparent paint (opacity<=0 or color.a<=0)", () => {
     expect(isVisiblePaint(solid(0, 0, 0, { opacity: 0 }))).toBe(false);
+    expect(isVisiblePaint(solid(0, 0, 0, { opacity: -1 }))).toBe(false);
     expect(isVisiblePaint({ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0 } })).toBe(false);
   });
 });

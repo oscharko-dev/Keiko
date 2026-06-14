@@ -33,7 +33,7 @@ import {
   readString,
   type FigmaSourceNode,
 } from "./sourceNode.js";
-import { firstSolidPaintHex } from "./color.js";
+import { firstSolidPaintHex, isVisiblePaint } from "./color.js";
 import type {
   AlignItems,
   BoundingBox,
@@ -69,16 +69,36 @@ const readImageFills = (node: FigmaSourceNode): readonly ImageFillRef[] => {
   for (const fill of readArray(node.fills)) {
     const record = asNode(fill);
     if (record === undefined || readString(record.type) !== "IMAGE") continue;
+    if (!isVisiblePaint(record)) continue;
     const imageRef = readString(record.imageRef);
     if (imageRef !== undefined) out.push({ imageRef });
   }
   return out;
 };
 
+const actionHasNavigationTarget = (action: unknown): boolean => {
+  const record = asNode(action);
+  if (record === undefined) return false;
+  if (readString(record.destinationId) !== undefined) return true;
+  const nav = asNode(record.navigation);
+  if (nav !== undefined && readString(nav.destinationId) !== undefined) return true;
+  return readString(record.type) === "URL" && readString(record.url) !== undefined;
+};
+
+const interactionHasNavigationTarget = (entry: unknown): boolean => {
+  const record = asNode(entry);
+  if (record === undefined) return false;
+  if (readArray(record.actions).some(actionHasNavigationTarget)) return true;
+  return actionHasNavigationTarget(record.action);
+};
+
 const navigates = (node: FigmaSourceNode): boolean => {
   const interactions = readArray(node.interactions);
   const reactions = readArray(node.reactions);
-  return interactions.length > 0 || reactions.length > 0;
+  return (
+    interactions.some(interactionHasNavigationTarget) ||
+    reactions.some(interactionHasNavigationTarget)
+  );
 };
 
 const classify = (node: FigmaSourceNode, imageFills: readonly ImageFillRef[]): InteractionHint => {

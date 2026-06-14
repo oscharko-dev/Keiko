@@ -446,31 +446,27 @@ describe("deriveNavFlows / deriveNavTestItemsByScreen — MAX_NAV_FLOWS cap (Fix
   });
 });
 
-// ─── Fix #5: URL actions surface as unresolvedLinks (not silently dropped) ──
+// ─── Unresolved links ───────────────────────────────────────────────────────
 
-describe("deriveNavGraph — URL actions (Fix #5)", () => {
-  it("surfaces a URL action as an unresolved link with targetNodeId 'url:<href>'", () => {
-    // URL actions carry { type:'URL', url:'https://...' } — no destinationId.
-    // extractInterScreenLinks emits them with targetNodeId='url:<href>'; no screen owns that id
-    // so they appear in unresolvedLinks instead of being silently dropped.
-    const urlLink: InterScreenLink = {
+describe("deriveNavGraph — unresolved links", () => {
+  it("surfaces a target outside any screen as an unresolved link", () => {
+    const unresolved: InterScreenLink = {
       sourceNodeId: "btn-ext",
       trigger: "ON_CLICK",
-      targetNodeId: "url:https://example.com/docs",
+      targetNodeId: "ghost-node",
     };
     const graph = deriveNavGraph(
-      result([screen("s-a", "A", node("a-root", [node("btn-ext")]))], [urlLink]),
+      result([screen("s-a", "A", node("a-root", [node("btn-ext")]))], [unresolved]),
     );
-    // Must appear in unresolvedLinks, not in edges.
     expect(graph.edges).toHaveLength(0);
     expect(graph.unresolvedLinks).toHaveLength(1);
-    expect(graph.unresolvedLinks[0]?.targetNodeId).toBe("url:https://example.com/docs");
+    expect(graph.unresolvedLinks[0]?.targetNodeId).toBe("ghost-node");
     expect(graph.unresolvedLinks[0]?.trigger).toBe("ON_CLICK");
   });
 
-  it("keeps a URL-action unresolved link alongside regular unresolved links", () => {
+  it("keeps multiple unresolved links in the graph", () => {
     const links: InterScreenLink[] = [
-      { sourceNodeId: "btn-a", trigger: "ON_CLICK", targetNodeId: "url:https://example.com" },
+      { sourceNodeId: "btn-a", trigger: "ON_CLICK", targetNodeId: "missing-a" },
       { sourceNodeId: "btn-b", trigger: "ON_CLICK", targetNodeId: "ghost-node" },
     ];
     const graph = deriveNavGraph(
@@ -478,7 +474,7 @@ describe("deriveNavGraph — URL actions (Fix #5)", () => {
     );
     expect(graph.unresolvedLinks).toHaveLength(2);
     const targets = graph.unresolvedLinks.map((u) => u.targetNodeId);
-    expect(targets).toContain("url:https://example.com");
+    expect(targets).toContain("missing-a");
     expect(targets).toContain("ghost-node");
   });
 });
