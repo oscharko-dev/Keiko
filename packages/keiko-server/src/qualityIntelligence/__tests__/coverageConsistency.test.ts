@@ -288,18 +288,18 @@ describe("Issue #741 — coverage consistency across all three surfaces", () => 
     expect(uncoveredRow).toBeDefined();
     expect(coveredRow).toBeDefined();
 
-    // Assert the status column in each row — parse the atom-specific row so a global
-    // toContain("uncovered") on the full CSV body cannot mask a per-row inversion.
-    expect(uncoveredRow).toContain("uncovered");
-    expect(coveredRow).toContain("covered");
+    // Assert each STATUS as a standalone token (word-boundary), not a row substring. The atom ids
+    // "atom-uncovered-741" / "atom-covered-741" and the candidate id "tc-covered-741" all contain
+    // the status words as substrings, so a substring check (toContain) would survive a prod
+    // mutation that drops or relabels the Status column. The word-boundary class `[\w-]` excludes
+    // the hyphenated id occurrences (e.g. "covered" in "atom-covered-741" is followed by "-"),
+    // so only the real Status cell matches.
+    expect(uncoveredRow).toMatch(/(?<![a-z])uncovered(?![\w-])/u);
+    expect(coveredRow).toMatch(/(?<![a-z])covered(?![\w-])/u);
 
-    // Guard: the uncovered atom's row must NOT contain "covered" as a standalone status
-    // (the word "uncovered" contains "covered" as a substring — use word-boundary regex
-    // to guard against the inversion mutation).
+    // Inversion guards: neither row may carry the OTHER status as a standalone token.
     expect(uncoveredRow).not.toMatch(/(?<![a-z])covered(?![\w-])/u);
-
-    // Guard: the covered control atom must NOT appear with "uncovered" status.
-    expect(coveredRow).not.toContain("uncovered");
+    expect(coveredRow).not.toMatch(/(?<![a-z])uncovered(?![\w-])/u);
   });
 
   // -------------------------------------------------------------------------
@@ -328,6 +328,11 @@ describe("Issue #741 — coverage consistency across all three surfaces", () => 
       traceCtx(RUN_ID, makeReq(null)),
       deps(evidenceDir),
     );
+
+    // Fail closed with a meaningful assertion (not an opaque "cannot read .body of undefined"
+    // TypeError) if either real handler returned non-200 before we destructure their bodies.
+    expect(runResult.status).toBe(200);
+    expect(traceResult.status).toBe(200);
 
     // Assert — Surface 1: manifest matrix
     const matrixRow = manifest?.coverageMatrix?.find((r) => r.status === "uncovered");
