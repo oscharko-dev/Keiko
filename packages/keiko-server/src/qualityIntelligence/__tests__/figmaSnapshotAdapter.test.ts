@@ -5,7 +5,7 @@
 // resolveQiMultimodalSelection only — no hard-coded model id; returns [] when no multimodal
 // capability, when no call is injected, and when the call throws or returns garbage).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -194,6 +194,48 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
         resolveLatestByScope: true,
       });
       expect(loader?.("fs-only")?.runId).toBe("fs-only");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the pinned record when the newest record fails to load (TOCTOU ?? pinned)", () => {
+    // Arrange: write two snapshots with different content so drift is detected (newest ≠ pinned).
+    // Then tamper the newest record file so store.load("fs-new") returns undefined (schema-invalid)
+    // while listByScope still lists it as newest (parseScopeEntry is header-only, no schema check).
+    // This exercises the `?? pinned` fallback on adapter line 68.
+    //
+    // Tamper mechanism: inject an unknown top-level key into the on-disk JSON — this trips the
+    // ALLOWED_TOP_LEVEL_KEYS guard in validateFigmaSnapshotRecord(), which returns {ok:false},
+    // so loadOp returns undefined WITHOUT throwing (the outer catch is NOT involved).
+    // parseScopeEntry reads only provenance.{fileKey,nodeId,fetchedAt}, runId, and integrityHash —
+    // all of which remain intact — so listByScope still returns "fs-new" as the most-recent entry.
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-toctou-"));
+    try {
+      record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "alt");
+      record(dir, "fs-new", "2026-02-01T00:00:00.000Z", "neu");
+
+      // Tamper fs-new on disk by injecting an unknown top-level key.
+      const recordFile = join(dir, "qi", "fs-new.figma-snapshot.json");
+      const raw = JSON.parse(readFileSync(recordFile, "utf8")) as Record<string, unknown>;
+      raw.__tampered__ = true; // unknown key → validateFigmaSnapshotRecord fails → load() = undefined
+      writeFileSync(recordFile, JSON.stringify(raw), "utf8");
+
+      // Pre-condition verification: store.load("fs-new") must return undefined (not throw),
+      // and listByScope must still return "fs-new" as the first (newest) entry.
+      const store = createNodeFigmaSnapshotStore(dir);
+      expect(store.load("fs-new")).toBeUndefined();
+      expect(store.listByScope("KEY", "0:1")[0]?.runId).toBe("fs-new");
+
+      // Act: loader with resolveLatestByScope detects drift (fs-new's hash ≠ fs-old's hash via
+      // listByScope header) and tries store.load("fs-new") → undefined → falls back via ?? pinned.
+      const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
+        resolveLatestByScope: true,
+      });
+
+      // Assert: fallback to the pinned record (fs-old), not undefined, not fs-new.
+      // The invariant: drift detection MUST degrade to "fresh", never crash the re-check.
+      expect(loader?.("fs-old")?.runId).toBe("fs-old");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
