@@ -50,4 +50,25 @@ describe("parseFigmaTarget — generic, deterministic", () => {
     expect(parseFigmaTarget("")).toBeNull();
     expect(parseFigmaTarget("   ")).toBeNull();
   });
+
+  it("normalises EVERY dash in the node-id and preserves instance separators (replace-all)", () => {
+    // The URL form encodes ':' as '-', so a colon-only instance id like 'I12:3;45:6' arrives as
+    // 'I12-3;45-6'. The replace-all must convert all dashes and leave the ';' separator intact.
+    expect(parseFigmaTarget("https://figma.com/design/K/N?node-id=0--1")?.nodeId).toBe("0::1");
+    expect(parseFigmaTarget("https://figma.com/design/K/N?node-id=I12-3;45-6")?.nodeId).toBe(
+      "I12:3;45:6",
+    );
+  });
+
+  it("decodes a percent-encoded node-id before normalising (%3A colon, %2D dash)", () => {
+    // WHATWG searchParams.get auto-decodes; both encodings must resolve to the same API node-id.
+    expect(parseFigmaTarget("https://www.figma.com/design/KEY/N?node-id=12%3A34")).toEqual({
+      fileKey: "KEY",
+      nodeId: "12:34",
+    });
+    expect(parseFigmaTarget("https://www.figma.com/design/KEY/N?node-id=12%2D34")).toEqual({
+      fileKey: "KEY",
+      nodeId: "12:34",
+    });
+  });
 });
