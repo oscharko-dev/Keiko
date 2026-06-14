@@ -14,12 +14,11 @@
 // `redactQualityIntelligenceEvidence` before write. The token is never present by construction
 // (the server builder never places it on the in-memory snapshot); redaction is defense-in-depth.
 //
-// Integrity: load() recomputes the snapshot integrity hash and rejects a record whose persisted
-// `integrityHash` disagrees — tampered or truncated records are rejected at the read boundary. The
+// Integrity: load() recomputes each persisted screen hash from the stored, redacted IR + image
+// sha256, verifies each PNG side-file against the stored sha256/byteLength, and then recomputes the
+// snapshot integrity hash. Tampered or truncated records are rejected at the read boundary. The
 // optional #752 artifacts (`links`, `tokens`) stay out of the drift hash but carry separate artifact
 // hashes when present; old un-hashed optional artifacts are omitted on load instead of being trusted.
-// NOTE: the PNG side-files are NOT re-hashed on load (they are served separately); the per-screen
-// `sha256` stored in the record serves as the tamper-evidence for each image.
 //
 // Retention: `enforceFigmaSnapshotRetention` deletes snapshot records + their side-file dirs in
 // lock-step with the provided policy. Wiring: call it where the other QI retention enforcement
@@ -33,11 +32,11 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   type Dirent,
   chmodSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -66,6 +65,8 @@ import {
 const QI_DIR_MODE = 0o700;
 const SNAPSHOT_SUFFIX = ".figma-snapshot.json";
 const SIDE_FILE_SUBDIR = "figma-snapshots";
+const MAX_SIDE_FILE_NAME_LENGTH = 128;
+const SIDE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
 
 export interface RecordFigmaSnapshotScreenInput {
   readonly screenId: string;
@@ -129,6 +130,8 @@ export interface FigmaSnapshotStoreOptions {
 const sha256Hex = (input: string): string =>
   createHash("sha256").update(input, "utf8").digest("hex");
 
+const sha256Bytes = (input: Uint8Array): string => createHash("sha256").update(input).digest("hex");
+
 // Stable stringify: keys emitted in sorted order at every depth (mirrors canonical() in hash.ts).
 function canonical(value: unknown): string {
   if (value === undefined) return "null";
@@ -142,6 +145,51 @@ function canonical(value: unknown): string {
 }
 
 const hashArtifact = (value: unknown): string => sha256Hex(canonical(value));
+
+// Hash-neutral IR projection (mirrors figmaSnapshotHash.ts in keiko-server). The store accepts
+// `irJson` as opaque JSON, so malformed legacy/tampered shapes fall back to the raw JSON projection;
+// valid Screen-IR gets the exact same hash-neutral field pruning as the builder.
+const HASH_NEUTRAL_IR_KEYS = new Set([
+  "textColor",
+  "backgroundColor",
+  "layout",
+  "sizing",
+  "cornerRadius",
+  "typography",
+]);
+
+const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const stripHashNeutralChild = (child: unknown): unknown =>
+  isJsonObject(child) ? stripHashNeutralFields(child) : child;
+
+const stripHashNeutralFields = (node: Record<string, unknown>): Record<string, unknown> => {
+  const entries = Object.entries(node).filter(
+    ([key]) => key !== "children" && !HASH_NEUTRAL_IR_KEYS.has(key),
+  );
+  const rawChildren = node.children;
+  return {
+    ...Object.fromEntries(entries),
+    children: Array.isArray(rawChildren)
+      ? (rawChildren as readonly unknown[]).map(stripHashNeutralChild)
+      : [],
+  };
+};
+
+const hashStableIr = (irJson: unknown): unknown => {
+  if (!isJsonObject(irJson) || !isJsonObject(irJson.root)) return irJson;
+  return { ...irJson, root: stripHashNeutralFields(irJson.root) };
+};
+
+const recomputeScreenIntegrityHash = (screen: FigmaSnapshotScreenRow): string =>
+  sha256Hex(
+    canonical({
+      imageSha256: screen.image.sha256,
+      ir: hashStableIr(screen.irJson),
+      screenId: screen.screenId,
+    }),
+  );
 
 const artifactHashesFor = (record: {
   readonly links?: readonly FigmaSnapshotLinkRow[];
@@ -170,6 +218,15 @@ function recomputeSnapshotIntegrityHash(record: FigmaSnapshotRecord): string {
     }),
   );
 }
+
+const rehashRecord = (record: FigmaSnapshotRecord): FigmaSnapshotRecord => {
+  const screens = record.screens.map((screen) => ({
+    ...screen,
+    integrityHash: recomputeScreenIntegrityHash(screen),
+  }));
+  const rehashed = { ...record, screens };
+  return { ...rehashed, integrityHash: recomputeSnapshotIntegrityHash(rehashed) };
+};
 
 const EXTERNAL_LINK_TARGET = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|tel:|data:|javascript:)/iu;
 
@@ -304,8 +361,9 @@ function snapshotRecordFiles(baseDir: string): readonly SnapshotRecordFile[] {
   return files;
 }
 
-// Write-once: O_EXCL ("wx") refuses if a record for this runId already exists, closing the TOCTOU
-// gap left by the caller's pre-check.
+// Write-once: create a temp file, then hard-link it into the final target. `linkSync` is the
+// exclusive commit: it fails with EEXIST if another recorder created the target after the
+// pre-check, unlike `rename`, which would overwrite the winner on POSIX.
 function atomicWriteOnce(target: string, json: string, randomSuffix: () => string): void {
   assertSnapshotAbsent(target);
   const temp = `${target}.${randomSuffix()}.tmp`;
@@ -316,7 +374,15 @@ function atomicWriteOnce(target: string, json: string, randomSuffix: () => strin
     } catch {
       // non-fatal: not every filesystem supports chmod (e.g. Windows)
     }
-    renameSync(temp, target);
+    try {
+      linkSync(temp, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
+      }
+      throw error;
+    }
+    rmSync(temp, { force: true });
   } catch (error) {
     rmSync(temp, { force: true });
     if (error instanceof EvidenceWriteError) throw error;
@@ -377,12 +443,70 @@ function assembleRecord(
     redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
   };
   const { redacted, summary } = redactQualityIntelligenceEvidence(draft);
-  const artifactHashes = artifactHashesFor(redacted);
+  const rehashed = rehashRecord(redacted);
+  const artifactHashes = artifactHashesFor(rehashed);
   return {
-    ...redacted,
+    ...rehashed,
     ...(artifactHashes !== undefined ? { artifactHashes } : {}),
     redactionSummary: summary,
   };
+}
+
+function isAllowedSideFileName(name: string): boolean {
+  if (name.length === 0 || name.length > MAX_SIDE_FILE_NAME_LENGTH) return false;
+  return !name.startsWith(".") && SIDE_FILE_NAME_PATTERN.test(name);
+}
+
+function verifyScreenIntegrity(screen: FigmaSnapshotScreenRow, runId: string): void {
+  const expected = recomputeScreenIntegrityHash(screen);
+  if (screen.integrityHash !== expected) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: screen ${screen.screenId} hash mismatch`,
+    );
+  }
+}
+
+function verifyScreenImageSideFile(
+  ctx: StoreCtx,
+  runId: string,
+  screen: FigmaSnapshotScreenRow,
+): void {
+  const name = screen.image.relativePath;
+  if (!isAllowedSideFileName(name)) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: invalid image side-file path`,
+    );
+  }
+  const runDir = join(ctx.sideFileBase, runId);
+  let realRunDir: string;
+  try {
+    realRunDir = ctx.fs.realPath(runDir);
+  } catch {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: image side-file directory missing`,
+    );
+  }
+  const lexical = resolveWithinWorkspace(realRunDir, name);
+  const absolute = assertContainedRealPath(ctx.fs, realRunDir, lexical, name);
+  const stat = lstatSync(absolute, { throwIfNoEntry: false });
+  if (stat === undefined || !stat.isFile() || stat.isSymbolicLink()) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: image side-file missing`,
+    );
+  }
+  const bytes = readFileSync(absolute);
+  if (bytes.byteLength !== screen.image.byteLength || sha256Bytes(bytes) !== screen.image.sha256) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: image side-file hash mismatch`,
+    );
+  }
+}
+
+function verifyPersistedScreens(ctx: StoreCtx, rec: FigmaSnapshotRecord, runId: string): void {
+  for (const screen of rec.screens) {
+    verifyScreenIntegrity(screen, runId);
+    verifyScreenImageSideFile(ctx, runId, screen);
+  }
 }
 
 // Parse one raw JSON string from a snapshot record file into a scope entry, or null when the
@@ -557,8 +681,9 @@ function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
   }
   if (!validateFigmaSnapshotRecord(parsed).ok) return undefined;
   const rec = parsed as FigmaSnapshotRecord;
-  // Integrity check: recompute and reject on mismatch. The PNG side-files are NOT re-hashed
-  // on load — each screen's `sha256` field is the tamper evidence for the image bytes.
+  // Integrity check: recompute and reject on mismatch. Screen rows are verified before the
+  // snapshot-level hash so stale/tampered IR or image refs cannot hide behind an old screen hash.
+  verifyPersistedScreens(ctx, rec, runId);
   const expected = recomputeSnapshotIntegrityHash(rec);
   if (rec.integrityHash !== expected) {
     throw new EvidenceReadError(

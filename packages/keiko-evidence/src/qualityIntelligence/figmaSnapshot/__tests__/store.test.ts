@@ -24,13 +24,8 @@ const RUN_ID = "00000000-0000-4000-8000-000000000001";
 const RUN_ID_2 = "00000000-0000-4000-8000-000000000002";
 const RUN_ID_3 = "00000000-0000-4000-8000-000000000003";
 
-// Correct integrity hash for the baseInput fixture: sha256 of canonical(
-//   { screens: [{integrityHash:"b"*64, screenId:"1:1"},{integrityHash:"c"*64, screenId:"1:2"}],
-//     snapshotSchemaVersion:1, version:"v-pinned-1" })
-// Pre-computed to keep tests deterministic without depending on crypto at describe time.
-const BASE_INTEGRITY_HASH = "fd7a4f5be941a3d16d98379b51a2f43f577420f2402db028b846700cd8e44ab4";
-// Hash for zero screens, same provenance (version:"v-pinned-1").
-const EMPTY_INTEGRITY_HASH = "5439a337ebe6807307c9c0728da47f801073462d4bfcdb446cfedd858bb12af3";
+const STALE_INTEGRITY_HASH = "0".repeat(64);
+const STALE_SCREEN_HASH = "b".repeat(64);
 
 const loadOrThrow = (store: FigmaSnapshotStore, runId: string): FigmaSnapshotRecord => {
   const record = store.load(runId);
@@ -59,6 +54,25 @@ afterEach(() => {
 
 const png = (seed: number): Uint8Array => new Uint8Array([0x89, 0x50, seed, seed + 1]);
 
+const node = (
+  id: string,
+  name: string,
+  children: readonly Record<string, unknown>[] = [],
+): Record<string, unknown> => ({
+  id,
+  name,
+  type: "FRAME",
+  interactionHint: "container",
+  imageFills: [],
+  children,
+});
+
+const screenIr = (id: string, name: string, text?: string): Record<string, unknown> => ({
+  id,
+  name,
+  root: node(`${id}:root`, name, text === undefined ? [] : [node(`${id}:text`, text)]),
+});
+
 const snapshotFile = (runId = RUN_ID): string => join(dir, "qi", `${runId}.figma-snapshot.json`);
 
 const readSnapshotFile = (runId = RUN_ID): Record<string, unknown> =>
@@ -68,6 +82,12 @@ const writeSnapshotFile = (raw: Record<string, unknown>, runId = RUN_ID): void =
   writeFileSync(snapshotFile(runId), JSON.stringify(raw), "utf8");
 };
 
+const rawScreens = (raw: Record<string, unknown>): Record<string, unknown>[] =>
+  raw.screens as Record<string, unknown>[];
+
+const rawImage = (screen: Record<string, unknown>): Record<string, unknown> =>
+  screen.image as Record<string, unknown>;
+
 const baseInput = (): RecordFigmaSnapshotInput => ({
   runId: RUN_ID,
   provenance: {
@@ -76,18 +96,18 @@ const baseInput = (): RecordFigmaSnapshotInput => ({
     version: "v-pinned-1",
     fetchedAt: "2026-06-09T00:00:00.000Z",
   },
-  integrityHash: BASE_INTEGRITY_HASH,
+  integrityHash: STALE_INTEGRITY_HASH,
   screens: [
     {
       screenId: "1:1",
-      irJson: { id: "1:1", name: "Home", note: `leaked key ${PLANTED_SECRET} in a text node` },
-      integrityHash: "b".repeat(64),
+      irJson: screenIr("1:1", "Home", `leaked key ${PLANTED_SECRET} in a text node`),
+      integrityHash: STALE_SCREEN_HASH,
       image: { mimeType: "image/png", bytes: png(10) },
     },
     {
       screenId: "1:2",
-      irJson: { id: "1:2", name: "Detail" },
-      integrityHash: "c".repeat(64),
+      irJson: screenIr("1:2", "Detail"),
+      integrityHash: STALE_SCREEN_HASH,
       image: { mimeType: "image/png", bytes: png(20) },
     },
   ],
@@ -102,11 +122,13 @@ describe("createNodeFigmaSnapshotStore", () => {
     const loaded = loadOrThrow(store, RUN_ID);
 
     expect(loaded.figmaSnapshotSchemaVersion).toBe(1);
-    expect(loaded.integrityHash).toBe(BASE_INTEGRITY_HASH);
+    expect(loaded.integrityHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(loaded.integrityHash).not.toBe(STALE_INTEGRITY_HASH);
     expect(loaded.provenance.fileKey).toBe("KEY123");
     expect(loaded.provenance.version).toBe("v-pinned-1");
     expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2"]);
-    expect(firstScreen(loaded).integrityHash).toBe("b".repeat(64));
+    expect(firstScreen(loaded).integrityHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(firstScreen(loaded).integrityHash).not.toBe(STALE_SCREEN_HASH);
     expect(firstScreen(loaded).image.relativePath).toMatch(/\.png$/);
     expect(loaded.skippedScreens).toEqual([{ screenId: "1:3", reason: "render-url-missing" }]);
   });
@@ -132,6 +154,26 @@ describe("createNodeFigmaSnapshotStore", () => {
     store.record(baseInput());
 
     expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+  });
+
+  it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
+    const existing = "existing snapshot written by a concurrent recorder";
+    const store = createNodeFigmaSnapshotStore(dir, {
+      randomSuffix: () => {
+        writeFileSync(snapshotFile(), existing, { encoding: "utf8", flag: "wx" });
+        return "race";
+      },
+    });
+
+    expect(() =>
+      store.record({
+        ...baseInput(),
+        screens: [],
+        skippedScreens: [],
+        integrityHash: STALE_INTEGRITY_HASH,
+      }),
+    ).toThrow(EvidenceWriteError);
+    expect(readFileSync(snapshotFile(), "utf8")).toBe(existing);
   });
 
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {
@@ -171,7 +213,7 @@ describe("createNodeFigmaSnapshotStore", () => {
       ...baseInput(),
       screens: [],
       skippedScreens: [],
-      integrityHash: EMPTY_INTEGRITY_HASH,
+      integrityHash: STALE_INTEGRITY_HASH,
     });
 
     const loaded = loadOrThrow(store, RUN_ID);
@@ -315,17 +357,27 @@ describe("createNodeFigmaSnapshotStore", () => {
   it("loads a snapshot whose screens were recorded in reversed screenId order (sort invariant #753)", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     const base = baseInput();
-    // Record the same two screens as baseInput but in DESCENDING screenId order. The snapshot-level
-    // integrityHash is order-independent (recompute sorts by screenId), so BASE_INTEGRITY_HASH still
-    // applies. load() must accept it; the persisted screens keep their recorded (reversed) order.
-    // RED if the .sort() is dropped from recomputeSnapshotIntegrityHash in store.ts.
-    store.record({
-      ...base,
-      screens: [...base.screens].reverse(),
-      integrityHash: BASE_INTEGRITY_HASH,
-    });
-    const loaded = loadOrThrow(store, RUN_ID);
-    expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:2", "1:1"]);
+    const other = mkdtempSync(join(tmpdir(), "figma-snapshot-reversed-"));
+    try {
+      const reference = createNodeFigmaSnapshotStore(other);
+      reference.record(base);
+      const referenceHash = loadOrThrow(reference, RUN_ID).integrityHash;
+
+      // Record the same two screens as baseInput but in DESCENDING screenId order. The
+      // snapshot-level integrityHash is order-independent (recompute sorts by screenId), so the
+      // loaded hash must match the reference while the persisted screen order stays reversed.
+      // RED if the .sort() is dropped from recomputeSnapshotIntegrityHash in store.ts.
+      store.record({
+        ...base,
+        screens: [...base.screens].reverse(),
+        integrityHash: STALE_INTEGRITY_HASH,
+      });
+      const loaded = loadOrThrow(store, RUN_ID);
+      expect(loaded.integrityHash).toBe(referenceHash);
+      expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:2", "1:1"]);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 });
 
@@ -348,11 +400,64 @@ describe("createNodeFigmaSnapshotStore — integrity check on load", () => {
     const qiDir = join(dir, "qi");
     const file = join(qiDir, `${RUN_ID}.figma-snapshot.json`);
     const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    const screens = raw.screens as Record<string, unknown>[];
+    const screens = rawScreens(raw);
     if (screens[0] !== undefined) {
       screens[0] = { ...screens[0], integrityHash: "d".repeat(64) };
     }
     writeFileSync(file, JSON.stringify(raw), "utf8");
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose persisted screen IR was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const raw = readSnapshotFile();
+    const screens = rawScreens(raw);
+    if (screens[0] !== undefined) {
+      screens[0] = { ...screens[0], irJson: screenIr("1:1", "Tampered") };
+    }
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose persisted image sha256 was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const raw = readSnapshotFile();
+    const first = rawScreens(raw)[0];
+    if (first !== undefined) {
+      first.image = { ...rawImage(first), sha256: "f".repeat(64) };
+    }
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose image side-file path was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const raw = readSnapshotFile();
+    const first = rawScreens(raw)[0];
+    if (first !== undefined) {
+      first.image = { ...rawImage(first), relativePath: "missing.png" };
+    }
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose image side-file bytes were tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    const raw = readSnapshotFile();
+    const first = rawScreens(raw)[0];
+    if (first === undefined) throw new Error("expected screen");
+    writeFileSync(join(result.sideFileDir, String(rawImage(first).relativePath)), png(99));
 
     expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
   });
