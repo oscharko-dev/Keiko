@@ -220,6 +220,28 @@ describe("buildFigmaSnapshot", () => {
     ).rejects.toBeInstanceOf(FigmaConnectorError);
   });
 
+  it.each([
+    { status: 401, json: { err: "Invalid token" }, code: "FIGMA_TOKEN_INVALID" },
+    { status: 403, json: { err: "Token has expired" }, code: "FIGMA_TOKEN_EXPIRED" },
+    { status: 403, json: { message: "This token was revoked" }, code: "FIGMA_TOKEN_REVOKED" },
+    { status: 403, json: { err: "Invalid scope(s)" }, code: "FIGMA_INSUFFICIENT_SCOPE" },
+    { status: 403, json: {}, code: "FIGMA_TOKEN_INVALID" },
+    { status: 407, json: {}, code: "FIGMA_PROXY_EGRESS_FAILED" },
+    { status: 502, json: {}, code: "FIGMA_PROXY_EGRESS_FAILED" },
+    { status: 503, json: {}, code: "FIGMA_UPSTREAM_UNAVAILABLE" },
+  ] as const)(
+    "maps /v1/images $status to $code through the #758 token-failure taxonomy",
+    async ({ status, json, code }) => {
+      const screens = [screen("1:1", "Home")];
+      const images: FigmaHttpPort = () => Promise.resolve({ status, json, headers: {} });
+      const renders = renderPort({});
+
+      await expect(
+        buildFigmaSnapshot(baseInput(screens, images, renders.port)),
+      ).rejects.toMatchObject({ code });
+    },
+  );
+
   it("never embeds the token anywhere in the assembled snapshot value", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();

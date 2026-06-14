@@ -24,10 +24,10 @@ const FIGMA_CONSENT_SUFFIX = ".figma-consent.json";
 /**
  * Display-only list of the least-privilege, read-only Figma scopes the connector relies on. Shown to
  * the operator before the first fetch so they can confirm the PAT they minted is read-only. The
- * connector reads files and renders images; it never writes. Figma PAT scopes are coarse, so this is
- * the human-readable expectation, not an enforced grant.
+ * connector reads file content and renders images; it never writes. This is the human-readable
+ * expectation for an out-of-band PAT grant, not an enforced grant.
  */
-export const EXPECTED_FIGMA_SCOPES: readonly string[] = ["files:read", "file_dev_resources:read"];
+export const EXPECTED_FIGMA_SCOPES: readonly string[] = ["file_content:read"];
 
 export interface FigmaScopeConsent {
   readonly figmaConsentSchemaVersion: typeof FIGMA_CONSENT_SCHEMA_VERSION;

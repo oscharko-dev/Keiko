@@ -405,8 +405,8 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
 //
 // FIGMA_TOKEN_MISSING / FIGMA_INSUFFICIENT_SCOPE operator messages must reference exactly the
 // scopes the consent ledger records (EXPECTED_FIGMA_SCOPES), so an operator never mints a token
-// with a wrong/stale scope name. Guards against the prior drift (stale "file_read" + missing
-// "file_dev_resources:read") by pinning the messages to the single source of truth.
+// with a wrong/stale scope name. Guards against prior drift and overbroad/deprecated scopes by
+// pinning the messages to the single source of truth.
 describe("POST /api/figma/snapshots — re-key scope hint (#758 SEC-3)", () => {
   it.each(["FIGMA_TOKEN_MISSING", "FIGMA_INSUFFICIENT_SCOPE"] as const)(
     "%s message lists every canonical read-only scope and no stale scope name",
@@ -427,8 +427,10 @@ describe("POST /api/figma/snapshots — re-key scope hint (#758 SEC-3)", () => {
         for (const scope of EXPECTED_FIGMA_SCOPES) {
           expect(body.error.message).toContain(scope);
         }
-        // The stale, non-canonical scope name must never reappear.
+        // Deprecated or unused scope names must never reappear.
         expect(body.error.message).not.toContain("file_read");
+        expect(body.error.message).not.toContain("files:read");
+        expect(body.error.message).not.toContain("file_dev_resources:read");
       } finally {
         spy.mockRestore();
       }
