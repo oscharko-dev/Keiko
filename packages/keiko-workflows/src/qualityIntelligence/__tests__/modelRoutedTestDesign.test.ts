@@ -445,6 +445,17 @@ const STRONG_VERDICT = {
   overallRationale: "strong test",
 };
 
+const MEDIUM_WEAK_VERDICT = {
+  verdict: "weak" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 55, rationale: "expected result is vague" },
+    { name: "atomicity" as const, score: 55, rationale: "multiple concerns are mixed" },
+    { name: "determinism" as const, score: 55, rationale: "timing-sensitive wait remains" },
+    { name: "ac-fidelity" as const, score: 55, rationale: "only partially matches the AC" },
+  ],
+  overallRationale: "medium severity weak test",
+};
+
 const DISTINCT_WEAK_RATIONALE_VERDICT = {
   verdict: "weak" as const,
   dimensions: [
@@ -666,6 +677,64 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       "Determinism: Relies on timing-sensitive behavior.",
     );
     expect(qualityFinding?.summaryRedacted).not.toContain("Test quality score");
+  });
+
+  it("preserves weak-test findings ahead of same-severity validator findings when the cap is hit", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...JUDGE_PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-cap-quality"),
+    };
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+      makeIngestedAtom("atom-3", "Requirement 3"),
+    ];
+    const rawText = JSON.stringify(
+      [1, 2, 3].map((n) => ({
+        title: `Cap saturation candidate ${String(n)}`,
+        preconditions: ["User is approved"],
+        steps: ["Open the review page", "Open the review page"],
+        expectedResults: ["User is not approved"],
+        priority: "P2",
+        riskClass: "regression",
+        derivedFromEvidenceIndexes: [n],
+      })),
+    );
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) => Promise.resolve(MEDIUM_WEAK_VERDICT)),
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText,
+            modelCallCount: 1,
+            modelId: "test-model",
+          }),
+      },
+      limits: {
+        ...QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS,
+        maxFindingsPerRun: 4,
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+
+    const manifest = store.load(String(plan.id));
+    expect(manifest).toBeDefined();
+    if (manifest === undefined) throw new Error("manifest not found");
+    expect(manifest.findings).toHaveLength(4);
+    const qualityFindings = manifest.findings.filter((finding) => finding.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(3);
+    expect(qualityFindings.every((finding) => finding.severity === "medium")).toBe(true);
+    expect(qualityFindings.every((finding) => finding.candidateId !== undefined)).toBe(true);
   });
 
   it("returns qualityScore: null when no judge is configured", async () => {
