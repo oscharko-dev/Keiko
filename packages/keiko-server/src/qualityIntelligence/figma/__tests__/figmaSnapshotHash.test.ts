@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
-import { hashScreen } from "../figmaSnapshotHash.js";
+import { hashScreen, hashSnapshot } from "../figmaSnapshotHash.js";
 
 type IrNode = QualityIntelligenceFigma.IrNode;
 type ScreenIr = QualityIntelligenceFigma.ScreenIr;
@@ -107,5 +107,18 @@ describe("hashScreen — layout/sizing/cornerRadius/typography fields are hash-n
     };
 
     expect(hashScreen("s1", screen(a), SHA)).not.toBe(hashScreen("s1", screen(b), SHA));
+  });
+});
+
+describe("hashSnapshot — order-independent in screenId (sort step #753)", () => {
+  it("hashes identically regardless of the per-screen input order", () => {
+    const perScreen = [
+      { screenId: "z:9", integrityHash: "1".repeat(64) },
+      { screenId: "a:1", integrityHash: "2".repeat(64) },
+    ];
+    const reversed = [...perScreen].reverse();
+    // The snapshot identity sorts per-screen entries by screenId before hashing, so document order
+    // must not affect the hash. RED if the .sort() is dropped from hashSnapshot.
+    expect(hashSnapshot(1, "v-pinned-1", perScreen)).toBe(hashSnapshot(1, "v-pinned-1", reversed));
   });
 });
