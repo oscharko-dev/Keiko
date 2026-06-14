@@ -151,13 +151,18 @@ export async function executeQiRun(
     throw new QiGenerationError("QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
 
+  let ingestionModelGatewayCallCount = 0;
   const ingestion = await ingestInlineSourcesAsync({
     request,
     runId,
     registeredAt: input.registeredAt,
     capsuleResolver: makeCapsuleResolver(deps),
     figmaSnapshotLoader: makeFigmaSnapshotLoader(deps),
-    figmaVision: makeFigmaVisionHintProvider(deps),
+    figmaVision: makeFigmaVisionHintProvider(deps, undefined, {
+      onGatewayCallAttempt: () => {
+        ingestionModelGatewayCallCount += 1;
+      },
+    }),
   });
   const { modelId, generate } = resolveExecutionStrategy(deps, request);
   const judge = buildJudgePortForModelRun(deps, modelId, request.modelId);
@@ -178,6 +183,7 @@ export async function executeQiRun(
       runId,
       evidenceDir,
       modelId,
+      initialModelGatewayCallCount: ingestionModelGatewayCallCount,
       generate,
       judge,
       onEvent: input.onEvent,
@@ -191,6 +197,7 @@ interface WorkflowDepsInput {
   readonly runId: string;
   readonly evidenceDir: string;
   readonly modelId?: string | undefined;
+  readonly initialModelGatewayCallCount?: number | undefined;
   readonly generate: ReturnType<typeof createQiGenerationPort>;
   readonly judge?: ReturnType<typeof createQiJudgePort> | undefined;
   readonly onEvent: (event: QI.QualityIntelligenceRunEvent) => void;
@@ -221,6 +228,7 @@ function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRou
   return {
     sink: { emit: args.onEvent },
     evidenceStore: createNodeQualityIntelligenceLocalStore(evidenceDir),
+    initialModelGatewayCallCount: args.initialModelGatewayCallCount,
     candidatesSink: {
       record: (candidates, generatedAt): void => {
         recordQualityIntelligenceCandidates({
