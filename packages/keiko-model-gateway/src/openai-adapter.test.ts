@@ -380,6 +380,25 @@ describe("OpenAiAdapter.call", () => {
     expect((sentBody as { seed?: number }).seed).toBe(13);
   });
 
+  // Issue #763 (Epic #761): determinism parameters must NOT leak into the provider payload when the
+  // gateway request does not carry them. A regression that always spreads `{ seed: 0 }` (or a
+  // response_format) would send an unrequested deterministic seed to every call and falsely record
+  // reproducibility. Assert the keys are absent, not merely undefined.
+  it("omits seed and response_format from the request body when the gateway request provides neither", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "plain" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, CONFIG);
+    const body = sentBody as Record<string, unknown>;
+    expect("seed" in body).toBe(false);
+    expect("response_format" in body).toBe(false);
+  });
+
   it("normalises assistant text-part arrays from OpenAI-compatible providers", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(

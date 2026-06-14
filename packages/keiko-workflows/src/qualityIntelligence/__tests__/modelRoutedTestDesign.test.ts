@@ -168,6 +168,42 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(manifest?.seedUsed).toBeNull();
   });
 
+  // Issue #763 (Epic #761) AC2: a numeric applied seed (and its modelParameters) must thread from
+  // the generation result through persistRun into the manifest. The test above only exercises the
+  // `seedUsed ?? null` fallback (no seed), leaving the positive-integer branch and the
+  // modelParameters threading mutation-blind at the workflow-unit level.
+  it("records a numeric applied seed and modelParameters in evidence (Epic #761)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: MODEL_OUTPUT_COVERING_TWO,
+            modelCallCount: 1,
+            modelId: "seeded-model",
+            seedUsed: 42,
+            modelParameters: { responseFormat: "json_schema", seed: 42 },
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    });
+
+    const manifest = store.load(String(PLAN.id));
+    expect(manifest?.modelId).toBe("seeded-model");
+    expect(manifest?.seedUsed).toBe(42);
+    expect(manifest?.modelParameters).toEqual({ responseFormat: "json_schema", seed: 42 });
+  });
+
   it("uses the deterministic structural baseline when generation is model-free", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];

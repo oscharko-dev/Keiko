@@ -335,6 +335,121 @@ describe("parseGatewayConfig", () => {
     expect(cap?.supportsImageInput).toBe(true);
   });
 
+  // Issue #763 (Epic #761 determinism-first contract): the determinism capability flags
+  // supportsSeeding / supportsResponseFormat are the AC2 reproducibility gate — generationPort
+  // only sends a seed / json_schema responseFormat when the chosen model advertises them
+  // (capability.supportsSeeding === true / capability.supportsResponseFormat === true). They must
+  // round-trip through the inline provider-capability path so a deployment can declare a
+  // seed-capable model and have it actually apply the seed.
+  it("round-trips supportsSeeding/supportsResponseFormat: true through the inline provider capability path", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "deterministic-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        supportsSeeding: true,
+        supportsResponseFormat: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "deterministic endpoint",
+        preferredUseCases: ["Reproducible generation"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "deterministic-chat");
+    expect(cap?.supportsSeeding).toBe(true);
+    expect(cap?.supportsResponseFormat).toBe(true);
+  });
+
+  // Mutation guard: the inline path defaults both determinism flags to false when omitted, so a
+  // model is never mistakenly treated as seed-capable (which would persist a misleading seedUsed).
+  it("defaults supportsSeeding/supportsResponseFormat to false when the inline capability omits them", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "nondeterministic-chat",
+      capability: { kind: "chat", contextWindow: 8_192 },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "nondeterministic-chat");
+    expect(cap?.supportsSeeding).toBe(false);
+    expect(cap?.supportsResponseFormat).toBe(false);
+  });
+
+  // Issue #763: the strict top-level `capabilities` array (parseModelCapability →
+  // optionalDeterminismFlags) is the wire-facing, authoritative override surface. A parser
+  // regression there could silently disable the AC2 seeding gate for every declared model without
+  // any other test catching it, so pin the true round-trip explicitly.
+  it("round-trips supportsSeeding/supportsResponseFormat: true through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "deterministic-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "deterministic-chat",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsSeeding: true,
+          supportsResponseFormat: true,
+          workflowEligible: true,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "deterministic endpoint",
+          preferredUseCases: ["Reproducible generation"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "deterministic-chat");
+    expect(cap?.supportsSeeding).toBe(true);
+    expect(cap?.supportsResponseFormat).toBe(true);
+  });
+
+  // Mutation guard: the strict top-level path preserves absence (optionalDeterminismFlags only
+  // materialises a flag when declared), so an omitted determinism flag must read back as undefined,
+  // not a coerced false — the gate treats both as "not seed-capable" but the wire shape must not drift.
+  it("leaves supportsSeeding/supportsResponseFormat undefined when the strict top-level capability omits them", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "plain-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "plain-chat",
+          kind: "chat",
+          contextWindow: 8_192,
+          maxOutputTokens: 2_048,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "plain endpoint",
+          preferredUseCases: ["Chat"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "plain-chat");
+    expect(cap?.supportsSeeding).toBeUndefined();
+    expect(cap?.supportsResponseFormat).toBeUndefined();
+  });
+
   it("rejects custom capability metadata whose id differs from the provider modelId", () => {
     const raw = rawWithProvider((p) => ({
       ...p,

@@ -60,3 +60,9 @@ This means seeded reproducibility is now a real end-to-end path, not a placehold
 start request can carry `seed`, the gateway request carries it when supported, and evidence records
 the applied value. Unseeded model runs persist `seedUsed: null`; baseline runs omit `seedUsed`
 entirely because no model participated.
+
+Re-check targeted regeneration (`POST /runs/:id/regenerate-stale`) records `seedUsed: null` for its
+model paths because the original run's seed is not stored in the manifest and the regeneration
+request does not carry one — not because the selected model lacks seeding support. A re-checked run
+still carries its own `modelId` and `modelParameters`, so it stays attributable; only the seed is not
+replayed. Storing the original seed for seed-replayable re-checks is a deliberate non-goal of #763.
