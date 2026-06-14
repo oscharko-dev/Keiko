@@ -924,19 +924,21 @@ function AgentLauncher({
           type="button"
           className="dlg-btn dlg-primary"
           disabled={!canStart}
+          aria-busy={starting}
+          aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
           onClick={() => void startAgent()}
         >
           {starting ? "Starting…" : "Start agent"}
         </button>
         {loading ? (
-          <span className="dlg-note" role="status">
+          <span id="agent-start-validation" className="dlg-note" role="status">
             Loading models and projects…
           </span>
         ) : null}
         {/* uiux-fix F017 C189 — the disabled Start button never reached the click guard,
             so its validation copy was dead code; surface the reason inline instead. */}
         {!loading && validation !== null ? (
-          <span className="dlg-note" role="status">
+          <span id="agent-start-validation" className="dlg-note" role="status">
             {validation}
           </span>
         ) : null}
@@ -978,10 +980,13 @@ export function NewWindowDialog({
         return;
       }
       requestAnimationFrame(() => {
+        // MD-05: guaranteed fallback to document.body so focus never lands in
+        // limbo when neither the top window nor the FAB is in the DOM yet.
         const next =
           document.querySelector<HTMLElement>('.window[data-top="true"]') ??
-          document.querySelector<HTMLElement>(".ws-fab");
-        next?.focus({ preventScroll: true });
+          document.querySelector<HTMLElement>(".ws-fab") ??
+          document.body;
+        next.focus({ preventScroll: true });
       });
     };
   }, []);

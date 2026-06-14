@@ -248,6 +248,11 @@ export function GatewaySetupDialog({
               {success}
             </div>
           ) : null}
+          {/* FE-03: visually-hidden description tells AT users what is required
+              when the submit button cannot be activated (WCAG 3.3.4). */}
+          <span id="gw-submit-requirements" className="visually-hidden">
+            Base URL and API token are required.
+          </span>
           <div className="gw-actions">
             {onCancel !== undefined ? (
               <button
@@ -265,6 +270,8 @@ export function GatewaySetupDialog({
               disabled={
                 busy || success !== undefined || baseUrl.trim() === "" || apiKey.trim() === ""
               }
+              aria-busy={busy}
+              aria-describedby="gw-submit-requirements"
             >
               {busy ? "Testing connection…" : "Test & save"}
             </button>

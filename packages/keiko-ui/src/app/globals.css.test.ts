@@ -472,3 +472,99 @@ describe("uiux-fix F013 — header responsive stages and tab truncation", () => 
     expect(css).not.toContain(".tb-newtab:focus-visible");
   });
 });
+
+// ─── uiux-fix A11Y (WCAG 2.2 AA audit) — focus rings, reduced-motion, contrast ──
+
+describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)", () => {
+  it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
+    const block = cssBlock(".footer:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it("adds a visible .workspace:focus-visible ring (WC-01 keyboard pan surface)", () => {
+    const block = cssBlock(".workspace:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
+    const block = cssBlock(".tr-caret-btn:focus-visible");
+    expect(block).toContain("box-shadow: 0 0 0 1px var(--bg)");
+  });
+});
+
+describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL)", () => {
+  const gated = [
+    ".cmp-box",
+    ".cmp-send",
+    ".ws-shader",
+    ".proj-caret",
+    ".tr-caret",
+    ".auto-toggle span",
+    ".attach-drop-zone",
+    ".win-zoom",
+    ".arun-prog i",
+    ".pal-card",
+    ".mc-row",
+    ".connector-picker-retry",
+    ".files-retry",
+    ".scope-grounding-select",
+  ];
+
+  // Isolate the appended MO-ALL no-preference block by its marker comment, then
+  // brace-match to its close so the membership checks can't leak into other blocks.
+  const marker = css.indexOf("MO-ALL — gate remaining interaction transitions");
+  const blockOpen = css.indexOf("@media (prefers-reduced-motion: no-preference)", marker);
+  let depth = 0;
+  let blockEnd = blockOpen;
+  let started = false;
+  for (let i = css.indexOf("{", blockOpen); i < css.length; i++) {
+    if (css[i] === "{") {
+      depth++;
+      started = true;
+    } else if (css[i] === "}") {
+      depth--;
+    }
+    if (started && depth === 0) {
+      blockEnd = i;
+      break;
+    }
+  }
+  const moBlock = css.slice(blockOpen, blockEnd + 1);
+
+  it("the MO-ALL no-preference block exists after its marker", () => {
+    expect(marker).toBeGreaterThan(-1);
+    expect(blockOpen).toBeGreaterThan(marker);
+  });
+
+  for (const sel of gated) {
+    it(`${sel} transition is opted back in only inside the no-preference block`, () => {
+      expect(moBlock).toContain(`${sel} {`);
+    });
+  }
+
+  it("composer, send button and pal-card no longer carry an ungated base transition", () => {
+    // Reverting any of these (re-adding the base transition) re-fails this guard.
+    expect(cssBlock(".cmp-box {")).not.toContain("transition");
+    expect(cssBlock(".cmp-send {")).not.toContain("transition");
+    expect(cssBlock(".pal-card {")).not.toContain("transition");
+  });
+});
+
+describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
+  it("dark .hl-com uses --fg-dim, not the sub-AA #6b7787 (CC-04)", () => {
+    const block = cssBlock(".hl-com {");
+    expect(block).toContain("var(--fg-dim)");
+    expect(block).not.toContain("#6b7787");
+  });
+
+  it("invalid connect-target window is dimmed to 0.7, not the sub-AA 0.42 (TZ-01)", () => {
+    const block = cssBlock('.window[data-conn="invalid"] {');
+    expect(block).toContain("opacity: 0.7");
+    expect(block).not.toContain("opacity: 0.42");
+  });
+
+  it("required-field marker is a CSS ::after glyph keyed off data-required (QI-01)", () => {
+    const block = cssBlock('.qi-edit-label[data-required="true"]::after');
+    expect(block).toContain('content: " *"');
+  });
+});

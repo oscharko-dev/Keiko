@@ -271,7 +271,6 @@ button {
 .proj-caret {
   display: grid;
   place-items: center;
-  transition: transform 0.15s;
   color: var(--fg-faint);
 }
 .proj-caret[data-open="true"] {
@@ -870,7 +869,6 @@ button {
   z-index: 0;
   display: block;
   pointer-events: none;
-  transition: opacity 0.35s ease;
 }
 /* Dot-grid — own layer (z1) above the wallpaper; pans/zooms with the view */
 .ws-grid {
@@ -1117,6 +1115,9 @@ button {
 .tr-caret-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+  /* WCAG 2.4.7 — dark separator so the accent ring keeps >=3:1 even on an accent-dim
+     active-row background (accent-on-accent would otherwise be low-contrast). */
+  box-shadow: 0 0 0 1px var(--bg);
 }
 .tr-dir-enter {
   min-width: 0;
@@ -1137,7 +1138,6 @@ button {
   display: grid;
   place-items: center;
   color: var(--fg-faint);
-  transition: transform 0.12s;
   flex: none;
 }
 .tr-caret[data-open="true"] {
@@ -1298,9 +1298,6 @@ button {
   height: 18px;
   border-radius: 50%;
   background: var(--fg);
-  transition:
-    left 0.15s,
-    background 0.15s;
 }
 .auto-toggle.on {
   background: var(--accent-dim);
@@ -1377,9 +1374,6 @@ button {
   border-radius: var(--radius-lg);
   padding: 14px 14px 10px;
   box-shadow: var(--shadow-card);
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
 }
 .cmp-box:focus-within {
   border-color: var(--accent-line);
@@ -1476,9 +1470,6 @@ button {
   place-items: center;
   color: var(--bg);
   background: var(--line-strong);
-  transition:
-    background 0.15s,
-    transform 0.1s;
 }
 .cmp-send[data-on="true"] {
   background: var(--accent);
@@ -1545,9 +1536,6 @@ button {
   padding: 10px 14px;
   border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
-  transition:
-    border-color 0.15s,
-    background 0.15s;
 }
 .attach-drop-zone[data-dragover="true"] {
   border-color: var(--accent-line);
@@ -1913,7 +1901,6 @@ button {
   align-items: center;
   gap: 1px;
   opacity: 0;
-  transition: opacity 0.12s;
 }
 .win-head:hover .win-zoom,
 .win-zoom:focus-within {
@@ -2177,7 +2164,10 @@ button {
     var(--shadow-pop);
 }
 .window[data-conn="invalid"] {
-  opacity: 0.42;
+  /* WCAG 1.4.3 — invalid connect-targets are transient & inactive during the connect
+     gesture; 0.42 composited body text (~7:1) below 4.5:1. 0.7 keeps text legible while
+     still clearly de-emphasising vs the accent-ringed valid targets. */
+  opacity: 0.7;
 }
 .window[data-conn="source"] {
   box-shadow:
@@ -2247,7 +2237,6 @@ button {
   display: block;
   height: 100%;
   border-radius: 999px;
-  transition: width 0.4s;
 }
 .arun-perms {
   display: flex;
@@ -3018,7 +3007,9 @@ button {
   border-color: color-mix(in oklch, var(--danger) 55%, var(--line-soft));
 }
 .hl-com {
-  color: #6b7787;
+  /* WCAG 1.4.3 — the prior hardcoded comment hex measured ~3.38:1 on the dark code well
+     (FAIL); --fg-dim is the documented comment-token (4.57:1) the light override already names. */
+  color: var(--fg-dim);
   font-style: italic;
 }
 .hl-str {
@@ -3911,7 +3902,6 @@ button {
   border-radius: 11px;
   overflow: hidden;
   background: var(--card);
-  transition: border-color 0.12s;
 }
 .pal-card:hover {
   border-color: var(--accent-line);
@@ -7348,7 +7338,6 @@ select.dlg-input {
   border: 1px solid var(--line-soft);
   text-decoration: none;
   color: var(--fg);
-  transition: background 120ms;
 }
 
 .mc-row:hover {
@@ -10536,7 +10525,6 @@ select.dlg-input {
   color: var(--fg);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color 0.15s ease;
 }
 .connector-picker-retry:hover {
   border-color: var(--accent-line);
@@ -11002,9 +10990,6 @@ ul.integ {
   color: var(--fg);
   background: var(--card-2);
   border: 1px solid var(--line-strong);
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease;
 }
 .files-retry:hover {
   background: var(--card);
@@ -11876,7 +11861,6 @@ ul.integ {
   font-family: inherit;
   max-width: 260px;
   cursor: pointer;
-  transition: border-color 0.15s ease;
 }
 .scope-grounding-select:hover:not(:disabled) {
   border-color: var(--line);
@@ -12392,4 +12376,86 @@ ul.integ {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* ============================================================
+   uiux-fix A11Y (WCAG 2.2 AA audit) — focus rings for keyboard focus targets
+   + reduced-motion gating of remaining interaction transitions (F037/B4 convention).
+   ============================================================ */
+
+/* SH-02 — Alt+S moves focus to the status footer (programmatic jump-to-region,
+   tabIndex=-1); WC-01 — the workspace surface is keyboard-focusable for arrow-pan.
+   Both need a visible focus indicator (WCAG 2.4.7). */
+.footer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.workspace:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+/* MO-ALL — gate remaining interaction transitions so prefers-reduced-motion users get
+   instant state changes (composer, send button, carets, toggles, progress, drop zone,
+   cards, lists, selects). Base rules carry no transition; opted back in here (WCAG 2.3.3). */
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-box {
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+  }
+  .cmp-send {
+    transition:
+      background 0.15s,
+      transform 0.1s;
+  }
+  .ws-shader {
+    transition: opacity 0.35s ease;
+  }
+  .proj-caret {
+    transition: transform 0.15s;
+  }
+  .tr-caret {
+    transition: transform 0.12s;
+  }
+  .auto-toggle span {
+    transition:
+      left 0.15s,
+      background 0.15s;
+  }
+  .attach-drop-zone {
+    transition:
+      border-color 0.15s,
+      background 0.15s;
+  }
+  .win-zoom {
+    transition: opacity 0.12s;
+  }
+  .arun-prog i {
+    transition: width 0.4s;
+  }
+  .pal-card {
+    transition: border-color 0.12s;
+  }
+  .mc-row {
+    transition: background 120ms;
+  }
+  .connector-picker-retry {
+    transition: border-color 0.15s ease;
+  }
+  .files-retry {
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .scope-grounding-select {
+    transition: border-color 0.15s ease;
+  }
+}
+
+/* QI-01 — required-field marker as a CSS glyph so the input's accessible name stays exactly
+   the field label (screen readers convey required via aria-required); WCAG 3.3.2. */
+.qi-edit-label[data-required="true"]::after {
+  content: " *";
+  color: var(--accent-text);
 }

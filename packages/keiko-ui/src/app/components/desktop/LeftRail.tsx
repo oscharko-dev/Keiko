@@ -153,11 +153,15 @@ export function LeftRail({
         </button>
       </div>
       <div className="rail-div" />
+      {/* SH-01: aria-pressed reflects current state (true = light theme is active);
+          the action label describes the next state — "Dark mode" when light, "Light
+          mode" when dark — which is the standard WAI-ARIA APG toggle-button pattern. */}
       <button
         type="button"
         className="rail-btn"
         data-side="left"
         aria-label={theme === "light" ? "Dark mode" : "Light mode"}
+        aria-pressed={theme === "light"}
         data-tip={theme === "light" ? "Dark mode" : "Light mode"}
         onClick={onToggleTheme}
       >

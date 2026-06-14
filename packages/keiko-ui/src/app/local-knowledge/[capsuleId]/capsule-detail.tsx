@@ -249,7 +249,9 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
           label="Latest job"
           value={job !== undefined ? JOB_STATUS_LABEL[job.status] : "Not indexed"}
           meta={remainingLabel}
-          tone={job?.status === "failed" ? "danger" : job?.status === "running" ? "warn" : "neutral"}
+          tone={
+            job?.status === "failed" ? "danger" : job?.status === "running" ? "warn" : "neutral"
+          }
         />
       </div>
       <div className="lkd-status-bars">
@@ -506,7 +508,14 @@ function diagnosticGroups(diagnostics: readonly ParserDiagnostic[]): readonly Di
 
 function DiagnosticGroupRow({ group }: { group: DiagnosticGroup }): ReactNode {
   return (
-    <li className="lkd-diag-group" data-severity={group.severity}>
+    <li
+      className="lkd-diag-group"
+      data-severity={group.severity}
+      aria-label={`${DIAG_SEVERITY_LABEL[group.severity]}: ${group.code} (${group.count.toString()}x)`}
+    >
+      <span className="lkd-diag-severity" aria-hidden="true">
+        {DIAG_SEVERITY_LABEL[group.severity]}
+      </span>
       <span className="lkd-diag-group-count">{group.count.toString()}x</span>
       <span className="lkd-diag-code">{group.code}</span>
       <span className="lkd-diag-message">{group.message}</span>

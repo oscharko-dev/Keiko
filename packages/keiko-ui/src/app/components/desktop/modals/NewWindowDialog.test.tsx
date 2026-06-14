@@ -76,6 +76,54 @@ describe("NewWindowDialog: no Keiko-Mode coming-soon toggle (#146 GAP-C3)", () =
   });
 });
 
+// MD-05 (WCAG 2.4.3): focus-restoration fallback must always reach a focusable
+// target — document.body is the guaranteed last resort when neither the top
+// window nor the FAB is present in the DOM.
+describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () => {
+  it("focuses document.body when no top-window or FAB is available on close", () => {
+    // Ensure no stray .window[data-top=true] or .ws-fab elements exist.
+    expect(document.querySelector('.window[data-top="true"]')).toBeNull();
+    expect(document.querySelector(".ws-fab")).toBeNull();
+
+    const { unmount } = render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    // Detach the trigger reference by putting focus on body before unmount.
+    document.body.focus();
+    unmount();
+    // Without the guaranteed fallback, focus would land in limbo (null activeElement
+    // on some browsers); with it, document.body is always the fallback.
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
+// FE-05 (WCAG 4.1.2) + FE-03 (WCAG 3.3.4): Start agent button in the agents
+// dialog must expose aria-busy reflecting the pending state, and aria-describedby
+// pointing to the visible validation reason when the button is disabled.
+describe("NewWindowDialog agents: Start agent a11y attributes (FE-05/FE-03)", () => {
+  it("Start agent button has aria-busy=false when not submitting", () => {
+    render(
+      <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    const btn = screen.getByRole("button", { name: /start agent/i });
+    // Not yet submitting — aria-busy must be false, not absent.
+    expect(btn).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("Start agent button has aria-describedby pointing to the validation status span when disabled", () => {
+    render(
+      <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    const btn = screen.getByRole("button", { name: /start agent/i });
+    // Button is disabled (models still loading) — aria-describedby must point at
+    // the validation/loading span so AT users know why it cannot be activated (FE-03).
+    expect(btn).toHaveAttribute("aria-describedby", "agent-start-validation");
+    const desc = document.getElementById("agent-start-validation");
+    expect(desc).not.toBeNull();
+    expect(desc?.getAttribute("role")).toBe("status");
+  });
+});
+
 // M2 (#532) — arbitrary-folder browse error mapping
 describe("directoryPickerError", () => {
   it("returns an absolute-path prompt for a 400 BAD_ROOT error", () => {

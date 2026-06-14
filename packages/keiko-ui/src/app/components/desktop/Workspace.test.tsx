@@ -503,3 +503,152 @@ describe("Workspace card connections", () => {
     expect(live?.textContent).toMatch(/escape to cancel/i);
   });
 });
+
+describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
+  it("workspace surface is keyboard-focusable (tabIndex=0)", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    expect(surface.tabIndex).toBe(0);
+  });
+
+  it("ArrowLeft pans content right (panBy +step, 0)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowLeft", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(48, 0);
+  });
+
+  it("ArrowRight pans content left (panBy -step, 0)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowRight", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(-48, 0);
+  });
+
+  it("ArrowUp pans content down (panBy 0, +step)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowUp", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(0, 48);
+  });
+
+  it("ArrowDown pans content up (panBy 0, -step)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowDown", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(0, -48);
+  });
+
+  it("Shift+ArrowRight uses a larger step (4×)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowRight", shiftKey: true, target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(-192, 0);
+  });
+
+  it("arrow keys call event.preventDefault()", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const event = createEvent.keyDown(surface, { key: "ArrowDown" });
+    // Simulate target === currentTarget by firing directly on surface
+    fireEvent(surface, event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("non-arrow key does not call panBy", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "Tab", target: surface });
+    fireEvent.keyDown(surface, { key: "Escape", target: surface });
+    fireEvent.keyDown(surface, { key: " ", target: surface });
+    expect(panBy).not.toHaveBeenCalled();
+  });
+
+  it("arrow key from a focused child window does not trigger panBy", () => {
+    // Guard: event.target !== event.currentTarget when key bubbles from a child.
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    // Find a child inside the workspace (e.g., the window element) and fire
+    // keyDown from it — it bubbles to the surface but target !== currentTarget.
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+    // Dispatch on the child; the event bubbles but target stays the child.
+    fireEvent.keyDown(windowEl as HTMLElement, { key: "ArrowLeft", bubbles: true });
+    expect(panBy).not.toHaveBeenCalled();
+  });
+});

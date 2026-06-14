@@ -86,18 +86,22 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
 
   if (error !== null) {
     // message rendered inline — title/aria-label-only details are unreachable
-    // for sighted keyboard users (WCAG 1.4.13; uiux-fix F023 C379)
+    // for sighted keyboard users (WCAG 1.4.13; uiux-fix F023 C379).
+    // role="alert" (assertive) is correct for errors per WCAG 4.1.3 (CW-02).
     return (
-      <span className="rv-evidence-link rv-evidence-error" role="status">
+      <span className="rv-evidence-link rv-evidence-error" role="alert">
         Evidence error: {error.message}
       </span>
     );
   }
 
+  // Unavailable evidence has no keyboard path — native <button disabled> gives
+  // correct role/disabled semantics without requiring a href (WCAG 4.1.2, CW-01).
+  // Visual appearance is unchanged via the same CSS classes.
   return (
-    <span className="rv-evidence-link rv-evidence-disabled" role="link" aria-disabled="true">
+    <button type="button" className="rv-evidence-link rv-evidence-disabled" disabled>
       Evidence
-    </span>
+    </button>
   );
 }
 

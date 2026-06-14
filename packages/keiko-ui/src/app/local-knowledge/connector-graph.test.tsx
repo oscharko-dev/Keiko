@@ -263,6 +263,83 @@ describe("ConnectorGraph — with capsules", () => {
   });
 });
 
+describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
+  it("dispatches the connector drop event when 'Add to workspace' is clicked (keyboard path)", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("kbdrop"), displayName: "KB Capsule" });
+
+    // Set up a fake workspace element so getWorkspaceCenter() finds it
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    // jsdom getBoundingClientRect returns zeros by default; override to a
+    // non-zero rect so the button is accepted by the Workspace bounds check.
+    workspace.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        right: 900,
+        top: 50,
+        bottom: 750,
+        width: 800,
+        height: 700,
+        x: 100,
+        y: 50,
+        toJSON: () => undefined,
+      }) as DOMRect;
+    document.body.appendChild(workspace);
+
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+
+    const user = userEvent.setup();
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("KB Capsule")).toBeInTheDocument();
+    });
+
+    const addBtn = screen.getByRole("button", { name: /add capsule KB Capsule to workspace/i });
+    await user.click(addBtn);
+
+    expect(dropListener).toHaveBeenCalledTimes(1);
+    const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;
+    expect(event.detail.payload).toEqual({
+      kind: "capsule",
+      id: "cap-kbdrop",
+      label: "KB Capsule",
+      lifecycleState: "ready",
+    });
+    // Coordinates should be the workspace center (500, 400)
+    expect(event.detail.clientX).toBe(500);
+    expect(event.detail.clientY).toBe(400);
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    workspace.remove();
+  });
+
+  it("does not dispatch the drop event when no workspace element is present", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("nowspc"), displayName: "No WS Capsule" });
+
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+
+    const user = userEvent.setup();
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No WS Capsule")).toBeInTheDocument();
+    });
+
+    // No main.workspace in the DOM — click should silently no-op
+    const addBtn = screen.getByRole("button", {
+      name: /add capsule No WS Capsule to workspace/i,
+    });
+    await user.click(addBtn);
+
+    expect(dropListener).not.toHaveBeenCalled();
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+  });
+});
+
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
   it("submits a trimmed display name from the create dialog", async () => {
     const createCapsuleImpl = vi
@@ -480,7 +557,9 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     const onOpenCapsule = vi.fn();
     const user = userEvent.setup();
 
-    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} onOpenCapsule={onOpenCapsule} />);
+    render(
+      <ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} onOpenCapsule={onOpenCapsule} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Health Cap")).toBeInTheDocument();

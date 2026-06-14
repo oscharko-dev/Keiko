@@ -21,10 +21,21 @@ type QualityIntelligenceExportAdapter = QualityIntelligence.QualityIntelligenceE
  */
 export type QualityIntelligenceBinaryExportMode = "pdf" | "zip-bundle";
 
-/** Any target an export-evidence row may record: a domain adapter or a binary bundle mode. */
+/**
+ * Traceability matrix export modes produced by the dedicated traceability route (Epic #734,
+ * Issue #740). Like binary modes, these are assembled at the route level — the matrix serializers
+ * are separate from the candidate-export adapters — so they extend the evidence target union here
+ * rather than the contract `QualityIntelligenceExportAdapter`.
+ */
+export type QualityIntelligenceTraceabilityExportMode =
+  | "traceability-csv"
+  | "traceability-markdown";
+
+/** Any target an export-evidence row may record: a domain adapter, a binary bundle mode, or a traceability matrix mode. */
 export type QualityIntelligenceExportTarget =
   | QualityIntelligenceExportAdapter
-  | QualityIntelligenceBinaryExportMode;
+  | QualityIntelligenceBinaryExportMode
+  | QualityIntelligenceTraceabilityExportMode;
 type QualityIntelligenceLifecycleStatus = QualityIntelligence.QualityIntelligenceLifecycleStatus;
 type QualityIntelligenceRunId = QualityIntelligence.QualityIntelligenceRunId;
 type QualityIntelligenceValidationFindingKind =

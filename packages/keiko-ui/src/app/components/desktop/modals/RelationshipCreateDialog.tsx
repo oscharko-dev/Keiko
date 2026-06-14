@@ -134,12 +134,17 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
     [onClose],
   );
 
+  // MD-01: bind Escape + focus-trap to the dialog element (not window) so a
+  // concurrent overlay's Escape does not double-fire this handler.
+  // Pattern: GatewaySetupDialog lines 73-98.
   useEffect(() => {
-    window.addEventListener("keydown", trapFocus);
-    window.addEventListener("keydown", handleEscape);
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    dialog.addEventListener("keydown", trapFocus);
+    dialog.addEventListener("keydown", handleEscape);
     return () => {
-      window.removeEventListener("keydown", trapFocus);
-      window.removeEventListener("keydown", handleEscape);
+      dialog.removeEventListener("keydown", trapFocus);
+      dialog.removeEventListener("keydown", handleEscape);
     };
   }, [trapFocus, handleEscape]);
 
