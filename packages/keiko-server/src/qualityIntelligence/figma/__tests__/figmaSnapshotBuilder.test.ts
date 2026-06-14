@@ -735,6 +735,54 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     expect(snapshot.skippedScreens).toHaveLength(0);
   });
 
+  it("normalizes an invalid batchSize instead of stalling the chunk loop", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B")];
+    let callCount = 0;
+    const images: FigmaHttpPort = (request) => {
+      callCount += 1;
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "")
+        .split(",")
+        .filter((id) => id.length > 0);
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({
+      "https://ephemeral/1:1.png": png(10),
+      "https://ephemeral/1:2.png": png(20),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      batchSize: 0,
+    });
+
+    expect(callCount).toBe(1);
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2"]);
+  });
+
+  it("normalizes an invalid downloadConcurrency before entering the worker pool", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B"), screen("1:3", "C")];
+    const images = imagesPort();
+    let active = 0;
+    let peak = 0;
+    const renders: FigmaRenderPort = async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
+      return { status: 200, bytes: png(1), headers: {} };
+    };
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      downloadConcurrency: Number.NaN,
+    });
+
+    expect(peak).toBeGreaterThan(0);
+    expect(snapshot.screens).toHaveLength(3);
+  });
+
   it("preserves screen order even when downloads complete out of order", async () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail"), screen("1:3", "Settings")];
     const images = imagesPort();

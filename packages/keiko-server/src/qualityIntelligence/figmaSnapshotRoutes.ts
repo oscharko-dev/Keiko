@@ -55,6 +55,7 @@ import {
   observeFigmaRevoke,
   EXPECTED_FIGMA_SCOPES,
   FigmaConnectorError,
+  resolveScopedPaginationLimits,
   type FigmaConnectorErrorCode,
   type FigmaConnectorMetrics,
   type FigmaScopeCoverage,
@@ -371,7 +372,7 @@ interface ParsedTriggerBody {
 // Deployment-overridable deep scoped-pagination budgets (#837). Operators on a tighter Figma plan can
 // dial concurrency/depth/screen-count down (or up) via env without a code change; an unset or
 // non-positive value falls back to the connector default. Mirrors the #532 KEIKO_GROUNDING_* pattern.
-function figmaPaginationFromEnv(env: EnvSource): Partial<ScopedPaginationLimits> {
+export function figmaPaginationFromEnv(env: EnvSource): ScopedPaginationLimits {
   const readPositiveInt = (raw: string | undefined): number | undefined => {
     if (raw === undefined) return undefined;
     const value = Number(raw);
@@ -387,7 +388,7 @@ function figmaPaginationFromEnv(env: EnvSource): Partial<ScopedPaginationLimits>
   apply("maxFetchesPerScreen", "KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN");
   apply("maxScreensDeep", "KEIKO_FIGMA_MAX_SCREENS_DEEP");
   apply("fetchConcurrency", "KEIKO_FIGMA_FETCH_CONCURRENCY");
-  return overrides;
+  return resolveScopedPaginationLimits(overrides);
 }
 
 /** Default total snapshot-build deadline in milliseconds (10 minutes). */

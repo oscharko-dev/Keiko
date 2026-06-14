@@ -38,6 +38,7 @@ import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intel
 const FIGMA_API_ORIGIN = "https://api.figma.com";
 const SNAPSHOT_SCHEMA_VERSION = 1 as const;
 const DEFAULT_RENDER_BATCH_SIZE = 20;
+const MAX_RENDER_BATCH_SIZE = 100;
 const DEFAULT_MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_RENDER_SCALE = 1;
 const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
@@ -65,9 +66,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const chunk = <T>(items: readonly T[], size: number): readonly (readonly T[])[] => {
+  const safeSize = Number.isInteger(size) && size >= 1 ? size : DEFAULT_RENDER_BATCH_SIZE;
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += safeSize) out.push(items.slice(i, i + safeSize));
   return out;
+};
+
+const boundedPositiveInt = (
+  value: number | undefined,
+  fallback: number,
+  ceiling: number,
+): number => {
+  if (value === undefined || !Number.isInteger(value) || value < 1) return fallback;
+  return Math.min(value, ceiling);
 };
 
 // Returns true when the hostname is an IP literal or a local/loopback name that must be blocked.
@@ -139,7 +150,11 @@ const requestRenderUrls = async (
   input: BuildFigmaSnapshotInput,
   screenIds: readonly string[],
 ): Promise<Map<string, string | null>> => {
-  const batchSize = input.batchSize ?? DEFAULT_RENDER_BATCH_SIZE;
+  const batchSize = boundedPositiveInt(
+    input.batchSize,
+    DEFAULT_RENDER_BATCH_SIZE,
+    MAX_RENDER_BATCH_SIZE,
+  );
   const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
   const sleep = input.sleep ?? realFigmaRetrySleep;
   const urls = new Map<string, string | null>();
@@ -260,7 +275,11 @@ export const buildFigmaSnapshot = async (
       ? new Map<string, string | null>()
       : await requestRenderUrls(input, screenIds);
 
-  const concurrency = input.downloadConcurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY;
+  const concurrency = boundedPositiveInt(
+    input.downloadConcurrency,
+    DEFAULT_DOWNLOAD_CONCURRENCY,
+    Number.MAX_SAFE_INTEGER,
+  );
   const outcomes = await mapWithConcurrency(input.ir.screens, concurrency, (ir) =>
     resolveScreen(input, ir, renderUrls.get(ir.id) ?? null),
   );

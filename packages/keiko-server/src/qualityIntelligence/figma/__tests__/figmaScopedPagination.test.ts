@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SCOPED_PAGINATION_LIMITS,
+  SCOPED_PAGINATION_LIMIT_CEILINGS,
   discoverScreenNodes,
   paginateScopedDocument,
+  resolveScopedPaginationLimits,
   type RawFigmaNode,
   type ScopedNodeFetcher,
   type ScopedPaginationLimits,
@@ -104,6 +106,13 @@ const deepScreen = (id: string): BuildNode =>
 
 const canvasOf = (screenIds: readonly string[]): RawFigmaNode =>
   toRaw(node("canvas", "CANVAS", screenIds.map(deepScreen)));
+
+const firstChild = (n: RawFigmaNode): RawFigmaNode => {
+  const kids = Array.isArray(n.children) ? n.children : [];
+  const child = kids[0];
+  if (child === undefined) throw new Error("missing child");
+  return child;
+};
 
 // ─── discoverScreenNodes ─────────────────────────────────────────────────────────
 
@@ -218,6 +227,18 @@ describe("paginateScopedDocument — deep capture (#837)", () => {
 });
 
 describe("paginateScopedDocument — bounds + coverage", () => {
+  it("clamps operator overrides to finite safety ceilings", () => {
+    expect(
+      resolveScopedPaginationLimits({
+        pageDepth: 999,
+        maxNodesPerScreen: 999_999,
+        maxFetchesPerScreen: 999_999,
+        maxScreensDeep: 999_999,
+        fetchConcurrency: 999,
+      }),
+    ).toEqual(SCOPED_PAGINATION_LIMIT_CEILINGS);
+  });
+
   it("caps the number of screens deep-fetched and reports capped", async () => {
     const full = canvasOf(["s1", "s2", "s3", "s4", "s5"]);
     const f = fetcherFor(full, 2);
@@ -279,6 +300,52 @@ describe("paginateScopedDocument — bounds + coverage", () => {
     expect(f.calls()).toEqual(["w1", "w1-a"]); // base fetch + exactly one budgeted frontier fetch
   });
 
+  it("does not splice a frontier response that would exceed the per-screen node budget", async () => {
+    const oversized = toRaw(
+      node("canvas", "CANVAS", [
+        node("s1", "FRAME", [
+          node(
+            "s1-a",
+            "FRAME",
+            Array.from({ length: 20 }, (_unused, i) =>
+              node(`s1-a-t${String(i)}`, "TEXT", [], "overflow"),
+            ),
+          ),
+        ]),
+      ]),
+    );
+    const { document, coverage } = await paginateScopedDocument(
+      truncate(oversized, 1),
+      fetcherFor(oversized, 1).fetch,
+      limits({ pageDepth: 1, maxNodesPerScreen: 3, maxFetchesPerScreen: 3 }),
+    );
+
+    expect(countNodes(firstChild(document))).toBeLessThanOrEqual(3);
+    expect(countText(document)).toBe(0);
+    expect(coverage.screensTruncated).toBe(1);
+  });
+
+  it("prunes an over-budget base fetch instead of accepting it wholesale", async () => {
+    const oversized = toRaw(
+      node("canvas", "CANVAS", [
+        node(
+          "s1",
+          "FRAME",
+          Array.from({ length: 8 }, (_unused, i) => node(`s1-t${String(i)}`, "TEXT", [], "x")),
+        ),
+      ]),
+    );
+    const { document, coverage } = await paginateScopedDocument(
+      truncate(oversized, 1),
+      fetcherFor(oversized, 1).fetch,
+      limits({ pageDepth: 1, maxNodesPerScreen: 3 }),
+    );
+
+    expect(countNodes(firstChild(document))).toBe(3);
+    expect(coverage.screensDeepFetched).toBe(1);
+    expect(coverage.screensTruncated).toBe(1);
+  });
+
   it("reports an accurate assembled node + fetch count", async () => {
     const full = canvasOf(["s1"]);
     const { document, coverage } = await paginateScopedDocument(
@@ -303,6 +370,7 @@ describe("paginateScopedDocument — fail-soft", () => {
     const { document, coverage } = await paginateScopedDocument(shallow, f.fetch, limits());
     // s1 stays shallow (its discovery subtree), s2 deep-fetched.
     expect(coverage.screensDeepFetched).toBe(1);
+    expect(coverage.screensTruncated).toBe(1);
     expect(countText(document)).toBe(1); // only s2's label
   });
 
