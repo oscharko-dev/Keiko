@@ -19,9 +19,11 @@
 //   link  — the node carries a navigating prototype interaction/reaction (it navigates).
 //   image — the node has an IMAGE-type fill (and is not TEXT).
 //   text  — the node is a TEXT node.
-// `button`/`input` are the one accepted name heuristic: a tiny, word-boundary, case-insensitive
-// match over the conventional design-system role vocabulary. Boards that don't use these words fall
-// back to `container` — no board's specific names are encoded.
+// `button` is also used for activation-style local prototype actions (for example ON_CLICK variable
+// updates) because they are interactive controls even when they do not navigate. `button`/`input`
+// name heuristics remain a tiny, word-boundary, case-insensitive match over conventional
+// design-system role vocabulary. Boards that don't use these words and carry no prototype action
+// fall back to `container` — no board's specific names are encoded.
 
 import {
   asNode,
@@ -92,6 +94,17 @@ const interactionHasNavigationTarget = (entry: unknown): boolean => {
   return actionHasNavigationTarget(record.action);
 };
 
+const interactionHasLocalAction = (entry: unknown): boolean => {
+  const record = asNode(entry);
+  if (record === undefined) return false;
+  const trigger = asNode(record.trigger);
+  const triggerType = trigger !== undefined ? readString(trigger.type) : undefined;
+  if (triggerType !== "ON_CLICK" && triggerType !== "ON_PRESS" && triggerType !== "ON_TAP") {
+    return false;
+  }
+  return readArray(record.actions).length > 0 || asNode(record.action) !== undefined;
+};
+
 const navigates = (node: FigmaSourceNode): boolean => {
   const interactions = readArray(node.interactions);
   const reactions = readArray(node.reactions);
@@ -101,9 +114,16 @@ const navigates = (node: FigmaSourceNode): boolean => {
   );
 };
 
+const hasActivation = (node: FigmaSourceNode): boolean => {
+  const interactions = readArray(node.interactions);
+  const reactions = readArray(node.reactions);
+  return interactions.some(interactionHasLocalAction) || reactions.some(interactionHasLocalAction);
+};
+
 const classify = (node: FigmaSourceNode, imageFills: readonly ImageFillRef[]): InteractionHint => {
   if (nodeType(node) === "TEXT") return "text";
   if (navigates(node)) return "link";
+  if (hasActivation(node)) return "button";
   if (imageFills.length > 0) return "image";
   const name = nodeName(node);
   if (BUTTON_ROLE.test(name)) return "button";

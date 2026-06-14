@@ -26,10 +26,7 @@ const node = (
   name: over.name ?? id,
   type: over.type ?? "FRAME",
   interactionHint,
-  ...(over.text !== undefined ? { text: over.text } : {}),
-  ...(over.boundingBox !== undefined ? { boundingBox: over.boundingBox } : {}),
-  ...(over.textColor !== undefined ? { textColor: over.textColor } : {}),
-  ...(over.backgroundColor !== undefined ? { backgroundColor: over.backgroundColor } : {}),
+  ...optionalNodeFields(over),
   imageFills: over.imageFills ?? [],
   children: over.children ?? [],
 });
@@ -43,9 +40,23 @@ const box = (x: number, y: number, width: number, height: number): BoundingBox =
   height,
 });
 
-const itemsFor = (s: ScreenIr): readonly { category: string; title: string }[] => {
+const optionalNodeFields = (over: Partial<IrNode>): Partial<IrNode> => ({
+  ...(over.text !== undefined ? { text: over.text } : {}),
+  ...(over.boundingBox !== undefined ? { boundingBox: over.boundingBox } : {}),
+  ...(over.textColor !== undefined ? { textColor: over.textColor } : {}),
+  ...(over.backgroundColor !== undefined ? { backgroundColor: over.backgroundColor } : {}),
+  ...(over.typography !== undefined ? { typography: over.typography } : {}),
+});
+
+const itemsFor = (
+  s: ScreenIr,
+): readonly { category: string; title: string; outcome?: string | undefined }[] => {
   const byScreen = deriveA11yTestItemsByScreen([s]);
-  return (byScreen.get(s.id) ?? []).map((i) => ({ category: i.category, title: i.title }));
+  return (byScreen.get(s.id) ?? []).map((i) => ({
+    category: i.category,
+    title: i.title,
+    outcome: i.outcome,
+  }));
 };
 
 // ─── WCAG relative luminance + contrast ratio ────────────────────────────────────
@@ -127,6 +138,64 @@ describe("deriveA11yTestItemsByScreen — contrast", () => {
     const fail = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
     expect(fail).toHaveLength(1);
     expect(fail[0]?.title.toLowerCase()).toContain("below");
+    expect(fail[0]?.outcome).toBe("fail");
+  });
+
+  it("composites semi-transparent text before checking contrast", () => {
+    const ir = screen(
+      "s-alpha-text",
+      "AlphaText",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [node("t", "text", { text: "Ghost", textColor: "#00000080" })],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    expect(contrast[0]?.title).toContain("below WCAG AA");
+  });
+
+  it("composites semi-transparent backgrounds over ancestor backgrounds", () => {
+    const ir = screen(
+      "s-alpha-bg",
+      "AlphaBg",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          node("panel", "container", {
+            backgroundColor: "#00000080",
+            children: [node("t", "text", { text: "White", textColor: "#ffffff" })],
+          }),
+        ],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    expect(contrast[0]?.title).toContain("below WCAG AA");
+  });
+
+  it("uses the WCAG AA large-text threshold when typography proves large text", () => {
+    const ir = screen(
+      "s-large",
+      "Large",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          node("t", "text", {
+            text: "Large",
+            textColor: "#777777",
+            typography: { fontFamily: "Inter", fontSize: 24, fontWeight: 400 },
+          }),
+        ],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    expect(contrast[0]?.title).toContain("meets WCAG AA large text");
+    expect(contrast[0]?.outcome).toBe("pass");
   });
 
   it("resolves the background from the nearest ancestor that carries one", () => {
@@ -165,6 +234,41 @@ describe("deriveA11yTestItemsByScreen — contrast", () => {
     expect(items.some((i) => i.title.toLowerCase().includes("meets"))).toBe(false);
   });
 
+  it("emits a coverage notice when a text node has no resolvable text colour", () => {
+    const ir = screen(
+      "s-missing-fg",
+      "MissingFg",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [node("t", "text", { text: "No fill" })],
+      }),
+    );
+
+    const notice = itemsFor(ir).filter((i) => i.category === "coverage-notice");
+    expect(notice).toHaveLength(1);
+    expect(notice[0]?.title.toLowerCase()).toContain("contrast");
+  });
+
+  it("emits a coverage notice when the nearest background colour is malformed", () => {
+    const ir = screen(
+      "s-bad-bg",
+      "BadBg",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          node("panel", "container", {
+            backgroundColor: "not-a-color",
+            children: [node("t", "text", { text: "Label", textColor: "#000000" })],
+          }),
+        ],
+      }),
+    );
+
+    const notice = itemsFor(ir).filter((i) => i.category === "coverage-notice");
+    expect(notice).toHaveLength(1);
+    expect(notice[0]?.title.toLowerCase()).toContain("contrast");
+  });
+
   it("emits a coverage notice when the text colour hex is malformed", () => {
     const ir = screen(
       "s5",
@@ -195,6 +299,8 @@ describe("deriveA11yTestItemsByScreen — accessible names", () => {
     const names = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("accessible name"));
     expect(names).toHaveLength(1);
     expect(names[0]?.category).toBe("a11y");
+    expect(names[0]?.title).toContain("needs an accessible name");
+    expect(names[0]?.outcome).toBe("fail");
   });
 
   it("does not flag an interactive node that carries visible text", () => {
@@ -237,6 +343,24 @@ describe("deriveA11yTestItemsByScreen — focus order", () => {
     expect(order).toHaveLength(1);
     // The top element must be named before the bottom one in the asserted order.
     expect(order[0]?.title.indexOf("T")).toBeLessThan(order[0]?.title.indexOf("B") ?? -1);
+    expect(order[0]?.outcome).toBe("expectation");
+  });
+
+  it("uses left-to-right order as the same-row tie-breaker", () => {
+    const ir = screen(
+      "s9b",
+      "Toolbar",
+      node("root", "container", {
+        children: [
+          node("right", "button", { text: "Right", boundingBox: box(100, 0, 40, 40) }),
+          node("left", "button", { text: "Left", boundingBox: box(0, 0, 40, 40) }),
+        ],
+      }),
+    );
+
+    const order = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("focus order"));
+    expect(order).toHaveLength(1);
+    expect(order[0]?.title.indexOf("Left")).toBeLessThan(order[0]?.title.indexOf("Right") ?? -1);
   });
 
   it("does not derive a focus-order item with fewer than two boxed interactive nodes", () => {
@@ -250,6 +374,28 @@ describe("deriveA11yTestItemsByScreen — focus order", () => {
 
     const order = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("focus order"));
     expect(order).toHaveLength(0);
+  });
+
+  it("emits a coverage notice for interactive controls without layout bounds", () => {
+    const ir = screen(
+      "s10b",
+      "MixedBounds",
+      node("root", "container", {
+        children: [
+          node("a", "button", { text: "A", boundingBox: box(0, 0, 40, 40) }),
+          node("b", "button", { text: "B" }),
+          node("c", "button", { text: "C", boundingBox: box(100, 0, 40, 40) }),
+        ],
+      }),
+    );
+
+    const items = itemsFor(ir);
+    expect(
+      items.filter((i) => i.category === "a11y" && i.title.toLowerCase().includes("focus order")),
+    ).toHaveLength(1);
+    const notice = items.filter((i) => i.category === "coverage-notice");
+    expect(notice).toHaveLength(1);
+    expect(notice[0]?.title).toContain("layout bounds");
   });
 });
 
@@ -268,6 +414,8 @@ describe("deriveA11yTestItemsByScreen — target size", () => {
     const target = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("target size"));
     expect(target).toHaveLength(1);
     expect(target[0]?.category).toBe("a11y");
+    expect(target[0]?.title).toContain("does not meet");
+    expect(target[0]?.outcome).toBe("fail");
   });
 
   it("does not flag an interactive node at or above 24×24", () => {
@@ -281,6 +429,26 @@ describe("deriveA11yTestItemsByScreen — target size", () => {
 
     const target = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("target size"));
     expect(target).toHaveLength(0);
+  });
+
+  it("pins the 24×24 boundary and flags either axis below the minimum", () => {
+    const ir = screen(
+      "s12b",
+      "Boundary",
+      node("root", "container", {
+        children: [
+          node("ok", "button", { text: "OK", boundingBox: box(0, 0, 24, 24) }),
+          node("narrow", "button", { text: "Narrow", boundingBox: box(0, 40, 23, 24) }),
+          node("short", "button", { text: "Short", boundingBox: box(0, 80, 24, 23) }),
+        ],
+      }),
+    );
+
+    const target = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("target size"));
+    expect(target.map((i) => i.title)).toEqual([
+      'Control "Narrow" does not meet the 24×24 minimum target size',
+      'Control "Short" does not meet the 24×24 minimum target size',
+    ]);
   });
 });
 

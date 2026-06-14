@@ -22,6 +22,7 @@ export type {
   ScreenTestBaseline,
   StructuralTestCategory,
   StructuralTestItem,
+  StructuralTestOutcome,
 } from "./screenIrTestBaseline.js";
 
 // Vision merge that structurally enforces "vision augments, never overrides the IR" (Issue #754).

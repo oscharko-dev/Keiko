@@ -430,6 +430,19 @@ describe("cleanScopedNodesToScreenIr — interaction hints", () => {
     ).toBe("container");
   });
 
+  it("classifies an activation-style local interaction as a button", () => {
+    expect(
+      hintFor({
+        id: "1:2",
+        name: "Pay",
+        type: "FRAME",
+        absoluteBoundingBox: bbox(0, 0, 40, 40),
+        fills: [solidFill(0, 0, 0)],
+        interactions: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "UPDATE_VARIABLE" }] }],
+      }),
+    ).toBe("button");
+  });
+
   it("classifies by the generic button role word in the name", () => {
     expect(
       hintFor({
