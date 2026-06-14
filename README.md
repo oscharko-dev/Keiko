@@ -345,6 +345,8 @@ The Figma connector needs exactly one credential: a read-only personal access to
 | `KEIKO_FIGMA_REQUEST_TIMEOUT_MS`     | Per-request timeout for Figma API and render downloads.                                                                                                                                                                   | 60000   |
 | `KEIKO_FIGMA_BUILD_DEADLINE_MS`      | Total wall-clock deadline for one snapshot build (HTTP 504 `FIGMA_BUILD_TIMEOUT` when exceeded).                                                                                                                          | 600000  |
 
+Pagination values accept positive integers; values above the hard safety ceilings are clamped: `pageDepth` 16, `maxNodesPerScreen` 50000, `maxFetchesPerScreen` 128, `maxScreensDeep` 250, `fetchConcurrency` 8.
+
 Figma is contacted only during the bounded snapshot build (scoped node fetch + screen render); every downstream stage — Quality Intelligence test generation, the accessibility baseline, design-to-code — reads the stored immutable snapshot. Re-snapshot is an explicit full re-fetch. Concurrent snapshot requests for the same board coalesce into one build. Budget caps surface as coverage notices in the snapshot summary, never as silent truncation. Failures are coded (`FIGMA_RATE_LIMITED`, `FIGMA_NETWORK_UNREACHABLE`, `FIGMA_EGRESS_TIMEOUT`, `FIGMA_TLS_CA_FAILURE`, `FIGMA_PROXY_*` — proxy codes appear only when a proxy is actually configured) and content-free: no URL, host, or token material ever appears in an error.
 
 ### Outbound egress (proxy / custom CA)
