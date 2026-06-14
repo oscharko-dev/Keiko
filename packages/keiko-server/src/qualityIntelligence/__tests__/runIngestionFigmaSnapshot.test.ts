@@ -771,3 +771,53 @@ describe("figma-snapshot ingestion — four-kind cross-source composition (Issue
     }
   });
 });
+
+// ─── Unsafe format-char hardening (#752/#753/#754) ────────────────────────────────
+//
+// A Figma file is untrusted external input. Bidi-override / zero-width / C1 spoofing code points in a
+// screen NAME or prototype TRIGGER would otherwise ride verbatim into the QI atom text and every
+// downstream export (the secret/PII redactor does not strip them). figmaScreenDocs now strips them
+// BEFORE redaction (strip-before-redact), symmetric with the candidate-text and source-label paths.
+
+describe("figma-snapshot ingestion — unsafe format-char hardening (#752/#753/#754)", () => {
+  const RLO = String.fromCodePoint(0x202e); // bidi override
+  const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+  const C1 = String.fromCodePoint(0x0085); // C1 control (NEL)
+
+  const recordWith = (loginName: string, trigger: string): FigmaSnapshotRecord =>
+    record(
+      [
+        screenRow(
+          "s-login",
+          screenIr(
+            "s-login",
+            loginName,
+            irNode("login-root", "container", { children: [irNode("login-btn", "button")] }),
+          ),
+        ),
+        screenRow("s-home", screenIr("s-home", "Home", irNode("home-root", "container"))),
+      ],
+      [{ sourceNodeId: "login-btn", trigger, targetNodeId: "home-root" }],
+    );
+
+  const atomTextFor = (rec: FigmaSnapshotRecord): string =>
+    ingestInlineSources(input([figmaSource()], { figmaSnapshotLoader: loaderFor(rec) }))
+      .ingestedAtoms.map((a) => a.canonicalText)
+      .join("\n");
+
+  it("strips bidi/zero-width/C1 spoofing chars from the screen name and trigger in the atom text", () => {
+    const dirty = atomTextFor(recordWith(`Log${RLO}in${ZWSP}${C1}`, `ON_${RLO}CLICK${ZWSP}`));
+    expect(dirty).not.toContain(RLO);
+    expect(dirty).not.toContain(ZWSP);
+    expect(dirty).not.toContain(C1);
+    // The legitimate text survives — only the spoofing code points are removed.
+    expect(dirty).toContain("Login");
+    expect(dirty).toContain("ON_CLICK");
+  });
+
+  it("is byte-identical to the clean input once the format chars are stripped", () => {
+    const clean = atomTextFor(recordWith("Login", "ON_CLICK"));
+    const dirty = atomTextFor(recordWith(`Log${RLO}in${ZWSP}${C1}`, `ON_${RLO}CLICK${ZWSP}`));
+    expect(dirty).toBe(clean);
+  });
+});
