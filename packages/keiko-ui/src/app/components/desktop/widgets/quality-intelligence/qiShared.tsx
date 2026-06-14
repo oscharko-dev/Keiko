@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceReviewState,
+  TestQualityRubricDimension,
   QualityIntelligenceUiWeakTestFlag,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
@@ -182,6 +183,54 @@ export function WeakTestFlag({
         Weak test
       </span>
       <p className="qi-weak-flag-reason">{flag.rationale}</p>
+    </div>
+  );
+}
+
+export interface CandidateQualityVerdict {
+  readonly verdict: "strong" | "weak";
+  readonly score: number;
+  readonly dimensions: readonly TestQualityRubricDimension[];
+  readonly overallRationale: string;
+}
+
+const QUALITY_DIMENSION_LABEL: Readonly<Record<string, string>> = {
+  verifiability: "Verifiability",
+  atomicity: "Atomicity",
+  determinism: "Determinism",
+  "ac-fidelity": "AC fidelity",
+};
+
+function qualityVerdictLabel(verdict: CandidateQualityVerdict["verdict"]): string {
+  return verdict === "strong" ? "Strong" : "Weak";
+}
+
+export function CandidateQualityVerdictNote({
+  verdict,
+}: {
+  readonly verdict: CandidateQualityVerdict;
+}): ReactNode {
+  const rounded = Math.round(verdict.score);
+  const label = qualityVerdictLabel(verdict.verdict);
+  return (
+    <div
+      role="note"
+      aria-label={`Quality judge verdict: ${label}, ${rounded.toString()} out of 100. ${verdict.overallRationale}`}
+      className="qi-cand-block"
+      data-testid="qi-quality-verdict"
+    >
+      <p className="qi-cand-block-label">Quality verdict</p>
+      <p>
+        {label} - {rounded.toString()}/100
+      </p>
+      <ul className="qi-cand-list" aria-label="Quality dimensions">
+        {verdict.dimensions.map((dimension) => (
+          <li key={dimension.name}>
+            {QUALITY_DIMENSION_LABEL[dimension.name] ?? dimension.name}{" "}
+            {Math.round(dimension.score).toString()}: {dimension.rationale}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

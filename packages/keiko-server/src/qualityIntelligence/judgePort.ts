@@ -191,6 +191,10 @@ interface RawDimensionFields {
   readonly rationale: string;
 }
 
+function scrubJudgeRationale(text: string, maxLength: number): string {
+  return scrubCandidateText(text).slice(0, maxLength);
+}
+
 function rawDimensionFields(raw: unknown): RawDimensionFields | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -213,7 +217,7 @@ function parseDimension(raw: unknown): TestQualityRubricDimension | null {
   return Object.freeze({
     name,
     score,
-    rationale: rationale.slice(0, 500),
+    rationale: scrubJudgeRationale(rationale, 500),
   });
 }
 
@@ -297,23 +301,24 @@ function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly strin
 function parseJudgeObject(obj: Record<string, unknown>): TestQualityJudgeVerdict | null {
   if (!hasOnlyKeys(obj, ["dimensions", "overallRationale"])) return null;
   const dimensions = parseDimensions(obj.dimensions);
-  const overallRationale =
-    typeof obj.overallRationale === "string" && obj.overallRationale.trim().length > 0
-      ? obj.overallRationale.slice(0, 1000)
-      : null;
-  if (dimensions === null || overallRationale === null) return null;
+  if (typeof obj.overallRationale !== "string") return null;
+  const overallRationale = scrubJudgeRationale(obj.overallRationale, 1000);
+  if (dimensions === null || overallRationale.trim().length === 0) return null;
   const verdict = verdictFromScore(scoreFromDimensions(dimensions));
   return Object.freeze({ verdict, dimensions: Object.freeze(dimensions), overallRationale });
 }
 
 export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
+  let parsedVerdict: TestQualityJudgeVerdict | null = null;
   for (const candidate of balancedJsonObjectCandidates(rawText)) {
     const obj = tryParseJsonObject(candidate);
     if (obj === null) continue;
     const verdict = parseJudgeObject(obj);
-    if (verdict !== null) return verdict;
+    if (verdict === null) continue;
+    if (parsedVerdict !== null) return SAFE_DEFAULT_VERDICT;
+    parsedVerdict = verdict;
   }
-  return SAFE_DEFAULT_VERDICT;
+  return parsedVerdict ?? SAFE_DEFAULT_VERDICT;
 }
 
 export interface QiJudgePort {

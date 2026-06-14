@@ -30,6 +30,14 @@ export interface QualityIntelligenceCandidateRow {
   readonly tags: readonly string[];
   readonly status: QualityIntelligence.QualityIntelligenceTestCaseStatus;
   readonly derivedFromAtomIds: readonly string[];
+  readonly qualityVerdict?: QualityIntelligenceCandidateQualityVerdict;
+}
+
+export interface QualityIntelligenceCandidateQualityVerdict {
+  readonly verdict: QualityIntelligence.TestQualityJudgeVerdict["verdict"];
+  readonly score: number;
+  readonly dimensions: readonly QualityIntelligence.TestQualityRubricDimension[];
+  readonly overallRationale: string;
 }
 
 export interface QualityIntelligenceCandidatesArtifact {
@@ -42,20 +50,39 @@ export interface QualityIntelligenceCandidatesArtifact {
   readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
 }
 
+type CandidateWithQualityVerdict = QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+  readonly qualityVerdict?: QualityIntelligenceCandidateQualityVerdict;
+};
+
+const cloneQualityVerdict = (
+  verdict: QualityIntelligenceCandidateQualityVerdict,
+): QualityIntelligenceCandidateQualityVerdict => ({
+  verdict: verdict.verdict,
+  score: verdict.score,
+  dimensions: verdict.dimensions.map((dimension) => ({ ...dimension })),
+  overallRationale: verdict.overallRationale,
+});
+
 const toRow = (
   candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
-): QualityIntelligenceCandidateRow => ({
-  id: String(candidate.id),
-  title: candidate.title,
-  preconditions: [...candidate.preconditions],
-  steps: [...candidate.steps],
-  expectedResults: [...candidate.expectedResults],
-  priority: candidate.priority,
-  riskClass: candidate.riskClass,
-  tags: [...candidate.tags],
-  status: candidate.status,
-  derivedFromAtomIds: candidate.derivedFromAtomIds.map(String),
-});
+): QualityIntelligenceCandidateRow => {
+  const qualityVerdict = (candidate as CandidateWithQualityVerdict).qualityVerdict;
+  return {
+    id: String(candidate.id),
+    title: candidate.title,
+    preconditions: [...candidate.preconditions],
+    steps: [...candidate.steps],
+    expectedResults: [...candidate.expectedResults],
+    priority: candidate.priority,
+    riskClass: candidate.riskClass,
+    tags: [...candidate.tags],
+    status: candidate.status,
+    derivedFromAtomIds: candidate.derivedFromAtomIds.map(String),
+    ...(qualityVerdict !== undefined
+      ? { qualityVerdict: cloneQualityVerdict(qualityVerdict) }
+      : {}),
+  };
+};
 
 const PRIORITIES: ReadonlySet<string> = new Set(
   QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES,
@@ -65,6 +92,9 @@ const RISK_CLASSES: ReadonlySet<string> = new Set(
 );
 const TEST_CASE_STATUSES: ReadonlySet<string> = new Set(
   QualityIntelligence.QUALITY_INTELLIGENCE_TEST_CASE_STATUSES,
+);
+const TEST_QUALITY_DIMENSIONS: ReadonlySet<string> = new Set(
+  QualityIntelligence.TEST_QUALITY_RUBRIC_DIMENSIONS,
 );
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
@@ -76,6 +106,8 @@ const isNonEmptyString = (value: unknown): value is string =>
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
+const isString = (value: unknown): value is string => typeof value === "string";
+
 const isPriority = (value: unknown): value is QualityIntelligence.QualityIntelligencePriority =>
   typeof value === "string" && PRIORITIES.has(value);
 
@@ -86,6 +118,46 @@ const isTestCaseStatus = (
   value: unknown,
 ): value is QualityIntelligence.QualityIntelligenceTestCaseStatus =>
   typeof value === "string" && TEST_CASE_STATUSES.has(value);
+
+const isQualityVerdictValue = (
+  value: unknown,
+): value is QualityIntelligence.TestQualityJudgeVerdict["verdict"] =>
+  value === "strong" || value === "weak";
+
+const isScore = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+
+const isDimensionScore = (value: unknown): value is number =>
+  isScore(value) && Number.isInteger(value);
+
+const isRubricDimensionName = (
+  value: unknown,
+): value is QualityIntelligence.TestQualityDimensionName =>
+  typeof value === "string" && TEST_QUALITY_DIMENSIONS.has(value);
+
+function isRubricDimension(
+  value: unknown,
+): value is QualityIntelligence.TestQualityRubricDimension {
+  return (
+    isObjectRecord(value) &&
+    isRubricDimensionName(value.name) &&
+    isDimensionScore(value.score) &&
+    isString(value.rationale)
+  );
+}
+
+function isCandidateQualityVerdict(
+  value: unknown,
+): value is QualityIntelligenceCandidateQualityVerdict {
+  return (
+    isObjectRecord(value) &&
+    isQualityVerdictValue(value.verdict) &&
+    isScore(value.score) &&
+    Array.isArray(value.dimensions) &&
+    value.dimensions.every(isRubricDimension) &&
+    isString(value.overallRationale)
+  );
+}
 
 const isEditedBy = (
   value: unknown,
@@ -131,6 +203,8 @@ const CANDIDATE_ROW_VALIDATORS: readonly ((row: Record<string, unknown>) => bool
   (row): boolean => isStringArray(row.tags),
   (row): boolean => isTestCaseStatus(row.status),
   (row): boolean => isStringArray(row.derivedFromAtomIds),
+  (row): boolean =>
+    row.qualityVerdict === undefined || isCandidateQualityVerdict(row.qualityVerdict),
 ];
 
 function isCandidateRow(value: unknown): value is QualityIntelligenceCandidateRow {
