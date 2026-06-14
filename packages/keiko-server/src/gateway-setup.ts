@@ -134,7 +134,6 @@ interface ProviderRawOptions {
   readonly timeoutMs?: number | undefined;
   readonly maxRetries?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
-  readonly figmaAccessToken?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
 }
 
@@ -166,13 +165,9 @@ function buildRawConfig(
   modelIds: readonly string[],
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
-  const figmaAccessToken = options.figmaAccessToken?.trim();
   return {
     providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-    ...(figmaAccessToken !== undefined && figmaAccessToken.length > 0
-      ? { figma: { accessToken: figmaAccessToken } }
-      : {}),
   };
 }
 
@@ -421,28 +416,6 @@ function parseImageInputModelIds(value: unknown): readonly string[] | RouteResul
   return names;
 }
 
-interface ParsedOptionalString {
-  readonly ok: true;
-  readonly value?: string | undefined;
-}
-
-function parseOptionalTrimmedString(
-  value: unknown,
-  field: string,
-): ParsedOptionalString | RouteResult {
-  if (value === undefined) {
-    return { ok: true };
-  }
-  if (typeof value !== "string") {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", `${field} must be a string.`),
-    };
-  }
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? { ok: true } : { ok: true, value: trimmed };
-}
-
 function validateSetupConnection(
   baseUrl: string,
   apiKey: string,
@@ -582,7 +555,6 @@ interface SetupRequest {
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
   readonly deploymentNames: readonly string[];
-  readonly figmaAccessToken?: string | undefined;
   readonly imageInputModelIds: readonly string[];
 }
 
@@ -631,9 +603,14 @@ function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteRes
   if (isRouteResult(modelLists)) {
     return modelLists;
   }
-  const figmaAccessToken = parseOptionalTrimmedString(raw.figmaAccessToken, "figmaAccessToken");
-  if (isRouteResult(figmaAccessToken)) {
-    return figmaAccessToken;
+  if (Object.hasOwn(raw, "figmaAccessToken")) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "Figma access tokens must be configured server-side, not through gateway setup.",
+      ),
+    };
   }
   const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
   if (invalidConnection !== undefined) {
@@ -644,7 +621,6 @@ function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteRes
     apiKey,
     apiKeyHeaderName,
     deploymentNames: modelLists.deploymentNames,
-    figmaAccessToken: figmaAccessToken.value,
     imageInputModelIds: modelLists.imageInputModelIds,
   };
 }
@@ -679,7 +655,6 @@ async function verifySetupCandidate(
   apiKey: string,
   apiKeyHeaderName: string,
   deploymentNames: readonly string[],
-  figmaAccessToken: string | undefined,
   imageInputModelIds: readonly string[],
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
@@ -691,7 +666,6 @@ async function verifySetupCandidate(
   validateBaseUrl(baseUrl, "candidate");
   const validationRawConfig = buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
     apiKeyHeaderName,
-    figmaAccessToken,
     imageInputModelIds,
   });
   const validationConfig = parseGatewayConfig(
@@ -708,7 +682,6 @@ async function verifySetupCandidate(
     apiKeyHeaderName,
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
-    figmaAccessToken,
     imageInputModelIds,
   });
   const candidateConfig = parseGatewayConfig(withInheritedEgress(candidateRawConfig, egress), env);
@@ -716,7 +689,6 @@ async function verifySetupCandidate(
   assertImageInputModelsWereTested(imageInputModelIds, testedModelIds);
   const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, {
     apiKeyHeaderName,
-    figmaAccessToken,
     imageInputModelIds,
   });
   const config = parseGatewayConfig(withInheritedEgress(rawConfig, egress), env);
@@ -802,7 +774,6 @@ async function trySetupCandidate(
     request.apiKey,
     request.apiKeyHeaderName,
     request.deploymentNames,
-    request.figmaAccessToken,
     request.imageInputModelIds,
     tester,
     discovery,
@@ -815,7 +786,7 @@ async function trySetupCandidate(
 }
 
 function setupCandidateError(error: unknown, request: SetupRequest, baseUrl: string): string {
-  return safeError(error, [request.apiKey, request.baseUrl, request.figmaAccessToken, baseUrl]);
+  return safeError(error, [request.apiKey, request.baseUrl, baseUrl]);
 }
 
 export async function handleGatewaySetup(

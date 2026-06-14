@@ -169,32 +169,10 @@ describe("GatewaySetupDialog", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
   });
 
-  it("submits an optional Figma access token from the setup dialog", async () => {
-    vi.mocked(setupGateway).mockResolvedValueOnce({
-      ok: true,
-      testedModelId: "internal-chat",
-      testedModelIds: ["internal-chat"],
-      providerCount: 1,
-      models: [],
-      config: {
-        providers: [],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-      },
-    });
+  it("does not expose a Figma access token field in gateway setup", () => {
     render(<GatewaySetupDialog />);
 
-    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
-    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
-    await userEvent.type(screen.getByLabelText(/figma access token optional/i), " figd_ui-token ");
-    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
-
-    expect(setupGateway).toHaveBeenCalledWith({
-      baseUrl: "https://llm-gateway.example.com/v1",
-      apiKey: "example-token",
-      apiKeyHeaderName: undefined,
-      deploymentNames: [],
-      figmaAccessToken: "figd_ui-token",
-    });
+    expect(screen.queryByLabelText(/figma access token/i)).toBeNull();
   });
 
   it("submits optional image-input model ids from the setup dialog", async () => {

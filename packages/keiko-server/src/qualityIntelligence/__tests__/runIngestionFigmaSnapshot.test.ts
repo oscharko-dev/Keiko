@@ -100,6 +100,21 @@ const loginScreen = (): unknown =>
     }),
   );
 
+const visualOnlyScreen = (): unknown =>
+  screenIr(
+    "screen-visual",
+    "Visual hero",
+    irNode("root", "container", {
+      children: [
+        irNode("hero", "image", {
+          name: "Hero artwork",
+          type: "RECTANGLE",
+          imageFills: [{ imageRef: "img-1" }],
+        }),
+      ],
+    }),
+  );
+
 // ─── Structural baseline → atoms ─────────────────────────────────────────────────
 
 describe("figma-snapshot ingestion — deterministic structural baseline", () => {
@@ -213,7 +228,7 @@ describe("figma-snapshot ingestion — coded errors", () => {
 // ─── Vision augmentation (additive, never overrides IR) + graceful degradation ─────
 
 describe("figma-snapshot ingestion — vision augmentation", () => {
-  const rec = (): FigmaSnapshotRecord => record([screenRow("screen-login", loginScreen())]);
+  const rec = (): FigmaSnapshotRecord => record([screenRow("screen-visual", visualOnlyScreen())]);
 
   it("appends vision hints additively while preserving the structural baseline", () => {
     const vision: FigmaVisionHintProvider = () => [
@@ -226,13 +241,31 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
     const text = result.ingestedAtoms[0]?.canonicalText ?? "";
 
     // Structural baseline lines are STILL present (vision never overrides the IR) ...
-    expect(text).toContain("(field-presence)");
-    expect(text).toContain("(control-action)");
+    expect(text).toContain("(screen-render)");
+    expect(text).toContain("Structural test baseline");
     // ... and the additive hint appears below them.
     expect(text).toContain("The CTA is visually de-emphasised when disabled");
-    expect(text.indexOf("(field-presence)")).toBeLessThan(
+    expect(text.indexOf("Structural test baseline")).toBeLessThan(
       text.indexOf("The CTA is visually de-emphasised when disabled"),
     );
+  });
+
+  it("does not invoke vision when the structural IR is already sufficient", () => {
+    let calls = 0;
+    const vision: FigmaVisionHintProvider = () => {
+      calls += 1;
+      return ["should not be used"];
+    };
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("screen-login", loginScreen())])),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toBe(0);
+    expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain("should not be used");
   });
 
   it("degrades to IR-only when no vision provider is supplied", () => {
@@ -255,6 +288,29 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
 
     expect(text).toContain("(screen-render)");
     expect(text).not.toContain("Vision-derived");
+  });
+
+  it("keeps atom and envelope fingerprints deterministic when vision output changes", () => {
+    const first = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(rec()),
+        figmaVision: () => ["first visual hint"],
+      }),
+    );
+    const second = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(rec()),
+        figmaVision: () => ["second visual hint"],
+      }),
+    );
+
+    expect(first.ingestedAtoms[0]?.canonicalText).not.toBe(second.ingestedAtoms[0]?.canonicalText);
+    expect(first.ingestedAtoms[0]?.atom.canonicalHashSha256Hex).toBe(
+      second.ingestedAtoms[0]?.atom.canonicalHashSha256Hex,
+    );
+    expect(first.envelopes[0]?.provenance.integrityHashSha256Hex).toBe(
+      second.envelopes[0]?.provenance.integrityHashSha256Hex,
+    );
   });
 });
 
@@ -282,6 +338,28 @@ describe("figma-snapshot ingestion — redaction", () => {
     );
 
     expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain(accessKeyId);
+  });
+
+  it("redacts and bounds the screen name before it enters the document id", () => {
+    const accessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const ir = screenIr(
+      "s-secret-name",
+      `Config ${accessKeyId}\nSecond line`,
+      irNode("root", "container", {
+        children: [irNode("submit", "button", { text: "Save" })],
+      }),
+    );
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("s-secret-name", ir)])),
+      }),
+    );
+
+    const text = result.ingestedAtoms[0]?.canonicalText ?? "";
+    expect(text).not.toContain(accessKeyId);
+    expect(text.split("\n")[0]).toContain("Second line");
+    expect(text.split("\n")[0]).toContain("[REDACTED]");
   });
 });
 

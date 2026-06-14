@@ -55,7 +55,7 @@ import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSna
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
-import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
+import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
@@ -64,7 +64,7 @@ type QiTestCaseCandidate = QualityIntelligence.QualityIntelligenceTestCaseCandid
 type QiRunPlan = QualityIntelligence.QualityIntelligenceRunPlan;
 type QiManifest = NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>;
 type QiEditedRevision = QI.QualityIntelligenceCandidateEditedRevision;
-type QiIngestion = ReturnType<typeof ingestInlineSources>;
+type QiIngestion = Awaited<ReturnType<typeof ingestInlineSourcesAsync>>;
 type AtomFingerprintRow = ReturnType<typeof mapCurrentAtomFingerprints>[number];
 
 const errorResult = (status: number, code: string, message: string): RouteResult => ({
@@ -293,7 +293,7 @@ function mapCurrentAtomFingerprints(
 }
 
 function mapCurrentSourceFingerprints(
-  ingestion: ReturnType<typeof ingestInlineSources>,
+  ingestion: QiIngestion,
 ): readonly { readonly envelopeId: string; readonly integrityHashSha256Hex: string }[] {
   return ingestion.envelopes.map((envelope) => ({
     envelopeId: String(envelope.id),
@@ -449,15 +449,15 @@ function loadManifestForDrift(id: string, evidenceDir: string): ManifestOutcome 
     : { ok: true, manifest };
 }
 
-function ingestSourcesForDrift(
+async function ingestSourcesForDrift(
   sources: readonly QI.QualityIntelligenceInlineSource[],
   ingestRunId: string,
   deps: UiHandlerDeps,
-): IngestionOutcome {
+): Promise<IngestionOutcome> {
   try {
     return {
       ok: true,
-      ingestion: ingestInlineSources({
+      ingestion: await ingestInlineSourcesAsync({
         request: { sources },
         runId: ingestRunId,
         registeredAt: new Date().toISOString(),
@@ -531,7 +531,7 @@ async function computeDrift(
   if (!parsed.ok) return { ok: false, result: parsed.result };
   const loaded = loadManifestForDrift(id, evidenceDir);
   if (!loaded.ok) return { ok: false, result: loaded.result };
-  const ingested = ingestSourcesForDrift(parsed.sources, ingestRunId, deps);
+  const ingested = await ingestSourcesForDrift(parsed.sources, ingestRunId, deps);
   if (!ingested.ok) return { ok: false, result: ingested.result };
   const oldArtifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
   if (oldArtifact === undefined && loaded.manifest.totals.candidates > 0) {

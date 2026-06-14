@@ -10,7 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  ModelCapability,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
@@ -80,10 +85,79 @@ function depsWith(over: Partial<UiHandlerDeps>): UiHandlerDeps {
 }
 
 const REQUEST: FigmaVisionScreenRequest = {
+  snapshotRunId: "snap-1",
   screenId: "s1",
+  image: {
+    mimeType: "image/png",
+    relativePath: "screen-s1.png",
+    sha256: "0".repeat(64),
+    byteLength: 2,
+  },
   imageRelativePath: "screen-s1.png",
   baselineText: "Screen: S1 [s1]",
 };
+
+const normalizedResponse = (content: string, modelId = "vision"): NormalizedResponse => ({
+  modelId,
+  content,
+  finishReason: "stop",
+  toolCalls: [],
+  structuredOutput: null,
+  usage: {
+    requestId: "req-test",
+    promptTokens: 1,
+    completionTokens: 1,
+    latencyMs: 1,
+    costClass: "low",
+  },
+});
+
+function recordVisionSnapshot(dir: string): {
+  readonly loaded: NonNullable<ReturnType<ReturnType<typeof createNodeFigmaSnapshotStore>["load"]>>;
+  readonly screen: NonNullable<
+    ReturnType<ReturnType<typeof createNodeFigmaSnapshotStore>["load"]>
+  >["screens"][number];
+} {
+  const store = createNodeFigmaSnapshotStore(dir);
+  store.record({
+    runId: "snap-1",
+    provenance: {
+      fileKey: "KEY",
+      nodeId: "0:1",
+      version: undefined,
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+    },
+    integrityHash: hashSnapshot(1, undefined, [{ screenId: "s1", integrityHash: "h-vision" }]),
+    screens: [
+      {
+        screenId: "s1",
+        irJson: {
+          id: "s1",
+          name: "Login",
+          root: {
+            id: "s1-root",
+            name: "root",
+            type: "FRAME",
+            interactionHint: "container",
+            text: "",
+            imageFills: [],
+            children: [],
+          },
+        },
+        integrityHash: "h-vision",
+        image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50]) },
+      },
+    ],
+    skippedScreens: [],
+    links: [],
+    tokens: { colors: [], typography: [], spacing: [], radius: [] },
+  });
+  const loaded = store.load("snap-1");
+  if (loaded === undefined) throw new Error("expected stored snapshot");
+  const screen = loaded.screens[0];
+  if (screen === undefined) throw new Error("expected screen");
+  return { loaded, screen };
+}
 
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────
 
@@ -260,12 +334,55 @@ describe("makeFigmaVisionHintProvider", () => {
     expect(provider(REQUEST)).toEqual([]);
   });
 
-  it("returns [] when a multimodal model exists but no vision call is injected", () => {
+  it("returns [] when a multimodal model exists but no evidence dir is configured", async () => {
     const deps = depsWith({
       config: configWith([capability("vision", { supportsImageInput: true })]),
       configPresent: true,
     });
-    expect(makeFigmaVisionHintProvider(deps)(REQUEST)).toEqual([]);
+    expect(await makeFigmaVisionHintProvider(deps)(REQUEST)).toEqual([]);
+  });
+
+  it("routes stored snapshot images through the selected gateway model", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-"));
+    const seenRequests: GatewayRequest[] = [];
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: (request) => {
+          seenRequests.push(request);
+          return Promise.resolve(
+            normalizedResponse(JSON.stringify(["Primary CTA is visually disabled"]), "vision-low"),
+          );
+        },
+      };
+      const deps = depsWith({
+        config: configWith([capability("vision-low", { supportsImageInput: true })]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      const provider = makeFigmaVisionHintProvider(deps);
+      await expect(
+        provider({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual(["Primary CTA is visually disabled"]);
+
+      const user = seenRequests[0]?.messages[1];
+      expect(seenRequests[0]?.modelId).toBe("vision-low");
+      expect(user?.content).toContain("Screen id:");
+      const textPart = user?.contentParts?.find((part) => part.type === "text");
+      const imagePart = user?.contentParts?.find((part) => part.type === "image_url");
+      expect(textPart?.text).toContain("Screen id:");
+      expect(imagePart?.image_url.url).toMatch(/^data:image\/png;base64,/u);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("routes the call through the capability-selected model id (no hard-coded id)", () => {

@@ -56,6 +56,7 @@ import {
   FIGMA_SNAPSHOT_SCHEMA_VERSION,
   validateFigmaSnapshotRecord,
   type FigmaSnapshotArtifactHashes,
+  type FigmaSnapshotImageRef,
   type FigmaSnapshotLinkRow,
   type FigmaSnapshotRecord,
   type FigmaSnapshotScreenRow,
@@ -107,9 +108,17 @@ export interface FigmaSnapshotScopeEntry {
   readonly integrityHash: string;
 }
 
+export interface FigmaSnapshotImageBytes {
+  readonly mimeType: "image/png";
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+  readonly byteLength: number;
+}
+
 export interface FigmaSnapshotStore {
   readonly record: (input: RecordFigmaSnapshotInput) => RecordFigmaSnapshotResult;
   readonly load: (runId: string) => FigmaSnapshotRecord | undefined;
+  readonly loadImage: (runId: string, image: FigmaSnapshotImageRef) => FigmaSnapshotImageBytes;
   readonly location: (runId: string) => string;
   /**
    * List all snapshot records for a specific Figma scope, sorted by `fetchedAt` descending
@@ -466,12 +475,12 @@ function verifyScreenIntegrity(screen: FigmaSnapshotScreenRow, runId: string): v
   }
 }
 
-function verifyScreenImageSideFile(
+function readVerifiedScreenImageSideFile(
   ctx: StoreCtx,
   runId: string,
-  screen: FigmaSnapshotScreenRow,
-): void {
-  const name = screen.image.relativePath;
+  image: FigmaSnapshotImageRef,
+): Buffer {
+  const name = image.relativePath;
   if (!isAllowedSideFileName(name)) {
     throw new EvidenceReadError(
       `Figma snapshot integrity check failed for run ${runId}: invalid image side-file path`,
@@ -495,11 +504,20 @@ function verifyScreenImageSideFile(
     );
   }
   const bytes = readFileSync(absolute);
-  if (bytes.byteLength !== screen.image.byteLength || sha256Bytes(bytes) !== screen.image.sha256) {
+  if (bytes.byteLength !== image.byteLength || sha256Bytes(bytes) !== image.sha256) {
     throw new EvidenceReadError(
       `Figma snapshot integrity check failed for run ${runId}: image side-file hash mismatch`,
     );
   }
+  return bytes;
+}
+
+function verifyScreenImageSideFile(
+  ctx: StoreCtx,
+  runId: string,
+  screen: FigmaSnapshotScreenRow,
+): void {
+  readVerifiedScreenImageSideFile(ctx, runId, screen.image);
 }
 
 function verifyPersistedScreens(ctx: StoreCtx, rec: FigmaSnapshotRecord, runId: string): void {
@@ -693,6 +711,22 @@ function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
   return verifyOptionalArtifactHashes(rec, runId);
 }
 
+function loadImageOp(
+  ctx: StoreCtx,
+  runId: string,
+  image: FigmaSnapshotImageRef,
+): FigmaSnapshotImageBytes {
+  assertValidRunId(runId);
+  ctx.ensureSwept();
+  const bytes = readVerifiedScreenImageSideFile(ctx, runId, image);
+  return {
+    mimeType: image.mimeType,
+    bytes,
+    sha256: image.sha256,
+    byteLength: image.byteLength,
+  };
+}
+
 function listByScopeOp(
   ctx: StoreCtx,
   fileKey: string,
@@ -732,6 +766,7 @@ export function createNodeFigmaSnapshotStore(
   return {
     record: (input) => recordOp(ctx, input),
     load: (runId) => loadOp(ctx, runId),
+    loadImage: (runId, image) => loadImageOp(ctx, runId, image),
     location: (runId): string => {
       assertValidRunId(runId);
       const realBase = realBaseForRead(qiDir, ctx.fs);

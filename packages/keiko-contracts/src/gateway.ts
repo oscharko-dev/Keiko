@@ -48,9 +48,24 @@ export interface ModelCapability {
 
 // ─── Request / response ───────────────────────────────────────────────────────
 
+export interface ChatMessageTextContentPart {
+  readonly type: "text";
+  readonly text: string;
+}
+
+export interface ChatMessageImageUrlContentPart {
+  readonly type: "image_url";
+  readonly image_url: {
+    readonly url: string;
+  };
+}
+
+export type ChatMessageContentPart = ChatMessageTextContentPart | ChatMessageImageUrlContentPart;
+
 export interface ChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
+  readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
   readonly toolCallId?: string | undefined;
   readonly toolCalls?: readonly NormalizedToolCall[] | undefined;
 }

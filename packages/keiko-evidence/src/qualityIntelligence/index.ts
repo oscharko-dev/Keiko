@@ -103,6 +103,7 @@ export type {
 } from "./figmaSnapshot/schema.js";
 export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
 export type {
+  FigmaSnapshotImageBytes,
   FigmaSnapshotStore,
   FigmaSnapshotStoreOptions,
   RecordFigmaSnapshotInput,

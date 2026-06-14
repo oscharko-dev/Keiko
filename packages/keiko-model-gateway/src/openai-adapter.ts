@@ -27,6 +27,7 @@ import {
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type {
+  ChatMessageContentPart,
   CostClass,
   FinishReason,
   GatewayRequest,
@@ -66,7 +67,7 @@ interface ChatRequestBody {
   readonly model: string;
   readonly messages: readonly {
     readonly role: string;
-    readonly content: string | null;
+    readonly content: ChatRequestMessageContent | null;
     readonly tool_call_id?: string | undefined;
     readonly tool_calls?:
       | readonly {
@@ -83,6 +84,25 @@ interface ChatRequestBody {
   readonly stream_options?: { readonly include_usage: boolean };
 }
 
+type ChatRequestMessageContent =
+  | string
+  | readonly (
+      | { readonly type: "text"; readonly text: string }
+      | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
+    )[];
+
+function buildMessageContent(
+  content: string,
+  parts: readonly ChatMessageContentPart[] | undefined,
+): ChatRequestMessageContent {
+  if (parts === undefined) return content;
+  return parts.map((part) =>
+    part.type === "text"
+      ? { type: "text" as const, text: part.text }
+      : { type: "image_url" as const, image_url: { url: part.image_url.url } },
+  );
+}
+
 function buildMessage(
   message: GatewayRequest["messages"][number],
 ): ChatRequestBody["messages"][number] {
@@ -96,7 +116,7 @@ function buildMessage(
     content:
       message.role === "assistant" && toolCalls !== undefined && toolCalls.length > 0
         ? null
-        : message.content,
+        : buildMessageContent(message.content, message.contentParts),
     ...(message.role === "tool" && message.toolCallId !== undefined
       ? { tool_call_id: message.toolCallId }
       : {}),

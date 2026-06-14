@@ -72,7 +72,7 @@ import {
 
 const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   FIGMA_TOKEN_MISSING:
-    "No Figma PAT is configured. Add one in Gateway setup, Keiko config, vault, or FIGMA_ACCESS_TOKEN (read-only scopes: file_read, files:read).",
+    "No Figma PAT is configured. Add one in Keiko config, vault, or FIGMA_ACCESS_TOKEN (read-only scopes: file_read, files:read).",
   FIGMA_TOKEN_INVALID: "The configured Figma PAT is invalid. Please rotate the token.",
   FIGMA_TOKEN_EXPIRED: "The configured Figma PAT has expired. Please rotate the token.",
   FIGMA_TOKEN_REVOKED: "The configured Figma PAT has been revoked. Please mint a new token.",
