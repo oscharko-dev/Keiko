@@ -66,6 +66,24 @@ describe("relativeLuminance", () => {
     expect(relativeLuminance({ r: 0, g: 0, b: 0 })).toBeCloseTo(0, 10);
     expect(relativeLuminance({ r: 255, g: 255, b: 255 })).toBeCloseTo(1, 10);
   });
+
+  // M1 COEFFICIENT SPLIT — pins the WCAG 2.x relative-luminance coefficients independently.
+  // When a single channel is at full saturation (255) and the other two are 0, the channel
+  // linearizes to exactly 1.0 and relativeLuminance returns precisely that channel's coefficient.
+  // Existing tests use only achromatic (black/white/grey) inputs, which are coefficient-invariant
+  // (swapping 0.2126↔0.7152 or any permutation leaves those tests green). These three cases pin
+  // each coefficient individually; swapping any two makes exactly one of these assertions fail.
+  it("returns the red coefficient (0.2126) for a pure red input [M1-pin]", () => {
+    expect(relativeLuminance({ r: 255, g: 0, b: 0 })).toBeCloseTo(0.2126, 4);
+  });
+
+  it("returns the green coefficient (0.7152) for a pure green input [M1-pin]", () => {
+    expect(relativeLuminance({ r: 0, g: 255, b: 0 })).toBeCloseTo(0.7152, 4);
+  });
+
+  it("returns the blue coefficient (0.0722) for a pure blue input [M1-pin]", () => {
+    expect(relativeLuminance({ r: 0, g: 0, b: 255 })).toBeCloseTo(0.0722, 4);
+  });
 });
 
 describe("contrastRatio", () => {
@@ -176,6 +194,33 @@ describe("deriveA11yTestItemsByScreen — contrast", () => {
     expect(contrast[0]?.title).toContain("below WCAG AA");
   });
 
+  // M2 ALPHA COMPOSITE DIRECTION — pins that compositing is `fg*alpha + bg*(1-alpha)`, not the
+  // swapped form. Alpha=0.5 is symmetric so existing tests cannot distinguish direction. We use
+  // black text at α=0x33/255≈0.2 (asymmetric) on a white background:
+  //   correct: compositeChannel = round(0*0.2 + 255*0.8) = 204  → light grey → ratio ≈ 1.61:1 → FAIL
+  //   swapped: compositeChannel = round(0*0.8 + 255*0.2) =  51  → dark grey  → ratio ≈ 12.63:1 → PASS
+  // The title must contain "(1.61:1" and outcome must be "fail". Under the swapped formula the
+  // composite would be dark instead of light → high contrast → "meets" → test fails. Mutation killed.
+  it("composites alpha in the correct fg*α + bg*(1-α) direction — asymmetric α=0x33 [M2-pin]", () => {
+    // textColor '#00000033': black at alpha 0x33/255 ≈ 0.200. Background: opaque white.
+    // Correct composite: round(0*0.200 + 255*0.800) = 204 per channel → contrast ≈ 1.61:1 → below AA.
+    const ir = screen(
+      "s-alpha-dir",
+      "AlphaDir",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [node("t", "text", { text: "Ghost2", textColor: "#00000033" })],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    expect(contrast[0]?.title).toContain("below WCAG AA");
+    // Pin the exact computed ratio so a swapped composite formula (giving 12.63:1) fails this assertion.
+    expect(contrast[0]?.title).toContain("(1.61:1");
+    expect(contrast[0]?.outcome).toBe("fail");
+  });
+
   it("uses the WCAG AA large-text threshold when typography proves large text", () => {
     const ir = screen(
       "s-large",
@@ -196,6 +241,86 @@ describe("deriveA11yTestItemsByScreen — contrast", () => {
     expect(contrast).toHaveLength(1);
     expect(contrast[0]?.title).toContain("meets WCAG AA large text");
     expect(contrast[0]?.outcome).toBe("pass");
+  });
+
+  // M3 isLargeText BOLD BRANCH — pins the bold-large path (fontSize≥18.6667 && fontWeight≥700).
+  // #1097 only tests the regular large-text path (fontSize≥24, fontWeight=400). Using #777 on #fff
+  // (ratio≈4.48): below 4.5 normal-AA threshold, above 3.0 large-text AA threshold. This means the
+  // pass/fail outcome distinguishes whether the bold-large branch activated. Three sub-cases:
+  //   (a) 20px bold  → bold-large branch active  → "meets WCAG AA large text" / pass
+  //   (b) 20px normal → bold-large branch INACTIVE → weight gate pins fontWeight≥700 → fail
+  //   (c) 18px bold  → below LARGE_BOLD_TEXT_MIN_PX (18.6667) → px gate pins boundary → fail
+  // Under M3 (widened weight gate 700→100), case (b) would wrongly activate → should be green test
+  // that turns red. Under a lowered px constant, case (c) would also wrongly activate.
+  it("activates bold-large-text threshold for fontSize 20 fontWeight 700 [M3-pin]", () => {
+    const ir = screen(
+      "s-bold-large",
+      "BoldLarge",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          node("t", "text", {
+            text: "Bold",
+            textColor: "#777777",
+            typography: { fontFamily: "Inter", fontSize: 20, fontWeight: 700 },
+          }),
+        ],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    // Bold at 20px qualifies as large text → uses 3.0 threshold → 4.48 passes.
+    expect(contrast[0]?.title).toContain("meets WCAG AA large text");
+    expect(contrast[0]?.outcome).toBe("pass");
+  });
+
+  it("does NOT activate large-text threshold for fontSize 20 fontWeight 400 — pins weight gate [M3-pin]", () => {
+    const ir = screen(
+      "s-normal-20",
+      "Normal20",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          node("t", "text", {
+            text: "Normal",
+            textColor: "#777777",
+            typography: { fontFamily: "Inter", fontSize: 20, fontWeight: 400 },
+          }),
+        ],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    // Regular weight at 20px does NOT qualify as large (20 < 24) → uses 4.5 threshold → 4.48 fails.
+    // Under M3 (weight gate widened to 100), this would wrongly pass as large text.
+    expect(contrast[0]?.title).toContain("below WCAG AA");
+    expect(contrast[0]?.outcome).toBe("fail");
+  });
+
+  it("does NOT activate bold-large threshold for fontSize 18 fontWeight 700 — pins px gate [M3-pin]", () => {
+    const ir = screen(
+      "s-bold-18",
+      "Bold18",
+      node("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          node("t", "text", {
+            text: "Bold18",
+            textColor: "#777777",
+            typography: { fontFamily: "Inter", fontSize: 18, fontWeight: 700 },
+          }),
+        ],
+      }),
+    );
+
+    const contrast = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("contrast"));
+    expect(contrast).toHaveLength(1);
+    // 18px bold: 18 < 18.6667 (LARGE_BOLD_TEXT_MIN_PX) → NOT large text → 4.5 threshold → 4.48 fails.
+    // Under a lowered px constant this would wrongly qualify as large text.
+    expect(contrast[0]?.title).toContain("below WCAG AA");
+    expect(contrast[0]?.outcome).toBe("fail");
   });
 
   it("resolves the background from the nearest ancestor that carries one", () => {

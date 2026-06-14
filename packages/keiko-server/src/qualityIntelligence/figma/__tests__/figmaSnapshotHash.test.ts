@@ -122,3 +122,54 @@ describe("hashSnapshot — order-independent in screenId (sort step #753)", () =
     expect(hashSnapshot(1, "v-pinned-1", perScreen)).toBe(hashSnapshot(1, "v-pinned-1", reversed));
   });
 });
+
+describe("hashScreen — positive controls: structural fields ARE included in the hash (#735 drift identity)", () => {
+  // These tests guard against an over-broad HASH_NEUTRAL_KEYS set accidentally stripping structural
+  // fields (name, text) that ARE part of the drift identity. If those keys were added to
+  // HASH_NEUTRAL_KEYS, two designs that differ only in name/text would hash identically, breaking
+  // the drift detection guarantee from #735.
+
+  it("produces different hashes for trees differing only in node.name (same id)", () => {
+    // Only the root's name differs; id, type, children are identical.
+    const a = screen(
+      leaf("root", {
+        interactionHint: "container",
+        type: "FRAME",
+        name: "Button",
+        children: [leaf("t", { text: "Label" })],
+      }),
+    );
+    const b = screen(
+      leaf("root", {
+        interactionHint: "container",
+        type: "FRAME",
+        name: "CTA",
+        children: [leaf("t", { text: "Label" })],
+      }),
+    );
+
+    // If name were in HASH_NEUTRAL_KEYS, both would hash identically — drift invisible.
+    expect(hashScreen(a.id, a, SHA)).not.toBe(hashScreen(b.id, b, SHA));
+  });
+
+  it("produces different hashes for trees differing only in node.text (same id and name)", () => {
+    // Only the leaf text differs; all structural ids/names are identical.
+    const a = screen(
+      leaf("root", {
+        interactionHint: "container",
+        type: "FRAME",
+        children: [leaf("t", { name: "t", text: "Hello" })],
+      }),
+    );
+    const b = screen(
+      leaf("root", {
+        interactionHint: "container",
+        type: "FRAME",
+        children: [leaf("t", { name: "t", text: "World" })],
+      }),
+    );
+
+    // If text were in HASH_NEUTRAL_KEYS, a copy-change would be invisible to drift detection.
+    expect(hashScreen(a.id, a, SHA)).not.toBe(hashScreen(b.id, b, SHA));
+  });
+});
