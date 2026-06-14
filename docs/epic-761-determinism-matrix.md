@@ -34,6 +34,22 @@ resulting run records `qualityScore: null`, persists no `test-quality` findings,
 generation gateway dispatch. An explicitly requested chat-only generation model paired with a
 separate structured-output model still runs end to end with the judged path.
 
+## Multimodal (vision-augmented) tier (Issue #764)
+
+The fourth capability cell is the vision-augmented Figma snapshot stage (Issue #810). It is routed by
+the `supportsImageInput` capability through `resolveQiMultimodalSelection`, never by model id, and
+degrades to the deterministic IR-only baseline — a typed `unavailable` that the vision hint provider
+turns into an empty hint set — when no multimodal model is configured. It never silently substitutes a
+text model that would pretend to have seen the image. The matrix pins both states in
+[`matrix.test.ts`](../packages/keiko-server/src/qualityIntelligence/__tests__/matrix.test.ts) (the
+"Epic #761 chat+multimodal tier" block); the selection contract lives in `resolveQiMultimodalSelection`
+(`modelSelection.ts`) and the fail-safe provider in `figmaSnapshotAdapter.ts`.
+
+| Capability set                                | Outcome                                              |
+| --------------------------------------------- | ---------------------------------------------------- |
+| chat + multimodal (image-input model present) | lowest-cost `supportsImageInput` model selected      |
+| multimodal removed (no image-input model)     | typed `unavailable` → deterministic IR-only baseline |
+
 ## Determinism-first contract (Issue #763)
 
 - Structural stages are model-free and replayable. Coverage mapping, deduplication, validation,
@@ -56,6 +72,7 @@ separate structured-output model still runs end to end with the judged path.
 | Evidence attribution for model runs               | `modelId` recorded; `seedUsed` is number or `null`      |
 | No-model baseline                                 | run succeeds; `modelId` and `seedUsed` are both omitted |
 | Explicit seeded run                               | requested seed is persisted only when actually applied  |
+| Multimodal removed (no image-input model)         | IR-only baseline; no model id recorded for the stage    |
 
 This means seeded reproducibility is now a real end-to-end path, not a placeholder field: a valid
 start request can carry `seed`, the gateway request carries it when supported, and evidence records

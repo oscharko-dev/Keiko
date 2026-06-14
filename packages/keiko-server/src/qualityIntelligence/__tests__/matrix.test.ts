@@ -24,7 +24,7 @@ import {
   type QualityIntelligenceModelRoutedTestDesignInput,
 } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "../../deps.js";
-import { resolveQiTestDesignSelection } from "../modelSelection.js";
+import { resolveQiMultimodalSelection, resolveQiTestDesignSelection } from "../modelSelection.js";
 
 function capability(id: string, overrides: Partial<ModelCapability>): ModelCapability {
   return {
@@ -127,6 +127,37 @@ describe("Epic #761 capability matrix", () => {
       }
     });
   }
+});
+
+// Issue #764 fourth scope cell: chat + multimodal. The vision-augmented stage (Issue #810) is routed
+// by the supportsImageInput capability through resolveQiMultimodalSelection, never by model id, and
+// degrades to the deterministic IR-only baseline (a typed "unavailable", never a silent text-model
+// substitution that would pretend to have seen the image) when no multimodal model is configured.
+// These rows consolidate the chat+multimodal cell and the "multimodal removed -> graceful" transition
+// into the #761/#764 matrix artifact.
+describe("Epic #761 chat+multimodal tier", () => {
+  it("routes the vision stage to the configured image-input model by capability", () => {
+    const selection = resolveQiMultimodalSelection(
+      depsWith(
+        configWith([
+          capability("text-tier", { supportsImageInput: false, costClass: "low" }),
+          capability("vision-tier", { supportsImageInput: true, costClass: "medium" }),
+        ]),
+      ),
+    );
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("vision-tier");
+      expect(selection.capability.supportsImageInput).toBe(true);
+    }
+  });
+
+  it("degrades gracefully to IR-only baseline when multimodal is removed", () => {
+    const selection = resolveQiMultimodalSelection(
+      depsWith(configWith([capability("text-only", { supportsImageInput: false })])),
+    );
+    expect(selection).toEqual({ kind: "unavailable" });
+  });
 });
 
 function makeAtom(id: string): QualityIntelligence.QualityIntelligenceEvidenceAtom {
