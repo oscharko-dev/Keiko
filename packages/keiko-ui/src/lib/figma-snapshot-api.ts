@@ -132,6 +132,12 @@ export async function loadFigmaSnapshotSummary(
   });
 }
 
+export function figmaSnapshotScreenImageUrl(runId: string, screenIndex: number): string {
+  return `/api/figma/snapshots/${encodeURIComponent(runId)}/screens/${encodeURIComponent(
+    String(screenIndex),
+  )}/image`;
+}
+
 // ─── POST /api/figma/snapshots/:runId/code (design-to-code #755) ────────────────
 
 /** One reviewable file in the generated code artifact. */
@@ -183,5 +189,6 @@ export interface FigmaRevokeTokenResult {
 export async function revokeFigmaToken(): Promise<FigmaRevokeTokenResult> {
   return fetchJson<FigmaRevokeTokenResult>("/api/figma/token", {
     method: "DELETE",
+    body: JSON.stringify({}),
   });
 }

@@ -9394,7 +9394,10 @@ select.dlg-input {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   color: var(--fg);
-  padding: 3px 0;
+  padding: 4px 0;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
   outline-offset: 2px;
 }
 .figma-snapshot-code-file-path:focus-visible {
@@ -9430,6 +9433,9 @@ select.dlg-input {
   font-size: 12px;
   color: var(--fg-muted);
   padding: 4px 0;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
   outline-offset: 2px;
 }
 .figma-snapshot-scopes-summary:focus-visible {
@@ -9502,21 +9508,14 @@ select.dlg-input {
   align-items: flex-start;
 }
 
-.figma-snapshot-screen-placeholder {
+.figma-snapshot-screen-image {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 72px;
+  height: 54px;
   border-radius: var(--radius-sm);
   background: var(--card-2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.figma-snapshot-screen-index {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--fg-muted);
+  object-fit: contain;
+  border: 1px solid var(--line);
 }
 
 .figma-snapshot-screen-meta {

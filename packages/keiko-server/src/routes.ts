@@ -138,6 +138,7 @@ import {
 import {
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
+  handleFigmaLoadSnapshotImage,
   handleFigmaRevokeToken,
 } from "./qualityIntelligence/figmaSnapshotRoutes.js";
 import { handleFigmaGenerateCode } from "./qualityIntelligence/figmaCodegenRoutes.js";
@@ -464,6 +465,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Token: resolved server-side from vault, config, or FIGMA_ACCESS_TOKEN env; never in response.
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
+  {
+    method: "GET",
+    pattern: "/api/figma/snapshots/:runId/screens/:screenIndex/image",
+    handler: handleFigmaLoadSnapshotImage,
+  },
   // Epic #750 #758/#760 — operator revokes the stored encrypted PAT (audited key removal).
   { method: "DELETE", pattern: "/api/figma/token", handler: handleFigmaRevokeToken },
   // Epic #750 #755 — design-to-code: emit reviewable HTML/CSS from a stored snapshot.
