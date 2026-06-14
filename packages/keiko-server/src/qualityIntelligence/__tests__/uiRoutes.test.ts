@@ -398,6 +398,63 @@ describe("handleGetQiRun", () => {
     expect(JSON.stringify(result.body)).not.toContain("b".repeat(64));
   });
 
+  it("caps oversized candidate text in the browser projection and marks truncated fields", () => {
+    const huge = "x".repeat(5_000);
+    loadMock.mockReturnValue(manifest("run-large-candidate"));
+    loadCandidatesMock.mockReturnValue({
+      candidates: [
+        {
+          id: "cand-large-001",
+          title: huge,
+          preconditions: [huge],
+          steps: [huge],
+          expectedResults: [huge],
+          priority: "P1",
+          riskClass: "functional",
+          tags: [huge],
+          status: "proposed",
+          derivedFromAtomIds: ["atom-1"],
+        },
+      ],
+      editedRevisions: [],
+    });
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-large-candidate", {
+          id: "run-large-candidate",
+        }),
+        depsWithEvidenceDir("/tmp/qi-evidence"),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    interface LargeCandidateProjection {
+      readonly title: string;
+      readonly preconditions: readonly string[];
+      readonly steps: readonly string[];
+      readonly expectedResults: readonly string[];
+      readonly tags: readonly string[];
+      readonly truncatedFields?: readonly string[];
+    }
+    const body = result.body as { readonly candidates: readonly LargeCandidateProjection[] };
+    const candidate = body.candidates[0];
+    if (candidate === undefined) throw new Error("expected one projected candidate");
+    expect(JSON.stringify(result.body)).not.toContain(huge);
+    expect(candidate.title.length).toBeLessThan(huge.length);
+    expect(candidate.preconditions[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.steps[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.expectedResults[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.tags[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.truncatedFields).toEqual([
+      "title",
+      "preconditions",
+      "steps",
+      "expectedResults",
+      "tags",
+    ]);
+  });
+
   it("returns 400 BAD_REQUEST for an empty id", () => {
     const result = asResult(
       handleGetQiRun(ctx("/api/quality-intelligence/runs/", { id: "" }), deps()),
@@ -669,9 +726,20 @@ describe("evidenceDir wiring (issue #620)", () => {
     });
   });
 
-  it("projects persisted weak-test rationale onto the candidate weakTestFlag", () => {
+  it("projects persisted weak-test rationale and candidate quality verdict onto the candidate", () => {
     const runId = "run-weak-flag";
     const candidateId = "cand-weak-001";
+    const qualityVerdict = {
+      verdict: "weak" as const,
+      score: 17.5,
+      dimensions: [
+        { name: "verifiability" as const, score: 20, rationale: "Expected result is measurable." },
+        { name: "atomicity" as const, score: 20, rationale: "Flow is narrow enough." },
+        { name: "determinism" as const, score: 20, rationale: "Relies on timing." },
+        { name: "ac-fidelity" as const, score: 10, rationale: "Misses the acceptance criteria." },
+      ],
+      overallRationale: "weak because it misses the originating AC",
+    };
     actualRecord(
       {
         runId,
@@ -723,6 +791,30 @@ describe("evidenceDir wiring (issue #620)", () => {
       evidenceDir,
       redact: (value: unknown): unknown => value,
     });
+    writeFileSync(
+      join(evidenceDir, "qi", `${runId}.candidates.json`),
+      JSON.stringify({
+        qiCandidatesSchemaVersion: 1,
+        runId,
+        generatedAt: "2026-06-09T10:01:00.000Z",
+        candidates: [
+          {
+            id: candidateId,
+            title: "Weak candidate",
+            preconditions: ["ready"],
+            steps: ["open help"],
+            expectedResults: ["help center opens"],
+            priority: "P1",
+            riskClass: "functional",
+            tags: [],
+            status: "proposed",
+            derivedFromAtomIds: [],
+            qualityVerdict,
+          },
+        ],
+      }),
+      "utf8",
+    );
 
     const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
     const result = asResult(
@@ -735,6 +827,12 @@ describe("evidenceDir wiring (issue #620)", () => {
       candidates: readonly {
         id: string;
         weakTestFlag?: { severity: string; rationale: string };
+        qualityVerdict?: {
+          verdict: string;
+          score: number;
+          dimensions: readonly { name: string; score: number; rationale: string }[];
+          overallRationale: string;
+        };
       }[];
     };
     expect(body.findingRefs).toEqual([
@@ -744,15 +842,22 @@ describe("evidenceDir wiring (issue #620)", () => {
           "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
       }),
     ]);
-    expect(body.candidates).toEqual([
-      expect.objectContaining({
-        id: candidateId,
-        weakTestFlag: {
-          severity: "high",
-          rationale:
-            "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
-        },
-      }),
-    ]);
+    const candidate = body.candidates[0];
+    expect(candidate?.id).toBe(candidateId);
+    expect(candidate?.weakTestFlag).toEqual({
+      severity: "high",
+      rationale:
+        "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
+    });
+    expect(candidate?.qualityVerdict).toMatchObject({
+      verdict: "weak",
+      score: 17.5,
+      overallRationale: "weak because it misses the originating AC",
+    });
+    expect(candidate?.qualityVerdict?.dimensions).toEqual(
+      expect.arrayContaining([
+        { name: "ac-fidelity", score: 10, rationale: "Misses the acceptance criteria." },
+      ]),
+    );
   });
 });

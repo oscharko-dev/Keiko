@@ -501,6 +501,14 @@ describe("parseJudgeVerdict", () => {
     expect(verdict.overallRationale).toBe("good test");
   });
 
+  it("returns safe default when two valid judge-shaped objects are present", () => {
+    const noisy =
+      "First verdict:\n" + VALID_VERDICT_JSON + "\nSecond verdict:\n" + WEAK_VERDICT_JSON;
+    const verdict = parseJudgeVerdict(noisy);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
   it("does not mis-slice when rationale strings contain braces", () => {
     const json = JSON.stringify({
       dimensions: [
@@ -514,6 +522,27 @@ describe("parseJudgeVerdict", () => {
     const verdict = parseJudgeVerdict("Reasoning… " + json + " …done");
     expect(verdict.verdict).toBe("strong");
     expect(verdict.dimensions).toHaveLength(4);
+  });
+
+  it("scrubs unsafe dimension and overall rationales before truncating them", () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const zwsp = String.fromCodePoint(0x200b);
+    const control = "\x07";
+    const dimensionRationale = `${"a".repeat(497)}${rlo}${zwsp}${control}bcd`;
+    const overallRationale = `${"o".repeat(997)}${rlo}${zwsp}${control}xyz`;
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 80, rationale: dimensionRationale },
+        { name: "atomicity", score: 70, rationale: "single action" },
+        { name: "determinism", score: 90, rationale: "no randomness" },
+        { name: "ac-fidelity", score: 75, rationale: "matches AC" },
+      ],
+      overallRationale,
+    });
+    const verdict = parseJudgeVerdict(json);
+    const rationale = verdict.dimensions.find((d) => d.name === "verifiability")?.rationale;
+    expect(rationale).toBe(`${"a".repeat(497)}bcd`);
+    expect(verdict.overallRationale).toBe(`${"o".repeat(997)}xyz`);
   });
 });
 

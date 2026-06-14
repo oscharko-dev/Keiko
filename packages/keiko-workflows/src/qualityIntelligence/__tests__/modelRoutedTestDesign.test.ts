@@ -587,6 +587,110 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(qualityFindings.length).toBe(1);
   });
 
+  it("passes candidate preconditions into the judge prompt", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "AC-1: Admins can approve refunds.")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-preconditions"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const rawText = JSON.stringify([
+      {
+        title: "Approve refund as an admin",
+        preconditions: ["User has admin role", "Refund request is pending"],
+        steps: ["Open the refund request", "Click approve"],
+        expectedResults: ["The refund is approved"],
+        priority: "P1",
+        riskClass: "functional",
+        derivedFromEvidenceIndexes: [1],
+      },
+    ]);
+    const judgeCalls: QualityIntelligenceJudgeInput[] = [];
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (judgeInput) => {
+        judgeCalls.push(judgeInput);
+        return Promise.resolve(STRONG_VERDICT);
+      }),
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText,
+            modelCallCount: 1,
+            modelId: "test-model",
+          }),
+      },
+    };
+
+    await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(judgeCalls).toHaveLength(1);
+    expect(judgeCalls[0]?.candidateText).toContain(
+      "Preconditions: User has admin role; Refund request is pending",
+    );
+  });
+
+  it("passes per-candidate quality verdicts to candidate persistence for strong and weak tests", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-verdict-persist"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (judgeInput) =>
+        Promise.resolve(
+          judgeInput.candidateText.includes("Test atom 1 behavior") ? STRONG_VERDICT : WEAK_VERDICT,
+        ),
+      ),
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(summary.status).toBe("succeeded");
+    expect(recorded).toHaveLength(2);
+    const withVerdicts =
+      recorded as readonly (QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+        readonly qualityVerdict?: QualityIntelligence.TestQualityJudgeVerdict & {
+          readonly score: number;
+        };
+      })[];
+    expect(withVerdicts[0]?.qualityVerdict).toEqual(
+      expect.objectContaining({
+        verdict: "strong",
+        score: 87.5,
+        overallRationale: "strong test",
+      }),
+    );
+    expect(withVerdicts[1]?.qualityVerdict).toEqual(
+      expect.objectContaining({
+        verdict: "weak",
+        score: 20,
+        overallRationale: "weak test",
+      }),
+    );
+    expect(withVerdicts[0]?.qualityVerdict?.dimensions).toEqual(STRONG_VERDICT.dimensions);
+    expect(withVerdicts[1]?.qualityVerdict?.dimensions).toEqual(WEAK_VERDICT.dimensions);
+  });
+
   it("does not emit test-quality findings for strong candidates", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
