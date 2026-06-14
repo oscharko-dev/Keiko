@@ -112,6 +112,10 @@ describe("deriveNavGraph — nodes and edges", () => {
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]?.fromScreenId).toBe("s-a");
     expect(graph.edges[0]?.toScreenId).toBe("s-a");
+    // A self-looping screen has an outgoing edge and is its own entry, so it is neither a dead end
+    // nor unreachable — pins the fromScreenId-based outgoing-set classification (GAP7).
+    expect(graph.deadEndScreenIds).toEqual([]);
+    expect(graph.unreachableScreenIds).toEqual([]);
   });
 });
 
@@ -315,6 +319,9 @@ describe("deriveNavTestItemsByScreen — per-screen attribution", () => {
     const flows = (byScreen.get("s-a") ?? []).filter((i) => i.category === "flow");
     expect(flows.length).toBeGreaterThan(0);
     expect(flows.every((i) => i.screenId === "s-a")).toBe(true);
+    // Screen names are load-bearing for human-readable flow attribution — a mutation that strips
+    // them from the title is caught: the full A → B → C path names its first and last screens (GAP5).
+    expect(flows.some((i) => i.title.includes('"A"') && i.title.includes('"C"'))).toBe(true);
   });
 
   it("emits a coverage-notice item for an unreachable screen", () => {
@@ -333,6 +340,8 @@ describe("deriveNavTestItemsByScreen — per-screen attribution", () => {
     );
     expect(notices).toHaveLength(1);
     expect(notices[0]?.title.toLowerCase()).toContain("unreachable");
+    // The unreachable screen's own name must appear in the notice for attributability (GAP5).
+    expect(notices[0]?.title).toContain("Orphan");
   });
 
   it("emits a coverage-notice item for a dead-end screen", () => {
@@ -346,6 +355,8 @@ describe("deriveNavTestItemsByScreen — per-screen attribution", () => {
       (i) => i.category === "coverage-notice",
     );
     expect(notices.some((n) => n.title.toLowerCase().includes("dead end"))).toBe(true);
+    // The dead-end screen's own name must appear in the notice for attributability (GAP5).
+    expect(notices.some((n) => n.title.includes('"B"'))).toBe(true);
   });
 });
 
@@ -419,6 +430,8 @@ describe("deriveNavFlows / deriveNavTestItemsByScreen — MAX_NAV_FLOWS cap (Fix
     );
     expect(notices).toHaveLength(1);
     expect(notices[0]?.title).toContain("500");
+    // The cap notice lands on the (synthetic) entry screen so it occupies a well-defined slot (GAP3).
+    expect(notices[0]?.screenId).toBe(graph.entryScreenIds[0]);
   });
 
   it("does not emit a coverage-notice when flow count is under the cap", () => {
@@ -443,6 +456,42 @@ describe("deriveNavFlows / deriveNavTestItemsByScreen — MAX_NAV_FLOWS cap (Fix
       (i) => i.category === "coverage-notice" && i.title.includes("truncated"),
     );
     expect(capNotices).toHaveLength(0);
+  });
+
+  it("counts parallel edges once: a duplicated-edge graph yields the same flows (CORR1)", () => {
+    // Parallel edges = distinct prototype reactions from the same screen to the same target (a second
+    // source node, or a second trigger). Each must still yield its own navigation item, but they must
+    // NOT inflate flow enumeration: before buildAdjacency de-duplicated targets per source, walkFlows
+    // traversed the identical sub-path once per duplicate, so the shared counter hit MAX_NAV_FLOWS
+    // while the de-duplicated flow set stayed below the cap — silently truncating flows with NO notice.
+    const base = fullyConnected(5);
+    const withParallel = base.screens.map((s, i) => ({
+      ...s,
+      root: { ...s.root, children: [...s.root.children, node(`alt${String(i)}`)] },
+    }));
+    // Same trigger, different source node: the parallel edge sorts adjacent to its twin per target,
+    // so the duplicate target entries interleave in the adjacency list. That is the order in which a
+    // raw multiset adjacency over-counts walkFlows and truncates the de-duplicated flow set early.
+    const parallelLinks: InterScreenLink[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      for (let j = 0; j < 5; j += 1) {
+        if (i !== j) parallelLinks.push(link(`alt${String(i)}`, "ON_CLICK", `root${String(j)}`));
+      }
+    }
+    const duplicated = result(withParallel, [...base.links, ...parallelLinks]);
+
+    const simpleGraph = deriveNavGraph(base);
+    const dupGraph = deriveNavGraph(duplicated);
+    // Reachability is identical, so the enumerated flow set must be byte-identical (no truncation).
+    expect(deriveNavFlows(dupGraph)).toEqual(deriveNavFlows(simpleGraph));
+    // Every parallel edge is still a distinct transition: 5×4 base + 5×4 parallel = 40 edges.
+    expect(simpleGraph.edges).toHaveLength(20);
+    expect(dupGraph.edges).toHaveLength(40);
+    // The 64 reachable acyclic flows from the synthetic entry stay under the 500 cap → no notice.
+    const dupNotices = [...deriveNavTestItemsByScreen(dupGraph).values()]
+      .flat()
+      .filter((item) => item.category === "coverage-notice" && item.title.includes("truncated"));
+    expect(dupNotices).toHaveLength(0);
   });
 });
 
@@ -476,5 +525,57 @@ describe("deriveNavGraph — unresolved links", () => {
     const targets = graph.unresolvedLinks.map((u) => u.targetNodeId);
     expect(targets).toContain("missing-a");
     expect(targets).toContain("ghost-node");
+  });
+
+  it("orders unresolved links deterministically under a shared targetNodeId (total order, DET1)", () => {
+    // Two unresolved links to the SAME target differ only in trigger/source. Sorting by targetNodeId
+    // alone is not a total order, so input order would leak; the full-tuple key restores determinism.
+    const tree = (): IrNode => node("a-root", [node("btn-x"), node("btn-y")]);
+    const forward = deriveNavGraph(
+      result(
+        [screen("s-a", "A", tree())],
+        [
+          { sourceNodeId: "btn-y", trigger: "ON_HOVER", targetNodeId: "ghost" },
+          { sourceNodeId: "btn-x", trigger: "ON_CLICK", targetNodeId: "ghost" },
+        ],
+      ),
+    );
+    const reversed = deriveNavGraph(
+      result(
+        [screen("s-a", "A", tree())],
+        [
+          { sourceNodeId: "btn-x", trigger: "ON_CLICK", targetNodeId: "ghost" },
+          { sourceNodeId: "btn-y", trigger: "ON_HOVER", targetNodeId: "ghost" },
+        ],
+      ),
+    );
+    expect(forward.unresolvedLinks).toEqual(reversed.unresolvedLinks);
+    // The composite key (targetNodeId, trigger, sourceNodeId) orders ON_CLICK before ON_HOVER.
+    expect(forward.unresolvedLinks.map((u) => u.trigger)).toEqual(["ON_CLICK", "ON_HOVER"]);
+  });
+});
+
+// ─── Injective keys ─────────────────────────────────────────────────────────
+
+describe("deriveNavGraph — injective transition keys", () => {
+  it("keeps NUL-colliding transitions distinct (composite key, not a raw separator join, INJ2)", () => {
+    // Under the previous NUL-delimited key, edgeKey for the tuples ["S","a","S","b c","d"] and
+    // ["S","a","S","b","c d"] joins to the identical string, so the edge de-dup Map silently
+    // drops one distinct prototype transition (and its navigation test). JSON.stringify keeps them
+    // apart. A snapshot can carry such node ids — the schema does not forbid control bytes.
+    const nul = String.fromCodePoint(0);
+    const root = node("S-root", [node(`b${nul}c`), node("d"), node("b"), node(`c${nul}d`)]);
+    const graph = deriveNavGraph(
+      result(
+        [screen("S", "Screen", root)],
+        [link(`b${nul}c`, "a", "d"), link("b", "a", `c${nul}d`)],
+      ),
+    );
+    expect(graph.edges).toHaveLength(2);
+    const navItems = [...deriveNavTestItemsByScreen(graph).values()]
+      .flat()
+      .filter((item) => item.category === "navigation");
+    expect(navItems).toHaveLength(2);
+    expect(new Set(navItems.map((item) => item.id)).size).toBe(2);
   });
 });

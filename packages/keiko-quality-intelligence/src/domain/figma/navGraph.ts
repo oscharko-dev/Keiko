@@ -93,13 +93,19 @@ function buildNodeOwnership(screens: readonly ScreenIr[]): ReadonlyMap<string, s
   return owner;
 }
 
-// NUL (\u0000) is used as a field separator inside key strings: it cannot appear in Figma node ids
-// or trigger names, so the join is unambiguous. The escape sequence is used rather than a literal
-// NUL byte to keep the source file grep-able as plain text (Fix #2).
-const SEP = "\u0000";
+// Injective composite key over a field tuple. The previous NUL-delimited join was non-injective:
+// a value carrying the separator byte could shift a field boundary so two distinct tuples collapse
+// to one key — the exact defect #752 fixed in links.ts linkKey, and a Figma node id or trigger from
+// an (untrusted) snapshot is not guaranteed separator-free. JSON.stringify escapes the quote,
+// backslash, and control bytes, so the encoding is total and unambiguous for any input. Used for
+// de-duplication, identity hashing, and stable total ordering so every emitted collection stays
+// byte-identical for a given input.
+const compositeKey = (...parts: readonly string[]): string => JSON.stringify(parts);
 
 const edgeKey = (e: NavEdge): string =>
-  `${e.fromScreenId}${SEP}${e.trigger}${SEP}${e.toScreenId}${SEP}${e.sourceNodeId}${SEP}${e.targetNodeId}`;
+  compositeKey(e.fromScreenId, e.trigger, e.toScreenId, e.sourceNodeId, e.targetNodeId);
+
+const flowKey = (screenIds: readonly string[]): string => compositeKey(...screenIds);
 
 interface ClassifiedLinks {
   readonly edges: readonly NavEdge[];
@@ -139,7 +145,15 @@ function classifyLinks(
   }
   return {
     edges: [...edges.values()].sort((a, b) => byString(edgeKey(a), edgeKey(b))),
-    unresolved: [...unresolved].sort((a, b) => byString(a.targetNodeId, b.targetNodeId)),
+    // Total order: targetNodeId alone is not injective across unresolved links sharing a target, so
+    // input order would leak into the output and break the byte-identical guarantee (DET1). The
+    // full tuple key restores a deterministic total order under ties.
+    unresolved: [...unresolved].sort((a, b) =>
+      byString(
+        compositeKey(a.targetNodeId, a.trigger, a.sourceNodeId),
+        compositeKey(b.targetNodeId, b.trigger, b.sourceNodeId),
+      ),
+    ),
     entryScreenIds: [...entries].sort(byString),
   };
 }
@@ -238,12 +252,26 @@ function walkFlows(
 }
 
 // Build the adjacency map once; edges are already stable-sorted so adjacency lists are deterministic.
+// Parallel edges (distinct prototype reactions from the same screen to the same target — two buttons,
+// or the same button with two triggers, both reaching A → B) must NOT push duplicate target entries:
+// walkFlows would traverse the identical sub-path once per duplicate, inflating the shared flow
+// counter past the number of DISTINCT flows. Because deriveNavTestItemsByScreen decides whether to
+// emit the truncation notice from the post-dedup flows.length, an inflated counter can hit
+// MAX_NAV_FLOWS and truncate enumeration while flows.length stays below the cap — silently dropping
+// flows with NO coverage-notice (CORR1). Navigation adjacency is a reachability relation, so a
+// per-source target set is the correct model and keeps the counter equal to the distinct-flow count.
+// First-occurrence order is preserved (edges are stable-sorted) so the derivation stays byte-identical.
 function buildAdjacency(edges: readonly NavEdge[]): ReadonlyMap<string, readonly string[]> {
   const adj = new Map<string, string[]>();
+  const seen = new Map<string, Set<string>>();
   for (const edge of edges) {
     const list = adj.get(edge.fromScreenId) ?? [];
+    const seenTargets = seen.get(edge.fromScreenId) ?? new Set<string>();
+    if (seenTargets.has(edge.toScreenId)) continue;
     list.push(edge.toScreenId);
+    seenTargets.add(edge.toScreenId);
     adj.set(edge.fromScreenId, list);
+    seen.set(edge.fromScreenId, seenTargets);
   }
   return adj;
 }
@@ -266,8 +294,8 @@ export function deriveNavFlows(
     walkFlows(entry, adjacency, maxDepth, MAX_NAV_FLOWS, counter, collected);
   }
   const byKey = new Map<string, NavFlow>();
-  for (const screenIds of collected) byKey.set(screenIds.join(SEP), { screenIds });
-  return [...byKey.values()].sort((a, b) => byString(a.screenIds.join(SEP), b.screenIds.join(SEP)));
+  for (const screenIds of collected) byKey.set(flowKey(screenIds), { screenIds });
+  return [...byKey.values()].sort((a, b) => byString(flowKey(a.screenIds), flowKey(b.screenIds)));
 }
 
 /**
@@ -282,7 +310,7 @@ export function deriveRoutingHints(graph: NavGraph): readonly RoutingHint[] {
       .filter((e) => e.fromScreenId === node.screenId)
       .map((e) => ({ trigger: e.trigger, toScreenId: e.toScreenId }))
       .sort((a, b) =>
-        byString(`${a.trigger}${SEP}${a.toScreenId}`, `${b.trigger}${SEP}${b.toScreenId}`),
+        byString(compositeKey(a.trigger, a.toScreenId), compositeKey(b.trigger, b.toScreenId)),
       ),
   }));
 }
@@ -317,7 +345,7 @@ function flowItem(graph: NavGraph, flow: NavFlow): StructuralTestItem {
   const entry = flow.screenIds[0] ?? "";
   const names = flow.screenIds.map((id) => `"${screenNameOf(graph, id)}"`).join(" → ");
   return {
-    id: navItemId("fflow", flow.screenIds.join(SEP)),
+    id: navItemId("fflow", flowKey(flow.screenIds)),
     category: "flow",
     screenId: entry,
     screenName: screenNameOf(graph, entry),
@@ -336,7 +364,7 @@ function coverageItem(
       ? `Screen "${name}" is unreachable: no navigation reaches it`
       : `Screen "${name}" is a dead end: no navigation leaves it`;
   return {
-    id: navItemId("fcov", `${kind}${SEP}${screenId}`),
+    id: navItemId("fcov", compositeKey(kind, screenId)),
     category: "coverage-notice",
     screenId,
     screenName: name,
@@ -350,7 +378,7 @@ function flowCapNoticeItem(graph: NavGraph, totalEnumerated: number): Structural
   const entryId = graph.entryScreenIds[0] ?? graph.nodes[0]?.screenId ?? "";
   const name = screenNameOf(graph, entryId);
   return {
-    id: navItemId("fnavcap", `cap${SEP}${entryId}`),
+    id: navItemId("fnavcap", compositeKey("cap", entryId)),
     category: "coverage-notice",
     screenId: entryId,
     screenName: name,
