@@ -455,6 +455,36 @@ describe("buildFigmaSnapshot — render egress abort codes (#750 audit)", () => 
     ).rejects.toMatchObject({ code: "FIGMA_PROXY_UNREACHABLE" });
   });
 
+  it("re-throws a FIGMA_PROXY_EGRESS_FAILED from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_EGRESS_FAILED"));
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_EGRESS_FAILED" });
+  });
+
+  it("re-throws a FIGMA_PROXY_AUTH_REQUIRED from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_AUTH_REQUIRED"));
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_AUTH_REQUIRED" });
+  });
+
+  it("re-throws a FIGMA_PROXY_BLOCKED_BY_POLICY from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_BLOCKED_BY_POLICY"));
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_BLOCKED_BY_POLICY" });
+  });
+
   it("skips with coded reason for a non-abort coded error (FIGMA_RATE_LIMITED)", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();

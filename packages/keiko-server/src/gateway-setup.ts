@@ -32,6 +32,7 @@ import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
+import { currentGatewayEgressConfig } from "./deps.js";
 
 const MAX_BODY_BYTES = 64_000;
 // Issue #144: exported so discovery-normalization tests can pin the slice cap
@@ -168,6 +169,16 @@ function buildRawConfig(
       ? { figma: { accessToken: figmaAccessToken } }
       : {}),
   };
+}
+
+function withInheritedEgress(
+  rawConfig: Record<string, unknown>,
+  egress: GatewayEgressConfig | undefined,
+): Record<string, unknown> {
+  if (egress === undefined || Object.hasOwn(rawConfig, "egress")) {
+    return rawConfig;
+  }
+  return { ...rawConfig, egress };
 }
 
 function modelsEndpoint(baseUrl: string): string {
@@ -610,12 +621,17 @@ async function verifySetupCandidate(
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
   env: EnvSource,
+  egress: GatewayEgressConfig | undefined,
 ): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(baseUrl, "candidate");
+  const validationRawConfig = buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
+    apiKeyHeaderName,
+    figmaAccessToken,
+  });
   const validationConfig = parseGatewayConfig(
-    buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName, figmaAccessToken }),
+    withInheritedEgress(validationRawConfig, egress),
     env,
   );
   const candidateModelIds =
@@ -630,13 +646,13 @@ async function verifySetupCandidate(
     maxRetries: 0,
     figmaAccessToken,
   });
-  const candidateConfig = parseGatewayConfig(candidateRawConfig, env);
+  const candidateConfig = parseGatewayConfig(withInheritedEgress(candidateRawConfig, egress), env);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
   const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, {
     apiKeyHeaderName,
     figmaAccessToken,
   });
-  const config = parseGatewayConfig(rawConfig, env);
+  const config = parseGatewayConfig(withInheritedEgress(rawConfig, egress), env);
   return { rawConfig, config, testedModelIds };
 }
 
@@ -723,6 +739,7 @@ async function trySetupCandidate(
     tester,
     discovery,
     deps.env,
+    currentGatewayEgressConfig(deps),
   );
   savePrivateJson(gatewayConfig.storagePath, verified.rawConfig);
   gatewayConfig.set(verified.config, true);
