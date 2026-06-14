@@ -90,6 +90,15 @@ function structuralDisplayName(node: IrNode): string {
   return node.interactionHint;
 }
 
+// Screen names are evidence text too; a tampered/partial record can carry blank names. Keep the
+// first-slice artifact reviewable and navigable without model help by falling back to the screen id.
+function structuralScreenName(screen: ScreenIr): string {
+  const trimmed = screen.name.trim();
+  if (trimmed.length > 0) return trimmed;
+  const id = screen.id.trim();
+  return id.length > 0 ? id : "Screen";
+}
+
 function toElement(node: IrNode): EmissionElement {
   const text = node.text?.trim();
   return {
@@ -114,11 +123,16 @@ function navTargetsFor(
 ): readonly EmissionNavTarget[] {
   const hint = hints.find((h) => h.screenId === screenId);
   if (hint === undefined) return [];
-  return hint.transitions.map((transition) => ({
-    trigger: transition.trigger,
-    toScreenId: transition.toScreenId,
-    toScreenName: nameByScreenId.get(transition.toScreenId) ?? transition.toScreenId,
-  }));
+  return hint.transitions.map((transition) => {
+    const fallbackName = transition.toScreenId.trim();
+    return {
+      trigger: transition.trigger,
+      toScreenId: transition.toScreenId,
+      toScreenName:
+        nameByScreenId.get(transition.toScreenId) ??
+        (fallbackName.length > 0 ? fallbackName : "Screen"),
+    };
+  });
 }
 
 /**
@@ -128,12 +142,15 @@ function navTargetsFor(
  * plan, so the emitted code is reproducible.
  */
 export function buildEmissionPlan(input: EmissionInput): CodeEmissionPlan {
-  const nameByScreenId = new Map(input.screens.map((s) => [s.id, s.name]));
-  const screens = input.screens.map((screen) => ({
-    screenId: screen.id,
-    screenName: screen.name,
-    root: toElement(screen.root),
-    navTargets: navTargetsFor(screen.id, input.hints, nameByScreenId),
-  }));
+  const nameByScreenId = new Map(input.screens.map((s) => [s.id, structuralScreenName(s)]));
+  const screens = input.screens.map((screen) => {
+    const screenName = structuralScreenName(screen);
+    return {
+      screenId: screen.id,
+      screenName,
+      root: toElement(screen.root),
+      navTargets: navTargetsFor(screen.id, input.hints, nameByScreenId),
+    };
+  });
   return { screens, tokens: input.tokens };
 }

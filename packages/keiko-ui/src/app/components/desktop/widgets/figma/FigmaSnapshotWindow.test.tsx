@@ -44,6 +44,7 @@ import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
 type TriggerFn = Required<FigmaSnapshotWindowProps>["triggerImpl"];
 type LoadFn = Required<FigmaSnapshotWindowProps>["loadImpl"];
+type CodegenFn = Required<FigmaSnapshotWindowProps>["codegenImpl"];
 type RevokeFn = Required<FigmaSnapshotWindowProps>["revokeImpl"];
 
 interface TriggerMock extends TriggerFn {
@@ -900,14 +901,27 @@ describe("FigmaSnapshotWindow", () => {
       ],
     };
 
-    function resolvingCodegen(): Required<FigmaSnapshotWindowProps>["codegenImpl"] & {
+    function resolvingCodegen(): CodegenFn & {
       mock: { calls: unknown[][] };
     } {
       return vi.fn(
-        async (_runId: string) => MOCK_CODE,
-      ) as unknown as Required<FigmaSnapshotWindowProps>["codegenImpl"] & {
+        async (_runId: string, _signal?: AbortSignal) => MOCK_CODE,
+      ) as unknown as CodegenFn & {
         mock: { calls: unknown[][] };
       };
+    }
+
+    function pendingCodegen(): CodegenFn & { mock: { calls: unknown[][] } } {
+      return vi.fn(
+        (_runId: string, signal?: AbortSignal) =>
+          new Promise<FigmaCodegenResponse>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      ) as unknown as CodegenFn & { mock: { calls: unknown[][] } };
     }
 
     it("generates reviewable code from the stored snapshot and lists the files", async () => {
@@ -917,10 +931,33 @@ describe("FigmaSnapshotWindow", () => {
       await typeAndSubmit(user);
       await waitForDone();
       await user.click(screen.getByRole("button", { name: /generate code/iu }));
-      await waitFor(() => expect(codegen).toHaveBeenCalledWith("fs-test-run-id-1234"));
+      await waitFor(() => expect(codegen).toHaveBeenCalled());
+      expect(codegen.mock.calls[0]?.[0]).toBe("fs-test-run-id-1234");
+      expect(codegen.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
       expect(await screen.findByText("index.html")).toBeInTheDocument();
       expect(screen.getByText("tokens.css")).toBeInTheDocument();
       expect(screen.getByText(/proposal only, never auto-applied/iu)).toBeInTheDocument();
+    });
+
+    it("cancels an in-flight code generation request", async () => {
+      const codegen = pendingCodegen();
+      renderWindow({ triggerImpl: resolvingTrigger(), codegenImpl: codegen });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      await user.click(screen.getByRole("button", { name: /generate code/iu }));
+      await waitFor(() => expect(codegen).toHaveBeenCalled());
+      const signal = codegen.mock.calls[0]?.[1] as AbortSignal | undefined;
+      expect(signal?.aborted).toBe(false);
+
+      await user.click(screen.getByRole("button", { name: /cancel/iu }));
+
+      expect(signal?.aborted).toBe(true);
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /cancel/iu })).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole("button", { name: /generate code/iu })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
   });
 });

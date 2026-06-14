@@ -9341,6 +9341,12 @@ select.dlg-input {
   gap: 8px;
   margin-top: 4px;
 }
+.figma-snapshot-codegen-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .figma-snapshot-codegen-btn {
   align-self: flex-start;
   padding: 5px 14px;
@@ -9359,6 +9365,19 @@ select.dlg-input {
 .figma-snapshot-codegen-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+.figma-snapshot-codegen-cancel-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-codegen-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent);
 }
 .figma-snapshot-code-result {
   display: flex;
@@ -9856,13 +9875,15 @@ select.dlg-input {
   border-color: var(--accent-bright);
 }
 .figma-snapshot-load-btn:hover:not(:disabled),
-.figma-snapshot-resnapshot-btn:hover:not(:disabled) {
+.figma-snapshot-resnapshot-btn:hover:not(:disabled),
+.figma-snapshot-codegen-cancel-btn:hover:not(:disabled) {
   background: var(--card-2);
   border-color: var(--line-strong);
 }
 @media (prefers-reduced-motion: no-preference) {
   .figma-snapshot-trigger-btn,
   .figma-snapshot-codegen-btn,
+  .figma-snapshot-codegen-cancel-btn,
   .figma-snapshot-load-btn,
   .figma-snapshot-resnapshot-btn {
     transition:

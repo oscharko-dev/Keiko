@@ -281,6 +281,7 @@ export function FigmaSnapshotWindow({
 
   // Fix #7: AbortController for the active build/load fetch.
   const abortRef = useRef<AbortController | null>(null);
+  const codeAbortRef = useRef<AbortController | null>(null);
 
   const flagConsentRequired = useCallback((): void => {
     setConsentInvalid(true);
@@ -321,6 +322,7 @@ export function FigmaSnapshotWindow({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      codeAbortRef.current?.abort();
     };
   }, []);
 
@@ -328,6 +330,8 @@ export function FigmaSnapshotWindow({
     async (link: string, isResnapshot: boolean): Promise<void> => {
       // Abort any previous in-flight request before starting a new one.
       abortRef.current?.abort();
+      codeAbortRef.current?.abort();
+      codeAbortRef.current = null;
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -411,18 +415,34 @@ export function FigmaSnapshotWindow({
   const handleGenerateCode = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
     if (runId === undefined || runId.length === 0 || codeState === "generating") return;
+    const controller = new AbortController();
+    codeAbortRef.current = controller;
     setCodeState("generating");
     setCodeError(null);
-    codegenImpl(runId)
+    codegenImpl(runId, controller.signal)
       .then((result) => {
         setCode(result);
         setCodeState("done");
       })
       .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setCodeState("idle");
+          return;
+        }
         setCodeError(formatError(err));
         setCodeState("error");
+      })
+      .finally(() => {
+        if (codeAbortRef.current === controller) codeAbortRef.current = null;
       });
   }, [codegenImpl, codeState, snapshotRunId, summary]);
+
+  const handleCancelCodegen = useCallback((): void => {
+    codeAbortRef.current?.abort();
+    codeAbortRef.current = null;
+    setCodeState("idle");
+    setCodeError(null);
+  }, []);
 
   // Load a previously stored snapshot (e.g. after window re-open) when runId is in cfg but no
   // in-memory summary is present.
@@ -708,15 +728,26 @@ export function FigmaSnapshotWindow({
           {/* Design-to-code (#755): generate reviewable HTML/CSS + design tokens from the stored
               snapshot. Deterministic + model-free server-side; the result is a proposal for review. */}
           <div className="figma-snapshot-codegen">
-            <button
-              type="button"
-              className="figma-snapshot-codegen-btn"
-              onClick={handleGenerateCode}
-              aria-disabled={codeState === "generating" ? "true" : undefined}
-              aria-busy={codeState === "generating"}
-            >
-              {codeState === "generating" ? "Generating code…" : "Generate code"}
-            </button>
+            <div className="figma-snapshot-codegen-actions">
+              <button
+                type="button"
+                className="figma-snapshot-codegen-btn"
+                onClick={handleGenerateCode}
+                aria-disabled={codeState === "generating" ? "true" : undefined}
+                aria-busy={codeState === "generating"}
+              >
+                {codeState === "generating" ? "Generating code…" : "Generate code"}
+              </button>
+              {codeState === "generating" && (
+                <button
+                  type="button"
+                  className="figma-snapshot-codegen-cancel-btn"
+                  onClick={handleCancelCodegen}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
             {codeState === "error" && codeError !== null && (
               <p className="figma-snapshot-error" role="alert">
                 {codeError}

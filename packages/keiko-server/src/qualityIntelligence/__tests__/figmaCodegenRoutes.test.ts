@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -112,6 +112,37 @@ const ISO_EPOCH = "1970-01-01T00:00:00.000Z";
 const errCode = (result: ReturnType<typeof handleFigmaGenerateCode>): string =>
   (result as { body: { error: { code: string } } }).body.error.code;
 
+const recordSnapshot = (
+  runId: string,
+  screens: readonly { readonly screenId: string; readonly irJson: unknown }[],
+  links: readonly {
+    readonly sourceNodeId: string;
+    readonly trigger: string;
+    readonly targetNodeId: string;
+  }[] = [],
+): void => {
+  const store = createNodeFigmaSnapshotStore(dir);
+  const img = { mimeType: "image/png" as const, bytes: new Uint8Array([0x89, 0x50]) };
+  const hashedScreens = screens.map((screen, i) => ({
+    screenId: screen.screenId,
+    integrityHash: `h${String(i + 1)}`,
+  }));
+  store.record({
+    runId,
+    provenance: { fileKey: "KEY", nodeId: "0:1", version: undefined, fetchedAt: ISO_EPOCH },
+    integrityHash: hashSnapshot(1, undefined, hashedScreens),
+    screens: screens.map((screen, i) => ({
+      screenId: screen.screenId,
+      irJson: screen.irJson,
+      integrityHash: `h${String(i + 1)}`,
+      image: img,
+    })),
+    skippedScreens: [],
+    links,
+    tokens: TOKENS,
+  });
+};
+
 describe("handleFigmaGenerateCode (#755)", () => {
   it("emits a reviewable html-css artifact for a stored snapshot", () => {
     seedSnapshot(dir, "fs-1");
@@ -200,6 +231,42 @@ describe("handleFigmaGenerateCode (#755)", () => {
     expect(persisted.adapterName).toBe("html-css");
     expect(persisted.figmaCodegenSchemaVersion).toBe(1);
     expect(persisted.files.length).toBeGreaterThan(0);
+  });
+
+  it("fails closed when the reviewable artifact cannot be persisted", () => {
+    seedSnapshot(dir, "persist-fail-1");
+    mkdirSync(join(dir, "qi", "persist-fail-1.figma-codegen.json"));
+    const result = handleFigmaGenerateCode(ctxFor("persist-fail-1"), depsFor(dir));
+    expect(result.status).toBe(500);
+    expect(errCode(result)).toBe("FIGMA_INTERNAL");
+  });
+
+  it("413s snapshots that would produce too many review files", () => {
+    recordSnapshot(
+      "too-many-1",
+      Array.from({ length: 81 }, (_, i) => {
+        const id = `s${String(i + 1)}`;
+        return { screenId: id, irJson: screenIr(id, []) };
+      }),
+    );
+    const result = handleFigmaGenerateCode(ctxFor("too-many-1"), depsFor(dir));
+    expect(result.status).toBe(413);
+    expect(errCode(result)).toBe("FIGMA_CODEGEN_TOO_LARGE");
+  });
+
+  it("413s generated artifacts with an oversized review file before persistence", () => {
+    recordSnapshot("too-large-file-1", [
+      {
+        screenId: "large",
+        irJson: screenIr("large", [
+          irNode("large-text", "text", { text: "x".repeat(1024 * 1024 + 1) }),
+        ]),
+      },
+    ]);
+    const result = handleFigmaGenerateCode(ctxFor("too-large-file-1"), depsFor(dir));
+    expect(result.status).toBe(413);
+    expect(errCode(result)).toBe("FIGMA_CODEGEN_TOO_LARGE");
+    expect(existsSync(join(dir, "qi", "too-large-file-1.figma-codegen.json"))).toBe(false);
   });
 
   it("strips unsafe bidi/zero-width format chars from board content end-to-end", () => {
