@@ -303,7 +303,7 @@ function noProxyRuleMatches(rule: string, host: string, hostPort: string): boole
   if (rule.includes(":") && normalizeHost(rule) === hostPort) return true;
   const domain = rule.startsWith(".") ? rule.slice(1) : rule;
   if (host === domain) return true;
-  return rule.startsWith(".") && host.endsWith(`.${domain}`);
+  return host.endsWith(`.${domain}`);
 }
 
 function noProxyMatches(url: URL, rules: readonly string[] | undefined): boolean {
