@@ -437,6 +437,9 @@ describe("figma-snapshot ingestion — navigation/flow composition (#811)", () =
     expect(loginText).toContain("(navigation)");
     expect(loginText).toContain("Login");
     expect(loginText).toContain("Home");
+    // The trigger is the load-bearing discriminator between two transitions sharing a screen pair —
+    // pin its propagation through the full renderBaselineText path, not just the navGraph unit (GAP6).
+    expect(loginText).toContain("ON_CLICK");
     // The deterministic structural baseline is still present (composition is additive).
     expect(loginText).toContain("(screen-render)");
   });
