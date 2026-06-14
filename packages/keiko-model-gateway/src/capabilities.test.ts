@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import {
@@ -148,6 +148,49 @@ describe("selectCheapest", () => {
   // coverage lives in model-selection.test.ts where caps come from an array.
   it("returns undefined for a supportsImageInput query against the empty built-in registry", () => {
     expect(selectCheapest({ kind: "chat", supportsImageInput: true })).toBeUndefined();
+  });
+
+  // Issue #810 mutation-robustness: seed a non-empty registry via per-test module mock so the
+  // supportsImageInput guard in satisfiesBooleanRequirements (capabilities.ts:117-119) is
+  // exercised. The text-only model is CHEAPER (costClass "low") than the vision model
+  // (costClass "high"). Without the guard, selectCheapest would return "text-cheap" even when
+  // supportsImageInput:true is requested — making the toBe("vision-pricey") assertion fail and
+  // proving the branch is lethal. The existing length-0 invariant test is unaffected because
+  // vi.resetModules() + vi.doMock are scoped to this test and restored at the end.
+  it("selectCheapest enforces the supportsImageInput requirement over a seeded registry", async () => {
+    vi.resetModules();
+    const baseChatCap: ModelCapability = {
+      id: "base",
+      kind: "chat",
+      contextWindow: 8192,
+      maxOutputTokens: 4096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test fixture",
+      preferredUseCases: ["Chat"],
+      knownLimitations: ["test fixture"],
+    };
+    vi.doMock("./capabilities.data.js", () => ({
+      CAPABILITY_DATA: [
+        { ...baseChatCap, id: "text-cheap", costClass: "low", supportsImageInput: false },
+        { ...baseChatCap, id: "vision-pricey", costClass: "high", supportsImageInput: true },
+      ],
+    }));
+    const { selectCheapest: selectCheapestSeeded } = await import("./capabilities.js");
+    // With the guard: image-requiring query must skip the cheaper text-only model.
+    expect(selectCheapestSeeded({ kind: "chat", supportsImageInput: true })?.id).toBe(
+      "vision-pricey",
+    );
+    // Without an image requirement the cheapest model wins regardless.
+    expect(selectCheapestSeeded({ kind: "chat" })?.id).toBe("text-cheap");
+    vi.doUnmock("./capabilities.data.js");
+    vi.resetModules();
   });
 });
 
