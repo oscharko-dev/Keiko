@@ -135,6 +135,7 @@ interface ProviderRawOptions {
   readonly maxRetries?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly figmaAccessToken?: string | undefined;
+  readonly imageInputModelIds?: readonly string[] | undefined;
 }
 
 function providerRaw(
@@ -143,12 +144,16 @@ function providerRaw(
   apiKey: string,
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
+  const defaultCapability = createDefaultChatCapability(modelId);
   return {
     modelId,
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-    capability: createDefaultChatCapability(modelId),
+    capability:
+      options.imageInputModelIds?.includes(modelId) === true
+        ? { ...defaultCapability, supportsImageInput: true }
+        : defaultCapability,
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: 500,
@@ -389,6 +394,33 @@ function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
   return names;
 }
 
+function parseImageInputModelIds(value: unknown): readonly string[] | RouteResult {
+  if (value === undefined) {
+    return [];
+  }
+  const values = deploymentNameValues(value);
+  if (values === undefined) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "imageInputModelIds must be a string or an array of strings."),
+    };
+  }
+  const names = normalizeDeploymentNames(values);
+  if (names.length > MAX_DEPLOYMENT_NAMES) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "imageInputModelIds exceeds the model setup limit."),
+    };
+  }
+  if (names.some((name) => !isUsableModelId(name))) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "imageInputModelIds contains an invalid model id."),
+    };
+  }
+  return names;
+}
+
 interface ParsedOptionalString {
   readonly ok: true;
   readonly value?: string | undefined;
@@ -551,6 +583,12 @@ interface SetupRequest {
   readonly apiKeyHeaderName: string;
   readonly deploymentNames: readonly string[];
   readonly figmaAccessToken?: string | undefined;
+  readonly imageInputModelIds: readonly string[];
+}
+
+interface SetupModelLists {
+  readonly deploymentNames: readonly string[];
+  readonly imageInputModelIds: readonly string[];
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
@@ -562,6 +600,18 @@ function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
     }
     throw error;
   }
+}
+
+function readSetupModelLists(raw: Record<string, unknown>): SetupModelLists | RouteResult {
+  const deploymentNames = parseDeploymentNames(raw.deploymentNames);
+  if (isRouteResult(deploymentNames)) {
+    return deploymentNames;
+  }
+  const imageInputModelIds = parseImageInputModelIds(raw.imageInputModelIds);
+  if (isRouteResult(imageInputModelIds)) {
+    return imageInputModelIds;
+  }
+  return { deploymentNames, imageInputModelIds };
 }
 
 function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteResult {
@@ -577,9 +627,9 @@ function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteRes
   if (isRouteResult(apiKeyHeaderName)) {
     return apiKeyHeaderName;
   }
-  const deploymentNames = parseDeploymentNames(raw.deploymentNames);
-  if (isRouteResult(deploymentNames)) {
-    return deploymentNames;
+  const modelLists = readSetupModelLists(raw);
+  if (isRouteResult(modelLists)) {
+    return modelLists;
   }
   const figmaAccessToken = parseOptionalTrimmedString(raw.figmaAccessToken, "figmaAccessToken");
   if (isRouteResult(figmaAccessToken)) {
@@ -593,8 +643,9 @@ function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteRes
     baseUrl,
     apiKey,
     apiKeyHeaderName,
-    deploymentNames,
+    deploymentNames: modelLists.deploymentNames,
     figmaAccessToken: figmaAccessToken.value,
+    imageInputModelIds: modelLists.imageInputModelIds,
   };
 }
 
@@ -612,12 +663,24 @@ interface VerifiedSetup {
   readonly testedModelIds: readonly string[];
 }
 
+function assertImageInputModelsWereTested(
+  imageInputModelIds: readonly string[],
+  testedModelIds: readonly string[],
+): void {
+  if (imageInputModelIds.length === 0) return;
+  const tested = new Set(testedModelIds);
+  if (imageInputModelIds.some((modelId) => !tested.has(modelId))) {
+    throw new Error("imageInputModelIds must match tested chat-callable model ids.");
+  }
+}
+
 async function verifySetupCandidate(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName: string,
   deploymentNames: readonly string[],
   figmaAccessToken: string | undefined,
+  imageInputModelIds: readonly string[],
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
   env: EnvSource,
@@ -629,6 +692,7 @@ async function verifySetupCandidate(
   const validationRawConfig = buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
     apiKeyHeaderName,
     figmaAccessToken,
+    imageInputModelIds,
   });
   const validationConfig = parseGatewayConfig(
     withInheritedEgress(validationRawConfig, egress),
@@ -645,12 +709,15 @@ async function verifySetupCandidate(
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
     figmaAccessToken,
+    imageInputModelIds,
   });
   const candidateConfig = parseGatewayConfig(withInheritedEgress(candidateRawConfig, egress), env);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
+  assertImageInputModelsWereTested(imageInputModelIds, testedModelIds);
   const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, {
     apiKeyHeaderName,
     figmaAccessToken,
+    imageInputModelIds,
   });
   const config = parseGatewayConfig(withInheritedEgress(rawConfig, egress), env);
   return { rawConfig, config, testedModelIds };
@@ -736,6 +803,7 @@ async function trySetupCandidate(
     request.apiKeyHeaderName,
     request.deploymentNames,
     request.figmaAccessToken,
+    request.imageInputModelIds,
     tester,
     discovery,
     deps.env,

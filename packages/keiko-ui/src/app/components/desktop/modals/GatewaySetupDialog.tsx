@@ -46,11 +46,13 @@ export function GatewaySetupDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const reloadTimerRef = useRef<number | undefined>(undefined);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [figmaAccessToken, setFigmaAccessToken] = useState("");
+  const [imageInputModelIds, setImageInputModelIds] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [errorCode, setErrorCode] = useState<string | undefined>();
@@ -60,6 +62,9 @@ export function GatewaySetupDialog({
     triggerRef.current = document.activeElement as HTMLElement | null;
     baseUrlRef.current?.focus();
     return () => {
+      if (reloadTimerRef.current !== undefined) {
+        window.clearTimeout(reloadTimerRef.current);
+      }
       triggerRef.current?.focus?.();
     };
   }, []);
@@ -128,18 +133,22 @@ export function GatewaySetupDialog({
         setBusy(false);
         return;
       }
+      const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
       const result = await setupGateway({
         baseUrl,
         apiKey,
         apiKeyHeaderName: apiKeyHeaderName.trim() === "" ? undefined : apiKeyHeaderName.trim(),
         deploymentNames: parsedDeploymentNames,
         ...(figmaAccessToken.trim() === "" ? {} : { figmaAccessToken: figmaAccessToken.trim() }),
+        ...(parsedImageInputModelIds.length === 0
+          ? {}
+          : { imageInputModelIds: parsedImageInputModelIds }),
       });
       const count = result.testedModelIds.length;
       setSuccess(
         `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…`,
       );
-      window.setTimeout(() => window.location.reload(), 800);
+      reloadTimerRef.current = window.setTimeout(() => window.location.reload(), 800);
     } catch (caught) {
       const details = errorDetails(caught);
       setError(details.message);
@@ -241,12 +250,26 @@ export function GatewaySetupDialog({
               onChange={(event) => setDeploymentNames(event.target.value)}
             />
           </label>
+          <label className="gw-field">
+            <span>
+              Image-input models <span className="dlg-opt">optional</span>
+            </span>
+            <textarea
+              className="gw-input gw-textarea mono"
+              value={imageInputModelIds}
+              placeholder="Paste image-capable model names, one per line"
+              autoComplete="off"
+              disabled={busy || success !== undefined}
+              onChange={(event) => setImageInputModelIds(event.target.value)}
+            />
+          </label>
           <div className="gw-note">
             Leave the header field empty unless your gateway admin gave you a custom API-key header,
             for example X-Litellm-Key. Supported headers are Authorization, X-Litellm-Key,
             X-Api-Key, and api-key. Leave deployment names empty only for OpenAI-compatible gateways
             with model discovery. For Azure AI Foundry, paste deployment names exactly as shown in
-            the Deployments tab. Testing several deployments can take up to 30 seconds.
+            the Deployments tab. Image-input model names must match tested gateway models exactly.
+            Testing several deployments can take up to 30 seconds.
           </div>
           {/* role=alert/status: the test result arrives after a long async wait
               while all controls are disabled — without a live region screen
