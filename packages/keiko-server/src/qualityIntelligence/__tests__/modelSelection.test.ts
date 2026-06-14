@@ -10,7 +10,12 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
-import { resolveQiMultimodalSelection, resolveQiTestDesignSelection } from "../modelSelection.js";
+import {
+  resolveQiMultimodalSelection,
+  resolveQiTestDesignSelection,
+  selectModelForQiCapability,
+} from "../modelSelection.js";
+import { QiGenerationError } from "../generationPort.js";
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -192,5 +197,72 @@ describe("resolveQiMultimodalSelection", () => {
       configWith([capability("llama-4-maverick-vision", { supportsImageInput: false })]),
     );
     expect(resolveQiMultimodalSelection(deps)).toEqual({ kind: "unavailable" });
+  });
+});
+
+// The strict profile selector used for the judge stage. Returns a model id chosen by capability
+// (qi:judge-logic requires text + structured-output) and throws a TYPED QI_CAPABILITY_UNAVAILABLE
+// when no configured model satisfies the profile — never a crash, never a hard-coded fallback id
+// (Issue #762 AC1). These pin the structured-output query translation at the unit level.
+describe("selectModelForQiCapability (qi:judge-logic)", () => {
+  function expectCapabilityUnavailable(act: () => unknown): void {
+    let caught: unknown;
+    try {
+      act();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(QiGenerationError);
+    expect((caught as QiGenerationError).code).toBe("QI_CAPABILITY_UNAVAILABLE");
+  }
+
+  it("throws QI_CAPABILITY_UNAVAILABLE when no config is present", () => {
+    expectCapabilityUnavailable(() =>
+      selectModelForQiCapability(depsWith(undefined), "qi:judge-logic"),
+    );
+  });
+
+  it("honours an explicitly requested judge-compatible (structured-output) model", () => {
+    const deps = depsWith(
+      configWith([
+        capability("cheap-structured", { structuredOutput: true, costClass: "low" }),
+        capability("requested-structured", { structuredOutput: true, costClass: "high" }),
+      ]),
+    );
+    expect(selectModelForQiCapability(deps, "qi:judge-logic", "requested-structured")).toBe(
+      "requested-structured",
+    );
+  });
+
+  it("ignores a requested chat-only model (no structured-output) and auto-selects a compatible one", () => {
+    const deps = depsWith(
+      configWith([
+        capability("requested-chat-only", { structuredOutput: false, costClass: "low" }),
+        capability("structured", { structuredOutput: true, costClass: "high" }),
+      ]),
+    );
+    expect(selectModelForQiCapability(deps, "qi:judge-logic", "requested-chat-only")).toBe(
+      "structured",
+    );
+  });
+
+  it("selects the lowest-cost structured-output model when none is requested", () => {
+    const deps = depsWith(
+      configWith([
+        capability("high-structured", { structuredOutput: true, costClass: "high" }),
+        capability("low-structured", { structuredOutput: true, costClass: "low" }),
+      ]),
+    );
+    expect(selectModelForQiCapability(deps, "qi:judge-logic")).toBe("low-structured");
+  });
+
+  it("throws QI_CAPABILITY_UNAVAILABLE when only chat-only models exist (judge needs structured output)", () => {
+    const deps = depsWith(
+      configWith([
+        capability("chat-only-a", { structuredOutput: false, costClass: "low" }),
+        capability("chat-only-b", { structuredOutput: false, costClass: "high" }),
+      ]),
+    );
+    expectCapabilityUnavailable(() => selectModelForQiCapability(deps, "qi:judge-logic"));
   });
 });

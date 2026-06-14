@@ -23,9 +23,10 @@ type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
 
 function buildSelectionQuery(profileId: QiProfileId): ModelSelectionQuery {
   const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
-  const base: ModelSelectionQuery = { kind: "chat" };
-  const needsStructuredOutput = profile.requiredCapabilities.includes("structured-output");
-  return needsStructuredOutput ? { ...base, structuredOutput: true } : base;
+  // Single source of truth: the gateway derives the selection query from the profile's required
+  // capabilities using the SAME mapping the capability gate enforces, so the auto-selector and the
+  // gate cannot diverge on any capability (text/structured-output/function-calling/vision) (#762).
+  return MgQI.buildSelectionQueryForCapabilities(profile.requiredCapabilities);
 }
 
 function isRequestedModelCompatible(
