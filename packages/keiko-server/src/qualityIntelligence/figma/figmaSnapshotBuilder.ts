@@ -18,6 +18,7 @@ import { mapWithConcurrency } from "./figmaConcurrency.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
 import type { FigmaRenderPort } from "./figmaRenderPort.js";
 import type { FigmaProvenance } from "./figmaConnector.js";
+import { classifyTokenFailure } from "./figmaTokenSource.js";
 import {
   DEFAULT_FIGMA_RETRY_POLICY,
   fetchWithBackoff,
@@ -112,12 +113,14 @@ const buildImagesUrl = (
   return url.toString();
 };
 
-const statusToError = (status: number): FigmaConnectorError => {
-  if (status === 404) return new FigmaConnectorError("FIGMA_NOT_FOUND");
-  if (status === 401 || status === 403) return new FigmaConnectorError("FIGMA_INSUFFICIENT_SCOPE");
-  if (status >= 500) return new FigmaConnectorError("FIGMA_UPSTREAM_UNAVAILABLE");
-  return new FigmaConnectorError("FIGMA_INTERNAL");
+const extractFigmaReason = (body: unknown): string | undefined => {
+  if (!isRecord(body)) return undefined;
+  const reason = body.err ?? body.message;
+  return typeof reason === "string" ? reason : undefined;
 };
+
+const statusToError = (status: number, body: unknown): FigmaConnectorError =>
+  classifyTokenFailure(status, extractFigmaReason(body));
 
 // Extracts the `{ images: { id: url|null } }` map from one `/v1/images` response.
 const extractImageUrls = (json: unknown): Readonly<Record<string, string | null>> => {
@@ -147,7 +150,9 @@ const requestRenderUrls = async (
       policy,
       sleep,
     );
-    if (response.status < 200 || response.status >= 300) throw statusToError(response.status);
+    if (response.status < 200 || response.status >= 300) {
+      throw statusToError(response.status, response.json);
+    }
     const map = extractImageUrls(response.json);
     for (const id of batch) urls.set(id, map[id] ?? null);
   }
