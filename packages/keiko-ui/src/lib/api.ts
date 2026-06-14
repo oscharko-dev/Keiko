@@ -148,6 +148,7 @@ export interface GatewaySetupInput {
   readonly apiKeyHeaderName?: string | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
   readonly figmaAccessToken?: string | undefined;
+  readonly imageInputModelIds?: readonly string[] | undefined;
 }
 
 export interface GatewaySetupResponse {

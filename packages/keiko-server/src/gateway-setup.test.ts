@@ -135,6 +135,76 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("stores selected image-input capabilities only for tested model ids", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-image-input-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-input-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: " vision-chat \n vision-chat ",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers: readonly {
+        readonly modelId: string;
+        readonly capability: { readonly supportsImageInput: boolean };
+      }[];
+    };
+    expect(
+      saved.providers.map((provider) => ({
+        modelId: provider.modelId,
+        supportsImageInput: provider.capability.supportsImageInput,
+      })),
+    ).toEqual([
+      { modelId: "text-chat", supportsImageInput: false },
+      { modelId: "vision-chat", supportsImageInput: true },
+    ]);
+    expect(JSON.stringify(result.body)).toContain('"supportsImageInput":true');
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it("does not store image-input capability claims for models that fail setup testing", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: () => Promise.resolve(["text-chat"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    expect(existsSync(deps.gatewayConfig?.storagePath ?? "")).toBe(false);
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
   it("passes env egress to discovery and smoke tests without persisting topology", async () => {
     const uiDir = await tempDir("keiko-gw-ui-egress-");
     const evidenceDir = await tempDir("keiko-gw-ev-egress-");

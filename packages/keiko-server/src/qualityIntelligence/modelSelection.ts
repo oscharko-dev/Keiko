@@ -11,7 +11,6 @@
 import {
   QualityIntelligence as MgQI,
   findConfiguredCapability,
-  listConfiguredCapabilities,
   selectConfiguredModel,
   QualityIntelligenceSafeErrorException,
   type ModelSelectionQuery,
@@ -21,8 +20,6 @@ import type { UiHandlerDeps } from "../deps.js";
 import { QiGenerationError } from "./generationPort.js";
 
 type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
-
-const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 
 function buildSelectionQuery(profileId: QiProfileId): ModelSelectionQuery {
   const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
@@ -58,18 +55,16 @@ function configuredChatCapability(
   return capability?.kind === "chat" ? capability : undefined;
 }
 
-function pickLowestCostChat(
-  capabilities: readonly ModelCapability[],
-  predicate: (capability: ModelCapability) => boolean,
-): ModelCapability | undefined {
-  let best: ModelCapability | undefined;
-  for (const capability of capabilities) {
-    if (capability.kind !== "chat" || !predicate(capability)) continue;
-    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
-      best = capability;
-    }
-  }
-  return best;
+function selectCapabilityByGatewayQuery(
+  deps: UiHandlerDeps,
+  query: ModelSelectionQuery,
+): { readonly modelId: string; readonly capability: ModelCapability } | undefined {
+  if (deps.config === undefined) return undefined;
+  const modelId = selectConfiguredModel(deps.config, query);
+  if (modelId === undefined) return undefined;
+  const capability = findConfiguredCapability(deps.config, modelId);
+  if (capability === undefined) return undefined;
+  return { modelId, capability };
 }
 
 export type QiTestDesignSelection =
@@ -105,15 +100,17 @@ export function resolveQiTestDesignSelection(
     return { kind: "baseline" };
   }
 
-  const configured = listConfiguredCapabilities(deps.config);
-  const structured = pickLowestCostChat(configured, (capability) => capability.structuredOutput);
+  const structured = selectCapabilityByGatewayQuery(deps, {
+    kind: "chat",
+    structuredOutput: true,
+  });
   if (structured !== undefined) {
-    return { kind: "model", modelId: structured.id, capability: structured };
+    return { kind: "model", ...structured };
   }
 
-  const anyChat = pickLowestCostChat(configured, () => true);
+  const anyChat = selectCapabilityByGatewayQuery(deps, { kind: "chat" });
   if (anyChat !== undefined) {
-    return { kind: "model", modelId: anyChat.id, capability: anyChat };
+    return { kind: "model", ...anyChat };
   }
 
   return { kind: "baseline" };
@@ -137,17 +134,14 @@ export type QiMultimodalSelection =
  * to have seen the image. No model id is hard-coded.
  */
 export function resolveQiMultimodalSelection(deps: UiHandlerDeps): QiMultimodalSelection {
-  if (deps.config === undefined) {
-    return { kind: "unavailable" };
-  }
-  const selected = pickLowestCostChat(
-    listConfiguredCapabilities(deps.config),
-    (capability) => capability.supportsImageInput,
-  );
+  const selected = selectCapabilityByGatewayQuery(deps, {
+    kind: "chat",
+    supportsImageInput: true,
+  });
   if (selected === undefined) {
     return { kind: "unavailable" };
   }
-  return { kind: "model", modelId: selected.id, capability: selected };
+  return { kind: "model", ...selected };
 }
 
 /**
