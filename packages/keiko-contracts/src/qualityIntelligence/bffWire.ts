@@ -155,9 +155,9 @@ export interface QualityIntelligenceUiRunDetail {
   /** Per-atom coverage classification (refs + status; empty when no matrix is available). */
   readonly coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[];
   /**
-   * Run quality score: the percentage of judged candidates the adversarial judge rated "strong"
-   * [0-100] (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null
-   * when the judge stage was skipped, unavailable, or no candidate was judged.
+   * Run quality score: the percentage of candidates with a strong adversarial judge outcome [0-100]
+   * (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null when the
+   * judge stage was skipped, unavailable, or there were no candidates to judge.
    */
   readonly qualityScore: number | null;
   /** Browser-safe Living Tests drift metadata; never contains raw source text, paths, or hashes. */
@@ -185,7 +185,7 @@ export interface QualityIntelligenceUiCandidate {
   readonly derivedFromAtomIds: readonly string[];
   /**
    * Present only when the adversarial test-quality judge (Epic #736) flagged this candidate as
-   * weak. Omitted entirely when the candidate was rated strong or was never judged.
+   * weak. Omitted entirely when the candidate was rated strong or the judge stage was skipped.
    */
   readonly weakTestFlag?: QualityIntelligenceUiWeakTestFlag;
 }

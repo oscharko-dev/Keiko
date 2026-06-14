@@ -12,6 +12,7 @@ import {
   type QualityIntelligenceCoverageMatrixRow,
   type QualityIntelligenceLocalStore,
   type QualityIntelligenceRecordInput,
+  type QualityIntelligenceRecordOptions,
   type QualityIntelligenceRecordResult,
 } from "@oscharko-dev/keiko-evidence";
 import { QualityIntelligenceSafeErrorException } from "@oscharko-dev/keiko-model-gateway";
@@ -58,9 +59,8 @@ export interface QualityIntelligenceRunSummary {
   readonly evidence?: QualityIntelligenceRecordResult | undefined;
   readonly reasonSummary?: string | undefined;
   /**
-   * Run quality score: the percentage of judged candidates the adversarial judge rated "strong"
-   * [0-100] (Epic #736). Null when the judge stage was skipped, unavailable, or no candidate was
-   * judged.
+   * Run quality score: the percentage of candidates with a strong judge outcome [0-100] (Epic #736).
+   * Null only when the judge stage was skipped/unavailable or there were no candidates to judge.
    */
   readonly qualityScore?: number | null;
 }
@@ -306,6 +306,7 @@ export interface PersistArgs {
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
   readonly qualityScore?: number | null;
+  readonly redaction?: QualityIntelligenceRecordOptions["redaction"];
   readonly sourceFingerprints?: QualityIntelligenceRecordInput["sourceFingerprints"];
   readonly atomFingerprints?: QualityIntelligenceRecordInput["atomFingerprints"];
   /** Model id that generated the candidates (Epic #761). */
@@ -362,7 +363,10 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     ...(args.modelParameters !== undefined ? { modelParameters: args.modelParameters } : {}),
     ...(args.seedUsed !== undefined ? { seedUsed: args.seedUsed } : {}),
   };
-  return recordQualityIntelligenceRun(input, { store: args.evidenceStore });
+  return recordQualityIntelligenceRun(input, {
+    store: args.evidenceStore,
+    ...(args.redaction !== undefined ? { redaction: args.redaction } : {}),
+  });
 }
 
 // ─── Shared failure / cancellation finaliser ─────────────────────────────────

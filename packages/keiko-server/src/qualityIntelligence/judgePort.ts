@@ -162,6 +162,20 @@ const SAFE_DEFAULT_VERDICT: TestQualityJudgeVerdict = Object.freeze({
   overallRationale: "judge output could not be parsed; defaulting to weak",
 });
 
+const SAFE_PROMPT_TOO_LARGE_VERDICT: TestQualityJudgeVerdict = Object.freeze({
+  verdict: "weak" as const,
+  dimensions: Object.freeze(
+    TEST_QUALITY_RUBRIC_DIMENSIONS.map((name) =>
+      Object.freeze<TestQualityRubricDimension>({
+        name,
+        score: 0,
+        rationale: "judge prompt exceeded the model budget",
+      }),
+    ),
+  ),
+  overallRationale: "judge prompt exceeded the model budget; defaulting to weak",
+});
+
 function isRubricDimensionName(value: string): value is TestQualityDimensionName {
   return (
     value === "verifiability" ||
@@ -256,22 +270,6 @@ function tryParseJsonObject(candidate: string): Record<string, unknown> | null {
   }
 }
 
-/**
- * Extract the judge verdict object from raw model text. Prefers a parsed object that carries the
- * judge shape (a `dimensions` field); falls back to the first object that parses at all. Returns
- * null when nothing parses, so the caller can emit the safe-default ("weak") verdict.
- */
-function extractJsonObject(rawText: string): Record<string, unknown> | null {
-  let firstParsed: Record<string, unknown> | null = null;
-  for (const candidate of balancedJsonObjectCandidates(rawText)) {
-    const parsed = tryParseJsonObject(candidate);
-    if (parsed === null) continue;
-    firstParsed ??= parsed;
-    if (Array.isArray(parsed.dimensions)) return parsed;
-  }
-  return firstParsed;
-}
-
 function parseDimensions(raw: unknown): readonly TestQualityRubricDimension[] | null {
   if (!Array.isArray(raw) || raw.length !== TEST_QUALITY_RUBRIC_DIMENSIONS.length) return null;
   const parsed: TestQualityRubricDimension[] = [];
@@ -296,18 +294,26 @@ function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly strin
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
-export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
-  const obj = extractJsonObject(rawText);
-  if (obj === null) return SAFE_DEFAULT_VERDICT;
-  if (!hasOnlyKeys(obj, ["dimensions", "overallRationale"])) return SAFE_DEFAULT_VERDICT;
+function parseJudgeObject(obj: Record<string, unknown>): TestQualityJudgeVerdict | null {
+  if (!hasOnlyKeys(obj, ["dimensions", "overallRationale"])) return null;
   const dimensions = parseDimensions(obj.dimensions);
   const overallRationale =
     typeof obj.overallRationale === "string" && obj.overallRationale.trim().length > 0
       ? obj.overallRationale.slice(0, 1000)
       : null;
-  if (dimensions === null || overallRationale === null) return SAFE_DEFAULT_VERDICT;
+  if (dimensions === null || overallRationale === null) return null;
   const verdict = verdictFromScore(scoreFromDimensions(dimensions));
   return Object.freeze({ verdict, dimensions: Object.freeze(dimensions), overallRationale });
+}
+
+export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
+  for (const candidate of balancedJsonObjectCandidates(rawText)) {
+    const obj = tryParseJsonObject(candidate);
+    if (obj === null) continue;
+    const verdict = parseJudgeObject(obj);
+    if (verdict !== null) return verdict;
+  }
+  return SAFE_DEFAULT_VERDICT;
 }
 
 export interface QiJudgePort {
@@ -353,6 +359,9 @@ export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudge
       signal?: AbortSignal,
     ): Promise<TestQualityJudgeVerdict> => {
       const messages = buildJudgePrompt(input.candidateText, input.sourceContext);
+      const userContent = messages[1]?.content ?? "";
+      const size = QualityIntelligenceHardening.assertPromptSize(userContent);
+      if (!size.ok) return SAFE_PROMPT_TOO_LARGE_VERDICT;
       const effectiveSignal = signal ?? new AbortController().signal;
       const request: GatewayRequest = {
         modelId,

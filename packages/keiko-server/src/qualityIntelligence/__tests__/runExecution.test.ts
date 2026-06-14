@@ -146,6 +146,23 @@ function buildConfig(
   );
 }
 
+function buildConfigWithApiKey(
+  capabilities: readonly ModelCapability[],
+  apiKey: string,
+): ReturnType<typeof parseGatewayConfig> {
+  return parseGatewayConfig(
+    {
+      providers: capabilities.map((capability) => ({
+        modelId: capability.id,
+        baseUrl: "https://fake.example.com/v1",
+        apiKey,
+        capability,
+      })),
+    },
+    {},
+  );
+}
+
 function buildDeps(options: {
   evidenceDir: string;
   modelPort?: ModelPort;
@@ -158,7 +175,7 @@ function buildDeps(options: {
     configPresent: true,
     evidenceStore: emptyStore(),
     env: {},
-    redactor: buildRedactor({}),
+    redactor: buildRedactor({}, config),
     registry: createRunRegistry(),
     modelPortFactory: (_modelId: string): ModelPort => port,
     store: createInMemoryUiStore(),
@@ -233,6 +250,36 @@ function nondeterministicPort(callCounter: { count: number }): ModelPort {
       });
     },
   };
+}
+
+function sequencePort(contents: readonly string[]): ModelPort {
+  let index = 0;
+  return {
+    call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+      const content = contents[Math.min(index, contents.length - 1)] ?? EMPTY_CANDIDATES_JSON;
+      index += 1;
+      return Promise.resolve({
+        content,
+        modelId: request.modelId,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: usageMeta(100, 50),
+      });
+    },
+  };
+}
+
+function weakJudgeVerdictWithRationale(rationale: string): string {
+  return JSON.stringify({
+    dimensions: [
+      { name: "verifiability", score: 10, rationale },
+      { name: "atomicity", score: 20, rationale: "too broad" },
+      { name: "determinism", score: 15, rationale: "timing-sensitive" },
+      { name: "ac-fidelity", score: 10, rationale: "misses the acceptance criteria" },
+    ],
+    overallRationale: rationale,
+  });
 }
 
 function candidateProjection(
@@ -396,22 +443,67 @@ describe("executeQiRun — model selection", () => {
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("preferred-structured");
   });
 
-  it("degrades successfully to a chat-only model when structured output is unavailable", async () => {
+  it("does not accept a model run when no judge-capable model is configured", async () => {
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    await expect(
+      executeQiRun(
+        makeInput(evidenceDir, {
+          onAccepted,
+          request: requestWithoutModel(),
+          deps: buildDeps({
+            evidenceDir,
+            config: buildConfig([
+              chatCapability("chat-only", { structuredOutput: false, costClass: "low" }),
+            ]),
+          }),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "QI_CAPABILITY_UNAVAILABLE" });
+    expect(onAccepted).not.toHaveBeenCalled();
+  });
+
+  it("can use an explicit chat-only generation model with a separate judge-capable model", async () => {
     const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
     const summary = await executeQiRun(
       makeInput(evidenceDir, {
         onAccepted,
-        request: requestWithoutModel(),
+        request: makeRequest({ modelId: "chat-only" }),
         deps: buildDeps({
           evidenceDir,
           config: buildConfig([
             chatCapability("chat-only", { structuredOutput: false, costClass: "low" }),
+            chatCapability("judge-structured", { structuredOutput: true, costClass: "medium" }),
           ]),
         }),
       }),
     );
     expect(summary.status).toBe("succeeded");
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("chat-only");
+  });
+
+  it("redacts configured provider secrets from persisted judge rationales", async () => {
+    const providerSecret = "literal-provider-secret-qi-judge-747";
+    const judgeVerdict = weakJudgeVerdictWithRationale(
+      `The candidate is unverifiable and echoed ${providerSecret}.`,
+    );
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        deps: buildDeps({
+          evidenceDir,
+          config: buildConfigWithApiKey([chatCapability(MODEL_ID)], providerSecret),
+          modelPort: sequencePort([COVERING_TWO_REQUIREMENTS_JSON, judgeVerdict, judgeVerdict]),
+        }),
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
+    const testQualityFindings = (manifest?.findings ?? []).filter(
+      (finding) => finding.kind === "test-quality",
+    );
+    expect(testQualityFindings).toHaveLength(2);
+    const persisted = JSON.stringify(testQualityFindings);
+    expect(persisted).not.toContain(providerSecret);
+    expect(persisted).toContain("[REDACTED]");
   });
 
   it("starts a deterministic baseline when no model is configured", async () => {
@@ -544,7 +636,10 @@ describe("executeQiRun — seed persistence", () => {
         deps: buildDeps({
           evidenceDir,
           modelPort: port,
-          config: buildConfig([chatCapability(MODEL_ID, { structuredOutput: false })]),
+          config: buildConfig([
+            chatCapability(MODEL_ID, { structuredOutput: false }),
+            chatCapability("judge-structured", { structuredOutput: true }),
+          ]),
         }),
       }),
     );

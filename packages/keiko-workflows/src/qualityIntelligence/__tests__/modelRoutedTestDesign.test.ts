@@ -712,7 +712,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(manifest?.modelGatewayCallCount).toBe(3);
   });
 
-  it("is fail-soft: a transient judge error leaves the run succeeded with candidates intact", async () => {
+  it("is fail-soft: a transient judge error becomes an explicit weak finding", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
     const ingestedAtoms = [
@@ -748,16 +748,17 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(recorded).toHaveLength(2);
     const manifest = store.load(String(input.plan.id));
     expect(manifest?.totals.candidates).toBe(2);
-    // Only the successfully judged candidate counts toward the score (1 strong of 1 judged = 100);
-    // the unjudged candidate is excluded rather than counted as weak, and yields no finding.
-    expect(summary.qualityScore).toBe(100);
+    // The failed judge call is represented as an explicit weak verdict so it cannot look strong.
+    expect(summary.qualityScore).toBe(50);
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
-    expect(qualityFindings).toHaveLength(0);
+    expect(qualityFindings).toHaveLength(1);
+    expect(qualityFindings[0]?.summaryRedacted).toContain("could not evaluate this candidate");
+    expect(qualityFindings[0]?.summaryRedacted).not.toContain("HTTP 429");
     // Both dispatches are still counted for an honest audit trail.
     expect(summary.modelGatewayCallCount).toBe(3);
   });
 
-  it("is fail-soft when EVERY judge call errors: run succeeds, score null, candidates intact", async () => {
+  it("is fail-soft when EVERY judge call errors: run succeeds with weak findings", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
@@ -777,14 +778,18 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     );
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
-    expect(summary.qualityScore).toBeNull();
+    expect(summary.qualityScore).toBe(0);
     const manifest = store.load(String(input.plan.id));
     expect(manifest?.totals.candidates).toBe(2);
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
-    expect(qualityFindings).toHaveLength(0);
+    expect(qualityFindings).toHaveLength(2);
+    expect(qualityFindings.map((f) => f.summaryRedacted)).toEqual(
+      expect.arrayContaining([expect.stringContaining("could not evaluate this candidate")]),
+    );
+    expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("gateway 503");
   });
 
-  it("bounds the judge by maxJudgeCallsPerRun (judges a prefix, scores only the judged)", async () => {
+  it("bounds gateway calls by maxJudgeCallsPerRun and marks overflow candidates weak", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
@@ -803,7 +808,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
       ...makeDepsWithJudge(store, (_input) => {
         judgeCallCount += 1;
-        return Promise.resolve(WEAK_VERDICT);
+        return Promise.resolve(STRONG_VERDICT);
       }),
       limits: { ...QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS, maxJudgeCallsPerRun: 1 },
     };
@@ -813,9 +818,11 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(judgeCallCount).toBe(1);
     // 1 generation + 1 judge call.
     expect(summary.modelGatewayCallCount).toBe(2);
+    expect(summary.qualityScore).toBe(50);
     const manifest = store.load(String(input.plan.id));
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(1);
+    expect(qualityFindings[0]?.summaryRedacted).toContain("budget exhausted");
   });
 
   it("classifies a run cancelled when the judge is aborted mid-stage (not failed)", async () => {

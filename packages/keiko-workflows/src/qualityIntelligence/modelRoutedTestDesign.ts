@@ -22,7 +22,10 @@ import {
   type PolicyProfile,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type { QualityIntelligenceLocalStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  QualityIntelligenceLocalStore,
+  QualityIntelligenceRecordOptions,
+} from "@oscharko-dev/keiko-evidence";
 import { QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR } from "./descriptors.js";
 import {
   emit,
@@ -128,6 +131,7 @@ export interface QualityIntelligenceModelRoutedTestDesignDeps {
   readonly clock?: QualityIntelligenceClock | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly limits?: QualityIntelligenceWorkflowLimits | undefined;
+  readonly redaction?: QualityIntelligenceRecordOptions["redaction"] | undefined;
 }
 
 class EmptyEvidenceError extends Error {
@@ -445,21 +449,34 @@ function isCancellationError(ctx: RunContext, error: unknown): boolean {
   return error instanceof StageCancelledError || isCancelled(ctx.signal);
 }
 
-type JudgeOutcome =
-  | {
-      readonly judged: true;
-      readonly strong: boolean;
-      readonly finding: QI.QualityIntelligenceTestQualityFinding | null;
-    }
-  | { readonly judged: false };
+interface JudgeOutcome {
+  readonly strong: boolean;
+  readonly finding: QI.QualityIntelligenceTestQualityFinding | null;
+}
 
-const JUDGE_SKIPPED: JudgeOutcome = Object.freeze({ judged: false });
+const JUDGE_ERROR_RATIONALE =
+  "Quality judge could not evaluate this candidate; treating it as weak for audit.";
+const JUDGE_BUDGET_RATIONALE =
+  "Quality judge budget exhausted before this candidate could be evaluated; treating it as weak for audit.";
+
+function buildSyntheticWeakJudgeOutcome(
+  ctx: RunContext,
+  candidate: Candidate,
+  ordinal: number,
+  rationale: string,
+): JudgeOutcome {
+  return {
+    strong: false,
+    finding: buildTestQualityFinding(ctx.plan.id, candidate, 0, rationale, ordinal),
+  };
+}
 
 /**
  * Judge one candidate. Counts the gateway dispatch, then returns its outcome. A transient judge
- * error (rate-limit / 5xx / timeout / network) degrades to "unjudged" (fail-soft); cancellation is
- * re-raised as `StageCancelledError` so the whole stage aborts. The dispatch is counted BEFORE the
- * await so the audit trail reflects every gateway call attempt, even one that then throws.
+ * error (rate-limit / 5xx / timeout / network) remains run-fail-soft but becomes an explicit weak
+ * judge outcome; cancellation is re-raised as `StageCancelledError` so the whole stage aborts. The
+ * dispatch is counted BEFORE the await so the audit trail reflects every gateway call attempt, even
+ * one that then throws.
  */
 async function judgeOneCandidate(
   ctx: RunContext,
@@ -480,11 +497,10 @@ async function judgeOneCandidate(
     );
   } catch (error) {
     if (isCancellationError(ctx, error)) throw new StageCancelledError();
-    return JUDGE_SKIPPED;
+    return buildSyntheticWeakJudgeOutcome(ctx, candidate, ordinal, JUDGE_ERROR_RATIONALE);
   }
-  if (verdict.verdict === "strong") return { judged: true, strong: true, finding: null };
+  if (verdict.verdict === "strong") return { strong: true, finding: null };
   return {
-    judged: true,
     strong: false,
     finding: buildTestQualityFinding(
       ctx.plan.id,
@@ -499,12 +515,14 @@ async function judgeOneCandidate(
 /**
  * Adversarially judge every candidate via the model-judge port (Epic #736, Issue #747).
  *
- * Resilience contract: the judge AUGMENTS generation and must never harm a successful run — a
- * transient per-candidate error is fail-soft (that candidate is excluded from the score, no
- * finding) and only cancellation aborts the stage. Audit contract: every dispatch is counted into
+ * Resilience contract: the judge AUGMENTS generation and must never fail an otherwise successful
+ * run — a transient per-candidate error becomes an explicit weak test-quality finding and only
+ * cancellation aborts the stage. Audit contract: every dispatch is counted into
  * `ctx.modelGatewayCallCount`. Budget contract: at most `ctx.limits.maxJudgeCallsPerRun` candidates
- * are judged. Bounded-concurrency workers share a cursor; findings land in candidate-indexed slots
- * so the persisted order stays deterministic regardless of completion order.
+ * make gateway calls; any overflow candidates receive deterministic weak findings so the persisted
+ * run still accounts for every candidate. Bounded-concurrency workers share a cursor; findings land
+ * in candidate-indexed slots so the persisted order stays deterministic regardless of completion
+ * order.
  */
 async function runJudgeStage(
   ctx: RunContext,
@@ -515,14 +533,13 @@ async function runJudgeStage(
   if (candidates.length === 0) return EMPTY_JUDGE_RESULT;
   const budget = Math.max(0, ctx.limits.maxJudgeCallsPerRun);
   const judgeable = budget >= candidates.length ? candidates : candidates.slice(0, budget);
-  if (judgeable.length === 0) return EMPTY_JUDGE_RESULT;
 
   const findingSlots: (QI.QualityIntelligenceTestQualityFinding | undefined)[] = Array.from(
-    { length: judgeable.length },
+    { length: candidates.length },
     () => undefined,
   );
   let strongCount = 0;
-  let scored = 0;
+  let verdictCount = 0;
   let cursor = 0;
 
   const worker = async (): Promise<void> => {
@@ -533,24 +550,33 @@ async function runJudgeStage(
       const candidate = judgeable[i];
       if (candidate === undefined) continue;
       const outcome = await judgeOneCandidate(ctx, candidate, i, ingestedAtoms, judge);
-      if (!outcome.judged) continue;
-      scored += 1;
+      verdictCount += 1;
       if (outcome.strong) strongCount += 1;
       else if (outcome.finding !== null) findingSlots[i] = outcome.finding;
     }
   };
 
-  await Promise.all(
-    Array.from({ length: Math.min(JUDGE_CONCURRENCY, judgeable.length) }, () => worker()),
-  );
+  if (judgeable.length > 0) {
+    await Promise.all(
+      Array.from({ length: Math.min(JUDGE_CONCURRENCY, judgeable.length) }, () => worker()),
+    );
+  }
+
+  for (let i = judgeable.length; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    if (candidate === undefined) continue;
+    const outcome = buildSyntheticWeakJudgeOutcome(ctx, candidate, i, JUDGE_BUDGET_RATIONALE);
+    verdictCount += 1;
+    if (outcome.finding !== null) findingSlots[i] = outcome.finding;
+  }
 
   const findings = findingSlots.filter(
     (f): f is QI.QualityIntelligenceTestQualityFinding => f !== undefined,
   );
-  // Per-run quality score = share of SUCCESSFULLY JUDGED candidates the judge rated "strong", as a
-  // percentage (#747). Candidates the judge could not evaluate are excluded from the denominator
-  // rather than counted as weak, so the score honestly reflects what was actually judged.
-  const qualityScore = scored === 0 ? null : (strongCount / scored) * 100;
+  // Per-run quality score = share of candidates with a strong judge outcome, as a percentage (#747).
+  // Gateway errors and budget overflow produce explicit weak outcomes so unverified candidates cannot
+  // be indistinguishable from strong candidates or inflate the run score.
+  const qualityScore = verdictCount === 0 ? null : (strongCount / verdictCount) * 100;
   return { findings: Object.freeze(findings), qualityScore };
 }
 
@@ -648,6 +674,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         evidenceStore: deps.evidenceStore,
         coverageMatrix,
         qualityScore: judgeResult.qualityScore,
+        ...(deps.redaction !== undefined ? { redaction: deps.redaction } : {}),
         ...(sourceFingerprints.length > 0 ? { sourceFingerprints } : {}),
         ...(atomFingerprints.length > 0 ? { atomFingerprints } : {}),
         ...(generation.modelId !== undefined ? { modelId: generation.modelId } : {}),

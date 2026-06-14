@@ -490,6 +490,17 @@ describe("parseJudgeVerdict", () => {
     expect(verdict.dimensions).toHaveLength(4);
   });
 
+  it("skips malformed dimension scratch JSON before a valid verdict", () => {
+    const noisy =
+      '{"dimensions":[],"overallRationale":"scratch outline, not the final verdict"}\n' +
+      "Final verdict:\n" +
+      VALID_VERDICT_JSON;
+    const verdict = parseJudgeVerdict(noisy);
+    expect(verdict.verdict).toBe("strong");
+    expect(verdict.dimensions).toHaveLength(4);
+    expect(verdict.overallRationale).toBe("good test");
+  });
+
   it("does not mis-slice when rationale strings contain braces", () => {
     const json = JSON.stringify({
       dimensions: [
@@ -565,6 +576,18 @@ describe("createQiJudgePort.judge — gateway call", () => {
     });
     expect(verdict.verdict).toBe("weak");
     expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns a weak verdict without a gateway call when the judge prompt is too large", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1");
+    const verdict = await port.judge({
+      candidateText: "x".repeat(257_000),
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    expect(calls).toHaveLength(0);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("model budget");
   });
 
   it("propagates AbortError when the model call is cancelled", async () => {
