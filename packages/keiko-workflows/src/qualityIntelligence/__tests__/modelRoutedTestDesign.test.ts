@@ -781,6 +781,34 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(manifest?.modelGatewayCallCount).toBe(3);
   });
 
+  it("does not count locally guarded judge verdicts as gateway dispatches", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-local-guard"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, (_input) =>
+      Promise.resolve({ ...WEAK_VERDICT, gatewayCallCount: 0 }),
+    );
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+    // 1 generation call + 0 real judge gateway dispatches.
+    expect(summary.modelGatewayCallCount).toBe(1);
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.modelGatewayCallCount).toBe(1);
+    expect((manifest?.findings ?? []).filter((f) => f.kind === "test-quality")).toHaveLength(2);
+  });
+
   it("is fail-soft: a transient judge error becomes an explicit weak finding", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];

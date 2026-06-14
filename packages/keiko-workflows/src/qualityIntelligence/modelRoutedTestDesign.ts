@@ -105,12 +105,20 @@ export interface QualityIntelligenceJudgeInput {
   readonly sourceContext: readonly QualityIntelligenceJudgeSourceContext[];
 }
 
+export interface QualityIntelligenceJudgeResult extends QI.TestQualityJudgeVerdict {
+  /**
+   * Number of actual Model Gateway dispatches made while producing this verdict.
+   * Older test doubles omit this field and are treated as one dispatch for compatibility.
+   */
+  readonly gatewayCallCount?: number;
+}
+
 /** Abstract model-judge seam (Epic #736, Issue #747). The server backs it with the gateway judge port. */
 export interface QualityIntelligenceJudgePort {
   readonly judge: (
     input: QualityIntelligenceJudgeInput,
     signal?: AbortSignal,
-  ) => Promise<QI.TestQualityJudgeVerdict>;
+  ) => Promise<QualityIntelligenceJudgeResult>;
 }
 
 export interface QualityIntelligenceModelRoutedTestDesignInput {
@@ -479,11 +487,11 @@ function buildSyntheticWeakJudgeOutcome(
 }
 
 /**
- * Judge one candidate. Counts the gateway dispatch, then returns its outcome. A transient judge
- * error (rate-limit / 5xx / timeout / network) remains run-fail-soft but becomes an explicit weak
- * judge outcome; cancellation is re-raised as `StageCancelledError` so the whole stage aborts. The
- * dispatch is counted BEFORE the await so the audit trail reflects every gateway call attempt, even
- * one that then throws.
+ * Judge one candidate. Counts actual gateway dispatches reported by the judge port, then returns
+ * its outcome. A transient judge error (rate-limit / 5xx / timeout / network) remains
+ * run-fail-soft but becomes an explicit weak judge outcome; cancellation is re-raised as
+ * `StageCancelledError` so the whole stage aborts. Legacy/test ports that throw without returning
+ * dispatch metadata are counted as one attempted gateway call, preserving the audit contract.
  */
 async function judgeOneCandidate(
   ctx: RunContext,
@@ -492,8 +500,7 @@ async function judgeOneCandidate(
   ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
   judge: QualityIntelligenceJudgePort,
 ): Promise<JudgeOutcome> {
-  ctx.modelGatewayCallCount += 1;
-  let verdict: QI.TestQualityJudgeVerdict;
+  let verdict: QualityIntelligenceJudgeResult;
   try {
     verdict = await judge.judge(
       {
@@ -502,8 +509,10 @@ async function judgeOneCandidate(
       },
       ctx.signal,
     );
+    ctx.modelGatewayCallCount += verdict.gatewayCallCount ?? 1;
   } catch (error) {
     if (isCancellationError(ctx, error)) throw new StageCancelledError();
+    ctx.modelGatewayCallCount += 1;
     return buildSyntheticWeakJudgeOutcome(ctx, candidate, ordinal, JUDGE_ERROR_RATIONALE);
   }
   if (verdict.verdict === "strong") return { strong: true, finding: null };

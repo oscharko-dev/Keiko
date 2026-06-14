@@ -529,6 +529,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
     });
     expect(calls).toHaveLength(1);
     expect(verdict.verdict).toBe("strong");
+    expect(verdict.gatewayCallCount).toBe(1);
   });
 
   it("uses stream: false in the gateway request", async () => {
@@ -587,6 +588,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
     });
     expect(calls).toHaveLength(0);
     expect(verdict.verdict).toBe("weak");
+    expect(verdict.gatewayCallCount).toBe(0);
     expect(verdict.overallRationale).toContain("model budget");
   });
 
