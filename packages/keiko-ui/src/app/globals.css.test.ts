@@ -595,3 +595,47 @@ describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
     expect(block).toContain('content: " *"');
   });
 });
+
+// ─── Figma snapshot button target size (WCAG 2.5.8) — #756 audit ─────────────
+
+describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => {
+  it(".figma-snapshot-cancel-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-cancel-btn {");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-cancel-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
+    const block = cssBlock(".figma-snapshot-cancel-btn:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".figma-snapshot-revoke-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-revoke-btn,");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
+    const block = cssBlock(".figma-snapshot-revoke-btn:focus-visible,");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".figma-snapshot-revoke-confirm-btn is covered by the shared revoke block (WCAG 2.5.8)", () => {
+    // The shared selector block names all three revoke buttons.
+    const idx = css.indexOf(".figma-snapshot-revoke-btn,");
+    expect(idx, ".figma-snapshot-revoke-btn shared block not found").toBeGreaterThan(-1);
+    const block = css.slice(idx, css.indexOf("}", idx) + 1);
+    expect(block).toContain(".figma-snapshot-revoke-confirm-btn");
+    expect(block).toContain(".figma-snapshot-revoke-cancel-btn");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-revoke-cancel-btn focus ring is covered by the shared revoke focus block (WCAG 2.4.7)", () => {
+    const idx = css.indexOf(".figma-snapshot-revoke-btn:focus-visible,");
+    expect(idx, ".figma-snapshot-revoke-btn:focus-visible shared block not found").toBeGreaterThan(
+      -1,
+    );
+    const block = css.slice(idx, css.indexOf("}", idx) + 1);
+    expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+});

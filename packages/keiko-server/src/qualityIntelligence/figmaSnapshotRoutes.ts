@@ -536,13 +536,27 @@ function startCoalescedBuild(
   return promise;
 }
 
-// Returns a promise that rejects with a FIGMA_BUILD_TIMEOUT error after `ms` milliseconds.
-function deadlineRejection(ms: number): Promise<never> {
-  return new Promise((_resolve, reject) => {
-    setTimeout(() => {
+// Returns a clearable deadline: promise rejects with FIGMA_BUILD_TIMEOUT after `ms` ms.
+// `.unref()` ensures a stray pending timer never blocks event-loop / test teardown.
+// Always call `.clear()` in a finally block after the race settles.
+interface Deadline {
+  readonly promise: Promise<never>;
+  readonly clear: () => void;
+}
+function makeDeadline(ms: number): Deadline {
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    timerId = setTimeout(() => {
       reject(new FigmaConnectorError("FIGMA_BUILD_TIMEOUT"));
     }, ms);
+    timerId.unref();
   });
+  return {
+    promise,
+    clear: (): void => {
+      clearTimeout(timerId);
+    },
+  };
 }
 
 // ─── POST /api/figma/snapshots ─────────────────────────────────────────────────
@@ -574,19 +588,26 @@ export async function handleFigmaTriggerSnapshot(
       : startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps);
 
   const deadlineMs = figmaBuildDeadlineMsFromEnv(deps.env);
+  const deadline = makeDeadline(deadlineMs);
 
   // Per-waiter race: deadline + client-disconnect both resolve this waiter promptly while the
   // coalesced build (and its persist) continues uninterrupted for other waiters.
+  // Named handler so removeListener can target it precisely in the finally block.
+  let onClose!: () => void;
   const disconnectPromise = new Promise<never>((_resolve, reject) => {
-    ctx.req.once("close", () => {
+    onClose = (): void => {
       reject(new FigmaConnectorError("FIGMA_BUILD_TIMEOUT"));
-    });
+    };
+    ctx.req.once("close", onClose);
   });
 
   try {
-    return await Promise.race([buildPromise, deadlineRejection(deadlineMs), disconnectPromise]);
+    return await Promise.race([buildPromise, deadline.promise, disconnectPromise]);
   } catch (err) {
     return figmaErrorResult(err);
+  } finally {
+    deadline.clear();
+    ctx.req.removeListener("close", onClose);
   }
 }
 
