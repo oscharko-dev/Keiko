@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -189,6 +189,47 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     });
     expect(currentRedactionSecrets(deps)).toContain("http://proxy.example.invalid:8080/");
     expect(currentRedactionSecrets(deps)).toContain("/tmp/corp-root-ca.pem");
+    store.close();
+  });
+
+  it("exposes config-file egress for Figma even when no model provider is configured", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-file-egress-only-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        egress: {
+          httpsProxy: "http://proxy.config.invalid:8443",
+          noProxy: "localhost,127.0.0.1",
+          caBundlePath: "/etc/keiko/corp-root-ca.pem",
+        },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store,
+    });
+
+    expect(deps.configPresent).toBe(false);
+    expect(deps.config).toBeUndefined();
+    expect(deps.egress).toEqual({
+      httpsProxy: "http://proxy.config.invalid:8443/",
+      noProxy: ["localhost", "127.0.0.1"],
+      caBundlePath: "/etc/keiko/corp-root-ca.pem",
+    });
+    expect(currentGatewayEgressConfig(deps)).toEqual(deps.egress);
+    expect(currentRedactionSecrets(deps)).toContain("http://proxy.config.invalid:8443/");
+    expect(currentRedactionSecrets(deps)).toContain("/etc/keiko/corp-root-ca.pem");
+    expect(
+      deps.redactor({
+        proxy: "http://proxy.config.invalid:8443/",
+        ca: "/etc/keiko/corp-root-ca.pem",
+      }),
+    ).toEqual({ proxy: "[REDACTED]", ca: "[REDACTED]" });
     store.close();
   });
 });

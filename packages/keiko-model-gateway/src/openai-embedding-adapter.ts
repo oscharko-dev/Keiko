@@ -3,7 +3,12 @@
 // information; the raw provider body never escapes this module.
 
 import { apiKeyHeaderValue } from "./config.js";
-import { gatewayFetch, readJsonCapped } from "./http.js";
+import {
+  gatewayFetch,
+  OutboundHttpEgressError,
+  readJsonCapped,
+  type OutboundHttpEgressErrorCode,
+} from "./http.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export interface OpenAIEmbeddingRequest {
@@ -35,7 +40,20 @@ export type OpenAIEmbeddingErrorKind =
   | "timeout"
   | "cancelled"
   | "transport"
+  | "proxy-unreachable"
+  | "proxy-auth-required"
+  | "proxy-egress-failed"
+  | "proxy-blocked-by-policy"
+  | "tls-ca-failure"
   | "invalid-response";
+
+const OUTBOUND_EMBEDDING_KINDS: Record<OutboundHttpEgressErrorCode, OpenAIEmbeddingErrorKind> = {
+  PROXY_UNREACHABLE: "proxy-unreachable",
+  PROXY_AUTH_REQUIRED: "proxy-auth-required",
+  PROXY_EGRESS_FAILED: "proxy-egress-failed",
+  PROXY_BLOCKED_BY_POLICY: "proxy-blocked-by-policy",
+  TLS_CA_FAILURE: "tls-ca-failure",
+};
 
 interface ParsedEmbedding {
   readonly embedding: readonly number[];
@@ -115,8 +133,9 @@ function classifyDispatchError(
   timeoutSignal: AbortSignal,
   callerSignal: AbortSignal | undefined,
 ): OpenAIEmbeddingErrorKind {
-  if (timeoutSignal.aborted) return "timeout";
   if (callerSignal?.aborted === true) return "cancelled";
+  if (error instanceof OutboundHttpEgressError) return OUTBOUND_EMBEDDING_KINDS[error.code];
+  if (timeoutSignal.aborted) return "timeout";
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   // A bare AbortError without either of our signals being aborted is a transport error
   // (e.g. the fetch impl tore down its own internal controller). Mapping it to `cancelled`

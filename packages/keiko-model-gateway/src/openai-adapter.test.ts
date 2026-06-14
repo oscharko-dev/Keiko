@@ -4,12 +4,15 @@ import {
   AuthenticationError,
   CancelledError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { OutboundHttpEgressError } from "./http.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const CONFIG: ModelProviderConfig = {
@@ -179,6 +182,21 @@ describe("OpenAiAdapter.call", () => {
   it("throws TransportError when fetch rejects with a network TypeError", async () => {
     const adapter = adapterWith(() => Promise.reject(new TypeError("network down")));
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(TransportError);
+  });
+
+  it("maps outbound egress failures to distinct non-retryable gateway errors", async () => {
+    const adapter = adapterWith(() =>
+      Promise.reject(new OutboundHttpEgressError("PROXY_AUTH_REQUIRED", "proxy password was bad")),
+    );
+    try {
+      await adapter.call(REQUEST, CONFIG);
+      expect.unreachable("should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(GatewayEgressError);
+      expect((error as GatewayEgressError).code).toBe(ERROR_CODES.PROXY_AUTH_REQUIRED);
+      expect((error as GatewayEgressError).retryable).toBe(false);
+      expect((error as Error).message).not.toContain("password");
+    }
   });
 
   it("throws CancelledError when the cancellation signal is already aborted", async () => {

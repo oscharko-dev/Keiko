@@ -178,14 +178,6 @@ function optionalNoProxy(value: unknown, path: string): readonly string[] | unde
   throw new ConfigInvalidError(`${path} must be a string or an array of strings`);
 }
 
-function envValue(env: EnvSource, ...names: readonly string[]): string | undefined {
-  for (const name of names) {
-    const value = env[name];
-    if (value !== undefined && value.trim().length > 0) return value;
-  }
-  return undefined;
-}
-
 function egressBlock(raw: unknown): Record<string, unknown> {
   if (raw !== undefined && !isRecord(raw)) {
     throw new ConfigInvalidError("egress must be an object");
@@ -193,17 +185,91 @@ function egressBlock(raw: unknown): Record<string, unknown> {
   return isRecord(raw) ? raw : {};
 }
 
-function egressValue(
-  block: Record<string, unknown>,
-  key: string,
-  env: EnvSource,
-  ...names: readonly string[]
-): unknown {
-  return block[key] ?? envValue(env, ...names);
-}
-
 function emptyToUndefined(config: OutboundHttpEgressConfig): OutboundHttpEgressConfig | undefined {
   return Object.keys(config).length === 0 ? undefined : config;
+}
+
+type MutableEgressConfig = {
+  -readonly [K in keyof OutboundHttpEgressConfig]?: OutboundHttpEgressConfig[K];
+};
+
+interface EgressField<K extends keyof OutboundHttpEgressConfig> {
+  readonly key: K;
+  readonly envNames: readonly string[];
+  readonly parser: (value: unknown, path: string) => OutboundHttpEgressConfig[K] | undefined;
+}
+
+const EGRESS_FIELDS: readonly EgressField<keyof OutboundHttpEgressConfig>[] = [
+  {
+    key: "httpProxy",
+    envNames: ["KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy"],
+    parser: optionalProxyUrl,
+  },
+  {
+    key: "httpsProxy",
+    envNames: ["KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"],
+    parser: optionalProxyUrl,
+  },
+  {
+    key: "noProxy",
+    envNames: ["KEIKO_NO_PROXY", "NO_PROXY", "no_proxy"],
+    parser: optionalNoProxy,
+  },
+  {
+    key: "caBundlePath",
+    envNames: ["KEIKO_CA_BUNDLE_PATH"],
+    parser: optionalCaBundlePath,
+  },
+];
+
+function setEgressField<K extends keyof OutboundHttpEgressConfig>(
+  config: MutableEgressConfig,
+  key: K,
+  value: OutboundHttpEgressConfig[K] | undefined,
+): void {
+  if (value !== undefined) {
+    config[key] = value;
+  }
+}
+
+function envVarForField(
+  env: EnvSource,
+  envNames: readonly string[],
+): { readonly name: string; readonly value: string } | undefined {
+  for (const name of envNames) {
+    const value = env[name];
+    if (value !== undefined && value.trim().length > 0) return { name, value };
+  }
+  return undefined;
+}
+
+function warnInvalidEgressEnvVar(name: string, key: keyof OutboundHttpEgressConfig): void {
+  // Log the variable name only — never the value (may contain credentials).
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[keiko-model-gateway] Ignoring invalid egress env var ${name} (reason: ${key} parse failed)`,
+  );
+}
+
+export function resolveOutboundHttpEgressConfig(
+  raw: unknown,
+  env: EnvSource = {},
+): OutboundHttpEgressConfig | undefined {
+  const block = egressBlock(raw);
+  const result: MutableEgressConfig = {};
+  for (const { key, parser } of EGRESS_FIELDS) {
+    setEgressField(result, key, parser(block[key], `egress.${key}`));
+  }
+  for (const { key, envNames, parser } of EGRESS_FIELDS) {
+    const envVar = envVarForField(env, envNames);
+    if (envVar === undefined) continue;
+    try {
+      setEgressField(result, key, parser(envVar.value, `egress.${key}`));
+    } catch {
+      warnInvalidEgressEnvVar(envVar.name, key);
+    }
+  }
+  return emptyToUndefined(result);
 }
 
 // Parses the four egress env vars INDEPENDENTLY so a malformed proxy URL (e.g. a
@@ -211,82 +277,7 @@ function emptyToUndefined(config: OutboundHttpEgressConfig): OutboundHttpEgressC
 // Each field is parsed in isolation; invalid fields are skipped with a console.warn
 // (naming the var, never the value) and the rest are still applied.
 export function parseEnvEgressConfigFaultTolerant(env: EnvSource): OutboundHttpEgressConfig {
-  const fields: {
-    key: keyof OutboundHttpEgressConfig;
-    envNames: readonly string[];
-    parser: (value: unknown, path: string) => string | readonly string[] | undefined;
-  }[] = [
-    {
-      key: "httpProxy",
-      envNames: ["KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy"],
-      parser: optionalProxyUrl,
-    },
-    {
-      key: "httpsProxy",
-      envNames: ["KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"],
-      parser: optionalProxyUrl,
-    },
-    {
-      key: "noProxy",
-      envNames: ["KEIKO_NO_PROXY", "NO_PROXY", "no_proxy"],
-      parser: optionalNoProxy,
-    },
-    {
-      key: "caBundlePath",
-      envNames: ["KEIKO_CA_BUNDLE_PATH"],
-      parser: optionalCaBundlePath,
-    },
-  ];
-  const result: { -readonly [K in keyof OutboundHttpEgressConfig]?: OutboundHttpEgressConfig[K] } =
-    {};
-  for (const { key, envNames, parser } of fields) {
-    const rawVar = envNames.find((n) => {
-      const v = env[n];
-      return v !== undefined && v.trim().length > 0;
-    });
-    if (rawVar === undefined) continue;
-    try {
-      const parsed = parser(env[rawVar], `egress.${key}`);
-      if (parsed !== undefined) {
-        // The conditional cast is safe: each branch's parser returns the correct type for that key.
-        (result as Record<string, unknown>)[key] = parsed;
-      }
-    } catch {
-      // Log the variable name only — never the value (may contain credentials).
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[keiko-model-gateway] Ignoring invalid egress env var ${rawVar} (reason: ${key} parse failed)`,
-      );
-    }
-  }
-  return result;
-}
-
-function parseEgressConfig(raw: unknown, env: EnvSource): OutboundHttpEgressConfig | undefined {
-  const block = egressBlock(raw);
-  const httpProxy = optionalProxyUrl(
-    egressValue(block, "httpProxy", env, "KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy"),
-    "egress.httpProxy",
-  );
-  const httpsProxy = optionalProxyUrl(
-    egressValue(block, "httpsProxy", env, "KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"),
-    "egress.httpsProxy",
-  );
-  const noProxy = optionalNoProxy(
-    egressValue(block, "noProxy", env, "KEIKO_NO_PROXY", "NO_PROXY", "no_proxy"),
-    "egress.noProxy",
-  );
-  const caBundlePath = optionalCaBundlePath(
-    egressValue(block, "caBundlePath", env, "KEIKO_CA_BUNDLE_PATH"),
-    "egress.caBundlePath",
-  );
-  const config: OutboundHttpEgressConfig = {
-    ...(httpProxy !== undefined ? { httpProxy } : {}),
-    ...(httpsProxy !== undefined ? { httpsProxy } : {}),
-    ...(noProxy !== undefined ? { noProxy } : {}),
-    ...(caBundlePath !== undefined ? { caBundlePath } : {}),
-  };
-  return emptyToUndefined(config);
+  return resolveOutboundHttpEgressConfig(undefined, env) ?? {};
 }
 
 export function normalizeApiKeyHeaderName(
@@ -836,7 +827,7 @@ export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayCo
   if (!isRecord(raw)) {
     throw new ConfigInvalidError("config root must be a JSON object");
   }
-  const egress = parseEgressConfig(raw.egress, env);
+  const egress = resolveOutboundHttpEgressConfig(raw.egress, env);
   const providersRaw = raw.providers;
   if (!Array.isArray(providersRaw) || providersRaw.length === 0) {
     throw new ConfigInvalidError("providers must be a non-empty array");
@@ -844,7 +835,7 @@ export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayCo
   return buildGatewayConfig(raw, providersRaw, env, egress);
 }
 
-export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayConfig {
+function readGatewayConfigFile(path: string): unknown {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -857,7 +848,22 @@ export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayCo
   } catch {
     throw new ConfigInvalidError(`config file is not valid JSON: ${path}`);
   }
-  return parseGatewayConfig(parsed, env);
+  return parsed;
+}
+
+export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayConfig {
+  return parseGatewayConfig(readGatewayConfigFile(path), env);
+}
+
+export function loadEgressConfigFromFile(
+  path: string,
+  env: EnvSource = {},
+): OutboundHttpEgressConfig | undefined {
+  const parsed = readGatewayConfigFile(path);
+  if (!isRecord(parsed)) {
+    throw new ConfigInvalidError("config root must be a JSON object");
+  }
+  return resolveOutboundHttpEgressConfig(parsed.egress, env);
 }
 
 // Credential- and endpoint-free projection for logging, CLI output, and serialisation.

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
 import {
   CircuitOpenError,
+  ERROR_CODES,
+  GatewayEgressError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -205,6 +207,23 @@ describe("Gateway.chat", () => {
     const result = await gateway.chat(REQUEST);
     expect(result.content).toBe("answer");
     expect(calls).toBe(2);
+  });
+
+  it("does not retry hard outbound egress failures", async () => {
+    let calls = 0;
+    const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
+      adapter: fakeAdapter(() => {
+        calls += 1;
+        return Promise.reject(
+          new GatewayEgressError(ERROR_CODES.PROXY_BLOCKED_BY_POLICY, "proxy blocked egress"),
+        );
+      }),
+      clock: stubClock(),
+    });
+    await expect(gateway.chat(REQUEST)).rejects.toMatchObject({
+      code: ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
+    });
+    expect(calls).toBe(1);
   });
 
   it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
