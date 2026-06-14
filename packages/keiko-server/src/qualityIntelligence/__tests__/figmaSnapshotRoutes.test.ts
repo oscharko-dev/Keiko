@@ -524,6 +524,52 @@ describe("POST /api/figma/snapshots — in-flight coalescing", () => {
     const b2 = r2.body as { runId: string };
     expect(b1.runId).toBe(b2.runId);
   });
+
+  it("does not coalesce an explicit re-snapshot with an in-flight first snapshot", async () => {
+    await recordConsent(evidenceDir);
+
+    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const actualBuild = orchModule.governedSnapshotBuild;
+    const operations: boolean[] = [];
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    spy.mockImplementation(async (boardLink, deps, isResnapshot = false) => {
+      operations.push(isResnapshot);
+      return actualBuild(
+        boardLink,
+        {
+          ...deps,
+          httpPort: fakeHttpPort,
+          renderPort: fakeRenderPort,
+        },
+        isResnapshot,
+      );
+    });
+
+    try {
+      const sharedMap = makeInFlightMap();
+      const handlerDeps = makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN });
+
+      const [initial, resnapshot] = await Promise.all([
+        handleFigmaTriggerSnapshot(makeCtx(triggerBody()), handlerDeps, sharedMap),
+        handleFigmaTriggerSnapshot(
+          makeCtx(triggerBody({ isResnapshot: true })),
+          handlerDeps,
+          sharedMap,
+        ),
+      ]);
+
+      expect(initial.status).toBe(201);
+      expect(resnapshot.status).toBe(201);
+      expect(operations).toHaveLength(2);
+      expect(operations).toEqual(expect.arrayContaining([false, true]));
+
+      const initialBody = initial.body as { runId: string };
+      const resnapshotBody = resnapshot.body as { runId: string };
+      expect(initialBody.runId).not.toBe(resnapshotBody.runId);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 // ─── DELETE /api/figma/token — happy-path envelope ────────────────────────────
@@ -744,6 +790,60 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
       expect(typeof screen.imageSha256).toBe("string");
       expect(typeof screen.imageByteLength).toBe("number");
     }
+  });
+});
+
+// ─── GET /api/figma/snapshots/:runId/screens/:screenIndex/image ──────────────
+
+describe("GET /api/figma/snapshots/:runId/screens/:screenIndex/image", () => {
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const PROVENANCE = {
+    fileKey: "PROJKEY",
+    nodeId: "1:0",
+    version: undefined,
+    fetchedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("serves a stored captured screen PNG without embedding bytes in the JSON summary", async () => {
+    const evidenceModule = await import("@oscharko-dev/keiko-evidence");
+    const store = evidenceModule.createNodeFigmaSnapshotStore(evidenceDir);
+    const runId = "fs-00000000-0000-0000-0000-000000000030";
+    store.record({
+      runId,
+      provenance: PROVENANCE,
+      integrityHash: "placeholder",
+      screens: [
+        {
+          screenId: "image-screen-1",
+          irJson: { name: "Image Screen", root: { interactionHint: null, children: [] } },
+          integrityHash: "placeholder",
+          image: { mimeType: "image/png", bytes: PNG_BYTES },
+        },
+      ],
+      skippedScreens: [],
+    });
+
+    const summaryRes = await fetch(`${baseUrl()}/api/figma/snapshots/${runId}`);
+    expect(summaryRes.status).toBe(200);
+    const summary = (await summaryRes.json()) as FigmaSnapshotSummary;
+    expect(JSON.stringify(summary)).not.toContain(Buffer.from(PNG_BYTES).toString("base64"));
+
+    const imageRes = await fetch(`${baseUrl()}/api/figma/snapshots/${runId}/screens/0/image`);
+    expect(imageRes.status).toBe(200);
+    expect(imageRes.headers.get("content-type")).toBe("image/png");
+    expect(imageRes.headers.get("cache-control")).toBe("no-store");
+    expect(imageRes.headers.get("etag")).toMatch(/^"sha256-[a-f0-9]{64}"$/u);
+    expect(Array.from(new Uint8Array(await imageRes.arrayBuffer()))).toEqual(Array.from(PNG_BYTES));
+  });
+
+  it("returns a coded 404 when the requested screen image is missing", async () => {
+    const res = await fetch(
+      `${baseUrl()}/api/figma/snapshots/fs-00000000-0000-0000-0000-000000000099/screens/0/image`,
+    );
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("FIGMA_SCREEN_NOT_FOUND");
   });
 });
 

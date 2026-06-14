@@ -6,13 +6,15 @@
 //
 //   POST /api/figma/snapshots           — trigger a bounded snapshot-build from a board link
 //   GET  /api/figma/snapshots/:runId    — load a stored snapshot summary for display
+//   GET  /api/figma/snapshots/:runId/screens/:screenIndex/image
+//                                       — stream a stored, token-free PNG side-file
 //
 // Trigger route:
 //   1. Parses board link → (fileKey, nodeId) — rejects malformed / missing node-id links.
 //   2. Resolves the read-only PAT server-side (vault > config > FIGMA_ACCESS_TOKEN env).
 //   3. Builds a runId, runs connector → cleanScopedNodesToScreenIr → buildFigmaSnapshot → store.
 //   4. Returns a minimal summary (runId, screenCount, skippedCount, reduction hint).
-//      No token, no raw IR bytes, no render bytes reach the browser.
+//      No token, no raw IR bytes, no render bytes are embedded in the JSON response.
 //
 // Load route reads the stored immutable evidence record and returns a browser-safe
 // projection. No re-contact with Figma.
@@ -44,7 +46,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import type { RouteContext, RouteResult } from "../routes.js";
+import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import {
@@ -110,6 +112,7 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     "The board link is not a valid Figma URL, or it is missing a node-id " +
     "(section/frame anchor required).",
   FIGMA_SNAPSHOT_NOT_FOUND: "No snapshot was found for this run id.",
+  FIGMA_SCREEN_NOT_FOUND: "No captured screen image was found for this snapshot.",
   FIGMA_NO_EVIDENCE_DIR: "The evidence directory is not configured; snapshots cannot be stored.",
   FIGMA_CONSENT_REQUIRED:
     "Acknowledge the read-only, least-privilege Figma scope before the first snapshot for this board.",
@@ -222,9 +225,8 @@ export interface FigmaSnapshotSummary {
    */
   readonly metrics?: FigmaConnectorMetrics;
   /**
-   * Per-screen summary for the UI gallery. IR display names + image metadata only.
-   * PNG bytes are NOT returned — the client shows a placeholder pending a future
-   * screen-image route (/{runId}/screens/:index).
+   * Per-screen summary for the UI gallery. IR display names + image metadata only. The client loads
+   * the token-free PNG side-file through /api/figma/snapshots/:runId/screens/:screenIndex/image.
    */
   readonly screens: readonly FigmaScreenSummary[];
 }
@@ -459,11 +461,15 @@ function persistSnapshot(
 
 // ─── In-flight coalescing ──────────────────────────────────────────────────────
 //
-// Keyed by "fileKey:nodeId" (the snapshot scope). The FIRST POST starts the governed build,
-// mints the runId ONCE, and persists ONCE (inside the build chain — see header comment for
-// the persist-inside-build design decision). Subsequent POSTs for the same scope await the
-// SAME promise and receive the same runId and response. The entry is removed on settle
-// (finally) so a retry POSTing after the build completes always starts fresh.
+// Keyed by "fileKey:nodeId:operation:consent" (the snapshot scope plus flags that affect auditing or
+// consent). The FIRST POST starts the governed build, mints the runId ONCE, and persists ONCE
+// (inside the build chain — see header comment for the persist-inside-build design decision).
+// Subsequent POSTs for the same scope and same flags await the SAME promise and receive the same
+// runId and response. The entry is removed on settle (finally) so a retry POSTing after the build
+// completes always starts fresh. Re-snapshot requests intentionally do not coalesce with first-
+// snapshot requests because #756/#759 require an explicit re-snapshot to be audited and fetched as a
+// fresh full scoped build; consent-acknowledged requests also stay separate from unacknowledged ones
+// so the first caller cannot mask a later operator acknowledgement.
 
 interface CoalescedBuildEntry {
   readonly promise: Promise<RouteResult>;
@@ -483,11 +489,15 @@ export function resetInFlightMap(): void {
   defaultInFlightMap = new Map<string, CoalescedBuildEntry>();
 }
 
-/** Derive the scope key (fileKey:nodeId) for the in-flight map. */
-function scopeKeyFor(boardLink: string): string | undefined {
+/** Derive the coalescing key (fileKey:nodeId:operation:consent) for the in-flight map. */
+function coalescingKeyFor(
+  boardLink: string,
+  acknowledgeReadOnly: boolean,
+  isResnapshot: boolean,
+): string | undefined {
   const target = parseFigmaTarget(boardLink);
   if (target === null) return undefined;
-  return `${target.fileKey}:${target.nodeId}`;
+  return `${target.fileKey}:${target.nodeId}:${isResnapshot ? "resnapshot" : "snapshot"}:${acknowledgeReadOnly ? "ack" : "noack"}`;
 }
 
 // Starts the governed build + persist and removes the map entry on settle.
@@ -576,7 +586,7 @@ export async function handleFigmaTriggerSnapshot(
   if ("status" in bodyResult) return bodyResult;
   const body: ParsedTriggerBody = bodyResult;
 
-  const scopeKey = scopeKeyFor(body.boardLink);
+  const scopeKey = coalescingKeyFor(body.boardLink, body.acknowledgeReadOnly, body.isResnapshot);
   if (scopeKey === undefined) {
     // parseTriggerBody already validates the board link; this is a belt-and-suspenders guard.
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
@@ -671,4 +681,72 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
   }
 
   return { status: 200, body: recordToSummary(record) };
+}
+
+// ─── GET /api/figma/snapshots/:runId/screens/:screenIndex/image ──────────────
+
+function parseScreenIndex(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.length === 0) return undefined;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 && String(parsed) === raw ? parsed : undefined;
+}
+
+type FigmaSnapshotStore = ReturnType<typeof createNodeFigmaSnapshotStore>;
+
+interface LoadedSnapshotRecord {
+  readonly store: FigmaSnapshotStore;
+  readonly record: FigmaSnapshotRecord;
+}
+
+function loadSnapshotRecordForImage(
+  evidenceDir: string,
+  runId: string,
+): LoadedSnapshotRecord | RouteResult {
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  let record: FigmaSnapshotRecord | undefined;
+  try {
+    record = store.load(runId);
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
+  return record === undefined
+    ? { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") }
+    : { store, record };
+}
+
+export function handleFigmaLoadSnapshotImage(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): HandlerOutcome {
+  const evidenceDir = deps.evidenceDir;
+  if (evidenceDir === undefined || evidenceDir.length === 0) {
+    return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
+  }
+
+  const runId = ctx.params.runId ?? "";
+  const screenIndex = parseScreenIndex(ctx.params.screenIndex);
+  if (runId.length === 0 || screenIndex === undefined) {
+    return { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") };
+  }
+
+  const loaded = loadSnapshotRecordForImage(evidenceDir, runId);
+  if ("status" in loaded) return loaded;
+
+  const screen = loaded.record.screens[screenIndex];
+  if (screen === undefined) {
+    return { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") };
+  }
+
+  try {
+    const image = loaded.store.loadImage(runId, screen.image);
+    ctx.res.statusCode = 200;
+    ctx.res.setHeader("Content-Type", image.mimeType);
+    ctx.res.setHeader("Content-Length", String(image.byteLength));
+    ctx.res.setHeader("Cache-Control", "no-store");
+    ctx.res.setHeader("ETag", `"sha256-${image.sha256}"`);
+    ctx.res.end(image.bytes);
+    return STREAMING;
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
 }

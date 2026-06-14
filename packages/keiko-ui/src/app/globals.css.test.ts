@@ -638,4 +638,21 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
     expect(block).toContain("outline: 2px solid var(--accent)");
   });
+
+  it(".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-code-file-path {");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-scopes-summary meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-scopes-summary {");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-screen-image has stable thumbnail dimensions for the gallery", () => {
+    const block = cssBlock(".figma-snapshot-screen-image {");
+    expect(block).toContain("width: 72px");
+    expect(block).toContain("height: 54px");
+    expect(block).toContain("object-fit: contain");
+  });
 });
