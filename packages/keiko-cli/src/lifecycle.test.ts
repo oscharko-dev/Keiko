@@ -159,6 +159,34 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args[0]).toBe("/tmp/fake-keiko-bin.js");
   });
 
+  it("accepts --open and opens the UI URL after a healthy start", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const openExternal = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--open"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        openExternal,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:1983");
+    expect(c.err()).toBe("");
+  });
+
   it("keeps an already-running UI when the health version matches the installed package", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
