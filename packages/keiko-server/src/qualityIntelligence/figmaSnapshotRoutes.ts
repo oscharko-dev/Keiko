@@ -45,7 +45,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "../routes.js";
-import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import {
   parseFigmaTarget,
@@ -72,7 +72,7 @@ import {
 
 const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   FIGMA_TOKEN_MISSING:
-    "No Figma PAT is configured. Set FIGMA_ACCESS_TOKEN in the server environment (read-only scopes: file_read, files:read).",
+    "No Figma PAT is configured. Add one in Gateway setup, Keiko config, vault, or FIGMA_ACCESS_TOKEN (read-only scopes: file_read, files:read).",
   FIGMA_TOKEN_INVALID: "The configured Figma PAT is invalid. Please rotate the token.",
   FIGMA_TOKEN_EXPIRED: "The configured Figma PAT has expired. Please rotate the token.",
   FIGMA_TOKEN_REVOKED: "The configured Figma PAT has been revoked. Please mint a new token.",
@@ -514,6 +514,7 @@ function startCoalescedBuild(
           acknowledgeReadOnly: body.acknowledgeReadOnly,
           pagination: figmaPaginationFromEnv(deps.env),
           egress: currentGatewayEgressConfig(deps),
+          configToken: currentGatewayConfig(deps)?.figma?.accessToken,
           portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
         },
         body.isResnapshot,

@@ -177,6 +177,21 @@ describe("governedSnapshotBuild — vault token precedence (#758)", () => {
     expect(rec.tokens).not.toContain(TOKEN);
   });
 
+  it("uses the configured PAT when no vault token or env token is available", async () => {
+    expect(readFigmaVaultToken(depsWith({ env: {} }))).toBeUndefined();
+    const rec = httpPort();
+    await governedSnapshotBuild(
+      URL_OK,
+      depsWith({
+        env: {},
+        configToken: "figd_config-pat",
+        httpPort: rec.port,
+        acknowledgeReadOnly: true,
+      }),
+    );
+    expect(rec.tokens.every((t) => t === "figd_config-pat")).toBe(true);
+  });
+
   it("falls back to the env token when no vault token is stored (graceful)", async () => {
     expect(readFigmaVaultToken(depsWith())).toBeUndefined();
     const rec = httpPort();

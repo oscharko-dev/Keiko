@@ -377,11 +377,19 @@ function configSecretValues(config: GatewayConfig | undefined): readonly string[
     if (egress.caBundlePath !== undefined) out.push(egress.caBundlePath);
   };
   addEgressTopology(config.egress);
+  if (config.figma?.accessToken !== undefined) {
+    out.push(config.figma.accessToken);
+  }
   for (const provider of config.providers) {
     out.push(provider.apiKey, provider.baseUrl);
     addEgressTopology(provider.egress);
   }
   return out;
+}
+
+function figmaEnvSecretValues(env: EnvSource): readonly string[] {
+  const token = env.FIGMA_ACCESS_TOKEN;
+  return token !== undefined && token.length > 0 ? [token] : [];
 }
 
 function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] {
@@ -399,6 +407,7 @@ function redactionSecrets(
   return Array.from(
     new Set([
       ...keikoApiKeySecretValues(env),
+      ...figmaEnvSecretValues(env),
       ...configSecretValues(config),
       ...egressSecretValues(egress),
     ]),
