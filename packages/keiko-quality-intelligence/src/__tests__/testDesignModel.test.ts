@@ -116,6 +116,25 @@ describe("designTestCaseCandidates", () => {
     expect(inOrderIds).toEqual(reversedIds);
   });
 
+  it("derives the same candidate IDs when only the run id changes", () => {
+    const fixture = loadFixture("bankingRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, bankingDefault);
+    const first = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    const second = designTestCaseCandidates({
+      runId: "qi-run-different" as QualityIntelligence.QualityIntelligenceRunId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    expect(first.map((candidate) => candidate.id)).toEqual(second.map((candidate) => candidate.id));
+    expect(first.map((candidate) => candidate.runId)).not.toEqual(
+      second.map((candidate) => candidate.runId),
+    );
+  });
+
   it("round-trips through JSON without mutation", () => {
     const fixture = loadFixture("regressionRequirement.synthetic.json");
     const intent = deriveIntent(fixture.envelopes, regressionDefault);

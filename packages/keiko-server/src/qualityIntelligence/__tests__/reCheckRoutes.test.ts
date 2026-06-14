@@ -811,6 +811,7 @@ describe("handleQiRegenerateStale — carries model provenance forward (Issue #7
       streaming: true,
       supportsImageInput: false,
       supportsDocumentInput: false,
+      supportsResponseFormat: true,
       workflowEligible: true,
       costClass: "medium",
       latencyClass: "standard",
@@ -923,6 +924,7 @@ describe("handleQiRegenerateStale — carries model provenance forward (Issue #7
     expect(manifest?.status).toBe("succeeded");
     // The regeneration ran a model, so the merged run is model-attributed (not the baseline path).
     expect(manifest?.modelId).toBe(MODEL_ID);
+    expect(manifest?.modelParameters).toEqual({ responseFormat: "json_schema" });
     // No seed flows through the regenerate path, so a model run records seedUsed: null (not absent).
     expect(manifest?.seedUsed).toBeNull();
   });

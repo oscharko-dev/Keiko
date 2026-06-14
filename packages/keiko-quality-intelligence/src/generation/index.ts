@@ -5,8 +5,9 @@
 // DETERMINISM-FIRST INVARIANT (Epic #761, Issue #763):
 // - The structural stages — coverage mapping, deduplication, validation, and candidate-ID
 //   derivation — are 100% deterministic and replayable: `parseGeneratedCandidates` derives every
-//   candidate id from a content hash (sha256 of run id + ordinal + title), so identical model
-//   text yields identical ids regardless of model, seed, or sampling temperature.
+//   candidate id from a content hash (sha256 of ordinal + title + cited atoms), so identical model
+//   text over identical evidence yields identical ids regardless of run id, model, seed, or sampling
+//   temperature.
 // - The model is invoked ONLY to draft candidate text; its output is an attributed delta. The
 //   evidence manifest records which model produced it (`modelId`), the request parameters used
 //   (`modelParameters`, e.g. responseFormat), and the seed (`seedUsed`, null when unsupported).
