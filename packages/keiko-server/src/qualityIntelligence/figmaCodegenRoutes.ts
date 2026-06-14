@@ -12,10 +12,11 @@
 //
 // Determinism + model-independence (#755 DoD): emission is pure and model-free, so the same stored
 // snapshot yields a byte-identical artifact; semantic naming (the only model-augmentation point) is
-// additive and absent here, so the structural defaults are used. Evidence-backed: the artifact is
-// persisted to the local evidence dir through the reused contained-store seam. Gated: CSRF + host-check
-// + a valid stored runId (the dispatch layer enforces the state-changing-request guard for this POST).
-// No hidden external effects: nothing leaves the box, the snapshot is never mutated.
+// additive and absent here, so the structural defaults are used. Evidence-backed: the artifact must be
+// persisted to the local evidence dir through the reused contained-store seam before the route returns
+// success. Gated: CSRF + host-check + a valid stored runId (the dispatch layer enforces the
+// state-changing-request guard for this POST). No hidden external effects: nothing leaves the box, the
+// snapshot is never mutated.
 //
 // Cancellable (#755 AC2): for the first slice this is moot by construction — the handler is a
 // synchronous, pure, microsecond computation with no run-registry entry, no model call, no streaming,
@@ -34,6 +35,10 @@ import { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligen
 
 const FIGMA_CODEGEN_SUFFIX = ".figma-codegen.json";
 const FIGMA_CODEGEN_SCHEMA_VERSION = 1 as const;
+const MAX_CODEGEN_SCREENS = 80;
+const MAX_CODEGEN_FILES = MAX_CODEGEN_SCREENS + 2;
+const MAX_CODEGEN_FILE_BYTES = 1024 * 1024;
+const MAX_CODEGEN_TOTAL_BYTES = 5 * 1024 * 1024;
 
 /** The persisted, reviewable code artifact (evidence-backed; deterministic, carries no timestamp). */
 export interface PersistedFigmaCodeArtifact {
@@ -60,6 +65,10 @@ const errorBody = (
   error: { code, message },
 });
 
+function codegenTooLarge(message: string): RouteResult {
+  return { status: 413, body: errorBody("FIGMA_CODEGEN_TOO_LARGE", message) };
+}
+
 // Re-hydrate the deterministic emission input from the stored snapshot. Unparseable screens are
 // dropped (never crash). Links → nav graph → routing hints feed the adapter's screen-to-screen wiring.
 function emissionInputFromRecord(
@@ -84,26 +93,42 @@ function emissionInputFromRecord(
 }
 
 function persistArtifact(evidenceDir: string, artifact: PersistedFigmaCodeArtifact): void {
-  // Evidence-backed (#755): the reviewable artifact is written through the reused contained-store
-  // seam. Best-effort — a failed evidence write must not fail the (already-computed) reviewable
-  // response, so the caller still returns the code; the persist is the durability layer.
-  try {
-    createNodeContainedJsonArtifactStore<PersistedFigmaCodeArtifact>(
-      evidenceDir,
-      FIGMA_CODEGEN_SUFFIX,
-      {
-        parse: (value) =>
-          typeof value === "object" &&
-          value !== null &&
-          (value as Record<string, unknown>).figmaCodegenSchemaVersion ===
-            FIGMA_CODEGEN_SCHEMA_VERSION
-            ? (value as PersistedFigmaCodeArtifact)
-            : undefined,
-      },
-    ).record(artifact.runId, artifact);
-  } catch {
-    // swallow: the response below is the source of truth for the operator's review.
+  // Evidence-backed (#755): the reviewable artifact is written through the reused contained-store seam.
+  // Fail closed when the companion cannot be written; otherwise the route could return generated code
+  // with no durable evidence record.
+  createNodeContainedJsonArtifactStore<PersistedFigmaCodeArtifact>(
+    evidenceDir,
+    FIGMA_CODEGEN_SUFFIX,
+    {
+      parse: (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        (value as Record<string, unknown>).figmaCodegenSchemaVersion ===
+          FIGMA_CODEGEN_SCHEMA_VERSION
+          ? (value as PersistedFigmaCodeArtifact)
+          : undefined,
+    },
+  ).record(artifact.runId, artifact);
+}
+
+function summarizeArtifact(
+  artifact: QualityIntelligenceFigma.CodeArtifact,
+): { readonly totalBytes: number } | RouteResult {
+  if (artifact.files.length > MAX_CODEGEN_FILES) {
+    return codegenTooLarge("The generated code artifact contains too many files to review safely.");
   }
+  let totalBytes = 0;
+  for (const file of artifact.files) {
+    const fileBytes = Buffer.byteLength(file.contents, "utf8");
+    if (fileBytes > MAX_CODEGEN_FILE_BYTES) {
+      return codegenTooLarge("A generated code file is too large to review safely.");
+    }
+    totalBytes += fileBytes;
+    if (totalBytes > MAX_CODEGEN_TOTAL_BYTES) {
+      return codegenTooLarge("The generated code artifact is too large to review safely.");
+    }
+  }
+  return { totalBytes };
 }
 
 // ─── POST /api/figma/snapshots/:runId/code ─────────────────────────────────────
@@ -157,25 +182,37 @@ export function handleFigmaGenerateCode(ctx: RouteContext, deps: UiHandlerDeps):
       ),
     };
   }
+  if (input.screens.length > MAX_CODEGEN_SCREENS) {
+    return codegenTooLarge("The snapshot contains too many screens to generate code safely.");
+  }
 
   const artifact = QualityIntelligenceFigma.emitCode(
     input,
     QualityIntelligenceFigma.htmlCssAdapter,
   );
+  const artifactSummary = summarizeArtifact(artifact);
+  if ("status" in artifactSummary) return artifactSummary;
+
   const persisted: PersistedFigmaCodeArtifact = {
     figmaCodegenSchemaVersion: FIGMA_CODEGEN_SCHEMA_VERSION,
     runId,
     adapterName: artifact.adapterName,
     files: artifact.files,
   };
-  persistArtifact(evidenceDir, persisted);
+  try {
+    persistArtifact(evidenceDir, persisted);
+  } catch {
+    return {
+      status: 500,
+      body: errorBody("FIGMA_INTERNAL", "The code artifact could not be persisted as evidence."),
+    };
+  }
 
-  const totalBytes = artifact.files.reduce((sum, f) => sum + Buffer.byteLength(f.contents), 0);
   const response: FigmaCodegenResponse = {
     runId,
     adapterName: artifact.adapterName,
     fileCount: artifact.files.length,
-    totalBytes,
+    totalBytes: artifactSummary.totalBytes,
     screenCount: input.screens.length,
     files: artifact.files,
   };
