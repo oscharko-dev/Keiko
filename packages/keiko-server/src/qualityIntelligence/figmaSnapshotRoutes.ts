@@ -72,14 +72,16 @@ import {
 
 // ─── Error helpers ─────────────────────────────────────────────────────────────
 
+// Operator-facing scope hint, derived from the single source of truth (figmaConsent.EXPECTED_FIGMA_SCOPES)
+// so the re-key guidance can never drift from the scopes the consent ledger records (#758 AC2).
+const READ_ONLY_SCOPE_HINT = EXPECTED_FIGMA_SCOPES.join(", ");
+
 const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
-  FIGMA_TOKEN_MISSING:
-    "No Figma PAT is configured. Add one in Keiko config, vault, or FIGMA_ACCESS_TOKEN (read-only scopes: files:read, file_dev_resources:read).",
+  FIGMA_TOKEN_MISSING: `No Figma PAT is configured. Add one in Keiko config, vault, or FIGMA_ACCESS_TOKEN (read-only scopes: ${READ_ONLY_SCOPE_HINT}).`,
   FIGMA_TOKEN_INVALID: "The configured Figma PAT is invalid. Please rotate the token.",
   FIGMA_TOKEN_EXPIRED: "The configured Figma PAT has expired. Please rotate the token.",
   FIGMA_TOKEN_REVOKED: "The configured Figma PAT has been revoked. Please mint a new token.",
-  FIGMA_INSUFFICIENT_SCOPE:
-    "The configured Figma PAT lacks the required read-only scopes (files:read, file_dev_resources:read).",
+  FIGMA_INSUFFICIENT_SCOPE: `The configured Figma PAT lacks the required read-only scopes (${READ_ONLY_SCOPE_HINT}).`,
   FIGMA_NOT_FOUND:
     "The Figma board was not found. Check the link and that the PAT can access this file.",
   FIGMA_UPSTREAM_UNAVAILABLE: "Figma API is temporarily unavailable. Please try again.",

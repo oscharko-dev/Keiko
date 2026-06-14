@@ -77,6 +77,28 @@ describe("classifyTokenFailure taxonomy (structural, generic)", () => {
     );
   });
 
+  it("maps a 'forbidden access' reason to FIGMA_INSUFFICIENT_SCOPE", () => {
+    // Pins the "forbidden access" keyword: prior tests covered scope/permission/not-allowed only.
+    expect(classifyTokenFailure(403, "Forbidden access to this file").code).toBe(
+      "FIGMA_INSUFFICIENT_SCOPE",
+    );
+  });
+
+  it("maps a future-tense 'expire' reason (no 'expired') to FIGMA_TOKEN_EXPIRED", () => {
+    // Pins the bare "expire" stem: every prior expired-case input also contains "expired",
+    // so a mutant dropping "expire" from the keyword pair would survive without this case.
+    expect(classifyTokenFailure(403, "Your token will expire soon").code).toBe(
+      "FIGMA_TOKEN_EXPIRED",
+    );
+  });
+
+  it("maps a 'revoke' reason (no 'revoked') to FIGMA_TOKEN_REVOKED", () => {
+    // Pins the bare "revoke" stem (symmetric with "expire" above).
+    expect(classifyTokenFailure(403, "An admin may revoke this token").code).toBe(
+      "FIGMA_TOKEN_REVOKED",
+    );
+  });
+
   it("maps 401 to FIGMA_TOKEN_INVALID", () => {
     expect(classifyTokenFailure(401, "Invalid token").code).toBe("FIGMA_TOKEN_INVALID");
   });
@@ -113,6 +135,12 @@ describe("classifyTokenFailure taxonomy (structural, generic)", () => {
 
   it("maps a generic 5xx to FIGMA_UPSTREAM_UNAVAILABLE", () => {
     expect(classifyTokenFailure(500).code).toBe("FIGMA_UPSTREAM_UNAVAILABLE");
+  });
+
+  it("maps a 503 service-unavailable to FIGMA_UPSTREAM_UNAVAILABLE, not a proxy fault", () => {
+    // The 407/502/504 proxy-egress split deliberately EXCLUDES 503 (plain upstream unavailability).
+    // Pins that intentional boundary so a mutant folding 503 into the proxy set is caught.
+    expect(classifyTokenFailure(503).code).toBe("FIGMA_UPSTREAM_UNAVAILABLE");
   });
 
   it("maps an unclassified status to FIGMA_INTERNAL", () => {

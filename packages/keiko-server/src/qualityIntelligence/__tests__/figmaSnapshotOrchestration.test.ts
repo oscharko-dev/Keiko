@@ -230,6 +230,14 @@ describe("governedSnapshotBuild — vault token precedence (#758)", () => {
     );
     expect(rec.tokens.every((t) => t === TOKEN)).toBe(true);
   });
+
+  it("returns undefined (graceful) when the vault key cannot be resolved (malformed KEIKO_FIGMA_KEY)", () => {
+    // A malformed env key makes resolveFigmaVaultKey throw FIGMA_INTERNAL. readFigmaVaultToken must
+    // swallow it and degrade to the config/env token rather than letting the throw propagate into
+    // governedSnapshotBuild (which runs it before the consent gate → it would surface a 500). Pins
+    // the try/catch: a mutant removing it makes readFigmaVaultToken throw here instead of returning.
+    expect(readFigmaVaultToken(depsWith({ env: { KEIKO_FIGMA_KEY: "tooshort" } }))).toBeUndefined();
+  });
 });
 
 // ─── Audit + metrics (#760) ─────────────────────────────────────────────────────
