@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdtempSync,
@@ -111,6 +112,10 @@ describe("createNodeFigmaSnapshotStore", () => {
     const onDisk = readFileSync(join(result.sideFileDir, ref.relativePath));
     expect(Array.from(new Uint8Array(onDisk))).toEqual(Array.from(png(10)));
     expect(ref.byteLength).toBe(png(10).length);
+    const expectedSha256 = createHash("sha256")
+      .update(Buffer.from(png(10)))
+      .digest("hex");
+    expect(ref.sha256).toBe(expectedSha256);
   });
 
   it("is WRITE-ONCE: a second record for the same runId is refused", () => {
@@ -212,6 +217,22 @@ describe("createNodeFigmaSnapshotStore", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
     }
+  });
+
+  it("loads a snapshot whose screens were recorded in reversed screenId order (sort invariant #753)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    // Record the same two screens as baseInput but in DESCENDING screenId order. The snapshot-level
+    // integrityHash is order-independent (recompute sorts by screenId), so BASE_INTEGRITY_HASH still
+    // applies. load() must accept it; the persisted screens keep their recorded (reversed) order.
+    // RED if the .sort() is dropped from recomputeSnapshotIntegrityHash in store.ts.
+    store.record({
+      ...base,
+      screens: [...base.screens].reverse(),
+      integrityHash: BASE_INTEGRITY_HASH,
+    });
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:2", "1:1"]);
   });
 });
 
