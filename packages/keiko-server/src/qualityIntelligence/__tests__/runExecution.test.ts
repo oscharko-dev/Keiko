@@ -24,8 +24,13 @@ import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "../runExecution.js";
 import type { ExecuteQiRunInput, QiRunAccepted } from "../runExecution.js";
-import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import type {
+  QualityIntelligenceStartRunRequest,
+  QualityIntelligenceUiRunDetail,
+} from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceRunSummary } from "@oscharko-dev/keiko-workflows";
+import type { RouteContext } from "../../routes.js";
+import { handleGetQiRun } from "../uiRoutes.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -270,6 +275,30 @@ function sequencePort(contents: readonly string[]): ModelPort {
   };
 }
 
+function recordingSequencePort(contents: readonly string[]): {
+  readonly port: ModelPort;
+  readonly calls: GatewayRequest[];
+} {
+  let index = 0;
+  const calls: GatewayRequest[] = [];
+  const port: ModelPort = {
+    call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+      calls.push(request);
+      const content = contents[Math.min(index, contents.length - 1)] ?? EMPTY_CANDIDATES_JSON;
+      index += 1;
+      return Promise.resolve({
+        content,
+        modelId: request.modelId,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: usageMeta(100, 50),
+      });
+    },
+  };
+  return { port, calls };
+}
+
 function weakJudgeVerdictWithRationale(rationale: string): string {
   return JSON.stringify({
     dimensions: [
@@ -277,6 +306,18 @@ function weakJudgeVerdictWithRationale(rationale: string): string {
       { name: "atomicity", score: 20, rationale: "too broad" },
       { name: "determinism", score: 15, rationale: "timing-sensitive" },
       { name: "ac-fidelity", score: 10, rationale: "misses the acceptance criteria" },
+    ],
+    overallRationale: rationale,
+  });
+}
+
+function strongJudgeVerdictWithRationale(rationale: string): string {
+  return JSON.stringify({
+    dimensions: [
+      { name: "verifiability", score: 90, rationale },
+      { name: "atomicity", score: 88, rationale: "single focused behavior" },
+      { name: "determinism", score: 92, rationale: "deterministic observation" },
+      { name: "ac-fidelity", score: 90, rationale: "matches the requirement" },
     ],
     overallRationale: rationale,
   });
@@ -299,6 +340,41 @@ function candidateProjection(
     steps: candidates.map((candidate) => candidate.steps),
     expectedResults: candidates.map((candidate) => candidate.expectedResults),
   };
+}
+
+function runDetailCtx(runId: string): RouteContext {
+  return {
+    req: {} as RouteContext["req"],
+    res: {} as RouteContext["res"],
+    params: { id: runId },
+    url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}`),
+  };
+}
+
+function testQualityFindingsFrom(
+  manifest: ReturnType<typeof loadQualityIntelligenceRun>,
+): NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>["findings"] {
+  return (manifest?.findings ?? []).filter((finding) => finding.kind === "test-quality");
+}
+
+function expectRedactedText(text: string | undefined, secret: string): void {
+  expect(text).toContain("[REDACTED]");
+  expect(text).not.toContain(secret);
+}
+
+function expectIssue749RunDetail(
+  detail: QualityIntelligenceUiRunDetail,
+  providerSecret: string,
+): void {
+  expect(detail.qualityScore).toBe(50);
+  const flagged = detail.candidates.filter((candidate) => candidate.weakTestFlag !== undefined);
+  expect(flagged).toHaveLength(1);
+  expect(flagged[0]?.title).toBe("Verify transfer confirmation is shown before submission");
+  expectRedactedText(flagged[0]?.weakTestFlag?.rationale, providerSecret);
+  const unflagged = detail.candidates.find(
+    (candidate) => candidate.title === "Verify MFA is required before audit login access",
+  );
+  expect(unflagged?.weakTestFlag).toBeUndefined();
 }
 
 function expectSeededBaselineManifest(runId: string, evidenceDir: string): void {
@@ -497,13 +573,90 @@ describe("executeQiRun — model selection", () => {
     );
     expect(summary.status).toBe("succeeded");
     const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
-    const testQualityFindings = (manifest?.findings ?? []).filter(
-      (finding) => finding.kind === "test-quality",
-    );
+    const testQualityFindings = testQualityFindingsFrom(manifest);
     expect(testQualityFindings).toHaveLength(2);
     const persisted = JSON.stringify(testQualityFindings);
     expect(persisted).not.toContain(providerSecret);
     expect(persisted).toContain("[REDACTED]");
+  });
+
+  it("proves Issue #749 end to end: weak judge rationale lowers quality score and reaches run detail redacted", async () => {
+    const providerSecret = "literal-provider-secret-qi-judge-749";
+    const weakRationale = `The candidate is unverifiable, misses the acceptance criteria, and echoed ${providerSecret}.`;
+    const { port, calls } = recordingSequencePort([
+      COVERING_TWO_REQUIREMENTS_JSON,
+      strongJudgeVerdictWithRationale("The candidate has a deterministic observable assertion."),
+      weakJudgeVerdictWithRationale(weakRationale),
+    ]);
+    const deps = buildDeps({
+      evidenceDir,
+      config: buildConfigWithApiKey([chatCapability(MODEL_ID)], providerSecret),
+      modelPort: port,
+    });
+
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-749-live-proof",
+        deps,
+      }),
+    );
+
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(50);
+    expect(summary.modelGatewayCallCount).toBe(3);
+    expect(calls).toHaveLength(3);
+
+    const manifest = loadQualityIntelligenceRun("run-749-live-proof", { evidenceDir });
+    expect(manifest?.qualityScore).toBe(50);
+    expect(manifest?.modelGatewayCallCount).toBe(3);
+    const testQualityFindings = testQualityFindingsFrom(manifest);
+    expect(testQualityFindings).toHaveLength(1);
+    expectRedactedText(testQualityFindings[0]?.summaryRedacted, providerSecret);
+
+    const result = handleGetQiRun(runDetailCtx("run-749-live-proof"), deps);
+    expect(result.status).toBe(200);
+    const detail = result.body as QualityIntelligenceUiRunDetail;
+    expectIssue749RunDetail(detail, providerSecret);
+  });
+
+  it("does not count the oversized judge-prompt local guard as a gateway dispatch", async () => {
+    const oversizedCandidateOutput = JSON.stringify({
+      testCases: [
+        {
+          title: "Exercise an intentionally oversized candidate",
+          preconditions: ["A generated test contains an oversized body."],
+          steps: ["x".repeat(512_000)],
+          expectedResults: ["The judge should classify the local guard outcome as weak."],
+          priority: "P1",
+          riskClass: "compliance",
+          derivedFromEvidenceIndexes: [1],
+          tags: ["oversize-judge"],
+        },
+      ],
+    });
+    const { port, calls } = recordingSequencePort([oversizedCandidateOutput]);
+    const deps = buildDeps({
+      evidenceDir,
+      modelPort: port,
+    });
+
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-749-oversize-guard",
+        deps,
+      }),
+    );
+
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+    // Only the generation request reached the gateway. The oversized judge prompt returned a local
+    // weak verdict before model.call, so the audit trail must not claim a second dispatch.
+    expect(summary.modelGatewayCallCount).toBe(1);
+    expect(calls).toHaveLength(1);
+    const manifest = loadQualityIntelligenceRun("run-749-oversize-guard", { evidenceDir });
+    expect(manifest?.modelGatewayCallCount).toBe(1);
+    const qualityFinding = testQualityFindingsFrom(manifest)[0];
+    expect(qualityFinding?.summaryRedacted).toContain("model budget");
   });
 
   it("starts a deterministic baseline when no model is configured", async () => {

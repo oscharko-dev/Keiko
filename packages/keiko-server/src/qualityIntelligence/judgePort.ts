@@ -320,7 +320,7 @@ export interface QiJudgePort {
   readonly judge: (
     input: JudgePromptInput,
     signal?: AbortSignal,
-  ) => Promise<TestQualityJudgeVerdict>;
+  ) => Promise<TestQualityJudgeVerdict & { readonly gatewayCallCount: number }>;
 }
 
 /**
@@ -357,11 +357,11 @@ export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudge
     judge: async (
       input: JudgePromptInput,
       signal?: AbortSignal,
-    ): Promise<TestQualityJudgeVerdict> => {
+    ): Promise<TestQualityJudgeVerdict & { readonly gatewayCallCount: number }> => {
       const messages = buildJudgePrompt(input.candidateText, input.sourceContext);
       const userContent = messages[1]?.content ?? "";
       const size = QualityIntelligenceHardening.assertPromptSize(userContent);
-      if (!size.ok) return SAFE_PROMPT_TOO_LARGE_VERDICT;
+      if (!size.ok) return { ...SAFE_PROMPT_TOO_LARGE_VERDICT, gatewayCallCount: 0 };
       const effectiveSignal = signal ?? new AbortController().signal;
       const request: GatewayRequest = {
         modelId,
@@ -377,7 +377,7 @@ export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudge
           : {}),
       };
       const response = await model.call(request, effectiveSignal);
-      return parseJudgeVerdict(response.content);
+      return { ...parseJudgeVerdict(response.content), gatewayCallCount: 1 };
     },
   };
 }
