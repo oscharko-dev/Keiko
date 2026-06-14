@@ -8,6 +8,7 @@ import {
   currentGatewayEgressConfig,
   currentRedactionSecrets,
 } from "./deps.js";
+import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -30,6 +31,31 @@ describe("buildRedactor", () => {
     const secret = ["CORPSECRET_", "123456789"].join("");
     const redactor = buildRedactor({ KEIKO_DEFAULT_API_KEY: secret });
     expect(redactor({ message: `token=${secret}` })).toEqual({ message: "token=[REDACTED]" });
+  });
+
+  it("scrubs Figma access tokens from env and local gateway config", () => {
+    const envToken = "figd_env-redaction-token";
+    const configToken = "figd_config-redaction-token";
+    const config = parseGatewayConfig({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://models.example.invalid/openai/v1",
+          apiKey: "fake-test-key",
+          timeoutMs: 30000,
+          maxRetries: 2,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      figma: { accessToken: configToken },
+    });
+    const redactor = buildRedactor({ FIGMA_ACCESS_TOKEN: envToken }, config);
+
+    expect(redactor({ env: envToken, config: configToken })).toEqual({
+      env: "[REDACTED]",
+      config: "[REDACTED]",
+    });
   });
 });
 
@@ -230,6 +256,40 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
         ca: "/etc/keiko/corp-root-ca.pem",
       }),
     ).toEqual({ proxy: "[REDACTED]", ca: "[REDACTED]" });
+    store.close();
+  });
+
+  it("includes Figma env and config tokens in current redaction secrets", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-figma-redaction-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://models.example.invalid/openai/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 30000,
+            maxRetries: 2,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+        figma: { accessToken: "figd_config-redaction-token" },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: { FIGMA_ACCESS_TOKEN: "figd_env-redaction-token" },
+      store,
+    });
+
+    expect(currentRedactionSecrets(deps)).toContain("figd_env-redaction-token");
+    expect(currentRedactionSecrets(deps)).toContain("figd_config-redaction-token");
     store.close();
   });
 });

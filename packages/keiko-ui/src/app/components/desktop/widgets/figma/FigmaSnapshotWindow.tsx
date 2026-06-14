@@ -753,8 +753,9 @@ export function FigmaSnapshotWindow({
               </li>
             </ul>
             <p className="figma-snapshot-scopes-note">
-              The token is read server-side from the <code>FIGMA_ACCESS_TOKEN</code> environment
-              variable or vault. This window never holds or transmits the token.
+              The token is read server-side from the vault, Keiko config, or{" "}
+              <code>FIGMA_ACCESS_TOKEN</code> environment variable. This window never holds or
+              transmits the token.
             </p>
             {/* Fix #3: two-step inline confirm for PAT revoke (mirrors ContextBudget pattern).
                 Revoke removes the stored encrypted PAT from the server vault (#758). */}

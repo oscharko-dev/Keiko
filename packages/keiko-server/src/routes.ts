@@ -461,7 +461,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/relationships/:id/explain", handler: handleRelationshipExplain },
   // Epic #750, Issue #756 — Figma Snapshot UI routes. PAT stays server-side; UI-safe projection only.
   // POST triggers a bounded snapshot-build from a board link; GET loads the stored summary.
-  // Token: resolved server-side from FIGMA_ACCESS_TOKEN env or vault; never in request or response.
+  // Token: resolved server-side from vault, config, or FIGMA_ACCESS_TOKEN env; never in response.
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
   // Epic #750 #758/#760 — operator revokes the stored encrypted PAT (audited key removal).

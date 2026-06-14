@@ -50,6 +50,7 @@ export function GatewaySetupDialog({
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
+  const [figmaAccessToken, setFigmaAccessToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [errorCode, setErrorCode] = useState<string | undefined>();
@@ -132,6 +133,7 @@ export function GatewaySetupDialog({
         apiKey,
         apiKeyHeaderName: apiKeyHeaderName.trim() === "" ? undefined : apiKeyHeaderName.trim(),
         deploymentNames: parsedDeploymentNames,
+        ...(figmaAccessToken.trim() === "" ? {} : { figmaAccessToken: figmaAccessToken.trim() }),
       });
       const count = result.testedModelIds.length;
       setSuccess(
@@ -212,6 +214,20 @@ export function GatewaySetupDialog({
               autoComplete="off"
               disabled={busy || success !== undefined}
               onChange={(event) => setApiKeyHeaderName(event.target.value)}
+            />
+          </label>
+          <label className="gw-field">
+            <span>
+              Figma access token <span className="dlg-opt">optional</span>
+            </span>
+            <input
+              className="gw-input mono"
+              type="password"
+              value={figmaAccessToken}
+              placeholder="Paste your Figma PAT"
+              autoComplete="off"
+              disabled={busy || success !== undefined}
+              onChange={(event) => setFigmaAccessToken(event.target.value)}
             />
           </label>
           <label className="gw-field">
