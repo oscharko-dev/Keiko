@@ -17,9 +17,20 @@ export const ERROR_CODES = {
   PROVIDER_ERROR: "GATEWAY_PROVIDER_ERROR",
   CONFIG_INVALID: "GATEWAY_CONFIG_INVALID",
   UNKNOWN_MODEL: "GATEWAY_UNKNOWN_MODEL",
+  PROXY_UNREACHABLE: "GATEWAY_PROXY_UNREACHABLE",
+  PROXY_AUTH_REQUIRED: "GATEWAY_PROXY_AUTH_REQUIRED",
+  PROXY_EGRESS_FAILED: "GATEWAY_PROXY_EGRESS_FAILED",
+  PROXY_BLOCKED_BY_POLICY: "GATEWAY_PROXY_BLOCKED_BY_POLICY",
+  TLS_CA_FAILURE: "GATEWAY_TLS_CA_FAILURE",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
+export type GatewayEgressErrorCode =
+  | typeof ERROR_CODES.PROXY_UNREACHABLE
+  | typeof ERROR_CODES.PROXY_AUTH_REQUIRED
+  | typeof ERROR_CODES.PROXY_EGRESS_FAILED
+  | typeof ERROR_CODES.PROXY_BLOCKED_BY_POLICY
+  | typeof ERROR_CODES.TLS_CA_FAILURE;
 
 export abstract class GatewayError extends Error {
   abstract readonly code: ErrorCode;
@@ -105,4 +116,14 @@ export class ConfigInvalidError extends GatewayError {
 export class UnknownModelError extends GatewayError {
   readonly code = ERROR_CODES.UNKNOWN_MODEL;
   readonly retryable = false;
+}
+
+export class GatewayEgressError extends GatewayError {
+  readonly code: GatewayEgressErrorCode;
+  readonly retryable = false;
+
+  constructor(code: GatewayEgressErrorCode, message: string, secrets: readonly string[] = []) {
+    super(message, secrets);
+    this.code = code;
+  }
 }

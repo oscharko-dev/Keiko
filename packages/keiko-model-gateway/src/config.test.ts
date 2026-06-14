@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   parseCapabilityList,
   parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
   parseModelCapability,
+  resolveOutboundHttpEgressConfig,
   toSafeObject,
 } from "./config.js";
 
@@ -48,6 +50,10 @@ function rawWithProvider(mutate: (provider: RawProvider) => Record<string, unkno
 }
 
 describe("parseGatewayConfig", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("parses a structurally valid config", () => {
     const config = parseGatewayConfig(validRaw());
     expect(config.providers).toHaveLength(1);
@@ -90,6 +96,48 @@ describe("parseGatewayConfig", () => {
       caBundlePath: "/etc/keiko/env-ca.pem",
     });
     expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("lets env vars override explicit enterprise egress settings per field", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: {
+        httpProxy: "http://proxy.config.local:8080",
+        httpsProxy: "http://secure-proxy.config.local:8443",
+        noProxy: "localhost,.config.example",
+      },
+    };
+    const config = parseGatewayConfig(raw, {
+      KEIKO_HTTP_PROXY: "http://proxy.env.local:8080",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.egress).toEqual({
+      httpProxy: "http://proxy.env.local:8080/",
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      noProxy: ["localhost", ".config.example"],
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("keeps valid config-file egress when a credentialed env override is ignored", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: { httpsProxy: "http://secure-proxy.config.local:8443" },
+    };
+    const config = parseGatewayConfig(raw, {
+      HTTPS_PROXY: "http://user:supersecret@proxy.env.local:8080",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.egress).toEqual({
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("HTTPS_PROXY");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("supersecret");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("user");
   });
 
   it("rejects credential-bearing proxy URLs without echoing the credentials", () => {
@@ -509,6 +557,57 @@ describe("loadConfigFromFile", () => {
       KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "example-file-load-token-1234567890",
     });
     expect(config.providers[0]?.apiKey).toBe("example-file-load-token-1234567890");
+  });
+
+  it("loads egress-only config JSON from disk without requiring providers", () => {
+    const path = join(dir, "egress-only.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        egress: {
+          httpsProxy: "http://secure-proxy.config.local:8443",
+          noProxy: "localhost,127.0.0.1",
+        },
+      }),
+      "utf8",
+    );
+    const config = loadEgressConfigFromFile(path, {
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config).toEqual({
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      noProxy: ["localhost", "127.0.0.1"],
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+  });
+});
+
+describe("resolveOutboundHttpEgressConfig", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns undefined when neither config nor env defines egress", () => {
+    expect(resolveOutboundHttpEgressConfig(undefined, {})).toBeUndefined();
+  });
+
+  it("applies env overrides independently over explicit config", () => {
+    const config = resolveOutboundHttpEgressConfig(
+      {
+        httpProxy: "http://proxy.config.local:8080",
+        httpsProxy: "http://secure-proxy.config.local:8443",
+        noProxy: ["localhost"],
+      },
+      {
+        KEIKO_HTTP_PROXY: "http://proxy.env.local:8080",
+        KEIKO_NO_PROXY: ".corp.example",
+      },
+    );
+    expect(config).toEqual({
+      httpProxy: "http://proxy.env.local:8080/",
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      noProxy: [".corp.example"],
+    });
   });
 });
 

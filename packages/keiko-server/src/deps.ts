@@ -9,7 +9,9 @@
 import {
   createDefaultChatCapability,
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   parseGatewayConfig,
+  resolveOutboundHttpEgressConfig,
   type EnvSource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -84,6 +86,8 @@ export interface UiHandlerDeps {
   readonly evidenceStore: EvidenceStore;
   // Process environment for redaction (env-value scrubbing) and config resolution.
   readonly env: EnvSource;
+  // Resolved outbound HTTP egress policy, including config-file-only Figma egress.
+  readonly egress?: GatewayEgressConfig | undefined;
   // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
   readonly redactor: Redactor;
   // The in-memory, bounded run registry. Injectable so tests never share global state.
@@ -263,6 +267,21 @@ function resolveConfig(
   }
 }
 
+function resolveConfiguredEgress(
+  configPath: string | undefined,
+  env: EnvSource,
+  localConfigPath: string,
+): GatewayEgressConfig | undefined {
+  try {
+    return loadEgressConfigFromFile(configPath ?? localConfigPath, env);
+  } catch (error) {
+    if (error instanceof GatewayError) {
+      return resolveOutboundHttpEgressConfig(undefined, env);
+    }
+    throw error;
+  }
+}
+
 function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
@@ -289,87 +308,14 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
 
-// Probes a single egress env var by running parseGatewayConfig with only that variable
-// set, returning the resulting egress field or undefined when the value is invalid.
-// Logs a warning naming the variable on failure — never the value (may contain credentials).
-function probeEgressField(
-  envName: string,
-  envValue: string,
-  fieldKey: keyof GatewayEgressConfig,
-): GatewayEgressConfig[keyof GatewayEgressConfig] | undefined {
-  try {
-    const probed = parseGatewayConfig(
-      {
-        providers: [
-          { modelId: "keiko-egress-probe", baseUrl: "http://127.0.0.1", apiKey: "probe-key" },
-        ],
-      },
-      { [envName]: envValue },
-    ).egress;
-    return probed?.[fieldKey];
-  } catch (error) {
-    if (error instanceof GatewayError) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[keiko-model-gateway] Ignoring invalid egress env var ${envName} (reason: ${fieldKey} parse failed)`,
-      );
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function firstEnvValue(
-  env: EnvSource,
-  ...names: string[]
-): { name: string; value: string } | undefined {
-  for (const name of names) {
-    const value = env[name];
-    if (typeof value === "string" && value.trim().length > 0) return { name, value };
-  }
-  return undefined;
-}
-
-function parseEnvOnlyEgressConfig(env: EnvSource): GatewayEgressConfig | undefined {
-  // Parse each egress field independently so a malformed HTTPS_PROXY (e.g. with embedded
-  // credentials) never silently discards a valid caBundlePath or noProxy. Each invalid
-  // field emits a console.warn (var name only, never the value) and the rest are applied.
-  const result: { -readonly [K in keyof GatewayEgressConfig]?: GatewayEgressConfig[K] } = {};
-
-  const httpProxy = firstEnvValue(env, "KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy");
-  if (httpProxy !== undefined) {
-    const val = probeEgressField(httpProxy.name, httpProxy.value, "httpProxy");
-    if (val !== undefined) result.httpProxy = val as string;
-  }
-
-  const httpsProxy = firstEnvValue(env, "KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy");
-  if (httpsProxy !== undefined) {
-    const val = probeEgressField(httpsProxy.name, httpsProxy.value, "httpsProxy");
-    if (val !== undefined) result.httpsProxy = val as string;
-  }
-
-  const noProxy = firstEnvValue(env, "KEIKO_NO_PROXY", "NO_PROXY", "no_proxy");
-  if (noProxy !== undefined) {
-    const val = probeEgressField(noProxy.name, noProxy.value, "noProxy");
-    if (val !== undefined) result.noProxy = val as readonly string[];
-  }
-
-  const caBundlePath = firstEnvValue(env, "KEIKO_CA_BUNDLE_PATH");
-  if (caBundlePath !== undefined) {
-    // caBundlePath is just a trimmed string — no validation that rejects valid paths.
-    result.caBundlePath = caBundlePath.value.trim();
-  }
-
-  return Object.keys(result).length === 0 ? undefined : result;
-}
-
 export function currentGatewayEgressConfig(
-  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env">,
+  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env" | "egress">,
 ): GatewayEgressConfig | undefined {
   return (
     deps.gatewayConfig?.current()?.egress ??
+    deps.egress ??
     deps.config?.egress ??
-    parseEnvOnlyEgressConfig(deps.env)
+    resolveOutboundHttpEgressConfig(undefined, deps.env)
   );
 }
 
@@ -462,18 +408,20 @@ function redactionSecrets(
 function runtimeRedactionSecrets(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
 ): readonly string[] {
   const config = runtimeConfig.current();
-  return redactionSecrets(env, config, config?.egress ?? parseEnvOnlyEgressConfig(env));
+  return redactionSecrets(env, config, config?.egress ?? egress);
 }
 
 function runtimeRedactString(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
 ): (value: string) => string {
   return (value: string): string =>
     createAuditRedactor(
-      { additionalSecrets: runtimeRedactionSecrets(env, runtimeConfig) },
+      { additionalSecrets: runtimeRedactionSecrets(env, runtimeConfig, egress) },
       env,
     )(value);
 }
@@ -482,13 +430,10 @@ function runtimeRedactString(
 // reuses `createAuditRedactor` (escaped literals + audited gateway patterns) wrapped by
 // `deepRedactStrings` so every string leaf of a serialized payload is scrubbed.
 export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor {
+  const egress = config?.egress ?? resolveOutboundHttpEgressConfig(undefined, env);
   const redactString = createAuditRedactor(
     {
-      additionalSecrets: redactionSecrets(
-        env,
-        config,
-        config?.egress ?? parseEnvOnlyEgressConfig(env),
-      ),
+      additionalSecrets: redactionSecrets(env, config, egress),
     },
     env,
   );
@@ -652,11 +597,12 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     options.env,
     runtimeConfigPath,
   );
+  const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
   const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, runtimeConfigPath);
   const evidenceStore = createNodeEvidenceStore(
     resolveEvidenceDir(options.evidenceDir, options.env),
   );
-  const redactString = runtimeRedactString(options.env, runtimeConfig);
+  const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const { store: uiStore, relationship } = composePersistence(
     options.store,
@@ -676,10 +622,11 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     evidenceStore,
     evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
     env: options.env,
+    egress,
     redactor: liveRedactor,
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
-    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig),
+    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig, egress),
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
     preferredProjectPath,
