@@ -57,8 +57,8 @@ describe("runInitCli", () => {
     expect(code).toBe(0);
     expect(c.err()).toBe("");
     expect(readPackage(root).scripts).toEqual({
-      "keiko:start": "keiko start",
-      "keiko:stop": "keiko stop",
+      "keiko:start": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start",
+      "keiko:stop": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop",
     });
     expect(c.out()).toContain("npm run keiko:start");
   });
@@ -66,7 +66,11 @@ describe("runInitCli", () => {
   it("is idempotent when scripts already match", () => {
     const root = makeTempPackage({
       name: "target-project",
-      scripts: { test: "vitest run", "keiko:start": "keiko start", "keiko:stop": "keiko stop" },
+      scripts: {
+        test: "vitest run",
+        "keiko:start": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start",
+        "keiko:stop": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop",
+      },
     });
     const c = makeIo();
 
@@ -75,8 +79,8 @@ describe("runInitCli", () => {
     expect(code).toBe(0);
     expect(readPackage(root).scripts).toEqual({
       test: "vitest run",
-      "keiko:start": "keiko start",
-      "keiko:stop": "keiko stop",
+      "keiko:start": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start",
+      "keiko:stop": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop",
     });
   });
 
@@ -105,8 +109,8 @@ describe("runInitCli", () => {
 
     expect(code).toBe(0);
     expect(readPackage(root).scripts).toEqual({
-      "keiko:start": "keiko start",
-      "keiko:stop": "keiko stop",
+      "keiko:start": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start",
+      "keiko:stop": "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop",
     });
   });
 
