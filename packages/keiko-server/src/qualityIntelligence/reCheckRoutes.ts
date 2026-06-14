@@ -999,6 +999,16 @@ function regenWorkflowDeps(
       },
     },
     generate: createQiGenerationPort(deps, target),
+    // The regenerate-stale judge deliberately shares the auto-selected generation model id rather than
+    // resolving an independent qi:judge-logic model the way the initial run does (runExecution.ts).
+    // This is safe because the regen target comes from resolveQiTestDesignSelection(deps) with NO
+    // explicit model request: auto-selection prefers structured-output models, so whenever a judge is
+    // possible (a structured-output model is configured) the generation model already satisfies
+    // qi:judge-logic, and when only chat-only models exist both generation and the judge degrade
+    // (judge skipped via buildJudgePortIfAvailable's typed-unavailable catch). The initial-run
+    // asymmetry — an explicitly requested chat-only generation model paired with a separate
+    // structured-output judge — cannot arise here because the regen path never carries an explicit
+    // generation-model request.
     ...(target.kind === "model" ? { judge: buildJudgePortIfAvailable(deps, target.modelId) } : {}),
   };
 }

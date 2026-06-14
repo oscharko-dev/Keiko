@@ -34,6 +34,17 @@ resulting run records `qualityScore: null`, persists no `test-quality` findings,
 generation gateway dispatch. An explicitly requested chat-only generation model paired with a
 separate structured-output model still runs end to end with the judged path.
 
+The judge is selected by capability through `resolveModelForQiCapability(deps, "qi:judge-logic")`,
+never by model id. The matrix pins both judge states in
+[`matrix.test.ts`](../packages/keiko-server/src/qualityIntelligence/__tests__/matrix.test.ts) (the
+"Epic #761 judge tier" block); the end-to-end skip (run accepted, `qualityScore: null`, no
+`test-quality` findings) is pinned in `runExecution.test.ts`.
+
+| Judge capability set                         | Outcome                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| structured-output model configured           | lowest-cost structured-output model selected for the judge              |
+| chat-only models only (no structured-output) | typed `QI_CAPABILITY_UNAVAILABLE` → judge skipped, `qualityScore: null` |
+
 ## Multimodal (vision-augmented) tier (Issue #764)
 
 The fourth capability cell is the vision-augmented Figma snapshot stage (Issue #810). It is routed by
