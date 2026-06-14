@@ -140,18 +140,19 @@ describe("Epic #761 capability matrix", () => {
 // These rows consolidate the chat+multimodal cell and the "multimodal removed -> graceful" transition
 // into the #761/#764 matrix artifact.
 describe("Epic #761 chat+multimodal tier", () => {
-  it("routes the vision stage to the configured image-input model by capability", () => {
+  it("routes the vision stage to the lowest-cost configured image-input model by capability", () => {
     const selection = resolveQiMultimodalSelection(
       depsWith(
         configWith([
           capability("text-tier", { supportsImageInput: false, costClass: "low" }),
-          capability("vision-tier", { supportsImageInput: true, costClass: "medium" }),
+          capability("vision-high", { supportsImageInput: true, costClass: "high" }),
+          capability("vision-low", { supportsImageInput: true, costClass: "low" }),
         ]),
       ),
     );
     expect(selection.kind).toBe("model");
     if (selection.kind === "model") {
-      expect(selection.modelId).toBe("vision-tier");
+      expect(selection.modelId).toBe("vision-low");
       expect(selection.capability.supportsImageInput).toBe(true);
     }
   });

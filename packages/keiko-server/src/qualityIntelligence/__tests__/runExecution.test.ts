@@ -16,6 +16,7 @@ import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  createNodeFigmaSnapshotStore,
   loadQualityIntelligenceCandidates,
   loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
@@ -31,6 +32,7 @@ import type {
 import type { QualityIntelligenceRunSummary } from "@oscharko-dev/keiko-workflows";
 import type { RouteContext } from "../../routes.js";
 import { handleGetQiRun } from "../uiRoutes.js";
+import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -328,6 +330,7 @@ function candidateProjection(
   evidenceDir: string,
 ): {
   readonly count: number;
+  readonly ids: readonly string[];
   readonly titles: readonly string[];
   readonly steps: readonly (readonly string[])[];
   readonly expectedResults: readonly (readonly string[])[];
@@ -336,10 +339,47 @@ function candidateProjection(
   const candidates = artifact?.candidates ?? [];
   return {
     count: candidates.length,
+    ids: candidates.map((candidate) => candidate.id),
     titles: candidates.map((candidate) => candidate.title),
     steps: candidates.map((candidate) => candidate.steps),
     expectedResults: candidates.map((candidate) => candidate.expectedResults),
   };
+}
+
+function recordVisionSnapshot(dir: string): void {
+  createNodeFigmaSnapshotStore(dir).record({
+    runId: "snap-vision-1",
+    provenance: {
+      fileKey: "KEY",
+      nodeId: "0:1",
+      version: undefined,
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+    },
+    integrityHash: hashSnapshot(1, undefined, [{ screenId: "s1", integrityHash: "h-vision" }]),
+    screens: [
+      {
+        screenId: "s1",
+        irJson: {
+          id: "s1",
+          name: "Visual login",
+          root: {
+            id: "s1-root",
+            name: "Hero image",
+            type: "FRAME",
+            interactionHint: "container",
+            text: "",
+            imageFills: [{ imageRef: "img-1" }],
+            children: [],
+          },
+        },
+        integrityHash: "h-vision",
+        image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50]) },
+      },
+    ],
+    skippedScreens: [],
+    links: [],
+    tokens: { colors: [], typography: [], spacing: [], radius: [] },
+  });
 }
 
 function runDetailCtx(runId: string): RouteContext {
@@ -669,6 +709,43 @@ describe("executeQiRun — model selection", () => {
     expect(qualityFinding?.summaryRedacted).toContain("model budget");
   });
 
+  it("counts capability-routed Figma vision calls in run evidence", async () => {
+    recordVisionSnapshot(evidenceDir);
+    const { port, calls } = recordingSequencePort([
+      JSON.stringify(["The primary CTA appears visually disabled"]),
+      COVERING_TWO_REQUIREMENTS_JSON,
+    ]);
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-figma-vision-counted",
+        request: makeRequest({
+          modelId: "chat-only",
+          sources: [
+            { kind: "figma-snapshot", label: "Vision snapshot", snapshotRunId: "snap-vision-1" },
+          ],
+        }),
+        deps: buildDeps({
+          evidenceDir,
+          modelPort: port,
+          config: buildConfig([
+            chatCapability("chat-only", { structuredOutput: false, costClass: "medium" }),
+            chatCapability("vision-low", {
+              structuredOutput: false,
+              supportsImageInput: true,
+              costClass: "low",
+            }),
+          ]),
+        }),
+      }),
+    );
+
+    expect(summary.status).toBe("succeeded");
+    expect(calls.map((call) => call.modelId)).toEqual(["vision-low", "chat-only"]);
+    expect(summary.modelGatewayCallCount).toBe(2);
+    const manifest = loadQualityIntelligenceRun("run-figma-vision-counted", { evidenceDir });
+    expect(manifest?.modelGatewayCallCount).toBe(2);
+  });
+
   it("starts a deterministic baseline when no model is configured", async () => {
     const deps: UiHandlerDeps = {
       config: undefined,
@@ -778,13 +855,13 @@ describe("executeQiRun — seed persistence", () => {
     expectSeededBaselineManifest("run-seeded-no-config", evidenceDir);
   });
 
-  it("persists the applied seed when the selected model advertises seeding support", async () => {
-    let seenSeed: number | undefined;
+  it("reproduces seeded output when the selected model advertises seeding support", async () => {
+    const seenSeeds: (number | undefined)[] = [];
     const port: ModelPort = {
       call: (request: GatewayRequest): Promise<NormalizedResponse> => {
-        seenSeed = request.seed;
+        seenSeeds.push(request.seed);
         return Promise.resolve({
-          content: EMPTY_CANDIDATES_JSON,
+          content: COVERING_TWO_REQUIREMENTS_JSON,
           modelId: request.modelId,
           finishReason: "stop",
           toolCalls: [],
@@ -793,21 +870,51 @@ describe("executeQiRun — seed persistence", () => {
         });
       },
     };
-    const summary = await executeQiRun(
-      makeInput(evidenceDir, {
-        request: makeRequest({ seed: 23 }),
-        deps: buildDeps({
-          evidenceDir,
-          modelPort: port,
-          config: buildConfig([chatCapability(MODEL_ID, { supportsSeeding: true })]),
+    const deps = buildDeps({
+      evidenceDir,
+      modelPort: port,
+      config: buildConfig([
+        chatCapability("seeded-chat-only", {
+          structuredOutput: false,
+          supportsSeeding: true,
         }),
+      ]),
+    });
+    const request = { ...determinismAuditRequest(), seed: 23 };
+    const first = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-seeded-supported-a",
+        request,
+        deps,
       }),
     );
-    expect(summary.status).toBe("succeeded");
-    expect(seenSeed).toBe(23);
-    const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
-    expect(manifest?.seedUsed).toBe(23);
-    expect(manifest?.modelParameters?.seed).toBe(23);
+    const second = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-seeded-supported-b",
+        request,
+        deps,
+      }),
+    );
+
+    expect(first.status).toBe("succeeded");
+    expect(second.status).toBe("succeeded");
+    expect(seenSeeds).toEqual([23, 23]);
+    expect(first.modelGatewayCallCount).toBe(1);
+    expect(second.modelGatewayCallCount).toBe(1);
+
+    const firstProjection = candidateProjection("run-seeded-supported-a", evidenceDir);
+    const secondProjection = candidateProjection("run-seeded-supported-b", evidenceDir);
+    expect(firstProjection.count).toBeGreaterThan(0);
+    expect(firstProjection).toEqual(secondProjection);
+
+    const firstManifest = loadQualityIntelligenceRun("run-seeded-supported-a", { evidenceDir });
+    const secondManifest = loadQualityIntelligenceRun("run-seeded-supported-b", { evidenceDir });
+    expect(firstManifest?.modelId).toBe("seeded-chat-only");
+    expect(secondManifest?.modelId).toBe("seeded-chat-only");
+    expect(firstManifest?.seedUsed).toBe(23);
+    expect(secondManifest?.seedUsed).toBe(23);
+    expect(firstManifest?.modelParameters?.seed).toBe(23);
+    expect(secondManifest?.modelParameters?.seed).toBe(23);
   });
 
   it("persists seedUsed=null when a model run did not apply the requested seed", async () => {

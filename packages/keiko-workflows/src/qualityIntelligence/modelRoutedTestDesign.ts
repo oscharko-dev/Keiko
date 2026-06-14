@@ -146,6 +146,11 @@ export interface QualityIntelligenceModelRoutedTestDesignDeps {
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly candidatesSink: QualityIntelligenceCandidatesSink;
   readonly generate: QualityIntelligenceGenerationPort;
+  /**
+   * Gateway calls made before this workflow context exists, such as capability-routed vision hints
+   * during server-side source ingestion. They are folded into summary + manifest evidence.
+   */
+  readonly initialModelGatewayCallCount?: number | undefined;
   /** Optional model-judge for test-quality scoring (Epic #736). Absent → judge stage is skipped. */
   readonly judge?: QualityIntelligenceJudgePort | undefined;
   readonly clock?: QualityIntelligenceClock | undefined;
@@ -802,6 +807,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     policyProfile: input.profile,
     signal: deps.signal,
   });
+  ctx.modelGatewayCallCount += deps.initialModelGatewayCallCount ?? 0;
   const evidenceRefs = evidenceRefsFor(input.ingestedAtoms);
   emitQueuedAndStarted(ctx);
   try {
@@ -826,7 +832,9 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
     const coverageMap = await withStage(ctx, "coverage", async () =>
-      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates: reviewCandidates })),
+      Promise.resolve(
+        buildCoverageMap({ runId: input.plan.id, atoms, candidates: reviewCandidates }),
+      ),
     );
     const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
     const excerptByAtomId = excerptsByAtomId(input.ingestedAtoms);

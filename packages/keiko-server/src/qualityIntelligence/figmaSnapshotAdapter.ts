@@ -107,6 +107,10 @@ export type FigmaVisionCall = (
   modelId: string,
 ) => readonly string[] | Promise<readonly string[]>;
 
+export interface FigmaVisionHintProviderOptions {
+  readonly onGatewayCallAttempt?: (() => void) | undefined;
+}
+
 const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_VISION_BASELINE_BYTES = 12_000;
 const MAX_VISION_HINTS = 24;
@@ -231,7 +235,10 @@ function createVisionAbortSignal(): { readonly signal: AbortSignal; readonly cle
   };
 }
 
-function makeGatewayFigmaVisionCall(deps: UiHandlerDeps): FigmaVisionCall | undefined {
+function makeGatewayFigmaVisionCall(
+  deps: UiHandlerDeps,
+  options: FigmaVisionHintProviderOptions,
+): FigmaVisionCall | undefined {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) return undefined;
   const store = createNodeFigmaSnapshotStore(evidenceDir);
@@ -260,6 +267,7 @@ function makeGatewayFigmaVisionCall(deps: UiHandlerDeps): FigmaVisionCall | unde
     );
     const abort = createVisionAbortSignal();
     try {
+      options.onGatewayCallAttempt?.();
       const response = await model.call(gatewayRequest, abort.signal);
       return parseHintResponse(redactedString(deps, response.content));
     } finally {
@@ -277,16 +285,18 @@ function makeGatewayFigmaVisionCall(deps: UiHandlerDeps): FigmaVisionCall | unde
  */
 export function makeFigmaVisionHintProvider(
   deps: UiHandlerDeps,
-  visionCall: FigmaVisionCall | undefined = makeGatewayFigmaVisionCall(deps),
+  visionCall?: FigmaVisionCall,
+  options: FigmaVisionHintProviderOptions = {},
 ): FigmaVisionHintProvider {
+  const resolvedVisionCall = visionCall ?? makeGatewayFigmaVisionCall(deps, options);
   const selection = resolveQiMultimodalSelection(deps);
-  if (selection.kind === "unavailable" || visionCall === undefined) {
+  if (selection.kind === "unavailable" || resolvedVisionCall === undefined) {
     return () => [];
   }
   const { modelId } = selection;
   return (request: FigmaVisionScreenRequest): readonly string[] | Promise<readonly string[]> => {
     try {
-      const result = visionCall(request, modelId);
+      const result = resolvedVisionCall(request, modelId);
       return typeof (result as Promise<readonly string[]>).then === "function"
         ? Promise.resolve(result).then(sanitiseCallResult, () => [])
         : sanitiseCallResult(result);
