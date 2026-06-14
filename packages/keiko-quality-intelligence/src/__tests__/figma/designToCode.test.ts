@@ -137,6 +137,30 @@ describe("buildEmissionPlan — target-neutral component tree", () => {
     expect(home?.navTargets).toEqual([]);
   });
 
+  it("falls back to screen ids when persisted screen names are blank", () => {
+    const source = screen(
+      "s-source",
+      "Source",
+      node("source-root", "container", {
+        children: [node("to-target", "button", { text: "Next" })],
+      }),
+    );
+    const target = screen("s-target", "   ", node("target-root", "container"));
+    const hints = deriveRoutingHints(
+      deriveNavGraph({
+        screens: [source, target],
+        links: [link("to-target", "ON_CLICK", "target-root")],
+        tokens: NO_TOKENS,
+        reduction: { inputNodeCount: 0, keptNodeCount: 0, removedNodeCount: 0, removedRatio: 0 },
+      }),
+    );
+    const plan = buildEmissionPlan({ screens: [source, target], tokens: NO_TOKENS, hints });
+    expect(plan.screens.find((s) => s.screenId === "s-target")?.screenName).toBe("s-target");
+    expect(plan.screens.find((s) => s.screenId === "s-source")?.navTargets).toEqual([
+      { trigger: "ON_CLICK", toScreenId: "s-target", toScreenName: "s-target" },
+    ]);
+  });
+
   it("carries the design tokens through unchanged for the adapter to theme", () => {
     const plan = buildEmissionPlan({ screens: [loginScreen()], tokens, hints: [] });
     expect(plan.tokens).toEqual(tokens);
@@ -445,6 +469,59 @@ describe("htmlCssAdapter — sanitized screen file names (Fix #7)", () => {
     // Sanitized href must not parse as a URI scheme (no bare 'I123:' scheme).
     const hrefMatch = /href="([^"]+)"/u.exec(index);
     expect(hrefMatch?.[1]).not.toMatch(/^[A-Za-z][A-Za-z0-9+\-.]*:/u);
+  });
+
+  it("normalizes traversal-like and shell-like screen ids to one safe path segment", () => {
+    const artifact = emitCode(
+      {
+        screens: [
+          screen("../admin\\panel?x=1", "Admin", node("root-a", "container")),
+          screen("..admin/panel;x=1", "Admin copy", node("root-b", "container")),
+        ],
+        tokens: NO_TOKENS,
+        hints: [],
+      },
+      htmlCssAdapter,
+    );
+
+    const paths = artifact.files.map((f) => f.path);
+    expect(paths).toContain("screens/admin-panel-x-1.html");
+    expect(paths).toContain("screens/admin-panel-x-1-1.html");
+    for (const path of paths.filter((p) => p.startsWith("screens/"))) {
+      const fileName = path.slice("screens/".length);
+      expect(fileName).toMatch(/^[A-Za-z0-9_-]+\.html$/u);
+      expect(fileName).not.toContain("..");
+      expect(fileName).not.toContain("/");
+      expect(fileName).not.toContain("\\");
+    }
+    const index = fileByPath(artifact, "index.html");
+    expect(index).toContain('href="screens/admin-panel-x-1.html"');
+    expect(index).toContain('href="screens/admin-panel-x-1-1.html"');
+  });
+
+  it("uses a stable basename when a screen id has no safe filename characters", () => {
+    const artifact = emitCode(
+      {
+        screens: [screen("///", "Slash", node("root", "container"))],
+        tokens: NO_TOKENS,
+        hints: [],
+      },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/screen.html");
+    expect(html).toContain('data-screen-id="///"');
+    expect(fileByPath(artifact, "index.html")).toContain('href="screens/screen.html"');
+  });
+
+  it("uses structural screen names for blank titles and index links", () => {
+    const nameless = screen("s-nameless", "   ", node("root", "container"));
+    const artifact = emitCode(
+      { screens: [nameless], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-nameless.html");
+    expect(html).toContain("<title>s-nameless</title>");
+    expect(fileByPath(artifact, "index.html")).toContain(">s-nameless</a>");
   });
 
   it("prefixes in-screen nav hrefs with './' to prevent URI-scheme misparse", () => {

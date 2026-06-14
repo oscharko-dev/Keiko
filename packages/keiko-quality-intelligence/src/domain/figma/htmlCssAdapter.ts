@@ -23,10 +23,11 @@
 // rather than emitted.
 //
 // Screen file names: Figma ids may contain ':' (Windows-invalid) and ';' (URI scheme risk in hrefs).
-// sanitizeScreenFileName replaces /[:;]/g with '-'. Collisions after substitution are resolved by a
-// numeric suffix. All relative hrefs inside screen HTML are prefixed with './' so they are relative
-// to the screens/ directory, not ambiguous URI-scheme fragments. The raw screen id is preserved in
-// the data-screen-id attribute.
+// Stored evidence can also be tampered with, so screen ids are normalized to one safe POSIX path
+// segment ([A-Za-z0-9_-]) before they become CodeFile.path / href material. Collisions after
+// substitution are resolved by a numeric suffix. All relative hrefs inside screen HTML are prefixed
+// with './' so they are relative to the screens/ directory, not ambiguous URI-scheme fragments. The
+// raw screen id is preserved in the data-screen-id attribute.
 //
 // Layout / sizing / cornerRadius / typography (from IrNode, threaded through EmissionElement):
 // For nodes with auto-layout, a deterministic CSS class is emitted (name = "n-" + sanitized node id)
@@ -84,15 +85,26 @@ const indent = (depth: number): string => INDENT.repeat(depth);
 
 // ─── Fix #7: safe screen file names ──────────────────────────────────────────
 //
-// Figma ids contain ':' (invalid on Windows file paths) and INSTANCE ids contain ';' which is
-// parsed as a URI scheme separator in sibling hrefs (e.g. "I123:456;789:12.html" → opaque URI).
-// We replace /[:;]/g with '-'; ids are unique before substitution so collisions are rare, but a
-// numeric suffix is appended defensively.
+// Figma ids contain ':' (invalid on Windows file paths) and INSTANCE ids contain ';' which is parsed
+// as a URI scheme separator in sibling hrefs (e.g. "I123:456;789:12.html" → opaque URI). A tampered
+// stored snapshot could also contain slashes, backslashes, or other path metacharacters. Normalize to
+// a single artifact-relative filename segment. Ids are unique before substitution so collisions are
+// rare, but a numeric suffix is appended defensively.
+const SAFE_SCREEN_FILE_RE = /[^A-Za-z0-9_-]/gu;
+
+function sanitizeScreenFileName(screenId: string): string {
+  const cleaned = stripUnsafeFormatChars(screenId)
+    .replace(SAFE_SCREEN_FILE_RE, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  return cleaned.length > 0 ? cleaned : "screen";
+}
+
 function buildSafeNameIndex(screens: readonly ScreenEmission[]): ReadonlyMap<string, string> {
   const seen = new Map<string, number>();
   const result = new Map<string, string>();
   for (const screen of screens) {
-    const base = screen.screenId.replace(/[:;]/gu, "-");
+    const base = sanitizeScreenFileName(screen.screenId);
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     result.set(screen.screenId, count === 0 ? base : `${base}-${String(count)}`);
@@ -321,7 +333,7 @@ function renderNav(
   if (navTargets.length === 0) return [];
   const lines: string[] = [`${indent(depth)}<nav aria-label="Screen navigation">`];
   for (const target of navTargets) {
-    const safeName = safeNames.get(target.toScreenId) ?? target.toScreenId.replace(/[:;]/gu, "-");
+    const safeName = safeNames.get(target.toScreenId) ?? sanitizeScreenFileName(target.toScreenId);
     const href = `./${escapeHtml(safeName)}.html`;
     const trigger = escapeHtml(target.trigger);
     const label = escapeHtml(target.toScreenName);
@@ -380,7 +392,7 @@ function renderIndexHtml(
   safeNames: ReadonlyMap<string, string>,
 ): string {
   const links = screens.map((screen) => {
-    const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
+    const safeName = safeNames.get(screen.screenId) ?? sanitizeScreenFileName(screen.screenId);
     return (
       `${indent(3)}<li><a href="screens/${escapeHtml(safeName)}.html">` +
       `${escapeHtml(screen.screenName)}</a></li>`
@@ -459,7 +471,7 @@ function emitHtmlCss(plan: CodeEmissionPlan): CodeArtifact {
     { path: "index.html", contents: renderIndexHtml(plan.screens, safeNames) },
     { path: "tokens.css", contents: renderTokensCss(plan.tokens) },
     ...plan.screens.map((screen) => {
-      const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
+      const safeName = safeNames.get(screen.screenId) ?? sanitizeScreenFileName(screen.screenId);
       return {
         path: `screens/${safeName}.html`,
         contents: renderScreenHtml(screen, safeNames, lookups),
