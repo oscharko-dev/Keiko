@@ -30,7 +30,7 @@ import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort, QiJudgeError } from "./judgePort.js";
-import { resolveQiTestDesignSelection, selectModelForQiCapability } from "./modelSelection.js";
+import { resolveModelForQiCapability, resolveQiTestDesignSelection } from "./modelSelection.js";
 
 // Mirrors the stages the model-routed workflow actually emits (descriptors.ts stageNames), so the
 // run plan the UI renders matches the live stage:started/completed events — including the
@@ -203,9 +203,10 @@ function buildJudgePortForModelRun(
   requestedModelId: string | undefined,
 ): ReturnType<typeof createQiJudgePort> | undefined {
   if (modelId === undefined) return undefined;
-  const judgeModelId = selectModelForQiCapability(deps, "qi:judge-logic", requestedModelId);
+  const judgeSelection = resolveModelForQiCapability(deps, "qi:judge-logic", requestedModelId);
+  if (judgeSelection.kind === "unavailable") return undefined;
   try {
-    return createQiJudgePort(deps, judgeModelId);
+    return createQiJudgePort(deps, judgeSelection.modelId);
   } catch (error) {
     if (error instanceof QiJudgeError) {
       throw new QiGenerationError(error.code, error.message);
