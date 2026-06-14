@@ -16,6 +16,7 @@ export { runEvidenceCli } from "./evidence.js";
 export { runContextCli } from "./context.js";
 export { runModelsCli } from "./models.js";
 export { runInitCli, KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT, type InitCliDeps } from "./init.js";
+export { runDoctorCli, type DoctorCliDeps } from "./doctor.js";
 export { runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
 export { runUiCli, parseUiArgs, waitForShutdown, type UiCliDeps } from "./ui.js";
 export { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
