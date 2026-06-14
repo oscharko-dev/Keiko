@@ -42,7 +42,10 @@ export interface EmissionElement {
   readonly layout?: IrLayout;
   /** Per-axis sizing mode threaded from the IR node; absent when not set. */
   readonly sizing?: IrSizing;
-  /** Corner radius in pixels threaded from the IR node; absent when zero or absent. */
+  /**
+   * Corner radius in pixels threaded verbatim from the IR node; absent when the IR omits it. The IR
+   * cleaner (normalize) already drops a zero radius upstream, so this is never 0 in practice.
+   */
   readonly cornerRadius?: number;
   /** Per-TEXT typography threaded from the IR node; absent for non-TEXT nodes. */
   readonly typography?: IrTypography;

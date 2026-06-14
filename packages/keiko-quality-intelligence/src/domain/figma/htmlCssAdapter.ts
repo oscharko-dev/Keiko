@@ -9,8 +9,12 @@
 //
 // Output is a reviewable proposal (an ordered file list): `index.html` (links every screen),
 // `tokens.css` (the `:root` custom-property table), and one `screens/<id>.html` per screen. Pure: no
-// IO, no model, no Date — a given plan yields a byte-identical artifact. All text and attribute values
-// are HTML-escaped so the reviewable artifact cannot inject markup.
+// IO, no model, no clock — a given plan yields a byte-identical artifact. All text and attribute values
+// are HTML-escaped so the reviewable artifact cannot inject markup, and unsafe Unicode format chars
+// (bidi-override / zero-width / C0-C1 / DEL) are stripped from every emitted string before escaping —
+// these are not HTML metacharacters and would otherwise survive into the artifact, enabling
+// Trojan-source spoofing and zero-width-split secrets that evade redaction (same invariant the QI atom
+// path enforces). The TAB/LF/CR trio and all ordinary text survive, so clean boards are unchanged.
 //
 // CSS value handling: fontFamily tokens are emitted as quoted strings with embedded double-quotes
 // escaped and control/injection characters ('{', '}', ';', '</', '*/', newlines) stripped, so a
@@ -35,6 +39,7 @@
 // What is NOT reproduced: absolute positioning, constraints, effects (shadows/blur), image fills
 // beyond refs, grid layout, overflow, z-ordering, component variants.
 
+import { stripUnsafeFormatChars } from "../assertions.js";
 import type { CodeArtifact, CodeFile, CodeTargetAdapter } from "./codeTargetAdapter.js";
 import type {
   CodeEmissionPlan,
@@ -66,8 +71,14 @@ const HTML_ESCAPES: Readonly<Record<string, string>> = {
   "'": "&#39;",
 };
 
+// Strip unsafe Unicode format chars (bidi-override / zero-width / C0-C1 / DEL) BEFORE HTML-escaping.
+// These are NOT HTML metacharacters, so escaping alone passes them verbatim into the reviewable
+// artifact — enabling Trojan-source spoofing and zero-width-split secrets that evade redaction. This
+// mirrors the QI atom-text invariant (stripUnsafeFormatChars). Clean text is unchanged — the TAB/LF/CR
+// trio and all ordinary/accented/CJK/emoji code points survive — so deterministic output stays
+// byte-identical for non-hostile boards.
 const escapeHtml = (value: string): string =>
-  value.replace(/[&<>"']/gu, (char) => HTML_ESCAPES[char] ?? char);
+  stripUnsafeFormatChars(value).replace(/[&<>"']/gu, (char) => HTML_ESCAPES[char] ?? char);
 
 const indent = (depth: number): string => INDENT.repeat(depth);
 
@@ -100,7 +111,12 @@ function buildSafeNameIndex(screens: readonly ScreenEmission[]): ReadonlyMap<str
 const CSS_INJECTION_RE = /[{};]|<\/|\*\/|[\u0000-\u001f\u007f]/gu;
 
 const safeFontFamily = (family: string): string => {
-  const cleaned = family.replace(CSS_INJECTION_RE, "").replace(/"/gu, "\\22 ");
+  // Strip unsafe Unicode format chars first — bidi/zero-width/C1 are NOT covered by CSS_INJECTION_RE
+  // (which only strips C0/DEL + structural injection sequences) — then escape embedded quotes. Same
+  // egress invariant as escapeHtml: these chars would otherwise survive into the quoted CSS string.
+  const cleaned = stripUnsafeFormatChars(family)
+    .replace(CSS_INJECTION_RE, "")
+    .replace(/"/gu, "\\22 ");
   return `"${cleaned}"`;
 };
 
@@ -245,7 +261,12 @@ const collectStyles = (element: EmissionElement, ctx: ScreenStyleContext): void 
     ctx.rules.push("}");
   }
 
-  for (const child of element.children) collectStyles(child, ctx);
+  // renderElement discards the children of void-role elements (image/input), so collecting their
+  // styles would emit orphaned CSS rules referencing classes that appear on no rendered element.
+  // Skip the recursion for void roles to keep the stylesheet aligned with the emitted HTML.
+  if (!VOID_ROLES.has(element.role)) {
+    for (const child of element.children) collectStyles(child, ctx);
+  }
 };
 
 // ─── HTML element rendering ───────────────────────────────────────────────────
@@ -265,6 +286,11 @@ function elementAttributes(
   if (element.role === "link") parts.push('href="#"');
   if (element.role === "input") parts.push(`aria-label="${escapeHtml(element.displayName)}"`);
   if (element.role === "image") parts.push(`alt="${escapeHtml(element.displayName)}"`);
+  // A text-less button/link gets no accessible name from its (empty) content; fall back to the
+  // structural display name so the reviewable artifact stays screen-reader navigable (WCAG 4.1.2).
+  if ((element.role === "button" || element.role === "link") && element.text === undefined) {
+    parts.push(`aria-label="${escapeHtml(element.displayName)}"`);
+  }
   return parts.join(" ");
 }
 

@@ -31,6 +31,7 @@ import {
   deriveRoutingHints,
   type RoutingHint,
 } from "../../domain/figma/navGraph.js";
+import { isUnsafeFormatCodePoint } from "../../domain/assertions.js";
 
 // ─── Fixture builders ──────────────────────────────────────────────────────────
 
@@ -647,5 +648,234 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
       htmlCssAdapter,
     );
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+// ─── Unsafe format-char stripping in the reviewable artifact ──────────────────
+//
+// Figma board text (screen names, node names, text content, font-family) is untrusted. Unicode
+// bidi-override / zero-width / control code points are NOT HTML metacharacters, so escapeHtml alone
+// passes them through verbatim into the downloadable HTML/CSS — enabling Trojan-source spoofing and
+// zero-width-split secrets that evade redaction. The emitter must strip them (the same invariant the
+// QI atom path enforces via stripUnsafeFormatChars), preserving ordinary text and the TAB/LF/CR trio.
+
+describe("htmlCssAdapter — strips unsafe bidi/zero-width/control format chars from the artifact", () => {
+  const RLO = String.fromCodePoint(0x202e); // right-to-left override (Trojan-source)
+  const ZWSP = String.fromCodePoint(0x200b); // zero-width space (secret-splitting)
+  const BEL = String.fromCodePoint(0x0007); // C0 control
+  const BOM = String.fromCodePoint(0xfeff); // zero-width no-break space
+
+  // Assert against the SAME canonical predicate the emitter strips by, so the test pins "the artifact
+  // carries no unsafe format code point" rather than a hand-rolled (and drift-prone) range list.
+  const hasUnsafe = (s: string): boolean => {
+    for (const ch of s) {
+      const cp = ch.codePointAt(0);
+      if (cp !== undefined && isUnsafeFormatCodePoint(cp)) return true;
+    }
+    return false;
+  };
+
+  it("strips format chars from screen name, text, and node name in the emitted HTML", () => {
+    const evil = screen(
+      `Lo${RLO}gin${ZWSP}`,
+      `Lo${RLO}gin${ZWSP}`,
+      node("root", "container", {
+        name: `ro${BOM}ot`,
+        children: [node("t", "text", { name: `la${ZWSP}bel`, text: `He${RLO}llo${BEL}` })],
+      }),
+    );
+    const artifact = emitCode({ screens: [evil], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    // The screen file is keyed by the (sanitised) screen id, which here is the dirty name.
+    const html = artifact.files.find((f) => f.path.startsWith("screens/"))?.contents ?? "";
+    expect(html.length).toBeGreaterThan(0);
+    expect(hasUnsafe(html)).toBe(false);
+    // Ordinary characters survive — only the format chars are removed.
+    expect(html).toContain("Hello");
+    expect(html).toContain("Login");
+    const index = fileByPath(artifact, "index.html");
+    expect(hasUnsafe(index)).toBe(false);
+  });
+
+  it("strips format chars from a font-family token in tokens.css", () => {
+    const dirtyTokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typo:dirty",
+          kind: "typography",
+          fontFamily: `In${RLO}ter${ZWSP}`,
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: dirtyTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const css = fileByPath(artifact, "tokens.css");
+    expect(hasUnsafe(css)).toBe(false);
+    expect(css).toContain("Inter"); // the legitimate remainder survives
+  });
+
+  it("preserves the legitimate TAB/LF/CR whitespace trio in text content", () => {
+    const ws = screen(
+      "s-ws",
+      "WS",
+      node("root", "container", {
+        children: [node("t", "text", { text: "a\tb" })],
+      }),
+    );
+    const artifact = emitCode({ screens: [ws], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-ws.html");
+    expect(html).toContain("a\tb");
+  });
+});
+
+// ─── Void-role elements do not emit orphaned CSS rules for discarded children ──
+//
+// renderElement renders void roles (image/input) as self-closing tags and discards their children.
+// collectStyles must therefore skip those children, or the <style> block carries rules whose class
+// appears on no rendered element.
+
+describe("htmlCssAdapter — void-role children emit no orphaned CSS", () => {
+  it("does not emit a CSS rule for a styled child of a void (image) element", () => {
+    const s = screen(
+      "s-v",
+      "Void",
+      node("root", "container", {
+        name: "root",
+        children: [
+          node("img", "image", {
+            name: "img",
+            children: [node("kid", "container", { name: "kid", cornerRadius: 8 })],
+          }),
+        ],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-v.html");
+    // The child of the void <img> is never rendered, so neither its class nor its rule may appear.
+    expect(html).not.toContain("n-kid");
+    expect(html).not.toContain("border-radius: 8px;");
+  });
+
+  it("still emits the void element's OWN style rule", () => {
+    const s = screen(
+      "s-vo",
+      "VoidOwn",
+      node("root", "container", {
+        name: "root",
+        children: [node("img", "image", { name: "img", cornerRadius: 8 })],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-vo.html");
+    expect(html).toContain("n-img");
+    expect(html).toContain("border-radius: 8px;");
+  });
+});
+
+// ─── Accessible name fallback for text-less interactive elements (WCAG 4.1.2) ──
+
+describe("htmlCssAdapter — accessible name fallback for text-less button/link", () => {
+  it("adds aria-label from the display name for a button with no text", () => {
+    const s = screen(
+      "s-b",
+      "Btn",
+      node("root", "container", { children: [node("icon-btn", "button", { name: "Close" })] }),
+    );
+    const html = fileByPath(
+      emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter),
+      "screens/s-b.html",
+    );
+    expect(html).toMatch(/<button[^>]*aria-label="Close"/u);
+  });
+
+  it("adds aria-label from the display name for a link with no text", () => {
+    const s = screen(
+      "s-l",
+      "Lnk",
+      node("root", "container", { children: [node("icon-link", "link", { name: "Help" })] }),
+    );
+    const html = fileByPath(
+      emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter),
+      "screens/s-l.html",
+    );
+    expect(html).toMatch(/<a[^>]*aria-label="Help"/u);
+  });
+
+  it("does NOT add aria-label when the button already has text (name from content)", () => {
+    const s = screen(
+      "s-bt",
+      "BtnText",
+      node("root", "container", {
+        children: [node("b", "button", { name: "Submit", text: "Continue" })],
+      }),
+    );
+    const html = fileByPath(
+      emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter),
+      "screens/s-bt.html",
+    );
+    expect(html).not.toContain("aria-label");
+    expect(html).toContain("Continue");
+  });
+});
+
+// ─── Typography inline fallback + flex alignment (mutation coverage) ───────────
+
+describe("htmlCssAdapter — typography inline fallback and flex alignment", () => {
+  it("emits inline font declarations when TEXT typography matches no token", () => {
+    const s = screen(
+      "s-it",
+      "InlineTypo",
+      node("root", "container", {
+        children: [
+          node("label", "text", {
+            text: "Hi",
+            typography: { fontFamily: "Roboto", fontSize: 18, fontWeight: 700 },
+          }),
+        ],
+      }),
+    );
+    // NO_TOKENS → no typography token to match → inline fallback branch.
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-it.html");
+    expect(html).toContain("font-weight: 700;");
+    expect(html).toContain("font-size: 18px;");
+    expect(html).toContain('font-family: "Roboto";');
+    expect(html).not.toContain("font: var(--font-");
+  });
+
+  it("emits justify-content and align-items from primaryAlign/counterAlign", () => {
+    const s = screen(
+      "s-al",
+      "Align",
+      node("root", "container", {
+        layout: { mode: "row", primaryAlign: "center", counterAlign: "end" },
+      }),
+    );
+    const html = fileByPath(
+      emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter),
+      "screens/s-al.html",
+    );
+    expect(html).toContain("justify-content: center;");
+    expect(html).toContain("align-items: flex-end;");
+  });
+
+  it("maps space-between alignment to justify-content", () => {
+    const s = screen(
+      "s-sb",
+      "SB",
+      node("root", "container", { layout: { mode: "row", primaryAlign: "space-between" } }),
+    );
+    const html = fileByPath(
+      emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter),
+      "screens/s-sb.html",
+    );
+    expect(html).toContain("justify-content: space-between;");
   });
 });

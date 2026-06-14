@@ -34,6 +34,7 @@ import { describe, expect, it } from "vitest";
 import {
   cleanScopedNodesToScreenIr,
   deriveNavGraph,
+  deriveRoutingHints,
   deriveNavTestItemsByScreen,
   deriveA11yTestItemsByScreen,
   deriveScreenTestBaseline,
@@ -194,12 +195,9 @@ const runPipeline = (root: FigmaSourceNode): PipelineOutput => {
     ]),
   );
 
-  const hints = graph.nodes.map((node) => ({
-    screenId: node.screenId,
-    transitions: graph.edges
-      .filter((edge) => edge.fromScreenId === node.screenId)
-      .map((edge) => ({ trigger: edge.trigger, toScreenId: edge.toScreenId })),
-  }));
+  // Use the production routing-hint deriver (which sorts transitions deterministically) rather than a
+  // hand-rolled equivalent, so this end-to-end test pins the real #811 → #755 seam.
+  const hints = deriveRoutingHints(graph);
 
   const artifact = emitCode({ screens: ir.screens, tokens: ir.tokens, hints }, htmlCssAdapter);
 
