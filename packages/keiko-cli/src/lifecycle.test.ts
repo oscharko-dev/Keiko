@@ -159,6 +159,49 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args[0]).toBe("/tmp/fake-keiko-bin.js");
   });
 
+  it("prefers the built workspace checkout over a stale inherited global bin", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, "dist", "cli"), { recursive: true });
+    mkdirSync(join(root, "dist", "ui", "static"), { recursive: true });
+    writeFileSync(join(root, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
+    writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
+    writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n", "utf8");
+    const c = makeIo();
+    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
+    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+
+    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", "/opt/old-keiko/dist/cli/index.js", async () =>
+      withEnvVar("KEIKO_UI_STATIC_ROOT", "/opt/old-keiko/dist/ui/static", async () =>
+        runLifecycleCli(
+          "start",
+          [],
+          c.io,
+          {},
+          {
+            cwd: root,
+            spawnFn: (command, args, opts) => {
+              spawned.push({ command, args, opts });
+              return child;
+            },
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+            isProcessAlive: () => true,
+            isPortAvailable: () => Promise.resolve(true),
+            killProcess: vi.fn(),
+            sleep: () => Promise.resolve(),
+          },
+        ),
+      ),
+    );
+
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args[0]).toBe(join(root, "dist", "cli", "index.js"));
+    expect(spawned[0]?.opts.env).toMatchObject({
+      KEIKO_CLI_BIN_PATH: join(root, "dist", "cli", "index.js"),
+      KEIKO_UI_STATIC_ROOT: join(root, "dist", "ui", "static"),
+    });
+  });
+
   it("accepts --open and opens the UI URL after a healthy start", async () => {
     const root = makeRoot();
     const c = makeIo();
