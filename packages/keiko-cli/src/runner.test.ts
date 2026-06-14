@@ -93,7 +93,15 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("keiko evidence");
     expect(c.out()).toContain("keiko init");
+    expect(c.out()).toContain("keiko doctor");
     expect(c.out()).toContain("keiko start|stop|status|restart");
+  });
+
+  it("dispatches the doctor subcommand", () => {
+    const c = makeIo();
+    const code = runCli(["doctor"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Keiko doctor");
   });
 
   it("lists the launcher subcommand in help (epic #121 child #125)", () => {
