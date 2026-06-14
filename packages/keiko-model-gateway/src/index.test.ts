@@ -18,8 +18,10 @@ import {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
+  resolveOutboundHttpEgressConfig,
   toSafeObject,
   validateBaseUrl,
   Gateway,
@@ -34,6 +36,7 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   ERROR_CODES,
+  GatewayEgressError,
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
@@ -66,12 +69,14 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
+  OutboundHttpEgressConfig,
   ProviderAdapter,
   ResponseFormat,
   StreamDelta,
   StreamEvent,
   ToolDefinition,
   UsageMetadata,
+  GatewayEgressErrorCode,
 } from "./index.js";
 
 describe("keiko-model-gateway package surface", () => {
@@ -95,8 +100,10 @@ describe("keiko-model-gateway package surface", () => {
   it("exposes the config helpers as callable functions", () => {
     expect(typeof apiKeyHeaderValue).toBe("function");
     expect(typeof loadConfigFromFile).toBe("function");
+    expect(typeof loadEgressConfigFromFile).toBe("function");
     expect(typeof normalizeApiKeyHeaderName).toBe("function");
     expect(typeof parseGatewayConfig).toBe("function");
+    expect(typeof resolveOutboundHttpEgressConfig).toBe("function");
     expect(typeof toSafeObject).toBe("function");
     expect(typeof validateBaseUrl).toBe("function");
   });
@@ -142,6 +149,7 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof CircuitOpenError).toBe("function");
     expect(typeof ConfigInvalidError).toBe("function");
     expect(typeof ContextOverflowError).toBe("function");
+    expect(typeof GatewayEgressError).toBe("function");
     expect(typeof GatewayError).toBe("function");
     expect(typeof MalformedToolCallError).toBe("function");
     expect(typeof ModelRefusalError).toBe("function");
@@ -186,12 +194,14 @@ describe("keiko-model-gateway package surface", () => {
     pin<ModelProviderConfig>();
     pin<NormalizedResponse>();
     pin<NormalizedToolCall>();
+    pin<OutboundHttpEgressConfig>();
     pin<ProviderAdapter>();
     pin<ResponseFormat>();
     pin<StreamDelta>();
     pin<StreamEvent>();
     pin<ToolDefinition>();
     pin<UsageMetadata>();
+    pin<GatewayEgressErrorCode>();
     expect(true).toBe(true);
   });
 });

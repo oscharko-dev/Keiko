@@ -30,6 +30,7 @@ export type {
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
+  OutboundHttpEgressConfig,
   ProviderAdapter,
   ResponseFormat,
   StreamDelta,
@@ -57,8 +58,10 @@ export {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
+  resolveOutboundHttpEgressConfig,
   toSafeObject,
   validateBaseUrl,
   type EnvSource,
@@ -103,6 +106,7 @@ export {
   ConfigInvalidError,
   ContextOverflowError,
   ERROR_CODES,
+  GatewayEgressError,
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
@@ -112,6 +116,7 @@ export {
   TransportError,
   UnknownModelError,
   type ErrorCode,
+  type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 
 // Quality Intelligence sub-module (Epic #270, Issue #279). Exposed under a namespace so
