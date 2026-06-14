@@ -114,6 +114,16 @@ const baseInput = (): RecordFigmaSnapshotInput => ({
   skippedScreens: [{ screenId: "1:3", reason: "render-url-missing" }],
 });
 
+const metrics = (): NonNullable<RecordFigmaSnapshotInput["metrics"]> => ({
+  reductionRatio: 0.4,
+  screenCount: 2,
+  renderCount: 2,
+  designTokenCount: 3,
+  augmentation: { deterministic: 4, modelAugmented: 1, modelAugmentedShare: 0.2 },
+  navGraph: { screens: 2, transitions: 1 },
+  a11y: { findings: 0 },
+});
+
 describe("createNodeFigmaSnapshotStore", () => {
   it("persists per-screen IR + image ref + provenance + integrity hash and loads them back", () => {
     const store = createNodeFigmaSnapshotStore(dir);
@@ -320,6 +330,16 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(loaded.artifactHashes?.tokens).toMatch(/^[0-9a-f]{64}$/u);
   });
 
+  it("round-trips optional numeric metrics with an artifact hash when provided", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const m = metrics();
+    store.record({ ...baseInput(), metrics: m });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.metrics).toEqual(m);
+    expect(loaded.artifactHashes?.metrics).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
   it("rejects a record whose links artifact was tampered after persist", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record({
@@ -348,12 +368,24 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
   });
 
-  it("omits old optional links/tokens when artifact hashes are missing", () => {
+  it("rejects a record whose metrics artifact was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({ ...baseInput(), metrics: metrics() });
+
+    const raw = readSnapshotFile();
+    raw.metrics = { ...(raw.metrics as Record<string, unknown>), renderCount: 999 };
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("omits old optional links/tokens/metrics when artifact hashes are missing", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record({
       ...baseInput(),
       links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
       tokens: { colors: [], typography: [], spacing: [], radius: [] },
+      metrics: metrics(),
     });
 
     const raw = readSnapshotFile();
@@ -365,6 +397,7 @@ describe("createNodeFigmaSnapshotStore", () => {
     const loaded = loadOrThrow(store, RUN_ID);
     expect(loaded.links).toBeUndefined();
     expect(loaded.tokens).toBeUndefined();
+    expect(loaded.metrics).toBeUndefined();
   });
 
   it("loads a snapshot whose screens were recorded in reversed screenId order (sort invariant #753)", () => {

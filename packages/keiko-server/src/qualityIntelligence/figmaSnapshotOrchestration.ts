@@ -23,7 +23,7 @@ import {
   createFigmaTokenStore,
   deriveFigmaScopeRef,
   FigmaConnectorError,
-  hasReadOnlyConsent,
+  loadFigmaConnectorAudit,
   observeFigmaSnapshot,
   parseFigmaTarget,
   recordReadOnlyConsent,
@@ -55,6 +55,11 @@ export interface GovernedSnapshotDeps {
   readonly now: string;
   /** When true, record the read-only-scope acknowledgement before the fetch (operator consent). */
   readonly acknowledgeReadOnly?: boolean;
+  /**
+   * Route orchestration sets this true so `snapshot`/`resnapshot` success is audited only after the
+   * evidence record has been durably persisted and reloaded.
+   */
+  readonly deferSuccessAudit?: boolean;
   /** Deep scoped-pagination overrides (#837). */
   readonly pagination?: Partial<ScopedPaginationLimits>;
   /** Optional Keiko config PAT alternate (#751). Vault remains higher precedence. */
@@ -128,21 +133,26 @@ const a11yFindingsCount = (ir: ScreenIrResult): number => {
   return count;
 };
 
+const hasSuccessfulConnectAudit = (scopeRef: FigmaScopeRef, evidenceDir: string): boolean =>
+  loadFigmaConnectorAudit(scopeRef, evidenceDir)?.auditLog.some(
+    (entry) => entry.action === "connect" && entry.outcome === "ok",
+  ) === true;
+
 // Record (when acknowledged) and assert read-only-scope consent BEFORE any token materialisation or
 // egress — an unconsented scope never reaches Figma (#760). Throws FIGMA_CONSENT_REQUIRED if missing.
 const gateConsent = (deps: GovernedSnapshotDeps, scopeRef: FigmaScopeRef): void => {
   if (deps.acknowledgeReadOnly === true) {
-    // The first acknowledgement IS the operator's "connect" gesture — emit a one-time connect audit
-    // entry so AC1's four actions are all self-contained in the ledger. Guarded on prior consent so a
-    // re-acknowledged scope does not append a duplicate marker.
-    const isFirstConnect = !hasReadOnlyConsent(scopeRef, deps.evidenceDir);
+    // The first acknowledgement IS the operator's "connect" gesture. Guard on the audit ledger, not
+    // only on consent existence: if consent was written but the audit append failed, an acknowledged
+    // retry must repair the missing connect marker rather than suppressing it forever.
+    const needsConnectAudit = !hasSuccessfulConnectAudit(scopeRef, deps.evidenceDir);
     recordReadOnlyConsent({
       scopeRef,
       evidenceDir: deps.evidenceDir,
       acknowledgedBy: "operator",
       now: deps.now,
     });
-    if (isFirstConnect) {
+    if (needsConnectAudit) {
       appendFigmaConnectorAudit({
         scopeRef,
         evidenceDir: deps.evidenceDir,
@@ -195,6 +205,27 @@ function createGovernedConnector(
   });
 }
 
+function auditedResolveBuildToken(
+  deps: GovernedSnapshotDeps,
+  vaultToken: string | undefined,
+  scopeRef: FigmaScopeRef,
+  action: "snapshot" | "resnapshot",
+): string {
+  try {
+    return resolveBuildToken(deps, vaultToken);
+  } catch (error) {
+    appendFigmaConnectorAudit({
+      scopeRef,
+      evidenceDir: deps.evidenceDir,
+      action,
+      outcome: "error",
+      errorCode: error instanceof FigmaConnectorError ? error.code : "FIGMA_INTERNAL",
+      now: deps.now,
+    });
+    throw error;
+  }
+}
+
 // Deep scoped fetch with audit-on-failure: a fetch failure is recorded as a coded audit entry before
 // it propagates, so the audit ledger captures the action even when the egress never produced a build.
 const auditedDeepFetch = async (
@@ -235,15 +266,15 @@ export const governedSnapshotBuild = async (
   if (target === null) throw new FigmaConnectorError("FIGMA_MALFORMED_URL");
   const scopeRef = deriveFigmaScopeRef(target.fileKey, target.nodeId);
   const { httpPort, renderPort } = snapshotPorts(deps);
-  const vaultToken = readFigmaVaultToken(deps);
+  const action = isResnapshot ? "resnapshot" : "snapshot";
 
   gateConsent(deps, scopeRef);
+  const vaultToken = readFigmaVaultToken(deps);
 
   // Render-token (vault > config > env). Throws FIGMA_TOKEN_MISSING when nothing is configured.
-  const token = resolveBuildToken(deps, vaultToken);
+  const token = auditedResolveBuildToken(deps, vaultToken, scopeRef, action);
   const connector = createGovernedConnector(deps, httpPort, vaultToken);
 
-  const action = isResnapshot ? "resnapshot" : "snapshot";
   const scoped = await auditedDeepFetch(connector, boardLink, deps, scopeRef, action);
   const ir = QualityIntelligenceFigma.cleanScopedNodesToScreenIr(scoped.nodes);
   const observed = await observeFigmaSnapshot({
@@ -255,6 +286,7 @@ export const governedSnapshotBuild = async (
     augmentation: { deterministic: 0, modelAugmented: 0 },
     extras: { a11yFindings: a11yFindingsCount(ir) },
     isResnapshot,
+    auditSuccess: deps.deferSuccessAudit !== true,
     run: () =>
       buildFigmaSnapshot({
         ir,
