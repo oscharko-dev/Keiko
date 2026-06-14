@@ -81,13 +81,19 @@ export {
 export type { FigmaSourceNode } from "./sourceNode.js";
 
 export type {
+  AlignItems,
   BoundingBox,
   ColorToken,
   DesignTokens,
   ImageFillRef,
   InteractionHint,
   InterScreenLink,
+  IrLayout,
   IrNode,
+  IrSizing,
+  IrTypography,
+  LayoutMode,
+  LayoutSizing,
   RadiusToken,
   ReductionReport,
   ScreenIr,
