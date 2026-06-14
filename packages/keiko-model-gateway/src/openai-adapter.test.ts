@@ -104,6 +104,48 @@ describe("OpenAiAdapter.call", () => {
     expect(seenCustom).toBe(CONFIG.apiKey);
   });
 
+  it("serializes image content parts in OpenAI-compatible message payloads", async () => {
+    let seenBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      seenBody = JSON.parse(body) as unknown;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        modelId: "example-chat-model",
+        messages: [
+          {
+            role: "user",
+            content: "Inspect this screen",
+            contentParts: [
+              { type: "text", text: "Inspect this screen" },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
+              },
+            ],
+          },
+        ],
+      },
+      CONFIG,
+    );
+
+    expect(seenBody).toMatchObject({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Inspect this screen" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+          ],
+        },
+      ],
+    });
+  });
+
   it("throws AuthenticationError on HTTP 401", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({ error: "bad key" }, { status: 401 })),

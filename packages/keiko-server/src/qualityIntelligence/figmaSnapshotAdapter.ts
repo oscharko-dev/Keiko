@@ -9,16 +9,20 @@
 //
 //   2. The capability-routed VISION hint provider — consults `resolveQiMultimodalSelection` (#810)
 //      to decide whether a multimodal model is available; when one is, it MAY call an injected
-//      `visionCall` to recover image-derived semantics, returning them as additive hints. There is
+//      server-owned vision call to recover image-derived semantics from the STORED render side-file,
+//      returning them as additive hints. There is
 //      NO hard-coded model id. On "unavailable", a thrown call, or a non-array/garbage result the
 //      provider returns `[]`, so the source degrades silently to the deterministic IR-only baseline.
-//      No model port is wired here yet, so the default provider is IR-only by construction — the
-//      seam is ready for the multimodal port without any further refactor of the ingestion path.
+//      The call goes through deps.modelPortFactory / Model Gateway only — no provider SDK and no
+//      Figma egress after snapshot build.
 
+import { Buffer } from "node:buffer";
 import {
   createNodeFigmaSnapshotStore,
+  type FigmaSnapshotImageRef,
   type FigmaSnapshotRecord,
 } from "@oscharko-dev/keiko-evidence";
+import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveQiMultimodalSelection } from "./modelSelection.js";
 
@@ -75,8 +79,10 @@ export function makeFigmaSnapshotLoader(
 
 /** The image-derived semantics a multimodal model recovered for one screen, as additive hints. */
 export interface FigmaVisionScreenRequest {
+  readonly snapshotRunId: string;
   readonly screenId: string;
   /** The image side-file reference recorded in the snapshot (relative path + sha256). */
+  readonly image: FigmaSnapshotImageRef;
   readonly imageRelativePath: string;
   /** The deterministic baseline text, supplied so the model cross-checks rather than re-derives. */
   readonly baselineText: string;
@@ -87,21 +93,179 @@ export interface FigmaVisionScreenRequest {
  * The contract is total: it NEVER throws and NEVER returns a value that could override the IR — the
  * caller appends the hints below the baseline.
  */
-export type FigmaVisionHintProvider = (request: FigmaVisionScreenRequest) => readonly string[];
+export type FigmaVisionHintProvider = (
+  request: FigmaVisionScreenRequest,
+) => readonly string[] | Promise<readonly string[]>;
 
 /**
  * A raw vision call: given a screen request and the selected model id, return image-derived hint
- * strings. Injected so this module imports no provider SDK and stays testable. Absent in production
- * until the multimodal port lands (#810 follow-up) — its absence is exactly the IR-only path.
+ * strings. Injectable so tests can keep the provider deterministic; production defaults to the
+ * server-owned evidence-store + Model Gateway port below. Absence is exactly the IR-only path.
  */
 export type FigmaVisionCall = (
   request: FigmaVisionScreenRequest,
   modelId: string,
-) => readonly string[];
+) => readonly string[] | Promise<readonly string[]>;
+
+const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_VISION_BASELINE_BYTES = 12_000;
+const MAX_VISION_HINTS = 24;
+const FIGMA_VISION_TIMEOUT_MS = 30_000;
+
+const encoder = new TextEncoder();
+
+function utf8ByteLength(value: string): number {
+  return encoder.encode(value).length;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (utf8ByteLength(value) <= maxBytes) return value;
+  let out = "";
+  let bytes = 0;
+  for (const cp of value) {
+    const cpBytes = utf8ByteLength(cp);
+    if (bytes + cpBytes > maxBytes) break;
+    out += cp;
+    bytes += cpBytes;
+  }
+  return out;
+}
+
+function redactedString(deps: UiHandlerDeps, value: string): string {
+  const redacted = deps.redactor(value);
+  return typeof redacted === "string" ? redacted : "";
+}
 
 function sanitiseCallResult(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function parseHintResponse(raw: string): readonly string[] {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) return sanitiseCallResult(parsed).slice(0, MAX_VISION_HINTS);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      Array.isArray((parsed as { readonly hints?: unknown }).hints)
+    ) {
+      return sanitiseCallResult((parsed as { readonly hints: unknown }).hints).slice(
+        0,
+        MAX_VISION_HINTS,
+      );
+    }
+  } catch {
+    // Fall through to a conservative line parser.
+  }
+  return trimmed
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/u, "").trim())
+    .filter((line) => line.length > 0)
+    .slice(0, MAX_VISION_HINTS);
+}
+
+function visionUserText(request: FigmaVisionScreenRequest, baselineText: string): string {
+  return (
+    `Screen id: ${request.screenId}\n` +
+    "Structural baseline, already authoritative:\n" +
+    `${baselineText}\n\n` +
+    "Return only visual/semantic hints that are absent from the baseline."
+  );
+}
+
+function buildVisionRequest(
+  request: FigmaVisionScreenRequest,
+  modelId: string,
+  dataUrl: string,
+  baselineText: string,
+  structuredOutput: boolean,
+): GatewayRequest {
+  const userText = visionUserText(request, baselineText);
+  return {
+    modelId,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an additive UI test-generation vision pass. Use the image only to recover " +
+          "semantics missing from the structural baseline. Do not contradict, replace, or restate " +
+          "the baseline. Return concise JSON: an array of strings.",
+      },
+      {
+        role: "user",
+        content: userText,
+        contentParts: [
+          { type: "text", text: userText },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+    ...(structuredOutput
+      ? {
+          responseFormat: {
+            type: "json_schema" as const,
+            schema: {
+              type: "array",
+              items: { type: "string" },
+              maxItems: MAX_VISION_HINTS,
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+function createVisionAbortSignal(): { readonly signal: AbortSignal; readonly cleanup: () => void } {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, FIGMA_VISION_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    cleanup: (): void => {
+      clearTimeout(timeout);
+    },
+  };
+}
+
+function makeGatewayFigmaVisionCall(deps: UiHandlerDeps): FigmaVisionCall | undefined {
+  const evidenceDir = deps.evidenceDir;
+  if (evidenceDir === undefined || evidenceDir.length === 0) return undefined;
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  return async (request: FigmaVisionScreenRequest, modelId: string): Promise<readonly string[]> => {
+    if (request.image.byteLength > MAX_VISION_IMAGE_BYTES) return [];
+    const model = deps.modelPortFactory(modelId);
+    if (model === undefined) return [];
+    const image = store.loadImage(request.snapshotRunId, request.image);
+    if (image.byteLength > MAX_VISION_IMAGE_BYTES) return [];
+    const dataUrl = `data:${image.mimeType};base64,${Buffer.from(image.bytes).toString("base64")}`;
+    const baselineText = truncateUtf8(
+      redactedString(deps, request.baselineText),
+      MAX_VISION_BASELINE_BYTES,
+    );
+    const selection = resolveQiMultimodalSelection(deps);
+    const structuredOutput =
+      selection.kind === "model" &&
+      selection.modelId === modelId &&
+      selection.capability.supportsResponseFormat === true;
+    const gatewayRequest = buildVisionRequest(
+      request,
+      modelId,
+      dataUrl,
+      baselineText,
+      structuredOutput,
+    );
+    const abort = createVisionAbortSignal();
+    try {
+      const response = await model.call(gatewayRequest, abort.signal);
+      return parseHintResponse(redactedString(deps, response.content));
+    } finally {
+      abort.cleanup();
+    }
+  };
 }
 
 /**
@@ -113,16 +277,19 @@ function sanitiseCallResult(value: unknown): readonly string[] {
  */
 export function makeFigmaVisionHintProvider(
   deps: UiHandlerDeps,
-  visionCall?: FigmaVisionCall,
+  visionCall: FigmaVisionCall | undefined = makeGatewayFigmaVisionCall(deps),
 ): FigmaVisionHintProvider {
   const selection = resolveQiMultimodalSelection(deps);
   if (selection.kind === "unavailable" || visionCall === undefined) {
     return () => [];
   }
   const { modelId } = selection;
-  return (request: FigmaVisionScreenRequest): readonly string[] => {
+  return (request: FigmaVisionScreenRequest): readonly string[] | Promise<readonly string[]> => {
     try {
-      return sanitiseCallResult(visionCall(request, modelId));
+      const result = visionCall(request, modelId);
+      return typeof (result as Promise<readonly string[]>).then === "function"
+        ? Promise.resolve(result).then(sanitiseCallResult, () => [])
+        : sanitiseCallResult(result);
     } catch {
       return [];
     }

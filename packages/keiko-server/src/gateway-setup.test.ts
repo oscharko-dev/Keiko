@@ -102,7 +102,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("stores and activates an optional Figma PAT without returning it", async () => {
+  it("rejects Figma PATs submitted through browser gateway setup", async () => {
     const uiDir = await tempDir("keiko-gw-ui-figma-");
     const evidenceDir = await tempDir("keiko-gw-ev-figma-");
     const deps = buildUiHandlerDeps({
@@ -124,14 +124,14 @@ describe("handleGatewaySetup", () => {
       deps,
     );
 
-    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-    expect(result.status).toBe(200);
-    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBe("figd_setup-config-token");
-    expect(JSON.parse(saved) as Record<string, unknown>).toMatchObject({
-      figma: { accessToken: "figd_setup-config-token" },
-    });
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("server-side");
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBeUndefined();
     expect(JSON.stringify(result.body)).not.toContain("figd_setup-config-token");
-    expect(JSON.stringify(result.body)).not.toContain("figma");
+    const savedPath = deps.gatewayConfig?.storagePath;
+    if (savedPath !== undefined && existsSync(savedPath)) {
+      expect(readFileSync(savedPath, "utf8")).not.toContain("figd_setup-config-token");
+    }
     deps.store.close();
   });
 

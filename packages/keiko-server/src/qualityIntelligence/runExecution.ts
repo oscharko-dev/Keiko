@@ -24,7 +24,7 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
 import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
-import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
+import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
@@ -76,6 +76,8 @@ interface ResolvedExecutionStrategy {
   readonly generate: ReturnType<typeof createQiGenerationPort>;
 }
 
+type QiIngestion = Awaited<ReturnType<typeof ingestInlineSourcesAsync>>;
+
 function resolveExecutionStrategy(
   deps: UiHandlerDeps,
   request: QualityIntelligenceStartRunRequest,
@@ -111,7 +113,7 @@ function resolveExecutionStrategy(
 
 function buildAccepted(
   input: ExecuteQiRunInput,
-  ingestion: ReturnType<typeof ingestInlineSources>,
+  ingestion: QiIngestion,
   modelId: string | undefined,
 ): QiRunAccepted {
   return {
@@ -149,7 +151,7 @@ export async function executeQiRun(
     throw new QiGenerationError("QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
 
-  const ingestion = ingestInlineSources({
+  const ingestion = await ingestInlineSourcesAsync({
     request,
     runId,
     registeredAt: input.registeredAt,

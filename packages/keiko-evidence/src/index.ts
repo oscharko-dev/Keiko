@@ -93,6 +93,7 @@ export {
   type FigmaSnapshotScreenRow,
   type FigmaSnapshotSkipReason,
   type FigmaSnapshotSkippedScreenRow,
+  type FigmaSnapshotImageBytes,
   type FigmaSnapshotStore,
   type FigmaSnapshotStoreOptions,
   type FigmaSnapshotValidationResult,
