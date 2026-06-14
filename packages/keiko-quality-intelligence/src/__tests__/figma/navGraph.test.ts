@@ -559,8 +559,8 @@ describe("deriveNavGraph — unresolved links", () => {
 
 describe("deriveNavGraph — injective transition keys", () => {
   it("keeps NUL-colliding transitions distinct (composite key, not a raw separator join, INJ2)", () => {
-    // Under the previous NUL-delimited key, edgeKey for the tuples ["S","a","S","b c","d"] and
-    // ["S","a","S","b","c d"] joins to the identical string, so the edge de-dup Map silently
+    // Under the previous NUL-delimited key, edgeKey for the tuples ["S","a","S","b\u0000c","d"] and
+    // ["S","a","S","b","c\u0000d"] joins to the identical string, so the edge de-dup Map silently
     // drops one distinct prototype transition (and its navigation test). JSON.stringify keeps them
     // apart. A snapshot can carry such node ids — the schema does not forbid control bytes.
     const nul = String.fromCodePoint(0);
