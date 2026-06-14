@@ -7,10 +7,11 @@
 //
 // The rendered PNG bytes do NOT live inline — they are written as binary side-files and referenced
 // here by relative path + sha256 (the same tamper-evidence pattern as ADR-0017 side-files). The
-// integrity hashes are computed by the server builder over the in-memory Snapshot BEFORE persist
-// and are reproduced here verbatim, so a loaded record can be drift-checked against #735. Optional
-// #752 metadata (`links`, `tokens`) keeps separate artifact hashes: they are not drift identity, but
-// downstream consumers must not trust a tampered artifact under an otherwise-valid drift hash.
+// integrity hashes follow the server builder's deterministic hash projection but are recomputed by
+// the evidence store after redaction so they describe the exact persisted artifact. A loaded record
+// can then be drift-checked against #735. Optional #752 metadata (`links`, `tokens`) keeps separate
+// artifact hashes: they are not drift identity, but downstream consumers must not trust a tampered
+// artifact under an otherwise-valid drift hash.
 //
 // `irJson` is the structural Screen-IR (#752) serialised as an opaque JSON value. It is design
 // CONTENT — the artifact's purpose — and is kept (not redacted away); only secrets are stripped.
