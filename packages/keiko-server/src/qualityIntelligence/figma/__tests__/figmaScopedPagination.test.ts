@@ -150,6 +150,7 @@ describe("paginateScopedDocument — deep capture (#837)", () => {
     expect(coverage.screensDeepFetched).toBe(2);
     expect(coverage.screensTruncated).toBe(0);
     expect(coverage.capped).toBe(false);
+    expect(coverage.fetchCount).toBe(4); // 2 fetches per screen (base + s-b frontier) × 2 screens
   });
 
   it("never re-fetches leaf nodes (only container frontier nodes)", async () => {
@@ -167,6 +168,52 @@ describe("paginateScopedDocument — deep capture (#837)", () => {
     const b = await paginateScopedDocument(truncate(full, 2), fetcherFor(full, 2).fetch, limits());
     expect(JSON.stringify(a.document)).toBe(JSON.stringify(b.document));
     expect(a.coverage).toEqual(b.coverage);
+  });
+
+  it("recovers in-screen text when the scope root IS a single screen (FRAME root)", async () => {
+    // A connector pointed directly at a FRAME (not a CANVAS section) makes the root its own sole
+    // screen — exercising the rebuildWithDeepScreens identity substitution where the root's own id
+    // is the one replaced by its deep-fetched version.
+    const full = toRaw(deepScreen("s1"));
+    const shallow = truncate(full, 2);
+    expect(countText(shallow)).toBe(0); // depth-3 text absent from the shallow discovery
+
+    const f = fetcherFor(full, 2);
+    const { document, coverage } = await paginateScopedDocument(shallow, f.fetch, limits());
+
+    expect(countText(document)).toBe(1); // s1's label recovered via root substitution
+    expect(coverage.screenCount).toBe(1);
+    expect(coverage.screensDeepFetched).toBe(1);
+    expect(coverage.screensTruncated).toBe(0);
+    expect(coverage.capped).toBe(false);
+  });
+
+  it("never runs more than fetchConcurrency scoped fetches in flight at once", async () => {
+    // The shared fetch gate (createFetchGate) caps total in-flight scoped fetches across all screens.
+    // A deferred fetcher that holds each call open for two microtask ticks makes the peak observable;
+    // without the gate all four screens' base fetches would start at once (peak 4).
+    const full = canvasOf(["s1", "s2", "s3", "s4"]);
+    const base = fetcherFor(full, 2);
+    let active = 0;
+    let peak = 0;
+    const fetch: ScopedNodeFetcher = async (id) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      await Promise.resolve();
+      const result = await base.fetch(id);
+      active -= 1;
+      return result;
+    };
+
+    const { coverage } = await paginateScopedDocument(
+      truncate(full, 2),
+      fetch,
+      limits({ fetchConcurrency: 2 }),
+    );
+
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(coverage.screensDeepFetched).toBe(4); // all screens still fully deep-fetched
   });
 });
 
@@ -206,6 +253,32 @@ describe("paginateScopedDocument — bounds + coverage", () => {
     expect(coverage.screensTruncated).toBe(1);
   });
 
+  it("truncates (cut) when a level's frontier is wider than the remaining fetch budget", async () => {
+    // One screen with three sibling FRAME containers at depth 1, each hiding a TEXT at depth 2.
+    // With maxFetchesPerScreen=2 and pageDepth=1 the base fetch (1) leaves a 3-wide frontier but a
+    // remaining budget of 1, so expandLevel slices it (cut=true) and the screen is reported truncated.
+    const wide = toRaw(
+      node("canvas", "CANVAS", [
+        node("w1", "FRAME", [
+          node("w1-a", "FRAME", [node("w1-a-t", "TEXT", [], "a")]),
+          node("w1-b", "FRAME", [node("w1-b-t", "TEXT", [], "b")]),
+          node("w1-c", "FRAME", [node("w1-c-t", "TEXT", [], "c")]),
+        ]),
+      ]),
+    );
+    const f = fetcherFor(wide, 1);
+    const { document, coverage } = await paginateScopedDocument(
+      truncate(wide, 1),
+      f.fetch,
+      limits({ pageDepth: 1, maxFetchesPerScreen: 2 }),
+    );
+
+    expect(coverage.screensTruncated).toBe(1);
+    // Only the first sibling (w1-a) is expanded within the budget; w1-b/w1-c stay shallow.
+    expect(countText(document)).toBe(1);
+    expect(f.calls()).toEqual(["w1", "w1-a"]); // base fetch + exactly one budgeted frontier fetch
+  });
+
   it("reports an accurate assembled node + fetch count", async () => {
     const full = canvasOf(["s1"]);
     const { document, coverage } = await paginateScopedDocument(
@@ -214,7 +287,11 @@ describe("paginateScopedDocument — bounds + coverage", () => {
       limits(),
     );
     expect(coverage.nodeCount).toBe(countNodes(document));
-    expect(coverage.fetchCount).toBeGreaterThanOrEqual(1);
+    // Exact, deterministic count for the single deepScreen at pageDepth=2: the base fetch of s1
+    // (revealing the s1-b frontier container at depth 2) + one frontier fetch of s1-b = 2. Pinning
+    // the exact value catches a mutation that over- or under-counts the per-screen fetch telemetry
+    // (the only operator-visible signal of large-board pagination cost).
+    expect(coverage.fetchCount).toBe(2);
   });
 });
 

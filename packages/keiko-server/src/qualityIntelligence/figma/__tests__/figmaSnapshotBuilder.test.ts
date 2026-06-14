@@ -377,6 +377,26 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     expect(renders.requests).toHaveLength(0);
   });
 
+  it("skips a screen whose render URL is an IPv6 literal (SSRF)", async () => {
+    const screens = [screen("1:1", "Home")];
+    // The Figma API could (in a compromised/MITM'd response) return an IPv6-literal render host;
+    // WHATWG URL exposes it bracketed as the hostname, which isBlockedHostname rejects via the
+    // leading-"[" check. Pins the IPv6 branch of the SSRF guard.
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://[::1]/render/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
   it("allows a legitimate https://ephemeral/ render URL (existing fixtures still work)", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
@@ -683,6 +703,36 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
 
     expect(peak).toBeLessThanOrEqual(2);
     expect(snapshot.screens).toHaveLength(6);
+  });
+
+  it("batches /v1/images calls when the screen count exceeds batchSize (multi-pass)", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B"), screen("1:3", "C")];
+    let callCount = 0;
+    // One ephemeral url per requested id; counts how many /v1/images calls the builder makes.
+    const images: FigmaHttpPort = (request) => {
+      callCount += 1;
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "")
+        .split(",")
+        .filter((id) => id.length > 0);
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({
+      "https://ephemeral/1:1.png": png(10),
+      "https://ephemeral/1:2.png": png(20),
+      "https://ephemeral/1:3.png": png(30),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      batchSize: 1,
+    });
+
+    // batchSize=1 → the chunk() loop runs once per screen and each batch's url map is merged.
+    expect(callCount).toBe(3);
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2", "1:3"]);
+    expect(snapshot.skippedScreens).toHaveLength(0);
   });
 
   it("preserves screen order even when downloads complete out of order", async () => {
