@@ -50,6 +50,7 @@ import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } f
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import {
+  appendFigmaConnectorAudit,
   parseFigmaTarget,
   deriveFigmaScopeRef,
   observeFigmaRevoke,
@@ -58,6 +59,7 @@ import {
   resolveScopedPaginationLimits,
   type FigmaConnectorErrorCode,
   type FigmaConnectorMetrics,
+  type FigmaConnectorAuditCounts,
   type FigmaScopeCoverage,
   type ScopedPaginationLimits,
 } from "./figma/index.js";
@@ -219,10 +221,10 @@ export interface FigmaSnapshotSummary {
    */
   readonly coverage?: FigmaScopeCoverage;
   /**
-   * Operational metrics (#760) — present on a freshly-built snapshot (POST response): reduction
+   * Operational metrics (#760) — present on POST and reloaded GET summaries: reduction
    * ratio, screen/render counts, design-token count, navigation-graph size (screens + transitions),
    * a11y-finding count, and the deterministic-vs-model augmentation share. All NUMBERS — never any
-   * board content, screen name, token, or board id. Build-time only; not persisted in the snapshot.
+   * board content, screen name, token, or board id.
    */
   readonly metrics?: FigmaConnectorMetrics;
   /**
@@ -328,6 +330,51 @@ function recordToSummary(
       imageByteLength: s.image.byteLength,
     })),
   };
+}
+
+function persistedAuditCounts(
+  record: FigmaSnapshotRecord,
+  metrics: FigmaConnectorMetrics,
+): FigmaConnectorAuditCounts {
+  return {
+    screens: metrics.screenCount,
+    renders: metrics.renderCount,
+    skipped: record.skippedScreens.length,
+    designTokens: metrics.designTokenCount,
+    ...(metrics.navGraph !== undefined ? { navTransitions: metrics.navGraph.transitions } : {}),
+  };
+}
+
+function appendPersistedSnapshotAudit(
+  evidenceDir: string,
+  result: GovernedSnapshotResult,
+  record: FigmaSnapshotRecord,
+  isResnapshot: boolean,
+): void {
+  appendFigmaConnectorAudit({
+    scopeRef: result.scopeRef,
+    evidenceDir,
+    action: isResnapshot ? "resnapshot" : "snapshot",
+    outcome: "ok",
+    counts: persistedAuditCounts(record, result.metrics),
+    now: result.provenance.fetchedAt,
+  });
+}
+
+function appendSnapshotRouteFailureAudit(
+  evidenceDir: string,
+  result: GovernedSnapshotResult,
+  isResnapshot: boolean,
+  errorCode: FigmaConnectorErrorCode,
+): void {
+  appendFigmaConnectorAudit({
+    scopeRef: result.scopeRef,
+    evidenceDir,
+    action: isResnapshot ? "resnapshot" : "snapshot",
+    outcome: "error",
+    errorCode,
+    now: result.provenance.fetchedAt,
+  });
 }
 
 // ─── POST /api/figma/snapshots — parse + validate ─────────────────────────────
@@ -451,11 +498,17 @@ function persistSnapshot(
       })),
       ...(result.snapshot.links !== undefined ? { links: result.snapshot.links } : {}),
       tokens: result.ir.tokens,
+      metrics: result.metrics,
     });
   } catch {
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
-  const record = store.load(runId);
+  let record: FigmaSnapshotRecord | undefined;
+  try {
+    record = store.load(runId);
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
   if (record === undefined) return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   return record;
 }
@@ -529,6 +582,7 @@ function startCoalescedBuild(
           egress: currentGatewayEgressConfig(deps),
           configToken: currentGatewayConfig(deps)?.figma?.accessToken,
           portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
+          deferSuccessAudit: true,
         },
         body.isResnapshot,
       );
@@ -538,8 +592,12 @@ function startCoalescedBuild(
 
     const runId = `fs-${randomUUID()}`;
     const stored = persistSnapshot(evidenceDir, runId, result);
-    if ("status" in stored) return stored;
-    return { status: 201, body: recordToSummary(stored, result.coverage, result.metrics) };
+    if ("status" in stored) {
+      appendSnapshotRouteFailureAudit(evidenceDir, result, body.isResnapshot, "FIGMA_INTERNAL");
+      return stored;
+    }
+    appendPersistedSnapshotAudit(evidenceDir, result, stored, body.isResnapshot);
+    return { status: 201, body: recordToSummary(stored, result.coverage, stored.metrics) };
   };
 
   const promise = buildAndPersist().finally(() => {
@@ -681,7 +739,7 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
     return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
   }
 
-  return { status: 200, body: recordToSummary(record) };
+  return { status: 200, body: recordToSummary(record, undefined, record.metrics) };
 }
 
 // ─── GET /api/figma/snapshots/:runId/screens/:screenIndex/image ──────────────
