@@ -533,6 +533,36 @@ describe("figma-snapshot ingestion — navigation/flow composition (#811)", () =
     expect(homeText.toLowerCase()).toContain("dead end");
   });
 
+  it("adds an unreachable coverage notice to an orphan screen's atom text", () => {
+    const unreachableRecord = record(
+      [
+        screenRow(
+          "s-login",
+          screenIr(
+            "s-login",
+            "Login",
+            irNode("login-root", "container", { children: [irNode("login-btn", "button")] }),
+          ),
+        ),
+        screenRow("s-home", screenIr("s-home", "Home", irNode("home-root", "container"))),
+        screenRow("s-orphan", screenIr("s-orphan", "Orphan", irNode("orphan-root", "container"))),
+      ],
+      [
+        { sourceNodeId: "canvas", trigger: "FLOW_START", targetNodeId: "login-root" },
+        { sourceNodeId: "login-btn", trigger: "ON_CLICK", targetNodeId: "home-root" },
+      ],
+    );
+
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(unreachableRecord) }),
+    );
+    const orphanText =
+      result.ingestedAtoms.find((a) => a.canonicalText.includes("[s-orphan]"))?.canonicalText ?? "";
+
+    expect(orphanText).toContain("(coverage-notice)");
+    expect(orphanText.toLowerCase()).toContain("unreachable");
+  });
+
   it("degrades to zero nav items when the snapshot carries no links (older record)", () => {
     const result = ingestInlineSources(
       input([figmaSource()], {
