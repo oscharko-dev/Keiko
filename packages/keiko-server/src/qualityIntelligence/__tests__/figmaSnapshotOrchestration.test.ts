@@ -253,6 +253,28 @@ describe("governedSnapshotBuild — audit + metrics (#760)", () => {
     expect(result.metrics.navGraph).toEqual({ screens: 2, transitions: 1 });
     expect(result.metrics.a11y?.findings).toBeGreaterThanOrEqual(0);
     expect(result.metrics.augmentation.modelAugmentedShare).toBe(0);
+    expect(result.metrics.augmentation.deterministic).toBe(0);
+    expect(result.metrics.augmentation.modelAugmented).toBe(0);
+  });
+
+  it("emits a one-time connect audit entry on the first read-only acknowledgement", async () => {
+    const result = await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    const audit = loadFigmaConnectorAudit(result.scopeRef, dir);
+    // connect precedes the snapshot: the ledger is self-contained for the AC1 actions.
+    const connect = audit?.auditLog[0];
+    expect(connect).toMatchObject({ action: "connect", outcome: "ok" });
+    // The connect marker is a pure action record — no board cardinalities, no error code.
+    expect(connect?.counts).toBeUndefined();
+    expect(connect?.errorCode).toBeUndefined();
+    expect(audit?.auditLog.at(-1)).toMatchObject({ action: "snapshot", outcome: "ok" });
+  });
+
+  it("does not emit a duplicate connect entry on a second acknowledged build for the same scope", async () => {
+    await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    const result = await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    const audit = loadFigmaConnectorAudit(result.scopeRef, dir);
+    const connects = (audit?.auditLog ?? []).filter((e) => e.action === "connect");
+    expect(connects).toHaveLength(1);
   });
 
   it("counts only failing deterministic a11y checks as a11y findings", async () => {

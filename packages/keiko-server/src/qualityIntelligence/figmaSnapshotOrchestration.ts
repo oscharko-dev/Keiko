@@ -23,6 +23,7 @@ import {
   createFigmaTokenStore,
   deriveFigmaScopeRef,
   FigmaConnectorError,
+  hasReadOnlyConsent,
   observeFigmaSnapshot,
   parseFigmaTarget,
   recordReadOnlyConsent,
@@ -131,12 +132,25 @@ const a11yFindingsCount = (ir: ScreenIrResult): number => {
 // egress — an unconsented scope never reaches Figma (#760). Throws FIGMA_CONSENT_REQUIRED if missing.
 const gateConsent = (deps: GovernedSnapshotDeps, scopeRef: FigmaScopeRef): void => {
   if (deps.acknowledgeReadOnly === true) {
+    // The first acknowledgement IS the operator's "connect" gesture — emit a one-time connect audit
+    // entry so AC1's four actions are all self-contained in the ledger. Guarded on prior consent so a
+    // re-acknowledged scope does not append a duplicate marker.
+    const isFirstConnect = !hasReadOnlyConsent(scopeRef, deps.evidenceDir);
     recordReadOnlyConsent({
       scopeRef,
       evidenceDir: deps.evidenceDir,
       acknowledgedBy: "operator",
       now: deps.now,
     });
+    if (isFirstConnect) {
+      appendFigmaConnectorAudit({
+        scopeRef,
+        evidenceDir: deps.evidenceDir,
+        action: "connect",
+        outcome: "ok",
+        now: deps.now,
+      });
+    }
   }
   assertReadOnlyConsent(scopeRef, deps.evidenceDir);
 };

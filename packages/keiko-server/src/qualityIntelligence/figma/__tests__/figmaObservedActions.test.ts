@@ -187,4 +187,34 @@ describe("observeFigmaRevoke", () => {
     expect(entry?.action).toBe("revoke");
     expect(entry?.outcome).toBe("ok");
   });
+
+  it("audits the coded failure and re-raises when run throws a FigmaConnectorError", () => {
+    expect(() => {
+      observeFigmaRevoke({
+        ctx: { evidenceDir, now: NOW },
+        scopeRef: ref(),
+        run: () => {
+          throw new FigmaConnectorError("FIGMA_INTERNAL");
+        },
+      });
+    }).toThrow(FigmaConnectorError);
+    const entry = loadFigmaConnectorAudit(ref(), evidenceDir)?.auditLog[0];
+    expect(entry?.outcome).toBe("error");
+    expect(entry?.errorCode).toBe("FIGMA_INTERNAL");
+  });
+
+  it("audits a generic (non-coded) failure as FIGMA_INTERNAL and re-raises the original error", () => {
+    const boom = new Error("revoke boom");
+    expect(() => {
+      observeFigmaRevoke({
+        ctx: { evidenceDir, now: NOW },
+        scopeRef: ref(),
+        run: () => {
+          throw boom;
+        },
+      });
+    }).toThrow(boom);
+    const entry = loadFigmaConnectorAudit(ref(), evidenceDir)?.auditLog[0];
+    expect(entry?.errorCode).toBe("FIGMA_INTERNAL");
+  });
 });
