@@ -367,6 +367,34 @@ describe("CapsuleDetail — health diagnostics section", () => {
     expect(screen.getByText("p.3")).toBeInTheDocument();
   });
 
+  it("LK-01: renders severity label text in each diagnostic group row (non-color cue)", async () => {
+    const withDiag: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      parserDiagnostics: [
+        { severity: "error", code: "ERR_001", message: "Fatal parse error" },
+        { severity: "warning", code: "WARN_001", message: "Minor layout issue" },
+        { severity: "info", code: "INFO_001", message: "Extra metadata ignored" },
+      ],
+    };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(withDiag)} />);
+
+    // Wait for the grouped list to render
+    const groupList = await screen.findByRole("list", { name: /grouped parser diagnostics/i });
+
+    // Each group row must carry its severity as visible text — not only as a
+    // CSS color class — so it is perceivable without color (WCAG 1.4.1 LK-01).
+    const items = groupList.querySelectorAll("li");
+    expect(items).toHaveLength(3);
+
+    const labels = Array.from(items).map(
+      (li) => li.querySelector(".lkd-diag-severity")?.textContent ?? "",
+    );
+    expect(labels).toContain("Error");
+    expect(labels).toContain("Warning");
+    expect(labels).toContain("Info");
+  });
+
   it("caps parser diagnostics by default and expands on demand", async () => {
     const user = userEvent.setup();
     const diagnostics = Array.from({ length: 30 }, (_, index) => ({

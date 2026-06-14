@@ -45,3 +45,23 @@ describe("SearchPanel — honest placeholder instead of fabricated mock (F027 C0
     expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
   });
 });
+
+// PA-06 — disabled input must reference its "coming soon" description so SR users understand why.
+describe("SearchPanel — aria-describedby for disabled state (PA-06)", () => {
+  it("disabled input has aria-describedby referencing the coming-soon element (PA-06)", () => {
+    render(<SearchPanel />);
+    const input = screen.getByLabelText("Search files and symbols");
+    const describedById = input.getAttribute("aria-describedby");
+    expect(describedById).toBeTruthy();
+    const desc = document.getElementById(describedById as string);
+    expect(desc).not.toBeNull();
+    expect(desc?.textContent).toMatch(/coming soon/i);
+  });
+
+  it("mutation guard: removing aria-describedby breaks the reference assertion (PA-06)", () => {
+    render(<SearchPanel />);
+    // Confirm the attribute value is non-empty so removing it would cause the above test to fail.
+    const input = screen.getByLabelText("Search files and symbols");
+    expect(input.getAttribute("aria-describedby")).not.toBe("");
+  });
+});

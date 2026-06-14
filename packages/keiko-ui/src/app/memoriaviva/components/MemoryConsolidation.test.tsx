@@ -164,6 +164,28 @@ describe("MemoryConsolidation", () => {
     expect(screen.getByRole("status")).toHaveTextContent("completed");
   });
 
+  it("announces the results section politely when results arrive (MV-03)", async () => {
+    const startJobImpl = vi.fn().mockResolvedValue(runningJob());
+    const fetchJobImpl = vi.fn().mockResolvedValue(completedJob());
+    const cancelJobImpl = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryConsolidation
+        startJobImpl={startJobImpl}
+        fetchJobImpl={fetchJobImpl}
+        cancelJobImpl={cancelJobImpl}
+        pollIntervalMs={5}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Consolidation results")).toHaveAttribute("aria-live", "polite");
+    });
+  });
+
   it("cancels an active job", async () => {
     const startJobImpl = vi.fn().mockResolvedValue(runningJob());
     const fetchJobImpl = vi.fn();

@@ -81,6 +81,10 @@ export function Footer({
       ? "Governance mode: Keiko governs agents per your policy"
       : "Governance mode: you approve every privileged action";
   return (
+    // SH-02: tabIndex={-1} is intentional — this footer is a programmatic focus target
+    // for the Alt+S "jump to status region" shortcut (AppShell dispatchShortcut
+    // "focus-status"). It must NOT be in the natural tab order; tabIndex={-1} is correct.
+    // A :focus-visible indicator is provided via CSS (see CSS_NEEDED in the a11y audit).
     <footer
       ref={statusRef}
       className="footer mono"
