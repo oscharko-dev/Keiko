@@ -5,24 +5,12 @@
 
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceSafeErrorException, makeCapabilityMismatchError } from "./safeError.js";
+import { modelSupportsCapability } from "./capabilityMapping.js";
 import type { ModelSelectionQuery } from "../model-selection.js";
 import type {
   QualityIntelligenceCapability,
   QualityIntelligenceTaskProfile,
 } from "./taskProfiles.js";
-
-function modelSupports(capability: QualityIntelligenceCapability, model: ModelCapability): boolean {
-  switch (capability) {
-    case "text":
-      return model.kind === "chat";
-    case "vision":
-      return model.supportsImageInput;
-    case "structured-output":
-      return model.structuredOutput;
-    case "function-calling":
-      return model.toolCalling;
-  }
-}
 
 /**
  * Project a profile's required QI capabilities onto the gateway `ModelSelectionQuery` constraints
@@ -66,7 +54,7 @@ export function assertProfileCompatibleWithModel(
 ): void {
   const missing: QualityIntelligenceCapability[] = [];
   for (const required of profile.requiredCapabilities) {
-    if (!modelSupports(required, modelCapability)) {
+    if (!modelSupportsCapability(required, modelCapability)) {
       missing.push(required);
     }
   }
