@@ -227,7 +227,7 @@ describe("buildFigmaSnapshot", () => {
     { status: 403, json: { err: "Invalid scope(s)" }, code: "FIGMA_INSUFFICIENT_SCOPE" },
     { status: 403, json: {}, code: "FIGMA_TOKEN_INVALID" },
     { status: 407, json: {}, code: "FIGMA_PROXY_EGRESS_FAILED" },
-    { status: 502, json: {}, code: "FIGMA_PROXY_EGRESS_FAILED" },
+    { status: 502, json: {}, code: "FIGMA_UPSTREAM_UNAVAILABLE" },
     { status: 503, json: {}, code: "FIGMA_UPSTREAM_UNAVAILABLE" },
   ] as const)(
     "maps /v1/images $status to $code through the #758 token-failure taxonomy",
