@@ -97,8 +97,12 @@ const collectFlowEntries = (root: FigmaSourceNode, out: InterScreenLink[]): void
   if (start !== undefined) out.push({ sourceNodeId, trigger: FLOW_START, targetNodeId: start });
 };
 
+// Injective dedup/sort key: JSON.stringify of the field tuple escapes every character (NUL,
+// backslash, quote, ...), so two distinct links can never collide into one key, which would
+// silently drop a transition feeding the downstream navigation graph (#811). Deterministic and
+// stable-ordered, preserving the byte-identical IR contract for every input.
 const linkKey = (link: InterScreenLink): string =>
-  `${link.sourceNodeId}\u0000${link.trigger}\u0000${link.targetNodeId}`;
+  JSON.stringify([link.sourceNodeId, link.trigger, link.targetNodeId]);
 
 /** Extract stable-ordered, deduped raw inter-screen links from the pruned tree + raw flow entries. */
 export const extractInterScreenLinks = (
