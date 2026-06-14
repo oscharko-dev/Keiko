@@ -34,6 +34,7 @@ import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
 import {
+  EXPECTED_FIGMA_SCOPES,
   FigmaConnectorError,
   type FigmaConnectorErrorCode,
   type FigmaHttpPort,
@@ -42,6 +43,7 @@ import {
 import type { RouteContext } from "../../routes.js";
 import {
   handleFigmaLoadSnapshot,
+  handleFigmaRevokeToken,
   handleFigmaTriggerSnapshot,
   makeInFlightMap,
   resetInFlightMap,
@@ -399,6 +401,41 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
   });
 });
 
+// ─── #758 SEC-3: re-key messages list the canonical least-privilege scopes ────
+//
+// FIGMA_TOKEN_MISSING / FIGMA_INSUFFICIENT_SCOPE operator messages must reference exactly the
+// scopes the consent ledger records (EXPECTED_FIGMA_SCOPES), so an operator never mints a token
+// with a wrong/stale scope name. Guards against the prior drift (stale "file_read" + missing
+// "file_dev_resources:read") by pinning the messages to the single source of truth.
+describe("POST /api/figma/snapshots — re-key scope hint (#758 SEC-3)", () => {
+  it.each(["FIGMA_TOKEN_MISSING", "FIGMA_INSUFFICIENT_SCOPE"] as const)(
+    "%s message lists every canonical read-only scope and no stale scope name",
+    async (code) => {
+      await recordConsent(evidenceDir);
+      const orchModule = await import("../figmaSnapshotOrchestration.js");
+      const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+      spy.mockRejectedValueOnce(new FigmaConnectorError(code));
+
+      try {
+        const result = await handleFigmaTriggerSnapshot(
+          makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false })),
+          makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        );
+        const body = result.body as { error: { code: string; message: string } };
+        expect(body.error.code).toBe(code);
+        expect(EXPECTED_FIGMA_SCOPES.length).toBeGreaterThan(0);
+        for (const scope of EXPECTED_FIGMA_SCOPES) {
+          expect(body.error.message).toContain(scope);
+        }
+        // The stale, non-canonical scope name must never reappear.
+        expect(body.error.message).not.toContain("file_read");
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+});
+
 // ─── Environment variable parsing ─────────────────────────────────────────────
 
 describe("env var parsing — KEIKO_FIGMA_BUILD_DEADLINE_MS", () => {
@@ -502,6 +539,17 @@ describe("DELETE /api/figma/token", () => {
     const body = (await res.json()) as { code: string; message: string };
     expect(body.code).toBe("FIGMA_TOKEN_REVOKED_OK");
     expect(typeof body.message).toBe("string");
+  });
+
+  it("returns 503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
+    // Direct-handler call mirroring the GET 503 guard test. The revoke 503 guard
+    // (figmaSnapshotRoutes.ts) fires before any vault access; the only prior DELETE test
+    // always wires a real evidenceDir, so a mutant deleting/inverting this guard would survive.
+    const deps: UiHandlerDeps = { ...makeDeps(""), evidenceDir: undefined };
+    const result = handleFigmaRevokeToken(makeGetCtx(""), deps);
+    expect(result.status).toBe(503);
+    const body = result.body as { error: { code: string } };
+    expect(body.error.code).toBe("FIGMA_NO_EVIDENCE_DIR");
   });
 });
 

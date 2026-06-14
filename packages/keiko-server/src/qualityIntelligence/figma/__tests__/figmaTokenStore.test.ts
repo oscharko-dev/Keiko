@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,6 +34,21 @@ describe("createFigmaTokenStore round-trip", () => {
 
   it("returns undefined when no entry has been written", () => {
     expect(storeAt().read()).toBeUndefined();
+  });
+
+  it("returns undefined (not throw) when the stored file is not a sealed kv1 envelope", () => {
+    // Pins the `!isSealed(envelope)` guard: a mutant dropping it would call openString() on a
+    // non-sealed string and throw, breaking the "no entry → undefined" contract.
+    const storePath = join(dir, "figma-token.enc");
+    writeFileSync(storePath, "plaintext-not-a-kv1-envelope");
+    expect(createFigmaTokenStore({ key: KEY, storePath }).read()).toBeUndefined();
+  });
+
+  it("returns undefined (not throw) when the stored file is empty", () => {
+    // Pins the `envelope.length === 0` guard against a mutant that removes it.
+    const storePath = join(dir, "figma-token.enc");
+    writeFileSync(storePath, "");
+    expect(createFigmaTokenStore({ key: KEY, storePath }).read()).toBeUndefined();
   });
 
   it("never writes the plaintext token to disk", () => {
@@ -119,6 +134,21 @@ describe("resolveFigmaVaultKey precedence", () => {
     const resolved = resolveFigmaVaultKey({}, dir, () => fromKeychain);
     expect(resolved.source).toBe("keychain");
     expect(resolved.key.equals(fromKeychain)).toBe(true);
+  });
+
+  it("prefers the env key over the keychain tier when both are present", () => {
+    // The env-tier test above injects NO_FIGMA_KEYCHAIN, so it cannot prove env BEATS keychain.
+    // Provide BOTH a valid env key and a DIFFERENT keychain key: a mutant that checks keychain
+    // before env would resolve source==='keychain' with the keychain key and fail here.
+    const envKey = Buffer.alloc(32, 5);
+    const keychainKey = Buffer.alloc(32, 9);
+    const resolved = resolveFigmaVaultKey(
+      { KEIKO_FIGMA_KEY: envKey.toString("base64") },
+      dir,
+      () => keychainKey,
+    );
+    expect(resolved.source).toBe("env");
+    expect(resolved.key.equals(envKey)).toBe(true);
   });
 });
 

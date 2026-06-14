@@ -399,6 +399,11 @@ function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] 
   );
 }
 
+// The Figma PAT is redacted via its config (`config.figma.accessToken`) and env
+// (`FIGMA_ACCESS_TOKEN`) literals. The decrypted ENCRYPTED-VAULT token (#758) is intentionally NOT
+// added here: it never reaches a redactable payload — it is confined to the outbound `X-Figma-Token`
+// request header by construction (figmaConnector.ts) and is never returned, logged, or serialized.
+// Adding it would require decrypting the vault at redactor-build time, widening exposure for no gain.
 function redactionSecrets(
   env: EnvSource,
   config: GatewayConfig | undefined,
