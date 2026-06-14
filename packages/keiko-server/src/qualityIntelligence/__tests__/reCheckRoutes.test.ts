@@ -29,6 +29,13 @@ import {
   recordQualityIntelligenceCandidates,
 } from "@oscharko-dev/keiko-evidence";
 import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-workflows";
+import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  ModelCapability,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   EvidenceStore,
   QualityIntelligenceEvidenceManifest,
@@ -782,6 +789,142 @@ describe("handleQiRegenerateStale — no model configured", () => {
     expect(matrix.length).toBeGreaterThan(0);
     const excerpts = matrix.map((row) => row.requirementExcerptRedacted ?? "");
     expect(excerpts.some((e) => e.includes("Login must work reliably"))).toBe(true);
+  });
+});
+
+// Issue #763 (Epic #761) AC2: model provenance (modelId / seedUsed / modelParameters) of a
+// MODEL-attributed regeneration must be carried forward onto the merged run record so a re-checked
+// run stays attributable. The existing coverage only asserts the no-model path (modelId/seedUsed
+// undefined); the `optionalModelFields` carry-forward (`regeneratedManifest.modelId !== undefined`
+// etc.) is mutation-blind without a model-backed regeneration that actually sets those fields.
+describe("handleQiRegenerateStale — carries model provenance forward (Issue #763)", () => {
+  const MODEL_ID = "recheck-chat-model";
+
+  function chatCapability(modelId: string): ModelCapability {
+    return {
+      id: modelId,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+  }
+
+  // Canned generation output covering the regenerated atom; the judge call (different shape) fails
+  // soft and never blocks the succeeded run, so the model id is still attributed.
+  const REGEN_CANDIDATES_JSON = JSON.stringify({
+    testCases: [
+      {
+        title: "Verify MFA writes an audit entry on login",
+        preconditions: ["An audit user exists."],
+        steps: ["Log in with MFA."],
+        expectedResults: ["An audit entry is written."],
+        priority: "P1",
+        riskClass: "compliance",
+        derivedFromEvidenceIndexes: [1],
+        tags: ["audit-login"],
+      },
+    ],
+  });
+
+  function fakeChatPort(content: string): ModelPort {
+    return {
+      call: (req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> =>
+        Promise.resolve({
+          content,
+          modelId: req.modelId,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "req-test",
+            promptTokens: 10,
+            completionTokens: 5,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        }),
+    };
+  }
+
+  function depsWithModel(dir: string): UiHandlerDeps {
+    const config = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: MODEL_ID,
+            baseUrl: "https://fake.example.com/v1",
+            apiKey: "fake-key",
+            capability: chatCapability(MODEL_ID),
+          },
+        ],
+      },
+      {},
+    );
+    const port = fakeChatPort(REGEN_CANDIDATES_JSON);
+    return {
+      config,
+      configPresent: true,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}, config),
+      registry: createRunRegistry(),
+      modelPortFactory: (): ModelPort => port,
+      store: createInMemoryUiStore(),
+      evidenceDir: dir,
+    };
+  }
+
+  it("carries the regenerated run's modelId and seedUsed onto the merged run", async () => {
+    const runId = "run-model-recheck";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-login", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-mfa", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+    });
+    const body = {
+      sources: [
+        {
+          kind: "requirements",
+          label: "Spec",
+          text: "Login must work reliably\nMFA must also write an audit entry",
+        },
+      ],
+    };
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx("regenerate-stale", runId, makeReq(body)),
+        depsWithModel(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const newRunId = (result.body as { runId: string }).runId;
+    expect(newRunId).not.toBe(runId);
+    const manifest = loadQualityIntelligenceRun(newRunId, { evidenceDir });
+    expect(manifest?.status).toBe("succeeded");
+    // The regeneration ran a model, so the merged run is model-attributed (not the baseline path).
+    expect(manifest?.modelId).toBe(MODEL_ID);
+    // No seed flows through the regenerate path, so a model run records seedUsed: null (not absent).
+    expect(manifest?.seedUsed).toBeNull();
   });
 });
 

@@ -182,6 +182,58 @@ describe("handleStartQiRun — seed validation", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
   });
+
+  // Issue #763 (Epic #761) AC2: seed=0 is a valid, non-negative safe integer and must be accepted
+  // so a deterministic run can pin the zero seed. The existing tests only cover -1 (reject) and 7
+  // (accept), leaving the `value >= 0` boundary unpinned — a `>= 0` → `> 0` mutation would reject a
+  // valid zero seed with no test catching it.
+  it("accepts seed=0 as a valid deterministic seed on the SSE path", async () => {
+    const res = new MockResponse();
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+          seed: 0,
+        }),
+        res,
+      ),
+      deps(),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
+  });
+
+  // Issue #763 AC2: parseOptionalSeed requires a NON-NEGATIVE SAFE INTEGER. Pin the distinct guard
+  // clauses so a loosened check (e.g. Number.isSafeInteger → Number.isInteger, or dropping the
+  // typeof number guard) is caught: a fractional seed, an unsafe integer beyond 2^53-1, and a
+  // numeric string must each be rejected with 400 QI_BAD_REQUEST before any streaming begins.
+  it.each([
+    { label: "a fractional seed", seed: 1.5 },
+    { label: "an unsafe integer beyond MAX_SAFE_INTEGER", seed: Number.MAX_SAFE_INTEGER + 1 },
+    { label: "a numeric string", seed: "7" },
+  ])("returns 400 QI_BAD_REQUEST for $label", async ({ seed }) => {
+    const res = new MockResponse();
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+            seed,
+          }),
+          res,
+        ),
+        deps(),
+      ),
+    );
+
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+    expect((result.body as { error: { message: string } }).error.message).toMatch(/seed/i);
+    expect(res.statusCode).toBeUndefined();
+    expect(res.chunks).toHaveLength(0);
+  });
 });
 
 // ─── Capsule source parsing (Issue #716) ────────────────────────────────────────
