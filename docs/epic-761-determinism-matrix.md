@@ -38,9 +38,10 @@ separate structured-output model still runs end to end with the judged path.
 
 - Structural stages are model-free and replayable. Coverage mapping, deduplication, validation,
   and candidate-id derivation never call a model. Every candidate id is a content hash
-  (`sha256(runId | ordinal | title)`), so identical model text yields identical ids regardless of
-  model tier.
-- Model output is an attributed delta. The evidence manifest records `modelId`, request parameters
+  (`sha256(ordinal | title | cited atoms)` for model candidates, `sha256(atom hash | ordinal)` for
+  structural candidates), so identical inputs yield identical ids regardless of run id or model tier.
+- Every run starts from the deterministic structural baseline. Model output is appended only as a
+  non-duplicate, attributed delta. The evidence manifest records `modelId`, request parameters
   actually used (`modelParameters`, for example `responseFormat` and `seed`), and `seedUsed`.
 - Graceful degradation is explicit:
   - response format is sent only when the chosen model advertises `supportsResponseFormat=true`
