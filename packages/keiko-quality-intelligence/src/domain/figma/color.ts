@@ -83,13 +83,26 @@ export interface Rgb {
   readonly b: number;
 }
 
-// Parse the leading `#RRGGBB` of a normalized hex (the optional alpha suffix is ignored for contrast:
-// WCAG contrast is defined on opaque colours and the IR composites onto a solid background). Returns
-// undefined for a malformed value so the caller emits a coverage notice rather than crashing.
-export const parseHexRgb = (hex: string): Rgb | undefined => {
+export interface Rgba extends Rgb {
+  /** Alpha in the 0..1 range. */
+  readonly a: number;
+}
+
+// Parse `#RRGGBB[AA]` into rendered colour channels. Returns undefined for a malformed value so the
+// caller emits a coverage notice rather than crashing.
+export const parseHexRgba = (hex: string): Rgba | undefined => {
   if (!/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/u.test(hex)) return undefined;
   const r = Number.parseInt(hex.slice(1, 3), 16);
   const g = Number.parseInt(hex.slice(3, 5), 16);
   const b = Number.parseInt(hex.slice(5, 7), 16);
+  const a = hex.length === 9 ? Number.parseInt(hex.slice(7, 9), 16) / 255 : 1;
+  return { r, g, b, a };
+};
+
+// Legacy RGB parser for callers that intentionally want the opaque leading colour.
+export const parseHexRgb = (hex: string): Rgb | undefined => {
+  const parsed = parseHexRgba(hex);
+  if (parsed === undefined) return undefined;
+  const { r, g, b } = parsed;
   return { r, g, b };
 };

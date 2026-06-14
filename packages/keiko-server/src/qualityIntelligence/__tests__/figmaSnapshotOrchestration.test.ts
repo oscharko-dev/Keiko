@@ -97,7 +97,7 @@ interface PortRecorder {
   readonly tokens: string[];
 }
 
-const httpPort = (): PortRecorder => {
+const httpPort = (board: Record<string, unknown> = BOARD): PortRecorder => {
   const tokens: string[] = [];
   const port: FigmaHttpPort = (request) => {
     tokens.push(request.headers["X-Figma-Token"] ?? "");
@@ -109,7 +109,7 @@ const httpPort = (): PortRecorder => {
       return Promise.resolve({ status: 200, json: { images }, headers: {} });
     }
     const id = url.searchParams.get("ids") ?? "";
-    const doc = findById(BOARD, id);
+    const doc = findById(board, id);
     if (doc === undefined) return Promise.resolve({ status: 404, json: {}, headers: {} });
     return Promise.resolve({
       status: 200,
@@ -119,6 +119,35 @@ const httpPort = (): PortRecorder => {
   };
   return { port, tokens };
 };
+
+const singleTextBoard = (textFill: {
+  r: number;
+  g: number;
+  b: number;
+}): Record<string, unknown> => ({
+  id: "0:1",
+  name: "Canvas",
+  type: "CANVAS",
+  children: [
+    {
+      id: "1:1",
+      name: "Content",
+      type: "FRAME",
+      fills: [SOLID({ r: 1, g: 1, b: 1 })],
+      children: [
+        {
+          id: "1:2",
+          name: "Body",
+          type: "TEXT",
+          characters: "Readable",
+          fills: [SOLID(textFill)],
+          style: TEXT_STYLE,
+          absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 24 },
+        },
+      ],
+    },
+  ],
+});
 
 const renderPort: FigmaRenderPort = () =>
   Promise.resolve({ status: 200, bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), headers: {} });
@@ -216,6 +245,26 @@ describe("governedSnapshotBuild — audit + metrics (#760)", () => {
     expect(result.metrics.navGraph).toEqual({ screens: 2, transitions: 1 });
     expect(result.metrics.a11y?.findings).toBeGreaterThanOrEqual(0);
     expect(result.metrics.augmentation.modelAugmentedShare).toBe(0);
+  });
+
+  it("counts only failing deterministic a11y checks as a11y findings", async () => {
+    const passing = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({
+        httpPort: httpPort(singleTextBoard({ r: 0, g: 0, b: 0 })).port,
+        acknowledgeReadOnly: true,
+      }),
+    );
+    expect(passing.metrics.a11y?.findings).toBe(0);
+
+    const failing = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({
+        httpPort: httpPort(singleTextBoard({ r: 0.47, g: 0.47, b: 0.47 })).port,
+        acknowledgeReadOnly: true,
+      }),
+    );
+    expect(failing.metrics.a11y?.findings).toBe(1);
   });
 
   it("audits a re-snapshot action distinctly", async () => {
