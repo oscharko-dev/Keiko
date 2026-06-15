@@ -57,17 +57,106 @@ describe("effectiveStrength", () => {
     expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(expected, 10);
   });
 
-  it("uses lastAccessedAt (not createdAt) for the recency factor when present", () => {
+  it("anchors recency on lastAccessedAt once the memory has a real access", () => {
     const r = makeRecord({ id: "m", confidence: 0.8, createdAt: NOW - 90 * DAY });
-    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 0 }]]);
-    // recent touch resets decay => strength back to ~confidence
-    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.8, 6);
+    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 3 }]]);
+    // A genuine recall (count > 0) resets the decay anchor to lastAccessedAt (NOW), so recency = 1
+    // and only the frequency boost applies.
+    const expected = 0.8 * (1 + 0.15 * Math.log1p(3));
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(expected, 10);
+  });
+
+  it("anchors recency on createdAt for an outcome-only row (accessCount 0)", () => {
+    // O-V1: an outcome was recorded (lastAccessedAt set) but the memory was never recalled (count 0),
+    // so recency must fall back to createdAt — one half-life => 0.5, NOT the lastAccessedAt's 1.0.
+    const r = makeRecord({ id: "m", confidence: 0.8, createdAt: NOW - 45 * DAY });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 1, utilitySum: 0.5 }],
+    ]);
+    // recency 0.5 (createdAt anchor), freqBoost 1, utilityFactor 1.0 (mean 0.5) => 0.8 * 0.5 = 0.4
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.4, 6);
   });
 
   it("clamps to [0,1]", () => {
     const r = makeRecord({ id: "m", confidence: 1, createdAt: NOW });
     const s = stats([["m", { lastAccessedAt: NOW, accessCount: 1000 }]]);
     expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBe(1);
+  });
+});
+
+describe("effectiveStrength — outcome-gated utility factor (O-V1)", () => {
+  it("is byte-identical when the stat carries no outcome fields", () => {
+    const r = makeRecord({ id: "m", confidence: 0.5, createdAt: NOW });
+    const withAccess = stats([["m", { lastAccessedAt: NOW, accessCount: 4 }]]);
+    const withZeroOutcomes = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 4, outcomeCount: 0, utilitySum: 0 }],
+    ]);
+    expect(effectiveStrength(r, withAccess.get("m" as MemoryId), NOW)).toBe(
+      effectiveStrength(r, withZeroOutcomes.get("m" as MemoryId), NOW),
+    );
+  });
+
+  it("boosts strength 1.5x when every outcome is positive", () => {
+    const r = makeRecord({ id: "m", confidence: 0.5, createdAt: NOW });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 2, utilitySum: 2 }],
+    ]);
+    // meanUtility 1 => factor 1.5; freqBoost 1, recency 1 => 0.5 * 1.5 = 0.75
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.75, 10);
+  });
+
+  it("halves strength when every outcome is negative", () => {
+    const r = makeRecord({ id: "m", confidence: 0.6, createdAt: NOW });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 3, utilitySum: 0 }],
+    ]);
+    // meanUtility 0 => factor 0.5 => 0.6 * 0.5 = 0.3
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.3, 10);
+  });
+
+  it("is neutral (factor 1) for a mean utility of 0.5", () => {
+    const r = makeRecord({ id: "m", confidence: 0.5, createdAt: NOW });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 2, utilitySum: 1 }],
+    ]);
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.5, 10);
+  });
+});
+
+describe("planMemoryMaintenance — outcome-driven forgetting (O-V1)", () => {
+  it("archives a negative-outcome accepted memory the neutral one would keep", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "accepted",
+      confidence: 0.35,
+      createdAt: NOW - 4 * DAY,
+    });
+    // Neutral: strength ≈ 0.35 * 0.940 ≈ 0.329 ≥ 0.2 => kept.
+    expect(planFor([r], emptyStats()).archive).toEqual([]);
+    // Proven bad (mean 0 => 0.5x): ≈ 0.165 < 0.2, age > 3d => archived.
+    const bad = stats([
+      ["m", { lastAccessedAt: NOW - 4 * DAY, accessCount: 0, outcomeCount: 2, utilitySum: 0 }],
+    ]);
+    expect(planFor([r], bad).archive).toEqual(["m"]);
+  });
+
+  it("keeps a positive-outcome accepted memory the neutral one would archive", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "accepted",
+      confidence: 0.45,
+      createdAt: NOW - 60 * DAY,
+    });
+    // Neutral: strength ≈ 0.45 * 0.397 ≈ 0.179 < 0.2 => archived.
+    expect(planFor([r], emptyStats()).archive).toEqual(["m"]);
+    // Proven useful (mean 1 => 1.5x): ≈ 0.268 ≥ 0.2 => survives with no decision.
+    const good = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 1, utilitySum: 1 }],
+    ]);
+    const plan = planFor([r], good);
+    expect(plan.archive).toEqual([]);
+    expect(plan.forget).toEqual([]);
+    expect(plan.promote).toEqual([]);
   });
 });
 

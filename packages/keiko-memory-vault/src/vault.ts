@@ -38,7 +38,12 @@ import {
   listOutgoingEdgeRows,
 } from "./edges.js";
 import { getEmbeddingRow, getEmbeddingRows, upsertEmbeddingRow } from "./embeddings.js";
-import { getAccessStatsRows, recordAccessRows, type MemoryAccessStat } from "./access.js";
+import {
+  getAccessStatsRows,
+  recordAccessRows,
+  recordOutcomeRows,
+  type MemoryAccessStat,
+} from "./access.js";
 import {
   deleteTombstonesByScopeBeforeRows,
   insertTombstoneRow,
@@ -369,7 +374,11 @@ type EdgeAndEmbeddingOps = Pick<
 
 type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
-  "listTombstonesByScope" | "purgeTombstonesByScopeBefore" | "recordAccess" | "getAccessStats"
+  | "listTombstonesByScope"
+  | "purgeTombstonesByScopeBefore"
+  | "recordAccess"
+  | "recordOutcome"
+  | "getAccessStats"
 >;
 
 function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
@@ -426,6 +435,9 @@ function buildTombstoneAndAccessOps(
     },
     recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
       recordAccessRows(db, ids, nowMs);
+    },
+    recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number): void => {
+      recordOutcomeRows(db, ids, utility, nowMs);
     },
     getAccessStats: (ids?: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryAccessStat> =>
       getAccessStatsRows(db, ids),

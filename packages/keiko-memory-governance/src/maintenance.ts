@@ -13,8 +13,17 @@
 //   base         = provenance.confidence                       (calibrated [0,1])
 //   freqBoost    = 1 + 0.15 * ln(1 + accessCount)              (recall strengthens)
 //   recencyFactor= exp(-ln2 * (now - lastTouch) / HALF_LIFE)   (disuse decays; 45-day half-life)
-//   strength     = pinned ? 1 : clamp(base * freqBoost * recencyFactor, 0, 1)
+//   utilityFactor= 0.5 + meanOutcomeUtility                    (outcome-gated; [0.5,1.5], default 1)
+//   strength     = pinned ? 1 : clamp(base * freqBoost * recencyFactor * utilityFactor, 0, 1)
 // lastTouch is the last access timestamp, falling back to createdAt when never accessed.
+//
+// OUTCOME-DRIVEN FORGETTING (#204, O-V1). Disuse is not the only reason to forget: a memory can be
+// recent and frequently recalled yet keep leading to the WRONG answer. `utilityFactor` folds the
+// mean of a memory's governed retention outcomes (proposal accepted/rejected, conflict won/lost,
+// accepted correction superseding its origin) into the strength: all-bad outcomes (mean 0) halve it
+// so the memory archives/forgets sooner; all-good (mean 1) raise it 1.5x so a proven-useful memory
+// resists disuse decay. With NO outcomes the factor is exactly 1 and the model is byte-identical to
+// the pre-O-V1 curve. The factor is bounded so outcomes shift, but never dominate, the prior signal.
 //
 // CONFIDENCE IS IMMUTABLE PROVENANCE (#204, O-V2). This pass NEVER overwrites provenance.confidence.
 // Confidence is the calibrated veridicality of a memory at capture time and is changed only by an
@@ -34,6 +43,11 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memor
 export interface MemoryAccessStatLike {
   readonly lastAccessedAt: number;
   readonly accessCount: number;
+  // Governed retention outcomes (#204, O-V1). Optional so a caller that does not track outcomes
+  // (or a pre-O-V1 access row) yields a neutral utility factor of 1 — byte-identical to the
+  // pre-outcome strength model.
+  readonly outcomeCount?: number;
+  readonly utilitySum?: number;
 }
 
 export interface MemoryMaintenancePolicy {
@@ -83,8 +97,22 @@ function recencyFactorOf(
   nowMs: number,
   halfLifeMs: number,
 ): number {
-  const lastTouch = stat?.lastAccessedAt ?? record.createdAt;
+  // Only a genuine recall advances the recency anchor. An outcome-only row (accessCount 0, written
+  // by recordOutcome before the memory was ever recalled) carries no "last use", so recency falls
+  // back to createdAt — exactly as a never-tracked memory does. For every real access row
+  // (accessCount >= 1) this is byte-identical to the prior `stat.lastAccessedAt ?? createdAt`.
+  const lastTouch =
+    stat !== undefined && stat.accessCount > 0 ? stat.lastAccessedAt : record.createdAt;
   return Math.exp((-Math.LN2 * (nowMs - lastTouch)) / halfLifeMs);
+}
+
+// Outcome-gated utility factor (#204, O-V1). Mean utility of the memory's recorded retention
+// outcomes mapped linearly onto [0.5, 1.5]; no outcomes => exactly 1 (strength model unchanged).
+function utilityFactor(stat: MemoryAccessStatLike | undefined): number {
+  const count = stat?.outcomeCount ?? 0;
+  if (count <= 0) return 1;
+  const meanUtility = clamp01((stat?.utilitySum ?? 0) / count);
+  return 0.5 + meanUtility;
 }
 
 export function effectiveStrength(
@@ -97,7 +125,7 @@ export function effectiveStrength(
   const base = record.provenance.confidence;
   const freqBoost = 1 + 0.15 * Math.log1p(stat?.accessCount ?? 0);
   const recencyFactor = recencyFactorOf(record, stat, nowMs, halfLifeMs);
-  return clamp01(base * freqBoost * recencyFactor);
+  return clamp01(base * freqBoost * recencyFactor * utilityFactor(stat));
 }
 
 // ─── Per-record decision ───────────────────────────────────────────────────────

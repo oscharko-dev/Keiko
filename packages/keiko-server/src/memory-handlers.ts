@@ -1138,6 +1138,11 @@ function executeConflictResolution(
     resolution.supersessions,
     nowMs,
   );
+  // Outcome-driven forgetting (#204, O-V1): the winner proved more correct (utility 1), the losers
+  // proved wrong (utility 0). These bias the maintenance utility factor toward keeping the winner
+  // and forgetting the superseded losers.
+  vault.recordOutcome([input.winner], 1, nowMs);
+  vault.recordOutcome(input.losers, 0, nowMs);
   return {
     resolved: true,
     winner: input.winner,
@@ -1467,6 +1472,14 @@ function acceptMemoryProposal(
   if (updated === undefined) {
     throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
   }
+  // Outcome-driven forgetting (#204, O-V1): acceptance is a positive retention outcome for the
+  // proposal; any origin it supersedes proved wrong (utility 0). Both feed the maintenance utility
+  // factor so the kept memory resists disuse decay and the corrected-away origin fades sooner.
+  vault.recordOutcome([id], 1, nowMs);
+  const supersededOriginIds = origins.map((origin) => origin.original.id);
+  if (supersededOriginIds.length > 0) {
+    vault.recordOutcome(supersededOriginIds, 0, nowMs);
+  }
   recordCorrectionSupersessionAudits(deps, updated, origins, nowMs);
   return { status: 200, body: { memory: redactMemory(deps, updated) } };
 }
@@ -1530,11 +1543,15 @@ export async function handleRejectMemoryProposal(
   try {
     const existing = ensureRejectableMemory(vault.getMemory(id as MemoryId));
     if (isRouteResult(existing)) return existing;
+    const nowMs = Date.now();
     const updated = vault.updateMemory(
       id as MemoryId,
       { status: "rejected", staleReason: reason },
-      Date.now(),
+      nowMs,
     );
+    // Outcome-driven forgetting (#204, O-V1): a user rejection is a negative retention outcome
+    // (utility 0), so the rejected memory fades faster under maintenance instead of lingering.
+    vault.recordOutcome([id as MemoryId], 0, nowMs);
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
