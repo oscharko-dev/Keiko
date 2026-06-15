@@ -49,7 +49,7 @@ import type {
   QualityIntelligenceModelRoutedTestDesignDeps,
 } from "@oscharko-dev/keiko-workflows";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
-import type { UiHandlerDeps } from "../deps.js";
+import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
@@ -1296,8 +1296,17 @@ function optionalModelFields(
 function recordMergedManifest(
   evidenceDir: string,
   args: Parameters<typeof buildMergedRunRecord>[0],
+  additionalSecrets: readonly string[],
 ): void {
-  recordQualityIntelligenceRun(buildMergedRunRecord(args), { evidenceDir });
+  // Persist-time secret scrubbing at parity with the initial-run path (runExecution.ts
+  // buildWorkflowDeps): the merged manifest carries judge rationales forwarded from the regenerated
+  // run, so the live additionalSecrets list must reach the manifest writer here too — otherwise a
+  // configured provider secret echoed in a rationale that the security-package builtin patterns do
+  // not match would survive into the on-disk merged manifest (Issue #747 defence-in-depth).
+  recordQualityIntelligenceRun(buildMergedRunRecord(args), {
+    evidenceDir,
+    redaction: { additionalSecrets },
+  });
 }
 
 function recordMergedCandidatesArtifact(args: {
@@ -1358,19 +1367,23 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     mergedCandidates,
     preservedEditedRevisions: args.preservedEditedRevisions,
   });
-  recordMergedManifest(args.evidenceDir, {
-    newRunId: args.newRunId,
-    requestedAt: args.requestedAt,
-    profile: args.profile,
-    oldManifest: args.oldManifest,
-    ingestion: args.ingestion,
-    preservedCandidates: args.preservedCandidates,
-    regeneratedCandidates: args.regeneratedCandidates,
-    regeneratedManifest: args.regeneratedManifest,
-    completedAt: args.completedAt,
-    findings,
-    coverageMatrix: coverage.coverageMatrix,
-  });
+  recordMergedManifest(
+    args.evidenceDir,
+    {
+      newRunId: args.newRunId,
+      requestedAt: args.requestedAt,
+      profile: args.profile,
+      oldManifest: args.oldManifest,
+      ingestion: args.ingestion,
+      preservedCandidates: args.preservedCandidates,
+      regeneratedCandidates: args.regeneratedCandidates,
+      regeneratedManifest: args.regeneratedManifest,
+      completedAt: args.completedAt,
+      findings,
+      coverageMatrix: coverage.coverageMatrix,
+    },
+    currentRedactionSecrets(args.deps),
+  );
 }
 
 interface RegeneratedSlice {
