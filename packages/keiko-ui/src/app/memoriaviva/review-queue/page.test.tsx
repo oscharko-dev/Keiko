@@ -1,17 +1,20 @@
-import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import MemoryReviewQueuePage, { metadata } from "./page";
 
-vi.mock("../components/ReviewQueue", () => ({
-  ReviewQueue: () => <section aria-label="Memory review queue client" />,
+const { redirectMock } = vi.hoisted(() => ({
+  redirectMock: vi.fn((path: string): never => {
+    throw new Error(`redirect:${path}`);
+  }),
+}));
+
+vi.mock("next/navigation", () => ({
+  redirect: redirectMock,
 }));
 
 describe("MemoryReviewQueuePage", () => {
-  it("exposes the review queue route shell and mounts the queue client", () => {
-    render(<MemoryReviewQueuePage />);
-
-    expect(metadata.title).toBe("MemoriaViva Review Queue — Keiko");
-    expect(screen.getByRole("main", { name: "MemoriaViva review queue" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Memory review queue client" })).toBeInTheDocument();
+  it("redirects to the Workspace because review queue opens inside the MemoriaViva window", () => {
+    expect(metadata.title).toBe("Keiko");
+    expect(() => MemoryReviewQueuePage()).toThrow("redirect:/");
+    expect(redirectMock).toHaveBeenCalledWith("/");
   });
 });

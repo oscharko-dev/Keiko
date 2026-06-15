@@ -1,29 +1,12 @@
-// Issue #189 — tests for the LeftRail navigation links.
-// Verifies that the remaining page-route link (MemoriaViva) renders with correct href and
-// accessible name. Quality Intelligence and Local Knowledge are Workspace tool windows:
-// each renders as a tool button that calls onTool(...).
+// Issue #189 — tests for the LeftRail navigation controls.
+// Verifies that visible features render as Workspace tool buttons and hidden/unreleased
+// surfaces stay out of the rail.
 // Epic #518 — also verifies aria-pressed state on toggle buttons (WCAG 4.1.2).
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LeftRail } from "./LeftRail";
-
-vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-    ...rest
-  }: {
-    href: string;
-    children: React.ReactNode;
-    [key: string]: unknown;
-  }) => (
-    <a href={href} {...rest}>
-      {children}
-    </a>
-  ),
-}));
 
 function renderRail(openTools: ReadonlySet<string> = new Set()): void {
   render(
@@ -37,7 +20,7 @@ function renderRail(openTools: ReadonlySet<string> = new Set()): void {
   );
 }
 
-describe("LeftRail — page-route links", () => {
+describe("LeftRail — workspace tool buttons", () => {
   it("renders the left rail as a labeled navigation landmark", () => {
     renderRail();
     expect(
@@ -85,11 +68,34 @@ describe("LeftRail — page-route links", () => {
     expect(screen.queryByRole("button", { name: "Account" })).not.toBeInTheDocument();
   });
 
-  it("renders the MemoriaViva link with correct href and accessible name", () => {
+  it("renders MemoriaViva as a tool button instead of a page-route link", () => {
     renderRail();
-    const link = screen.getByRole("link", { name: "MemoriaViva" });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/memoriaviva");
+    expect(screen.getByRole("button", { name: "MemoriaViva" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "MemoriaViva" })).not.toBeInTheDocument();
+  });
+
+  it("opens the MemoriaViva window via onTool('memoria') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "MemoriaViva" }));
+    expect(onTool).toHaveBeenCalledWith("memoria");
+  });
+
+  it("marks the MemoriaViva button pressed when its window is open", () => {
+    renderRail(new Set(["memoria"]));
+    expect(screen.getByRole("button", { name: "MemoriaViva" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("renders Quality Intelligence as a tool button (not a page-route link)", () => {
@@ -179,13 +185,6 @@ describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
     expect(settingsBtn).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("route links do NOT have aria-pressed", () => {
-    renderRail();
-    const links = screen.getAllByRole("link");
-    for (const link of links) {
-      expect(link).not.toHaveAttribute("aria-pressed");
-    }
-  });
 });
 
 // SH-01 (WCAG 4.1.2) — theme-toggle button aria-pressed tracks the active theme.

@@ -190,7 +190,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
   // command palette (same forgotten-WindowType pattern as #756/"figma"). Pin them.
-  it("includes Open commands for settings, local knowledge, quality and relationships", () => {
+  it("includes Open commands for MemoriaViva, settings, local knowledge, quality and relationships", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -200,6 +200,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const ids = new Set(commands.map((c) => c.id));
+    expect(ids.has("open-memoria")).toBe(true);
     expect(ids.has("open-settings")).toBe(true);
     expect(ids.has("open-localKnowledge")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);

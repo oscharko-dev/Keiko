@@ -28,6 +28,7 @@ import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
+import { MemoriaVivaWindow } from "../../../memoriaviva/components/MemoriaVivaWindow";
 import { ConnectorGraph } from "../../../local-knowledge/connector-graph";
 import {
   buildConnectedRunSources,
@@ -302,6 +303,7 @@ registerWindowRender("agents", (cfg, ctx) => (
     linkedFilePath={ctx.linkedFilePath}
   />
 ));
+registerWindowRender("memoria", () => <MemoriaVivaWindow />);
 // uiux-fix F023 C054 — no real integrations exist yet; the widget renders an honest
 // static list, so the legacy `provider` cfg (fabricated "connected" state) is ignored.
 registerWindowRender("integ", () => <IntegrationsWidget />);

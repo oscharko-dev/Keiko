@@ -134,16 +134,51 @@ function TagsList({ tags }: { readonly tags: readonly string[] }): ReactNode {
 // RecordHeader
 // ---------------------------------------------------------------------------
 
-function RecordHeader({ record }: { readonly record: MemoryRecord }): ReactNode {
+function BackToMemoriaControl({
+  onBack,
+  controlRef,
+  children = "Back to MemoriaViva",
+}: {
+  readonly onBack?: (() => void) | undefined;
+  readonly controlRef?:
+    | ((node: HTMLAnchorElement | HTMLButtonElement | null) => void)
+    | undefined;
+  readonly children?: ReactNode;
+}): ReactNode {
+  if (onBack !== undefined) {
+    return (
+      <button
+        ref={controlRef}
+        type="button"
+        className="mc-back-link lk-btn lk-btn-ghost"
+        onClick={onBack}
+      >
+        {children}
+      </button>
+    );
+  }
+  return (
+    <Link
+      ref={controlRef}
+      href="/memoriaviva"
+      className="mc-back-link lk-btn lk-btn-ghost"
+      aria-label="Back to MemoriaViva"
+    >
+      {children}
+    </Link>
+  );
+}
+
+function RecordHeader({
+  record,
+  onBack,
+}: {
+  readonly record: MemoryRecord;
+  readonly onBack?: (() => void) | undefined;
+}): ReactNode {
   return (
     <header className="mc-detail-header">
-      <Link
-        href="/memoriaviva"
-        className="mc-back-link lk-btn lk-btn-ghost"
-        aria-label="Back to MemoriaViva"
-      >
-        ← Back
-      </Link>
+      <BackToMemoriaControl onBack={onBack}>← Back</BackToMemoriaControl>
       <div className="mc-detail-title-row">
         <h1 className="lk-title" style={{ flex: 1 }}>
           {TYPE_LABELS[record.type]} memory
@@ -168,9 +203,14 @@ function RecordHeader({ record }: { readonly record: MemoryRecord }): ReactNode 
 interface MemoryDetailProps {
   readonly id: string;
   readonly fetchMemoryImpl?: typeof fetchMemory;
+  readonly onBack?: (() => void) | undefined;
 }
 
-export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetailProps): ReactNode {
+export function MemoryDetail({
+  id,
+  fetchMemoryImpl = fetchMemory,
+  onBack,
+}: MemoryDetailProps): ReactNode {
   const [record, setRecord] = useState<MemoryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -178,7 +218,13 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
   // empty state then confirms the removal and offers a way back instead of a
   // dead-end "Memory not found" (uiux-fix F005).
   const [removed, setRemoved] = useState(false);
-  const removedBackLinkRef = useRef<HTMLAnchorElement>(null);
+  const removedBackControlRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
+  const setRemovedBackControlRef = useCallback(
+    (node: HTMLAnchorElement | HTMLButtonElement | null): void => {
+      removedBackControlRef.current = node;
+    },
+    [],
+  );
 
   const handleRecordChange = useCallback((updated: MemoryRecord | null): void => {
     if (updated === null) setRemoved(true);
@@ -189,7 +235,7 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
   // trigger button; move focus to the back link so keyboard users keep an
   // anchor after the destructive action.
   useEffect(() => {
-    if (removed && record === null) removedBackLinkRef.current?.focus();
+    if (removed && record === null) removedBackControlRef.current?.focus();
   }, [removed, record]);
 
   const load = useCallback(async (): Promise<void> => {
@@ -233,9 +279,7 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
           </button>
         </div>
         <p>
-          <Link href="/memoriaviva" className="lk-btn lk-btn-ghost">
-            Back to MemoriaViva
-          </Link>
+          <BackToMemoriaControl onBack={onBack} />
         </p>
       </>
     );
@@ -252,9 +296,7 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
               : "This memory may have been deleted. Open a memory from the list instead."}
           </p>
           <p>
-            <Link ref={removedBackLinkRef} href="/memoriaviva" className="lk-btn lk-btn-ghost">
-              Back to MemoriaViva
-            </Link>
+            <BackToMemoriaControl onBack={onBack} controlRef={setRemovedBackControlRef} />
           </p>
         </div>
       </div>
@@ -263,7 +305,7 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
 
   return (
     <article aria-label={`Memory record: ${record.body.slice(0, 60)}`} className="mc-detail">
-      <RecordHeader record={record} />
+      <RecordHeader record={record} onBack={onBack} />
 
       <section aria-label="Memory body" className="mc-section">
         <h2 className="lk-section-head">Content</h2>

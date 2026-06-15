@@ -6404,6 +6404,14 @@ select.dlg-input {
   flex: 1;
 }
 
+.memoria-window {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
 /* Header action cluster (Combine + Create) — Issue #189 Slice 4 */
 .lk-header-actions {
   display: flex;
@@ -7439,6 +7447,13 @@ select.dlg-input {
   border: 1px solid var(--line-soft);
   text-decoration: none;
   color: var(--fg);
+}
+
+.mc-row-button {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .mc-row:hover {
@@ -11419,6 +11434,14 @@ ul.integ {
   color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.mc-link-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
 .mc-row-detail-link:hover {
   color: var(--fg);
