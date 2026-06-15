@@ -27,6 +27,21 @@ function bind(id: string, key: string, mod: string[] = []): WorkspaceKeyboardSho
   };
 }
 
+function withExpectedShortcutRenderError(assertion: () => void): void {
+  const onError = (event: ErrorEvent): void => {
+    const message = event.error instanceof Error ? event.error.message : event.message;
+    if (message.includes("Workspace keyboard shortcut")) event.preventDefault();
+  };
+  window.addEventListener("error", onError);
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    assertion();
+  } finally {
+    errorSpy.mockRestore();
+    window.removeEventListener("error", onError);
+  }
+}
+
 describe("useKeyboardShortcuts — pure helpers", () => {
   it("detectShortcutConflicts surfaces two bindings claiming the same chord", () => {
     const conflicts = detectShortcutConflicts([bind("a", "k", ["ctrl"]), bind("b", "k", ["ctrl"])]);
@@ -72,50 +87,58 @@ describe("useKeyboardShortcuts — pure helpers", () => {
 describe("useKeyboardShortcuts — substrate contract", () => {
   it("throws WorkspaceShortcutConflictError when two bindings share a chord", () => {
     const dispatch = vi.fn();
-    expect(() =>
-      renderHook(() =>
-        useKeyboardShortcuts({
-          bindings: [bind("a", "k", ["ctrl"]), bind("b", "k", ["ctrl"])],
-          dispatch,
-        }),
-      ),
-    ).toThrow(WorkspaceShortcutConflictError);
+    withExpectedShortcutRenderError(() => {
+      expect(() =>
+        renderHook(() =>
+          useKeyboardShortcuts({
+            bindings: [bind("a", "k", ["ctrl"]), bind("b", "k", ["ctrl"])],
+            dispatch,
+          }),
+        ),
+      ).toThrow(WorkspaceShortcutConflictError);
+    });
   });
 
   it("throws WorkspaceShortcutReservedError on browser-reserved chord", () => {
     const dispatch = vi.fn();
-    expect(() =>
-      renderHook(() =>
-        useKeyboardShortcuts({
-          bindings: [bind("newTab", "t", ["cmd"])],
-          dispatch,
-        }),
-      ),
-    ).toThrow(WorkspaceShortcutReservedError);
+    withExpectedShortcutRenderError(() => {
+      expect(() =>
+        renderHook(() =>
+          useKeyboardShortcuts({
+            bindings: [bind("newTab", "t", ["cmd"])],
+            dispatch,
+          }),
+        ),
+      ).toThrow(WorkspaceShortcutReservedError);
+    });
   });
 
   it("throws WorkspaceShortcutReservedError for Cmd+W (ADR-0028 §4 — closes tab)", () => {
     const dispatch = vi.fn();
-    expect(() =>
-      renderHook(() =>
-        useKeyboardShortcuts({
-          bindings: [bind("closePanel", "w", ["cmd"])],
-          dispatch,
-        }),
-      ),
-    ).toThrow(WorkspaceShortcutReservedError);
+    withExpectedShortcutRenderError(() => {
+      expect(() =>
+        renderHook(() =>
+          useKeyboardShortcuts({
+            bindings: [bind("closePanel", "w", ["cmd"])],
+            dispatch,
+          }),
+        ),
+      ).toThrow(WorkspaceShortcutReservedError);
+    });
   });
 
   it("throws WorkspaceShortcutReservedError for Ctrl+W (ADR-0028 §4 — closes tab)", () => {
     const dispatch = vi.fn();
-    expect(() =>
-      renderHook(() =>
-        useKeyboardShortcuts({
-          bindings: [bind("closePanel", "w", ["ctrl"])],
-          dispatch,
-        }),
-      ),
-    ).toThrow(WorkspaceShortcutReservedError);
+    withExpectedShortcutRenderError(() => {
+      expect(() =>
+        renderHook(() =>
+          useKeyboardShortcuts({
+            bindings: [bind("closePanel", "w", ["ctrl"])],
+            dispatch,
+          }),
+        ),
+      ).toThrow(WorkspaceShortcutReservedError);
+    });
   });
 
   it("dispatches the bound command when a matching keydown fires (cmd → meta on mac)", () => {

@@ -23,7 +23,9 @@ function sha256Hex(value: string): string {
 
 function sortChecks(checks: readonly ExpectedCheck[]): readonly ExpectedCheck[] {
   const order = new Map(EXPECTED_CHECKS.map((check, index) => [check, index]));
-  return [...checks].sort((a, b) => (order.get(a) ?? 999) - (order.get(b) ?? 999) || a.localeCompare(b));
+  return [...checks].sort(
+    (a, b) => (order.get(a) ?? 999) - (order.get(b) ?? 999) || a.localeCompare(b),
+  );
 }
 
 function fileHeader(file: PatchFileChange): readonly string[] {
@@ -39,7 +41,9 @@ function fileHeader(file: PatchFileChange): readonly string[] {
 function filePatchBytes(file: PatchFileChange): number {
   const lines = [...fileHeader(file)];
   for (const hunk of file.hunks) {
-    lines.push(`@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@`);
+    lines.push(
+      `@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@`,
+    );
     lines.push(...hunk.lines);
   }
   return Buffer.byteLength(lines.join("\n"), "utf8");
@@ -65,7 +69,10 @@ export function contextPackStableIdForPacks(packs: readonly ConnectedContextPack
   if (packs.length === 1) {
     return packs[0]?.stableId ?? `p-${"0".repeat(64)}`;
   }
-  const joined = packs.map((pack) => pack.stableId).sort().join("|");
+  const joined = packs
+    .map((pack) => pack.stableId)
+    .sort()
+    .join("|");
   return `p-${sha256Hex(joined)}`;
 }
 
@@ -85,9 +92,7 @@ export function readOnlyPathsForPacks(
   return [...unique].sort();
 }
 
-export function evidenceAtomIdsForPacks(
-  packs: readonly ConnectedContextPack[],
-): readonly string[] {
+export function evidenceAtomIdsForPacks(packs: readonly ConnectedContextPack[]): readonly string[] {
   const unique = new Set<string>();
   for (const pack of packs) {
     for (const file of pack.files) {
@@ -99,9 +104,7 @@ export function evidenceAtomIdsForPacks(
   return [...unique].sort();
 }
 
-export function approvalTokenInputFor(
-  request: WorkflowHandoffRequest,
-): UserApprovalTokenInput {
+export function approvalTokenInputFor(request: WorkflowHandoffRequest): UserApprovalTokenInput {
   return {
     contextPackStableId: request.contextPackStableId,
     workflowKind: request.workflowKind,

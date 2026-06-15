@@ -746,8 +746,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setState((previous) => ({
         ...previous,
         chats: previous.chats.filter((chat) => chat.id !== payload.chatId),
-        activeChat:
-          previous.activeChat?.id === payload.chatId ? undefined : previous.activeChat,
+        activeChat: previous.activeChat?.id === payload.chatId ? undefined : previous.activeChat,
         messages: previous.activeChat?.id === payload.chatId ? [] : previous.messages,
       }));
     };

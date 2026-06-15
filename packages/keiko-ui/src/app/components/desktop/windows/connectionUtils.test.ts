@@ -4,7 +4,16 @@
 // unrelated pairings.
 
 import { describe, expect, it } from "vitest";
-import { canConnect, relLabel, type WinSnapshot } from "./connectionUtils";
+import {
+  canConnect,
+  connPath,
+  defaultLayout,
+  hasConnectablePeer,
+  relLabel,
+  snapMap,
+  subText,
+  type WinSnapshot,
+} from "./connectionUtils";
 
 function snap(type: WinSnapshot["type"], cfg: Record<string, unknown> = {}): WinSnapshot {
   return { id: `${type}-1`, type, x: 0, y: 0, w: 10, h: 10, cfg };
@@ -71,5 +80,87 @@ describe("relLabel — quality ↔ connector (#710 #718)", () => {
   it("labels a quality↔connector edge as a knowledge binding", () => {
     expect(relLabel(snap("quality"), snap("connector"))).toBe("uses knowledge");
     expect(relLabel(snap("connector"), snap("quality"))).toBe("uses knowledge");
+  });
+});
+
+describe("connectionUtils — general workspace contracts", () => {
+  it("detects connectable peers including reverse-only peers and rejects unknowns", () => {
+    expect(hasConnectablePeer("quality")).toBe(true);
+    expect(hasConnectablePeer("figma")).toBe(true);
+    expect(hasConnectablePeer("chatHistory")).toBe(false);
+    expect(hasConnectablePeer(undefined)).toBe(false);
+    expect(canConnect(undefined, "chat")).toBe(false);
+    expect(canConnect("chat", undefined)).toBe(false);
+  });
+
+  it("labels common non-file relationship predicates with readable verbs", () => {
+    expect(relLabel(snap("quality"), snap("figma"))).toBe("uses snapshot");
+    expect(relLabel(snap("chat"), snap("keiko"))).toBe("governed by");
+    expect(relLabel(snap("agents"), snap("agents"))).toBe("delegates");
+    expect(relLabel(snap("agents"), snap("terminal"))).toBe("runs in");
+    expect(relLabel(snap("plugins"), snap("chat"))).toBe("uses tools");
+    expect(relLabel(snap("review"), snap("agents"))).toBe("reviews");
+    expect(relLabel(snap("browser"), snap("chat"))).toBe("browses");
+    expect(relLabel(snap("editor"), snap("chat"))).toBe("connected");
+  });
+
+  it("labels files edges with the most specific active scope", () => {
+    expect(
+      relLabel(snap("files", { root: "/repo", activeDirectoryPath: "/repo/docs" }), snap("chat")),
+    ).toBe("uses docs/");
+    expect(
+      relLabel(snap("files", { root: "/repo", activeFilePath: "/repo/src/app.ts" }), snap("chat")),
+    ).toBe("uses app.ts");
+  });
+
+  it("builds horizontal and vertical bezier paths with stable midpoints", () => {
+    expect(
+      connPath(
+        { ...snap("chat"), x: 0, y: 0, w: 100, h: 80 },
+        { ...snap("files"), x: 300, y: 20, w: 100, h: 80 },
+      ),
+    ).toEqual({
+      d: "M100,40 C200,40 200,60 300,60",
+      mid: { x: 200, y: 50 },
+    });
+    expect(
+      connPath(
+        { ...snap("chat"), x: 100, y: 300, w: 100, h: 80 },
+        { ...snap("files"), x: 120, y: 0, w: 100, h: 80 },
+      ),
+    ).toEqual({
+      d: "M150,300 C150,190 170,190 170,80",
+      mid: { x: 160, y: 190 },
+    });
+  });
+
+  it("derives snap rectangles and the default desktop layout from viewport geometry", () => {
+    expect(snapMap({ x: 10, y: 20, w: 800, h: 600 })).toMatchObject({
+      left: { x: 10, y: 20, w: 400, h: 600 },
+      right: { x: 410, y: 20, w: 400, h: 600 },
+      maxi: { x: 10, y: 20, w: 800, h: 600 },
+      br: { x: 410, y: 320, w: 400, h: 300 },
+    });
+
+    const layout = defaultLayout(1200, 800);
+    expect(layout.map((win) => win.type)).toEqual(["chat", "files", "terminal"]);
+    expect(layout[0]).toMatchObject({ id: "chat-0", x: 14, y: 14, z: 3, max: false, zoom: 1 });
+    expect(layout[1]?.x).toBe((layout[0]?.x ?? 0) + (layout[0]?.w ?? 0) + 14);
+    expect(layout[1]?.h).toBe(Math.round((800 - 14 * 2 - 14) * 0.52));
+    expect(layout[2]?.y).toBe((layout[1]?.y ?? 0) + (layout[1]?.h ?? 0) + 14);
+  });
+
+  it("derives compact subtext only from meaningful config values", () => {
+    expect(subText("files", { root: "/repo" })).toBe("/repo");
+    expect(subText("browser", { url: "https://example.test" })).toBe("https://example.test");
+    expect(subText("editor", { file: "src/app.ts" })).toBe("src/app.ts");
+    expect(subText("terminal", { cwd: "/repo" })).toBe("/repo");
+    expect(subText("review", { base: "main", head: "release/0.2.0" })).toBe("main → release/0.2.0");
+    expect(subText("review", { base: "main" })).toBeNull();
+    expect(subText("agents", { role: "reviewer" })).toBe("reviewer");
+    expect(subText("chat", { title: "Release QA" })).toBe("Release QA");
+    expect(subText("chat", { title: "New chat" })).toBeNull();
+    expect(subText("connector", { provider: "github" })).toBeNull();
+    expect(subText("files", undefined)).toBeNull();
   });
 });

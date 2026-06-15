@@ -202,7 +202,13 @@ describe("runStructuralAdapters", () => {
     const registry: StructuralAdapterRegistry = { adapters: [fakeAdapter("alpha", atoms)] };
     // limits.maxMatchesReturned = 3, query.maxResults = 2 → effective cap = 2
     const limitsWide: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 3 };
-    const queryNarrow = { kind: "natural-language" as const, text: "x", caseSensitive: false, maxResults: 2, emittedAtMs: 0 };
+    const queryNarrow = {
+      kind: "natural-language" as const,
+      text: "x",
+      caseSensitive: false,
+      maxResults: 2,
+      emittedAtMs: 0,
+    };
     const result = await runStructuralAdapters(registry, scope, queryNarrow, limitsWide, fs, {
       nowMs: FIXED_NOW,
     });
@@ -215,5 +221,4 @@ describe("runStructuralAdapters", () => {
     });
     expect(result2.atoms.length).toBe(2);
   });
-
 });

@@ -208,11 +208,16 @@ function parseIrSizing(value: unknown): IrNode["sizing"] | undefined {
 
 function parseIrTypography(value: unknown): IrNode["typography"] | undefined {
   if (!isObject(value)) return undefined;
-  const { fontFamily, fontSize, fontWeight } = value;
+  const { fontFamily, fontSize, fontWeight, lineHeight } = value;
   if (!isString(fontFamily) || !isFiniteNumber(fontSize) || !isFiniteNumber(fontWeight)) {
     return undefined;
   }
-  return { fontFamily, fontSize, fontWeight };
+  return {
+    fontFamily,
+    fontSize,
+    fontWeight,
+    ...(isFiniteNumber(lineHeight) ? { lineHeight } : {}),
+  };
 }
 
 // Total, defensive IR-node parser: an opaque serialised node (from the snapshot's `irJson`) is

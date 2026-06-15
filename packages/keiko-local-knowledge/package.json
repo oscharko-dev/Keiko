@@ -22,7 +22,9 @@
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "sideEffects": false,
   "engines": {
     "node": ">=22"

@@ -14,6 +14,8 @@ const NOT_CONFIGURED: OcrPageResult = Object.freeze({
 
 export const nullOcrAdapter: OcrAdapter = Object.freeze({
   kind: "ocr" as const,
-  ocrPage: (_input: { readonly bytes: Uint8Array; readonly pageNumber: number }): Promise<OcrPageResult> =>
-    Promise.resolve(NOT_CONFIGURED),
+  ocrPage: (_input: {
+    readonly bytes: Uint8Array;
+    readonly pageNumber: number;
+  }): Promise<OcrPageResult> => Promise.resolve(NOT_CONFIGURED),
 });

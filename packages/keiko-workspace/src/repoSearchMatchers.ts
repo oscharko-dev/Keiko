@@ -270,7 +270,9 @@ function analyzeNaturalLanguageIntent(
       .map((t) => (caseSensitive ? t : t.toLowerCase())),
   );
   const httpMethods = uniqueStrings(
-    lowered.filter((t) => HTTP_METHOD_TOKENS.has(t)).map((t) => (caseSensitive ? t : t.toLowerCase())),
+    lowered
+      .filter((t) => HTTP_METHOD_TOKENS.has(t))
+      .map((t) => (caseSensitive ? t : t.toLowerCase())),
   );
   return { definitionIntent, symbolTokens, routeTokens, httpMethods };
 }

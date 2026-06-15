@@ -3,10 +3,24 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ReviewQueue } from "./ReviewQueue";
 import type { MemoryReviewQueueResponse } from "@/lib/memory-api";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
+
+type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  readonly href: string;
+  readonly children: ReactNode;
+};
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: MockLinkProps) => (
+    <a href={href} onClick={(event) => event.preventDefault()} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures

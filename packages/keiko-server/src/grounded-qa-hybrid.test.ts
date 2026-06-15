@@ -1648,3 +1648,100 @@ describe("ask-path source cap — connectors capped at maxLocalKnowledgeSources"
     expect(kciLabels.some((l) => l.startsWith(`${labelB} / `))).toBe(true);
   });
 });
+
+describe("ask-path source cap — combined folder and connector total", () => {
+  it("retrieves only the combined cap when a persisted chat carries 10 folders and 10 connectors", async () => {
+    const seededCapsules: { readonly capsuleId: KnowledgeCapsuleId; readonly label: string }[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      seededCapsules.push(await seedReadyCapsule(`Combined Cap ${String(index)}`));
+    }
+    const folders: ChatConnectedScope[] = Array.from({ length: 10 }, (_unused, index) => ({
+      kind: "directory",
+      relativePaths: [`src/combined-${String(index)}.ts`],
+      connectedAtMs: NOW + index,
+      root: tempRoot(`combined-folder-${String(index)}`),
+    }));
+    const connectors: ChatLocalKnowledgeScope[] = seededCapsules.map((seeded, index) => ({
+      kind: "capsule",
+      capsuleId: seeded.capsuleId,
+      connectedAtMs: NOW + 10 + index,
+    }));
+    const project = store.createProject(tmp, "combined-cap-legacy");
+    const chat = store.createChat(project.path, "Combined cap legacy", CHAT_MODEL);
+    const legacyLimits = { maxConnectedSources: 20, maxLocalKnowledgeSources: 20 };
+    store.updateChat(chat.id, { connectedScopes: folders }, legacyLimits);
+    store.updateChat(chat.id, { localKnowledgeScopes: connectors }, legacyLimits);
+    const chatId = chat.id;
+
+    const retrievedFolders: string[] = [];
+    const packMap = new Map(
+      folders.map((folder, index) => [
+        folder.relativePaths[0] ?? "",
+        folderPack(folder.relativePaths[0] ?? "", 0.9 - index / 100, `combined-${String(index)}`),
+      ]),
+    );
+    const trackingRetriever: GroundedRetriever = (input: OrchestratorInput) => {
+      const key = input.scope.relativePaths[0] ?? "";
+      retrievedFolders.push(key);
+      const pack = packMap.get(key);
+      if (pack === undefined) throw new Error(`No fixture pack for path: ${key}`);
+      return Promise.resolve({ pack, elapsedMs: 5, plan: { state: "ready" } as never });
+    };
+
+    const retrievedConnectors: string[] = [];
+    const trackingConnectorRetrieve: ConnectorRetrieve = (
+      _store,
+      scope,
+    ): Promise<RetrievalResult> => {
+      if (scope.kind !== "capsule") {
+        return Promise.resolve({ references: [], noEvidence: true, reason: "no-scope" });
+      }
+      retrievedConnectors.push(String(scope.capsuleId));
+      return Promise.resolve({
+        references: [connectorReference(scope.capsuleId, 1, `doc-${String(scope.capsuleId)}`)],
+        noEvidence: false,
+      });
+    };
+
+    const capDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 16,
+          maxLocalKnowledgeSources: 16,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 24,
+          hybridMaxExcerptBytes: 100_000,
+        },
+      },
+      configPresent: true,
+    });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Combined cap?" })),
+      capDeps,
+      undefined,
+      undefined,
+      {
+        folderRetriever: trackingRetriever,
+        connectorRetrieve: trackingConnectorRetrieve,
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(retrievedFolders).toHaveLength(10);
+    expect(retrievedConnectors).toHaveLength(6);
+    expect(retrievedFolders.length + retrievedConnectors.length).toBe(16);
+    expect(retrievedConnectors).not.toContain(String(seededCapsules[6]?.capsuleId));
+
+    const answer = asHybrid(result.body as GroundedAnswer);
+    const skipped = answer.uncertainty.filter((u) => u.kind === "source-skipped");
+    expect(skipped).toHaveLength(4);
+    expect(answer.contextPack.folderSourceCount).toBe(10);
+    expect(answer.contextPack.connectorSourceCount).toBe(10);
+  });
+});

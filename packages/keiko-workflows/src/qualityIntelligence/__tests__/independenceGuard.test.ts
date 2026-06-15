@@ -16,10 +16,7 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-const FORBIDDEN_SUBSTRINGS = [
-  "@oscharko-dev/test-intelligence",
-  "@oscharko-dev/ti-",
-];
+const FORBIDDEN_SUBSTRINGS = ["@oscharko-dev/test-intelligence", "@oscharko-dev/ti-"];
 
 describe("QI workflow source independence from Test Intelligence", () => {
   it("no production source under qualityIntelligence/ references forbidden TI namespaces", () => {

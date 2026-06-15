@@ -86,6 +86,34 @@ describe("generateFigmaCode — HTTP request shape (#755)", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.signal).toBe(controller.signal);
   });
+
+  it("sends a pinned Figma version when supplied", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        runId: "r",
+        fileKey: "k",
+        nodeId: "1:2",
+        version: "ver-123",
+        fetchedAt: "now",
+        screenCount: 0,
+        skippedCount: 0,
+        reductionHint: "",
+        integrityHash: "",
+        screens: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await triggerFigmaSnapshot("https://www.figma.com/design/K/N?node-id=1:2", {
+      version: "ver-123",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      boardLink: "https://www.figma.com/design/K/N?node-id=1:2",
+      version: "ver-123",
+    });
+  });
 });
 
 describe("triggerFigmaSnapshot — coded BFF errors", () => {

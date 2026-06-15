@@ -149,7 +149,7 @@ yarn add @oscharko-dev/keiko && yarn keiko init && yarn keiko:start
 pnpm add @oscharko-dev/keiko && pnpm exec keiko init && pnpm keiko:start
 
 # npx (no global install)
-npx @oscharko-dev/keiko init && npx keiko start
+npx @oscharko-dev/keiko init && npx @oscharko-dev/keiko start
 ```
 
 Open the local UI:
@@ -170,6 +170,10 @@ npm run keiko:stop
 | --------------------- | ---------------------------------------------- |
 | `npm run keiko:start` | Starts the local Keiko UI on the default port. |
 | `npm run keiko:stop`  | Stops the local Keiko UI process.              |
+
+These scripts call the installed package entry by relative path, so they do not depend on a
+global `keiko` already on `PATH`. This avoids stale-version launches when a machine still has an
+older global install on macOS or Windows.
 
 ## First-run setup
 

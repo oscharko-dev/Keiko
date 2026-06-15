@@ -1093,7 +1093,9 @@ describe("looksLikeSecretShape", () => {
     if (result.ok) {
       return;
     }
-    expect(result.errors).toContain("retrieval.tagsFilter entry must be a non-empty bounded control-free string");
+    expect(result.errors).toContain(
+      "retrieval.tagsFilter entry must be a non-empty bounded control-free string",
+    );
   });
 });
 

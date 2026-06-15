@@ -4,16 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import { renderEvalSummary } from "./render.js";
-import {
-  EVALUATION_DIMENSIONS,
-  EVAL_SCORECARD_SCHEMA_VERSION,
-} from "./index.js";
-import type {
-  DimensionResult,
-  EvalScorecard,
-  FixtureRunResult,
-  ScorecardEntry,
-} from "./types.js";
+import { EVALUATION_DIMENSIONS, EVAL_SCORECARD_SCHEMA_VERSION } from "./index.js";
+import type { DimensionResult, EvalScorecard, FixtureRunResult, ScorecardEntry } from "./types.js";
 
 // ─── Scorecard builders ────────────────────────────────────────────────────────
 

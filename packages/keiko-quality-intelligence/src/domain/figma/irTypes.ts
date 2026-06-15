@@ -60,13 +60,15 @@ export interface IrSizing {
 
 /**
  * Per-TEXT-node typography properties, only present on TEXT nodes. Matches what `tokens.ts`
- * already extracts globally (fontFamily, fontSize, fontWeight). Optional and additive; absent for
- * non-TEXT nodes or when the `style` block is missing. Hash-neutral like {@link IrLayout}.
+ * already extracts globally (fontFamily, fontSize, fontWeight, lineHeight). Optional and additive;
+ * absent for non-TEXT nodes or when the `style` block is missing. Hash-neutral like
+ * {@link IrLayout}.
  */
 export interface IrTypography {
   readonly fontFamily: string;
   readonly fontSize: number;
   readonly fontWeight: number;
+  readonly lineHeight?: number;
 }
 
 /** A kept node in a screen's normalized structural tree. */
@@ -105,8 +107,9 @@ export interface IrNode {
    */
   readonly cornerRadius?: number;
   /**
-   * Per-TEXT typography (fontFamily, fontSize, fontWeight). Optional and additive: absent for
-   * non-TEXT nodes or when the style block is missing. Hash-neutral like {@link IrNode.layout}.
+   * Per-TEXT typography (fontFamily, fontSize, fontWeight, optional lineHeight). Optional and
+   * additive: absent for non-TEXT nodes or when the style block is missing. Hash-neutral like
+   * {@link IrNode.layout}.
    */
   readonly typography?: IrTypography;
   readonly imageFills: readonly ImageFillRef[];

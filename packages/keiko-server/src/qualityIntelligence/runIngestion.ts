@@ -66,6 +66,9 @@ function perSourceAtomBudget(total: number, sourceCount: number): number {
 const EVIDENCE_BUDGET_BYTES = 196_608;
 // Never starve a source below this many bytes — a tiny share is still usable context.
 const MIN_SOURCE_BUDGET_BYTES = 4_096;
+// Bound productive vision calls for one Figma snapshot source. The deterministic structural
+// baseline still covers every parseable screen; vision hints are additive and sampled first-in-order.
+const MAX_FIGMA_VISION_AUGMENTED_SCREENS = 12;
 
 /**
  * Fair per-source UTF-8 byte budget — the byte analogue of {@link perSourceAtomBudget}. Floor-divides
@@ -1000,6 +1003,53 @@ function figmaDocumentId(screenId: string, screenName: string): string {
 // stays intact; clean inputs are byte-identical, so the atom hash and budget accounting are unchanged.
 const redactFigmaAtomText = (text: string): string => redact(stripUnsafeFormatChars(text));
 
+function consumeVisionProviderForScreen(
+  vision: FigmaVisionHintProvider | undefined,
+  remainingVisionScreens: number,
+  ir: QualityIntelligenceFigma.ScreenIr,
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+): { readonly provider: FigmaVisionHintProvider | undefined; readonly remaining: number } {
+  if (
+    vision === undefined ||
+    remainingVisionScreens <= 0 ||
+    !screenNeedsVisionAugmentation(ir, baseline)
+  ) {
+    return { provider: undefined, remaining: remainingVisionScreens };
+  }
+  return { provider: vision, remaining: remainingVisionScreens - 1 };
+}
+
+function corpusDocFromFigmaScreen(
+  row: FigmaSnapshotRecord["screens"][number],
+  ir: QualityIntelligenceFigma.ScreenIr,
+  augmented: FigmaScreenTexts,
+  perDocBudget: number,
+): { readonly doc: CorpusDoc; readonly bytes: number } | undefined {
+  const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
+  if (capped.trim().length === 0) return undefined;
+  const fingerprintText = truncateToUtf8Bytes(
+    redactFigmaAtomText(augmented.fingerprintText),
+    perDocBudget,
+  );
+  return {
+    doc: {
+      documentId: figmaDocumentId(row.screenId, ir.name),
+      text: capped,
+      fingerprintText,
+    },
+    bytes: utf8ByteLength(capped),
+  };
+}
+
+function figmaDocFitsBudget(
+  docs: readonly CorpusDoc[],
+  totalBytes: number,
+  nextBytes: number,
+  perRunBudget: number,
+): boolean {
+  return docs.length === 0 || totalBytes + nextBytes <= perRunBudget;
+}
+
 // Derive the redacted, budget-capped canonical text for every parseable screen. Each screen's
 // deterministic structural baseline (#754) is augmented additively with its navigation/flow test
 // items (#811) AND its accessibility test items (#812) — concatenated, neither replacing the other —
@@ -1022,24 +1072,18 @@ function figmaScreenDocs(
   const a11yItems = a11yItemsByScreen(parsed);
   const docs: CorpusDoc[] = [];
   let totalBytes = 0;
+  let remainingVisionScreens = MAX_FIGMA_VISION_AUGMENTED_SCREENS;
   for (const { row, ir } of parsed) {
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
-    const augmented = visionAugmentedScreenText(baseline, ir, record, row, vision);
-    const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
-    if (capped.trim().length === 0) continue;
-    const fingerprintText = truncateToUtf8Bytes(
-      redactFigmaAtomText(augmented.fingerprintText),
-      perDocBudget,
-    );
-    const bytes = utf8ByteLength(capped);
-    if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
-    docs.push({
-      documentId: figmaDocumentId(row.screenId, ir.name),
-      text: capped,
-      fingerprintText,
-    });
-    totalBytes += bytes;
+    const visionSlot = consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline);
+    remainingVisionScreens = visionSlot.remaining;
+    const augmented = visionAugmentedScreenText(baseline, ir, record, row, visionSlot.provider);
+    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
+    if (nextDoc === undefined) continue;
+    if (!figmaDocFitsBudget(docs, totalBytes, nextDoc.bytes, perRunBudget)) break;
+    docs.push(nextDoc.doc);
+    totalBytes += nextDoc.bytes;
   }
   return docs;
 }
@@ -1056,24 +1100,24 @@ async function figmaScreenDocsAsync(
   const a11yItems = a11yItemsByScreen(parsed);
   const docs: CorpusDoc[] = [];
   let totalBytes = 0;
+  let remainingVisionScreens = MAX_FIGMA_VISION_AUGMENTED_SCREENS;
   for (const { row, ir } of parsed) {
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
-    const augmented = await visionAugmentedScreenTextAsync(baseline, ir, record, row, vision);
-    const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
-    if (capped.trim().length === 0) continue;
-    const fingerprintText = truncateToUtf8Bytes(
-      redactFigmaAtomText(augmented.fingerprintText),
-      perDocBudget,
+    const visionSlot = consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline);
+    remainingVisionScreens = visionSlot.remaining;
+    const augmented = await visionAugmentedScreenTextAsync(
+      baseline,
+      ir,
+      record,
+      row,
+      visionSlot.provider,
     );
-    const bytes = utf8ByteLength(capped);
-    if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
-    docs.push({
-      documentId: figmaDocumentId(row.screenId, ir.name),
-      text: capped,
-      fingerprintText,
-    });
-    totalBytes += bytes;
+    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
+    if (nextDoc === undefined) continue;
+    if (!figmaDocFitsBudget(docs, totalBytes, nextDoc.bytes, perRunBudget)) break;
+    docs.push(nextDoc.doc);
+    totalBytes += nextDoc.bytes;
   }
   return docs;
 }

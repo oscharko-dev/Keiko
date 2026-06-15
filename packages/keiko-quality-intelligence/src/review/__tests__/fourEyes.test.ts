@@ -32,13 +32,17 @@ describe("assertFourEyesPair", () => {
       reviewerKind: "human-reviewer",
       reviewerLabel: "bob",
     });
-    expect(() => { assertFourEyesPair(record, candidate); }).not.toThrow();
+    expect(() => {
+      assertFourEyesPair(record, candidate);
+    }).not.toThrow();
   });
 
   it("accepts distinct-reviewer pairing (human-reviewer × judge)", () => {
     const record = baseRecord({ id: ID_A, reviewerKind: "human-reviewer", reviewerLabel: "alice" });
     const candidate = baseRecord({ id: ID_B, reviewerKind: "judge", reviewerLabel: "judge-1" });
-    expect(() => { assertFourEyesPair(record, candidate); }).not.toThrow();
+    expect(() => {
+      assertFourEyesPair(record, candidate);
+    }).not.toThrow();
   });
 
   it("rejects two human-author reviewers with SELF_REVIEW_FORBIDDEN", () => {

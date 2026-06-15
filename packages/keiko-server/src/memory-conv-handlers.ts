@@ -179,10 +179,7 @@ interface ContextInput {
   readonly budgetTokens: number | undefined;
 }
 
-function parseRequiredString(
-  raw: Record<string, unknown>,
-  key: string,
-): string | RouteResult {
+function parseRequiredString(raw: Record<string, unknown>, key: string): string | RouteResult {
   const value = raw[key];
   if (typeof value === "string" && value.length > 0) {
     return value;

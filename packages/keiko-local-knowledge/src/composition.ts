@@ -32,7 +32,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule } from "./capsule-lifecycle.js";
-import { getCapsuleSet, createCapsuleSet, createCapsuleSetWithinTxn } from "./capsule-set-lifecycle.js";
+import {
+  getCapsuleSet,
+  createCapsuleSet,
+  createCapsuleSetWithinTxn,
+} from "./capsule-set-lifecycle.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import { listCapsuleSources, type AddCapsuleSourceInput } from "./source-lifecycle.js";
 import { validateSourceRoutingForCapsule } from "./source-routing-validation.js";

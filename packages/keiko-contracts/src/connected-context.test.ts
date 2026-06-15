@@ -1103,7 +1103,9 @@ describe("validateConnectedContextPack", () => {
   it("rejects a pack with an uncertainty marker carrying an empty impactedAtomId", () => {
     const pack: ConnectedContextPack = {
       ...happyPack(),
-      uncertainty: [{ kind: "no-evidence", claim: "missing proof", impactedAtomIds: [""], emittedAtMs: 1 }],
+      uncertainty: [
+        { kind: "no-evidence", claim: "missing proof", impactedAtomIds: [""], emittedAtMs: 1 },
+      ],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds invalid");
   });

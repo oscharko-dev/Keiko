@@ -91,6 +91,8 @@ export interface TriggerFigmaSnapshotOptions {
   readonly acknowledgeReadOnly?: boolean;
   /** Audits the build as a re-snapshot — a fresh, explicit, full scoped re-fetch (#759). */
   readonly isResnapshot?: boolean;
+  /** Optional pinned Figma version id; when omitted the server also accepts version/version-id in the link. */
+  readonly version?: string;
   /**
    * Optional abort signal threaded from the component's unmount cleanup.
    * Aborting cancels the in-flight fetch; the server-side build continues
@@ -111,6 +113,7 @@ export async function triggerFigmaSnapshot(
       boardLink,
       ...(options.acknowledgeReadOnly === true ? { acknowledgeReadOnly: true } : {}),
       ...(options.isResnapshot === true ? { isResnapshot: true } : {}),
+      ...(options.version !== undefined ? { version: options.version } : {}),
     }),
   });
 }

@@ -454,11 +454,7 @@ describe("searchText (memFs)", () => {
       fs,
       nowMs: FIXED_NOW,
     });
-    expect(r.atoms.map((a) => a.scopePath)).toEqual([
-      ".hidden.ts",
-      "generated/b.ts",
-      "src/a.ts",
-    ]);
+    expect(r.atoms.map((a) => a.scopePath)).toEqual([".hidden.ts", "generated/b.ts", "src/a.ts"]);
   });
 
   it("respects maxMatchesReturned with truncated=true", async () => {

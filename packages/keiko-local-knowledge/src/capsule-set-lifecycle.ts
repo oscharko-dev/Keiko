@@ -188,14 +188,13 @@ export function listCapsuleSets(store: KnowledgeStore): readonly CapsuleSet[] {
   const rows = store._internal.db
     .prepare("SELECT key, value FROM schema_meta WHERE key LIKE :prefix")
     .all({ prefix: `${META_PREFIX}%` });
-  const sets = rows
-    .map((row) => {
-      const { key, value } = row as unknown as KeyValueRow;
-      const id = key.slice(META_PREFIX.length) as CapsuleSetId;
-      const payload = parseMeta(value, id);
-      const capsuleIds = readMembers(store, id);
-      return metaToCapsuleSet(id, payload, capsuleIds);
-    });
+  const sets = rows.map((row) => {
+    const { key, value } = row as unknown as KeyValueRow;
+    const id = key.slice(META_PREFIX.length) as CapsuleSetId;
+    const payload = parseMeta(value, id);
+    const capsuleIds = readMembers(store, id);
+    return metaToCapsuleSet(id, payload, capsuleIds);
+  });
   return sets.slice().sort((a, b) => a.composedAt - b.composedAt);
 }
 

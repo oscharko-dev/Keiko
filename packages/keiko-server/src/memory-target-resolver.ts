@@ -31,7 +31,10 @@ const STOP_WORDS = new Set([
 ]);
 
 function normalizePhrase(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function stemToken(token: string): string {
@@ -57,7 +60,9 @@ function tokensMatch(targetTokens: readonly string[], bodyTokens: readonly strin
     return false;
   }
   return targetTokens.every((target) =>
-    bodyTokens.some((body) => body === target || body.startsWith(target) || target.startsWith(body)),
+    bodyTokens.some(
+      (body) => body === target || body.startsWith(target) || target.startsWith(body),
+    ),
   );
 }
 

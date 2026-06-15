@@ -123,9 +123,7 @@ export function buildWorkflowManifest(
     verification: verificationOf(report),
     patch: patchOf(report),
     failure: undefined,
-    ...(options.governedHandoff === undefined
-      ? {}
-      : { governedHandoff: options.governedHandoff }),
+    ...(options.governedHandoff === undefined ? {} : { governedHandoff: options.governedHandoff }),
   };
 }
 
@@ -153,13 +151,7 @@ export function persistWorkflowEvidence(
   ctx: EvidencePersistContext,
   options: { readonly governedHandoff?: EvidenceManifest["governedHandoff"] } = {},
 ): EvidenceReport {
-  const manifest = buildWorkflowManifest(
-    identity,
-    events,
-    report,
-    ctx.costClassResolver,
-    options,
-  );
+  const manifest = buildWorkflowManifest(identity, events, report, ctx.costClassResolver, options);
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));

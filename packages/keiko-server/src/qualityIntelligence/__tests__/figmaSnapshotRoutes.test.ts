@@ -125,9 +125,17 @@ function makeDeps(dir: string, env: Record<string, string> = {}): UiHandlerDeps 
 // Minimal synthetic board for happy-path builds.
 const FIGMA_BOARD = {
   id: "0:1",
-  name: "Canvas",
+  name: "Release",
   type: "CANVAS",
-  children: [{ id: "1:1", name: "Screen", type: "FRAME", children: [] }],
+  children: [
+    {
+      id: "1:1",
+      name: "Screen",
+      type: "FRAME",
+      devStatus: { type: "READY_FOR_DEV" },
+      children: [],
+    },
+  ],
 };
 
 function findById(node: Record<string, unknown>, id: string): Record<string, unknown> | undefined {
@@ -147,7 +155,8 @@ const fakeHttpPort: FigmaHttpPort = (request) => {
   if (url.pathname.includes("/v1/images/")) {
     const ids = (url.searchParams.get("ids") ?? "").split(",");
     const images: Record<string, string> = {};
-    for (const id of ids) images[id] = `https://ephemeral/${encodeURIComponent(id)}.png`;
+    for (const id of ids)
+      images[id] = `https://s3-alpha-sig.figma.com/${encodeURIComponent(id)}.png`;
     return Promise.resolve({ status: 200, json: { images }, headers: {} });
   }
   const id = url.searchParams.get("ids") ?? "";
@@ -351,6 +360,7 @@ const CODE_STATUS_MATRIX: { code: FigmaConnectorErrorCode; status: number }[] = 
   { code: "FIGMA_RESPONSE_TOO_LARGE", status: 502 },
   // Other mapped codes
   { code: "FIGMA_NOT_FOUND", status: 404 },
+  { code: "FIGMA_NOT_READY", status: 412 },
   { code: "FIGMA_RATE_LIMITED", status: 429 },
   { code: "FIGMA_OVERSIZED_SCOPE", status: 422 },
   { code: "FIGMA_CONSENT_REQUIRED", status: 428 },
@@ -375,8 +385,12 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
         makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
       );
       expect(result.status).toBe(status);
-      const errorBody = result.body as { error: { code: string } };
+      const errorBody = result.body as { error: { code: string; message: string } };
       expect(errorBody.error.code).toBe(code);
+      if (code === "FIGMA_RATE_LIMITED") {
+        expect(errorBody.error.message).toContain("narrower Release section");
+        expect(errorBody.error.message).toContain("Figma fetch limits");
+      }
     } finally {
       spy.mockRestore();
     }
@@ -713,6 +727,7 @@ describe("POST /api/figma/snapshots — persist failure", () => {
         throw new Error("disk full");
       },
       load: (): undefined => undefined,
+      loadMetadata: (): undefined => undefined,
     } as unknown as ReturnType<typeof evidenceModule.createNodeFigmaSnapshotStore>);
 
     try {
@@ -804,13 +819,16 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
     expect(body.error.code).toBe("FIGMA_SNAPSHOT_NOT_FOUND");
   });
 
-  it("500 FIGMA_INTERNAL when store.load throws", async () => {
-    // Arrange: spy on the store factory to make load() throw a corrupt-data error.
+  it("500 FIGMA_INTERNAL when store.loadMetadata throws", async () => {
+    // Arrange: spy on the store factory to make loadMetadata() throw a corrupt-data error.
     const evidenceModule = await import("@oscharko-dev/keiko-evidence");
     const storeSpy = vi.spyOn(evidenceModule, "createNodeFigmaSnapshotStore");
     storeSpy.mockReturnValueOnce({
       record: (): void => undefined,
       load: (): never => {
+        throw new Error("corrupt snapshot file");
+      },
+      loadMetadata: (): never => {
         throw new Error("corrupt snapshot file");
       },
     } as unknown as ReturnType<typeof evidenceModule.createNodeFigmaSnapshotStore>);

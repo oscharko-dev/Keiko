@@ -2,13 +2,22 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, GroundedAnswer, ModelCapability } from "@/lib/types";
+import { updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    updateChat: vi.fn(),
+  };
+});
 
 vi.mock("@/lib/local-knowledge-api", () => ({
   fetchCapsules: vi.fn(async () => ({ capsules: [] })),
@@ -92,6 +101,15 @@ function renderWindow(session: ChatSessionApi): void {
 
 const fetchCapsulesMock = vi.mocked(fetchCapsules);
 const fetchCapsuleSetsMock = vi.mocked(fetchCapsuleSets);
+const updateChatMock = vi.mocked(updateChat);
+
+beforeEach(() => {
+  fetchCapsulesMock.mockReset();
+  fetchCapsulesMock.mockResolvedValue({ capsules: [] });
+  fetchCapsuleSetsMock.mockReset();
+  fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+  updateChatMock.mockReset();
+});
 
 function makeCapsuleId(value: string): KnowledgeCapsuleId {
   return value as KnowledgeCapsuleId;
@@ -371,6 +389,158 @@ describe("ChatWindow memory disclosure", () => {
 });
 
 describe("ChatWindow local knowledge scope disclosure", () => {
+  it("switches from Files grounding to a ready knowledge capsule and clears file scopes", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-release"),
+          displayName: "Release notes",
+          lifecycleState: "ready",
+          sourceCount: 6,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-indexing"),
+          displayName: "Still indexing",
+          lifecycleState: "indexing",
+          sourceCount: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    const updated = makeChat({
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: makeCapsuleId("cap-release"), connectedAtMs: 123 },
+      ],
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 1 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: "Live Files context" })).not.toBeDisabled();
+    expect(screen.queryByRole("option", { name: /Still indexing/i })).toBeNull();
+
+    await user.selectOptions(select, "capsule:cap-release");
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: null,
+        localKnowledgeScopes: [
+          expect.objectContaining({ kind: "capsule", capsuleId: "cap-release" }),
+        ],
+      });
+    });
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("switches to a capsule set and disables Files mode when no folder scope exists", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({
+      capsuleSets: [
+        {
+          id: makeCapsuleSetId("set-release"),
+          displayName: "Release pack",
+          capsuleCount: 4,
+          composedAt: 2,
+        },
+      ],
+    });
+    const updated = makeChat({
+      localKnowledgeScopes: [
+        { kind: "capsule-set", capsuleSetId: makeCapsuleSetId("set-release"), connectedAtMs: 456 },
+      ],
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
+
+    const filesOption = (await screen.findByRole("option", {
+      name: "Live Files context",
+    })) as HTMLOptionElement;
+    expect(filesOption.disabled).toBe(true);
+
+    await user.selectOptions(screen.getByLabelText("Grounding mode"), "capsule-set:set-release");
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: null,
+        localKnowledgeScopes: [
+          expect.objectContaining({ kind: "capsule-set", capsuleSetId: "set-release" }),
+        ],
+      });
+    });
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("clears mixed folder and knowledge grounding when Model only is selected", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const updated = makeChat();
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+          ],
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-release"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: null,
+        localKnowledgeScopes: null,
+      });
+    });
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("surfaces scope update failures without changing the active chat cache", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-release"),
+          displayName: "Release notes",
+          lifecycleState: "ready",
+          sourceCount: 6,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockRejectedValueOnce(new Error("knowledge store unavailable"));
+    renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-release");
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("knowledge store unavailable");
+    });
+    expect(replaceChat).not.toHaveBeenCalled();
+  });
+
   it("keeps the active capsule visible when it is no longer in the ready capsule list", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
     fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
