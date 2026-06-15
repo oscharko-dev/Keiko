@@ -23,6 +23,8 @@ const requiredValueExports: readonly string[] = [
   "QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS",
   "QUALITY_INTELLIGENCE_SEVERITIES",
   "QUALITY_INTELLIGENCE_SEVERITY_RANK",
+  "TEST_QUALITY_RUBRIC_DIMENSIONS",
+  "TEST_QUALITY_JUDGE_RESPONSE_SCHEMA",
   "QUALITY_INTELLIGENCE_PLANNER_KINDS",
   "QUALITY_INTELLIGENCE_RUN_EVENT_KINDS",
   "QUALITY_INTELLIGENCE_REVIEWER_KINDS",
@@ -102,6 +104,20 @@ describe("QI module barrel — value exports", () => {
     expect(Qi.QUALITY_INTELLIGENCE_SCHEMA_VERSION).toBe("1");
   });
 
+  it("exports the test-quality judge response schema through the QI namespace", () => {
+    expect(Qi.TEST_QUALITY_RUBRIC_DIMENSIONS).toEqual([
+      "verifiability",
+      "atomicity",
+      "determinism",
+      "ac-fidelity",
+    ]);
+    expect(Qi.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["dimensions", "overallRationale"],
+    });
+  });
+
   it("exports EXACTLY the required value-export set — no undeclared exports, none missing", () => {
     // This pins the complete value surface. Adding or removing a value export from the
     // barrel without updating requiredValueExports will fail this test.
@@ -137,6 +153,13 @@ describe("Outer package barrel — namespace re-export", () => {
     expect(undeclared).toEqual([]);
     expect(missing).toEqual([]);
     expect(actual.size).toBe(requiredValueExports.length);
+  });
+
+  it("flat-exports the test-quality judge schema contract", () => {
+    expect(Contracts.TEST_QUALITY_RUBRIC_DIMENSIONS).toBe(Qi.TEST_QUALITY_RUBRIC_DIMENSIONS);
+    expect(Contracts.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA).toBe(
+      Qi.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
+    );
   });
 });
 

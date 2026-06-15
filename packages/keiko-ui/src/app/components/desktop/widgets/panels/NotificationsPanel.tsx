@@ -16,16 +16,16 @@ const ITEMS: NotificationItem[] = [
 
 export function NotificationsPanel(): ReactNode {
   return (
-    <div className="tw-list">
+    <ul className="tw-list">
       {ITEMS.map((n, i) => (
-        <div className="nt-row" key={i}>
-          <span className="dot" style={{ background: n.c, marginTop: 6 }} />
+        <li className="nt-row" key={i}>
+          <span className="dot" style={{ background: n.c, marginTop: 6 }} aria-hidden="true" />
           <span className="nt-text">
             <span className="nt-title">{n.t}</span>
             <span className="nt-time mono">{n.time} ago</span>
           </span>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }

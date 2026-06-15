@@ -42,6 +42,18 @@ function makeConflicted(id = makeId(2), body = "Conflicted memory"): MemoryRecor
   return { ...makeProposed(id, body), status: "conflicted" };
 }
 
+function makeStaleAccepted(id = makeId(14), body = "Stale accepted memory"): MemoryRecord {
+  return {
+    ...makeProposed(id, body),
+    status: "accepted",
+    staleReason: "source workflow was revoked",
+  };
+}
+
+function makeExpired(id = makeId(15), body = "Expired memory"): MemoryRecord {
+  return { ...makeProposed(id, body), status: "expired" };
+}
+
 function queueWith(records: readonly MemoryRecord[]): () => Promise<MemoryReviewQueueResponse> {
   return vi.fn().mockResolvedValue({ memories: records, total: records.length });
 }
@@ -50,6 +62,7 @@ const emptyQueue = () => vi.fn().mockResolvedValue({ memories: [], total: 0 });
 
 const acceptOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(1), "accepted") });
 const rejectOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(1), "rejected") });
+const archiveOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(1), "archived") });
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -65,7 +78,7 @@ describe("ReviewQueue — empty state", () => {
 });
 
 describe("ReviewQueue — populated state", () => {
-  it("renders proposed memory with Accept and Reject buttons", async () => {
+  it("renders proposed memory with Approve and Reject buttons", async () => {
     const record = makeProposed(makeId(1), "Use camelCase for variables");
     render(
       <ReviewQueue
@@ -77,11 +90,11 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Use camelCase for variables")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 
-  it("renders conflicted memory with Reject conflict button (no Accept)", async () => {
+  it("renders conflicted memory with Reject conflict button (no Approve)", async () => {
     const record = makeConflicted(makeId(3), "Conflicting preference");
     render(
       <ReviewQueue
@@ -93,10 +106,45 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Conflicting preference")).toBeInTheDocument();
     });
-    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     // Honest label (uiux-fix F035): the action permanently rejects the
     // conflicted memory — it is not a mere queue dismissal.
     expect(screen.getByRole("button", { name: "Reject conflict" })).toBeInTheDocument();
+  });
+
+  it("renders stale accepted memory with its stale reason and archive action", async () => {
+    const record = makeStaleAccepted(makeId(16), "Outdated package manager preference");
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        archiveImpl={archiveOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Outdated package manager preference")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Stale: source workflow was revoked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Archive stale" })).toBeInTheDocument();
+  });
+
+  it("renders expired memory as a stale review item", async () => {
+    const record = makeExpired(makeId(17), "Expired captured memory");
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        archiveImpl={archiveOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Expired captured memory")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Stale")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive stale" })).toBeInTheDocument();
   });
 
   it("links each row to the memory detail page", async () => {
@@ -109,14 +157,15 @@ describe("ReviewQueue — populated state", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
-        "href",
-        "/memoriaviva/detail?id=mem-q-12",
-      );
+      expect(
+        screen.getByRole("link", {
+          name: "View details for memory mem-q-12: Linked proposal",
+        }),
+      ).toHaveAttribute("href", "/memoriaviva/detail?id=mem-q-12");
     });
   });
 
-  it("removes row from queue after Accept", async () => {
+  it("removes row from queue after Approve", async () => {
     const record = makeProposed(makeId(4), "Memory to accept");
     const user = userEvent.setup();
     render(
@@ -129,7 +178,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Memory to accept")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
       expect(screen.queryByText("Memory to accept")).toBeNull();
     });
@@ -154,6 +203,32 @@ describe("ReviewQueue — populated state", () => {
     });
   });
 
+  it("archives stale memories and removes them from the queue", async () => {
+    const record = makeStaleAccepted(makeId(18), "Memory to archive");
+    const archiveImpl = archiveOk();
+    const user = userEvent.setup();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+        archiveImpl={archiveImpl}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Memory to archive")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Archive stale" }));
+    await waitFor(() => {
+      expect(archiveImpl).toHaveBeenCalledWith(
+        "mem-q-18",
+        "archived stale memory from review queue",
+      );
+      expect(screen.queryByText("Memory to archive")).toBeNull();
+    });
+    expect(screen.getByText("Memory archived")).toBeInTheDocument();
+  });
+
   it("announces the result and moves focus to the next row after an action (uiux-fix F035)", async () => {
     const records = [
       makeProposed(makeId(20), "First in queue"),
@@ -171,18 +246,18 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByText("First in queue")).toBeInTheDocument();
     });
 
-    const [firstAccept] = screen.getAllByRole("button", { name: "Accept" });
+    const [firstAccept] = screen.getAllByRole("button", { name: "Approve" });
     expect(firstAccept).toBeDefined();
-    if (firstAccept === undefined) throw new Error("Expected an Accept button.");
+    if (firstAccept === undefined) throw new Error("Expected an Approve button.");
     await user.click(firstAccept);
 
     await waitFor(() => {
       expect(screen.queryByText("First in queue")).toBeNull();
     });
     // Focus lands on the next row's first action button instead of <body>.
-    expect(screen.getByRole("button", { name: "Accept" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Approve" })).toHaveFocus();
     // The dedicated status region announces the outcome.
-    expect(screen.getByText("Memory accepted")).toBeInTheDocument();
+    expect(screen.getByText("Memory approved")).toBeInTheDocument();
   });
 
   it("moves focus to the heading when the last row is removed (uiux-fix F035)", async () => {
@@ -198,7 +273,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Only entry")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
       expect(screen.queryByText("Only entry")).toBeNull();
     });
@@ -219,12 +294,12 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Fail to accept")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/accept failed/i)).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
   it("keeps other rows interactive while one row is busy", async () => {
@@ -252,7 +327,7 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByText("Second proposal")).toBeInTheDocument();
     });
 
-    const acceptButtons = screen.getAllByRole("button", { name: "Accept" });
+    const acceptButtons = screen.getAllByRole("button", { name: "Approve" });
     expect(acceptButtons).toHaveLength(2);
     const [firstAcceptButton, secondAcceptButton] = acceptButtons;
     expect(firstAcceptButton).toBeDefined();

@@ -18,6 +18,7 @@ import { mapWithConcurrency } from "./figmaConcurrency.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
 import type { FigmaRenderPort } from "./figmaRenderPort.js";
 import type { FigmaProvenance } from "./figmaConnector.js";
+import { classifyTokenFailure } from "./figmaTokenSource.js";
 import {
   DEFAULT_FIGMA_RETRY_POLICY,
   fetchWithBackoff,
@@ -37,6 +38,7 @@ import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intel
 const FIGMA_API_ORIGIN = "https://api.figma.com";
 const SNAPSHOT_SCHEMA_VERSION = 1 as const;
 const DEFAULT_RENDER_BATCH_SIZE = 20;
+const MAX_RENDER_BATCH_SIZE = 100;
 const DEFAULT_MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_RENDER_SCALE = 1;
 const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
@@ -64,9 +66,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const chunk = <T>(items: readonly T[], size: number): readonly (readonly T[])[] => {
+  const safeSize = Number.isInteger(size) && size >= 1 ? size : DEFAULT_RENDER_BATCH_SIZE;
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += safeSize) out.push(items.slice(i, i + safeSize));
   return out;
+};
+
+const boundedPositiveInt = (
+  value: number | undefined,
+  fallback: number,
+  ceiling: number,
+): number => {
+  if (value === undefined || !Number.isInteger(value) || value < 1) return fallback;
+  return Math.min(value, ceiling);
 };
 
 // Returns true when the hostname is an IP literal or a local/loopback name that must be blocked.
@@ -112,12 +124,14 @@ const buildImagesUrl = (
   return url.toString();
 };
 
-const statusToError = (status: number): FigmaConnectorError => {
-  if (status === 404) return new FigmaConnectorError("FIGMA_NOT_FOUND");
-  if (status === 401 || status === 403) return new FigmaConnectorError("FIGMA_INSUFFICIENT_SCOPE");
-  if (status >= 500) return new FigmaConnectorError("FIGMA_UPSTREAM_UNAVAILABLE");
-  return new FigmaConnectorError("FIGMA_INTERNAL");
+const extractFigmaReason = (body: unknown): string | undefined => {
+  if (!isRecord(body)) return undefined;
+  const reason = body.err ?? body.message;
+  return typeof reason === "string" ? reason : undefined;
 };
+
+const statusToError = (status: number, body: unknown): FigmaConnectorError =>
+  classifyTokenFailure(status, extractFigmaReason(body));
 
 // Extracts the `{ images: { id: url|null } }` map from one `/v1/images` response.
 const extractImageUrls = (json: unknown): Readonly<Record<string, string | null>> => {
@@ -136,7 +150,11 @@ const requestRenderUrls = async (
   input: BuildFigmaSnapshotInput,
   screenIds: readonly string[],
 ): Promise<Map<string, string | null>> => {
-  const batchSize = input.batchSize ?? DEFAULT_RENDER_BATCH_SIZE;
+  const batchSize = boundedPositiveInt(
+    input.batchSize,
+    DEFAULT_RENDER_BATCH_SIZE,
+    MAX_RENDER_BATCH_SIZE,
+  );
   const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
   const sleep = input.sleep ?? realFigmaRetrySleep;
   const urls = new Map<string, string | null>();
@@ -147,7 +165,9 @@ const requestRenderUrls = async (
       policy,
       sleep,
     );
-    if (response.status < 200 || response.status >= 300) throw statusToError(response.status);
+    if (response.status < 200 || response.status >= 300) {
+      throw statusToError(response.status, response.json);
+    }
     const map = extractImageUrls(response.json);
     for (const id of batch) urls.set(id, map[id] ?? null);
   }
@@ -255,7 +275,11 @@ export const buildFigmaSnapshot = async (
       ? new Map<string, string | null>()
       : await requestRenderUrls(input, screenIds);
 
-  const concurrency = input.downloadConcurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY;
+  const concurrency = boundedPositiveInt(
+    input.downloadConcurrency,
+    DEFAULT_DOWNLOAD_CONCURRENCY,
+    Number.MAX_SAFE_INTEGER,
+  );
   const outcomes = await mapWithConcurrency(input.ir.screens, concurrency, (ir) =>
     resolveScreen(input, ir, renderUrls.get(ir.id) ?? null),
   );

@@ -11,6 +11,7 @@ import {
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "./openai-embedding-adapter.js";
+import { OutboundHttpEgressError } from "./http.js";
 
 const SECRET_API_KEY = ["sk-", "test-keiko-embedding-1234567890abcdef"].join("");
 const PROVIDER_ENDPOINT = "https://internal.example.invalid/v1";
@@ -187,6 +188,19 @@ describe("verifyEmbeddingCapability", () => {
     }
   });
 
+  it("maps outbound egress adapter outcomes to distinct safe reasons", async () => {
+    const result = await verifyEmbeddingCapability(
+      adapterReturning({ ok: false, kind: "proxy-blocked-by-policy" }),
+      PROBE,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("proxy-blocked-by-policy");
+      expect(result.safeMessage).toContain("proxy");
+      assertSafeMessage(result.safeMessage);
+    }
+  });
+
   it("maps invalid-response adapter outcomes to invalid-response", async () => {
     const result = await verifyEmbeddingCapability(
       adapterReturning({ ok: false, kind: "invalid-response" }),
@@ -262,6 +276,11 @@ describe("verifyEmbeddingCapability", () => {
       "unsupported-model",
       "timeout",
       "transport",
+      "proxy-unreachable",
+      "proxy-auth-required",
+      "proxy-egress-failed",
+      "proxy-blocked-by-policy",
+      "tls-ca-failure",
       "invalid-response",
     ] as const;
     const results = await Promise.all(
@@ -515,6 +534,23 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
+  });
+
+  it("classifies outbound egress transport errors distinctly", async () => {
+    const fetchImpl = mockFetch(() =>
+      Promise.reject(
+        new OutboundHttpEgressError("TLS_CA_FAILURE", "custom CA secret was not trusted"),
+      ),
+    );
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("tls-ca-failure");
   });
 
   it("returns 'cancelled' when the caller's signal aborts (#192 Copilot)", async () => {

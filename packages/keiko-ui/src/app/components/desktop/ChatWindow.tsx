@@ -4,6 +4,7 @@ import Image from "next/image";
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent,
@@ -1088,15 +1089,33 @@ function MemoryActionCard({
   acceptCandidate,
   rejectCandidate,
   forgetMemoryAction,
+  onActionSettled,
 }: {
   readonly action: ConversationMemoryActionWire;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
+  readonly onActionSettled: (message: string) => void;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirmForget, setConfirmForget] = useState(false);
+  const runAction = useCallback(
+    (actionCallback: () => Promise<void>, successMessage: string, errorMessage: string): void => {
+      if (busy) return;
+      setBusy(true);
+      setError(undefined);
+      void actionCallback()
+        .then(() => {
+          onActionSettled(successMessage);
+        })
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : errorMessage);
+        })
+        .finally(() => setBusy(false));
+    },
+    [busy, onActionSettled],
+  );
   if (action.kind === "candidate") {
     return (
       <article className="chat-memory-action">
@@ -1108,30 +1127,28 @@ function MemoryActionCard({
         <div className="chat-memory-action-buttons">
           <button
             type="button"
-            disabled={busy}
+            aria-disabled={busy}
+            aria-busy={busy}
             onClick={() => {
-              setBusy(true);
-              setError(undefined);
-              void acceptCandidate(action.proposalId)
-                .catch((caught) => {
-                  setError(caught instanceof Error ? caught.message : "Unable to accept memory.");
-                })
-                .finally(() => setBusy(false));
+              runAction(
+                () => acceptCandidate(action.proposalId),
+                "MemoriaViva proposal accepted.",
+                "Unable to accept memory.",
+              );
             }}
           >
             Accept
           </button>
           <button
             type="button"
-            disabled={busy}
+            aria-disabled={busy}
+            aria-busy={busy}
             onClick={() => {
-              setBusy(true);
-              setError(undefined);
-              void rejectCandidate(action.proposalId)
-                .catch((caught) => {
-                  setError(caught instanceof Error ? caught.message : "Unable to reject memory.");
-                })
-                .finally(() => setBusy(false));
+              runAction(
+                () => rejectCandidate(action.proposalId),
+                "MemoriaViva proposal rejected.",
+                "Unable to reject memory.",
+              );
             }}
           >
             Reject
@@ -1162,14 +1179,11 @@ function MemoryActionCard({
   }
   if (action.kind === "forget") {
     const executeForget = (): void => {
-      setBusy(true);
-      setError(undefined);
-      void forgetMemoryAction(action.memoryId)
-        .then(() => setConfirmForget(false))
-        .catch((caught) => {
-          setError(caught instanceof Error ? caught.message : "Unable to forget memory.");
-        })
-        .finally(() => setBusy(false));
+      runAction(
+        () => forgetMemoryAction(action.memoryId).then(() => setConfirmForget(false)),
+        "MemoriaViva forget action completed.",
+        "Unable to forget memory.",
+      );
     };
     return (
       <article className="chat-memory-action">
@@ -1180,14 +1194,16 @@ function MemoryActionCard({
         <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
         <div className="chat-memory-action-buttons">
           {!action.requiresConfirmation ? (
-            <button type="button" disabled={busy} onClick={executeForget}>
+            <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
               Forget
             </button>
           ) : !confirmForget ? (
             <button
               type="button"
-              disabled={busy}
+              aria-disabled={busy}
+              aria-busy={busy}
               onClick={() => {
+                if (busy) return;
                 setError(undefined);
                 setConfirmForget(true);
               }}
@@ -1196,13 +1212,15 @@ function MemoryActionCard({
             </button>
           ) : (
             <>
-              <button type="button" disabled={busy} onClick={executeForget}>
+              <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
                 Forget permanently
               </button>
               <button
                 type="button"
-                disabled={busy}
+                aria-disabled={busy}
+                aria-busy={busy}
                 onClick={() => {
+                  if (busy) return;
                   setError(undefined);
                   setConfirmForget(false);
                 }}
@@ -1230,6 +1248,10 @@ function MemoryActionCard({
   );
 }
 
+function formatMemoryCapturedAt(capturedAt: number): string {
+  return new Date(capturedAt).toISOString().slice(0, 10);
+}
+
 function MemoryPanel({
   memoryEnabled,
   setMemoryEnabled,
@@ -1250,7 +1272,14 @@ function MemoryPanel({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
-  const disclosureId = "chat-memory-disclosure";
+  const [actionStatus, setActionStatus] = useState("");
+  const generatedId = useId();
+  const disclosureId = `${generatedId}-chat-memory-disclosure`;
+  const disclosureButtonRef = useRef<HTMLButtonElement>(null);
+  const handleActionSettled = useCallback((message: string): void => {
+    setActionStatus(message);
+    disclosureButtonRef.current?.focus();
+  }, []);
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   return (
     <section className="chat-memory-panel" aria-label="Conversation memory">
@@ -1280,6 +1309,7 @@ function MemoryPanel({
           />
         </label>
         <button
+          ref={disclosureButtonRef}
           type="button"
           className="chip"
           aria-expanded={open}
@@ -1305,6 +1335,31 @@ function MemoryPanel({
                 <span>{memory.inclusionReason}</span>
               </div>
               <p>{memory.bodyExcerpt}</p>
+              <dl className="chat-memory-meta" aria-label={`Provenance for ${memory.memoryId}`}>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{memory.sourceKind}</dd>
+                </div>
+                <div>
+                  <dt>Sensitivity</dt>
+                  <dd>{memory.sensitivity}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{memory.status}</dd>
+                </div>
+                <div>
+                  <dt>Confidence</dt>
+                  <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
+                </div>
+                <div>
+                  <dt>Captured</dt>
+                  <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
+                </div>
+              </dl>
+              {memory.captureRationale !== undefined ? (
+                <p className="chat-memory-rationale">{memory.captureRationale}</p>
+              ) : null}
             </article>
           ))}
           {latestMemory?.actions.map((action) => (
@@ -1320,8 +1375,12 @@ function MemoryPanel({
               acceptCandidate={acceptCandidate}
               rejectCandidate={rejectCandidate}
               forgetMemoryAction={forgetMemoryAction}
+              onActionSettled={handleActionSettled}
             />
           ))}
+          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {actionStatus}
+          </p>
         </div>
       ) : null}
     </section>

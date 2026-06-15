@@ -112,22 +112,31 @@ function InputField({
   label,
   value,
   disabled = false,
+  required = false,
   onChange,
 }: {
   readonly id: string;
   readonly label: string;
   readonly value: string;
   readonly disabled?: boolean;
+  readonly required?: boolean;
   readonly onChange: (next: string) => void;
 }): ReactNode {
   return (
     <label className="qi-edit-field" htmlFor={id}>
-      <span className="qi-edit-label">{label}</span>
+      {/* QI-01: the required marker is a CSS ::after glyph (see .qi-edit-label[data-required]),
+          so the label's accessible name stays exactly the field name — screen readers convey
+          "required" via aria-required, not by reading "star" (WCAG 3.3.2). */}
+      <span className="qi-edit-label" data-required={required ? "true" : undefined}>
+        {label}
+      </span>
       <input
         id={id}
         className="qi-edit-input"
         value={value}
         disabled={disabled}
+        required={required}
+        aria-required={required ? "true" : undefined}
         onChange={(e) => {
           onChange(e.target.value);
         }}
@@ -289,6 +298,7 @@ export function CandidateEditForm({
         label="Title"
         value={state.title}
         disabled={saving}
+        required
         onChange={(v) => {
           set("title", v);
         }}

@@ -1,5 +1,6 @@
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import jsxA11y from "eslint-plugin-jsx-a11y";
+import tseslint from "typescript-eslint";
 
 const { plugins: _jsxA11yPlugins, ...jsxA11yStrict } = jsxA11y.flatConfigs.strict;
 
@@ -34,6 +35,14 @@ const config = [
   ...nextCoreWebVitals,
   {
     rules: next15HooksRules,
+  },
+  {
+    plugins: {
+      "@typescript-eslint": tseslint.plugin,
+    },
+    rules: {
+      "@typescript-eslint/no-explicit-any": "error",
+    },
   },
   jsxA11yStrict,
 ];

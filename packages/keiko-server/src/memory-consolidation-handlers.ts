@@ -38,6 +38,9 @@ const DEFAULT_JACCARD_THRESHOLD = 0.85;
 const DEFAULT_STALE_CONFIDENCE_THRESHOLD = 0.3;
 const DEFAULT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_CLUSTERS_PER_RUN = 100;
+const DEFAULT_MAX_RECORDS_PER_RUN = 1_000;
+const MAX_CLUSTERS_PER_RUN_LIMIT = 1_000;
+const MAX_RECORDS_PER_RUN_LIMIT = 1_000;
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -231,7 +234,8 @@ const SETTING_BOUNDS: Record<keyof ConsolidationJobSettings, SettingBounds> = {
   jaccardThreshold: { lo: 0, hi: 1 },
   staleConfidenceThreshold: { lo: 0, hi: 1 },
   maxAgeMs: { lo: 0, hi: Number.MAX_SAFE_INTEGER },
-  maxClustersPerRun: { lo: 0, hi: Number.MAX_SAFE_INTEGER, integerOnly: true },
+  maxClustersPerRun: { lo: 0, hi: MAX_CLUSTERS_PER_RUN_LIMIT, integerOnly: true },
+  maxRecordsPerRun: { lo: 0, hi: MAX_RECORDS_PER_RUN_LIMIT, integerOnly: true },
 };
 
 function resolveSetting(
@@ -261,6 +265,7 @@ function parseSettings(raw: unknown): ConsolidationJobSettings | RouteResult {
     staleConfidenceThreshold: DEFAULT_STALE_CONFIDENCE_THRESHOLD,
     maxAgeMs: DEFAULT_MAX_AGE_MS,
     maxClustersPerRun: DEFAULT_MAX_CLUSTERS_PER_RUN,
+    maxRecordsPerRun: DEFAULT_MAX_RECORDS_PER_RUN,
   };
   const result: Record<string, number> = {};
   for (const key of keys) {
@@ -280,6 +285,11 @@ function parseSettings(raw: unknown): ConsolidationJobSettings | RouteResult {
 interface CreateJobInput {
   readonly selection: ConsolidationJobSelection;
   readonly settings: ConsolidationJobSettings;
+}
+
+interface LoadedMemories {
+  readonly records: readonly MemoryRecord[];
+  readonly truncated: boolean;
 }
 
 function badRequest(message: string): RouteResult {
@@ -321,22 +331,38 @@ function parseCreateInput(raw: Record<string, unknown>): CreateJobInput | RouteR
 function loadSelectedMemories(
   vault: MemoryVaultStore,
   selection: ConsolidationJobSelection,
-): readonly MemoryRecord[] {
+  maxRecords: number,
+): LoadedMemories {
   const seen = new Map<string, MemoryRecord>();
+  const statuses = selection.statuses?.filter((status) => status === "accepted") ?? ["accepted"];
+  if (statuses.length === 0 || maxRecords <= 0) return { records: [], truncated: false };
+  const detectionLimit = maxRecords + 1;
   for (const scope of selection.scopes) {
+    const remaining = detectionLimit - seen.size;
+    if (remaining <= 0) break;
     const records = vault.listMemoriesByScope(scope, {
       ...(selection.types !== undefined ? { type: selection.types } : {}),
-      ...(selection.statuses !== undefined ? { status: selection.statuses } : {}),
+      status: statuses,
       includeExpired: selection.includeExpired,
+      limit: remaining,
+      orderBy: "updatedAt",
+      orderDir: "asc",
     });
     for (const record of records) {
       seen.set(record.id, record);
+      if (seen.size >= detectionLimit) break;
     }
   }
-  return [...seen.values()].sort((a, b) => {
-    if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
-    return a.id.localeCompare(b.id);
-  });
+  const sorted = [...seen.values()]
+    .sort((a, b) => {
+      if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+      return a.id.localeCompare(b.id);
+    })
+    .slice(0, maxRecords);
+  return {
+    records: sorted,
+    truncated: seen.size > maxRecords,
+  };
 }
 
 function redactJob(deps: UiHandlerDeps, record: ConsolidationJobRecord): unknown {
@@ -373,6 +399,7 @@ function buildRunOptions(
     staleConfidenceThreshold: settings.staleConfidenceThreshold,
     maxAgeMs: settings.maxAgeMs,
     maxClustersPerRun: settings.maxClustersPerRun,
+    maxRecordsPerRun: settings.maxRecordsPerRun,
     cancellationSignal: (): boolean => registry.get(jobId)?.cancelRequested === true,
   };
 }
@@ -383,12 +410,15 @@ function finalizeTerminalJob(
   jobId: string,
   memories: readonly MemoryRecord[],
   result: ConsolidationResult,
+  selectionTruncated = false,
 ): void {
   const completedAt = Date.now();
+  const finalResult: ConsolidationResult =
+    selectionTruncated && !result.truncated ? { ...result, truncated: true } : result;
   if (result.state === "completed") {
     registry.complete(
       jobId,
-      transitionJob(running, "completed", { completedAt, result }),
+      transitionJob(running, "completed", { completedAt, result: finalResult }),
       memories.length,
     );
     return;
@@ -396,7 +426,7 @@ function finalizeTerminalJob(
   if (result.state === "canceled") {
     registry.complete(
       jobId,
-      transitionJob(running, "canceled", { completedAt, result }),
+      transitionJob(running, "canceled", { completedAt, result: finalResult }),
       memories.length,
     );
     return;
@@ -404,7 +434,7 @@ function finalizeTerminalJob(
   const message = "Consolidation run failed.";
   registry.fail(
     jobId,
-    transitionJob(running, "failed", { completedAt, result, error: message }),
+    transitionJob(running, "failed", { completedAt, result: finalResult, error: message }),
     message,
     memories.length,
   );
@@ -427,10 +457,25 @@ function failScheduledJob(
   );
 }
 
+function emptyConsolidationResult(state: ConsolidationResult["state"]): ConsolidationResult {
+  return {
+    state,
+    edgesProposed: [],
+    updatesProposed: [],
+    staleFlags: [],
+    reviewItems: [],
+    clustersInspected: 0,
+    recordsInspected: 0,
+    truncated: false,
+    elapsedMs: 0,
+  };
+}
+
 function scheduleJob(
   deps: UiHandlerDeps,
   jobId: string,
-  memories: readonly MemoryRecord[],
+  vault: MemoryVaultStore,
+  selection: ConsolidationJobSelection,
   settings: ConsolidationJobSettings,
 ): void {
   const registry = deps.consolidationJobs;
@@ -440,60 +485,38 @@ function scheduleJob(
     if (queued?.job.state !== "queued") return;
     if (queued.cancelRequested) {
       const canceled = transitionJob(queued.job, "canceled", { completedAt: Date.now() });
+      registry.complete(jobId, canceled, 0);
+      return;
+    }
+    const loaded = loadSelectedMemories(vault, selection, settings.maxRecordsPerRun);
+    const memories = loaded.records;
+    const afterLoad = registry.get(jobId);
+    if (afterLoad?.job.state !== "queued") return;
+    if (afterLoad.cancelRequested) {
+      const canceled = transitionJob(afterLoad.job, "canceled", { completedAt: Date.now() });
       registry.complete(jobId, canceled, memories.length);
       return;
     }
-    const running = transitionJob(queued.job, "running");
+    if (memories.length === 0 || settings.maxClustersPerRun === 0) {
+      const result = emptyConsolidationResult("skipped");
+      const skipped = transitionJob(afterLoad.job, "skipped", {
+        completedAt: Date.now(),
+        result,
+      });
+      registry.complete(jobId, skipped, memories.length);
+      return;
+    }
+    const running = transitionJob(afterLoad.job, "running");
     registry.setRunning(jobId, running);
     try {
       const result = runConsolidation(
         memories,
         buildRunOptions(registry, jobId, queued.createdAt, settings),
       );
-      finalizeTerminalJob(registry, running, jobId, memories, result);
+      finalizeTerminalJob(registry, running, jobId, memories, result, loaded.truncated);
     } catch (error) {
       failScheduledJob(registry, running, jobId, memories, error);
     }
-  });
-}
-
-function skippedJob(
-  jobId: string,
-  createdAt: number,
-  selection: ConsolidationJobSelection,
-  settings: ConsolidationJobSettings,
-  memoryCount: number,
-): ConsolidationJobRecord {
-  const base = buildConsolidationJob(jobId, createdAt);
-  const result: ConsolidationResult = {
-    state: "skipped",
-    edgesProposed: [],
-    updatesProposed: [],
-    staleFlags: [],
-    reviewItems: [],
-    clustersInspected: 0,
-    elapsedMs: 0,
-  };
-  return {
-    job: transitionJob(base, "skipped", { completedAt: createdAt, result }),
-    createdAt,
-    selection,
-    settings,
-    memoryCount,
-    cancelRequested: false,
-  };
-}
-
-function registerRecord(
-  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
-  record: ConsolidationJobRecord,
-): ConsolidationJobRecord {
-  return registry.register({
-    job: record.job,
-    createdAt: record.createdAt,
-    selection: record.selection,
-    settings: record.settings,
-    memoryCount: record.memoryCount,
   });
 }
 
@@ -524,17 +547,7 @@ export async function handleCreateConsolidationJob(
   const input = parseCreateInput(body);
   if (isRouteResult(input)) return input;
   const createdAt = Date.now();
-  const memories = loadSelectedMemories(vault, input.selection);
   const jobId = randomUUID();
-  if (memories.length === 0 || input.settings.maxClustersPerRun === 0) {
-    const record = skippedJob(jobId, createdAt, input.selection, input.settings, memories.length);
-    try {
-      registerRecord(registry, record);
-    } catch (error) {
-      return registerJobLimit(error);
-    }
-    return createJobResponse(deps, record);
-  }
   const job = buildConsolidationJob(jobId, createdAt);
   let record: ConsolidationJobRecord;
   try {
@@ -543,12 +556,12 @@ export async function handleCreateConsolidationJob(
       createdAt,
       selection: input.selection,
       settings: input.settings,
-      memoryCount: memories.length,
+      memoryCount: 0,
     });
   } catch (error) {
     return registerJobLimit(error);
   }
-  scheduleJob(deps, jobId, memories, input.settings);
+  scheduleJob(deps, jobId, vault, input.selection, input.settings);
   return createJobResponse(deps, record);
 }
 

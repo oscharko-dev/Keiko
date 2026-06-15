@@ -211,6 +211,22 @@ describe("RelationshipCreateDialog", () => {
     expect(mockCreateRelationship).not.toHaveBeenCalled();
   });
 
+  // MD-01 (WCAG 2.1.2): Escape/focus-trap handlers are dialog-scoped, not
+  // window-scoped, so a concurrent overlay's Escape does not close this dialog.
+  it("Escape on the dialog element closes it; Escape dispatched to window does not (MD-01)", () => {
+    const onClose = vi.fn();
+    render(<RelationshipCreateDialog onClose={onClose} />);
+    const dialog = screen.getByTestId("rel-create-dialog");
+
+    // Escape on window must NOT trigger close — handler is dialog-scoped.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Escape on the dialog element itself MUST trigger close.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("clears a non-security submit denial on the next form edit so Create is not a dead end", async () => {
     mockValidateRelationshipProposal.mockResolvedValue({
       decision: { allowed: true, reasons: [] },

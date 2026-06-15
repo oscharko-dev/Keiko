@@ -182,6 +182,58 @@ describe("handleStartQiRun — seed validation", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
   });
+
+  // Issue #763 (Epic #761) AC2: seed=0 is a valid, non-negative safe integer and must be accepted
+  // so a deterministic run can pin the zero seed. The existing tests only cover -1 (reject) and 7
+  // (accept), leaving the `value >= 0` boundary unpinned — a `>= 0` → `> 0` mutation would reject a
+  // valid zero seed with no test catching it.
+  it("accepts seed=0 as a valid deterministic seed on the SSE path", async () => {
+    const res = new MockResponse();
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+          seed: 0,
+        }),
+        res,
+      ),
+      deps(),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
+  });
+
+  // Issue #763 AC2: parseOptionalSeed requires a NON-NEGATIVE SAFE INTEGER. Pin the distinct guard
+  // clauses so a loosened check (e.g. Number.isSafeInteger → Number.isInteger, or dropping the
+  // typeof number guard) is caught: a fractional seed, an unsafe integer beyond 2^53-1, and a
+  // numeric string must each be rejected with 400 QI_BAD_REQUEST before any streaming begins.
+  it.each([
+    { label: "a fractional seed", seed: 1.5 },
+    { label: "an unsafe integer beyond MAX_SAFE_INTEGER", seed: Number.MAX_SAFE_INTEGER + 1 },
+    { label: "a numeric string", seed: "7" },
+  ])("returns 400 QI_BAD_REQUEST for $label", async ({ seed }) => {
+    const res = new MockResponse();
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+            seed,
+          }),
+          res,
+        ),
+        deps(),
+      ),
+    );
+
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+    expect((result.body as { error: { message: string } }).error.message).toMatch(/seed/i);
+    expect(res.statusCode).toBeUndefined();
+    expect(res.chunks).toHaveLength(0);
+  });
 });
 
 // ─── Capsule source parsing (Issue #716) ────────────────────────────────────────
@@ -421,6 +473,144 @@ describe("handleStartQiRun — figma-snapshot source validation (Issue #754)", (
     expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
     expect(res.ended).toBe(true);
     expect(res.chunks.join("")).toContain('"type":"error"');
+  });
+});
+
+// ─── SSE 'accepted' frame — multi-source wire shape (Issue #730) ─────────────────────────────────
+//
+// Existing tests all use `evidenceDir: undefined`, so `executeQiRun` throws QI_NO_EVIDENCE_DIR
+// BEFORE ingestion and the 'accepted' frame is never emitted. These tests supply a real temp dir
+// so ingestion runs and the 'accepted' frame IS emitted (it is written synchronously inside
+// `onAccepted`, before any model call, so it is present regardless of whether generation later
+// fails). The SSE chunks are `data: {...}\n\n` lines; we parse them into JSON frames and locate
+// the one with `type === "accepted"`.
+
+function parseSseFrames(chunks: readonly string[]): readonly Record<string, unknown>[] {
+  const raw = chunks.join("");
+  return raw
+    .split("\n\n")
+    .map((block) => block.trim())
+    .filter((block) => block.startsWith("data:"))
+    .map((block) => JSON.parse(block.slice("data:".length).trim()) as Record<string, unknown>);
+}
+
+describe("handleStartQiRun — SSE accepted frame wire shape (Issue #730)", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function depsWithEvidenceDir(evidenceDir: string): UiHandlerDeps {
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: createInMemoryUiStore(),
+      evidenceDir,
+    };
+  }
+
+  // B1 — 17 sources (cap is 16): accepted frame must carry droppedSourceCount === 1.
+  // Pins the `droppedSourceCount > 0` conditional emit in runRoutes.ts:315.
+  // A mutation removing the condition or emitting a falsy value causes `droppedSourceCount` to
+  // be absent (or 0) where this asserts it is exactly 1.
+  it("accepted frame carries droppedSourceCount === 1 when 17 requirements sources are submitted (cap = 16)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-b1-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+
+    const sources = Array.from({ length: 17 }, (_, i) => ({
+      kind: "requirements" as const,
+      label: `Src${String(i)}`,
+      text: `The system shall satisfy requirement number ${String(i)} for the audit trail.`,
+    }));
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    expect(accepted).toBeDefined();
+    expect(accepted?.droppedSourceCount).toBe(1);
+  });
+
+  // B2 — 2 valid sources: accepted frame must NOT contain `droppedSourceCount` at all.
+  // Pins the `> 0` guard: when none are dropped the key must be absent (not present as 0).
+  // A mutation that always spreads `{ droppedSourceCount: 0 }` would fail this test.
+  it("accepted frame has no droppedSourceCount key when only 2 sources are submitted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-b2-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+
+    const sources = [
+      { kind: "requirements" as const, label: "Alpha", text: "The system shall log every login." },
+      {
+        kind: "requirements" as const,
+        label: "Beta",
+        text: "The system shall enforce the daily transfer limit.",
+      },
+    ];
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    expect(accepted).toBeDefined();
+    // Key must be absent — not present as 0 — because zero drops must not widen the wire.
+    expect("droppedSourceCount" in (accepted ?? {})).toBe(false);
+  });
+
+  // B3 — 1 valid + 1 whitespace-only source: accepted frame must carry `skippedSources` with
+  // exactly one entry, and that entry's keys must be exactly ["code","kind","label"] (sorted).
+  // This pins the wire-shape projection in runRoutes.ts:325-329: the internal QiSkippedSource
+  // also has a `message` field, which the route MUST strip before emitting it on the SSE surface
+  // (the `accepted` frame bypasses the redactor). A mutation that leaks `message` into the frame
+  // would add an extra key and fail the `Object.keys(...).sort()` assertion.
+  it("accepted frame skippedSources entries have exactly {code,kind,label} keys — no message field leaked", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-b3-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+
+    const sources = [
+      {
+        kind: "requirements" as const,
+        label: "GoodSource",
+        text: "The system shall validate every input field before persisting data.",
+      },
+      // Whitespace-only text → ingests to nothing → skipped with QI_SOURCE_EMPTY.
+      { kind: "requirements" as const, label: "BlankSource", text: "   \n\t  " },
+    ];
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    expect(accepted).toBeDefined();
+
+    const skipped = accepted?.skippedSources as readonly Record<string, unknown>[];
+    expect(Array.isArray(skipped)).toBe(true);
+    expect(skipped).toHaveLength(1);
+
+    const entry = skipped[0];
+    expect(entry).toBeDefined();
+    // Exact key-set: {code, kind, label} — message must NOT appear on the wire.
+    expect(Object.keys(entry ?? {}).sort()).toEqual(["code", "kind", "label"]);
   });
 });
 

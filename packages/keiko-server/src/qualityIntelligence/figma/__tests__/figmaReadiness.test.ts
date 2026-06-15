@@ -76,4 +76,27 @@ describe("resolveReadiness — precedence version > section > devStatus > none",
     expect(resolveReadiness(leaf("Release"), {}).source).toBe("section");
     expect(resolveReadiness(leaf("Draft"), {}).source).toBe("none");
   });
+
+  it("treats an empty version string as NO version and falls through (guards version.length > 0)", () => {
+    // An empty pinned version must not claim the 'version' source — it falls through to section.
+    const node = leaf("Release Candidate");
+    expect(resolveReadiness(node, { version: "", releaseMarker: "release" })).toEqual({
+      source: "section",
+      ready: true,
+      matchedNodeName: "Release Candidate",
+    });
+    // …and to 'none' when nothing else matches either.
+    expect(resolveReadiness(leaf("Draft"), { version: "", releaseMarker: "release" })).toEqual({
+      source: "none",
+      ready: false,
+    });
+  });
+
+  it("matches 'Unreleased' as a known substring false-positive (by design — scope the marker to avoid)", () => {
+    // 'unreleased'.includes('release') === true. The substring design is intentional; operators who
+    // want to exclude such labels should pass a scoped releaseMarker (e.g. '[release]').
+    expect(resolveReadiness(leaf("Unreleased"), { releaseMarker: "release" }).source).toBe(
+      "section",
+    );
+  });
 });

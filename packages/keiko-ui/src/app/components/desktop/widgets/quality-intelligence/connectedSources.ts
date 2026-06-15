@@ -15,6 +15,7 @@ import type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceFileSource,
+  QualityIntelligenceInlineSource,
   QualityIntelligenceWorkspaceSource,
 } from "@oscharko-dev/keiko-contracts";
 import { MAX_SCOPES } from "../../hooks/workspaceActions";
@@ -40,6 +41,77 @@ export interface ConnectedSourceProps {
   readonly connectedCapsuleSetIds?: readonly string[] | undefined;
   /** Figma Snapshot run ids from connected Figma Snapshot windows (Epic #750 #756). */
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
+}
+
+const CONNECTED_SOURCES_CFG_KEY = "connectedSourcesJson";
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasStringField(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === "string";
+}
+
+function isConnectedRunSource(value: unknown): value is ConnectedRunSource {
+  if (!isRecord(value) || !hasStringField(value, "label")) return false;
+  switch (value.kind) {
+    case "file":
+    case "workspace":
+      return hasStringField(value, "path");
+    case "capsule":
+      return hasStringField(value, "capsuleId");
+    case "capsule-set":
+      return hasStringField(value, "capsuleSetId");
+    case "figma-snapshot":
+      return hasStringField(value, "snapshotRunId");
+    default:
+      return false;
+  }
+}
+
+function parseConnectedRunSourcesJson(json: string): readonly ConnectedRunSource[] | null {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed) || !parsed.every(isConnectedRunSource)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function connectedRunSourcesCfgFromSources(
+  sources: readonly ConnectedRunSource[],
+): Record<string, string> {
+  return sources.length > 0 ? { [CONNECTED_SOURCES_CFG_KEY]: JSON.stringify(sources) } : {};
+}
+
+export function connectedRunSourcesCfgFromInlineSources(
+  sources: readonly QualityIntelligenceInlineSource[],
+): Record<string, string> {
+  // Never serialize pasted requirements text into a window cfg; only portable source handles can ride
+  // through regenerated/opened run cards. An explicit empty filtered set is still serialized so
+  // reopening an existing qiRun card from history clears any previously carried handles.
+  return { [CONNECTED_SOURCES_CFG_KEY]: JSON.stringify(sources.filter(isConnectedRunSource)) };
+}
+
+export function connectedRunSourcesFromWindowCfg(
+  cfg: Record<string, unknown>,
+): readonly ConnectedRunSource[] {
+  const json = stringField(cfg, CONNECTED_SOURCES_CFG_KEY);
+  if (json !== undefined && json.length > 0) {
+    const parsed = parseConnectedRunSourcesJson(json);
+    if (parsed !== null) return parsed;
+  }
+  return buildConnectedRunSources({
+    connectedFilePath: stringField(cfg, "connectedFilePath") ?? null,
+    connectedRoot: stringField(cfg, "connectedRoot") ?? null,
+  });
 }
 
 export function baseName(p: string): string {

@@ -155,4 +155,14 @@ describe("fetchWithBackoff", () => {
       DEFAULT_FIGMA_RETRY_POLICY.baseDelayMs,
     );
   });
+
+  // The exact default values are the contractual rate-limit budget that AC1 (a huge board snapshots
+  // within rate limits without manual retries) rests on: the module comment documents "8 retries, 45s
+  // ceiling". Pinning them exactly catches a silent drift (e.g. maxRetries 8→1 would fail a
+  // rate-limited board after 2 attempts instead of 9) that the bounded-range checks above let through.
+  it("pins the exact default rate-limit budget (#759 AC1 contract)", () => {
+    expect(DEFAULT_FIGMA_RETRY_POLICY.maxRetries).toBe(8);
+    expect(DEFAULT_FIGMA_RETRY_POLICY.baseDelayMs).toBe(500);
+    expect(DEFAULT_FIGMA_RETRY_POLICY.maxDelayMs).toBe(45_000);
+  });
 });

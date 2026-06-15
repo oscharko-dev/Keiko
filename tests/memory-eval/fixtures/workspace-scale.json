@@ -1,0 +1,32 @@
+[
+  {
+    "id": "workspace-scale-seed",
+    "description": "Workspace-scoped memory seed used by the scale scenario; the scenario expands it into bounded synthetic noise to exercise the retrieval cap.",
+    "memories": [
+      {
+        "id": "workspace-ci-runner-policy",
+        "scope": { "kind": "workspace", "workspaceId": "ws-main" },
+        "type": "decision",
+        "body": "workspace CI runner policy requires deterministic memory benchmark evidence before release",
+        "tags": ["ci", "release", "memory-eval"],
+        "confidence": 0.96
+      },
+      {
+        "id": "workspace-unrelated-formatting",
+        "scope": { "kind": "workspace", "workspaceId": "ws-main" },
+        "type": "preference",
+        "body": "workspace uses two-space indentation for generated markdown tables",
+        "tags": ["formatting"],
+        "confidence": 0.8
+      },
+      {
+        "id": "workspace-other-ci-runner-policy",
+        "scope": { "kind": "workspace", "workspaceId": "ws-other" },
+        "type": "decision",
+        "body": "other workspace CI runner policy must never leak into ws-main retrieval",
+        "tags": ["ci", "release", "memory-eval"],
+        "confidence": 0.96
+      }
+    ]
+  }
+]

@@ -22,12 +22,21 @@ function atomFp(
   atomId: string,
   envelopeId: string,
   canonicalHashSha256Hex: string,
+  replacement?: { readonly group: string; readonly ordinal: number },
 ): {
   atomId: string;
   envelopeId: string;
   canonicalHashSha256Hex: string;
+  replacementGroupId?: string;
+  replacementOrdinal?: number;
 } {
-  return { atomId, envelopeId, canonicalHashSha256Hex };
+  return {
+    atomId,
+    envelopeId,
+    canonicalHashSha256Hex,
+    ...(replacement !== undefined ? { replacementGroupId: replacement.group } : {}),
+    ...(replacement !== undefined ? { replacementOrdinal: replacement.ordinal } : {}),
+  };
 }
 
 function cand(
@@ -109,6 +118,53 @@ describe("compareStaleness — source-changed", () => {
       { candidateId: "tc-file", reason: "source-changed", envelopeId: "env-workspace" },
     ]);
   });
+
+  it("uses replacement metadata to mark edited document requirement atoms as changed", () => {
+    const args: CompareStalenessArgs = {
+      oldFingerprints: [fp("env-workspace", "workspace-a")],
+      oldAtomFingerprints: [
+        atomFp("atom-doc-1", "env-workspace", "hash-1", { group: "doc-a", ordinal: 0 }),
+        atomFp("atom-doc-2", "env-workspace", "hash-2", { group: "doc-a", ordinal: 1 }),
+      ],
+      evidenceRefs: [ref("env-workspace", "atom-doc-1"), ref("env-workspace", "atom-doc-2")],
+      candidates: [cand("tc-1", "atom-doc-1"), cand("tc-2", "atom-doc-2")],
+      currentFingerprints: [fp("env-workspace", "workspace-a")],
+      currentAtomFingerprints: [
+        atomFp("atom-doc-1", "env-workspace", "hash-1", { group: "doc-a", ordinal: 0 }),
+        atomFp("atom-doc-2b", "env-workspace", "hash-2b", { group: "doc-a", ordinal: 1 }),
+      ],
+    };
+    const result = compareStaleness(args);
+    expect(result.fresh).toEqual(["tc-1"]);
+    expect(result.changedStale).toEqual([
+      { candidateId: "tc-2", reason: "source-changed", envelopeId: "env-workspace" },
+    ]);
+    expect(result.orphanedStale).toHaveLength(0);
+  });
+
+  it("aligns replacement metadata when an unrelated document requirement is inserted before an edit", () => {
+    const args: CompareStalenessArgs = {
+      oldFingerprints: [fp("env-workspace", "workspace-a")],
+      oldAtomFingerprints: [
+        atomFp("atom-doc-login", "env-workspace", "hash-login", { group: "doc-a", ordinal: 0 }),
+        atomFp("atom-doc-pay", "env-workspace", "hash-pay", { group: "doc-a", ordinal: 1 }),
+      ],
+      evidenceRefs: [ref("env-workspace", "atom-doc-login"), ref("env-workspace", "atom-doc-pay")],
+      candidates: [cand("tc-login", "atom-doc-login"), cand("tc-pay", "atom-doc-pay")],
+      currentFingerprints: [fp("env-workspace", "workspace-a")],
+      currentAtomFingerprints: [
+        atomFp("atom-doc-report", "env-workspace", "hash-report", { group: "doc-a", ordinal: 0 }),
+        atomFp("atom-doc-login", "env-workspace", "hash-login", { group: "doc-a", ordinal: 1 }),
+        atomFp("atom-doc-paypal", "env-workspace", "hash-paypal", { group: "doc-a", ordinal: 2 }),
+      ],
+    };
+    const result = compareStaleness(args);
+    expect(result.fresh).toEqual(["tc-login"]);
+    expect(result.changedStale).toEqual([
+      { candidateId: "tc-pay", reason: "source-changed", envelopeId: "env-workspace" },
+    ]);
+    expect(result.orphanedStale).toHaveLength(0);
+  });
 });
 
 describe("compareStaleness — source-removed", () => {
@@ -126,6 +182,26 @@ describe("compareStaleness — source-removed", () => {
     expect(result.orphanedStale).toHaveLength(1);
     expect(result.orphanedStale[0]?.candidateId).toBe("tc-2");
     expect(result.orphanedStale[0]?.reason).toBe("source-removed");
+  });
+
+  it("marks a deleted requirement atom orphanedStale when the envelope still exists", () => {
+    const args: CompareStalenessArgs = {
+      oldFingerprints: [fp("qi-src-req-old", "req-hash-old")],
+      oldAtomFingerprints: [
+        atomFp("atom-req-1", "qi-src-req-old", "hash-req-1"),
+        atomFp("atom-req-2", "qi-src-req-old", "hash-req-2"),
+      ],
+      evidenceRefs: [ref("qi-src-req-old", "atom-req-1"), ref("qi-src-req-old", "atom-req-2")],
+      candidates: [cand("tc-1", "atom-req-1"), cand("tc-2", "atom-req-2")],
+      currentFingerprints: [fp("qi-src-req-old", "req-hash-new")],
+      currentAtomFingerprints: [atomFp("atom-req-1", "qi-src-req-old", "hash-req-1")],
+    };
+    const result = compareStaleness(args);
+    expect(result.fresh).toEqual(["tc-1"]);
+    expect(result.changedStale).toHaveLength(0);
+    expect(result.orphanedStale).toEqual([
+      { candidateId: "tc-2", reason: "source-removed", envelopeId: "qi-src-req-old" },
+    ]);
   });
 });
 

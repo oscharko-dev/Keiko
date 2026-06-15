@@ -47,6 +47,22 @@ describe("rankMemories — basic ordering", () => {
     expect(ranked[1]?.memoryId).toBe(memoryId("fact"));
   });
 
+  it("boosts accepted-correction provenance even when the durable type is semantic", () => {
+    const correction = buildRecord({
+      id: "correction-preference",
+      type: "preference",
+      sourceKind: "accepted-correction",
+      body: "user prefers npm ci",
+      updatedAt: now,
+    });
+    const [ranked] = rankMemories([correction], {
+      queryText: "npm ci",
+      nowMs: now,
+      weights: DEFAULT_RANKING_WEIGHTS,
+    });
+    expect(ranked?.subscores.correction).toBe(1);
+  });
+
   it("attaches a human-readable inclusionReason naming the top contributing subscore", () => {
     const pinned = buildRecord({ id: "p", pinned: true, updatedAt: now });
     const [first] = rankMemories([pinned], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });

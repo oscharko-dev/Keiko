@@ -304,3 +304,65 @@ describe("selectConfiguredModel — embedding ids are excluded from chat selecti
     expect(selected).toBeUndefined();
   });
 });
+
+// Issue #762 hardening: each matches() conjunct must be individually decisive, and the cheapest
+// tie-break must be deterministic. Without these, mutants that drop the toolCalling/minContextWindow
+// guard or flip the cost comparison (`<`→`<=`) survive the suite — the QI selector relies on all of
+// them being correct.
+describe("selectConfiguredModel — conjunct guards & deterministic tie-break (#762)", () => {
+  function chatCap(id: string, overrides: Partial<ModelCapability> = {}): ModelCapability {
+    return {
+      id,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Test"],
+      knownLimitations: [],
+      ...overrides,
+    };
+  }
+
+  it("excludes a model that lacks tool calling when toolCalling is required (guard is decisive)", () => {
+    const selected = selectConfiguredModel(
+      config(["no-tools"], [chatCap("no-tools", { toolCalling: false })]),
+      { kind: "chat", toolCalling: true },
+    );
+    expect(selected).toBeUndefined();
+  });
+
+  it("excludes a model below the requested minimum context window", () => {
+    const selected = selectConfiguredModel(
+      config(["small-ctx"], [chatCap("small-ctx", { contextWindow: 32_000 })]),
+      { kind: "chat", minContextWindow: 64_000 },
+    );
+    expect(selected).toBeUndefined();
+  });
+
+  it("selects a model that meets the requested minimum context window", () => {
+    const selected = selectConfiguredModel(
+      config(["big-ctx"], [chatCap("big-ctx", { contextWindow: 128_000 })]),
+      { kind: "chat", minContextWindow: 64_000 },
+    );
+    expect(selected).toBe("big-ctx");
+  });
+
+  it("breaks an equal-cost tie deterministically in favour of the first-configured model", () => {
+    const selected = selectConfiguredModel(
+      config(
+        ["tie-first", "tie-second"],
+        [chatCap("tie-first", { costClass: "low" }), chatCap("tie-second", { costClass: "low" })],
+      ),
+      { kind: "chat" },
+    );
+    expect(selected).toBe("tie-first");
+  });
+});

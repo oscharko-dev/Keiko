@@ -60,6 +60,15 @@ describe("QualityIntelligenceExportBundle", () => {
     expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toContain("plain-text");
     expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toContain("quality-center");
   });
+
+  it("does not include server-only binary modes 'pdf' or 'zip-bundle' in the domain adapter list", () => {
+    // Kills mutation: someone accidentally adds "pdf" or "zip-bundle" to the domain union.
+    // These are assembled by keiko-server's exportAssembly.ts and served as binary blobs;
+    // they must NOT appear in the domain export-adapter contract so UI and TMS code
+    // cannot accidentally route binary-blob requests through the text-adapter pipeline.
+    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).not.toContain("pdf");
+    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).not.toContain("zip-bundle");
+  });
 });
 
 describe("assertExportBundleInvariant", () => {

@@ -28,6 +28,7 @@ import type {
   QualityIntelligenceTestCaseStatus,
 } from "./testCaseCandidate.js";
 import type { QualityIntelligenceReviewState } from "./reviewRecord.js";
+import type { TestQualityRubricDimension } from "./testQualityRubric.js";
 
 /** Counts-only totals carried on both the list-view and the detail view. */
 export interface QualityIntelligenceUiRunTotals {
@@ -110,6 +111,13 @@ export interface QualityIntelligenceUiWeakTestFlag {
   readonly rationale: string;
 }
 
+export interface QualityIntelligenceUiCandidateQualityVerdict {
+  readonly verdict: "strong" | "weak";
+  readonly score: number;
+  readonly dimensions: readonly TestQualityRubricDimension[];
+  readonly overallRationale: string;
+}
+
 export interface QualityIntelligenceUiDriftMetadata {
   /**
    * GET run detail is read-only: it reports whether drift tracking metadata exists, but never
@@ -155,9 +163,9 @@ export interface QualityIntelligenceUiRunDetail {
   /** Per-atom coverage classification (refs + status; empty when no matrix is available). */
   readonly coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[];
   /**
-   * Run quality score: the percentage of judged candidates the adversarial judge rated "strong"
-   * [0-100] (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null
-   * when the judge stage was skipped, unavailable, or no candidate was judged.
+   * Run quality score: the percentage of candidates with a strong adversarial judge outcome [0-100]
+   * (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null when the
+   * judge stage was skipped, unavailable, or there were no candidates to judge.
    */
   readonly qualityScore: number | null;
   /** Browser-safe Living Tests drift metadata; never contains raw source text, paths, or hashes. */
@@ -184,10 +192,26 @@ export interface QualityIntelligenceUiCandidate {
   readonly reviewState: QualityIntelligenceReviewState;
   readonly derivedFromAtomIds: readonly string[];
   /**
+   * Present when the adversarial test-quality judge evaluated this candidate. Additive and absent
+   * on legacy runs or when the judge stage was skipped.
+   */
+  readonly qualityVerdict?: QualityIntelligenceUiCandidateQualityVerdict;
+  /**
    * Present only when the adversarial test-quality judge (Epic #736) flagged this candidate as
-   * weak. Omitted entirely when the candidate was rated strong or was never judged.
+   * weak. Omitted entirely when the candidate was rated strong or the judge stage was skipped.
    */
   readonly weakTestFlag?: QualityIntelligenceUiWeakTestFlag;
+  /**
+   * Candidate body fields shortened only for the browser-facing BFF projection. Persisted evidence
+   * and export semantics remain full-fidelity.
+   */
+  readonly truncatedFields?: readonly (
+    | "title"
+    | "preconditions"
+    | "steps"
+    | "expectedResults"
+    | "tags"
+  )[];
 }
 
 // ─── Living Tests drift report (Epic #735, Issue #743/#744) ──────────────────────

@@ -140,4 +140,81 @@ describe("ChatHistoryPanel", () => {
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { title: "New title" }));
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, title: "New title" });
   });
+
+  // PA-04 — tabs must be linked to their tabpanel via aria-controls / aria-labelledby.
+  it("tabs carry aria-controls pointing to the tabpanel (PA-04)", () => {
+    renderPanel();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    const panelId = tabs[0]?.getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    // Both tabs control the same panel (single panel, switching content).
+    expect(tabs[1]?.getAttribute("aria-controls")).toBe(panelId);
+    const panel = document.getElementById(panelId as string);
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveAttribute("role", "tabpanel");
+  });
+
+  it("tabpanel is labelled by the active tab (PA-04)", () => {
+    renderPanel();
+    const activeTab = screen.getByRole("tab", { name: /active/i });
+    const tabId = activeTab.getAttribute("id");
+    expect(tabId).toBeTruthy();
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", tabId);
+  });
+
+  it("tabpanel aria-labelledby updates when Deleted tab is selected (PA-04)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    const deletedTabId = screen.getByRole("tab", { name: /deleted/i }).getAttribute("id");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", deletedTabId);
+  });
+
+  // PA-05 — empty rename must not silently discard; field stays open with aria-invalid.
+  it("keeps the rename field open with aria-invalid on empty submit (PA-05)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    // Field must still be present and marked invalid — not silently dismissed.
+    expect(renameInput).toBeInTheDocument();
+    expect(renameInput).toHaveAttribute("aria-invalid", "true");
+    expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  it("empty rename shows an associated error message via aria-describedby (PA-05)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const describedById = renameInput.getAttribute("aria-describedby");
+    expect(describedById).toBeTruthy();
+    const errorEl = document.getElementById(describedById as string);
+    expect(errorEl).not.toBeNull();
+    expect(errorEl?.textContent).toMatch(/empty/i);
+  });
+
+  it("rename error clears when the user starts typing again (PA-05)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    // Error is shown; now type to clear it.
+    await user.type(renameInput, "x");
+    expect(renameInput).not.toHaveAttribute("aria-invalid", "true");
+  });
 });

@@ -6,7 +6,13 @@
 // gap from the #729 review).
 
 import { describe, expect, it } from "vitest";
-import { buildConnectedRunSources, resolveConnectedFilePath } from "./connectedSources";
+import {
+  buildConnectedRunSources,
+  connectedRunSourcesCfgFromInlineSources,
+  connectedRunSourcesCfgFromSources,
+  connectedRunSourcesFromWindowCfg,
+  resolveConnectedFilePath,
+} from "./connectedSources";
 import { MAX_SCOPES } from "../../hooks/workspaceActions";
 
 describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
@@ -38,6 +44,15 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
       "capsule",
       "capsule-set",
       "figma-snapshot",
+    ]);
+  });
+
+  it("folds a lone connected capsule-set into a single capsule-set source (#710 #718)", () => {
+    // A Connector window bound as a capsule-set with nothing else connected must yield exactly one
+    // capsule-set source — the server expands the set into its member capsules at ingestion.
+    const sources = buildConnectedRunSources({ connectedCapsuleSetIds: ["set-regulatory"] });
+    expect(sources).toEqual([
+      { kind: "capsule-set", label: "set-regulatory", capsuleSetId: "set-regulatory" },
     ]);
   });
 
@@ -132,6 +147,20 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
     expect(sources.filter((s) => s.kind === "capsule")).toHaveLength(0);
   });
 
+  it("subjects figma snapshots to the SAME global cap — they do not escape the break (#729 #750)", () => {
+    // Figma is LAST in the precedence order, so it is the kind most likely to be dropped at the cap.
+    // 16 folder roots already fill MAX_SCOPES; the trailing figma snapshot must hit the single global
+    // break and be dropped, not appended past the limit. Without this case the figma path through the
+    // cap is mutation-blind (the cap test above used only file + folders + capsules).
+    const folders = Array.from({ length: MAX_SCOPES }, (_unused, i) => `/folder-${i.toString()}`);
+    const sources = buildConnectedRunSources({
+      connectedRoots: folders,
+      connectedFigmaSnapshotRunIds: ["fig-overflow"],
+    });
+    expect(sources).toHaveLength(MAX_SCOPES);
+    expect(sources.filter((s) => s.kind === "figma-snapshot")).toHaveLength(0);
+  });
+
   it("returns an empty list when nothing is connected (manual-input fallback case)", () => {
     expect(buildConnectedRunSources({})).toEqual([]);
     expect(buildConnectedRunSources({ connectedRoots: [], connectedCapsuleIds: [] })).toEqual([]);
@@ -186,5 +215,82 @@ describe("resolveConnectedFilePath", () => {
     // trimTrailingSeparators("/") keeps the root as "/"; the separator guard then adds none, so the
     // join stays a single-separator "/docs/spec.md" (absolute AND correctly formed — #714 AC3).
     expect(resolveConnectedFilePath("/", "docs/spec.md")).toBe("/docs/spec.md");
+  });
+});
+
+describe("connected run source window cfg (#744)", () => {
+  it("serializes connected run sources into the qiRun scalar cfg field", () => {
+    const sources = [
+      { kind: "file" as const, label: "Fachkonzept.md", path: "/abs/Fachkonzept.md" },
+      { kind: "capsule" as const, label: "cap-a", capsuleId: "cap-a" },
+    ];
+    expect(connectedRunSourcesCfgFromSources(sources)).toEqual({
+      connectedSourcesJson: JSON.stringify(sources),
+    });
+  });
+
+  it("returns no cfg field for an empty source set", () => {
+    expect(connectedRunSourcesCfgFromSources([])).toEqual({});
+  });
+
+  it("filters requirements text out of inline sources before serializing window cfg", () => {
+    expect(
+      connectedRunSourcesCfgFromInlineSources([
+        { kind: "requirements", label: "paste", text: "do not carry raw text" },
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    ).toEqual({
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+  });
+
+  it("serializes explicit empty inline sources so reopened run cards clear stale handles", () => {
+    expect(
+      connectedRunSourcesCfgFromInlineSources([
+        { kind: "requirements", label: "paste", text: "do not carry raw text" },
+      ]),
+    ).toEqual({ connectedSourcesJson: "[]" });
+    expect(connectedRunSourcesFromWindowCfg({ connectedSourcesJson: "[]" })).toEqual([]);
+  });
+
+  it("parses the connectedSourcesJson field when present", () => {
+    const sources = [
+      { kind: "workspace" as const, label: "specs", path: "/abs/specs" },
+      { kind: "figma-snapshot" as const, label: "fig-run-1", snapshotRunId: "fig-run-1" },
+    ];
+    expect(
+      connectedRunSourcesFromWindowCfg({ connectedSourcesJson: JSON.stringify(sources) }),
+    ).toEqual(sources);
+  });
+
+  it("falls back to legacy connectedFilePath / connectedRoot cfg when JSON is absent", () => {
+    expect(
+      connectedRunSourcesFromWindowCfg({
+        connectedRoot: "/abs/specs",
+        connectedFilePath: "flows/payments.md",
+      }),
+    ).toEqual([{ kind: "file", label: "payments.md", path: "/abs/specs/flows/payments.md" }]);
+  });
+
+  it("round-trips legacy cfg into a carried connectedSourcesJson for a regenerated run", () => {
+    const sources = connectedRunSourcesFromWindowCfg({
+      connectedRoot: "/abs/specs",
+      connectedFilePath: "flows/payments.md",
+    });
+    const carried = connectedRunSourcesCfgFromSources(sources);
+    expect(connectedRunSourcesFromWindowCfg(carried)).toEqual(sources);
+  });
+
+  it("falls back to legacy cfg when connectedSourcesJson is malformed or not a connected-source array", () => {
+    expect(
+      connectedRunSourcesFromWindowCfg({
+        connectedSourcesJson: JSON.stringify([
+          { kind: "requirements", label: "paste", text: "raw" },
+        ]),
+        connectedRoot: "/abs/specs",
+      }),
+    ).toEqual([{ kind: "workspace", label: "specs", path: "/abs/specs" }]);
   });
 });

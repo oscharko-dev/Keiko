@@ -432,7 +432,9 @@ describe("keiko-contracts package surface", () => {
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:forgotten");
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:retrieved");
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-used");
-    expect(mod.MEMORY_AUDIT_EVENT_KINDS.length).toBe(11);
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-omitted");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-write-candidate");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS.length).toBe(13);
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryAuditEvent = import("./index.js").MemoryAuditEvent;
     type _MemoryAuditEventKind = import("./index.js").MemoryAuditEventKind;
@@ -443,7 +445,7 @@ describe("keiko-contracts package surface", () => {
   it("memory audit event subpath is importable as @oscharko-dev/keiko-contracts/memory-audit-events (#214)", async () => {
     const subpath = await import("./memory-audit-events.js");
     expect(subpath.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
-    expect(subpath.MEMORY_AUDIT_EVENT_KINDS.length).toBe(11);
+    expect(subpath.MEMORY_AUDIT_EVENT_KINDS.length).toBe(13);
     expect(subpath.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
   });
 

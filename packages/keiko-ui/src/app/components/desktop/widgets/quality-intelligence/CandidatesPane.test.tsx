@@ -18,6 +18,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CandidatesPane } from "./CandidatesPane";
 import type { QualityIntelligenceUiCandidate } from "@oscharko-dev/keiko-contracts";
+import type { CandidateQualityVerdict } from "./qiShared";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -30,9 +31,11 @@ import type { QualityIntelligenceUiCandidate } from "@oscharko-dev/keiko-contrac
 
 let candidateCounter = 0;
 
-function makeCandidate(
-  overrides: Partial<QualityIntelligenceUiCandidate> = {},
-): QualityIntelligenceUiCandidate {
+type TestCandidate = QualityIntelligenceUiCandidate & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+};
+
+function makeCandidate(overrides: Partial<TestCandidate> = {}): TestCandidate {
   candidateCounter += 1;
   const id = `tc-${String(candidateCounter).padStart(3, "0")}`;
   return {
@@ -51,7 +54,7 @@ function makeCandidate(
   };
 }
 
-function makeCandidates(count: number): QualityIntelligenceUiCandidate[] {
+function makeCandidates(count: number): TestCandidate[] {
   return Array.from({ length: count }, () => makeCandidate());
 }
 
@@ -495,6 +498,64 @@ describe("CandidatesPane — weak-test flag", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — candidate quality verdict (Epic #736 audit)
+// ---------------------------------------------------------------------------
+
+describe("CandidatesPane — candidate quality verdict", () => {
+  it("renders the judge verdict score and dimension rationales", () => {
+    const c = makeCandidate({
+      qualityVerdict: {
+        verdict: "strong",
+        score: 87.5,
+        overallRationale: "Strong enough for audit.",
+        dimensions: [
+          { name: "verifiability", score: 90, rationale: "Expected result is measurable." },
+          { name: "atomicity", score: 85, rationale: "Covers one behavior." },
+          { name: "determinism", score: 95, rationale: "No timing dependency." },
+          { name: "ac-fidelity", score: 80, rationale: "Matches the acceptance criteria." },
+        ],
+      },
+    });
+
+    render(<CandidatesPane candidates={[c]} />);
+
+    expect(screen.getByTestId("qi-quality-verdict")).toBeInTheDocument();
+    expect(screen.getByText("Quality verdict")).toBeInTheDocument();
+    expect(screen.getByText("Strong - 88/100")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Verifiability 90: Expected result is measurable\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/AC fidelity 80: Matches the acceptance criteria\./),
+    ).toBeInTheDocument();
+  });
+
+  it("names the judge verdict note for assistive tech", () => {
+    const c = makeCandidate({
+      qualityVerdict: {
+        verdict: "weak",
+        score: 40,
+        overallRationale: "Too broad to audit.",
+        dimensions: [
+          { name: "verifiability", score: 40, rationale: "Vague result." },
+          { name: "atomicity", score: 40, rationale: "Too many concerns." },
+          { name: "determinism", score: 40, rationale: "Depends on timing." },
+          { name: "ac-fidelity", score: 40, rationale: "Partial match only." },
+        ],
+      },
+    });
+
+    render(<CandidatesPane candidates={[c]} />);
+
+    expect(
+      screen.getByRole("note", {
+        name: /Quality judge verdict: Weak, 40 out of 100\. Too broad to audit\./i,
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — boundary and edge cases
 // ---------------------------------------------------------------------------
 
@@ -627,6 +688,24 @@ describe("CandidatesPane — inline editing", () => {
     expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
   });
 
+  it("returns focus to the Edit button after a successful save (no keyboard dead-end)", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    render(<CandidatesPane candidates={[makeCandidate({ title: "Old title" })]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByRole("textbox", { name: /^title$/i });
+    expect(titleInput).toHaveFocus();
+    await user.clear(titleInput);
+    await user.type(titleInput, "New title");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    // After the save resolves the form unmounts; focus must return to the Edit trigger rather than
+    // dropping to <body>. This exercises the Save-close path — distinct from the Cancel-close path
+    // above, which restores focus synchronously rather than after an awaited save.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
+    });
+  });
+
   it("renders the governance note and disables actions when governance is blocked", () => {
     render(
       <CandidatesPane
@@ -682,6 +761,28 @@ describe("CandidatesPane — inline editing", () => {
       await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required."),
     ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: /edit editable/i })).toBeInTheDocument();
+  });
+
+  it("surfaces the validation error when a required field is cleared (submits an empty list)", async () => {
+    const user = userEvent.setup();
+    const candidate = makeCandidate({
+      title: "Has steps",
+      steps: ["Navigate to the page", "Click submit"],
+    });
+    const onEdit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('QI_BAD_EDIT: The "steps" field is empty or invalid.'));
+    render(<CandidatesPane candidates={[candidate]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.clear(screen.getByRole("textbox", { name: /steps/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    // Clearing a required list field submits an empty list; the server's minItems:1 gate rejects it
+    // and the UI surfaces the coded error while keeping the form open with the reviewer's edits.
+    expect(onEdit).toHaveBeenCalledWith(candidate.id, { steps: [] });
+    expect(
+      await screen.findByText('QI_BAD_EDIT: The "steps" field is empty or invalid.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("form")).toBeInTheDocument();
   });
 
   it("clears the save error when the reviewer edits the form again", async () => {

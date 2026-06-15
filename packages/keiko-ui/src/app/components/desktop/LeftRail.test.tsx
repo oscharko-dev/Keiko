@@ -177,3 +177,40 @@ describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
     }
   });
 });
+
+// SH-01 (WCAG 4.1.2) — theme-toggle button aria-pressed tracks the active theme.
+describe("LeftRail — theme-toggle aria-pressed (SH-01)", () => {
+  it("sets aria-pressed=true on the theme button when light theme is active", () => {
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={vi.fn()}
+        onNewChat={vi.fn()}
+        theme="light"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    // When light theme is active the button label is "Dark mode" (next action).
+    expect(screen.getByRole("button", { name: "Dark mode" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("sets aria-pressed=false on the theme button when dark theme is active", () => {
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={vi.fn()}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    // When dark theme is active the button label is "Light mode" (next action).
+    expect(screen.getByRole("button", { name: "Light mode" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+});

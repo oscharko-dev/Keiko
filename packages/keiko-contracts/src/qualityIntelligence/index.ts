@@ -190,6 +190,10 @@ export type {
   TestQualityRubricDimension,
   TestQualityJudgeVerdict,
 } from "./testQualityRubric.js";
+export {
+  TEST_QUALITY_RUBRIC_DIMENSIONS,
+  TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
+} from "./testQualityRubric.js";
 
 // ─── BFF wire shapes (Issue #280) ─────────────────────────────────────────────
 export type {

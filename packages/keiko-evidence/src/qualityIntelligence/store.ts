@@ -12,8 +12,8 @@
 // SQLite" alternative.
 //
 // Safety:
-// - Base dir is realpath-contained once at construction (reusing the assertContainedRealPath
-//   primitive); every child path is re-checked before any read/write/delete.
+// - Base dir is realpath-contained once at construction; every child path is derived from a
+//   validated runId and the lexical directory entry is inspected before overwrite/delete.
 // - File names are derived from the VALIDATED runId via assertValidRunId — no separator/`..`/NUL
 //   can reach the resolved path.
 // - Writes are atomic O_EXCL temp + rename. A partial write leaves a `.tmp` that is invisible to
@@ -34,11 +34,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
@@ -127,10 +123,9 @@ function existingQiBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined
   }
 }
 
-function containedQiManifestPath(runId: string, realBase: string, fs: WorkspaceFs): string {
+function lexicalQiManifestPath(runId: string, realBase: string): string {
   assertValidRunId(runId);
-  const lexical = resolveWithinWorkspace(realBase, `${runId}${QI_MANIFEST_SUFFIX}`);
-  return assertContainedRealPath(fs, realBase, lexical, `${runId}${QI_MANIFEST_SUFFIX}`);
+  return resolveWithinWorkspace(realBase, `${runId}${QI_MANIFEST_SUFFIX}`);
 }
 
 function isQiManifestName(name: string): boolean {
@@ -154,6 +149,14 @@ function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
     throw new EvidenceReadError(
       `cannot inspect QI manifest: ${error instanceof Error ? error.message : "unknown"}`,
     );
+  }
+}
+
+function assertWritableQiManifestEntry(target: string, fs: WorkspaceFs): void {
+  const entry = lstatSync(target, { throwIfNoEntry: false });
+  if (entry === undefined) return;
+  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+    throw new EvidenceWriteError("cannot overwrite a non-ledger QI manifest");
   }
 }
 
@@ -205,7 +208,7 @@ function reportQiLocation(baseDir: string, fs: WorkspaceFs, runId: string): stri
   const realBase = existingQiBaseDir(baseDir, fs);
   return realBase === undefined
     ? join(resolve(baseDir), `${runId}${QI_MANIFEST_SUFFIX}`)
-    : containedQiManifestPath(runId, realBase, fs);
+    : lexicalQiManifestPath(runId, realBase);
 }
 
 function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceManifest {
@@ -345,7 +348,8 @@ function recordQiManifest(
 ): string {
   assertValidRunId(manifest.runId);
   const realBase = prepareQiBaseDir(baseDir, fs);
-  const target = containedQiManifestPath(manifest.runId, realBase, fs);
+  const target = lexicalQiManifestPath(manifest.runId, realBase);
+  assertWritableQiManifestEntry(target, fs);
   atomicWriteQiManifest(target, JSON.stringify(manifest), randomSuffix);
   return target;
 }
@@ -356,7 +360,7 @@ function deleteQiManifest(baseDir: string, fs: WorkspaceFs, runId: string): bool
   if (realBase === undefined) {
     return false;
   }
-  const target = containedQiManifestPath(runId, realBase, fs);
+  const target = lexicalQiManifestPath(runId, realBase);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return false;
   }
@@ -414,7 +418,7 @@ export interface QualityIntelligenceRecordInput {
   readonly provenanceRefs: QualityIntelligenceEvidenceManifest["provenanceRefs"];
   /** Optional coverage matrix (per-atom status, refs only). Added in #738. */
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
-  /** Optional run quality score — percent of judged candidates rated "strong" [0-100]; null when judge was skipped. Added in #736. */
+  /** Optional run quality score — percent of candidates with a strong judge outcome [0-100]; null when judge was skipped. Added in #736. */
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
   /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];

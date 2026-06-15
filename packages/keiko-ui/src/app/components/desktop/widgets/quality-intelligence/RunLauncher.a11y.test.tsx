@@ -28,6 +28,24 @@ describe("RunLauncher connected-source banner — a11y (WCAG 2.2 AA)", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("has no violations and names the capsule when bound to a single Connector capsule (#710 #718)", async () => {
+    const { container } = render(<RunLauncher connectedCapsuleIds={["cap-policy"]} />);
+    const banner = await screen.findByTestId("qi-connected-source");
+    // The capsule id is opaque, so the kind ("Connected capsule") MUST be carried by text — a
+    // screen-reader user otherwise cannot tell what Generate will run against.
+    expect(banner.textContent).toContain("Connected capsule");
+    expect(banner.textContent).toContain("cap-policy");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no violations and names the capsule set when bound to a single capsule-set (#710 #718)", async () => {
+    const { container } = render(<RunLauncher connectedCapsuleSetIds={["set-regulatory"]} />);
+    const banner = await screen.findByTestId("qi-connected-source");
+    expect(banner.textContent).toContain("Connected capsule set");
+    expect(banner.textContent).toContain("set-regulatory");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("has no violations with several connected sources (N+1 list)", async () => {
     const { container } = render(
       <RunLauncher

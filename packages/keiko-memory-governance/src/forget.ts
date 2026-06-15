@@ -14,7 +14,7 @@
 //   Every envelope is revalidated through validateMemoryForget before returning.
 //
 // The two-stage shape is deliberate: callers can present the selection to the user for
-// confirmation (Memory Center UI #211) before materialising the destructive envelopes.
+// confirmation (MemoriaViva UI #211) before materialising the destructive envelopes.
 
 import type { MemoryForget, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 import { validateMemoryForget } from "@oscharko-dev/keiko-contracts/memory";

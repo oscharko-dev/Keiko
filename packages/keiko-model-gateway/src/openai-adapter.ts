@@ -7,17 +7,27 @@ import {
   AuthenticationError,
   CancelledError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
   TimeoutError,
   TransportError,
+  type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
-import { gatewayFetch, readJsonCapped, readSseStream } from "./http.js";
+import {
+  gatewayFetch,
+  OutboundHttpEgressError,
+  readJsonCapped,
+  readSseStream,
+  type OutboundHttpEgressErrorCode,
+} from "./http.js";
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type {
+  ChatMessageContentPart,
   CostClass,
   FinishReason,
   GatewayRequest,
@@ -30,6 +40,21 @@ import type {
 } from "./types.js";
 
 const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
+const GATEWAY_EGRESS_CODES: Record<OutboundHttpEgressErrorCode, GatewayEgressErrorCode> = {
+  PROXY_UNREACHABLE: ERROR_CODES.PROXY_UNREACHABLE,
+  PROXY_AUTH_REQUIRED: ERROR_CODES.PROXY_AUTH_REQUIRED,
+  PROXY_EGRESS_FAILED: ERROR_CODES.PROXY_EGRESS_FAILED,
+  PROXY_BLOCKED_BY_POLICY: ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
+  TLS_CA_FAILURE: ERROR_CODES.TLS_CA_FAILURE,
+};
+
+const GATEWAY_EGRESS_MESSAGES: Record<OutboundHttpEgressErrorCode, string> = {
+  PROXY_UNREACHABLE: "configured proxy is unreachable",
+  PROXY_AUTH_REQUIRED: "configured proxy requires authentication",
+  PROXY_EGRESS_FAILED: "configured proxy failed outbound egress",
+  PROXY_BLOCKED_BY_POLICY: "configured proxy blocked outbound egress",
+  TLS_CA_FAILURE: "TLS certificate verification failed for outbound egress",
+};
 
 export interface AdapterDeps {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -42,7 +67,7 @@ interface ChatRequestBody {
   readonly model: string;
   readonly messages: readonly {
     readonly role: string;
-    readonly content: string | null;
+    readonly content: ChatRequestMessageContent | null;
     readonly tool_call_id?: string | undefined;
     readonly tool_calls?:
       | readonly {
@@ -59,6 +84,25 @@ interface ChatRequestBody {
   readonly stream_options?: { readonly include_usage: boolean };
 }
 
+type ChatRequestMessageContent =
+  | string
+  | readonly (
+      | { readonly type: "text"; readonly text: string }
+      | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
+    )[];
+
+function buildMessageContent(
+  content: string,
+  parts: readonly ChatMessageContentPart[] | undefined,
+): ChatRequestMessageContent {
+  if (parts === undefined) return content;
+  return parts.map((part) =>
+    part.type === "text"
+      ? { type: "text" as const, text: part.text }
+      : { type: "image_url" as const, image_url: { url: part.image_url.url } },
+  );
+}
+
 function buildMessage(
   message: GatewayRequest["messages"][number],
 ): ChatRequestBody["messages"][number] {
@@ -72,7 +116,7 @@ function buildMessage(
     content:
       message.role === "assistant" && toolCalls !== undefined && toolCalls.length > 0
         ? null
-        : message.content,
+        : buildMessageContent(message.content, message.contentParts),
     ...(message.role === "tool" && message.toolCallId !== undefined
       ? { tool_call_id: message.toolCallId }
       : {}),
@@ -288,6 +332,18 @@ function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
   return { [headerName]: apiKeyHeaderValue(headerName, config.apiKey) };
 }
 
+function mapOutboundEgressError(
+  error: unknown,
+  secrets: readonly string[],
+): GatewayEgressError | undefined {
+  if (!(error instanceof OutboundHttpEgressError)) return undefined;
+  return new GatewayEgressError(
+    GATEWAY_EGRESS_CODES[error.code],
+    GATEWAY_EGRESS_MESSAGES[error.code],
+    secrets,
+  );
+}
+
 export class OpenAiAdapter implements ProviderAdapter {
   private readonly now: () => number;
 
@@ -417,6 +473,10 @@ export class OpenAiAdapter implements ProviderAdapter {
     if (error instanceof CancelledError || error instanceof TimeoutError) {
       return error;
     }
+    const egressError = mapOutboundEgressError(error, secrets);
+    if (egressError !== undefined) {
+      return egressError;
+    }
     return new TransportError(`stream read failed for '${config.modelId}'`, secrets);
   }
 
@@ -458,6 +518,10 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Error {
     if (cancel?.aborted === true) {
       return new CancelledError(`request for '${config.modelId}' cancelled`, secrets);
+    }
+    const egressError = mapOutboundEgressError(error, secrets);
+    if (egressError !== undefined) {
+      return egressError;
     }
     if (timeout.aborted) {
       return new TimeoutError(`request for '${config.modelId}' timed out`, secrets);

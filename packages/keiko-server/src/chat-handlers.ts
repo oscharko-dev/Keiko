@@ -22,12 +22,19 @@ import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
+  MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import {
+  DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
+  DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+  isMemorySuppressed,
+  retrieveMemoryContext,
+} from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   extractCandidatesFromUserText,
+  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -38,7 +45,7 @@ import {
   type ChatMessage,
   type Project,
 } from "./store/index.js";
-import { composeConversationPrompt } from "./conversation-prompt.js";
+import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
   validateConversationPayload,
   type ConversationAttachment,
@@ -50,6 +57,11 @@ import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
+import {
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+  SENSITIVE_MEMORY_REJECTION_REASON,
+} from "./memory-capture-policy.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import {
   conversationMemoryScopes,
@@ -287,8 +299,7 @@ function conversationForGateway(messages: readonly ChatMessage[]): GatewayConver
   return [
     {
       role: "system",
-      content:
-        "You are Keiko, an enterprise developer-assist AI. Be concise, practical, and explicit about uncertainty. Do not claim tool access you do not have in this chat.",
+      content: CONVERSATION_SYSTEM_PROMPT,
     },
     ...usable,
   ];
@@ -659,15 +670,29 @@ function recordConversationMemoryRetrieval(
 // Gathers the candidate memory ids the retrieval layer will rank for these scopes, so the caller
 // can score each against the query embedding BEFORE retrieval runs. A superset of the eventually-
 // ranked set is harmless: ids the ranker filters out simply never read their semantic score.
+function isSemanticRetrievalCandidate(record: MemoryRecord, nowMs: number): boolean {
+  if (record.status === "superseded") {
+    return false;
+  }
+  return !isMemorySuppressed(record, nowMs, DEFAULT_STALE_CONFIDENCE_THRESHOLD).suppressed;
+}
+
 function gatherCandidateIds(
   vault: MemoryVaultStore,
   scopes: readonly MemoryScope[],
+  nowMs: number,
 ): readonly MemoryId[] {
   const port = vaultAsQueryPort(vault);
   const ids: MemoryId[] = [];
   const seen = new Set<string>();
   for (const scope of scopes) {
-    for (const record of port.listByScope(scope)) {
+    for (const record of port.listByScope(scope, {
+      includeArchived: true,
+      includeForgotten: true,
+      includeExpired: true,
+      maxResults: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
+    })) {
+      if (!isSemanticRetrievalCandidate(record, nowMs)) continue;
       if (seen.has(record.id)) continue;
       seen.add(record.id);
       ids.push(record.id);
@@ -686,11 +711,14 @@ async function buildSemanticScores(
   queryText: string,
   candidateIds: readonly MemoryId[],
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
+  if (candidateIds.length === 0) return undefined;
+  const scores = new Map<MemoryId, number>();
+  const embeddings = vault.getEmbeddings(candidateIds);
+  if (embeddings.size === 0) return undefined;
   const queryEmbedding = await embedMemoryText(deps, queryText);
   if (queryEmbedding === null) return undefined;
-  const scores = new Map<MemoryId, number>();
   for (const id of candidateIds) {
-    const stored = vault.getEmbedding(id);
+    const stored = embeddings.get(id);
     if (stored === undefined) continue;
     scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
   }
@@ -708,6 +736,12 @@ function toMemoryResult(
         memoryId: String(item.memoryId),
         bodyExcerpt: item.bodyExcerpt,
         inclusionReason: item.inclusionReason,
+        sourceKind: item.sourceKind,
+        ...(item.captureRationale !== undefined ? { captureRationale: item.captureRationale } : {}),
+        sensitivity: item.sensitivity,
+        confidence: item.confidence,
+        status: item.status,
+        capturedAt: item.capturedAt,
       })),
       budget: retrieval.budget,
     },
@@ -729,19 +763,28 @@ export async function buildMemoryResult(
     return emptyMemoryResult(memory.enabled);
   }
   const scopes = conversationMemoryScopes(context);
-  const semanticById = await buildSemanticScores(
-    deps,
-    vault,
-    request.content,
-    gatherCandidateIds(vault, scopes),
-  );
+  const budgetTokens = memory.budgetTokens;
+  if (budgetTokens === 0) {
+    return emptyMemoryResult(true);
+  }
+  const nowMs = Date.now();
+  const safeForSecondaryModel =
+    memoryTextEgressRejectionReason(request.content, memoryCapturePolicyForDeps(deps)) === null;
+  const semanticById = safeForSecondaryModel
+    ? await buildSemanticScores(
+        deps,
+        vault,
+        request.content,
+        gatherCandidateIds(vault, scopes, nowMs),
+      )
+    : undefined;
   const retrieval = retrieveMemoryContext(
     {
       scopes,
       queryText: request.content,
-      ...(memory.budgetTokens !== undefined ? { budgetTokens: memory.budgetTokens } : {}),
+      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
       ...(semanticById !== undefined ? { semanticById } : {}),
-      nowMs: Date.now(),
+      nowMs,
     },
     vaultAsQueryPort(vault),
   );
@@ -776,6 +819,9 @@ async function captureActionFromOutcome(
   switch (outcome.kind) {
     case "candidate": {
       if (deps.memoryVault === undefined) return null;
+      if (!isPersistableMemoryCandidate(outcome)) {
+        return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+      }
       const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
       const record = buildMemoryRecordFromProposal(proposalId, outcome);
       if (record === null) return null;
@@ -818,7 +864,9 @@ async function captureMemoryActions(
     return [];
   }
   const outcomes = extractCandidatesFromUserText(request.content, buildCaptureContext(context), {
-    resolver: createMemoryTargetResolver(deps.memoryVault),
+    ...memoryCapturePolicyForDeps(deps, {
+      resolver: createMemoryTargetResolver(deps.memoryVault),
+    }),
   });
   const actions: ConversationMemoryActionWire[] = [];
   for (const outcome of outcomes) {

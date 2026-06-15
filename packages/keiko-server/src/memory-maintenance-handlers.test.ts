@@ -186,7 +186,7 @@ describe("handleRunMaintenance", () => {
     ).toHaveLength(1);
   });
 
-  it("auto-supersedes the older memory of a pairwise correction conflict", () => {
+  it("returns a review item instead of auto-superseding a pairwise correction conflict", () => {
     const vault = makeVault();
     const now = Date.now();
     insert(vault, {
@@ -202,15 +202,22 @@ describe("handleRunMaintenance", () => {
       createdAt: now - DAY,
     });
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
-    expect(counts(result).superseded).toBe(1);
-    expect(vault.getMemory(mid("old"))?.status).toBe("superseded");
+    const body = result.body as {
+      reviewItems: readonly { reason: string }[];
+      superseded: number;
+      reviewItemsCreated: number;
+    };
+    expect(body.superseded).toBe(0);
+    expect(body.reviewItemsCreated).toBe(1);
+    expect(body.reviewItems[0]?.reason).toBe("potential-conflict");
+    expect(vault.getMemory(mid("old"))?.status).toBe("accepted");
     expect(vault.getMemory(mid("new"))?.status).toBe("accepted");
   });
 
-  it("promotes proposed conflicts AND supersedes the older one in a single pass", () => {
+  it("promotes proposed conflicts and surfaces review evidence in a single pass", () => {
     // Regression guard for the promote-before-consolidate ordering. Consolidation only inspects
     // `accepted` records, so freshly-captured `proposed` conflicts must be promoted FIRST within the
-    // same pass — otherwise a single "Run maintenance" promotes but supersedes nothing until a
+    // same pass — otherwise a single "Run maintenance" promotes but detects nothing until a
     // second run.
     const vault = makeVault();
     const now = Date.now();
@@ -232,8 +239,15 @@ describe("handleRunMaintenance", () => {
     });
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
     expect(counts(result).promoted).toBe(2);
-    expect(counts(result).superseded).toBe(1);
-    expect(vault.getMemory(mid("old"))?.status).toBe("superseded");
+    const body = result.body as {
+      reviewItems: readonly { reason: string }[];
+      superseded: number;
+      reviewItemsCreated: number;
+    };
+    expect(body.superseded).toBe(0);
+    expect(body.reviewItemsCreated).toBe(1);
+    expect(body.reviewItems[0]?.reason).toBe("potential-conflict");
+    expect(vault.getMemory(mid("old"))?.status).toBe("accepted");
     expect(vault.getMemory(mid("new"))?.status).toBe("accepted");
   });
 

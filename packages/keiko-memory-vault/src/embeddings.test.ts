@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { insertMemoryRow } from "./memories.js";
 import { openTestDb, TEST_CIPHER } from "./_support.js";
-import { getEmbeddingRow, MAX_EMBEDDING_DIMENSIONS, upsertEmbeddingRow } from "./embeddings.js";
+import {
+  getEmbeddingRow,
+  getEmbeddingRows,
+  MAX_EMBEDDING_DIMENSIONS,
+  upsertEmbeddingRow,
+} from "./embeddings.js";
 import { gateEmbeddingInput } from "./validate.js";
 import { MemoryStorageValidationError } from "./errors.js";
 import type { MemoryEmbeddingMetric } from "./types.js";
@@ -121,6 +126,26 @@ describe("embeddings round-trip", () => {
     const db = openTestDb();
     insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
     expect(getEmbeddingRow(db, "m1" as MemoryId, TEST_CIPHER)).toBeUndefined();
+  });
+
+  it("bulk-reads available embeddings by memory id", () => {
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m2"), TEST_CIPHER);
+    upsertEmbeddingRow(
+      db,
+      "m1" as MemoryId,
+      { provider: "p", modelId: "m", metric: "cosine", vector: new Float32Array([1, 0]) },
+      1,
+      TEST_CIPHER,
+    );
+    const rows = getEmbeddingRows(
+      db,
+      ["m1" as MemoryId, "missing" as MemoryId, "m1" as MemoryId, "m2" as MemoryId],
+      TEST_CIPHER,
+    );
+    expect([...rows.keys()]).toEqual(["m1" as MemoryId]);
+    expect(Array.from(rows.get("m1" as MemoryId)?.vector ?? [])).toEqual([1, 0]);
   });
 
   it("cascades when the memory is deleted (FK ON DELETE CASCADE)", () => {

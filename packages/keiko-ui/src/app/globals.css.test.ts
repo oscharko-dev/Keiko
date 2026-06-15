@@ -264,6 +264,47 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
+  it("quality score tiers use the state tokens that are contrast-pinned in both themes", () => {
+    const highBlock = cssBlock(".qi-quality-high {");
+    expect(highBlock).toContain("background: var(--accent-dim)");
+    expect(highBlock).toContain("color: var(--accent-text)");
+
+    const midBlock = cssBlock(".qi-quality-mid {");
+    expect(midBlock).toContain("background: color-mix(in oklch, var(--warn) 20%, transparent)");
+    expect(midBlock).toContain("color: var(--warn)");
+
+    const lowBlock = cssBlock(".qi-quality-low {");
+    expect(lowBlock).toContain("background: color-mix(in oklch, var(--danger) 22%, transparent)");
+    expect(lowBlock).toContain("color: var(--fg)");
+  });
+
+  it("weak-test flag text stays on primary or muted foreground tokens over a card-tinted surface", () => {
+    const flagBlock = cssBlock(".qi-weak-flag {");
+    expect(flagBlock).toContain("background: color-mix(in oklch, var(--danger) 10%, var(--card))");
+
+    const badgeBlock = cssBlock(".qi-weak-flag-badge {");
+    expect(badgeBlock).toContain("color: var(--fg)");
+
+    const reasonBlock = cssBlock(".qi-weak-flag-reason {");
+    expect(reasonBlock).toContain("color: var(--fg-muted)");
+  });
+});
+
+describe("Conversation memory switch target size (WCAG 2.5.8)", () => {
+  it(".auto-toggle is at least 24px tall and has a larger hit area", () => {
+    const block = cssBlock(".auto-toggle {");
+    expect(block).toContain("width: 42px");
+    expect(block).toContain("height: 24px");
+  });
+
+  it(".auto-toggle thumb uses the enlarged 18px geometry", () => {
+    const block = cssBlock(".auto-toggle span");
+    expect(block).toContain("width: 18px");
+    expect(block).toContain("height: 18px");
+  });
+});
+
 // ─── Fix 4: dense desktop text clarity ───────────────────────────────────────
 
 describe("Fix 4 — dense desktop text clarity", () => {
@@ -456,5 +497,162 @@ describe("uiux-fix F013 — header responsive stages and tab truncation", () => 
     expect(css).not.toContain(".tb-newtab {");
     expect(css).not.toContain(".tb-newtab:hover");
     expect(css).not.toContain(".tb-newtab:focus-visible");
+  });
+});
+
+// ─── uiux-fix A11Y (WCAG 2.2 AA audit) — focus rings, reduced-motion, contrast ──
+
+describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)", () => {
+  it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
+    const block = cssBlock(".footer:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it("adds a visible .workspace:focus-visible ring (WC-01 keyboard pan surface)", () => {
+    const block = cssBlock(".workspace:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
+    const block = cssBlock(".tr-caret-btn:focus-visible");
+    expect(block).toContain("box-shadow: 0 0 0 1px var(--bg)");
+  });
+});
+
+describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL)", () => {
+  const gated = [
+    ".cmp-box",
+    ".cmp-send",
+    ".ws-shader",
+    ".proj-caret",
+    ".tr-caret",
+    ".auto-toggle span",
+    ".attach-drop-zone",
+    ".win-zoom",
+    ".arun-prog i",
+    ".pal-card",
+    ".mc-row",
+    ".connector-picker-retry",
+    ".files-retry",
+    ".scope-grounding-select",
+  ];
+
+  // Isolate the appended MO-ALL no-preference block by its marker comment, then
+  // brace-match to its close so the membership checks can't leak into other blocks.
+  const marker = css.indexOf("MO-ALL — gate remaining interaction transitions");
+  const blockOpen = css.indexOf("@media (prefers-reduced-motion: no-preference)", marker);
+  let depth = 0;
+  let blockEnd = blockOpen;
+  let started = false;
+  for (let i = css.indexOf("{", blockOpen); i < css.length; i++) {
+    if (css[i] === "{") {
+      depth++;
+      started = true;
+    } else if (css[i] === "}") {
+      depth--;
+    }
+    if (started && depth === 0) {
+      blockEnd = i;
+      break;
+    }
+  }
+  const moBlock = css.slice(blockOpen, blockEnd + 1);
+
+  it("the MO-ALL no-preference block exists after its marker", () => {
+    expect(marker).toBeGreaterThan(-1);
+    expect(blockOpen).toBeGreaterThan(marker);
+  });
+
+  for (const sel of gated) {
+    it(`${sel} transition is opted back in only inside the no-preference block`, () => {
+      expect(moBlock).toContain(`${sel} {`);
+    });
+  }
+
+  it("composer, send button and pal-card no longer carry an ungated base transition", () => {
+    // Reverting any of these (re-adding the base transition) re-fails this guard.
+    expect(cssBlock(".cmp-box {")).not.toContain("transition");
+    expect(cssBlock(".cmp-send {")).not.toContain("transition");
+    expect(cssBlock(".pal-card {")).not.toContain("transition");
+  });
+});
+
+describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
+  it("dark .hl-com uses --fg-dim, not the sub-AA #6b7787 (CC-04)", () => {
+    const block = cssBlock(".hl-com {");
+    expect(block).toContain("var(--fg-dim)");
+    expect(block).not.toContain("#6b7787");
+  });
+
+  it("invalid connect-target window is dimmed to 0.7, not the sub-AA 0.42 (TZ-01)", () => {
+    const block = cssBlock('.window[data-conn="invalid"] {');
+    expect(block).toContain("opacity: 0.7");
+    expect(block).not.toContain("opacity: 0.42");
+  });
+
+  it("required-field marker is a CSS ::after glyph keyed off data-required (QI-01)", () => {
+    const block = cssBlock('.qi-edit-label[data-required="true"]::after');
+    expect(block).toContain('content: " *"');
+  });
+});
+
+// ─── Figma snapshot button target size (WCAG 2.5.8) — #756 audit ─────────────
+
+describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => {
+  it(".figma-snapshot-cancel-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-cancel-btn {");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-cancel-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
+    const block = cssBlock(".figma-snapshot-cancel-btn:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".figma-snapshot-revoke-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-revoke-btn,");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
+    const block = cssBlock(".figma-snapshot-revoke-btn:focus-visible,");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".figma-snapshot-revoke-confirm-btn is covered by the shared revoke block (WCAG 2.5.8)", () => {
+    // The shared selector block names all three revoke buttons.
+    const idx = css.indexOf(".figma-snapshot-revoke-btn,");
+    expect(idx, ".figma-snapshot-revoke-btn shared block not found").toBeGreaterThan(-1);
+    const block = css.slice(idx, css.indexOf("}", idx) + 1);
+    expect(block).toContain(".figma-snapshot-revoke-confirm-btn");
+    expect(block).toContain(".figma-snapshot-revoke-cancel-btn");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-revoke-cancel-btn focus ring is covered by the shared revoke focus block (WCAG 2.4.7)", () => {
+    const idx = css.indexOf(".figma-snapshot-revoke-btn:focus-visible,");
+    expect(idx, ".figma-snapshot-revoke-btn:focus-visible shared block not found").toBeGreaterThan(
+      -1,
+    );
+    const block = css.slice(idx, css.indexOf("}", idx) + 1);
+    expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
+    expect(block).toContain("outline: 2px solid var(--accent)");
+  });
+
+  it(".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-code-file-path {");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-scopes-summary meets the 24px minimum height (WCAG 2.5.8)", () => {
+    const block = cssBlock(".figma-snapshot-scopes-summary {");
+    expect(block).toContain("min-height: 24px");
+  });
+
+  it(".figma-snapshot-screen-image has stable thumbnail dimensions for the gallery", () => {
+    const block = cssBlock(".figma-snapshot-screen-image {");
+    expect(block).toContain("width: 72px");
+    expect(block).toContain("height: 54px");
+    expect(block).toContain("object-fit: contain");
   });
 });

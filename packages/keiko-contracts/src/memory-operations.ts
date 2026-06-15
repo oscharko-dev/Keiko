@@ -34,7 +34,7 @@ import type {
 
 // ─── Proposal ─────────────────────────────────────────────────────────────────
 // A candidate memory that has been captured but not yet reviewed. The capture layer
-// (#207) emits these; the conversation center (#212) or Memory Center UI (#211) presents
+// (#207) emits these; the conversation center (#212) or MemoriaViva UI (#211) presents
 // them; the user accepts or rejects.
 //
 // The proposal carries the FULL prospective record body, payload, scope, type, and
@@ -148,7 +148,7 @@ export interface MemoryUnpin {
 
 // ─── Archive ──────────────────────────────────────────────────────────────────
 // Non-destructive: the record is removed from active retrieval but remains readable in
-// the Memory Center for restoration. Status transitions `accepted → archived`.
+// MemoriaViva for restoration. Status transitions `accepted → archived`.
 export interface MemoryArchive {
   readonly schemaVersion: "1";
   readonly memoryId: MemoryId;
@@ -266,8 +266,9 @@ export const MEMORY_UPDATE_FIELDS: readonly MemoryUpdateField[] = [
 
 // ─── Audit record envelope ────────────────────────────────────────────────────
 // Persisted by the audit layer (#214). Carries the action discriminator + minimum
-// metadata. `initiatorSurface` lets the audit reader distinguish a Memory Center action
-// from an automated consolidation pass without re-deriving from the action kind.
+// metadata. `initiatorSurface` lets the audit reader distinguish a MemoriaViva UI action
+// (encoded as the stable `memory-center` literal) from an automated consolidation pass without
+// re-deriving from the action kind.
 export type MemoryAuditInitiatorSurface =
   | "memory-center"
   | "conversation-center"

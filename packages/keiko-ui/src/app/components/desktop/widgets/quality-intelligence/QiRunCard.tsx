@@ -171,16 +171,32 @@ const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "unc
     uncovered: "qi-cov-uncovered",
   };
 
+// Gap-radar display severity: uncovered (no covering test at all) is the most severe gap, then
+// weakly-covered (only incidental coverage). The server emits coverageByAtom sorted by atomId, NOT
+// by severity (coverageRelevance.buildAtomCoverageStatuses), so without this the gap radar lists
+// gaps in opaque hash order and the worst gaps can fall below the INITIAL_VISIBLE_ROWS fold on
+// large runs. Surfacing uncovered first mirrors the server's sort-before-truncate invariant for
+// findings (#738/#1066) and satisfies the #739 intent: "see at a glance what is NOT tested".
+const COVERAGE_GAP_SEVERITY_ORDER: Readonly<
+  Record<"covered" | "weakly-covered" | "uncovered", number>
+> = { uncovered: 0, "weakly-covered": 1, covered: 2 };
+
 function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
   const [visibleGaps, setVisibleGaps] = useState(INITIAL_VISIBLE_ROWS);
   // Derive once per fetch — coverageByAtom only changes when `detail` is replaced, not on the
   // show-more state change (the old code re-filtered the whole matrix on every render).
   const { total, coveredCount, gaps } = useMemo(() => {
     const rows = detail.coverageByAtom;
+    // `.filter()` returns a fresh array, so the in-place `.sort()` never mutates detail.coverageByAtom.
+    // Array.prototype.sort is stable (ES2019+), so atoms keep their server atomId order within a tier.
     return {
       total: rows.length,
       coveredCount: rows.filter((r) => r.status === "covered").length,
-      gaps: rows.filter((r) => r.status !== "covered"),
+      gaps: rows
+        .filter((r) => r.status !== "covered")
+        .sort(
+          (a, b) => COVERAGE_GAP_SEVERITY_ORDER[a.status] - COVERAGE_GAP_SEVERITY_ORDER[b.status],
+        ),
     };
   }, [detail.coverageByAtom]);
   if (total === 0) return null;

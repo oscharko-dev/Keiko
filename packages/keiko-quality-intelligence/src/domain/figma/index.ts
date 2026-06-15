@@ -22,6 +22,7 @@ export type {
   ScreenTestBaseline,
   StructuralTestCategory,
   StructuralTestItem,
+  StructuralTestOutcome,
 } from "./screenIrTestBaseline.js";
 
 // Vision merge that structurally enforces "vision augments, never overrides the IR" (Issue #754).
@@ -81,13 +82,19 @@ export {
 export type { FigmaSourceNode } from "./sourceNode.js";
 
 export type {
+  AlignItems,
   BoundingBox,
   ColorToken,
   DesignTokens,
   ImageFillRef,
   InteractionHint,
   InterScreenLink,
+  IrLayout,
   IrNode,
+  IrSizing,
+  IrTypography,
+  LayoutMode,
+  LayoutSizing,
   RadiusToken,
   ReductionReport,
   ScreenIr,

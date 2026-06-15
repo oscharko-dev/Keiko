@@ -42,10 +42,18 @@ const collectTypography = (node: FigmaSourceNode, out: Map<string, TypographyTok
   if (nodeType(node) !== "TEXT") return;
   const style = asNode(node.style);
   if (style === undefined) return;
-  const fontFamily = readString(style.fontFamily) ?? "";
-  const fontSize = readNumber(style.fontSize) ?? 0;
-  const fontWeight = readNumber(style.fontWeight) ?? 0;
-  const lineHeight = readNumber(style.lineHeightPx) ?? 0;
+  const fontFamily = readString(style.fontFamily);
+  const fontSize = readNumber(style.fontSize);
+  const fontWeight = readNumber(style.fontWeight);
+  const lineHeight = readNumber(style.lineHeightPx);
+  if (
+    fontFamily === undefined ||
+    fontSize === undefined ||
+    fontWeight === undefined ||
+    lineHeight === undefined
+  ) {
+    return;
+  }
   const id = `typography:${fontFamily}|${String(fontSize)}|${String(fontWeight)}|${String(lineHeight)}`;
   out.set(id, { id, kind: "typography", fontFamily, fontSize, fontWeight, lineHeight });
 };

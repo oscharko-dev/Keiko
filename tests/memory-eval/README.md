@@ -6,7 +6,7 @@ Synthetic-fixture benchmark for the Governed Enterprise Memory Vault stack
 
 The harness composes the production memory packages (`keiko-memory-vault`,
 `keiko-memory-capture`, `keiko-memory-governance`, `keiko-memory-retrieval`)
-with deterministic clocks and counter-based IDs, then runs nine scenarios
+with deterministic clocks and counter-based IDs, then runs ten scenarios
 that each cover one acceptance criterion of the epic.
 
 ## How to run
@@ -95,10 +95,16 @@ kind requires its matching coordinate field (e.g. `userId` for `user`).
 | `stale-memories.json`        | suppressed-memory                       |
 | `forget-targets.json`        | selective-forgetting                    |
 | `cross-scope-collision.json` | cross-scope-isolation                   |
+| `workspace-scale.json`       | workspace-scale-boundary                |
 | `invalid-scope.json`         | `_support.test.ts` (fixture validation) |
 
 `error-propagation` does not load a fixture; it constructs a malformed record
 inline because the assertion is that the validator REJECTS it.
+
+`workspace-scale-boundary` expands its workspace fixture with deterministic
+synthetic noise at runtime so the scenario exercises the retrieval package's
+500-record `listByScope` cap without committing hundreds of near-identical
+fixture rows.
 
 ## Scorecard schema
 
@@ -106,7 +112,7 @@ inline because the assertion is that the validator REJECTS it.
 {
   "evalSchemaVersion": "1",
   "generatedAt": 1700000000000,
-  "totals": { "scenarios": 9, "passed": 9, "failed": 0 },
+  "totals": { "scenarios": 10, "passed": 10, "failed": 0 },
   "scenarios": [{ "name": "accurate-retrieval", "passed": true, "evidence": "..." }],
 }
 ```

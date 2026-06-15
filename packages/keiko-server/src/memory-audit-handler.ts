@@ -11,12 +11,15 @@
 //   3. Appends the audit event to a date-bucketed JSON manifest in the existing
 //      keiko-evidence ledger (runId = `memory-audit-YYYY-MM-DD`).
 //
-// Persistence shape: ONE manifest per UTC date. `EvidenceStore.put()` overwrites, so the
-// handler reads-appends-writes. Single-process BFF makes this safe; documented limit.
-// A multi-process deployment would lose audit events under concurrent writes.
+// Persistence shape: ONE manifest per UTC date. Stores that expose `EvidenceStore.update()`
+// serialize the read-append-write step so concurrent audit appenders do not drop events.
+// Custom stores without that optional method still work through get+put, but the built-in
+// Node and in-memory stores use the safer update path.
 //
 // Failure mode: persistence errors are caught and logged to console.error; the handler
 // never throws. An audit-persistence failure must NEVER break the user's memory mutation.
+// Corrupt audit manifests are never reset or overwritten; append attempts fail closed and
+// preserve the existing artifact for operator investigation.
 //
 // Known limitation: the `previousStatus` map is in-memory only. After a server restart the
 // first `memory:updated` for any record lacks transition context and is classified as a
@@ -28,16 +31,11 @@
 // edges + embeddings encode structural derivations the body-level audit already covers
 // via the related record mutations).
 //
-// "memory:retrieved" and "memory:workflow-used" kinds are NOT vault-derived. The
-// `recordMemoryAudit()` helper exported below is the single emission point for those
-// kinds; the retrieval and workflow packages adopt the audit boundary in a follow-up.
+// Retrieval/workflow-specific kinds are NOT vault-derived. The `recordMemoryAudit()`
+// helper exported below is the single emission point for those direct audit signals.
 
 import { randomUUID } from "node:crypto";
-import type {
-  MemoryAuditEvent,
-  MemoryId,
-  MemoryStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
 import {
@@ -81,14 +79,26 @@ export function auditRunIdFor(nowMs: number): string {
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 
-// Appends a single audit event to the date-bucketed manifest. Read-existing-or-empty,
-// parse-or-reset (corrupt-file safe: a parse failure starts a fresh array; the audit
-// ledger is append-only by intent, but a corrupt manifest must not break ongoing audit).
-function appendAuditEvent(store: EvidenceStore, runId: string, event: MemoryAuditEvent): void {
-  const existing = store.get(runId);
-  const list = parseExistingEvents(existing);
-  list.push(event);
-  store.put(runId, JSON.stringify(list));
+// Appends audit events to the date-bucketed manifest. The built-in evidence stores expose an
+// atomic update path; fallback stores still get parse-safe get+put behavior. Batch callers should
+// pass every event for one operation at once so the daily JSON manifest is parsed and rewritten once.
+function appendAuditEvents(
+  store: EvidenceStore,
+  runId: string,
+  events: readonly MemoryAuditEvent[],
+): void {
+  if (events.length === 0) {
+    return;
+  }
+  const append = (existingJson: string | undefined): string =>
+    JSON.stringify([...parseExistingEvents(existingJson), ...events]);
+
+  if (store.update !== undefined) {
+    store.update(runId, append);
+    return;
+  }
+
+  store.put(runId, append(store.get(runId)));
 }
 
 function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
@@ -97,15 +107,17 @@ function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
   }
   try {
     const parsed: unknown = JSON.parse(json);
-    if (Array.isArray(parsed)) {
-      // We trust the manifest is what we wrote; a hostile editor of the file could plant
-      // arbitrary JSON, but the file is in the contained evidence dir and the worst case
-      // is that the next read sees a corrupt list — handled by the catch.
-      return parsed as MemoryAuditEvent[];
+    if (!Array.isArray(parsed)) {
+      throw new Error("memory audit manifest has unexpected shape");
     }
-    return [];
-  } catch {
-    return [];
+    return parsed as MemoryAuditEvent[];
+  } catch (error) {
+    throw new Error(
+      `memory audit manifest is corrupt; refusing to overwrite existing audit evidence: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+      { cause: error },
+    );
   }
 }
 
@@ -135,11 +147,9 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
       return;
     }
     try {
-      appendAuditEvent(
-        options.evidenceStore,
-        auditRunIdFor(auditEvent.occurredAt),
+      appendAuditEvents(options.evidenceStore, auditRunIdFor(auditEvent.occurredAt), [
         sanitizeAuditEvent(auditEvent, options.redactString),
-      );
+      ]);
     } catch (error) {
       onPersistError(error);
     }
@@ -204,8 +214,8 @@ function updateStateCache(
 }
 
 // ─── Direct emission helper ───────────────────────────────────────────────────
-// Used by future retrieval (#210) and workflow (#213) wiring to emit
-// `memory:retrieved` and `memory:workflow-used` directly, bypassing the vault bridge.
+// Used by retrieval (#210) and workflow (#213) wiring to emit direct audit events,
+// bypassing the vault bridge when no structural vault mutation exists.
 // Failures are swallowed and reported through the same channel as the bridge.
 
 export interface RecordMemoryAuditOptions {
@@ -219,6 +229,16 @@ export function recordMemoryAudit(
   options: RecordMemoryAuditOptions,
   event: MemoryAuditEvent,
 ): void {
+  recordMemoryAudits(options, [event]);
+}
+
+export function recordMemoryAudits(
+  options: RecordMemoryAuditOptions,
+  events: readonly MemoryAuditEvent[],
+): void {
+  if (events.length === 0) {
+    return;
+  }
   const redactString = options.redactString ?? ((input: string): string => input);
   const onPersistError =
     options.onPersistError ??
@@ -226,14 +246,22 @@ export function recordMemoryAudit(
       // eslint-disable-next-line no-console
       console.error("memory-audit-handler: direct emission failed", error);
     });
-  try {
-    appendAuditEvent(
-      options.evidenceStore,
-      auditRunIdFor(event.occurredAt),
-      sanitizeAuditEvent(event, redactString),
-    );
-  } catch (error) {
-    onPersistError(error);
+  const eventsByRunId = new Map<string, MemoryAuditEvent[]>();
+  for (const event of events) {
+    const runId = auditRunIdFor(event.occurredAt);
+    const bucket = eventsByRunId.get(runId);
+    if (bucket === undefined) {
+      eventsByRunId.set(runId, [sanitizeAuditEvent(event, redactString)]);
+    } else {
+      bucket.push(sanitizeAuditEvent(event, redactString));
+    }
+  }
+  for (const [runId, bucket] of eventsByRunId) {
+    try {
+      appendAuditEvents(options.evidenceStore, runId, bucket);
+    } catch (error) {
+      onPersistError(error);
+    }
   }
 }
 

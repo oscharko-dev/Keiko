@@ -147,6 +147,7 @@ export interface GatewaySetupInput {
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
+  readonly imageInputModelIds?: readonly string[] | undefined;
 }
 
 export interface GatewaySetupResponse {
