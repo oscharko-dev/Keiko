@@ -12,6 +12,12 @@ import {
   insuranceDefault,
   regressionDefault,
 } from "@oscharko-dev/keiko-quality-intelligence";
+import {
+  GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
+  GENERATED_CANDIDATE_STEP_MAX_ITEMS,
+  GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
+  GENERATED_CANDIDATE_TITLE_MAX_CHARS,
+} from "../../generation/candidateBounds.js";
 
 type BuildInput = QualityIntelligenceGeneration.BuildTestDesignInstructionInput;
 
@@ -145,6 +151,23 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
     expect(enumVals).toContain("visual");
     expect(enumVals).toHaveLength(5);
   });
+
+  it("bounds response size and candidate field sizes in the schema", () => {
+    const props = QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA.properties as Record<
+      string,
+      unknown
+    >;
+    const testCases = props.testCases as Record<string, unknown>;
+    const items = testCases.items as Record<string, unknown>;
+    const itemProps = items.properties as Record<string, unknown>;
+    const title = itemProps.title as Record<string, unknown>;
+    const steps = itemProps.steps as Record<string, unknown>;
+    const stepItems = steps.items as Record<string, unknown>;
+    expect(testCases.maxItems).toBe(GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS);
+    expect(title.maxLength).toBe(GENERATED_CANDIDATE_TITLE_MAX_CHARS);
+    expect(steps.maxItems).toBe(GENERATED_CANDIDATE_STEP_MAX_ITEMS);
+    expect(stepItems.maxLength).toBe(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS);
+  });
 });
 
 // ─── buildTestDesignInstruction ───────────────────────────────────────────────
@@ -235,6 +258,17 @@ describe("buildTestDesignInstruction", () => {
       maxTestCases: 50,
     });
     expect(result).toContain("50");
+  });
+
+  it("includes bounded-output guidance for generated candidate fields", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 10,
+      profile: regressionDefault,
+      maxTestCases: 50,
+    });
+    expect(result).toContain(String(GENERATED_CANDIDATE_TITLE_MAX_CHARS));
+    expect(result).toContain(String(GENERATED_CANDIDATE_STEP_MAX_ITEMS));
+    expect(result).toContain(String(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS));
   });
 
   it("uses regressionDefault profile when no profile is provided", () => {

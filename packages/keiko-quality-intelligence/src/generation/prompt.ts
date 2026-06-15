@@ -8,6 +8,17 @@
 
 import type { PolicyProfile } from "../domain/policyProfile.js";
 import { regressionDefault } from "../domain/policyProfile.js";
+import {
+  GENERATED_CANDIDATE_EVIDENCE_INDEX_MAX_ITEMS,
+  GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
+  GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
+  GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
+  GENERATED_CANDIDATE_STEP_MAX_ITEMS,
+  GENERATED_CANDIDATE_TAG_MAX_CHARS,
+  GENERATED_CANDIDATE_TAG_MAX_ITEMS,
+  GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
+  GENERATED_CANDIDATE_TITLE_MAX_CHARS,
+} from "./candidateBounds.js";
 
 // The trusted system instruction. Pinned, never interpolates untrusted content. Frames the
 // model as a regulated-delivery QA engineer and fixes the output contract to STRICT JSON so
@@ -37,22 +48,43 @@ export const QI_TEST_DESIGN_RESPONSE_SCHEMA: Readonly<Record<string, unknown>> =
   properties: {
     testCases: {
       type: "array",
+      maxItems: GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
       items: {
         type: "object",
         required: ["title", "steps", "expectedResults", "derivedFromEvidenceIndexes"],
         additionalProperties: false,
         properties: {
-          title: { type: "string" },
-          preconditions: { type: "array", items: { type: "string" } },
-          steps: { type: "array", items: { type: "string" } },
-          expectedResults: { type: "array", items: { type: "string" } },
+          title: { type: "string", maxLength: GENERATED_CANDIDATE_TITLE_MAX_CHARS },
+          preconditions: {
+            type: "array",
+            maxItems: GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
+            items: { type: "string", maxLength: GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS },
+          },
+          steps: {
+            type: "array",
+            maxItems: GENERATED_CANDIDATE_STEP_MAX_ITEMS,
+            items: { type: "string", maxLength: GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS },
+          },
+          expectedResults: {
+            type: "array",
+            maxItems: GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
+            items: { type: "string", maxLength: GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS },
+          },
           priority: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
           riskClass: {
             type: "string",
             enum: ["safety", "compliance", "regression", "functional", "visual"],
           },
-          tags: { type: "array", items: { type: "string" } },
-          derivedFromEvidenceIndexes: { type: "array", items: { type: "integer" } },
+          tags: {
+            type: "array",
+            maxItems: GENERATED_CANDIDATE_TAG_MAX_ITEMS,
+            items: { type: "string", maxLength: GENERATED_CANDIDATE_TAG_MAX_CHARS },
+          },
+          derivedFromEvidenceIndexes: {
+            type: "array",
+            maxItems: GENERATED_CANDIDATE_EVIDENCE_INDEX_MAX_ITEMS,
+            items: { type: "integer" },
+          },
         },
       },
     },
@@ -92,6 +124,12 @@ export const buildTestDesignInstruction = (input: BuildTestDesignInstructionInpu
     '  "derivedFromEvidenceIndexes": number[]',
     "} ] }",
     "",
+    `Keep each title under ${String(GENERATED_CANDIDATE_TITLE_MAX_CHARS)} characters,`,
+    `each list item under ${String(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS)} characters,`,
+    `and use at most ${String(GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS)} preconditions,`,
+    `${String(GENERATED_CANDIDATE_STEP_MAX_ITEMS)} steps,`,
+    `${String(GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS)} expected results, and`,
+    `${String(GENERATED_CANDIDATE_TAG_MAX_ITEMS)} tags per test case.`,
     "Every test case must list at least one evidence index in derivedFromEvidenceIndexes.",
     "Respond with the JSON object only.",
   ].join("\n");

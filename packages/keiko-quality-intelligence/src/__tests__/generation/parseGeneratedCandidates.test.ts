@@ -14,6 +14,15 @@ import {
   bankingDefault,
   regressionDefault,
 } from "@oscharko-dev/keiko-quality-intelligence";
+import {
+  GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
+  GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
+  GENERATED_CANDIDATE_STEP_MAX_ITEMS,
+  GENERATED_CANDIDATE_TAG_MAX_CHARS,
+  GENERATED_CANDIDATE_TAG_MAX_ITEMS,
+  GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
+  GENERATED_CANDIDATE_TITLE_MAX_CHARS,
+} from "../../generation/candidateBounds.js";
 
 type ParseInput = QualityIntelligenceGeneration.ParseGeneratedCandidatesInput;
 
@@ -162,6 +171,27 @@ describe("parseGeneratedCandidates — JSON recovery", () => {
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     expect(result.recovered).toBe(true);
     expect(result.candidates).toHaveLength(1);
+  });
+
+  it("continues scanning when a non-JSON bracket fragment appears before the payload", () => {
+    const raw = `Candidate notes [draft only]\n${wrapInTestCases([validItem()])}`;
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.recovered).toBe(true);
+    expect(result.candidates).toHaveLength(1);
+  });
+
+  it("prefers a later non-empty testCases payload over an earlier empty bracket fragment", () => {
+    const raw = `Scratchpad: []\n${wrapInTestCases([validItem({ title: "Recovered later" })])}`;
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.recovered).toBe(true);
+    expect(result.candidates[0]?.title).toBe("Recovered later");
+  });
+
+  it("recovers common chat-model wrapper aliases for generated cases", () => {
+    const raw = JSON.stringify({ cases: [validItem({ title: "Alias wrapper" })] });
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.recovered).toBe(true);
+    expect(result.candidates[0]?.title).toBe("Alias wrapper");
   });
 });
 
@@ -571,12 +601,56 @@ describe("parseGeneratedCandidates — adversarial inputs", () => {
     expect(result.candidates).toHaveLength(0);
   });
 
-  it("handles an extremely long title (2000 chars) without throwing", () => {
+  it("bounds an extremely long title without throwing", () => {
     const longTitle = "A".repeat(2000);
     const raw = wrapInTestCases([validItem({ title: longTitle })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]?.title).toBe(longTitle);
+    expect(result.candidates[0]?.title).toHaveLength(GENERATED_CANDIDATE_TITLE_MAX_CHARS);
+    expect(result.candidates[0]?.title.endsWith("...")).toBe(true);
+  });
+
+  it("bounds long list entries before persistence and judge prompts", () => {
+    const longStep = "S".repeat(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS + 50);
+    const raw = wrapInTestCases([validItem({ steps: [longStep] })]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.candidates[0]?.steps[0]).toHaveLength(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS);
+    expect(result.candidates[0]?.steps[0]?.endsWith("...")).toBe(true);
+  });
+
+  it("bounds generated list fan-out per field", () => {
+    const preconditions = Array.from(
+      { length: GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS + 5 },
+      (_, i) => `pre-${String(i)}`,
+    );
+    const steps = Array.from(
+      { length: GENERATED_CANDIDATE_STEP_MAX_ITEMS + 5 },
+      (_, i) => `step-${String(i)}`,
+    );
+    const expectedResults = Array.from(
+      { length: GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS + 5 },
+      (_, i) => `expected-${String(i)}`,
+    );
+    const raw = wrapInTestCases([validItem({ preconditions, steps, expectedResults })]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.candidates[0]?.preconditions).toHaveLength(
+      GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
+    );
+    expect(result.candidates[0]?.steps).toHaveLength(GENERATED_CANDIDATE_STEP_MAX_ITEMS);
+    expect(result.candidates[0]?.expectedResults).toHaveLength(
+      GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
+    );
+  });
+
+  it("bounds generated tags by count and per-tag length", () => {
+    const tags = Array.from({ length: GENERATED_CANDIDATE_TAG_MAX_ITEMS + 5 }, (_, i) =>
+      `tag-${String(i)}-${"x".repeat(GENERATED_CANDIDATE_TAG_MAX_CHARS + 20)}`,
+    );
+    const raw = wrapInTestCases([validItem({ tags })]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    const parsedTags = result.candidates[0]?.tags ?? [];
+    expect(parsedTags).toHaveLength(GENERATED_CANDIDATE_TAG_MAX_ITEMS);
+    expect(parsedTags.every((tag) => tag.length <= GENERATED_CANDIDATE_TAG_MAX_CHARS)).toBe(true);
   });
 
   it("handles many candidates approaching maxCandidates (performance boundary)", () => {

@@ -670,7 +670,8 @@ describe("executeQiRun — model selection", () => {
     expectIssue749RunDetail(detail, providerSecret);
   });
 
-  it("does not count the oversized judge-prompt local guard as a gateway dispatch", async () => {
+  it("bounds oversized model candidates before judging and counts the bounded judge dispatch", async () => {
+    const judgeRationale = "bounded candidate remains too broad after parser truncation";
     const oversizedCandidateOutput = JSON.stringify({
       testCases: [
         {
@@ -685,7 +686,10 @@ describe("executeQiRun — model selection", () => {
         },
       ],
     });
-    const { port, calls } = recordingSequencePort([oversizedCandidateOutput]);
+    const { port, calls } = recordingSequencePort([
+      oversizedCandidateOutput,
+      weakJudgeVerdictWithRationale(judgeRationale),
+    ]);
     const deps = buildDeps({
       evidenceDir,
       modelPort: port,
@@ -700,14 +704,18 @@ describe("executeQiRun — model selection", () => {
 
     expect(summary.status).toBe("succeeded");
     expect(summary.qualityScore).toBe(0);
-    // Only the generation request reached the gateway. The oversized judge prompt returned a local
-    // weak verdict before model.call, so the audit trail must not claim a second dispatch.
-    expect(summary.modelGatewayCallCount).toBe(1);
-    expect(calls).toHaveLength(1);
+    // The parser bounds the oversized generated step before persistence/judging, so the judge prompt
+    // now stays under the local prompt guard and the bounded judge dispatch is counted.
+    expect(summary.modelGatewayCallCount).toBe(2);
+    expect(calls).toHaveLength(2);
+    const projection = candidateProjection("run-749-oversize-guard", evidenceDir);
+    const generatedStep = projection.steps.flat().find((step) => step.startsWith("xxx"));
+    expect(generatedStep).toBeDefined();
+    expect(generatedStep?.length).toBeLessThanOrEqual(1000);
     const manifest = loadQualityIntelligenceRun("run-749-oversize-guard", { evidenceDir });
-    expect(manifest?.modelGatewayCallCount).toBe(1);
+    expect(manifest?.modelGatewayCallCount).toBe(2);
     const qualityFinding = testQualityFindingsFrom(manifest)[0];
-    expect(qualityFinding?.summaryRedacted).toContain("model budget");
+    expect(qualityFinding?.summaryRedacted).toContain(judgeRationale);
   });
 
   it("counts capability-routed Figma vision calls in run evidence", async () => {
