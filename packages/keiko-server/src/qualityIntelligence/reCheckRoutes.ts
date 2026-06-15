@@ -1163,19 +1163,6 @@ function assertMergedCandidateBudget(
   );
 }
 
-function assertMergedCandidateBudget(
-  preservedCandidates: readonly QualityIntelligenceCandidateRow[],
-  regeneratedCandidates: readonly QiTestCaseCandidate[],
-): RouteResult | null {
-  const limit = QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxCandidatesPerRun;
-  if (preservedCandidates.length + regeneratedCandidates.length <= limit) return null;
-  return errorResult(
-    409,
-    "QI_REGEN_CANDIDATE_CAP_EXCEEDED",
-    "Regenerating the stale tests would exceed the per-run candidate limit. Reduce the stale scope or start a fresh QI run against the current source.",
-  );
-}
-
 function buildCoverageArtifacts(
   runId: QI.QualityIntelligenceRunId,
   ingestion: QiIngestion,
