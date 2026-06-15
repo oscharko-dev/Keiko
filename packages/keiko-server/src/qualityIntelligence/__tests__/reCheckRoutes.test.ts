@@ -930,6 +930,173 @@ describe("handleQiRegenerateStale — carries model provenance forward (Issue #7
   });
 });
 
+// Persist-time secret redaction parity with the initial-run path (Issue #747 defence-in-depth). The
+// regenerate-stale endpoint forwards regenerated judge rationales into the on-disk MERGED manifest;
+// the live additionalSecrets list must reach that manifest writer too, otherwise a configured
+// provider secret echoed in a rationale that the security-package builtin patterns do not match would
+// survive on disk. Mirrors runExecution.test.ts "redacts configured provider secrets from persisted
+// judge rationales".
+describe("handleQiRegenerateStale — redacts configured provider secrets from merged judge rationales (#747)", () => {
+  const MODEL_ID = "recheck-judge-model";
+  // A configured provider secret whose shape matches NONE of the security-package builtin patterns
+  // (not sk-/ghp_/AWS/assignment shaped), so only the additionalSecrets list can scrub it.
+  const PROVIDER_SECRET = "literal-provider-secret-qi-regen-747";
+
+  function chatCapability(modelId: string): ModelCapability {
+    return {
+      id: modelId,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      supportsResponseFormat: true,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+  }
+
+  const REGEN_CANDIDATES_JSON = JSON.stringify({
+    testCases: [
+      {
+        title: "Verify MFA writes an audit entry on login",
+        preconditions: ["An audit user exists."],
+        steps: ["Log in with MFA."],
+        expectedResults: ["An audit entry is written."],
+        priority: "P1",
+        riskClass: "compliance",
+        derivedFromEvidenceIndexes: [1],
+        tags: ["audit-login"],
+      },
+    ],
+  });
+
+  const WEAK_JUDGE_VERDICT_JSON = JSON.stringify({
+    dimensions: [
+      {
+        name: "verifiability",
+        score: 10,
+        rationale: `The candidate is unverifiable and echoed ${PROVIDER_SECRET}.`,
+      },
+      { name: "atomicity", score: 20, rationale: "too broad" },
+      { name: "determinism", score: 15, rationale: "timing-sensitive" },
+      { name: "ac-fidelity", score: 10, rationale: "misses the acceptance criteria" },
+    ],
+    overallRationale: `Weak: the rationale repeated ${PROVIDER_SECRET}.`,
+  });
+
+  // Returns the judge verdict for the judge call (recognised by the judge system prompt) and the
+  // generation JSON otherwise, so a single port serves both the generation and judge dispatches.
+  function judgeAwarePort(): ModelPort {
+    return {
+      call: (req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> => {
+        const isJudge = req.messages.some(
+          (m) => m.role === "system" && m.content.includes("test-quality judge"),
+        );
+        return Promise.resolve({
+          content: isJudge ? WEAK_JUDGE_VERDICT_JSON : REGEN_CANDIDATES_JSON,
+          modelId: req.modelId,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "req-test",
+            promptTokens: 10,
+            completionTokens: 5,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+  }
+
+  function depsWithSecretApiKey(dir: string): UiHandlerDeps {
+    const config = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: MODEL_ID,
+            baseUrl: "https://fake.example.com/v1",
+            apiKey: PROVIDER_SECRET,
+            capability: chatCapability(MODEL_ID),
+          },
+        ],
+      },
+      {},
+    );
+    const port = judgeAwarePort();
+    return {
+      config,
+      configPresent: true,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}, config),
+      registry: createRunRegistry(),
+      modelPortFactory: (): ModelPort => port,
+      store: createInMemoryUiStore(),
+      evidenceDir: dir,
+    };
+  }
+
+  it("scrubs the secret from the persisted merged manifest's judge rationale", async () => {
+    const runId = "run-regen-redaction";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-login", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-mfa", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+    });
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "Spec",
+                text: "Login must work reliably\nMFA must also write an audit entry",
+              },
+            ],
+          }),
+        ),
+        depsWithSecretApiKey(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const newRunId = (result.body as { runId: string }).runId;
+    const manifest = loadQualityIntelligenceRun(newRunId, { evidenceDir });
+    expect(manifest?.status).toBe("succeeded");
+    // Non-vacuous: the regenerated judge produced a persisted test-quality finding...
+    const testQualityFindings = (manifest?.findings ?? []).filter(
+      (finding) => finding.kind === "test-quality",
+    );
+    expect(testQualityFindings.length).toBeGreaterThan(0);
+    // ...and the configured provider secret it echoed is scrubbed from the on-disk manifest.
+    const persistedFindings = JSON.stringify(testQualityFindings);
+    expect(persistedFindings).toContain("[REDACTED]");
+    expect(persistedFindings).not.toContain(PROVIDER_SECRET);
+    expect(JSON.stringify(manifest)).not.toContain(PROVIDER_SECRET);
+  });
+});
+
 describe("handleQiRegenerateStale — no stale candidates still materialises a new run (#743)", () => {
   it("writes a new immutable run preserving all candidates and edits when nothing is stale", async () => {
     const runId = "run-regen-no-stale";
