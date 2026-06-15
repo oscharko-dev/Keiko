@@ -58,8 +58,12 @@ jobs:
         run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
-      - name: Unit tests
-        run: npm test
+      - name: Unit tests and package coverage quality
+        run: npm run test:coverage:quality
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Release smoke E2E
+        run: npm run test:e2e:smoke
       - name: Build
         run: npm run build
       - name: Prepare packaged CLI and UI assets

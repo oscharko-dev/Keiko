@@ -235,7 +235,7 @@ function tokenizeLine(line: string, state: LineState, cs: CommentStyle): Token[]
     if (im !== null) {
       const w = im[0];
       let cls: TokenKind = "id";
-      if (CODE_KW.has(w)) cls = "key";
+      if (CODE_KW.has(w) || CODE_KW.has(w.toLowerCase())) cls = "key";
       else if (w.startsWith("@")) cls = "type";
       else if (/^[A-Z]/.test(w)) cls = "type";
       else if (line.charAt(i + w.length) === "(") cls = "fn";
@@ -249,7 +249,7 @@ function tokenizeLine(line: string, state: LineState, cs: CommentStyle): Token[]
       i += wm[0].length;
       continue;
     }
-    const pm = /^[^\w\s$@]+/.exec(rest);
+    const pm = /^[^\w\s$@"']+/.exec(rest);
     if (pm !== null) {
       toks.push(["punct", pm[0]]);
       i += pm[0].length;

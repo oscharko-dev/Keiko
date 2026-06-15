@@ -80,6 +80,13 @@ function testModel(): ModelPort {
 }
 
 describe("runAgentCli dry-run", () => {
+  it("returns usage error 2 when no task type is provided", async () => {
+    const c = capture();
+    const code = await runAgentCli([], c.io);
+    expect(code).toBe(2);
+    expect(c.err()).toContain("Usage:");
+  });
+
   it("runs explain-plan to completion and exits 0", async () => {
     const c = capture();
     const code = await runAgentCli(
@@ -114,6 +121,28 @@ describe("runAgentCli dry-run", () => {
     expect(c.out()).toContain("diff redacted");
   });
 
+  it("runs investigate-bug with description and optional file scope", async () => {
+    const c = capture();
+    const code = await runAgentCli(
+      [
+        "investigate-bug",
+        "--description",
+        "Grounded answer omits the linked PDF source.",
+        "--file",
+        "src/rag.ts",
+        "--no-evidence",
+        "--model",
+        "test-model",
+      ],
+      c.io,
+      {},
+      { model: testModel() },
+    );
+    expect(code).toBe(0);
+    expect(c.out()).toContain("run:started");
+    expect(c.out()).toContain("completed");
+  });
+
   it("returns usage error 2 for an unknown task type", async () => {
     const c = capture();
     const code = await runAgentCli(["frobnicate", "--file", "x"], c.io);
@@ -126,6 +155,46 @@ describe("runAgentCli dry-run", () => {
     const code = await runAgentCli(["explain-plan"], c.io);
     expect(code).toBe(2);
     expect(c.err().toLowerCase()).toContain("missing required argument");
+  });
+
+  it("returns usage error 2 when investigate-bug is missing its description", async () => {
+    const c = capture();
+    const code = await runAgentCli(["investigate-bug", "--file", "src/foo.ts"], c.io);
+    expect(code).toBe(2);
+    expect(c.err()).toContain("missing required argument for investigate-bug");
+  });
+
+  it("requires an explicit model id when a test model is injected without config", async () => {
+    const c = capture();
+    const code = await runAgentCli(
+      ["explain-plan", "--file", "src/foo.ts", "--no-evidence"],
+      c.io,
+      {},
+      { model: testModel() },
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("no model id available");
+  });
+
+  it("returns exit 1 and a failed run summary when the model port rejects", async () => {
+    const c = capture();
+    const secret = "Bearer fixture-token-value";
+    const failingModel: ModelPort = {
+      call: () => Promise.reject(new Error(`provider leaked ${secret}`)),
+    };
+
+    const code = await runAgentCli(
+      ["explain-plan", "--file", "src/foo.ts", "--no-evidence", "--model", "test-model"],
+      c.io,
+      {},
+      { model: failingModel },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("failed");
+    expect(c.err()).toContain("MODEL_ERROR");
+    expect(c.err()).not.toContain(secret);
+    expect(c.err()).toContain("[REDACTED]");
   });
 
   it("dispatches through runCli's run branch and surfaces missing gateway config", async () => {

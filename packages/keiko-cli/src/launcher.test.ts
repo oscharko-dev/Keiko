@@ -357,6 +357,15 @@ describe("runLauncherCli install — refusals (security)", () => {
 });
 
 describe("runLauncherCli remove", () => {
+  it("returns 2 on unknown remove flag without touching state", () => {
+    const h = makeHarness();
+    const c = makeIo();
+    expect(runLauncherCli(["remove", "--whatever"], c.io, {}, h.deps)).toBe(2);
+    expect(c.err()).toContain("keiko launcher remove");
+    expect(c.err()).toContain("unknown flag");
+    expect(loadState(h.stateDir).entries).toEqual([]);
+  });
+
   it("returns 0 + 'nothing to remove' when state is empty", () => {
     const h = makeHarness();
     const c = makeIo();
