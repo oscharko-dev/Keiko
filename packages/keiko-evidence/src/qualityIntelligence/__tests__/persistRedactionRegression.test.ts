@@ -102,6 +102,46 @@ describe("recordQualityIntelligenceRun — persist-time redaction of modelParame
   });
 });
 
+describe("recordQualityIntelligenceRun — persist-time redaction of findings[].summaryRedacted (#738)", () => {
+  it("redacts a planted secret out of a coverage-gap finding summaryRedacted before persist", () => {
+    // T3 — the gap-finding summary surface (findings[].summaryRedacted) must pass through
+    // the persist deepRedact, just like coverageMatrix.requirementExcerptRedacted.
+    //
+    // Mutation target: a refactor that scopes persist-redaction to only `coverageMatrix`
+    // (excluding `findings`) would leave PLANTED_AKIA intact in the persisted finding →
+    // expect(summaryRedacted).not.toContain(PLANTED_AKIA) fails.
+    //
+    // Uses the same PLANTED_AKIA secret and [REDACTED] marker as the coverageMatrix test above
+    // so both surfaces are pinned to the same canonical secret shape and expectation.
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const summaryWithSecret = `Atom atom-1 ("${PLANTED_AKIA} region") has no tracing test (uncovered).`;
+    const input: QualityIntelligenceRecordInput = {
+      ...baseInput("qi-run-findings-redact"),
+      totals: { candidates: 0, findings: 1, exports: 0 },
+      findings: [
+        {
+          id: "qi-finding-test-001",
+          kind: "coverage-gap",
+          severity: "high",
+          summaryRedacted: summaryWithSecret,
+        },
+      ],
+    };
+
+    recordQualityIntelligenceRun(input, { store });
+    // Read back from the store (not the in-memory result) to confirm what was persisted.
+    const persisted = store.load("qi-run-findings-redact");
+    const row = persisted?.findings[0];
+    expect(row?.id).toBe("qi-finding-test-001");
+    expect(row?.summaryRedacted).toContain("[REDACTED]");
+    expect(row?.summaryRedacted).not.toContain(PLANTED_AKIA);
+    expect(row?.summaryRedacted).not.toContain("AKIA");
+    // Non-secret structural fields on the finding survive untouched.
+    expect(row?.kind).toBe("coverage-gap");
+    expect(row?.severity).toBe("high");
+  });
+});
+
 describe("recordQualityIntelligenceRun — clean data round-trips unchanged (backward-compat)", () => {
   it("leaves a clean coverageMatrix byte-identical and keeps the integrity hash stable", () => {
     const store = createInMemoryQualityIntelligenceLocalStore();

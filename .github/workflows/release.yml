@@ -30,6 +30,7 @@ concurrency:
 jobs:
   release-verify:
     name: Release verification
+    if: github.event_name != 'workflow_dispatch' || !inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -96,9 +97,10 @@ jobs:
   publish:
     name: Publish to npm
     needs: release-verify
-    if: github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     timeout-minutes: 30
     steps:
@@ -113,11 +115,50 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Install dependencies
         run: npm ci
+      - name: Require successful tag verification run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_WORKFLOW: ${{ github.workflow }}
+        run: |
+          set -euo pipefail
+          runs_json="$(gh run list --workflow "$RELEASE_WORKFLOW" --event push --json conclusion,headSha,status,url,databaseId -L 50)"
+          RUNS_JSON="$runs_json" node <<'NODE'
+          const runs = JSON.parse(process.env.RUNS_JSON ?? "[]");
+          const releaseSha = process.env.RELEASE_SHA;
+          const match = runs.find(
+            (run) =>
+              run.headSha === releaseSha &&
+              run.status === "completed" &&
+              run.conclusion === "success",
+          );
+          if (match === undefined) {
+            throw new Error(
+              `No successful tag-push Release verification run found for ${releaseSha}. ` +
+                "Wait for the tag-push release workflow to pass before publishing.",
+            );
+          }
+          console.log(`Verified release workflow run ${match.databaseId}: ${match.url}`);
+          NODE
       - name: Validate publish dist-tag
         env:
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          node -e "const { version } = require('./package.json'); const tag = process.env.NPM_DIST_TAG; if (!['beta', 'next', 'latest'].includes(tag)) throw new Error('Unsupported npm dist-tag: ' + tag); if (version.includes('-') && tag === 'latest') throw new Error('Prerelease versions must not be published with the latest dist-tag.');"
+          node <<'NODE'
+          const { version } = require("./package.json");
+          const tag = process.env.NPM_DIST_TAG;
+          const releaseTag = process.env.RELEASE_TAG;
+          if (releaseTag !== `v${version}`) {
+            throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
+          }
+          if (!["beta", "next", "latest"].includes(tag)) {
+            throw new Error(`Unsupported npm dist-tag: ${tag}`);
+          }
+          if (version.includes("-") && tag === "latest") {
+            throw new Error("Prerelease versions must not be published with the latest dist-tag.");
+          }
+          NODE
       - name: Publish package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

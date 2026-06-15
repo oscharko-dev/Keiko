@@ -21,10 +21,21 @@ type QualityIntelligenceExportAdapter = QualityIntelligence.QualityIntelligenceE
  */
 export type QualityIntelligenceBinaryExportMode = "pdf" | "zip-bundle";
 
-/** Any target an export-evidence row may record: a domain adapter or a binary bundle mode. */
+/**
+ * Traceability matrix export modes produced by the dedicated traceability route (Epic #734,
+ * Issue #740). Like binary modes, these are assembled at the route level — the matrix serializers
+ * are separate from the candidate-export adapters — so they extend the evidence target union here
+ * rather than the contract `QualityIntelligenceExportAdapter`.
+ */
+export type QualityIntelligenceTraceabilityExportMode =
+  | "traceability-csv"
+  | "traceability-markdown";
+
+/** Any target an export-evidence row may record: a domain adapter, a binary bundle mode, or a traceability matrix mode. */
 export type QualityIntelligenceExportTarget =
   | QualityIntelligenceExportAdapter
-  | QualityIntelligenceBinaryExportMode;
+  | QualityIntelligenceBinaryExportMode
+  | QualityIntelligenceTraceabilityExportMode;
 type QualityIntelligenceLifecycleStatus = QualityIntelligence.QualityIntelligenceLifecycleStatus;
 type QualityIntelligenceRunId = QualityIntelligence.QualityIntelligenceRunId;
 type QualityIntelligenceValidationFindingKind =
@@ -128,6 +139,13 @@ export interface QualityIntelligenceAtomFingerprintRow {
   readonly atomId: string;
   readonly envelopeId: string;
   readonly canonicalHashSha256Hex: string;
+  /**
+   * Optional opaque key for finding the current replacement atom during targeted regeneration. This is
+   * a hash-derived metadata key, not raw source text or a local filesystem path.
+   */
+  readonly replacementGroupId?: string;
+  /** Stable ordinal within replacementGroupId for same-document requirement replacements. */
+  readonly replacementOrdinal?: number;
 }
 
 export interface QualityIntelligenceProvenanceRefs {
@@ -162,7 +180,7 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly integrityHashes: QualityIntelligenceIntegrityHashes;
   /** Optional: per-atom coverage classification (refs + status, no raw text). Added in #738. */
   readonly coverageMatrix?: readonly QualityIntelligenceCoverageMatrixRow[];
-  /** Optional: run quality score — percent of judged candidates rated "strong" [0-100]; null when the judge stage was skipped. Added in #736. */
+  /** Optional: run quality score — percent of candidates with a strong judge outcome [0-100]; null when the judge stage was skipped. Added in #736. */
   readonly qualityScore?: number | null;
   /** Optional: per-envelope content fingerprints for drift detection (Epic #735, Issue #742). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];

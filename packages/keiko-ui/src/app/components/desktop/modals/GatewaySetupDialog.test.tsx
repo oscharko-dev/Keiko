@@ -92,6 +92,38 @@ describe("GatewaySetupDialog", () => {
     }
   });
 
+  // FE-05 (WCAG 4.1.2): submit button must expose aria-busy reflecting the
+  // pending/saving state so AT users know a request is in flight.
+  // FE-03 (WCAG 3.3.4): submit button must always have aria-describedby
+  // pointing to the requirement description so AT users know what is blocking.
+  it("submit button has aria-busy=false initially and aria-describedby pointing to the requirements description (FE-05/FE-03)", () => {
+    render(<GatewaySetupDialog />);
+    const btn = screen.getByRole("button", { name: /test & save/i });
+    // Not submitting — aria-busy must be false, not absent.
+    expect(btn).toHaveAttribute("aria-busy", "false");
+    // aria-describedby must always point at the requirements span.
+    expect(btn).toHaveAttribute("aria-describedby", "gw-submit-requirements");
+    const desc = document.getElementById("gw-submit-requirements");
+    expect(desc).not.toBeNull();
+    expect(desc?.textContent?.trim()).toMatch(/base url.*api token/i);
+  });
+
+  it("submit button has aria-busy=true while the gateway test is in flight (FE-05)", async () => {
+    // Never resolves — keeps the dialog in the busy state for the assertion.
+    vi.mocked(setupGateway).mockImplementation(() => new Promise(() => undefined));
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    // After clicking, the submit is in flight — aria-busy must flip to true.
+    expect(screen.getByRole("button", { name: /testing connection/i })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+  });
+
   it("restores focus to the triggering element when the dialog closes", () => {
     const trigger = document.createElement("button");
     trigger.textContent = "Open gateway setup";
@@ -135,6 +167,40 @@ describe("GatewaySetupDialog", () => {
 
     // C084: the async test result must be announced — success is a status live region.
     expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
+  });
+
+  it("does not expose a Figma access token field in gateway setup", () => {
+    render(<GatewaySetupDialog />);
+
+    expect(screen.queryByLabelText(/figma access token/i)).toBeNull();
+  });
+
+  it("submits optional image-input model ids from the setup dialog", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat", "vision-chat"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/image-input models optional/i), " vision-chat ");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: "https://llm-gateway.example.com/v1",
+      apiKey: "example-token",
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      imageInputModelIds: ["vision-chat"],
+    });
   });
 
   it("announces a failed test via role=alert, keeps the code as a secondary line, and refocuses Base URL (C084/C186/C191)", async () => {

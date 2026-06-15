@@ -13,6 +13,7 @@ import {
   loadFigmaConnectorAudit,
   hasReadOnlyConsent,
   deriveFigmaScopeRef,
+  recordReadOnlyConsent,
   type FigmaHttpPort,
   type FigmaRenderPort,
 } from "../figma/index.js";
@@ -97,7 +98,7 @@ interface PortRecorder {
   readonly tokens: string[];
 }
 
-const httpPort = (): PortRecorder => {
+const httpPort = (board: Record<string, unknown> = BOARD): PortRecorder => {
   const tokens: string[] = [];
   const port: FigmaHttpPort = (request) => {
     tokens.push(request.headers["X-Figma-Token"] ?? "");
@@ -109,7 +110,7 @@ const httpPort = (): PortRecorder => {
       return Promise.resolve({ status: 200, json: { images }, headers: {} });
     }
     const id = url.searchParams.get("ids") ?? "";
-    const doc = findById(BOARD, id);
+    const doc = findById(board, id);
     if (doc === undefined) return Promise.resolve({ status: 404, json: {}, headers: {} });
     return Promise.resolve({
       status: 200,
@@ -119,6 +120,35 @@ const httpPort = (): PortRecorder => {
   };
   return { port, tokens };
 };
+
+const singleTextBoard = (textFill: {
+  r: number;
+  g: number;
+  b: number;
+}): Record<string, unknown> => ({
+  id: "0:1",
+  name: "Canvas",
+  type: "CANVAS",
+  children: [
+    {
+      id: "1:1",
+      name: "Content",
+      type: "FRAME",
+      fills: [SOLID({ r: 1, g: 1, b: 1 })],
+      children: [
+        {
+          id: "1:2",
+          name: "Body",
+          type: "TEXT",
+          characters: "Readable",
+          fills: [SOLID(textFill)],
+          style: TEXT_STYLE,
+          absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 24 },
+        },
+      ],
+    },
+  ],
+});
 
 const renderPort: FigmaRenderPort = () =>
   Promise.resolve({ status: 200, bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), headers: {} });
@@ -153,6 +183,26 @@ describe("governedSnapshotBuild — consent gate (#760)", () => {
     expect(rec.tokens).toHaveLength(0);
   });
 
+  it("does not touch the vault/keychain before read-only consent is recorded", async () => {
+    let keychainTouched = false;
+    const rec = httpPort();
+    await expect(
+      governedSnapshotBuild(
+        URL_OK,
+        depsWith({
+          httpPort: rec.port,
+          acknowledgeReadOnly: false,
+          keychainAccess: () => {
+            keychainTouched = true;
+            return undefined;
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "FIGMA_CONSENT_REQUIRED" });
+    expect(keychainTouched).toBe(false);
+    expect(rec.tokens).toHaveLength(0);
+  });
+
   it("records consent and proceeds when the read-only scope is acknowledged", async () => {
     await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
     const scopeRef = deriveFigmaScopeRef("KEY123", "0:1");
@@ -177,6 +227,21 @@ describe("governedSnapshotBuild — vault token precedence (#758)", () => {
     expect(rec.tokens).not.toContain(TOKEN);
   });
 
+  it("uses the configured PAT when no vault token or env token is available", async () => {
+    expect(readFigmaVaultToken(depsWith({ env: {} }))).toBeUndefined();
+    const rec = httpPort();
+    await governedSnapshotBuild(
+      URL_OK,
+      depsWith({
+        env: {},
+        configToken: "figd_config-pat",
+        httpPort: rec.port,
+        acknowledgeReadOnly: true,
+      }),
+    );
+    expect(rec.tokens.every((t) => t === "figd_config-pat")).toBe(true);
+  });
+
   it("falls back to the env token when no vault token is stored (graceful)", async () => {
     expect(readFigmaVaultToken(depsWith())).toBeUndefined();
     const rec = httpPort();
@@ -185,6 +250,14 @@ describe("governedSnapshotBuild — vault token precedence (#758)", () => {
       depsWith({ httpPort: rec.port, acknowledgeReadOnly: true }),
     );
     expect(rec.tokens.every((t) => t === TOKEN)).toBe(true);
+  });
+
+  it("returns undefined (graceful) when the vault key cannot be resolved (malformed KEIKO_FIGMA_KEY)", () => {
+    // A malformed env key makes resolveFigmaVaultKey throw FIGMA_INTERNAL. readFigmaVaultToken must
+    // swallow it and degrade to the config/env token rather than letting the throw propagate into
+    // governedSnapshotBuild (which runs it before the consent gate → it would surface a 500). Pins
+    // the try/catch: a mutant removing it makes readFigmaVaultToken throw here instead of returning.
+    expect(readFigmaVaultToken(depsWith({ env: { KEIKO_FIGMA_KEY: "tooshort" } }))).toBeUndefined();
   });
 });
 
@@ -201,6 +274,84 @@ describe("governedSnapshotBuild — audit + metrics (#760)", () => {
     expect(result.metrics.navGraph).toEqual({ screens: 2, transitions: 1 });
     expect(result.metrics.a11y?.findings).toBeGreaterThanOrEqual(0);
     expect(result.metrics.augmentation.modelAugmentedShare).toBe(0);
+    expect(result.metrics.augmentation.deterministic).toBe(0);
+    expect(result.metrics.augmentation.modelAugmented).toBe(0);
+  });
+
+  it("emits a one-time connect audit entry on the first read-only acknowledgement", async () => {
+    const result = await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    const audit = loadFigmaConnectorAudit(result.scopeRef, dir);
+    // connect precedes the snapshot: the ledger is self-contained for the AC1 actions.
+    const connect = audit?.auditLog[0];
+    expect(connect).toMatchObject({ action: "connect", outcome: "ok" });
+    // The connect marker is a pure action record — no board cardinalities, no error code.
+    expect(connect?.counts).toBeUndefined();
+    expect(connect?.errorCode).toBeUndefined();
+    expect(audit?.auditLog.at(-1)).toMatchObject({ action: "snapshot", outcome: "ok" });
+  });
+
+  it("does not emit a duplicate connect entry on a second acknowledged build for the same scope", async () => {
+    await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    const result = await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    const audit = loadFigmaConnectorAudit(result.scopeRef, dir);
+    const connects = (audit?.auditLog ?? []).filter((e) => e.action === "connect");
+    expect(connects).toHaveLength(1);
+  });
+
+  it("recovers a missing connect audit when consent already exists", async () => {
+    const scopeRef = deriveFigmaScopeRef("KEY123", "0:1");
+    recordReadOnlyConsent({
+      scopeRef,
+      evidenceDir: dir,
+      acknowledgedBy: "operator",
+      now: "2026-06-08T00:00:00.000Z",
+    });
+    expect(loadFigmaConnectorAudit(scopeRef, dir)).toBeUndefined();
+
+    await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+
+    const audit = loadFigmaConnectorAudit(scopeRef, dir);
+    expect(audit?.auditLog[0]).toMatchObject({ action: "connect", outcome: "ok" });
+  });
+
+  it("audits a snapshot auth/setup failure after consent", async () => {
+    await expect(
+      governedSnapshotBuild(
+        URL_OK,
+        depsWith({
+          env: {},
+          configToken: undefined,
+          acknowledgeReadOnly: true,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "FIGMA_TOKEN_MISSING" });
+
+    const audit = loadFigmaConnectorAudit(deriveFigmaScopeRef("KEY123", "0:1"), dir);
+    expect(audit?.auditLog.at(-1)).toMatchObject({
+      action: "snapshot",
+      outcome: "error",
+      errorCode: "FIGMA_TOKEN_MISSING",
+    });
+  });
+
+  it("counts only failing deterministic a11y checks as a11y findings", async () => {
+    const passing = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({
+        httpPort: httpPort(singleTextBoard({ r: 0, g: 0, b: 0 })).port,
+        acknowledgeReadOnly: true,
+      }),
+    );
+    expect(passing.metrics.a11y?.findings).toBe(0);
+
+    const failing = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({
+        httpPort: httpPort(singleTextBoard({ r: 0.47, g: 0.47, b: 0.47 })).port,
+        acknowledgeReadOnly: true,
+      }),
+    );
+    expect(failing.metrics.a11y?.findings).toBe(1);
   });
 
   it("audits a re-snapshot action distinctly", async () => {

@@ -575,7 +575,7 @@ module.exports = {
         "including allow-listed domains such as `src/gateway/`, `src/workspace/`, and " +
         "`src/workflows/`, so production code cannot bypass the package surface. memory-vault, " +
         "memory-governance, " +
-        "and memory-retrieval added by issue #211 (Memory Center UI BFF routes). " +
+        "and memory-retrieval added by issue #211 (MemoriaViva UI BFF routes). " +
         "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route). " +
         "memory-consolidation added by issue #208 (Memory consolidation jobs); the server " +
         "wires consolidation lifecycle handlers through packages/keiko-server/src/memory-" +

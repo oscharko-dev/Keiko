@@ -32,11 +32,15 @@ export type StructuralTestCategory =
   | "a11y"
   | "coverage-notice";
 
+export type StructuralTestOutcome = "pass" | "fail" | "expectation";
+
 /** One deterministic, per-screen-attributable test item derived from the Screen-IR. */
 export interface StructuralTestItem {
   readonly id: string;
   readonly title: string;
   readonly category: StructuralTestCategory;
+  /** Optional machine-readable result semantics for derived checks. */
+  readonly outcome?: StructuralTestOutcome;
   /** Screen provenance so a generated test is attributable to its origin screen. */
   readonly screenId: string;
   readonly screenName: string;
@@ -101,14 +105,32 @@ function parseImageFills(value: unknown): IrNode["imageFills"] {
 // a RangeError. Shared constant — see prune.ts for rationale. Must stay in sync with every walk.
 const MAX_TREE_DEPTH = 512;
 
+// The total accepted node count for one screen is bounded so a pathologically WIDE persisted irJson
+// (flat siblings, not deep nesting — invisible to MAX_TREE_DEPTH) cannot materialise unbounded
+// memory/time during parse and every derivation that walks the resulting tree. The cap is set well
+// above the per-screen node ceiling the governed Figma pipeline enforces before a snapshot is ever
+// written (the connector rejects oversized scopes/screens upstream), so every real board parses fully
+// and byte-identically; only an out-of-band, oversized irJson (e.g. a direct write into the evidence
+// dir) is truncated. Breadth is bounded the same way depth is — silently, at the read boundary.
+export const MAX_IR_NODES_PER_SCREEN = 20_000;
+
+// Mutable node-count budget threaded through the parse so the bound is on the TOTAL accepted nodes of
+// the whole subtree, independent of its shape (one flat-wide root or many narrow branches).
+interface IrParseBudget {
+  remaining: number;
+}
+
 // Parse a node's children list, dropping any malformed child rather than failing the whole node.
-// depth tracks how deep we are so the recursion is bounded at MAX_TREE_DEPTH.
-function parseIrChildren(value: unknown, depth: number): IrNode[] {
+// depth bounds recursion at MAX_TREE_DEPTH; budget bounds the total accepted node count — once it is
+// exhausted no further siblings are parsed, so a flat-wide children array degrades to a truncated
+// (still well-formed) subtree rather than an unbounded allocation.
+function parseIrChildren(value: unknown, depth: number, budget: IrParseBudget): IrNode[] {
   if (depth > MAX_TREE_DEPTH) return [];
   if (!Array.isArray(value)) return [];
   const children: IrNode[] = [];
   for (const child of value) {
-    const parsed = parseIrNodeAt(child, depth);
+    if (budget.remaining <= 0) break;
+    const parsed = parseIrNodeAt(child, depth, budget);
     if (parsed !== undefined) children.push(parsed);
   }
   return children;
@@ -196,12 +218,14 @@ function parseIrTypography(value: unknown): IrNode["typography"] | undefined {
 // Total, defensive IR-node parser: an opaque serialised node (from the snapshot's `irJson`) is
 // accepted only when its required structural fields are present and well-typed; anything malformed
 // yields `undefined` so a corrupt screen degrades to "no items" rather than crashing the run.
-// depth is passed through parseIrChildren to bound total recursion at MAX_TREE_DEPTH.
-function parseIrNodeAt(value: unknown, depth: number): IrNode | undefined {
+// depth bounds recursion at MAX_TREE_DEPTH; budget bounds the total accepted node count. A node is
+// counted against the budget only once it is accepted, so malformed nodes are free.
+function parseIrNodeAt(value: unknown, depth: number, budget: IrParseBudget): IrNode | undefined {
   if (!isObject(value)) return undefined;
   const { id, name, type, interactionHint } = value;
   if (!isString(id) || !isString(name) || !isString(type)) return undefined;
   if (!isString(interactionHint) || !INTERACTION_HINTS.has(interactionHint)) return undefined;
+  budget.remaining -= 1;
   return {
     id,
     name,
@@ -209,12 +233,12 @@ function parseIrNodeAt(value: unknown, depth: number): IrNode | undefined {
     interactionHint: interactionHint as IrNode["interactionHint"],
     ...parseOptionalNodeFields(value),
     imageFills: parseImageFills(value.imageFills),
-    children: parseIrChildren(value.children, depth + 1),
+    children: parseIrChildren(value.children, depth + 1, budget),
   };
 }
 
 function parseIrNode(value: unknown): IrNode | undefined {
-  return parseIrNodeAt(value, 0);
+  return parseIrNodeAt(value, 0, { remaining: MAX_IR_NODES_PER_SCREEN });
 }
 
 /**

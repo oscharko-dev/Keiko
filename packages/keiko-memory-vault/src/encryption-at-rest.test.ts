@@ -144,8 +144,25 @@ function downgradeToLegacyPlaintext(dir: string): void {
     "m1",
   );
   // A genuine v1 (pre-encryption) DB predates the v3 access table; drop it so the reopen applies
-  // the v3 DDL cleanly instead of colliding with an already-present table.
+  // the later DDL cleanly instead of colliding with already-present tables/columns.
   db.exec("DROP TABLE IF EXISTS memory_access");
+  db.exec("DROP INDEX IF EXISTS idx_tombstones_scope");
+  db.exec("DROP INDEX IF EXISTS idx_tombstones_memory_id");
+  db.exec("DROP TABLE memory_tombstones");
+  db.exec(`
+    CREATE TABLE memory_tombstones (
+      id TEXT NOT NULL PRIMARY KEY,
+      memory_id TEXT NOT NULL,
+      scope_kind TEXT NOT NULL,
+      scope_coordinate TEXT NOT NULL,
+      type TEXT NOT NULL,
+      forgotten_at INTEGER NOT NULL,
+      forgetter_surface TEXT NOT NULL,
+      reason TEXT
+    ) STRICT;
+    CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
+    CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
+  `);
   db.exec("PRAGMA user_version = 1");
   db.close();
 }

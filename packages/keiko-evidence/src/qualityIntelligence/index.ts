@@ -11,6 +11,7 @@ export {
 } from "./manifestSchema.js";
 export type {
   QualityIntelligenceBinaryExportMode,
+  QualityIntelligenceTraceabilityExportMode,
   QualityIntelligenceEvidenceManifest,
   QualityIntelligenceEvidenceRefRow,
   QualityIntelligenceExportRow,
@@ -102,6 +103,7 @@ export type {
 } from "./figmaSnapshot/schema.js";
 export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
 export type {
+  FigmaSnapshotImageBytes,
   FigmaSnapshotStore,
   FigmaSnapshotStoreOptions,
   RecordFigmaSnapshotInput,

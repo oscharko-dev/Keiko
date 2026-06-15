@@ -5,12 +5,17 @@
 // resolveQiMultimodalSelection only — no hard-coded model id; returns [] when no multimodal
 // capability, when no call is injected, and when the call throws or returns garbage).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  ModelCapability,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
@@ -80,10 +85,79 @@ function depsWith(over: Partial<UiHandlerDeps>): UiHandlerDeps {
 }
 
 const REQUEST: FigmaVisionScreenRequest = {
+  snapshotRunId: "snap-1",
   screenId: "s1",
+  image: {
+    mimeType: "image/png",
+    relativePath: "screen-s1.png",
+    sha256: "0".repeat(64),
+    byteLength: 2,
+  },
   imageRelativePath: "screen-s1.png",
   baselineText: "Screen: S1 [s1]",
 };
+
+const normalizedResponse = (content: string, modelId = "vision"): NormalizedResponse => ({
+  modelId,
+  content,
+  finishReason: "stop",
+  toolCalls: [],
+  structuredOutput: null,
+  usage: {
+    requestId: "req-test",
+    promptTokens: 1,
+    completionTokens: 1,
+    latencyMs: 1,
+    costClass: "low",
+  },
+});
+
+function recordVisionSnapshot(dir: string): {
+  readonly loaded: NonNullable<ReturnType<ReturnType<typeof createNodeFigmaSnapshotStore>["load"]>>;
+  readonly screen: NonNullable<
+    ReturnType<ReturnType<typeof createNodeFigmaSnapshotStore>["load"]>
+  >["screens"][number];
+} {
+  const store = createNodeFigmaSnapshotStore(dir);
+  store.record({
+    runId: "snap-1",
+    provenance: {
+      fileKey: "KEY",
+      nodeId: "0:1",
+      version: undefined,
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+    },
+    integrityHash: hashSnapshot(1, undefined, [{ screenId: "s1", integrityHash: "h-vision" }]),
+    screens: [
+      {
+        screenId: "s1",
+        irJson: {
+          id: "s1",
+          name: "Login",
+          root: {
+            id: "s1-root",
+            name: "root",
+            type: "FRAME",
+            interactionHint: "container",
+            text: "",
+            imageFills: [],
+            children: [],
+          },
+        },
+        integrityHash: "h-vision",
+        image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50]) },
+      },
+    ],
+    skippedScreens: [],
+    links: [],
+    tokens: { colors: [], typography: [], spacing: [], radius: [] },
+  });
+  const loaded = store.load("snap-1");
+  if (loaded === undefined) throw new Error("expected stored snapshot");
+  const screen = loaded.screens[0];
+  if (screen === undefined) throw new Error("expected screen");
+  return { loaded, screen };
+}
 
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────
 
@@ -198,6 +272,48 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("falls back to the pinned record when the newest record fails to load (TOCTOU ?? pinned)", () => {
+    // Arrange: write two snapshots with different content so drift is detected (newest ≠ pinned).
+    // Then tamper the newest record file so store.load("fs-new") returns undefined (schema-invalid)
+    // while listByScope still lists it as newest (parseScopeEntry is header-only, no schema check).
+    // This exercises the `?? pinned` fallback on adapter line 68.
+    //
+    // Tamper mechanism: inject an unknown top-level key into the on-disk JSON — this trips the
+    // ALLOWED_TOP_LEVEL_KEYS guard in validateFigmaSnapshotRecord(), which returns {ok:false},
+    // so loadOp returns undefined WITHOUT throwing (the outer catch is NOT involved).
+    // parseScopeEntry reads only provenance.{fileKey,nodeId,fetchedAt}, runId, and integrityHash —
+    // all of which remain intact — so listByScope still returns "fs-new" as the most-recent entry.
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-toctou-"));
+    try {
+      record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "alt");
+      record(dir, "fs-new", "2026-02-01T00:00:00.000Z", "neu");
+
+      // Tamper fs-new on disk by injecting an unknown top-level key.
+      const recordFile = join(dir, "qi", "fs-new.figma-snapshot.json");
+      const raw = JSON.parse(readFileSync(recordFile, "utf8")) as Record<string, unknown>;
+      raw.__tampered__ = true; // unknown key → validateFigmaSnapshotRecord fails → load() = undefined
+      writeFileSync(recordFile, JSON.stringify(raw), "utf8");
+
+      // Pre-condition verification: store.load("fs-new") must return undefined (not throw),
+      // and listByScope must still return "fs-new" as the first (newest) entry.
+      const store = createNodeFigmaSnapshotStore(dir);
+      expect(store.load("fs-new")).toBeUndefined();
+      expect(store.listByScope("KEY", "0:1")[0]?.runId).toBe("fs-new");
+
+      // Act: loader with resolveLatestByScope detects drift (fs-new's hash ≠ fs-old's hash via
+      // listByScope header) and tries store.load("fs-new") → undefined → falls back via ?? pinned.
+      const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
+        resolveLatestByScope: true,
+      });
+
+      // Assert: fallback to the pinned record (fs-old), not undefined, not fs-new.
+      // The invariant: drift detection MUST degrade to "fresh", never crash the re-check.
+      expect(loader?.("fs-old")?.runId).toBe("fs-old");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Capability-routed vision hint provider ────────────────────────────────────────
@@ -218,12 +334,55 @@ describe("makeFigmaVisionHintProvider", () => {
     expect(provider(REQUEST)).toEqual([]);
   });
 
-  it("returns [] when a multimodal model exists but no vision call is injected", () => {
+  it("returns [] when a multimodal model exists but no evidence dir is configured", async () => {
     const deps = depsWith({
       config: configWith([capability("vision", { supportsImageInput: true })]),
       configPresent: true,
     });
-    expect(makeFigmaVisionHintProvider(deps)(REQUEST)).toEqual([]);
+    expect(await makeFigmaVisionHintProvider(deps)(REQUEST)).toEqual([]);
+  });
+
+  it("routes stored snapshot images through the selected gateway model", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-"));
+    const seenRequests: GatewayRequest[] = [];
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: (request) => {
+          seenRequests.push(request);
+          return Promise.resolve(
+            normalizedResponse(JSON.stringify(["Primary CTA is visually disabled"]), "vision-low"),
+          );
+        },
+      };
+      const deps = depsWith({
+        config: configWith([capability("vision-low", { supportsImageInput: true })]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      const provider = makeFigmaVisionHintProvider(deps);
+      await expect(
+        provider({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual(["Primary CTA is visually disabled"]);
+
+      const user = seenRequests[0]?.messages[1];
+      expect(seenRequests[0]?.modelId).toBe("vision-low");
+      expect(user?.content).toContain("Screen id:");
+      const textPart = user?.contentParts?.find((part) => part.type === "text");
+      const imagePart = user?.contentParts?.find((part) => part.type === "image_url");
+      expect(textPart?.text).toContain("Screen id:");
+      expect(imagePart?.image_url.url).toMatch(/^data:image\/png;base64,/u);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("routes the call through the capability-selected model id (no hard-coded id)", () => {

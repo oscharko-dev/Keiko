@@ -14,6 +14,7 @@ function baseOptions(overrides: Partial<ConsolidationOptions> = {}): Consolidati
     staleConfidenceThreshold: STALE_CONFIDENCE_DEFAULT,
     maxAgeMs: MAX_AGE_MS_DEFAULT,
     maxClustersPerRun: 100,
+    maxRecordsPerRun: 1_000,
     ...overrides,
   };
 }
@@ -27,6 +28,8 @@ describe("runConsolidation - skip and empty cases", () => {
     expect(result.staleFlags).toEqual([]);
     expect(result.reviewItems).toEqual([]);
     expect(result.clustersInspected).toBe(0);
+    expect(result.recordsInspected).toBe(0);
+    expect(result.truncated).toBe(false);
     expect(result.elapsedMs).toBe(0);
   });
 
@@ -74,13 +77,17 @@ describe("runConsolidation - two-member duplicate (no negation)", () => {
     const newer = makeRecord({ id: "m-new", body: "use tabs", createdAt: 200 });
     const result = runConsolidation([older, newer], baseOptions());
     expect(result.state).toBe("completed");
-    expect(result.edgesProposed).toHaveLength(1);
-    const edge = must(result.edgesProposed[0]);
-    expect(edge.kind).toBe("derived-from");
-    expect(edge.fromMemoryId).toBe("m-old");
-    expect(edge.toMemoryId).toBe("m-new");
-    expect(edge.createdAt).toBe(FIXED_NOW_MS);
-    expect(edge.id).toBe("edge-1");
+    expect(result.edgesProposed).toHaveLength(3);
+    expect(result.edgesProposed.map((edge) => edge.kind).sort()).toEqual([
+      "derived-from",
+      "related",
+      "temporal-precedes",
+    ]);
+    const lineage = must(result.edgesProposed.find((edge) => edge.kind === "derived-from"));
+    expect(lineage.fromMemoryId).toBe("m-old");
+    expect(lineage.toMemoryId).toBe("m-new");
+    expect(lineage.createdAt).toBe(FIXED_NOW_MS);
+    expect(lineage.id).toBe("edge-1");
     // Two-member non-conflicting cluster: edge ONLY, no review item. Supersede review items
     // are reserved for polarity-flip pairs (see "two-member negation pair" below).
     expect(result.reviewItems).toEqual([]);
@@ -97,6 +104,11 @@ describe("runConsolidation - two-member negation pair", () => {
     expect(result.edgesProposed).toEqual([]);
     expect(result.reviewItems).toHaveLength(1);
     expect(must(result.reviewItems[0]).reason).toBe("potential-conflict");
+    expect(
+      must(result.reviewItems[0])
+        .proposedEdges?.map((edge) => edge.kind)
+        .sort(),
+    ).toEqual(["conflicts-with", "corrects", "supersedes"]);
   });
 });
 
@@ -115,6 +127,11 @@ describe("runConsolidation - multi-way duplicate (3+ members)", () => {
       winner: "m-c",
       losers: ["m-a", "m-b"],
     });
+    expect(
+      must(result.reviewItems[0])
+        .proposedEdges?.map((edge) => edge.kind)
+        .sort(),
+    ).toEqual(["derived-from", "derived-from", "related", "related", "supersedes", "supersedes"]);
   });
 });
 
@@ -135,7 +152,28 @@ describe("runConsolidation - maxClustersPerRun bound", () => {
     const d = makeRecord({ id: "m-2b", body: "beta beta", createdAt: 200 });
     const result = runConsolidation([a, b, c, d], baseOptions({ maxClustersPerRun: 1 }));
     expect(result.clustersInspected).toBe(1);
-    expect(result.edgesProposed.length + result.reviewItems.length).toBeLessThanOrEqual(2);
+    expect(result.edgesProposed.length + result.reviewItems.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("runConsolidation - maxRecordsPerRun bound", () => {
+  it("admits only maxRecordsPerRun records before duplicate and conflict scans", () => {
+    const records = Array.from({ length: 2_000 }, (_, index) =>
+      makeRecord({
+        id: `m-${index.toString().padStart(4, "0")}`,
+        body: `unique memory body ${index.toString()}`,
+        createdAt: index,
+      }),
+    );
+    const result = runConsolidation(records, baseOptions({ maxRecordsPerRun: 200 }));
+    expect(result.state).toBe("completed");
+    expect(result.recordsInspected).toBe(200);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("rejects attempts to exceed the hard record cap", () => {
+    const result = runConsolidation([makeRecord()], baseOptions({ maxRecordsPerRun: 1_001 }));
+    expect(result.state).toBe("failed");
   });
 });
 

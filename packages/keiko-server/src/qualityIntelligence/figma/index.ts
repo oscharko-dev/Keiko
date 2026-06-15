@@ -48,6 +48,8 @@ export {
   paginateScopedDocument,
   discoverScreenNodes,
   DEFAULT_SCOPED_PAGINATION_LIMITS,
+  SCOPED_PAGINATION_LIMIT_CEILINGS,
+  resolveScopedPaginationLimits,
   type FigmaScopeCoverage,
   type RawFigmaNode,
   type ScopedNodeFetcher,

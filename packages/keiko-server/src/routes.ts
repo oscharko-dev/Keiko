@@ -49,8 +49,10 @@ import {
   handleUnpinMemory,
   handleArchiveMemory,
   handleForgetMemory,
+  handleForgetMemories,
   handleDeleteMemory,
   handleCorrectMemory,
+  handleResolveMemoryConflict,
   handleAcceptMemoryProposal,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
@@ -136,6 +138,7 @@ import {
 import {
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
+  handleFigmaLoadSnapshotImage,
   handleFigmaRevokeToken,
 } from "./qualityIntelligence/figmaSnapshotRoutes.js";
 import { handleFigmaGenerateCode } from "./qualityIntelligence/figmaCodegenRoutes.js";
@@ -306,9 +309,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
   },
-  // Issue #211 — Memory Center governance routes (Epic #204).
+  // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
+  { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
+  {
+    method: "POST",
+    pattern: "/api/memory/conflicts/resolve",
+    handler: handleResolveMemoryConflict,
+  },
   { method: "GET", pattern: "/api/memory/:id", handler: handleGetMemory },
   { method: "PATCH", pattern: "/api/memory/:id", handler: handleEditMemory },
   { method: "POST", pattern: "/api/memory/:id/pin", handler: handlePinMemory },
@@ -334,7 +343,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/memory/capture-from-conversation",
     handler: handleMemoryCaptureFromConversation,
   },
-  // Issue #208 — explicit consolidation jobs for the Memory Center review surface.
+  // Issue #208 — explicit consolidation jobs for the MemoriaViva review surface.
   {
     method: "POST",
     pattern: "/api/memory/consolidation/jobs",
@@ -453,9 +462,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/relationships/:id/explain", handler: handleRelationshipExplain },
   // Epic #750, Issue #756 — Figma Snapshot UI routes. PAT stays server-side; UI-safe projection only.
   // POST triggers a bounded snapshot-build from a board link; GET loads the stored summary.
-  // Token: resolved server-side from FIGMA_ACCESS_TOKEN env or vault; never in request or response.
+  // Token: resolved server-side from vault, config, or FIGMA_ACCESS_TOKEN env; never in response.
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
+  {
+    method: "GET",
+    pattern: "/api/figma/snapshots/:runId/screens/:screenIndex/image",
+    handler: handleFigmaLoadSnapshotImage,
+  },
   // Epic #750 #758/#760 — operator revokes the stored encrypted PAT (audited key removal).
   { method: "DELETE", pattern: "/api/figma/token", handler: handleFigmaRevokeToken },
   // Epic #750 #755 — design-to-code: emit reviewable HTML/CSS from a stored snapshot.

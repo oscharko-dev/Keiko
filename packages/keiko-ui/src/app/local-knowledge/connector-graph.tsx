@@ -506,6 +506,9 @@ interface RowActionProps {
   readonly onCancel: (id: KnowledgeCapsuleId) => void;
   readonly onDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly onHealth: (id: KnowledgeCapsuleId) => void;
+  // Keyboard alternative to drag (WCAG 2.5.7): dispatches the same connector
+  // drop event as drag-release onto the workspace.
+  readonly onAddToWorkspace: (id: KnowledgeCapsuleId) => void;
 }
 
 function IndexOrCancelBtn({
@@ -569,6 +572,7 @@ function CapsuleRowActions({
   onCancel,
   onDisconnect,
   onHealth,
+  onAddToWorkspace,
 }: RowActionProps): ReactNode {
   const { id, displayName } = capsule;
   return (
@@ -584,6 +588,17 @@ function CapsuleRowActions({
         onStart={onStart}
         onCancel={onCancel}
       />
+      <button
+        type="button"
+        disabled={busy}
+        aria-label={`Add capsule ${displayName} to workspace`}
+        onClick={() => {
+          onAddToWorkspace(id);
+        }}
+        className="lk-btn lk-btn-ghost"
+      >
+        Add to workspace
+      </button>
       <button
         type="button"
         disabled={busy}
@@ -620,6 +635,17 @@ function isRowActionDragTarget(target: EventTarget | null): boolean {
   return target.closest(".lk-capsule-actions,a,input,select,textarea") !== null;
 }
 
+function getWorkspaceCenter(): { readonly clientX: number; readonly clientY: number } | null {
+  const ws = document.querySelector("main.workspace");
+  if (!(ws instanceof HTMLElement)) return null;
+  const rect = ws.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  return {
+    clientX: Math.round(rect.left + rect.width / 2),
+    clientY: Math.round(rect.top + rect.height / 2),
+  };
+}
+
 function isWorkspaceDropTarget(clientX: number, clientY: number): boolean {
   const target = document.elementFromPoint(clientX, clientY);
   if (!(target instanceof Element)) return false;
@@ -653,6 +679,7 @@ function CapsuleRow({
   onCancel,
   onDisconnect,
   onHealth,
+  onAddToWorkspace,
 }: RowActionProps): ReactNode {
   const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
   const dragActiveRef = useRef(false);
@@ -768,6 +795,7 @@ function CapsuleRow({
           onCancel={onCancel}
           onDisconnect={onDisconnect}
           onHealth={onHealth}
+          onAddToWorkspace={onAddToWorkspace}
         />
       </article>
       {dragGhost !== null
@@ -889,6 +917,19 @@ function CapsuleSection({
             onCancel={onCancelIndexing}
             onDisconnect={onDisconnect}
             onHealth={onOpenHealth}
+            onAddToWorkspace={() => {
+              const center = getWorkspaceCenter();
+              if (center !== null)
+                dispatchConnectorDrop(
+                  {
+                    kind: "capsule",
+                    id: capsule.id,
+                    label: capsule.displayName,
+                    lifecycleState: capsule.lifecycleState,
+                  },
+                  center,
+                );
+            }}
           />
         </li>
       ))}

@@ -452,14 +452,14 @@ describe("parseGeneratedCandidates — atom-index resolution", () => {
 // ─── 4. Determinism and maxCandidates cap ─────────────────────────────────────
 
 describe("parseGeneratedCandidates — determinism and caps", () => {
-  it("same (runId, index, title) always produces the same candidate id", () => {
+  it("same index, title, and cited atoms always produce the same candidate id", () => {
     const raw = wrapInTestCases([validItem()]);
     const r1 = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     const r2 = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     expect(r1.candidates[0]?.id).toBe(r2.candidates[0]?.id);
   });
 
-  it("different titles produce different ids for the same runId+index", () => {
+  it("different titles produce different ids for the same cited atoms and index", () => {
     const r1 = QualityIntelligenceGeneration.parseGeneratedCandidates(
       wrapInTestCases([validItem({ title: "Title Alpha" })]),
       baseInput(),
@@ -471,7 +471,7 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     expect(r1.candidates[0]?.id).not.toBe(r2.candidates[0]?.id);
   });
 
-  it("different runIds produce different ids for identical title+index", () => {
+  it("different runIds produce the same ids for identical title, index, and cited atoms", () => {
     const raw = wrapInTestCases([validItem()]);
     const r1 = QualityIntelligenceGeneration.parseGeneratedCandidates(
       raw,
@@ -481,7 +481,9 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
       raw,
       baseInput({ runId: RUN_ID_2 }),
     );
-    expect(r1.candidates[0]?.id).not.toBe(r2.candidates[0]?.id);
+    expect(r1.candidates[0]?.id).toBe(r2.candidates[0]?.id);
+    expect(r1.candidates[0]?.runId).toBe(RUN_ID);
+    expect(r2.candidates[0]?.runId).toBe(RUN_ID_2);
   });
 
   it("maxCandidates=0 returns no candidates (boundary)", () => {

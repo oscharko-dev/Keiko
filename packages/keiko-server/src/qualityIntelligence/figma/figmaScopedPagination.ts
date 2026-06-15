@@ -79,6 +79,35 @@ export const DEFAULT_SCOPED_PAGINATION_LIMITS: ScopedPaginationLimits = {
   fetchConcurrency: 3,
 };
 
+/** Hard safety ceilings: operators may tune pagination, but never past these finite bounds. */
+export const SCOPED_PAGINATION_LIMIT_CEILINGS: ScopedPaginationLimits = {
+  pageDepth: 16,
+  maxNodesPerScreen: 50_000,
+  maxFetchesPerScreen: 128,
+  maxScreensDeep: 250,
+  fetchConcurrency: 8,
+};
+
+export const resolveScopedPaginationLimits = (
+  partial?: Partial<ScopedPaginationLimits>,
+): ScopedPaginationLimits => {
+  const pick = (key: keyof ScopedPaginationLimits): number => {
+    const supplied = partial?.[key];
+    const resolved =
+      supplied !== undefined && Number.isInteger(supplied) && supplied >= 1
+        ? supplied
+        : DEFAULT_SCOPED_PAGINATION_LIMITS[key];
+    return Math.min(resolved, SCOPED_PAGINATION_LIMIT_CEILINGS[key]);
+  };
+  return {
+    pageDepth: pick("pageDepth"),
+    maxNodesPerScreen: pick("maxNodesPerScreen"),
+    maxFetchesPerScreen: pick("maxFetchesPerScreen"),
+    maxScreensDeep: pick("maxScreensDeep"),
+    fetchConcurrency: pick("fetchConcurrency"),
+  };
+};
+
 /** Coverage telemetry for one deep snapshot fetch — surfaced in the snapshot summary (never a leak). */
 export interface FigmaScopeCoverage {
   /** Screens discovered structurally under the scoped root. */
@@ -122,6 +151,22 @@ const countNodes = (node: RawFigmaNode): number => {
   let total = 1;
   for (const child of childrenOf(node)) total += countNodes(child);
   return total;
+};
+
+const pruneToNodeBudget = (node: RawFigmaNode, maxNodes: number): RawFigmaNode => {
+  let remaining = Math.max(1, maxNodes);
+  const clone = (current: RawFigmaNode): RawFigmaNode | undefined => {
+    if (remaining <= 0) return undefined;
+    remaining -= 1;
+    const children: RawFigmaNode[] = [];
+    for (const child of childrenOf(current)) {
+      const kept = clone(child);
+      if (kept === undefined) break;
+      children.push(kept);
+    }
+    return { ...current, children };
+  };
+  return clone(node) ?? { ...node, children: [] };
 };
 
 /**
@@ -215,20 +260,32 @@ const expandLevel = async (
   gatedFetch: ScopedNodeFetcher,
   pageDepth: number,
   fetchBudget: number,
+  nodeBudgetRemaining: number,
 ): Promise<LevelResult> => {
   const level = frontier.slice(0, Math.max(0, fetchBudget));
-  const cut = level.length < frontier.length;
+  let cut = level.length < frontier.length;
   const deeps = await Promise.all(level.map((fnode) => gatedFetch(idOf(fnode))));
   const nextFrontier: RawFigmaNode[] = [];
   let nodesAdded = 0;
+  let remainingNodeBudget = Math.max(0, nodeBudgetRemaining);
   for (let k = 0; k < level.length; k += 1) {
     const frontierNode = level[k];
     const deep = deeps[k];
-    if (frontierNode === undefined || deep === undefined) continue;
+    if (frontierNode === undefined) continue;
+    if (deep === undefined) {
+      cut = true;
+      continue;
+    }
     const deepChildren = childrenOf(deep);
     if (deepChildren.length > 0) {
+      const added = countNodes(deep) - 1;
+      if (added > remainingNodeBudget) {
+        cut = true;
+        continue;
+      }
       frontierNode.children = deepChildren;
-      nodesAdded += countNodes(deep) - 1;
+      nodesAdded += added;
+      remainingNodeBudget -= added;
       for (const f of collectFrontier(deep, pageDepth)) nextFrontier.push(f);
     }
   }
@@ -246,12 +303,20 @@ const completeScreen = async (
 ): Promise<ScreenOutcome> => {
   const base = await gatedFetch(idOf(shallow));
   if (base === undefined) {
-    // Could not deepen this screen — keep the shallow content (no crash, no fabrication).
-    return { node: shallow, deepFetched: false, truncated: false, fetchCount: 1 };
+    // Could not deepen this screen — keep the shallow content, but surface partial capture.
+    return { node: shallow, deepFetched: false, truncated: true, fetchCount: 1 };
   }
   let screenNodes = countNodes(base);
   let fetches = 1;
   let truncated = false;
+  if (screenNodes > limits.maxNodesPerScreen) {
+    return {
+      node: pruneToNodeBudget(base, limits.maxNodesPerScreen),
+      deepFetched: true,
+      truncated: true,
+      fetchCount: fetches,
+    };
+  }
   let frontier = collectFrontier(base, limits.pageDepth);
 
   while (frontier.length > 0) {
@@ -264,6 +329,7 @@ const completeScreen = async (
       gatedFetch,
       limits.pageDepth,
       limits.maxFetchesPerScreen - fetches,
+      limits.maxNodesPerScreen - screenNodes,
     );
     fetches += level.fetchesUsed;
     screenNodes += level.nodesAdded;
@@ -306,14 +372,15 @@ export const paginateScopedDocument = async (
   fetchNode: ScopedNodeFetcher,
   limits: ScopedPaginationLimits = DEFAULT_SCOPED_PAGINATION_LIMITS,
 ): Promise<DeepFetchResult> => {
+  const resolvedLimits = resolveScopedPaginationLimits(limits);
   const screens = discoverScreenNodes(shallowRoot);
-  const deepable = screens.slice(0, limits.maxScreensDeep);
-  const gatedFetch = createFetchGate(fetchNode, limits.fetchConcurrency);
+  const deepable = screens.slice(0, resolvedLimits.maxScreensDeep);
+  const gatedFetch = createFetchGate(fetchNode, resolvedLimits.fetchConcurrency);
 
   // All deep-fetchable screens run concurrently; the shared gate bounds total in-flight fetches.
   // Each screen's result depends only on its own budgets, so order-of-completion never changes it.
   const outcomes = await Promise.all(
-    deepable.map((screen) => completeScreen(screen, gatedFetch, limits)),
+    deepable.map((screen) => completeScreen(screen, gatedFetch, resolvedLimits)),
   );
 
   const deepById = new Map<string, RawFigmaNode>();

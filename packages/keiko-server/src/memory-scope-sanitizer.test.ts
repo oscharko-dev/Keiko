@@ -272,6 +272,51 @@ describe("sanitizeAuditEvent", () => {
     }
   });
 
+  it("sanitizes memory:workflow-omitted scopes and reason", () => {
+    const projectId = "project-secret-coordinate";
+    const reasonSecret = ["sk-", "proj", "_", "omittedsecret123456789"].join("");
+    const redact = createAuditRedactor({ additionalSecrets: [reasonSecret] }, {});
+    const event: MemoryAuditEvent = {
+      ...ENVELOPE,
+      kind: "memory:workflow-omitted",
+      workflowRunId: "run-omitted",
+      scopes: [{ kind: "project", projectId: brandProjectId(projectId) }],
+      omittedMemoryId: brandMemoryId("mem-omitted"),
+      reason: `budget excluded ${reasonSecret}`,
+    };
+
+    const result = sanitizeAuditEvent(event, redact);
+
+    const json = JSON.stringify(result);
+    expect(json).not.toContain(projectId);
+    expect(json).not.toContain(reasonSecret);
+    expect(result.kind).toBe("memory:workflow-omitted");
+    if (result.kind === "memory:workflow-omitted") {
+      expect(result.scopes[0]?.kind).toBe("project");
+      expect(result.reason).toContain("[REDACTED]");
+    }
+  });
+
+  it("sanitizes the scope coordinate in memory:workflow-write-candidate", () => {
+    const projectId = "project-write-candidate";
+    const event: MemoryAuditEvent = {
+      ...ENVELOPE,
+      kind: "memory:workflow-write-candidate",
+      workflowRunId: "run-candidate",
+      source: "workflow-success",
+      scope: { kind: "project", projectId: brandProjectId(projectId) },
+      proposedMemoryIds: [brandMemoryId("mem-proposed")],
+    };
+
+    const result = sanitizeAuditEvent(event, identityRedact);
+
+    expect(JSON.stringify(result)).not.toContain(projectId);
+    expect(result.kind).toBe("memory:workflow-write-candidate");
+    if (result.kind === "memory:workflow-write-candidate") {
+      expect(result.scope.kind).toBe("project");
+    }
+  });
+
   it("redacts a credential-shaped token in the summary field (M1 hardening — direct emitter path)", () => {
     // Use createAuditRedactor so the real secret-pattern engine runs.
     const secret = ["sk-", "proj", "_", "secret12345678901234"].join("");
@@ -340,6 +385,32 @@ describe("auditEventTouchesScope", () => {
     };
     const allowed = new Set<string>(["user:u-unrelated"]) as ReadonlySet<string>;
     expect(auditEventTouchesScope(event, allowed)).toBe(false);
+  });
+
+  it("returns true for memory:workflow-omitted when any scope is allowed", () => {
+    const event: MemoryAuditEvent = {
+      ...ENVELOPE,
+      kind: "memory:workflow-omitted",
+      workflowRunId: "run-omitted-touch",
+      scopes: [userScope],
+      omittedMemoryId: brandMemoryId("mem-touch-omitted"),
+      reason: "budget-exceeded",
+    };
+    const allowed = new Set<string>(["user:u-touch-1"]) as ReadonlySet<string>;
+    expect(auditEventTouchesScope(event, allowed)).toBe(true);
+  });
+
+  it("returns true for memory:workflow-write-candidate when its scope is allowed", () => {
+    const event: MemoryAuditEvent = {
+      ...ENVELOPE,
+      kind: "memory:workflow-write-candidate",
+      workflowRunId: "run-candidate-touch",
+      source: "workflow-success",
+      scope: userScope,
+      proposedMemoryIds: [brandMemoryId("mem-touch-candidate")],
+    };
+    const allowed = new Set<string>(["user:u-touch-1"]) as ReadonlySet<string>;
+    expect(auditEventTouchesScope(event, allowed)).toBe(true);
   });
 
   it("always returns false for memory:workflow-used regardless of content", () => {

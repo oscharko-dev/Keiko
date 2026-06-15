@@ -15,6 +15,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { ExportBar } from "./ExportBar";
 import type { QiExportResult } from "@/lib/quality-intelligence-api";
@@ -873,5 +874,169 @@ describe("ExportBar — approvedOnly scope control (Issue #282 A11y-3)", () => {
       "csv",
     );
     expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — Issue #723 audit hardening (mutation-proven regression guards)
+//
+// Closes mutation-blind spots found auditing #723 against its ACs + Stop Conditions:
+//   - AC1 names Markdown and plain text explicitly, but only their *option presence* was tested —
+//     not that they trigger a real text download (routes to the generic export, not a dry run, not
+//     the traceability route).
+//   - SC2 ("the QC option must not imply a live write") was only guarded for jira-issues at the
+//     API-call level; the quality-center adapter that #723 added had no test proving it sends
+//     dryRun:true.
+//   - SC1 ("no corrupted binary downloads") was tested with ASCII magic bytes only; nothing pinned
+//     full 0–255 byte fidelity or the malformed-base64 error path.
+//   - The a11y ACs had no automated axe assertion.
+// ---------------------------------------------------------------------------
+
+describe("ExportBar — Issue #723 audit hardening", () => {
+  // AC1: Markdown and plain text must download via the text (non-base64, non-traceability) path.
+  it.each([
+    { adapter: "markdown", filename: "run-001.md", contentType: "text/markdown" },
+    { adapter: "plain-text", filename: "run-001.txt", contentType: "text/plain" },
+  ])(
+    "downloads the '$adapter' format through the text path (dryRun:false, success shown)",
+    async ({ adapter, filename, contentType }) => {
+      const user = userEvent.setup();
+      const exportImpl = makeLocalExportFake({ filename, contentType, body: "# cases\n\n- TC-1" });
+      const traceabilityImpl =
+        vi.fn() as unknown as typeof import("@/lib/quality-intelligence-api").exportQiRunTraceability;
+      render(
+        <ExportBar runId="run-001" exportImpl={exportImpl} traceabilityImpl={traceabilityImpl} />,
+      );
+
+      await user.selectOptions(
+        screen.getByRole("combobox", { name: /adapter|format|export/i }),
+        adapter,
+      );
+      await user.click(screen.getByRole("button", { name: /download/i }));
+
+      await waitFor(() => {
+        expect(exportImpl).toHaveBeenCalledOnce();
+      });
+      const [, calledAdapter, opts] = (exportImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        string,
+        string,
+        { dryRun: boolean },
+      ];
+      // Routed to the generic export (not the traceability route) with the right id and not a dry run.
+      expect(calledAdapter).toBe(adapter);
+      expect(opts.dryRun).toBe(false);
+      expect(traceabilityImpl).not.toHaveBeenCalled();
+      expect(await screen.findByTestId("qi-export-success")).toHaveTextContent(filename);
+    },
+  );
+
+  // SC2: the Quality Center adapter must run a dry-run preview — never a live (non-dry-run) write.
+  it("calls exportImpl with dryRun:true for the quality-center adapter (SC2 — no live write)", async () => {
+    const user = userEvent.setup();
+    const exportImpl = makeTmsPreviewFake("0 test cases would be written to Quality Center.");
+    render(<ExportBar runId="run-qc" exportImpl={exportImpl} />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "quality-center",
+    );
+    await user.click(screen.getByRole("button", { name: /preview/i }));
+
+    await waitFor(() => {
+      expect(exportImpl).toHaveBeenCalledOnce();
+    });
+    const [calledRunId, calledAdapter, opts] = (exportImpl as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, string, { dryRun: boolean }];
+    expect(calledRunId).toBe("run-qc");
+    expect(calledAdapter).toBe("quality-center");
+    expect(opts.dryRun).toBe(true);
+  });
+
+  // SC1: a malformed base64 binary body (truncated/corrupted response) must surface an error — not
+  // crash with an unhandled rejection nor silently "succeed" with a corrupt file.
+  it("surfaces qi-export-error when a base64 binary body is malformed (SC1 robustness)", async () => {
+    const user = userEvent.setup();
+    const exportImpl = vi.fn().mockResolvedValue({
+      dryRun: false,
+      adapter: "pdf",
+      filename: "run-001.pdf",
+      contentType: "application/pdf",
+      byteLen: 0,
+      encoding: "base64",
+      body: "@@@not-valid-base64@@@",
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").exportQiRun;
+    render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "pdf",
+    );
+    await user.click(screen.getByRole("button", { name: /download/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-export-error")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("qi-export-success")).not.toBeInTheDocument();
+  });
+
+  // SC1: the base64 -> byte decode must preserve the FULL 0–255 range. The existing magic-byte tests
+  // only exercise ASCII (P, K, %); a high-bit-dropping mutation (e.g. `& 0x7f`) would corrupt real
+  // PDFs/ZIPs yet survive those. This pins exact bytes including 0x00, 0x80, 0xfe, 0xff.
+  it("decodes base64 binary bodies across the full 0–255 byte range without truncation", async () => {
+    const raw = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x00, 0x7f, 0x80, 0xfe, 0xff]);
+    const blobs: Blob[] = [];
+    const createSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation((b: Blob | MediaSource) => {
+        blobs.push(b as Blob);
+        return "blob:mock";
+      });
+    const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    try {
+      const user = userEvent.setup();
+      const exportImpl = vi.fn().mockResolvedValue({
+        dryRun: false,
+        adapter: "zip-bundle",
+        filename: "run-001.zip",
+        contentType: "application/zip",
+        byteLen: raw.length,
+        encoding: "base64",
+        body: btoa(String.fromCharCode(...raw)),
+      }) as unknown as typeof import("@/lib/quality-intelligence-api").exportQiRun;
+      render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
+      await user.selectOptions(
+        screen.getByRole("combobox", { name: /adapter|format|export/i }),
+        "zip-bundle",
+      );
+      await user.click(screen.getByRole("button", { name: /download/i }));
+      await waitFor(() => {
+        expect(createSpy).toHaveBeenCalled();
+      });
+      const bytes = new Uint8Array(await (blobs[0] as Blob).arrayBuffer());
+      expect(Array.from(bytes)).toEqual(Array.from(raw));
+    } finally {
+      createSpy.mockRestore();
+      revokeSpy.mockRestore();
+    }
+  });
+
+  // a11y ACs (#723): "format picker labelled" + "disabled QC option communicates its disabled state
+  // accessibly". Automated axe guard for the default (local) state and the quality-center state —
+  // the QC case also pins the aria-describedby -> connector-hint reference (no dangling reference).
+  it("has no axe violations in the default (local CSV) state", async () => {
+    const { container } = render(<ExportBar runId="run-001" />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations when the disabled Quality Center option is selected", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ExportBar runId="run-001" />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "quality-center",
+    );
+    // The connector hint (the aria-describedby target on the picker) is now rendered.
+    expect(screen.getByTestId("qi-export-connector-hint")).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

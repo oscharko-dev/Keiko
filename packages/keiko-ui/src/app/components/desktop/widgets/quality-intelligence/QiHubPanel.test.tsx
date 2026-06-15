@@ -48,7 +48,7 @@ describe("QiHubPanel", () => {
     expect(screen.getByText(/qi-run-bbbb2222/)).toBeInTheDocument();
   });
 
-  it("calls openRun with the run id when a run row is clicked", async () => {
+  it("calls openRun with an empty source handle set when a historical run row is clicked", async () => {
     const user = userEvent.setup();
     const openRun = vi.fn();
     render(
@@ -58,7 +58,7 @@ describe("QiHubPanel", () => {
       />,
     );
     await user.click(await screen.findByRole("button", { name: /open run qi-run-aaaa1111/i }));
-    expect(openRun).toHaveBeenCalledWith("qi-run-aaaa1111");
+    expect(openRun).toHaveBeenCalledWith("qi-run-aaaa1111", []);
   });
 
   it("shows an empty state when there are no runs", async () => {

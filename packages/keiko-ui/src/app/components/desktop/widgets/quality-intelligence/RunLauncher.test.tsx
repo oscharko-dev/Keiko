@@ -16,7 +16,7 @@
 // Design note: startImpl is typed as the real function but replaced with a
 // controllable fake in every test. We never hit the network.
 
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
@@ -1237,5 +1237,151 @@ describe("RunLauncher — connected capsule-set source (Epic #710 #718)", () => 
     expect(req.sources[0]).toMatchObject({ kind: "workspace", path: "/work/docs" });
     expect(req.sources[1]).toMatchObject({ kind: "capsule", capsuleId: "cap-1" });
     expect(req.sources[2]).toMatchObject({ kind: "capsule-set", capsuleSetId: SET_ID });
+  });
+});
+
+// ─── Multi-source rendered list items (Issue #731 / Epic #729) ───────────────
+//
+// When connectedSources.length > 1, RunLauncher renders a <ul aria-label="Connected sources">
+// with one <li> per source showing the kind label (via sourceKindLabel) and the value (via
+// sourceValue). These render paths were previously mutation-blind: the existing N+1 test only
+// asserted the count text and the built request, not the DOM list items. A regression in
+// sourceKindLabel or the <li> map would go undetected.
+describe("RunLauncher — multi-source connected-source list DOM (Issue #731 / Epic #729)", () => {
+  it("renders one <li> per source with correct kind labels and values for a mixed multi-source connection", () => {
+    // Arrange: file (absolute path → directly usable) + 2 folders + 1 capsule + 1 capsule-set.
+    // This exercises the "file", "workspace", "capsule", and "capsule-set" arms of
+    // sourceKindLabel and sourceValue simultaneously.
+    render(
+      <RunLauncher
+        connectedFilePath="/work/fachkonzept/funds-transfer.md"
+        connectedRoots={["/work/a", "/work/b"]}
+        connectedCapsuleIds={["cap-1"]}
+        connectedCapsuleSetIds={["set-1"]}
+      />,
+    );
+
+    // Act: locate the accessible list.
+    const list = screen.getByRole("list", { name: /connected sources/i });
+    const items = within(list).getAllByRole("listitem");
+
+    // Assert: one <li> per connected source (1 file + 2 folders + 1 capsule + 1 capsule-set).
+    expect(items).toHaveLength(5);
+
+    // Kind labels — each sourceKindLabel arm renders into the DOM.
+    expect(within(list).getByText("File")).toBeInTheDocument();
+    expect(within(list).getAllByText("Folder")).toHaveLength(2);
+    expect(within(list).getByText("Capsule")).toBeInTheDocument();
+    expect(within(list).getByText("Capsule set")).toBeInTheDocument();
+
+    // Values — sourceValue returns path / capsuleId / capsuleSetId per source kind.
+    expect(within(list).getByText("/work/fachkonzept/funds-transfer.md")).toBeInTheDocument();
+    expect(within(list).getByText("/work/a")).toBeInTheDocument();
+    expect(within(list).getByText("/work/b")).toBeInTheDocument();
+    expect(within(list).getByText("cap-1")).toBeInTheDocument();
+    expect(within(list).getByText("set-1")).toBeInTheDocument();
+  });
+});
+
+// ─── Connected figma-snapshot source (Epic #750 #756) ────────────────────────
+//
+// connectedFigmaSnapshotRunIds is wired RunLauncher → buildConnectedRunSources → the Generate
+// request, but had ZERO integration coverage. Mirrors the connected capsule-source suite: banner,
+// request shape, combined-count alongside a folder, and onRunCompleted recheckable propagation.
+describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () => {
+  const RUN_ID = "fig-run-test-abc";
+
+  it("enables Generate when a figma snapshot is connected and no manual input is present", () => {
+    render(<RunLauncher connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("renders the connected-source banner with 'Connected figma snapshot' and the run id", () => {
+    render(<RunLauncher connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected figma snapshot");
+    expect(banner).toHaveTextContent(RUN_ID);
+  });
+
+  it("calls startImpl with a figma-snapshot source when a figma snapshot is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "figma-snapshot", snapshotRunId: RUN_ID });
+  });
+
+  it("shows a combined count when a folder root and a figma snapshot are connected", () => {
+    render(<RunLauncher connectedRoots={["/work/docs"]} connectedFigmaSnapshotRunIds={[RUN_ID]} />);
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (2)");
+  });
+
+  it("appends the figma-snapshot source after a connected folder in the request", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedRoots={["/work/docs"]}
+        connectedFigmaSnapshotRunIds={[RUN_ID]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources).toHaveLength(2);
+    expect(req.sources[0]).toMatchObject({ kind: "workspace", path: "/work/docs" });
+    expect(req.sources[1]).toMatchObject({ kind: "figma-snapshot", snapshotRunId: RUN_ID });
+  });
+
+  it("passes the launched figma-snapshot source to onRunCompleted so the run card can re-check drift", async () => {
+    const user = userEvent.setup();
+    const acceptedRunId = "run-figma-123";
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: acceptedRunId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 2,
+      },
+      succeededDone(acceptedRunId),
+    ]);
+    const onRunCompleted = vi.fn();
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={onRunCompleted}
+        connectedFigmaSnapshotRunIds={[RUN_ID]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [
+        { kind: "figma-snapshot", label: RUN_ID, snapshotRunId: RUN_ID },
+      ]);
+    });
+  });
+
+  it("shows no connected-source banner when connectedFigmaSnapshotRunIds is empty", () => {
+    render(<RunLauncher connectedFigmaSnapshotRunIds={[]} />);
+    expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
   });
 });

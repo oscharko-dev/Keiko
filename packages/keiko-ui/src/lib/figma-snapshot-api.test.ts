@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
+  figmaSnapshotScreenImageUrl,
   generateFigmaCode,
   loadFigmaSnapshotSummary,
   revokeFigmaToken,
@@ -207,6 +208,14 @@ describe("loadFigmaSnapshotSummary — abort signal", () => {
   });
 });
 
+describe("figmaSnapshotScreenImageUrl — token-free PNG route", () => {
+  it("encodes run ids and screen indexes into the BFF image route", () => {
+    expect(figmaSnapshotScreenImageUrl("fs/x y", 12)).toBe(
+      "/api/figma/snapshots/fs%2Fx%20y/screens/12/image",
+    );
+  });
+});
+
 describe("revokeFigmaToken — HTTP request shape (#758)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -227,7 +236,9 @@ describe("revokeFigmaToken — HTTP request shape (#758)", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/figma/token");
     expect(init.method).toBe("DELETE");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
     expect((init.headers as Record<string, string>)["X-Keiko-CSRF"]).toBe("1");
+    expect(init.body).toBe("{}");
   });
 
   it("rejects with ApiError on a BFF error response", async () => {

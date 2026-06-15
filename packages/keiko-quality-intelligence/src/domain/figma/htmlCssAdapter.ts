@@ -9,8 +9,12 @@
 //
 // Output is a reviewable proposal (an ordered file list): `index.html` (links every screen),
 // `tokens.css` (the `:root` custom-property table), and one `screens/<id>.html` per screen. Pure: no
-// IO, no model, no Date — a given plan yields a byte-identical artifact. All text and attribute values
-// are HTML-escaped so the reviewable artifact cannot inject markup.
+// IO, no model, no clock — a given plan yields a byte-identical artifact. All text and attribute values
+// are HTML-escaped so the reviewable artifact cannot inject markup, and unsafe Unicode format chars
+// (bidi-override / zero-width / C0-C1 / DEL) are stripped from every emitted string before escaping —
+// these are not HTML metacharacters and would otherwise survive into the artifact, enabling
+// Trojan-source spoofing and zero-width-split secrets that evade redaction (same invariant the QI atom
+// path enforces). The TAB/LF/CR trio and all ordinary text survive, so clean boards are unchanged.
 //
 // CSS value handling: fontFamily tokens are emitted as quoted strings with embedded double-quotes
 // escaped and control/injection characters ('{', '}', ';', '</', '*/', newlines) stripped, so a
@@ -19,10 +23,11 @@
 // rather than emitted.
 //
 // Screen file names: Figma ids may contain ':' (Windows-invalid) and ';' (URI scheme risk in hrefs).
-// sanitizeScreenFileName replaces /[:;]/g with '-'. Collisions after substitution are resolved by a
-// numeric suffix. All relative hrefs inside screen HTML are prefixed with './' so they are relative
-// to the screens/ directory, not ambiguous URI-scheme fragments. The raw screen id is preserved in
-// the data-screen-id attribute.
+// Stored evidence can also be tampered with, so screen ids are normalized to one safe POSIX path
+// segment ([A-Za-z0-9_-]) before they become CodeFile.path / href material. Collisions after
+// substitution are resolved by a numeric suffix. All relative hrefs inside screen HTML are prefixed
+// with './' so they are relative to the screens/ directory, not ambiguous URI-scheme fragments. The
+// raw screen id is preserved in the data-screen-id attribute.
 //
 // Layout / sizing / cornerRadius / typography (from IrNode, threaded through EmissionElement):
 // For nodes with auto-layout, a deterministic CSS class is emitted (name = "n-" + sanitized node id)
@@ -35,6 +40,7 @@
 // What is NOT reproduced: absolute positioning, constraints, effects (shadows/blur), image fills
 // beyond refs, grid layout, overflow, z-ordering, component variants.
 
+import { stripUnsafeFormatChars } from "../assertions.js";
 import type { CodeArtifact, CodeFile, CodeTargetAdapter } from "./codeTargetAdapter.js";
 import type {
   CodeEmissionPlan,
@@ -66,22 +72,39 @@ const HTML_ESCAPES: Readonly<Record<string, string>> = {
   "'": "&#39;",
 };
 
+// Strip unsafe Unicode format chars (bidi-override / zero-width / C0-C1 / DEL) BEFORE HTML-escaping.
+// These are NOT HTML metacharacters, so escaping alone passes them verbatim into the reviewable
+// artifact — enabling Trojan-source spoofing and zero-width-split secrets that evade redaction. This
+// mirrors the QI atom-text invariant (stripUnsafeFormatChars). Clean text is unchanged — the TAB/LF/CR
+// trio and all ordinary/accented/CJK/emoji code points survive — so deterministic output stays
+// byte-identical for non-hostile boards.
 const escapeHtml = (value: string): string =>
-  value.replace(/[&<>"']/gu, (char) => HTML_ESCAPES[char] ?? char);
+  stripUnsafeFormatChars(value).replace(/[&<>"']/gu, (char) => HTML_ESCAPES[char] ?? char);
 
 const indent = (depth: number): string => INDENT.repeat(depth);
 
 // ─── Fix #7: safe screen file names ──────────────────────────────────────────
 //
-// Figma ids contain ':' (invalid on Windows file paths) and INSTANCE ids contain ';' which is
-// parsed as a URI scheme separator in sibling hrefs (e.g. "I123:456;789:12.html" → opaque URI).
-// We replace /[:;]/g with '-'; ids are unique before substitution so collisions are rare, but a
-// numeric suffix is appended defensively.
+// Figma ids contain ':' (invalid on Windows file paths) and INSTANCE ids contain ';' which is parsed
+// as a URI scheme separator in sibling hrefs (e.g. "I123:456;789:12.html" → opaque URI). A tampered
+// stored snapshot could also contain slashes, backslashes, or other path metacharacters. Normalize to
+// a single artifact-relative filename segment. Ids are unique before substitution so collisions are
+// rare, but a numeric suffix is appended defensively.
+const SAFE_SCREEN_FILE_RE = /[^A-Za-z0-9_-]/gu;
+
+function sanitizeScreenFileName(screenId: string): string {
+  const cleaned = stripUnsafeFormatChars(screenId)
+    .replace(SAFE_SCREEN_FILE_RE, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  return cleaned.length > 0 ? cleaned : "screen";
+}
+
 function buildSafeNameIndex(screens: readonly ScreenEmission[]): ReadonlyMap<string, string> {
   const seen = new Map<string, number>();
   const result = new Map<string, string>();
   for (const screen of screens) {
-    const base = screen.screenId.replace(/[:;]/gu, "-");
+    const base = sanitizeScreenFileName(screen.screenId);
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     result.set(screen.screenId, count === 0 ? base : `${base}-${String(count)}`);
@@ -100,7 +123,12 @@ function buildSafeNameIndex(screens: readonly ScreenEmission[]): ReadonlyMap<str
 const CSS_INJECTION_RE = /[{};]|<\/|\*\/|[\u0000-\u001f\u007f]/gu;
 
 const safeFontFamily = (family: string): string => {
-  const cleaned = family.replace(CSS_INJECTION_RE, "").replace(/"/gu, "\\22 ");
+  // Strip unsafe Unicode format chars first — bidi/zero-width/C1 are NOT covered by CSS_INJECTION_RE
+  // (which only strips C0/DEL + structural injection sequences) — then escape embedded quotes. Same
+  // egress invariant as escapeHtml: these chars would otherwise survive into the quoted CSS string.
+  const cleaned = stripUnsafeFormatChars(family)
+    .replace(CSS_INJECTION_RE, "")
+    .replace(/"/gu, "\\22 ");
   return `"${cleaned}"`;
 };
 
@@ -245,7 +273,12 @@ const collectStyles = (element: EmissionElement, ctx: ScreenStyleContext): void 
     ctx.rules.push("}");
   }
 
-  for (const child of element.children) collectStyles(child, ctx);
+  // renderElement discards the children of void-role elements (image/input), so collecting their
+  // styles would emit orphaned CSS rules referencing classes that appear on no rendered element.
+  // Skip the recursion for void roles to keep the stylesheet aligned with the emitted HTML.
+  if (!VOID_ROLES.has(element.role)) {
+    for (const child of element.children) collectStyles(child, ctx);
+  }
 };
 
 // ─── HTML element rendering ───────────────────────────────────────────────────
@@ -265,6 +298,11 @@ function elementAttributes(
   if (element.role === "link") parts.push('href="#"');
   if (element.role === "input") parts.push(`aria-label="${escapeHtml(element.displayName)}"`);
   if (element.role === "image") parts.push(`alt="${escapeHtml(element.displayName)}"`);
+  // A text-less button/link gets no accessible name from its (empty) content; fall back to the
+  // structural display name so the reviewable artifact stays screen-reader navigable (WCAG 4.1.2).
+  if ((element.role === "button" || element.role === "link") && element.text === undefined) {
+    parts.push(`aria-label="${escapeHtml(element.displayName)}"`);
+  }
   return parts.join(" ");
 }
 
@@ -295,7 +333,7 @@ function renderNav(
   if (navTargets.length === 0) return [];
   const lines: string[] = [`${indent(depth)}<nav aria-label="Screen navigation">`];
   for (const target of navTargets) {
-    const safeName = safeNames.get(target.toScreenId) ?? target.toScreenId.replace(/[:;]/gu, "-");
+    const safeName = safeNames.get(target.toScreenId) ?? sanitizeScreenFileName(target.toScreenId);
     const href = `./${escapeHtml(safeName)}.html`;
     const trigger = escapeHtml(target.trigger);
     const label = escapeHtml(target.toScreenName);
@@ -354,7 +392,7 @@ function renderIndexHtml(
   safeNames: ReadonlyMap<string, string>,
 ): string {
   const links = screens.map((screen) => {
-    const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
+    const safeName = safeNames.get(screen.screenId) ?? sanitizeScreenFileName(screen.screenId);
     return (
       `${indent(3)}<li><a href="screens/${escapeHtml(safeName)}.html">` +
       `${escapeHtml(screen.screenName)}</a></li>`
@@ -433,7 +471,7 @@ function emitHtmlCss(plan: CodeEmissionPlan): CodeArtifact {
     { path: "index.html", contents: renderIndexHtml(plan.screens, safeNames) },
     { path: "tokens.css", contents: renderTokensCss(plan.tokens) },
     ...plan.screens.map((screen) => {
-      const safeName = safeNames.get(screen.screenId) ?? screen.screenId.replace(/[:;]/gu, "-");
+      const safeName = safeNames.get(screen.screenId) ?? sanitizeScreenFileName(screen.screenId);
       return {
         path: `screens/${safeName}.html`,
         contents: renderScreenHtml(screen, safeNames, lookups),

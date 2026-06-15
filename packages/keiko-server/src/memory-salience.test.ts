@@ -159,6 +159,43 @@ describe("captureSalientFromTurn", () => {
     expect(countMemories(vault, ctx)).toBe(3);
   });
 
+  it("does not forward assistant output to the salience model prompt", async () => {
+    const vault = makeVault();
+    let saliencePrompt = "";
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () => ({
+        call(request): Promise<NormalizedResponse> {
+          saliencePrompt = request.messages.map((message) => message.content).join("\n");
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: ATLAS_FACTS,
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "salience-test",
+              promptTokens: 7,
+              completionTokens: 3,
+              latencyMs: 11,
+              costClass: "high",
+            },
+          });
+        },
+      }),
+    });
+    const ctx = context();
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "assistant-only-sensitive-context",
+    );
+    expect(saliencePrompt).toContain(USER_TEXT);
+    expect(saliencePrompt).not.toContain("assistant-only-sensitive-context");
+  });
+
   it("persists records that carry tags and the salience captureRationale through validation", async () => {
     // The vault runs gateMemoryRecord on insert, so reading the records back proves the full
     // round-trip (tags + provenance.captureRationale) survives contract validation.
@@ -297,5 +334,102 @@ describe("captureSalientFromTurn", () => {
     );
     // The Atlas fact is a near-duplicate of the seed → dropped; Rust + Berlin remain.
     expect(actions).toHaveLength(2);
+  });
+
+  it("blocks confidential salience candidates before durable persistence", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              body: "The user's private support email is developer@example.com.",
+              type: "fact",
+              confidence: 0.8,
+              scope: "user",
+              tags: ["support"],
+            },
+          ]),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: "I prefer issue triage on Monday mornings.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    expect(actions).toEqual([{ kind: "rejected", reason: "sensitive-memory-requires-approval" }]);
+    expect(countMemories(vault, ctx)).toBe(0);
+  });
+
+  it("skips the salience model call when the user text is unsafe for memory egress", async () => {
+    const vault = makeVault();
+    let called = false;
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () => ({
+        call(): Promise<NormalizedResponse> {
+          called = true;
+          return Promise.resolve({
+            modelId: "gpt-test",
+            content: ATLAS_FACTS,
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "salience-test",
+              promptTokens: 7,
+              completionTokens: 3,
+              latencyMs: 11,
+              costClass: "high",
+            },
+          });
+        },
+      }),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: "My private support email is developer@example.com.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "assistant text must not be sent to salience",
+    );
+    expect(actions).toEqual([]);
+    expect(called).toBe(false);
+    expect(countMemories(vault, ctx)).toBe(0);
+  });
+
+  it("threads deployment redaction literals into salience secret rejection", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      redactionSecrets: ["CustomerOmega"],
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              body: "CustomerOmega requires SSO for releases.",
+              type: "fact",
+              confidence: 0.8,
+              scope: "project",
+              tags: ["customer"],
+            },
+          ]),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: "CustomerOmega requires SSO for releases.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    expect(actions).toEqual([]);
+    expect(countMemories(vault, ctx)).toBe(0);
   });
 });

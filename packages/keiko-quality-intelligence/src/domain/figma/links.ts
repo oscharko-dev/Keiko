@@ -9,9 +9,6 @@
 //   3. CANVAS `flowStartingPoints[]` + `prototypeStartNodeID` — flow entry points, emitted as
 //      `{ sourceNodeId: <canvasId>, trigger: "FLOW_START", targetNodeId }`.
 //
-// URL actions (type=URL, url=<href>) are surfaced with targetNodeId `url:<href>` so they appear in
-// `unresolvedLinks` downstream (no screen owns a `url:` node id) rather than being silently dropped.
-//
 // Links come from the pruned tree (hidden/dropped nodes emit nothing) plus the raw root for flow
 // entry points. The output is sorted by a stable structural key so order never depends on traversal.
 
@@ -23,22 +20,20 @@ const FLOW_START = "FLOW_START";
 const UNKNOWN_TRIGGER = "UNKNOWN";
 // Shared constant — see prune.ts for rationale. Must stay in sync with every other recursive walk.
 const MAX_TREE_DEPTH = 512;
+const EXTERNAL_LINK_TARGET = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|tel:|data:|javascript:)/iu;
 
-// URL actions carry type="URL" and a url field instead of a destinationId. We surface them with the
-// synthetic target `url:<href>` so they appear in unresolvedLinks downstream (no screen owns a node
-// with that id) rather than being silently dropped. Board-content URLs are acceptable here.
-const readUrlAction = (action: Record<string, unknown>): string | undefined => {
-  if (readString(action.type) !== "URL") return undefined;
-  const url = readString(action.url);
-  return url !== undefined ? `url:${url}` : undefined;
-};
+const isExternalLinkTarget = (targetNodeId: string): boolean =>
+  targetNodeId.startsWith("url:") || EXTERNAL_LINK_TARGET.test(targetNodeId);
 
 const readDestination = (action: Record<string, unknown>): string | undefined => {
   const direct = readString(action.destinationId);
-  if (direct !== undefined) return direct;
+  if (direct !== undefined) return isExternalLinkTarget(direct) ? undefined : direct;
   const nav = asNode(action.navigation);
-  if (nav !== undefined) return readString(nav.destinationId);
-  return readUrlAction(action);
+  if (nav !== undefined) {
+    const nested = readString(nav.destinationId);
+    return nested !== undefined && !isExternalLinkTarget(nested) ? nested : undefined;
+  }
+  return undefined;
 };
 
 const triggerType = (entry: Record<string, unknown>): string => {
@@ -97,8 +92,12 @@ const collectFlowEntries = (root: FigmaSourceNode, out: InterScreenLink[]): void
   if (start !== undefined) out.push({ sourceNodeId, trigger: FLOW_START, targetNodeId: start });
 };
 
+// Injective dedup/sort key: JSON.stringify of the field tuple escapes every character (NUL,
+// backslash, quote, ...), so two distinct links can never collide into one key, which would
+// silently drop a transition feeding the downstream navigation graph (#811). Deterministic and
+// stable-ordered, preserving the byte-identical IR contract for every input.
 const linkKey = (link: InterScreenLink): string =>
-  `${link.sourceNodeId}\u0000${link.trigger}\u0000${link.targetNodeId}`;
+  JSON.stringify([link.sourceNodeId, link.trigger, link.targetNodeId]);
 
 /** Extract stable-ordered, deduped raw inter-screen links from the pruned tree + raw flow entries. */
 export const extractInterScreenLinks = (

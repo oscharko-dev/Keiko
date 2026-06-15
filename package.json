@@ -36,7 +36,7 @@
     "keiko:stop": "node dist/cli/index.js stop",
     "keiko:status": "node dist/cli/index.js status",
     "typecheck": "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
-    "lint": "eslint . --max-warnings=0",
+    "lint": "eslint . --max-warnings=0 && npm --workspace @oscharko-dev/keiko-ui run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run build:packages && vitest run",

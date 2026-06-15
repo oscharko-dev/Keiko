@@ -22,6 +22,7 @@ import {
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
@@ -481,6 +482,19 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
   });
 
+  it("excludes a connector with a whitespace-only selectedId (parity with the server's trim guard)", () => {
+    // A blank id would reach the server and be rejected with a QI_BAD_REQUEST 400; the reader treats
+    // it as "no selection" and skips it so Generate never sends an unusable capsule source.
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "   " }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
   it("deduplicates the same capsuleId from two connectors", () => {
     const { linkedConnectorCapsuleIds } = makeConnectHarness(
       [
@@ -499,6 +513,25 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
       [conn("quality", "files-1")],
     );
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
+  it("caps the capsule list at MAX_SCOPES when more than 16 capsule connectors are bound", () => {
+    // The reader caps at MAX_SCOPES so the QI Generate request never exceeds the server's source
+    // limit (mirrors the linkedAllFilesRoots cap). Without this test an off-by-one regression in the
+    // `ids.length >= MAX_SCOPES` break would silently let 17+ capsule sources through.
+    const connectors = Array.from({ length: 20 }, (_unused, i) =>
+      win(
+        "connector",
+        { selectedKind: "capsule", selectedId: `cap-${String(i)}` },
+        `conn-${String(i)}`,
+      ),
+    );
+    const conns = connectors.map((w) => conn("quality", w.id));
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...connectors],
+      conns,
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toHaveLength(MAX_SCOPES);
   });
 });
 
@@ -537,6 +570,152 @@ describe("linkedConnectorCapsuleSetIds (Epic #710 #718)", () => {
     );
     expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-1", "set-2"]);
   });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-xyz" }, "conn-1"),
+      ],
+      [conn("conn-1", "quality")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-xyz"]);
+  });
+
+  it("excludes a connector with an empty selectedId", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("ignores connections to non-connector windows", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", { resolvedRoot: "/data" }, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("caps the capsule-set list at MAX_SCOPES when more than 16 capsule-set connectors are bound", () => {
+    const connectors = Array.from({ length: 20 }, (_unused, i) =>
+      win(
+        "connector",
+        { selectedKind: "capsule-set", selectedId: `set-${String(i)}` },
+        `conn-${String(i)}`,
+      ),
+    );
+    const conns = connectors.map((w) => conn("quality", w.id));
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...connectors],
+      conns,
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toHaveLength(MAX_SCOPES);
+  });
+});
+
+// ─── Epic #750 #756 — linkedFigmaSnapshotRunIds ──────────────────────────────
+//
+// The Figma Snapshot reader is the direct parallel of the connector capsule reader above (same
+// dedupe / cap / window-type-exclusion / blank-skip semantics) but reads cfg.snapshotRunId from
+// "figma" windows. It previously had ZERO coverage, so a regression in the window-type filter, the
+// blank guard, the dedupe set, or the MAX_SCOPES cap was invisible.
+describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
+  it("returns empty when the quality window has no connections", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("returns the snapshotRunId from a connected Figma Snapshot window", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-abc" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-abc"]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-xyz" }, "fig-1")],
+      [conn("fig-1", "quality")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-xyz"]);
+  });
+
+  it("returns multiple snapshot run ids for multiple connected Figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-1" }, "f1"),
+        win("figma", { snapshotRunId: "fig-2" }, "f2"),
+      ],
+      [conn("quality", "f1"), conn("quality", "f2")],
+    );
+    const ids = linkedFigmaSnapshotRunIds("quality");
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain("fig-1");
+    expect(ids).toContain("fig-2");
+  });
+
+  it("ignores connections to non-figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+        win("files", { resolvedRoot: "/data" }, "files-1"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "files-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with an empty snapshotRunId", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with a whitespace-only snapshotRunId (parity with the capsule reader's trim guard)", () => {
+    // A blank run id would reach the server and be rejected; the reader trims and treats it as "no
+    // selection" so Generate never sends an unusable figma-snapshot source.
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "   " }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("deduplicates the same snapshotRunId from two figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-1"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-2"),
+      ],
+      [conn("quality", "fig-1"), conn("quality", "fig-2")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-dup"]);
+  });
+
+  it("caps the snapshot list at MAX_SCOPES when more than 16 figma windows are bound", () => {
+    // Mirrors the capsule reader cap: without this an off-by-one regression in the
+    // `ids.length >= MAX_SCOPES` break would let 17+ figma sources through to Generate.
+    const figmas = Array.from({ length: 20 }, (_unused, i) =>
+      win("figma", { snapshotRunId: `fig-${String(i)}` }, `fig-${String(i)}`),
+    );
+    const conns = figmas.map((w) => conn("quality", w.id));
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...figmas],
+      conns,
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toHaveLength(MAX_SCOPES);
+  });
 });
 
 describe("makeMutations.add — QI run-card dedup (#270)", () => {
@@ -565,6 +744,43 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     const id2 = h.add("qiRun", { runId: "qi-run-1" });
     expect(id2).toBe(id1);
     expect(h.cards()).toHaveLength(1);
+  });
+
+  it("merges incoming cfg into the existing card when the same runId is reopened", () => {
+    const h = harness();
+    const id1 = h.add("qiRun", { runId: "qi-run-1" });
+    const id2 = h.add("qiRun", {
+      runId: "qi-run-1",
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.cards()[0]?.cfg).toMatchObject({
+      runId: "qi-run-1",
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+  });
+
+  it("overwrites carried source handles with an explicit empty set when a run row is reopened", () => {
+    const h = harness();
+    const staleHandles = JSON.stringify([
+      { kind: "workspace", label: "specs", path: "/abs/specs" },
+    ]);
+    const id1 = h.add("qiRun", {
+      runId: "qi-run-1",
+      connectedSourcesJson: staleHandles,
+    });
+    const id2 = h.add("qiRun", { runId: "qi-run-1", connectedSourcesJson: "[]" });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.cards()[0]?.cfg).toMatchObject({
+      runId: "qi-run-1",
+      connectedSourcesJson: "[]",
+    });
   });
 
   it("opens a separate card for a different runId", () => {
@@ -913,6 +1129,37 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns).toHaveLength(0);
   });
 
+  it("draws a quality↔connector edge WITHOUT firing the chat onConnectorBind callback (#710 #718)", async () => {
+    // The QI hub reads a connected connector's capsule per-render (linkedConnectorCapsuleIds); it must
+    // NOT go through the chat localKnowledgeScopes bind path. connectorChatBind requires one side to be
+    // a chat window, so for a quality↔connector pair it returns null, chatWindowId stays null, and
+    // onConnectorBind is never invoked — yet the relationship edge is still drawn so the reader sees it.
+    const store = { conns: [] as Connection[] };
+    let connectorBindCalls = 0;
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality-1"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-abc" }, "conn-1"),
+      ],
+      [],
+      {
+        connecting: { from: "quality-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => {
+          connectorBindCalls += 1;
+          return true;
+        },
+      },
+    );
+    harness.confirmConnect("conn-1", evt);
+    await flushAsyncBind();
+    expect(connectorBindCalls).toBe(0);
+    expect(store.conns).toHaveLength(1);
+    // The edge carries no chat-bind snapshot fields — it is a plain relationship edge the QI hub reads.
+    expect(store.conns[0]?.boundConnectorId).toBeUndefined();
+    expect(store.conns[0]?.boundChatWindowId).toBeUndefined();
+  });
+
   it("draws the edge with a boundRoot snapshot when onScopeBind accepts", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
@@ -1173,5 +1420,26 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       relativePaths: ["a.ts"],
       root: "/data/docs",
     });
+  });
+});
+
+// ─── AC2 Chat-parity drift guard (Issue #731 / Epic #729) ────────────────────
+//
+// MAX_SCOPES (the QI hub's connected-source cap, workspaceActions.ts) and
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources (Chat's grounding cap from
+// @oscharko-dev/keiko-contracts) must stay in sync. A change to one without
+// updating the other silently breaks the parity contract: Chat users would see
+// a different source limit than QI users.
+//
+// Server-side precedent: runIngestion.test.ts pins the same invariant against
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources (Issue #730 / #731 audit).
+// This test extends that guard to the UI layer.
+describe("MAX_SCOPES — AC2 Chat-parity drift guard (Issue #731 / Epic #729)", () => {
+  it("matches DEFAULT_GROUNDING_LIMITS.maxConnectedSources so the QI hub cap stays in sync with Chat", () => {
+    // If Chat's grounding default changes, this test will fail and force an intentional
+    // decision about whether MAX_SCOPES should change too. The alternative — silently
+    // leaving the values misaligned — would mean QI accepts a different number of sources
+    // than Chat, violating the N+1 parity AC.
+    expect(MAX_SCOPES).toBe(DEFAULT_GROUNDING_LIMITS.maxConnectedSources);
   });
 });

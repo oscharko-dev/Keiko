@@ -28,6 +28,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { handleQiEditCandidate } from "../editRoutes.js";
+import { handleGetQiRun } from "../uiRoutes.js";
 import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
 
 type Candidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
@@ -332,6 +333,8 @@ describe("handleQiEditCandidate — valid edit", () => {
     await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir));
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.candidates[0]?.title).toBe("Persisted title");
+    // The edit REPLACES the matched row in place — it must not append a duplicate.
+    expect(reloaded?.candidates).toHaveLength(1);
   });
 
   it("applies the mandatory redactor to edited fields before persist", async () => {
@@ -590,5 +593,305 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
     );
     expect(result.status).toBe(404);
     expect(errorOf(result).code).toBe("QI_CANDIDATES_NOT_FOUND");
+  });
+});
+
+// ─── Audit #726 hardening: AC1 round-trip via the real GET handler + persist-level redaction ────
+//
+// The existing valid-edit suite verifies persistence via a DIRECT `loadQualityIntelligenceCandidates`
+// reload and redaction via the WIRE response only. These cases close the remaining mutation-blind
+// surfaces: (1) AC1's "reflected on the next run-detail fetch" through the actual `handleGetQiRun`
+// handler — whose `projectCandidate` is a SEPARATE projection from the edit route's, so a write/read
+// mismatch would only surface here; (2) AC2's "redaction-attested" at the on-disk persist layer for
+// both the candidates artifact provenance label (#725/#1041) and the `.review.json` audit label
+// (#282 FIX M1); (3) a JSON-array body (valid JSON, wrong shape) is rejected with a coded error.
+
+// A GET run-detail context. The handler reads no body; a drained empty stream stands in for `req`.
+function getCtx(runId: string): RouteContext {
+  return {
+    req: makeRawReq(""),
+    res: {} as RouteContext["res"],
+    params: { id: runId },
+    url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}`),
+  };
+}
+
+interface DetailCandidate {
+  readonly id: string;
+  readonly title: string;
+  readonly priority: string;
+  readonly preconditions: readonly string[];
+}
+
+const detailCandidates = (result: RouteResult): readonly DetailCandidate[] =>
+  (result.body as { candidates: readonly DetailCandidate[] }).candidates;
+
+describe("handleQiEditCandidate — AC1 round-trip through the run-detail GET handler", () => {
+  it("reflects a persisted edit on the next GET /runs/:id fetch (not just a direct artifact reload)", async () => {
+    const edit = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "Round-trip title", priority: "P0", preconditions: [] },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // AC1: the SAME evidenceDir, fetched through the real read handler, must reflect the edit.
+    const fetched = handleGetQiRun(getCtx(RUN_ID), deps(evidenceDir));
+    expect(fetched.status).toBe(200);
+    const edited = detailCandidates(fetched).find((c) => c.id === "tc-1");
+    expect(edited?.title).toBe("Round-trip title");
+    expect(edited?.priority).toBe("P0");
+    expect(edited?.preconditions).toEqual([]);
+  });
+});
+
+describe("handleQiEditCandidate — AC2 redaction attested at the persist layer", () => {
+  it("redacts the provenance editorLabel on disk while keeping the editedBy enum byte-exact (#725/#1041)", async () => {
+    await handleQiEditCandidate(
+      ctx(
+        RUN_ID,
+        makeReq({
+          candidateId: "tc-1",
+          edited: { title: "secret-token" },
+          editorLabel: "alice-secret",
+        }),
+      ),
+      deps(evidenceDir, upcaseRedact),
+    );
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    const revision = reloaded?.editedRevisions?.[0];
+    // The user-controlled free-text label is redacted before it reaches `<runId>.candidates.json`.
+    expect(revision?.provenance.editorLabel).toBe("ALICE-SECRET");
+    // Surgical redaction: had the WHOLE provenance been redacted, `editedBy` would become "HUMAN",
+    // the strict read validator would reject the revision, and `revision` would be absent. Its
+    // byte-exact value proves only the label was routed through the redactor.
+    expect(revision?.provenance.editedBy).toBe("human");
+    // Edited body fields are redacted too (not only the label).
+    expect(revision?.editedFields.title).toBe("SECRET-TOKEN");
+    expect(reloaded?.candidates[0]?.title).toBe("SECRET-TOKEN");
+  });
+
+  it("redacts the reviewerLabel in the `.review.json` edit audit entry before persist (#282 M1)", async () => {
+    await handleQiEditCandidate(
+      ctx(
+        RUN_ID,
+        makeReq({ candidateId: "tc-1", edited: { title: "Audited" }, editorLabel: "bob-secret" }),
+      ),
+      deps(evidenceDir, upcaseRedact),
+    );
+    const review = loadRunReviewState(RUN_ID, evidenceDir);
+    const editEntry = (review?.auditLog ?? []).find((e) => e.action === "edit");
+    expect(editEntry?.reviewerLabel).toBe("BOB-SECRET");
+  });
+});
+
+describe("handleQiEditCandidate — malformed body shape", () => {
+  it("returns 400 QI_BAD_REQUEST for a body that is valid JSON but a top-level array", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(ctx(RUN_ID, makeRawReq("[]")), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect(errorOf(result).code).toBe("QI_BAD_REQUEST");
+    // a rejected edit persists nothing
+    expect(
+      loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.editedRevisions ?? [],
+    ).toHaveLength(0);
+  });
+});
+
+describe("handleQiEditCandidate — multi-candidate isolation", () => {
+  it("edits only the matched row, leaving every sibling candidate byte-identical", async () => {
+    // Reseed the artifact with two candidates so the edit must target exactly one row. A mutation
+    // that replaced every row (instead of mapping only the matched id) would corrupt `tc-2`.
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-08T10:00:00.000Z",
+      candidates: [seedCandidate("tc-1"), seedCandidate("tc-2")],
+      evidenceDir,
+      redact: (v) => v,
+    });
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "Only tc-1 changes", priority: "P0" },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    const rows = reloaded?.candidates ?? [];
+    expect(rows.find((c) => c.id === "tc-1")).toMatchObject({
+      title: "Only tc-1 changes",
+      priority: "P0",
+    });
+    // The untouched sibling keeps its seeded values verbatim.
+    expect(rows.find((c) => c.id === "tc-2")).toMatchObject({
+      title: "Original tc-2",
+      priority: "P2",
+      steps: ["step-a"],
+    });
+    // Exactly one revision is recorded, scoped to the edited candidate.
+    const revisions = reloaded?.editedRevisions ?? [];
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]?.candidateId).toBe("tc-1");
+  });
+});
+
+// ─── Epic #712 integration audit: candidate-text normalisation parity with generation ───────────
+//
+// The generation path strips bidi / zero-width / control spoofing code points from every persisted
+// candidate text field (parseGeneratedCandidates → normaliseCandidateText). The inline-edit path must
+// apply the SAME normalisation before persist, or an edited title / step / tag / reviewer label carries
+// those code points to disk, the run-detail GET, and every export — the #280/#1038 spoofing class,
+// reachable through the human-edit channel. These cases pin the parity: unsafe code points are stripped
+// from an accepted edit, and a field whose only content was unsafe code points is rejected (never
+// silently dropped or persisted as junk).
+
+const RLO = String.fromCodePoint(0x202e); // right-to-left override (bidi spoof)
+const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+const ZWJ = String.fromCodePoint(0x200d); // zero-width joiner
+const BOM = String.fromCodePoint(0xfeff); // byte-order mark / zero-width no-break space
+const UNSAFE_CHARS = [RLO, ZWSP, ZWJ, BOM];
+const hasUnsafe = (value: string): boolean => UNSAFE_CHARS.some((ch) => value.includes(ch));
+
+describe("handleQiEditCandidate — strips bidi/zero-width/control chars before persist (Epic #712)", () => {
+  it("strips spoofing code points from the persisted title, list items, and reviewer labels", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: {
+              title: `Login ${RLO}evil${ZWSP} case${BOM}`,
+              steps: [`open${ZWJ} the page`, `submit${ZWSP}`],
+              tags: [`smoke${RLO}`],
+            },
+            editorLabel: `Ali${RLO}ce${ZWSP}`,
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    // Exact equality pins that every spoofing code point is stripped while the visible text survives.
+    expect((reloaded?.candidates ?? [])[0]).toMatchObject({
+      title: "Login evil case",
+      steps: ["open the page", "submit"],
+      tags: ["smoke"],
+    });
+    // The provenance label and the `.review.json` audit label both derive from editorLabel → both clean.
+    expect((reloaded?.editedRevisions ?? [])[0]?.provenance.editorLabel).toBe("Alice");
+    const auditLog = loadRunReviewState(RUN_ID, evidenceDir)?.auditLog ?? [];
+    expect(auditLog.find((e) => e.action === "edit")?.reviewerLabel).toBe("Alice");
+  });
+
+  it("reflects the cleaned title (no spoofing code points) on the next run-detail GET fetch", async () => {
+    const edit = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: `Audit ${RLO}clean${ZWSP} title` },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // AC1 read-back through the real GET projection reflects the cleaned text, never the spoofing chars.
+    const fetched = handleGetQiRun(getCtx(RUN_ID), deps(evidenceDir));
+    const title = detailCandidates(fetched).find((c) => c.id === "tc-1")?.title ?? "";
+    expect(title).toBe("Audit clean title");
+    expect(hasUnsafe(title)).toBe(false);
+  });
+
+  it("rejects an edit whose required field is only spoofing code points (400, not a silent drop)", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { steps: [`${ZWSP}${ZWJ}${BOM}`] },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    // A step of only zero-width chars normalises to "" → rejected as empty/invalid; nothing persists.
+    expect(result.status).toBe(400);
+    expect(errorOf(result).code).toBe("QI_BAD_EDIT");
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions ?? []).toHaveLength(0);
+    expect(reloaded?.candidates[0]?.steps).toEqual(["step-a"]);
+  });
+
+  it("rejects an edit whose entire reviewer label is spoofing code points (400 QI_BAD_EDIT)", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "Valid title" },
+            editorLabel: `${RLO}${ZWSP}${BOM}`,
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    // editorLabel normalises to "" → the route requires a non-empty reviewer label → 400, no persist.
+    expect(result.status).toBe(400);
+    expect(errorOf(result).code).toBe("QI_BAD_EDIT");
+    expect(
+      loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.editedRevisions ?? [],
+    ).toHaveLength(0);
+  });
+
+  it("measures MAX_TITLE_LEN on the cleaned title, so zero-width padding cannot smuggle it past the cap", async () => {
+    // 256 visible chars (exactly MAX_TITLE_LEN) + zero-width padding → raw length 258. Because the
+    // route normalises BEFORE the length check, the cleaned 256-char title is accepted and persisted.
+    // Were normalisation applied AFTER validation, the raw 258-length title would be rejected (400) —
+    // this pins the normalise-before-validate ordering in the title-length direction.
+    const cleanTitle = "A".repeat(256);
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: `${cleanTitle}${ZWSP}${BOM}` },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.candidates[0]?.title).toBe(
+      cleanTitle,
+    );
   });
 });

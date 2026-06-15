@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   parseCapabilityList,
   parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
   parseModelCapability,
+  resolveOutboundHttpEgressConfig,
   toSafeObject,
 } from "./config.js";
 
@@ -48,12 +50,45 @@ function rawWithProvider(mutate: (provider: RawProvider) => Record<string, unkno
 }
 
 describe("parseGatewayConfig", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("parses a structurally valid config", () => {
     const config = parseGatewayConfig(validRaw());
     expect(config.providers).toHaveLength(1);
     expect(config.providers[0]?.modelId).toBe("example-chat-model");
     expect(config.providers[0]?.apiKeyHeaderName).toBe("authorization");
     expect(config.circuitBreaker.failureThreshold).toBe(5);
+  });
+
+  it("parses an optional Figma access token from local config", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      figma: { accessToken: "  figd_config-token  " },
+    });
+
+    expect(config.figma?.accessToken).toBe("figd_config-token");
+  });
+
+  it("rejects malformed Figma config without echoing token-like values", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        figma: "figd_bad-token",
+      }),
+    ).toThrow(/figma must be an object/);
+    try {
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        figma: { accessToken: 123 },
+      });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("figma.accessToken");
+      expect((error as Error).message).not.toContain("figd_bad-token");
+    }
   });
 
   it("parses explicit enterprise egress settings and applies them to providers", () => {
@@ -90,6 +125,48 @@ describe("parseGatewayConfig", () => {
       caBundlePath: "/etc/keiko/env-ca.pem",
     });
     expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("lets env vars override explicit enterprise egress settings per field", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: {
+        httpProxy: "http://proxy.config.local:8080",
+        httpsProxy: "http://secure-proxy.config.local:8443",
+        noProxy: "localhost,.config.example",
+      },
+    };
+    const config = parseGatewayConfig(raw, {
+      KEIKO_HTTP_PROXY: "http://proxy.env.local:8080",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.egress).toEqual({
+      httpProxy: "http://proxy.env.local:8080/",
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      noProxy: ["localhost", ".config.example"],
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("keeps valid config-file egress when a credentialed env override is ignored", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: { httpsProxy: "http://secure-proxy.config.local:8443" },
+    };
+    const config = parseGatewayConfig(raw, {
+      HTTPS_PROXY: "http://user:supersecret@proxy.env.local:8080",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.egress).toEqual({
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("HTTPS_PROXY");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("supersecret");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("user");
   });
 
   it("rejects credential-bearing proxy URLs without echoing the credentials", () => {
@@ -256,6 +333,121 @@ describe("parseGatewayConfig", () => {
     const config = parseGatewayConfig(raw);
     const cap = config.capabilities?.find((c) => c.id === "llama-4-maverick-vision");
     expect(cap?.supportsImageInput).toBe(true);
+  });
+
+  // Issue #763 (Epic #761 determinism-first contract): the determinism capability flags
+  // supportsSeeding / supportsResponseFormat are the AC2 reproducibility gate — generationPort
+  // only sends a seed / json_schema responseFormat when the chosen model advertises them
+  // (capability.supportsSeeding === true / capability.supportsResponseFormat === true). They must
+  // round-trip through the inline provider-capability path so a deployment can declare a
+  // seed-capable model and have it actually apply the seed.
+  it("round-trips supportsSeeding/supportsResponseFormat: true through the inline provider capability path", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "deterministic-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        supportsSeeding: true,
+        supportsResponseFormat: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "deterministic endpoint",
+        preferredUseCases: ["Reproducible generation"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "deterministic-chat");
+    expect(cap?.supportsSeeding).toBe(true);
+    expect(cap?.supportsResponseFormat).toBe(true);
+  });
+
+  // Mutation guard: the inline path defaults both determinism flags to false when omitted, so a
+  // model is never mistakenly treated as seed-capable (which would persist a misleading seedUsed).
+  it("defaults supportsSeeding/supportsResponseFormat to false when the inline capability omits them", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "nondeterministic-chat",
+      capability: { kind: "chat", contextWindow: 8_192 },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "nondeterministic-chat");
+    expect(cap?.supportsSeeding).toBe(false);
+    expect(cap?.supportsResponseFormat).toBe(false);
+  });
+
+  // Issue #763: the strict top-level `capabilities` array (parseModelCapability →
+  // optionalDeterminismFlags) is the wire-facing, authoritative override surface. A parser
+  // regression there could silently disable the AC2 seeding gate for every declared model without
+  // any other test catching it, so pin the true round-trip explicitly.
+  it("round-trips supportsSeeding/supportsResponseFormat: true through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "deterministic-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "deterministic-chat",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsSeeding: true,
+          supportsResponseFormat: true,
+          workflowEligible: true,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "deterministic endpoint",
+          preferredUseCases: ["Reproducible generation"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "deterministic-chat");
+    expect(cap?.supportsSeeding).toBe(true);
+    expect(cap?.supportsResponseFormat).toBe(true);
+  });
+
+  // Mutation guard: the strict top-level path preserves absence (optionalDeterminismFlags only
+  // materialises a flag when declared), so an omitted determinism flag must read back as undefined,
+  // not a coerced false — the gate treats both as "not seed-capable" but the wire shape must not drift.
+  it("leaves supportsSeeding/supportsResponseFormat undefined when the strict top-level capability omits them", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "plain-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "plain-chat",
+          kind: "chat",
+          contextWindow: 8_192,
+          maxOutputTokens: 2_048,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "plain endpoint",
+          preferredUseCases: ["Chat"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "plain-chat");
+    expect(cap?.supportsSeeding).toBeUndefined();
+    expect(cap?.supportsResponseFormat).toBeUndefined();
   });
 
   it("rejects custom capability metadata whose id differs from the provider modelId", () => {
@@ -444,6 +636,18 @@ describe("toSafeObject", () => {
     expect(serialised).not.toContain("egress");
   });
 
+  it("omits Figma connector credentials", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      figma: { accessToken: "figd_config-token" },
+    });
+    const serialised = JSON.stringify(toSafeObject(config));
+
+    expect(serialised).not.toContain("figd_config-token");
+    expect(serialised).not.toContain("figma");
+    expect(serialised).not.toContain("accessToken");
+  });
+
   it("preserves non-secret fields", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
@@ -509,6 +713,57 @@ describe("loadConfigFromFile", () => {
       KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "example-file-load-token-1234567890",
     });
     expect(config.providers[0]?.apiKey).toBe("example-file-load-token-1234567890");
+  });
+
+  it("loads egress-only config JSON from disk without requiring providers", () => {
+    const path = join(dir, "egress-only.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        egress: {
+          httpsProxy: "http://secure-proxy.config.local:8443",
+          noProxy: "localhost,127.0.0.1",
+        },
+      }),
+      "utf8",
+    );
+    const config = loadEgressConfigFromFile(path, {
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config).toEqual({
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      noProxy: ["localhost", "127.0.0.1"],
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+  });
+});
+
+describe("resolveOutboundHttpEgressConfig", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns undefined when neither config nor env defines egress", () => {
+    expect(resolveOutboundHttpEgressConfig(undefined, {})).toBeUndefined();
+  });
+
+  it("applies env overrides independently over explicit config", () => {
+    const config = resolveOutboundHttpEgressConfig(
+      {
+        httpProxy: "http://proxy.config.local:8080",
+        httpsProxy: "http://secure-proxy.config.local:8443",
+        noProxy: ["localhost"],
+      },
+      {
+        KEIKO_HTTP_PROXY: "http://proxy.env.local:8080",
+        KEIKO_NO_PROXY: ".corp.example",
+      },
+    );
+    expect(config).toEqual({
+      httpProxy: "http://proxy.env.local:8080/",
+      httpsProxy: "http://secure-proxy.config.local:8443/",
+      noProxy: [".corp.example"],
+    });
   });
 });
 

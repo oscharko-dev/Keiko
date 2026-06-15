@@ -21,9 +21,13 @@ const solidFill = (r: number, g: number, b: number, a = 1): Record<string, unkno
   color: { r, g, b, a },
 });
 
-const imageFill = (imageRef: string): Record<string, unknown> => ({
+const imageFill = (
+  imageRef: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> => ({
   type: "IMAGE",
   imageRef,
+  ...extra,
 });
 
 const text = (
@@ -244,6 +248,16 @@ describe("cleanScopedNodesToScreenIr — design tokens", () => {
     ]);
   });
 
+  it("does not fabricate a typography token from a partial TEXT style", () => {
+    const emptyStyle = text("1:2", "A", {});
+    const partialStyle = text("1:3", "B", { fontFamily: "Inter", fontSize: 16 });
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "S", [emptyStyle, partialStyle])]),
+    );
+
+    expect(result.tokens.typography).toEqual([]);
+  });
+
   it("extracts spacing tokens from itemSpacing and padding, deduped", () => {
     const screen = screenFrame("1:1", "S", [text("1:2", "x")], {
       layoutMode: "VERTICAL",
@@ -403,6 +417,32 @@ describe("cleanScopedNodesToScreenIr — interaction hints", () => {
     ).toBe("link");
   });
 
+  it("does not classify a non-navigation interaction as link", () => {
+    expect(
+      hintFor({
+        id: "1:2",
+        name: "Plain frame",
+        type: "FRAME",
+        absoluteBoundingBox: bbox(0, 0, 10, 10),
+        fills: [solidFill(0, 0, 0)],
+        interactions: [{ trigger: { type: "ON_HOVER" }, actions: [{ type: "UPDATE_VARIABLE" }] }],
+      }),
+    ).toBe("container");
+  });
+
+  it("classifies an activation-style local interaction as a button", () => {
+    expect(
+      hintFor({
+        id: "1:2",
+        name: "Pay",
+        type: "FRAME",
+        absoluteBoundingBox: bbox(0, 0, 40, 40),
+        fills: [solidFill(0, 0, 0)],
+        interactions: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "UPDATE_VARIABLE" }] }],
+      }),
+    ).toBe("button");
+  });
+
   it("classifies by the generic button role word in the name", () => {
     expect(
       hintFor({
@@ -511,6 +551,21 @@ describe("cleanScopedNodesToScreenIr — node normalization", () => {
     const pic = findIrNode(root, "1:3");
     expect(pic?.boundingBox).toEqual({ x: 5, y: 6, width: 30, height: 40 });
     expect(pic?.imageFills).toEqual([{ imageRef: "ref-xyz" }]);
+  });
+
+  it("omits non-rendering image fills from the IR", () => {
+    const img: FigmaSourceNode = {
+      id: "1:3",
+      name: "Hidden image paint",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(5, 6, 30, 40),
+      fills: [imageFill("hidden", { visible: false }), imageFill("transparent", { opacity: 0 })],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "S", [img])]));
+
+    const pic = findIrNode(screenById(result.screens, "1:1").root, "1:3");
+    expect(pic?.imageFills).toEqual([]);
+    expect(pic?.interactionHint).toBe("container");
   });
 
   it("omits text/boundingBox when absent and tolerates a malformed child", () => {
@@ -858,5 +913,349 @@ describe("cleanScopedNodesToScreenIr — layout/sizing/cornerRadius/typography p
     expect(root?.layout?.itemSpacing).toBeUndefined();
     // Negative cornerRadius → omitted.
     expect(root?.cornerRadius).toBeUndefined();
+  });
+});
+
+// ─── Inter-screen links: external URLs, dedup, stable order (audit #752) ───────────
+
+describe("cleanScopedNodesToScreenIr — inter-screen links (URL/dedup/order)", () => {
+  it("drops external URL actions from inter-screen links", () => {
+    const button: FigmaSourceNode = {
+      id: "1:2",
+      name: "Ext",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [
+        { trigger: { type: "ON_CLICK" }, actions: [{ type: "URL", url: "https://example.com" }] },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [button])]));
+    expect(result.links).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("https://example.com");
+  });
+
+  it("does not confuse a letter-prefixed Figma node id for a URL scheme", () => {
+    const button: FigmaSourceNode = {
+      id: "1:2",
+      name: "Go",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [
+        { trigger: { type: "ON_CLICK" }, actions: [{ type: "NODE", destinationId: "I4:99" }] },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [button])]));
+    expect(result.links).toEqual([
+      { sourceNodeId: "1:2", trigger: "ON_CLICK", targetNodeId: "I4:99" },
+    ]);
+  });
+
+  it("emits no link for a URL action with a missing url field", () => {
+    const button: FigmaSourceNode = {
+      id: "1:2",
+      name: "Ext",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [{ trigger: { type: "ON_CLICK" }, actions: [{ type: "URL" }] }],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [button])]));
+    expect(result.links).toEqual([]);
+  });
+
+  it("extracts a NODE-destination link while dropping a URL action from the same node", () => {
+    const button: FigmaSourceNode = {
+      id: "1:2",
+      name: "Mixed",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [
+        {
+          trigger: { type: "ON_CLICK" },
+          actions: [
+            { type: "NODE", destinationId: "2:1" },
+            { type: "URL", url: "https://example.com" },
+          ],
+        },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [
+        screenFrame("1:1", "A", [button]),
+        screenFrame("2:1", "B", [text("2:2", "y")]),
+      ]),
+    );
+    expect(result.links).toEqual([
+      { sourceNodeId: "1:2", trigger: "ON_CLICK", targetNodeId: "2:1" },
+    ]);
+    expect(JSON.stringify(result.links)).not.toContain("https://example.com");
+  });
+
+  it("deduplicates the same triple emitted by both interactions and legacy reactions", () => {
+    const button: FigmaSourceNode = {
+      id: "1:2",
+      name: "B",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [
+        { trigger: { type: "ON_CLICK" }, actions: [{ type: "NODE", destinationId: "2:1" }] },
+      ],
+      reactions: [
+        { trigger: { type: "ON_CLICK" }, action: { type: "NODE", destinationId: "2:1" } },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [button])]));
+    // Without the dedup Map this triple would appear twice.
+    expect(result.links).toEqual([
+      { sourceNodeId: "1:2", trigger: "ON_CLICK", targetNodeId: "2:1" },
+    ]);
+  });
+
+  it("deduplicates a FLOW_START emitted by both flowStartingPoints and prototypeStartNodeID", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [text("1:2", "x")])], {
+        flowStartingPoints: [{ nodeId: "1:1" }],
+        prototypeStartNodeID: "1:1",
+      }),
+    );
+    const flow = result.links.filter((l) => l.trigger === "FLOW_START");
+    expect(flow).toEqual([{ sourceNodeId: "0:1", trigger: "FLOW_START", targetNodeId: "1:1" }]);
+  });
+
+  it("keeps two distinct links whose unescaped concatenations would collide (injective key)", () => {
+    // A NUL inside a field would, under a naive NUL-joined key, make these two DISTINCT links
+    // collide into one and silently drop a transition. The injective key must keep both.
+    const nul = String.fromCharCode(0);
+    const a: FigmaSourceNode = {
+      id: "a" + nul + "b",
+      name: "A",
+      type: "FRAME",
+      absoluteBoundingBox: bbox(0, 0, 1, 1),
+      interactions: [{ trigger: { type: "T" }, actions: [{ type: "NODE", destinationId: "c" }] }],
+    };
+    const b: FigmaSourceNode = {
+      id: "a",
+      name: "B",
+      type: "FRAME",
+      absoluteBoundingBox: bbox(0, 0, 1, 1),
+      interactions: [
+        { trigger: { type: "b" + nul + "T" }, actions: [{ type: "NODE", destinationId: "c" }] },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [a, b]));
+    expect(result.links).toHaveLength(2);
+    expect(result.links).toContainEqual({
+      sourceNodeId: "a" + nul + "b",
+      trigger: "T",
+      targetNodeId: "c",
+    });
+    expect(result.links).toContainEqual({
+      sourceNodeId: "a",
+      trigger: "b" + nul + "T",
+      targetNodeId: "c",
+    });
+  });
+
+  it("orders multiple links by a stable structural key regardless of emission order", () => {
+    const btn3: FigmaSourceNode = {
+      id: "1:3",
+      name: "b3",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [
+        { trigger: { type: "ON_CLICK" }, actions: [{ type: "NODE", destinationId: "3:1" }] },
+      ],
+    };
+    const btn2: FigmaSourceNode = {
+      id: "1:2",
+      name: "b2",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      interactions: [
+        { trigger: { type: "ON_PRESS" }, actions: [{ type: "NODE", destinationId: "2:1" }] },
+      ],
+    };
+    // Emission order is [FLOW_START 0:1, 1:3, 1:2]; sorted order is [0:1, 1:2, 1:3].
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [btn3, btn2])], { prototypeStartNodeID: "1:1" }),
+    );
+    expect(result.links).toEqual([
+      { sourceNodeId: "0:1", trigger: "FLOW_START", targetNodeId: "1:1" },
+      { sourceNodeId: "1:2", trigger: "ON_PRESS", targetNodeId: "2:1" },
+      { sourceNodeId: "1:3", trigger: "ON_CLICK", targetNodeId: "3:1" },
+    ]);
+  });
+});
+
+// ─── Design tokens: sort direction and value>0 boundary (audit #752) ─────────────
+
+describe("cleanScopedNodesToScreenIr — design tokens (sort/boundary)", () => {
+  it("orders colour tokens ascending by hex regardless of insertion order", () => {
+    const red: FigmaSourceNode = {
+      id: "1:2",
+      name: "r",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(1, 0, 0)],
+    };
+    const blue: FigmaSourceNode = {
+      id: "1:3",
+      name: "b",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 1)],
+    };
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [red, blue])]),
+    );
+    expect(result.tokens.colors.map((c) => c.value)).toEqual(["#0000ff", "#ff0000"]);
+  });
+
+  it("orders typography tokens by canonical id regardless of insertion order", () => {
+    const roboto = text("1:2", "x", {
+      fontFamily: "Roboto",
+      fontSize: 16,
+      fontWeight: 400,
+      lineHeightPx: 20,
+    });
+    const inter = text("1:3", "y", {
+      fontFamily: "Inter",
+      fontSize: 16,
+      fontWeight: 400,
+      lineHeightPx: 20,
+    });
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [roboto, inter])]),
+    );
+    expect(result.tokens.typography.map((t) => t.fontFamily)).toEqual(["Inter", "Roboto"]);
+  });
+
+  it("orders radius tokens ascending regardless of insertion order", () => {
+    const big: FigmaSourceNode = {
+      id: "1:2",
+      name: "a",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 12,
+    };
+    const small: FigmaSourceNode = {
+      id: "1:3",
+      name: "b",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 4,
+    };
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [big, small])]),
+    );
+    expect(result.tokens.radius.map((r) => r.value)).toEqual([4, 12]);
+  });
+
+  it("omits a zero itemSpacing from layout and from spacing tokens", () => {
+    const sf = screenFrame("1:1", "A", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      itemSpacing: 0,
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [sf]));
+    const screen = screenById(result.screens, "1:1");
+    expect(screen.root.layout?.mode).toBe("row");
+    expect(screen.root.layout?.itemSpacing).toBeUndefined();
+    expect(result.tokens.spacing.map((s) => s.value)).not.toContain(0);
+  });
+
+  it("omits a zero cornerRadius from the node and from radius tokens", () => {
+    const node: FigmaSourceNode = {
+      id: "1:2",
+      name: "a",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 0,
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [node])]));
+    const irNode = findIrNode(screenById(result.screens, "1:1").root, "1:2");
+    expect(irNode?.cornerRadius).toBeUndefined();
+    expect(result.tokens.radius).toEqual([]);
+  });
+});
+
+// ─── Layout sizing/alignment values and classify precedence (audit #752) ─────────
+
+describe("cleanScopedNodesToScreenIr — layout values & classify precedence", () => {
+  it("projects HUG sizing to sizing.vertical", () => {
+    const sf = screenFrame("1:1", "A", [text("1:2", "x")], {
+      layoutMode: "VERTICAL",
+      layoutSizingVertical: "HUG",
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [sf]));
+    expect(screenById(result.screens, "1:1").root.sizing?.vertical).toBe("hug");
+  });
+
+  it("projects SPACE_BETWEEN alignment to layout.counterAlign", () => {
+    const sf = screenFrame("1:1", "A", [text("1:2", "x")], {
+      layoutMode: "HORIZONTAL",
+      counterAxisAlignItems: "SPACE_BETWEEN",
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [sf]));
+    expect(screenById(result.screens, "1:1").root.layout?.counterAlign).toBe("space-between");
+  });
+
+  it("classifies a navigating TEXT node as text (TEXT precedes link) yet still emits the link", () => {
+    const linkedText: FigmaSourceNode = {
+      id: "1:2",
+      name: "Go",
+      type: "TEXT",
+      characters: "Go",
+      absoluteBoundingBox: bbox(0, 0, 50, 20),
+      interactions: [
+        { trigger: { type: "ON_CLICK" }, actions: [{ type: "NODE", destinationId: "2:1" }] },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [linkedText])]),
+    );
+    const irNode = findIrNode(screenById(result.screens, "1:1").root, "1:2");
+    expect(irNode?.interactionHint).toBe("text");
+    expect(result.links).toContainEqual({
+      sourceNodeId: "1:2",
+      trigger: "ON_CLICK",
+      targetNodeId: "2:1",
+    });
+  });
+});
+
+// ─── Screen detection & pruning edge branches (audit #752) ───────────────────────
+
+describe("cleanScopedNodesToScreenIr — screen detection & pruning edges", () => {
+  it("treats a directly-scoped INSTANCE root as the single screen", () => {
+    const result = cleanScopedNodesToScreenIr({
+      id: "1:1",
+      name: "Root",
+      type: "INSTANCE",
+      absoluteBoundingBox: bbox(0, 0, 375, 812),
+      fills: [solidFill(0.5, 0.5, 0.5)],
+    });
+    expect(result.screens.map((s) => s.id)).toEqual(["1:1"]);
+  });
+
+  it("keeps a no-payload wrapper because a kept child survives", () => {
+    const wrapper: FigmaSourceNode = {
+      id: "1:9",
+      name: "Wrapper",
+      type: "GROUP",
+      children: [text("1:10", "Hi")],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [wrapper])]));
+    const ids = allIds(screenById(result.screens, "1:1").root);
+    expect(ids).toContain("1:9");
+    expect(ids).toContain("1:10");
   });
 });

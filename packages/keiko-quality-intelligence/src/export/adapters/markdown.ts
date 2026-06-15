@@ -25,9 +25,14 @@ const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }
 //   2. neutralise a leading spreadsheet formula lead (=,+,-,@, incl. a trimmed leading-whitespace
 //      run) with a single-quote prefix — parity with the CSV adapters / traceability.mdCell;
 //   3. escape the Markdown-active vectors a single-line value can still smuggle — a link or image
-//      (incl. javascript:/data: hrefs) and a fenced-code run — mirroring the accepted #278
-//      untrusted-markdown escape set (ingestion/untrustedContentNormalisation). The literal text is
-//      preserved so an auditor still reads the original content.
+//      (incl. javascript:/data: hrefs) and a fenced-code run — the link/image/fenced subset of the
+//      accepted #278 untrusted-markdown escape set (ingestion/untrustedContentNormalisation). The
+//      literal text is preserved so an auditor still reads the original content.
+// The #278 set's fourth vector — a line-leading `#` heading — is intentionally NOT escaped here: it
+// is already mitigated structurally, not by escaping. Step 1 folds every internal line break to a
+// space, and every field value is rendered behind a fixed prefix (`## ` for the title, `- `/`N. `
+// for list items, `**Tags:** ` etc.), so a leading `#` in untrusted text can never reach a true
+// line-start and open a heading.
 const FENCED_CODE = /```/gu;
 const IMAGE_OPEN = /!\[/gu;
 const LINK_OPEN = /(?<!!)\[([^\]]*)\]\(/gu;

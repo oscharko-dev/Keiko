@@ -14,11 +14,9 @@
 //   - Retention iterates the scopes the caller passes. The public MemoryVaultStore has no
 //     `listAllScopes()` capability, so a global enumeration would require an internal
 //     port extension. Out of scope here.
-//   - Forgotten-purge (purgeForgottenAfterMs) is a no-op in this PR: the public port
-//     exposes `listTombstonesByScope` for read but no API to delete tombstones, so we
-//     cannot purge them through the public seam. The field is accepted for forward
-//     compatibility and the result reports the count of tombstones THAT WOULD be purged,
-//     but no destructive call is issued. A future PR can extend the port.
+//   - Forgotten-purge (purgeForgottenAfterMs) uses the public vault port to delete only
+//     tombstones in the caller-supplied scopes whose forgottenAt is older than the
+//     deterministic cutoff.
 //
 // Why the operations are issued in a sequence of one-by-one deletes: the vault's delete
 // is already wrapped in a SQLite transaction (#206), and emitting a batch API here would
@@ -47,9 +45,8 @@ export interface MemoryRetentionPolicy {
   // only records in status="proposed" so a stale review-queue entry does not block the
   // reviewer indefinitely.
   readonly expireProposalsAfterMs?: number;
-  // Forgotten/tombstoned records older than this would be purged from the tombstone
-  // ledger. NOT implemented in this PR — see file docstring; the result reports the
-  // would-be count for visibility.
+  // Forgotten/tombstoned records older than this are purged from the tombstone ledger
+  // through the public vault port.
   readonly purgeForgottenAfterMs?: number;
 }
 
@@ -68,8 +65,8 @@ export interface MemoryRetentionResult {
   readonly forgotten: readonly MemoryRetentionDecision[];
   readonly kept: number;
   readonly byReason: Readonly<Record<MemoryRetentionReason, number>>;
-  // Number of tombstones across the scanned scopes that WOULD be purged once the public
-  // port grows a purge capability. Always 0 today when purgeForgottenAfterMs is undefined.
+  // Number of tombstones purged across the scanned scopes when purgeForgottenAfterMs is set.
+  // Always 0 when purgeForgottenAfterMs is undefined.
   readonly forgottenPurgeBacklog: number;
 }
 
@@ -109,8 +106,11 @@ function selectOverflowEvictions(
   if (nonPinned.length <= policy.maxRecordsPerScope) {
     return [];
   }
-  // Oldest-first by updatedAt; truncate to (count - cap) entries.
-  const sorted = [...nonPinned].sort((a, b) => a.updatedAt - b.updatedAt);
+  // Oldest-first by updatedAt, then by id so same-timestamp retention is deterministic
+  // across vault implementations and insertion orders.
+  const sorted = [...nonPinned].sort(
+    (a, b) => a.updatedAt - b.updatedAt || String(a.id).localeCompare(String(b.id)),
+  );
   const overflowCount = nonPinned.length - policy.maxRecordsPerScope;
   return sorted.slice(0, overflowCount);
 }
@@ -237,12 +237,5 @@ function countPurgeBacklog(
   if (policy.purgeForgottenAfterMs === undefined) {
     return 0;
   }
-  const tombstones = vault.listTombstonesByScope(scope);
-  let count = 0;
-  for (const t of tombstones) {
-    if (nowMs - t.forgottenAt > policy.purgeForgottenAfterMs) {
-      count += 1;
-    }
-  }
-  return count;
+  return vault.purgeTombstonesByScopeBefore(scope, nowMs - policy.purgeForgottenAfterMs);
 }
