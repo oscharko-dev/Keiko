@@ -28,7 +28,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { EnvSource, GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
@@ -44,6 +44,8 @@ const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
 const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
+const EMBEDDING_ID_PATTERN =
+  /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
@@ -135,6 +137,7 @@ interface ProviderRawOptions {
   readonly maxRetries?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly embeddingModelIds?: readonly string[] | undefined;
 }
 
 function providerRaw(
@@ -143,7 +146,10 @@ function providerRaw(
   apiKey: string,
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
-  const defaultCapability = createDefaultChatCapability(modelId);
+  const defaultCapability =
+    options.embeddingModelIds?.includes(modelId) === true
+      ? createDefaultEmbeddingCapabilityForSetup(modelId)
+      : createDefaultChatCapability(modelId);
   return {
     modelId,
     baseUrl,
@@ -157,6 +163,52 @@ function providerRaw(
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: 500,
   };
+}
+
+function isLikelyEmbeddingModelId(modelId: string): boolean {
+  return EMBEDDING_ID_PATTERN.test(modelId);
+}
+
+function createDefaultEmbeddingCapabilityForSetup(modelId: string): ModelCapability {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8_191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured embedding endpoint",
+    preferredUseCases: ["Embeddings"],
+    knownLimitations: [
+      "Runtime-configured capability; validate against the target endpoint before production use",
+    ],
+  };
+}
+
+function mergeChatAndEmbeddingModelIds(
+  chatModelIds: readonly string[],
+  deploymentNames: readonly string[],
+): readonly string[] {
+  const merged = [...chatModelIds];
+  const seen = new Set(merged);
+  for (const modelId of deploymentNames) {
+    if (!isLikelyEmbeddingModelId(modelId) || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    merged.push(modelId);
+  }
+  return merged;
+}
+
+function embeddingModelIdsFromDeployments(deploymentNames: readonly string[]): readonly string[] {
+  return deploymentNames.filter(isLikelyEmbeddingModelId);
 }
 
 function buildRawConfig(
@@ -687,9 +739,12 @@ async function verifySetupCandidate(
   const candidateConfig = parseGatewayConfig(withInheritedEgress(candidateRawConfig, egress), env);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
   assertImageInputModelsWereTested(imageInputModelIds, testedModelIds);
-  const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, {
+  const embeddingModelIds = embeddingModelIdsFromDeployments(deploymentNames);
+  const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, deploymentNames);
+  const rawConfig = buildRawConfig(baseUrl, apiKey, configuredModelIds, {
     apiKeyHeaderName,
     imageInputModelIds,
+    embeddingModelIds,
   });
   const config = parseGatewayConfig(withInheritedEgress(rawConfig, egress), env);
   return { rawConfig, config, testedModelIds };

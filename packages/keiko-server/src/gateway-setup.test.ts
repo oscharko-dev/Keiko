@@ -24,6 +24,7 @@ import {
   normalizeDiscoveryPayload,
   smokeTestCandidates,
 } from "./gateway-setup.js";
+import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 import type { RouteContext } from "./routes.js";
 
 const tmpDirs: string[] = [];
@@ -455,7 +456,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("uses supplied deployment names instead of Azure model catalog discovery", async () => {
+  it("preserves Azure embedding deployments for Knowledge Connector", async () => {
     const uiDir = await tempDir("keiko-gw-ui-azure-deployments-");
     const evidenceDir = await tempDir("keiko-gw-ev-azure-deployments-");
     const originalFetch = globalThis.fetch;
@@ -509,12 +510,16 @@ describe("handleGatewaySetup", () => {
         "phi-4",
         "gpt-oss-120b",
       ]);
-      expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+      const config = currentGatewayConfig(deps);
+      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
         "phi-4",
         "gpt-oss-120b",
+        "text-embedding-3-large",
       ]);
+      expect(selectEmbeddingModelId(config)).toBe("text-embedding-3-large");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-      expect(saved).not.toContain("text-embedding-3-large");
+      expect(saved).toContain("text-embedding-3-large");
+      expect(saved).toContain('"kind": "embedding"');
     } finally {
       globalThis.fetch = originalFetch;
       deps.store.close();
