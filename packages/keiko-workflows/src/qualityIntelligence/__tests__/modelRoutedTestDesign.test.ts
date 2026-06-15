@@ -208,9 +208,9 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
 
     expect(summary.status).toBe("succeeded");
     expect(recorded).toHaveLength(4);
-    expect(recorded.slice(0, 2).map((candidate) => candidate.derivedFromAtomIds.map(String))).toEqual(
-      [["atom-1"], ["atom-2"]],
-    );
+    expect(
+      recorded.slice(0, 2).map((candidate) => candidate.derivedFromAtomIds.map(String)),
+    ).toEqual([["atom-1"], ["atom-2"]]);
     expect(recorded.slice(2).map((candidate) => candidate.title)).toEqual([
       "Test atom 1 behavior",
       "Test atom 2 behavior",

@@ -1,5 +1,4 @@
-export const LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE =
-  "application/x-keiko-local-knowledge-connector";
+export const LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE = "application/x-keiko-local-knowledge-connector";
 export const LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT = "keiko:local-knowledge-connector-drop";
 
 export interface LocalKnowledgeConnectorDragPayload {

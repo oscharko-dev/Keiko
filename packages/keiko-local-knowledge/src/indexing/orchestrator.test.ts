@@ -746,8 +746,15 @@ describe("runIndexingJob — force", () => {
     }
   });
   it("re-chunks from new source text when force=true after content change", async () => {
-    const v1Fs = memoryFs(ROOT, [{ relativePath: "alpha.txt", content: "Version one content sentence. ".repeat(8) }]);
-    const v2Fs = memoryFs(ROOT, [{ relativePath: "alpha.txt", content: "Entirely different version two text here. ".repeat(8) }]);
+    const v1Fs = memoryFs(ROOT, [
+      { relativePath: "alpha.txt", content: "Version one content sentence. ".repeat(8) },
+    ]);
+    const v2Fs = memoryFs(ROOT, [
+      {
+        relativePath: "alpha.txt",
+        content: "Entirely different version two text here. ".repeat(8),
+      },
+    ]);
 
     await drain(runIndexingJob(buildOptions(fixture, { workspaceFs: v1Fs })));
 
@@ -756,7 +763,11 @@ describe("runIndexingJob — force", () => {
       sourceId: fixture.sourceId,
       relativePath: "alpha.txt",
     });
-    const v1Chunks = selectChunksForDocument(fixture.store._internal.db, fixture.capsuleId, documentId);
+    const v1Chunks = selectChunksForDocument(
+      fixture.store._internal.db,
+      fixture.capsuleId,
+      documentId,
+    );
     expect(v1Chunks.length).toBeGreaterThan(0);
     const v1Hashes = new Set(v1Chunks.map((c) => c.safe_excerpt_hash));
 
@@ -764,10 +775,16 @@ describe("runIndexingJob — force", () => {
     // force=undefined and skips re-chunking (shouldReuseExistingChunks returns true),
     // leaving v1 chunk rows in place. With the fix, force=true deletes old chunks and
     // re-chunks from the new parsed units, producing different safe_excerpt_hash values.
-    const events = await drain(runIndexingJob(buildOptions(fixture, { force: true, workspaceFs: v2Fs })));
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { force: true, workspaceFs: v2Fs })),
+    );
     expect(events.some((e) => e.kind === "document-embedded")).toBe(true);
 
-    const v2Chunks = selectChunksForDocument(fixture.store._internal.db, fixture.capsuleId, documentId);
+    const v2Chunks = selectChunksForDocument(
+      fixture.store._internal.db,
+      fixture.capsuleId,
+      documentId,
+    );
     expect(v2Chunks.length).toBeGreaterThan(0);
     const v2Hashes = new Set(v2Chunks.map((c) => c.safe_excerpt_hash));
     // All chunk hashes must differ from v1 — re-chunking from new source text is required.

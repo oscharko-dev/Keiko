@@ -264,6 +264,20 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+describe("Visual quality — workspace text rendering", () => {
+  it(".ws-scene does not force transform layer promotion", () => {
+    const block = cssBlock(".ws-scene");
+    expect(block).not.toContain("will-change: transform");
+  });
+});
+
+describe("WCAG 2.5.8 — footer target size", () => {
+  it(".ft-window-trigger keeps at least a 24px hit target", () => {
+    const block = cssBlock(".ft-window-trigger");
+    expect(block).toContain("min-height: 24px");
+  });
+});
+
 describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
   it("quality score tiers use the state tokens that are contrast-pinned in both themes", () => {
     const highBlock = cssBlock(".qi-quality-high {");

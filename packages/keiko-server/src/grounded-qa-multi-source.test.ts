@@ -748,15 +748,18 @@ describe("handleGroundedAsk folder ask-path source cap (Release 0.2.0)", () => {
       ctx(JSON.stringify({ chatId: chat.id, content: "explain all" })),
       recordingDeps([]),
       undefined,
-      seam((input) => {
-        const key = input.scope.relativePaths[0] ?? "";
-        retrieved.push(key);
-        return Promise.resolve({
-          pack: scopePack(key, 0.5, `body ${key}`),
-          elapsedMs: 1,
-          plan: { state: "ready" } as never,
-        });
-      }, constAnswerer("capped answer", answered)),
+      seam(
+        (input) => {
+          const key = input.scope.relativePaths[0] ?? "";
+          retrieved.push(key);
+          return Promise.resolve({
+            pack: scopePack(key, 0.5, `body ${key}`),
+            elapsedMs: 1,
+            plan: { state: "ready" } as never,
+          });
+        },
+        constAnswerer("capped answer", answered),
+      ),
     );
     expect(result.status).toBe(200);
     // Only the first 16 folders (connection order) are explored.
@@ -790,15 +793,18 @@ describe("handleGroundedAsk folder ask-path source cap (Release 0.2.0)", () => {
       ctx(JSON.stringify({ chatId: chat.id, content: "explain all" })),
       recordingDeps([]),
       undefined,
-      seam((input) => {
-        const key = input.scope.relativePaths[0] ?? "";
-        retrieved.push(key);
-        return Promise.resolve({
-          pack: scopePack(key, 0.5, `body ${key}`),
-          elapsedMs: 1,
-          plan: { state: "ready" } as never,
-        });
-      }, constAnswerer("full answer", answered)),
+      seam(
+        (input) => {
+          const key = input.scope.relativePaths[0] ?? "";
+          retrieved.push(key);
+          return Promise.resolve({
+            pack: scopePack(key, 0.5, `body ${key}`),
+            elapsedMs: 1,
+            plan: { state: "ready" } as never,
+          });
+        },
+        constAnswerer("full answer", answered),
+      ),
     );
     expect(result.status).toBe(200);
     expect(retrieved).toHaveLength(16);

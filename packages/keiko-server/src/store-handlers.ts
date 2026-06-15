@@ -362,7 +362,10 @@ export async function handleCreateProject(
     const name = optionalString(body, "name");
     const normalizedPath = validateProjectPath(path, { mustExist: true });
     if (pathIsDenied(normalizedPath)) {
-      return forbiddenResult("DENIED", "The project path is excluded from Keiko's safe read surface.");
+      return forbiddenResult(
+        "DENIED",
+        "The project path is excluded from Keiko's safe read surface.",
+      );
     }
     assertUiDbOutsideProject(deps.uiDbPath, normalizedPath);
     const project = deps.store.createProject(normalizedPath, name);

@@ -50,7 +50,9 @@ function listFilesRecursively(rootDir, prefix = "") {
 }
 
 function sha256(relativePath) {
-  return createHash("sha256").update(readFileSync(join(repoRoot, relativePath))).digest("hex");
+  return createHash("sha256")
+    .update(readFileSync(join(repoRoot, relativePath)))
+    .digest("hex");
 }
 
 function fail(message) {
@@ -103,8 +105,8 @@ for (const target of REMOVED_PATHS) {
   }
 }
 
-const rootSrcFiles = listFilesRecursively(join(repoRoot, "src")).map((relativePath) =>
-  `src/${relativePath}`,
+const rootSrcFiles = listFilesRecursively(join(repoRoot, "src")).map(
+  (relativePath) => `src/${relativePath}`,
 );
 if (JSON.stringify(rootSrcFiles) !== JSON.stringify(APPROVED_ROOT_SRC_FILES)) {
   fail(
@@ -131,7 +133,9 @@ if (
       "@oscharko-dev/keiko-contracts.",
   );
 }
-if (!/^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m.test(sdkIndex)) {
+if (
+  !/^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m.test(sdkIndex)
+) {
   fail(
     "packages/keiko-sdk/src/index.ts: SDK_VERSION does not directly re-export " +
       "KEIKO_PRODUCT_VERSION.",

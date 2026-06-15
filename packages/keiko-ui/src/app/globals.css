@@ -672,6 +672,7 @@ button {
   align-items: center;
 }
 .ft-window-trigger {
+  min-height: 24px;
   color: var(--accent-text);
   font: inherit;
   border: 0;
@@ -799,7 +800,6 @@ button {
   top: 0;
   width: 0;
   height: 0;
-  will-change: transform;
   z-index: 2;
 }
 /* .workspace lives in the WORKSPACE SURFACE block below (duplicate top-level
@@ -877,6 +877,107 @@ button {
   z-index: 1;
   pointer-events: none;
   background-image: radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0);
+}
+.ws-outline {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  z-index: 9000;
+  width: min(420px, calc(100% - 28px));
+  max-height: calc(100% - 84px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+  transform: translateX(calc(-100% - 18px));
+  opacity: 0;
+  pointer-events: none;
+}
+.ws-outline:focus-within {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+.ws-outline-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ws-outline h2,
+.ws-outline h3,
+.ws-outline h4,
+.ws-outline p {
+  margin: 0;
+}
+.ws-outline h2 {
+  font-size: 14px;
+  font-weight: 700;
+}
+.ws-outline h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-muted);
+}
+.ws-outline h4 {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.ws-outline p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+.ws-outline-summary {
+  color: var(--fg);
+}
+.ws-outline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ws-outline-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--card);
+}
+.ws-outline-list article {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-outline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ws-outline button {
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ws-outline button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--card-2);
+}
+.ws-outline button:disabled {
+  cursor: not-allowed;
+  color: var(--fg-dim);
+  opacity: 0.7;
 }
 
 /* ---------- TOOL RAILS ---------- */
@@ -11129,7 +11230,8 @@ ul.integ {
 .cmp-mode:focus-visible,
 .pal-card:focus-visible,
 .palette-x:focus-visible,
-.auto-toggle:focus-visible {
+.auto-toggle:focus-visible,
+.ws-outline button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

@@ -167,7 +167,9 @@ export function addSourceToCapsule(
   assertSafeScope(input.scope);
   const now = store._internal.now();
   insertSourceLink(store, capsuleId, sourceParams(input, now));
-  const fetched = store._internal.db.prepare(SELECT_BY_TUPLE_SQL).get({ c: capsuleId, s: input.id });
+  const fetched = store._internal.db
+    .prepare(SELECT_BY_TUPLE_SQL)
+    .get({ c: capsuleId, s: input.id });
   if (fetched === undefined) {
     throw new KnowledgeStoreError(
       `addSourceToCapsule: insert succeeded but row not found for ${String(input.id)}`,

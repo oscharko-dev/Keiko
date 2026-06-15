@@ -309,7 +309,14 @@ describe("--live fail-closed", () => {
     try {
       const configPath = writeGatewayConfig(dir);
       const code = await runEvaluateCli(
-        ["--fixture", "bug-investigation/investigation-only", "--live", "--json", "--config", configPath],
+        [
+          "--fixture",
+          "bug-investigation/investigation-only",
+          "--live",
+          "--json",
+          "--config",
+          configPath,
+        ],
         io,
         { KEIKO_DEFAULT_API_KEY: secret },
         {
@@ -367,7 +374,14 @@ describe("--live fail-closed", () => {
         ],
       });
       const code = await runEvaluateCli(
-        ["--fixture", "bug-investigation/investigation-only", "--live", "--json", "--config", configPath],
+        [
+          "--fixture",
+          "bug-investigation/investigation-only",
+          "--live",
+          "--json",
+          "--config",
+          configPath,
+        ],
         io,
         {},
         {
@@ -452,15 +466,7 @@ describe("--live fail-closed", () => {
         ],
       });
       const code = await runEvaluateCli(
-        [
-          "--suite",
-          "all",
-          "--live",
-          "--model",
-          "configured-live-model",
-          "--config",
-          configPath,
-        ],
+        ["--suite", "all", "--live", "--model", "configured-live-model", "--config", configPath],
         io,
       );
       expect(code).toBe(1);

@@ -176,7 +176,11 @@ describe("EditMemoryDialog — interaction", () => {
   });
 
   it("calls correctMemoryImpl and returns the new correction record in correction mode", async () => {
-    const correction = makeRecord({ id: "mem-correction-1" as MemoryId, type: "correction", status: "proposed" });
+    const correction = makeRecord({
+      id: "mem-correction-1" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
     const correctImpl = vi.fn().mockResolvedValue({
       correction,
       originalMemoryId: "mem-edit-1",

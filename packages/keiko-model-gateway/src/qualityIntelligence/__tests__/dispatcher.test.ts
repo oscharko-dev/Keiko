@@ -210,7 +210,9 @@ describe("dispatchQualityIntelligenceRequest", () => {
     const profile = getQualityIntelligenceTaskProfile("qi:judge-logic");
     const port = createMockModelPort({
       kind: "throw",
-      error: new Error(`DOWNSTREAM Bearer ${["sk-", "leaked"].join("")} endpoint=https://prod.test/v1`),
+      error: new Error(
+        `DOWNSTREAM Bearer ${["sk-", "leaked"].join("")} endpoint=https://prod.test/v1`,
+      ),
     });
     let caught: unknown;
     try {
