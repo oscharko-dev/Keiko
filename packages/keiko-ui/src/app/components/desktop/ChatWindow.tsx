@@ -771,7 +771,29 @@ function MiniChat({
   );
 }
 
+// #28 — When multiple grounding sources are active (multiple connectors, or a
+// connector plus folder scopes), we cannot represent them as a single select
+// value. Return the dedicated sentinel "multi" so the select shows a read-only
+// "Multiple sources" summary label instead of silently showing only the first.
+function activeGroundingSourceCount(chat: Chat): number {
+  const folderCount =
+    chat.connectedScopes !== undefined
+      ? chat.connectedScopes.length
+      : chat.connectedScope !== undefined
+        ? 1
+        : 0;
+  const connectorCount =
+    chat.localKnowledgeScopes !== undefined
+      ? chat.localKnowledgeScopes.length
+      : chat.localKnowledgeScope !== undefined
+        ? 1
+        : 0;
+  return folderCount + connectorCount;
+}
+
 function groundedModeValue(chat: Chat): string {
+  // Multi-source: more than one grounding scope of any kind.
+  if (activeGroundingSourceCount(chat) > 1) return "multi";
   const firstLocalKnowledgeScope = chat.localKnowledgeScopes?.[0] ?? chat.localKnowledgeScope;
   if (firstLocalKnowledgeScope?.kind === "capsule") {
     return `capsule:${firstLocalKnowledgeScope.capsuleId}`;
@@ -931,12 +953,31 @@ function LocalKnowledgeScopeControl({
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #2 — needed to revert the <select> to its prior value when the user
+  // cancels the "Model only" confirmation dialog.
+  const selectRef = useRef<HTMLSelectElement>(null);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
     setError(null);
     try {
       if (value === "none") {
+        // #2 — Selecting "Model only" permanently discards ALL active grounding
+        // sources (folder scopes + connectors). When sources are present, ask
+        // for explicit confirmation. On cancel, revert the <select> without
+        // mutating the chat and release the busy lock.
+        const sourceCount = activeGroundingSourceCount(chat);
+        if (sourceCount > 0) {
+          const confirmed = window.confirm(
+            `This will disconnect ${String(sourceCount)} grounding ${sourceCount === 1 ? "source" : "sources"}. Continue?`,
+          );
+          if (!confirmed) {
+            if (selectRef.current !== null) {
+              selectRef.current.value = groundedModeValue(chat);
+            }
+            return;
+          }
+        }
         const response = await updateChat(chat.id, {
           connectedScopes: null,
           localKnowledgeScopes: null,
@@ -1007,6 +1048,7 @@ function LocalKnowledgeScopeControl({
     <label className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">Grounding</span>
       <select
+        ref={selectRef}
         className="scope-grounding-select"
         value={value}
         disabled={busy}
@@ -1019,6 +1061,14 @@ function LocalKnowledgeScopeControl({
         <option value="files" disabled={!hasFolderGroundingScope(chat)}>
           Live Files context
         </option>
+        {/* #28 — read-only sentinel shown when more than one grounding source
+            is active. The user cannot select this value; switching away removes
+            the multi-source state by choosing a specific scope or "Model only". */}
+        {value === "multi" ? (
+          <option value="multi" disabled>
+            Multiple sources
+          </option>
+        ) : null}
         {capsuleChoices.map((capsule) => (
           <option key={capsule.value} value={capsule.value}>
             {capsule.label}
@@ -1255,12 +1305,24 @@ function MemoryActionCard({
       </article>
     );
   }
+  // #28 — explicit case for kind "rejected" (memory proposal declined by the
+  // governed capture pipeline). Previously fell through to the default with the
+  // misleading title "MemoriaViva action not created".
+  if (action.kind === "rejected") {
+    return (
+      <article className="chat-memory-action">
+        <div className="chat-memory-action-head">
+          <strong>Memory proposal declined</strong>
+        </div>
+        <p>{action.reason !== "" ? action.reason : "No reason provided"}</p>
+      </article>
+    );
+  }
   return (
     <article className="chat-memory-action">
       <div className="chat-memory-action-head">
         <strong>MemoriaViva action not created</strong>
       </div>
-      <p>{action.reason}</p>
     </article>
   );
 }

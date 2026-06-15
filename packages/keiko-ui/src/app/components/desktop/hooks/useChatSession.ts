@@ -164,6 +164,8 @@ export function isInFlight(status: SendStatus): boolean {
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
   "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
+export const GROUNDED_ATTACHMENT_NOTICE =
+  "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
 export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
   "The model request completed, but the provider did not return any answer text. Retry once; if it happens again, check the selected model deployment in Settings.";
 
@@ -1325,6 +1327,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setError(CONTEXT_OVERSIZED_USER_MESSAGE);
       return;
     }
+    // Issue #4 — block grounded sends that would silently discard attachments.
+    // The grounded path derives context from the repo/local-knowledge scope and
+    // ignores pendingAttachments entirely. Surface a notice and abort so the
+    // user can remove the attachment before sending.
+    if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
+      setError(GROUNDED_ATTACHMENT_NOTICE);
+      return;
+    }
     const optimistic: ChatMessage = {
       id: `local-${String(Date.now())}`,
       chatId: chat.id,
@@ -1399,6 +1409,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     state.selectedModel,
     state.models,
     state.messages,
+    pendingAttachments,
     sendGrounded,
     sendUngrounded,
     buildDocumentContext,

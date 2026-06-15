@@ -205,6 +205,22 @@ describe("RelationshipCreateDialog", () => {
     expect(screen.getByTestId("rel-create-overlay").parentElement).toBe(document.body);
   });
 
+  // WCAG 2.1.1 (item #26) — the dialog container must carry role=dialog + aria-modal
+  // so screen readers switch to dialog-browse mode, and must have an accessible name
+  // via aria-labelledby pointing at the visible title (WCAG 4.1.2).
+  it("dialog container exposes role=dialog, aria-modal=true, and an accessible name via aria-labelledby (WCAG 2.1.1/4.1.2)", () => {
+    renderDialog();
+    const dialog = screen.getByRole("dialog", { name: /create relationship/i });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+
+  // WCAG 2.1.1 — focus must move into the dialog on open so keyboard users can
+  // interact without tabbing through the entire page behind the overlay.
+  it("moves focus into the dialog on open (WCAG 2.1.1)", () => {
+    renderDialog();
+    expect(screen.getByRole("combobox", { name: /relationship type/i })).toHaveFocus();
+  });
+
   it("does not submit via Ctrl/Cmd+Enter while the form is incomplete", () => {
     renderDialog();
     fireEvent.keyDown(screen.getByTestId("rel-create-dialog"), { key: "Enter", ctrlKey: true });
