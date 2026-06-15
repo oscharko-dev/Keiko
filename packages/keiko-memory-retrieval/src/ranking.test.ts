@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { rankMemories } from "./ranking.js";
+import { rankMemories, sourceImportance } from "./ranking.js";
 import { DEFAULT_RANKING_WEIGHTS } from "./types.js";
 import { buildEdge, buildRecord, memoryId } from "./_support.js";
 
@@ -110,6 +110,8 @@ describe("rankMemories — basic ordering", () => {
       graph: 0,
       semantic: 0,
       strength: 0,
+      // buildRecord defaults sourceKind to explicit-user-instruction => importance 1.
+      importance: 1,
     });
   });
 
@@ -260,5 +262,47 @@ describe("rankMemories — reinforcement strength subscore (#204 plasticity)", (
       strengthById,
     });
     expect(first?.inclusionReason).toContain("reinforced");
+  });
+});
+
+describe("sourceImportance (#204, O-F5)", () => {
+  it("ranks capture provenance by authority, descending", () => {
+    expect(sourceImportance(buildRecord({ id: "a", sourceKind: "explicit-user-instruction" }))).toBe(
+      1,
+    );
+    expect(sourceImportance(buildRecord({ id: "b", sourceKind: "accepted-correction" }))).toBe(0.85);
+    expect(sourceImportance(buildRecord({ id: "c", sourceKind: "workflow-outcome" }))).toBe(0.6);
+    expect(sourceImportance(buildRecord({ id: "d", sourceKind: "consolidation" }))).toBe(0.5);
+    expect(sourceImportance(buildRecord({ id: "e", sourceKind: "system-default" }))).toBe(0.4);
+  });
+});
+
+describe("rankMemories — source-authority importance subscore (#204, O-F5)", () => {
+  it("computes importance from provenance but defaults its weight to 0 (byte-identical)", () => {
+    const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
+    const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
+    expect(first?.subscores.importance).toBe(1);
+    // importance weight is 0 by default, so it leaves the documented 1.15 lexical denominator intact.
+    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+  });
+
+  it("ranks a more-authoritative source above a passive one when importance is opted in", () => {
+    // ids chosen so the default id-tiebreak would put the LESS authoritative record first.
+    const explicit = buildRecord({
+      id: "zzz-explicit",
+      sourceKind: "explicit-user-instruction",
+      updatedAt: now,
+    });
+    const inferred = buildRecord({ id: "aaa-inferred", sourceKind: "system-default", updatedAt: now });
+    const ranked = rankMemories([inferred, explicit], {
+      nowMs: now,
+      weights: { ...DEFAULT_RANKING_WEIGHTS, importance: 0.5 },
+    });
+    expect(ranked[0]?.memoryId).toBe(memoryId("zzz-explicit"));
+    expect(ranked[0]?.subscores.importance).toBe(1);
+    // CONTROL: at the default importance weight 0 the two tie and fall back to the id order,
+    // surfacing the inferred record first — proving the re-order above is the importance signal.
+    const control = rankMemories([inferred, explicit], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
+    expect(control[0]?.memoryId).toBe(memoryId("aaa-inferred"));
   });
 });

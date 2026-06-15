@@ -16,7 +16,12 @@
 // "primarily because of X" is "X contributes more than any other dimension" — no
 // arbitrary cutoff — so the reason text always tracks the actual top contributor.
 
-import type { MemoryEdge, MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryEdge,
+  MemoryId,
+  MemoryRecord,
+  MemorySourceKind,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import { graphProximityScore } from "./graph.js";
 import { recencyScore } from "./recency.js";
@@ -43,6 +48,23 @@ export interface RankMemoriesOptions {
 
 const DEFAULT_GRAPH_HIGH_RANK_COUNT = 8;
 
+// Frozen source-authority importance (#204, O-F5). A deterministic function of the immutable capture
+// provenance: a fact the user stated outright outranks one passively inferred by the system, at equal
+// relevance. Reproducible and caller-input-free.
+const SOURCE_IMPORTANCE: Readonly<Record<MemorySourceKind, number>> = {
+  "explicit-user-instruction": 1,
+  "accepted-correction": 0.85,
+  "workflow-outcome": 0.6,
+  consolidation: 0.5,
+  "system-default": 0.4,
+};
+
+export function sourceImportance(record: MemoryRecord): number {
+  // SOURCE_IMPORTANCE is total over MemorySourceKind, so a new source kind in contracts surfaces here
+  // as a compile error rather than silently defaulting.
+  return SOURCE_IMPORTANCE[record.provenance.sourceKind];
+}
+
 function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): IncludedSubscores {
   return {
     relevance: lexicalRelevance(query.queryText, record),
@@ -56,6 +78,7 @@ function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): Incl
     graph: 0,
     semantic: query.semanticById?.get(record.id) ?? 0,
     strength: query.strengthById?.get(record.id) ?? 0,
+    importance: sourceImportance(record),
   };
 }
 
@@ -68,7 +91,8 @@ function weightedScore(s: IncludedSubscores, w: RankingWeights): number {
     s.correction * w.correction +
     s.graph * w.graph +
     s.semantic * w.semantic +
-    s.strength * w.strength;
+    s.strength * w.strength +
+    s.importance * w.importance;
   const totalWeight =
     w.relevance +
     w.recency +
@@ -77,7 +101,8 @@ function weightedScore(s: IncludedSubscores, w: RankingWeights): number {
     w.correction +
     w.graph +
     w.semantic +
-    w.strength;
+    w.strength +
+    w.importance;
   if (totalWeight <= 0) return 0;
   return raw / totalWeight;
 }
@@ -95,6 +120,7 @@ function topContributor(s: IncludedSubscores, w: RankingWeights): string {
     { key: "relevance", value: s.relevance * w.relevance },
     { key: "recency", value: s.recency * w.recency },
     { key: "confidence", value: s.confidence * w.confidence },
+    { key: "importance", value: s.importance * w.importance },
     { key: "graph", value: s.graph * w.graph },
   ];
   let bestKey: keyof IncludedSubscores = "recency";
@@ -119,6 +145,7 @@ function inclusionReasonText(key: keyof IncludedSubscores, value: number): strin
     graph: "graph proximity to other top memories",
     semantic: "semantic similarity to query",
     strength: "frequently recalled (reinforced)",
+    importance: "authoritative source",
   };
   return `top signal: ${label[key]}`;
 }

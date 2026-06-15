@@ -71,6 +71,11 @@ export interface RankingWeights {
   // ranker zeroes this weight in that case so the score is byte-identical to the pre-strength
   // behaviour. See strength.ts for the cognitive (ACT-R base-level) basis.
   readonly strength: number;
+  // Frozen source-authority importance in [0,1] (#204, O-F5): an explicit user instruction outranks a
+  // passively-inferred system default at equal relevance. Derived deterministically from
+  // provenance.sourceKind (immutable since capture), so it needs no caller input and stays
+  // reproducible. Default weight is 0 (opt-in) so it never perturbs legacy ranking until configured.
+  readonly importance: number;
 }
 
 // Defaults are documented at the request-type boundary; this table is the single source of
@@ -88,6 +93,9 @@ export const DEFAULT_RANKING_WEIGHTS: RankingWeights = Object.freeze({
   // not override an explicit pin or a fresh correction. Only participates when the caller supplies
   // per-memory strength scores; otherwise the ranker forces it to 0 (byte-identical legacy behaviour).
   strength: 0.2,
+  // Source-authority importance weight (#204, O-F5). Default 0 (opt-in): always computed but inert
+  // until an operator sets a non-zero weight, so legacy ranking is byte-identical.
+  importance: 0,
 });
 
 export const DEFAULT_BUDGET_TOKENS = 1500;
@@ -124,6 +132,9 @@ export interface MemoryRetrievalRequest {
   // ranker zeroes the strength weight so output is byte-identical to the pre-strength behaviour.
   readonly strengthById?: ReadonlyMap<MemoryId, number>;
   readonly strengthWeight?: number;
+  // Source-authority importance weight (#204, O-F5). Defaults to 0 (the signal is computed from
+  // provenance but inert) so legacy ranking is unchanged unless the caller opts in.
+  readonly importanceWeight?: number;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────
@@ -159,6 +170,9 @@ export interface IncludedSubscores {
   // Reinforcement strength in [0,1] from access frequency + recency-of-use (#204 plasticity).
   // 0 when no strength scores were supplied for this memory (the never-reused default).
   readonly strength: number;
+  // Source-authority importance in [0,1] derived from provenance.sourceKind (#204, O-F5). Always
+  // computed; contributes to the score only when the importance weight is opted in.
+  readonly importance: number;
 }
 
 export interface IncludedMemory {

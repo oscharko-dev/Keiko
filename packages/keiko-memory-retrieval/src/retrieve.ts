@@ -80,6 +80,7 @@ function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
     graph: request.graphProximityBoost ?? DEFAULT_RANKING_WEIGHTS.graph,
     semantic: request.semanticWeight ?? DEFAULT_RANKING_WEIGHTS.semantic,
     strength: request.strengthWeight ?? DEFAULT_RANKING_WEIGHTS.strength,
+    importance: request.importanceWeight ?? DEFAULT_RANKING_WEIGHTS.importance,
   };
 }
 

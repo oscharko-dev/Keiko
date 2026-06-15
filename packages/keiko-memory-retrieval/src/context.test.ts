@@ -17,6 +17,7 @@ function included(id: string, score = 1): IncludedMemory {
       graph: 0,
       semantic: 0,
       strength: 0,
+      importance: 0,
     },
     inclusionReason: `id ${id}`,
   };

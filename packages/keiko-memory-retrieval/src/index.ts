@@ -52,7 +52,12 @@ export {
   type MemoryAccessStat,
 } from "./strength.js";
 export { graphProximityScore } from "./graph.js";
-export { rankMemories, type RankMemoriesOptions, type RankMemoriesQuery } from "./ranking.js";
+export {
+  rankMemories,
+  sourceImportance,
+  type RankMemoriesOptions,
+  type RankMemoriesQuery,
+} from "./ranking.js";
 
 // ─── Context assembly ────────────────────────────────────────────────────────
 export {
