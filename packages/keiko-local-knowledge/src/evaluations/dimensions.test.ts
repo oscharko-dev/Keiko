@@ -14,6 +14,8 @@ import type {
 import {
   scoreCitationQuality,
   scoreContextBudgetFit,
+  scoreMeanReciprocalRank,
+  scoreNdcg,
   scoreNoEvidenceAccuracy,
   scorePrecision,
   scoreRecall,
@@ -92,6 +94,48 @@ describe("scorePrecision", () => {
 
   it("returns 1.0 vacuously when `returned` is empty", () => {
     expect(scorePrecision([], ["c1" as ChunkId])).toBe(1);
+  });
+});
+
+describe("scoreMeanReciprocalRank", () => {
+  it("returns 1.0 when the first returned chunk is relevant", () => {
+    const returned = [makeRef("c1", "cap"), makeRef("noise", "cap")];
+    expect(scoreMeanReciprocalRank(returned, ["c1" as ChunkId])).toBe(1);
+  });
+
+  it("returns the reciprocal rank of the first relevant chunk", () => {
+    const returned = [makeRef("noise", "cap"), makeRef("c1", "cap"), makeRef("c2", "cap")];
+    expect(scoreMeanReciprocalRank(returned, ["c1" as ChunkId, "c2" as ChunkId])).toBe(0.5);
+  });
+
+  it("returns 0.0 when no expected chunk is returned", () => {
+    expect(scoreMeanReciprocalRank([makeRef("noise", "cap")], ["c1" as ChunkId])).toBe(0);
+  });
+
+  it("returns 1.0 vacuously when `expected` is empty", () => {
+    expect(scoreMeanReciprocalRank([makeRef("anything", "cap")], [])).toBe(1);
+  });
+});
+
+describe("scoreNdcg", () => {
+  it("returns 1.0 when all relevant chunks occupy the ideal ranks", () => {
+    const returned = [makeRef("c1", "cap"), makeRef("c2", "cap"), makeRef("noise", "cap")];
+    expect(scoreNdcg(returned, ["c1" as ChunkId, "c2" as ChunkId])).toBe(1);
+  });
+
+  it("drops below 1.0 when relevant chunks are ranked behind noise", () => {
+    const returned = [makeRef("noise", "cap"), makeRef("c1", "cap"), makeRef("c2", "cap")];
+    expect(scoreNdcg(returned, ["c1" as ChunkId, "c2" as ChunkId])).toBeCloseTo(
+      (1 / Math.log2(3) + 1 / Math.log2(4)) / (1 + 1 / Math.log2(3)),
+    );
+  });
+
+  it("returns 0.0 when no expected chunk is returned", () => {
+    expect(scoreNdcg([makeRef("noise", "cap")], ["c1" as ChunkId])).toBe(0);
+  });
+
+  it("returns 1.0 vacuously when `expected` is empty", () => {
+    expect(scoreNdcg([makeRef("anything", "cap")], [])).toBe(1);
   });
 });
 

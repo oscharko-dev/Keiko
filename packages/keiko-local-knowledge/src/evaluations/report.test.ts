@@ -10,9 +10,12 @@ describe("renderRetrievalEvalQualityGateReport", () => {
     const report = renderRetrievalEvalQualityGateReport([scorecard]);
     expect(report).toContain("# Local Knowledge Retrieval Quality Gate");
     expect(report).toContain(
-      "| Fixture | Recall | Precision | Isolation | Citation | No-evidence | Context budget | Latency | Pass |",
+      "| Fixture | Recall | Precision | MRR | nDCG | Isolation | Citation | No-evidence | Context budget | Latency | Pass |",
     );
-    expect(report).toContain("| single-topic | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |");
+    expect(report).toContain(
+      "| single-topic | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |",
+    );
     expect(report).toContain("PASS");
+    expect(report).not.toContain("PASS | |");
   });
 });

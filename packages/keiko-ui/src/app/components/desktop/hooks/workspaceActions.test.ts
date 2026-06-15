@@ -362,6 +362,17 @@ describe("connectorChatBind", () => {
     expect(connectorChatBind(connector, win("chat"))).toBeNull();
   });
 
+  it("returns null when the connector has a whitespace-only selectedId", () => {
+    const connector = win("connector", { selectedKind: "capsule", selectedId: "   " });
+    expect(connectorChatBind(connector, win("chat"))).toBeNull();
+  });
+
+  it("trims the selectedId before binding a connector to chat", () => {
+    const connector = win("connector", { selectedKind: "capsule", selectedId: " cap-abc " });
+    const result = connectorChatBind(connector, win("chat"));
+    expect(result).toMatchObject({ kind: "capsule", capsuleId: "cap-abc" });
+  });
+
   it("returns null when the connector cfg is missing selectedKind", () => {
     const connector = win("connector", { selectedId: "cap-abc" });
     expect(connectorChatBind(connector, win("chat"))).toBeNull();

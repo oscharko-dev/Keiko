@@ -1100,14 +1100,20 @@ export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledg
   if (connector === null || chatWin === null) return null;
   const kind = connector.cfg["selectedKind"];
   const id = connector.cfg["selectedId"];
-  if (typeof kind !== "string" || typeof id !== "string" || id.length === 0) return null;
+  if (typeof kind !== "string" || typeof id !== "string") return null;
+  const selectedId = id.trim();
+  if (selectedId.length === 0) return null;
   if (kind === "capsule") {
-    return { kind: "capsule", capsuleId: id as KnowledgeCapsuleId, connectedAtMs: Date.now() };
+    return {
+      kind: "capsule",
+      capsuleId: selectedId as KnowledgeCapsuleId,
+      connectedAtMs: Date.now(),
+    };
   }
   if (kind === "capsule-set") {
     return {
       kind: "capsule-set",
-      capsuleSetId: id as CapsuleSetId,
+      capsuleSetId: selectedId as CapsuleSetId,
       connectedAtMs: Date.now(),
     };
   }

@@ -710,6 +710,74 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("release-notes.txt");
   });
 
+  it("recalls exact text matches outside the raw vector oversampling window", async () => {
+    const { store } = getFixture();
+    const capsuleId = "cap-recall" as KnowledgeCapsuleId;
+    const sourceId = "src-recall";
+    const distractorChunks: string[] = [];
+    for (let i = 0; i < 120; i += 1) {
+      const seeded = await seedCapsuleWithVectors(store, {
+        capsuleId,
+        sourceId,
+        documentId: `doc-distractor-${String(i).padStart(3, "0")}`,
+        safeDisplayName: `distractor-${String(i).padStart(3, "0")}.txt`,
+        text: "generic platform implementation overview without the target identifier",
+        skipCapsule: i > 0,
+        skipSource: i > 0,
+        unitId: `unit-distractor-${String(i).padStart(3, "0")}`,
+        contentHash: String(i).padStart(64, "0"),
+        chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+      });
+      const chunk = seeded.chunkIds[0];
+      if (chunk !== undefined) distractorChunks.push(String(chunk));
+    }
+    const exactText =
+      "Escalation record XR-7788 documents the treasury connector recovery checklist.";
+    const exact = await seedCapsuleWithVectors(store, {
+      capsuleId,
+      sourceId,
+      documentId: "doc-exact",
+      safeDisplayName: "treasury-recovery.txt",
+      text: exactText,
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-exact",
+      contentHash: "f".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: String(capsuleId), d: String(exact.documentId), t: exactText });
+    for (const chunkId of distractorChunks) {
+      setChunkVector(store, capsuleId, chunkId, vectorBlob(1, 0));
+    }
+    const exactChunk = exact.chunkIds[0];
+    if (exactChunk === undefined) throw new Error("expected exact chunk");
+    setChunkVector(store, capsuleId, exactChunk, vectorBlob(0.1, Math.sqrt(1 - 0.1 * 0.1)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [capsuleId] },
+      "XR-7788 treasury recovery checklist",
+      { topK: 1 },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("treasury-recovery.txt");
+  });
+
   it("diversifies broad query results across documents when scores are otherwise close", async () => {
     const { store } = getFixture();
     const first = await seedCapsuleWithVectors(store, {

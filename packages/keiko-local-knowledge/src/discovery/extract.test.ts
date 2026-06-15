@@ -25,7 +25,12 @@ import type {
   ParserRegistry,
   ParserSelectionInput,
 } from "../parsers/index.js";
-import { PDF_NO_TEXT_LAYER, PDF_TEXT_LAYER, PNG_MAGIC } from "../parsers/parser-test-fixtures.js";
+import {
+  PDF_NO_TEXT_LAYER,
+  PDF_TEXT_LAYER,
+  PNG_MAGIC,
+  XLSX_SIMPLE,
+} from "../parsers/parser-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
 import { folderScope, memoryFs } from "./test-support.js";
@@ -234,6 +239,50 @@ describe("extractDocument — normalized binary text", () => {
       | undefined;
     expect(row?.normalized_text).toContain("Hello PDF");
   });
+
+  it("persists XLSX workbook text and row lineage", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "controls.xlsx", content: XLSX_SIMPLE }]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "controls.xlsx", sizeBytes: XLSX_SIMPLE.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted");
+    expect(result.outcome.document.parser.parserId).toBe("xlsx");
+    expect(result.outcome.document.mediaType).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    const row = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | { readonly normalized_text?: string }
+      | undefined;
+    expect(row?.normalized_text).toContain(
+      "Controls!2: A=Control-17 | B=Encrypt backups | C=Q4 & audit",
+    );
+    const unitRows = store._internal.db
+      .prepare(
+        "SELECT kind, table_name, row_index FROM parsed_units WHERE capsule_id = :c AND document_id = :d ORDER BY id ASC",
+      )
+      .all({ c: capsuleId, d: result.outcome.document.id }) as unknown as readonly {
+      readonly kind: string;
+      readonly table_name: string | null;
+      readonly row_index: number | null;
+    }[];
+    expect(unitRows).toContainEqual({
+      kind: "csv-row",
+      table_name: "Controls",
+      row_index: 1,
+    });
+  });
 });
 
 describe("extractDocument — unsupported OCR and scanned inputs", () => {
@@ -384,6 +433,36 @@ describe("extractDocument — path containment", () => {
     expect(result.outcome.document.status).toBe("failed");
     expect(count("documents")).toBe(1);
     expect(count("parser_diagnostics")).toBe(1);
+  });
+
+  it("accepts files when the selected scope root resolves through a realpath symlink", async () => {
+    const baseFs = memoryFs(ROOT, [{ relativePath: "guide.md", content: "# Guide" }]);
+    const realRoot = `/private${ROOT}`;
+    const toRequestedPath = (absolutePath: string): string =>
+      absolutePath.startsWith(`${realRoot}/`)
+        ? `${ROOT}/${absolutePath.slice(realRoot.length + 1)}`
+        : absolutePath;
+    const fs: ReturnType<typeof memoryFs> = {
+      ...baseFs,
+      realPath: (absolutePath: string): string => {
+        if (absolutePath === ROOT) return realRoot;
+        if (absolutePath === `${ROOT}/guide.md`) return `${realRoot}/guide.md`;
+        return baseFs.realPath(absolutePath);
+      },
+      stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
+      readFileBytes: (absolutePath: string, maxBytes: number) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes) ??
+        Promise.reject(new Error("readFileBytes unavailable")),
+    };
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "guide.md", sizeBytes: 7 } },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted");
+    expect(result.outcome.document.documentPath).toBe("guide.md");
   });
 
   it("rejects direct extraction for files outside the selected source policy without persisting them", async () => {
