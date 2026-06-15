@@ -226,9 +226,15 @@ const readTypography = (node: FigmaSourceNode): IrTypography | undefined => {
   const fontFamily = readString(style.fontFamily);
   const fontSize = readNumber(style.fontSize);
   const fontWeight = readNumber(style.fontWeight);
+  const lineHeight = readNumber(style.lineHeightPx);
   if (fontFamily === undefined || fontSize === undefined || fontWeight === undefined)
     return undefined;
-  return { fontFamily, fontSize, fontWeight };
+  return {
+    fontFamily,
+    fontSize,
+    fontWeight,
+    ...(lineHeight !== undefined ? { lineHeight } : {}),
+  };
 };
 
 // Subtrees deeper than this are truncated to prevent RangeError on malformed chain-like inputs.

@@ -47,7 +47,7 @@ const INTERACTIVE = new Set<IrNode["interactionHint"]>(["button", "input", "link
 // sRGB → linear-light channel (WCAG 2.x): c/12.92 below the knee, else ((c+0.055)/1.055)^2.4.
 const linearizeChannel = (channel255: number): number => {
   const c = channel255 / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 };
 
 /** WCAG relative luminance of an sRGB colour: 0 for black, 1 for white. */
@@ -121,10 +121,17 @@ const noticeItem = (
 const nodeLabel = (node: IrNode): string =>
   node.text !== undefined && node.text.length > 0 ? node.text : node.name;
 
-// A node's name is "descriptive" only when it is not an opaque Figma node id (e.g. "123:45"). This is
-// structural, not board-specific: it rejects the id syntax, never any particular screen's vocabulary.
-const hasDescriptiveName = (node: IrNode): boolean =>
-  node.name.trim().length > 0 && !/^[0-9]+:[0-9]+$/u.test(node.name.trim());
+const GENERIC_LAYER_NAME =
+  /^(?:frame|rectangle|group|button|instance|component|text|vector|ellipse|line|image|icon)(?:\s+\d+)?$/iu;
+
+// A node's name is descriptive only when it is neither an opaque Figma node id nor a generic default
+// layer name. This stays structural: it rejects provider-default vocabulary, not board-specific copy.
+const hasDescriptiveName = (node: IrNode): boolean => {
+  const trimmed = node.name.trim();
+  return (
+    trimmed.length > 0 && !/^[0-9]+:[0-9]+$/u.test(trimmed) && !GENERIC_LAYER_NAME.test(trimmed)
+  );
+};
 
 const hasAccessibleName = (node: IrNode): boolean =>
   (node.text !== undefined && node.text.trim().length > 0) || hasDescriptiveName(node);

@@ -244,6 +244,27 @@ describe("FigmaSnapshotWindow", () => {
       expect(screen.getByRole("article", { name: /screen 2/iu })).toBeInTheDocument();
     });
 
+    it("mounts large screen galleries in deterministic pages", async () => {
+      const manyScreens: FigmaSnapshotSummary = {
+        ...MOCK_SUMMARY,
+        screenCount: 30,
+        reductionHint: "30 screens from 30 detected",
+        screens: Array.from({ length: 30 }, (_value, index) => makeScreen(index + 1)),
+      };
+      const trigger = resolvingTrigger(manyScreens);
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      await waitFor(() =>
+        expect(screen.getByRole("article", { name: /screen 24/iu })).toBeInTheDocument(),
+      );
+      expect(screen.queryByRole("article", { name: /screen 25/iu })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /show more screens/iu }));
+      expect(screen.getByRole("article", { name: /screen 30/iu })).toBeInTheDocument();
+    });
+
     it("renders captured screen images from the token-free BFF route", async () => {
       const trigger = resolvingTrigger();
       renderWindow({ triggerImpl: trigger });
@@ -780,6 +801,17 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow();
       const user = userEvent.setup();
       await user.type(screen.getByLabelText(/board link/iu), "https://example.com/nope");
+      expect(screen.getByText(/doesn't look like a figma board link/iu)).toBeInTheDocument();
+    });
+
+    it("rejects non-HTTPS and subdomain Figma URLs client-side", async () => {
+      renderWindow();
+      const user = userEvent.setup();
+      const input = screen.getByLabelText(/board link/iu);
+      await user.type(input, "http://www.figma.com/design/KEY/Board?node-id=1-2");
+      expect(screen.getByText(/doesn't look like a figma board link/iu)).toBeInTheDocument();
+      await user.clear(input);
+      await user.type(input, "https://evil.figma.com/design/KEY/Board?node-id=1-2");
       expect(screen.getByText(/doesn't look like a figma board link/iu)).toBeInTheDocument();
     });
 

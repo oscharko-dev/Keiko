@@ -428,6 +428,17 @@ describe("deriveA11yTestItemsByScreen — accessible names", () => {
     expect(names[0]?.outcome).toBe("fail");
   });
 
+  it.each(["Frame 1", "Rectangle 2", "Button"])(
+    "flags a textless interactive node with generic/default layer name %s",
+    (name) => {
+      const ir = screen("s6-generic", "Toolbar", node("generic", "button", { name }));
+
+      const names = itemsFor(ir).filter((i) => i.title.toLowerCase().includes("accessible name"));
+      expect(names).toHaveLength(1);
+      expect(names[0]?.outcome).toBe("fail");
+    },
+  );
+
   it("does not flag an interactive node that carries visible text", () => {
     const ir = screen(
       "s7",

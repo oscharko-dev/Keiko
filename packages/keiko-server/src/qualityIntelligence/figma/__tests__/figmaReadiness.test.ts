@@ -65,11 +65,19 @@ describe("resolveReadiness — precedence version > section > devStatus > none",
     expect(signal).toEqual({ source: "none", ready: false });
   });
 
-  it("does not match the marker as an unrelated substring collision risk — exact word fragments allowed", () => {
-    // 'release' as a substring of a longer token still counts as a section signal; this is
-    // intentional and structural (designers name sections 'Released', 'Release v3', etc.).
-    const node = leaf("Released");
-    expect(resolveReadiness(node, { releaseMarker: "release" }).source).toBe("section");
+  it("does not match the marker as an unrelated substring collision risk", () => {
+    expect(resolveReadiness(leaf("Unreleased"), { releaseMarker: "release" })).toEqual({
+      source: "none",
+      ready: false,
+    });
+    expect(resolveReadiness(leaf("Not for release"), { releaseMarker: "release" })).toEqual({
+      source: "none",
+      ready: false,
+    });
+    expect(resolveReadiness(leaf("Release"), { releaseMarker: "release" }).source).toBe("section");
+    expect(resolveReadiness(leaf("READY_FOR_DEV"), { releaseMarker: "release" }).source).toBe(
+      "none",
+    );
   });
 
   it("defaults the release marker to 'release' when none supplied", () => {
@@ -92,11 +100,13 @@ describe("resolveReadiness — precedence version > section > devStatus > none",
     });
   });
 
-  it("matches 'Unreleased' as a known substring false-positive (by design — scope the marker to avoid)", () => {
-    // 'unreleased'.includes('release') === true. The substring design is intentional; operators who
-    // want to exclude such labels should pass a scoped releaseMarker (e.g. '[release]').
-    expect(resolveReadiness(leaf("Unreleased"), { releaseMarker: "release" }).source).toBe(
+  it("still accepts common release labels that use the marker as a token", () => {
+    expect(resolveReadiness(leaf("Release Candidate"), { releaseMarker: "release" }).source).toBe(
       "section",
     );
+    expect(resolveReadiness(leaf("Release v2"), { releaseMarker: "release" }).source).toBe(
+      "section",
+    );
+    expect(resolveReadiness(leaf("Released"), { releaseMarker: "release" }).source).toBe("section");
   });
 });

@@ -162,13 +162,9 @@ function parseHintResponse(raw: string): readonly string[] {
       );
     }
   } catch {
-    // Fall through to a conservative line parser.
+    return [];
   }
-  return trimmed
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/u, "").trim())
-    .filter((line) => line.length > 0)
-    .slice(0, MAX_VISION_HINTS);
+  return [];
 }
 
 function visionUserText(request: FigmaVisionScreenRequest, baselineText: string): string {

@@ -427,4 +427,35 @@ describe("makeFigmaVisionHintProvider", () => {
 
     expect(provider(REQUEST)).toEqual(["kept"]);
   });
+
+  it("drops non-JSON vision output instead of persisting free-form rationale lines", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-rationale-"));
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: () =>
+          Promise.resolve(
+            normalizedResponse("Reasoning: the screenshot suggests a disabled submit button."),
+          ),
+      };
+      const deps = depsWith({
+        config: configWith([capability("vision", { supportsImageInput: true })]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      await expect(
+        makeFigmaVisionHintProvider(deps)({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

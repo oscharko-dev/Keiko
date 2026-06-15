@@ -27,6 +27,10 @@ import {
   type FigmaRetrySleep,
 } from "./figmaRetry.js";
 import { hashBytes, hashScreen, hashSnapshot } from "./figmaSnapshotHash.js";
+import {
+  DEFAULT_SCOPED_PAGINATION_LIMITS,
+  SCOPED_PAGINATION_LIMIT_CEILINGS,
+} from "./figmaScopedPagination.js";
 import type {
   FigmaSkippedScreen,
   FigmaSkippedScreenReason,
@@ -56,6 +60,8 @@ export interface BuildFigmaSnapshotInput {
   readonly maxImageBytes?: number;
   /** Max simultaneous byte-downloads — bounds burst on huge boards. */
   readonly downloadConcurrency?: number;
+  /** Max screens rendered into image side-files; excess screens remain structural-only skips. */
+  readonly maxScreensRendered?: number;
   /** Deterministic 429 backoff policy; defaults to {@link DEFAULT_FIGMA_RETRY_POLICY}. */
   readonly retryPolicy?: FigmaRetryPolicy;
   /** Injectable wait seam so tests assert the backoff schedule without real delays. */
@@ -105,10 +111,25 @@ const isRenderUrlSafe = (raw: string): boolean => {
   // Normalise: lowercase + strip exactly one trailing dot so "localhost." == "localhost".
   const h = url.hostname.toLowerCase().replace(/\.$/, "");
   if (isBlockedHostname(h)) return false;
+  if (!isAllowedFigmaRenderUrl(url, h)) return false;
   // Only allow the default HTTPS port (443 or implicit) — non-standard ports indicate an
   // internal service, not a CDN. url.port is "" when the port is the scheme default.
   if (url.port !== "" && url.port !== "443") return false;
   return true;
+};
+
+const isAllowedFigmaRenderUrl = (url: URL, host: string): boolean => {
+  if (host === "s3-alpha-sig.figma.com") return true;
+  if (host === "cdn.figma.com" || host === "static.figma.com") return true;
+  if (host.endsWith(".figma.com")) return true;
+  if (/^figma[-a-z0-9]*\.s3[.-][a-z0-9-]+\.amazonaws\.com$/u.test(host)) return true;
+  if (
+    (host === "s3-us-west-2.amazonaws.com" || host === "s3.us-west-2.amazonaws.com") &&
+    /^\/figma[-_/a-z0-9]*/iu.test(url.pathname)
+  ) {
+    return true;
+  }
+  return false;
 };
 
 const buildImagesUrl = (
@@ -269,7 +290,14 @@ const resolveScreen = async (
 export const buildFigmaSnapshot = async (
   input: BuildFigmaSnapshotInput,
 ): Promise<FigmaSnapshot> => {
-  const screenIds = input.ir.screens.map((screen) => screen.id);
+  const maxScreensRendered = boundedPositiveInt(
+    input.maxScreensRendered,
+    DEFAULT_SCOPED_PAGINATION_LIMITS.maxScreensDeep,
+    SCOPED_PAGINATION_LIMIT_CEILINGS.maxScreensDeep,
+  );
+  const renderableScreens = input.ir.screens.slice(0, maxScreensRendered);
+  const cappedScreens = input.ir.screens.slice(maxScreensRendered);
+  const screenIds = renderableScreens.map((screen) => screen.id);
   const renderUrls =
     screenIds.length === 0
       ? new Map<string, string | null>()
@@ -280,7 +308,7 @@ export const buildFigmaSnapshot = async (
     DEFAULT_DOWNLOAD_CONCURRENCY,
     Number.MAX_SAFE_INTEGER,
   );
-  const outcomes = await mapWithConcurrency(input.ir.screens, concurrency, (ir) =>
+  const outcomes = await mapWithConcurrency(renderableScreens, concurrency, (ir) =>
     resolveScreen(input, ir, renderUrls.get(ir.id) ?? null),
   );
 
@@ -289,6 +317,9 @@ export const buildFigmaSnapshot = async (
   for (const outcome of outcomes) {
     if (outcome.screen !== undefined) screens.push(outcome.screen);
     if (outcome.skipped !== undefined) skippedScreens.push(outcome.skipped);
+  }
+  for (const ir of cappedScreens) {
+    skippedScreens.push({ screenId: ir.id, reason: "render-screen-cap-exceeded" });
   }
 
   return {
