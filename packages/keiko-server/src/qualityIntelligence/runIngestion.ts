@@ -692,7 +692,7 @@ function processCapsuleDocs(docs: readonly CorpusDoc[], byteBudget: number): rea
   const processed: CorpusDoc[] = [];
   let totalBytes = 0;
   for (const doc of docs) {
-    const capped = truncateToUtf8Bytes(redact(doc.text), perDocBudget);
+    const capped = truncateToUtf8Bytes(redact(stripUnsafeFormatChars(doc.text)), perDocBudget);
     if (capped.trim().length === 0) continue;
     const bytes = utf8ByteLength(capped);
     // Always include the first usable document (capped to ≤ the per-document budget); thereafter
@@ -984,8 +984,12 @@ function a11yItemsByScreen(
 }
 
 function figmaDocumentId(screenId: string, screenName: string): string {
-  const redactedName = redact(screenName);
-  const safeName = sanitiseLabel(redactedName);
+  // Correct order (the #734 strip-before-redact rule): strip format chars first to
+  // de-obfuscate any zero-width-split secret, then redact (now catches raw AND ZW-split
+  // secrets → emits "[REDACTED]"), then sanitiseLabel for display safety (collapses
+  // newlines, URLs, paths). Mirrors redactFigmaAtomText = redact(stripUnsafeFormatChars)
+  // below, with sanitiseLabel as the final display-safe step.
+  const safeName = sanitiseLabel(redact(stripUnsafeFormatChars(screenName)));
   return `${screenId} (${truncateToUtf8Bytes(safeName, MAX_LABEL_CHARS)})`;
 }
 

@@ -5,7 +5,10 @@ import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { deriveIntent } from "../domain/intentDerivation.js";
 import type { IntentSummary } from "../domain/intentDerivation.js";
 import { bankingDefault, regressionDefault } from "../domain/policyProfile.js";
-import { designTestCaseCandidates } from "../domain/testDesignModel.js";
+import {
+  designTestCaseCandidates,
+  DETERMINISTIC_BASELINE_PROVENANCE_TAG,
+} from "../domain/testDesignModel.js";
 import { loadFixture, type LoadedFixture } from "./_fixtureLoader.js";
 
 // Unsafe bidi / zero-width / C0-C1 / DEL code points that must never reach a
@@ -145,6 +148,45 @@ describe("designTestCaseCandidates", () => {
     });
     const round: unknown = JSON.parse(JSON.stringify(candidates));
     expect(round).toEqual(candidates);
+  });
+
+  // Render-layer consumers (presenter scripts + the product CandidatesPane) sort
+  // deterministic-baseline candidates to the END so the judged model-delta candidates lead the
+  // user-facing deliverable. The discriminator must be an EXPLICIT provenance tag, not a null
+  // qualityVerdict (also null when the judge stage is skipped). The model-delta builder
+  // (parseGeneratedCandidates) never emits this tag, so its absence reliably distinguishes a judged
+  // candidate from a determinism-floor stub. The persisted manifest order itself is unchanged.
+  it("tags every deterministic-baseline candidate with the provenance discriminator", () => {
+    const fixture = loadFixture("bankingRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, bankingDefault);
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const candidate of candidates) {
+      expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+  });
+
+  it("keeps the provenance tag additive — existing risk-class/theme tags survive", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, regressionDefault);
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    const first = candidates[0];
+    if (first === undefined) {
+      throw new Error("fixture produced no candidates");
+    }
+    expect(first.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    expect(first.tags.some((tag) => tag.startsWith("risk-class:"))).toBe(true);
+    // Still canonical: sorted ascending and free of duplicates.
+    expect([...first.tags]).toEqual([...first.tags].sort());
+    expect(new Set(first.tags).size).toBe(first.tags.length);
   });
 });
 

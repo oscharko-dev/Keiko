@@ -23,6 +23,7 @@ import {
   buildAtomCoverageStatuses,
   buildCoverageMap,
   compareStaleness,
+  deduplicateCandidates,
   regressionDefault,
   validateCandidates,
   type AtomCoverageStatus,
@@ -1127,10 +1128,10 @@ function buildMergedCandidates(
   preservedCandidates: readonly QualityIntelligenceCandidateRow[],
   regeneratedCandidates: readonly QiTestCaseCandidate[],
 ): readonly QiTestCaseCandidate[] {
-  return [
+  return deduplicateCandidates([
     ...preservedCandidates.map((candidate) => rowToCandidate(candidate, newRunId)),
     ...regeneratedCandidates,
-  ];
+  ]);
 }
 
 function assertMergedCandidateBudget(

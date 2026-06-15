@@ -47,7 +47,13 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
-import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import {
+  currentGatewayConfig,
+  currentGatewayEgressConfig,
+  currentRedactionSecrets,
+  type UiHandlerDeps,
+} from "../deps.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import {
   appendFigmaConnectorAudit,
@@ -499,12 +505,30 @@ function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
   return readPositiveIntEnv(env.KEIKO_FIGMA_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
+// F9 observability: a `FIGMA_INTERNAL` 500 is the catch-all for an UNEXPECTED build/persist failure;
+// the coded body is content-free, so on its own an operator cannot tell a transient render-body
+// malformation from a filesystem failure from a genuine bug. Log the redacted cause (class + message,
+// secrets scrubbed) so the incident is diagnosable without ever leaking a token or provider body.
+// Matches the redacted-console.error convention (memory-salience.ts). Only fires for FIGMA_INTERNAL —
+// expected coded errors (consent/auth/rate-limit) stay quiet (they are already audited).
+function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): void {
+  const name = err instanceof Error ? err.constructor.name : typeof err;
+  const message = err instanceof Error ? err.message : String(err);
+  // eslint-disable-next-line no-console
+  console.error(
+    `figma snapshot-build failed (${stage}): ${name}`,
+    redact(message, currentRedactionSecrets(deps)),
+  );
+}
+
 // Map a thrown error from the governed build to a coded route result: a coded connector error maps to
 // its status (consent-required → 428, auth → 502, rate-limit → 429, …); anything else is a safe 500.
-function figmaErrorResult(err: unknown): RouteResult {
+function figmaErrorResult(err: unknown, deps: UiHandlerDeps): RouteResult {
   if (err instanceof FigmaConnectorError) {
+    if (err.code === "FIGMA_INTERNAL") logFigmaInternal("build", err, deps);
     return { status: figmaStatusForCode(err.code), body: figmaErrorBody(err.code) };
   }
+  logFigmaInternal("build", err, deps);
   return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
 }
 
@@ -517,6 +541,7 @@ function persistSnapshot(
   evidenceDir: string,
   runId: string,
   result: GovernedSnapshotResult,
+  deps: UiHandlerDeps,
 ): FigmaSnapshotRecord | RouteResult {
   const store = createNodeFigmaSnapshotStore(evidenceDir);
   try {
@@ -538,13 +563,15 @@ function persistSnapshot(
       tokens: result.ir.tokens,
       metrics: result.metrics,
     });
-  } catch {
+  } catch (e) {
+    logFigmaInternal("persist.record", e, deps);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
   let record: FigmaSnapshotRecord | undefined;
   try {
     record = store.load(runId);
-  } catch {
+  } catch (e) {
+    logFigmaInternal("persist.load", e, deps);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
   if (record === undefined) return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
@@ -627,11 +654,11 @@ function startCoalescedBuild(
         body.isResnapshot,
       );
     } catch (err) {
-      return figmaErrorResult(err);
+      return figmaErrorResult(err, deps);
     }
 
     const runId = `fs-${randomUUID()}`;
-    const stored = persistSnapshot(evidenceDir, runId, result);
+    const stored = persistSnapshot(evidenceDir, runId, result, deps);
     if ("status" in stored) {
       appendSnapshotRouteFailureAudit(evidenceDir, result, body.isResnapshot, "FIGMA_INTERNAL");
       return stored;
@@ -720,7 +747,7 @@ export async function handleFigmaTriggerSnapshot(
   try {
     return await Promise.race([buildPromise, deadline.promise, disconnectPromise]);
   } catch (err) {
-    return figmaErrorResult(err);
+    return figmaErrorResult(err, deps);
   } finally {
     deadline.clear();
     ctx.req.removeListener("close", onClose);
@@ -748,7 +775,7 @@ export function handleFigmaRevokeToken(ctx: RouteContext, deps: UiHandlerDeps): 
       },
     });
   } catch (err) {
-    return figmaErrorResult(err);
+    return figmaErrorResult(err, deps);
   }
   return {
     status: 200,

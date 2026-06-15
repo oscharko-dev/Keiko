@@ -396,6 +396,31 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
     }
   });
 
+  it("FIGMA_INTERNAL (unexpected build error) logs the redacted cause, token scrubbed (#750 F9)", async () => {
+    await recordConsent(evidenceDir);
+    const orchModule = await import("../figmaSnapshotOrchestration.js");
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    // A non-coded build error whose message embeds the secret PAT (defence-in-depth redaction).
+    spy.mockRejectedValueOnce(new TypeError(`render parse failed token=${TOKEN}`));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const result = await handleFigmaTriggerSnapshot(
+        makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false })),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      );
+      expect(result.status).toBe(500);
+      expect((result.body as { error: { code: string } }).error.code).toBe("FIGMA_INTERNAL");
+      expect(errorSpy).toHaveBeenCalled();
+      const logged = errorSpy.mock.calls.flat().map(String).join(" ");
+      expect(logged).toContain("TypeError"); // the cause class is surfaced for diagnosis…
+      expect(logged).not.toContain(TOKEN); // …but the secret PAT is redacted out
+    } finally {
+      spy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("FIGMA_BUILD_TIMEOUT → 504", async () => {
     const orchModule = await import("../figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");

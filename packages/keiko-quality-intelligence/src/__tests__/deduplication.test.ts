@@ -131,4 +131,40 @@ describe("deduplicateCandidates", () => {
     const result = deduplicateCandidates([left, right]);
     expect(result).toHaveLength(2);
   });
+
+  // ─── preconditions distinguishes the equivalence signature ────────────────
+
+  it("produces DIFFERENT signatures when preconditions differ and keeps BOTH candidates", () => {
+    // Kills: mutant that omits preconditions from the signature projection.
+    // Two candidates identical in title/steps/expectedResults/priority/riskClass
+    // but with DIFFERENT preconditions are semantically distinct test cases
+    // ("user logged in" vs "user is admin") and must NOT be collapsed.
+    const loggedIn = baseCandidate({
+      preconditions: ["The user is logged in"],
+    });
+    const admin = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-eeeeeeeeeeee"),
+      preconditions: ["The user is an admin"],
+    });
+    expect(computeCandidateEquivalenceSignature(loggedIn)).not.toBe(
+      computeCandidateEquivalenceSignature(admin),
+    );
+    const result = deduplicateCandidates([loggedIn, admin]);
+    expect(result).toHaveLength(2);
+  });
+
+  it("collapses two candidates with EQUAL preconditions (regression: empty → same signature)", () => {
+    // Regression guard: candidates with identical (here: empty) preconditions
+    // must still dedup to one — equal preconditions must not break dedup.
+    const left = baseCandidate({ preconditions: [] });
+    const right = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-ffffffffffff"),
+      preconditions: [],
+    });
+    expect(computeCandidateEquivalenceSignature(left)).toBe(
+      computeCandidateEquivalenceSignature(right),
+    );
+    const result = deduplicateCandidates([left, right]);
+    expect(result).toHaveLength(1);
+  });
 });

@@ -359,7 +359,7 @@ function screenRenderItem(ctx: DerivationContext): StructuralTestItem {
     screenName: ctx.screenName,
     id: itemId(ctx.screenId, "screen-render", ctx.screenId, 0),
     category: "screen-render",
-    title: `Screen "${ctx.screenName}" renders and is reachable`,
+    title: `Screen "${ctx.screenName}" renders correctly`,
   };
 }
 
