@@ -131,18 +131,17 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
   });
 
-  it("reinforces a frequently-recalled accepted memory", () => {
+  it("does NOT mutate confidence when a memory is frequently recalled (O-V2 immutability)", () => {
     const vault = makeVault();
     insert(vault, { id: "m", status: "accepted", confidence: 0.7 });
     vault.recordAccess([mid("m")], Date.now());
     vault.recordAccess([mid("m")], Date.now());
-    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
-    expect(counts(result).reinforced).toBe(1);
-    const confidence = vault.getMemory(mid("m"))?.provenance.confidence ?? 0;
-    expect(confidence).toBeGreaterThan(0.7);
+    handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    // Reuse strengthens ranking live, NOT provenance — confidence stays exactly as captured.
+    expect(vault.getMemory(mid("m"))?.provenance.confidence).toBe(0.7);
   });
 
-  it("decays an unaccessed, aged, mid-strength memory", () => {
+  it("does NOT mutate confidence of an aged, unaccessed memory (O-V2 immutability)", () => {
     const vault = makeVault();
     insert(vault, {
       id: "m",
@@ -150,10 +149,9 @@ describe("handleRunMaintenance", () => {
       confidence: 0.7,
       createdAt: Date.now() - 60 * DAY,
     });
-    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
-    expect(counts(result).decayed).toBe(1);
-    const confidence = vault.getMemory(mid("m"))?.provenance.confidence ?? 1;
-    expect(confidence).toBeLessThan(0.7);
+    handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    // Disuse is reflected by the live strength curve, never by a rewritten (0.6^n) confidence.
+    expect(vault.getMemory(mid("m"))?.provenance.confidence).toBe(0.7);
   });
 
   it("archives a faded accepted memory", () => {
@@ -264,8 +262,9 @@ describe("handleRunMaintenance", () => {
     const c = counts(result);
     expect(c.archived).toBe(0);
     expect(c.forgotten).toBe(0);
-    expect(c.decayed).toBe(0);
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
+    // A pinned record's confidence is also never rewritten.
+    expect(vault.getMemory(mid("m"))?.provenance.confidence).toBe(0.01);
   });
 
   it("returns 500 wrapping a vault fault", () => {

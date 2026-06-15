@@ -6,8 +6,10 @@
 //   2. Run consolidation on the accepted subset; persist auto-applicable relationship edges and
 //      return unresolved review items for MemoriaViva or CLI operators. Conflict and merge review
 //      items are NEVER auto-applied here.
-//   3. Compute the maintenance plan and apply it: promote (-> accepted), reinforce / decay
-//      (confidence patch), archive (-> archived), forget (vault delete + tombstone + reason).
+//   3. Compute the maintenance plan and apply it: promote (-> accepted), archive (-> archived),
+//      forget (vault delete + tombstone + reason). Confidence is immutable provenance and is never
+//      patched here (O-V2): reuse strengthens memories live in retrieval ranking, and disuse-decay
+//      is computed on the fly via the strength curve that gates archive/forget.
 //   4. Emit one audit event per applied effect and return the counts.
 //
 // CSRF: the server dispatch layer enforces x-keiko-csrf for POST, so this route is guarded without
@@ -38,8 +40,6 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 
 export interface MaintenanceCounts {
   promoted: number;
-  reinforced: number;
-  decayed: number;
   archived: number;
   forgotten: number;
   superseded: number;
@@ -59,8 +59,6 @@ interface MaintenanceAccumulator extends MaintenanceCounts {
 function emptyCounts(): MaintenanceAccumulator {
   return {
     promoted: 0,
-    reinforced: 0,
-    decayed: 0,
     archived: 0,
     forgotten: 0,
     superseded: 0,
@@ -107,11 +105,6 @@ function emitAudit(
   recordMemoryAudit({ evidenceStore }, event);
 }
 
-// Patch a record's confidence by rebuilding the provenance envelope (confidence lives there).
-function patchConfidence(vault: MemoryVaultStore, record: MemoryRecord, confidence: number): void {
-  vault.updateMemory(record.id, { provenance: { ...record.provenance, confidence } }, Date.now());
-}
-
 function recordsById(records: readonly MemoryRecord[]): Map<MemoryId, MemoryRecord> {
   const map = new Map<MemoryId, MemoryRecord>();
   for (const record of records) map.set(record.id, record);
@@ -155,18 +148,20 @@ function runConsolidationPass(
 }
 
 // ─── Plan application ──────────────────────────────────────────────────────────
-// Applies the reinforce / decay / archive / forget effects on the post-consolidation snapshot.
-// Promotions are applied SEPARATELY and BEFORE consolidation (see runMemoryMaintenance) so that
-// freshly-accepted memories are visible to conflict detection within the same maintenance pass.
-function applyDecayEffects(
+// Applies the archive / forget effects on the post-consolidation snapshot. Promotions are applied
+// SEPARATELY and BEFORE consolidation (see runMemoryMaintenance) so that freshly-accepted memories
+// are visible to conflict detection within the same maintenance pass.
+//
+// Confidence is NEVER mutated here (#204, O-V2): reinforcement-on-reuse is realised live in
+// retrieval ranking, and disuse-decay is computed on the fly via the strength curve that already
+// gates archive/forget — so provenance stays intact and every run is idempotent.
+function applyFadeEffects(
   vault: MemoryVaultStore,
   evidenceStore: EvidenceStore | undefined,
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
 ): void {
-  applyConfidencePatches(vault, plan.reinforce, byId, (n) => (counts.reinforced += n));
-  applyConfidencePatches(vault, plan.decay, byId, (n) => (counts.decayed += n));
   applyArchives(vault, evidenceStore, plan.archive, byId, counts);
   applyForgets(vault, evidenceStore, plan.forget, byId, counts);
 }
@@ -190,20 +185,6 @@ function applyPromotions(
       "Promoted a strong proposed memory.",
       { memoryId: id, scope: record.scope },
     );
-  }
-}
-
-function applyConfidencePatches(
-  vault: MemoryVaultStore,
-  patches: readonly { id: MemoryId; confidence: number }[],
-  byId: Map<MemoryId, MemoryRecord>,
-  bump: (n: number) => void,
-): void {
-  for (const patch of patches) {
-    const record = byId.get(patch.id);
-    if (record === undefined) continue;
-    patchConfidence(vault, record, patch.confidence);
-    bump(1);
   }
 }
 
@@ -279,12 +260,12 @@ export function runMemoryMaintenance(
     .listMemories({ includeExpired: true })
     .filter((record) => record.status === "accepted");
   runConsolidationPass(vault, accepted, counts);
-  // Phase 3 — reinforce / decay / archive / forget on the post-consolidation snapshot. The access
-  // stats feed the strength model.
+  // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
+  // strength model; confidence itself is never mutated (O-V2).
   const all = vault.listMemories({ includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs: Date.now() });
-  applyDecayEffects(vault, evidenceStore, plan, recordsById(all), counts);
+  applyFadeEffects(vault, evidenceStore, plan, recordsById(all), counts);
   return counts;
 }
 

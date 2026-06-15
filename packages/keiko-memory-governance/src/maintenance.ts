@@ -5,9 +5,9 @@
 // compute a plan, and applies the plan back to the vault + audit ledger. The split mirrors the
 // consolidation engine: planning is a pure function, application is the impure caller's job.
 //
-// Each record receives AT MOST ONE decision. Priority (highest first): forget > archive > promote
-// > reinforce > decay. A pinned record is never decayed, archived, or forgotten (its strength is
-// pinned to 1); it may still be promoted or reinforced since those only strengthen it.
+// Each record receives AT MOST ONE decision. Priority (highest first): forget > archive > promote.
+// A pinned record is never decayed, archived, or forgotten (its strength is pinned to 1); it may
+// still be promoted since that only strengthens it.
 //
 // Strength model (human-memory analogue):
 //   base         = provenance.confidence                       (calibrated [0,1])
@@ -15,6 +15,17 @@
 //   recencyFactor= exp(-ln2 * (now - lastTouch) / HALF_LIFE)   (disuse decays; 45-day half-life)
 //   strength     = pinned ? 1 : clamp(base * freqBoost * recencyFactor, 0, 1)
 // lastTouch is the last access timestamp, falling back to createdAt when never accessed.
+//
+// CONFIDENCE IS IMMUTABLE PROVENANCE (#204, O-V2). This pass NEVER overwrites provenance.confidence.
+// Confidence is the calibrated veridicality of a memory at capture time and is changed only by an
+// explicit, governed user correction/edit — never by a background job. "Reinforcement" and "decay"
+// are not persisted nudges to confidence (that conflated veridicality with activation, lost the
+// original value, and compounded non-idempotently as 0.6^n). Instead:
+//   - reinforcement-on-reuse is realised LIVE at retrieval time via the access-derived strength
+//     subscore (keiko-memory-retrieval strength.ts), and
+//   - disuse-decay is computed ON THE FLY here through `recencyFactor` inside `effectiveStrength`,
+//     which already gates archive/forget. So a faded memory still archives/forgets, but its
+//     provenance stays intact and every run is idempotent.
 
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -28,14 +39,6 @@ export interface MemoryAccessStatLike {
 export interface MemoryMaintenancePolicy {
   readonly halfLifeMs: number;
   readonly promoteStrength: number;
-  readonly reinforceMinAccessCount: number;
-  readonly reinforceMinRecency: number;
-  readonly reinforceStep: number;
-  readonly reinforceCap: number;
-  readonly decayMaxRecency: number;
-  readonly decayMinAgeMs: number;
-  readonly decayFactor: number;
-  readonly decayFloor: number;
   readonly archiveMaxStrength: number;
   readonly archiveMinAgeMs: number;
   readonly forgetArchivedMinAgeMs: number;
@@ -49,14 +52,6 @@ const DAY_MS = 864e5;
 export const MEMORY_MAINTENANCE_DEFAULTS: MemoryMaintenancePolicy = {
   halfLifeMs: 45 * DAY_MS,
   promoteStrength: 0.45,
-  reinforceMinAccessCount: 2,
-  reinforceMinRecency: 0.6,
-  reinforceStep: 0.1,
-  reinforceCap: 0.98,
-  decayMaxRecency: 0.5,
-  decayMinAgeMs: 3 * DAY_MS,
-  decayFactor: 0.6,
-  decayFloor: 0.05,
   archiveMaxStrength: 0.2,
   archiveMinAgeMs: 3 * DAY_MS,
   forgetArchivedMinAgeMs: 30 * DAY_MS,
@@ -67,8 +62,6 @@ export const MEMORY_MAINTENANCE_DEFAULTS: MemoryMaintenancePolicy = {
 
 export interface MemoryMaintenancePlan {
   readonly promote: MemoryId[];
-  readonly reinforce: { id: MemoryId; confidence: number }[];
-  readonly decay: { id: MemoryId; confidence: number }[];
   readonly archive: MemoryId[];
   readonly forget: { id: MemoryId; reason: string }[];
 }
@@ -108,13 +101,12 @@ export function effectiveStrength(
 }
 
 // ─── Per-record decision ───────────────────────────────────────────────────────
-type DecisionKind = "forget" | "archive" | "promote" | "reinforce" | "decay" | "none";
+type DecisionKind = "forget" | "archive" | "promote" | "none";
 
 interface RecordContext {
   readonly record: MemoryRecord;
   readonly stat: MemoryAccessStatLike | undefined;
   readonly strength: number;
-  readonly recencyFactor: number;
   readonly ageMs: number;
   readonly accessCount: number;
 }
@@ -122,7 +114,6 @@ interface RecordContext {
 interface Decision {
   readonly kind: DecisionKind;
   readonly reason?: string;
-  readonly confidence?: number;
 }
 
 function isValidityExpired(record: MemoryRecord, nowMs: number): boolean {
@@ -162,24 +153,6 @@ function shouldPromote(c: RecordContext, p: MemoryMaintenancePolicy): boolean {
   );
 }
 
-function reinforceConfidence(c: RecordContext, p: MemoryMaintenancePolicy): number | null {
-  if (
-    c.record.status === "accepted" &&
-    c.accessCount >= p.reinforceMinAccessCount &&
-    c.recencyFactor >= p.reinforceMinRecency
-  ) {
-    return Math.min(p.reinforceCap, c.record.provenance.confidence + p.reinforceStep);
-  }
-  return null;
-}
-
-function decayConfidence(c: RecordContext, p: MemoryMaintenancePolicy): number | null {
-  if (c.accessCount === 0 && c.recencyFactor < p.decayMaxRecency && c.ageMs > p.decayMinAgeMs) {
-    return Math.max(p.decayFloor, c.record.provenance.confidence * p.decayFactor);
-  }
-  return null;
-}
-
 function decideForLive(c: RecordContext, p: MemoryMaintenancePolicy, nowMs: number): Decision {
   if (!c.record.pinned) {
     const forgetReason = shouldForget(c, p, nowMs);
@@ -187,12 +160,6 @@ function decideForLive(c: RecordContext, p: MemoryMaintenancePolicy, nowMs: numb
     if (shouldArchive(c, p)) return { kind: "archive" };
   }
   if (shouldPromote(c, p)) return { kind: "promote" };
-  const reinforce = reinforceConfidence(c, p);
-  if (reinforce !== null) return { kind: "reinforce", confidence: reinforce };
-  if (!c.record.pinned) {
-    const decay = decayConfidence(c, p);
-    if (decay !== null) return { kind: "decay", confidence: decay };
-  }
   return { kind: "none" };
 }
 
@@ -206,7 +173,6 @@ function buildContext(
     record,
     stat,
     strength: effectiveStrength(record, stat, nowMs, policy.halfLifeMs),
-    recencyFactor: recencyFactorOf(record, stat, nowMs, policy.halfLifeMs),
     ageMs: nowMs - record.createdAt,
     accessCount: stat?.accessCount ?? 0,
   };
@@ -220,8 +186,6 @@ interface ForgetCandidate {
 
 interface Accumulator {
   readonly promote: MemoryId[];
-  readonly reinforce: { id: MemoryId; confidence: number }[];
-  readonly decay: { id: MemoryId; confidence: number }[];
   readonly archive: MemoryId[];
   readonly forgetCandidates: ForgetCandidate[];
 }
@@ -237,12 +201,6 @@ function applyDecision(acc: Accumulator, c: RecordContext, decision: Decision): 
       return;
     case "promote":
       acc.promote.push(id);
-      return;
-    case "reinforce":
-      acc.reinforce.push({ id, confidence: decision.confidence ?? c.record.provenance.confidence });
-      return;
-    case "decay":
-      acc.decay.push({ id, confidence: decision.confidence ?? c.record.provenance.confidence });
       return;
     case "none":
       return;
@@ -271,8 +229,6 @@ export function planMemoryMaintenance(
   const policy: MemoryMaintenancePolicy = { ...MEMORY_MAINTENANCE_DEFAULTS, ...options.policy };
   const acc: Accumulator = {
     promote: [],
-    reinforce: [],
-    decay: [],
     archive: [],
     forgetCandidates: [],
   };
@@ -283,8 +239,6 @@ export function planMemoryMaintenance(
   }
   return {
     promote: acc.promote,
-    reinforce: acc.reinforce,
-    decay: acc.decay,
     archive: acc.archive,
     forget: boundForget(acc.forgetCandidates, policy.maxForgetPerRun),
   };
