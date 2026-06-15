@@ -21,6 +21,38 @@ function cards(): HTMLElement[] {
 }
 
 describe("Palette", () => {
+  it("does not expose the hidden Plugins surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("plugins");
+  });
+
+  it("does not expose the hidden Search surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("search");
+  });
+
+  it("does not expose the hidden Project surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("project");
+  });
+
+  it("does not expose the hidden Keiko Digital Twin surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("keiko");
+  });
+
+  it("does not expose the hidden Agents surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("agents");
+  });
+
+  it("does not expose the hidden Integrations surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("integ");
+  });
+
+  it("does not expose the hidden Editor surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("editor");
+  });
+
+  it("does not expose the hidden Browser surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("browser");
+  });
+
   it("focuses the first card on mount and closes on Escape", () => {
     const { onClose } = renderPalette();
     const list = cards();

@@ -9,18 +9,11 @@ import { Header } from "./Header";
 
 function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
   const props = {
-    mode: "manual" as const,
-    projectName: "tender-kare-d0d488",
-    statusLabel: "Connected",
-    statusTone: "ok" as const,
-    onModeChange: vi.fn(),
     openPalette: vi.fn(),
     openCommandPalette: vi.fn(),
     onTileAll: vi.fn(),
     onSplitFront: vi.fn(),
     onCascade: vi.fn(),
-    onExpandFront: vi.fn(),
-    onRestoreFront: vi.fn(),
     ...overrides,
   };
   render(<Header {...props} />);
@@ -28,20 +21,14 @@ function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
 }
 
 describe("Header window controls (C023)", () => {
-  it("invokes onExpandFront when the expand button is clicked", async () => {
-    const user = userEvent.setup();
-    const props = renderHeader();
-    await user.click(screen.getByRole("button", { name: "Expand window" }));
-    expect(props.onExpandFront).toHaveBeenCalledTimes(1);
-    expect(props.onRestoreFront).not.toHaveBeenCalled();
+  it("does not expose the Expand window control", () => {
+    renderHeader();
+    expect(screen.queryByRole("button", { name: "Expand window" })).not.toBeInTheDocument();
   });
 
-  it("invokes onRestoreFront when the restore button is clicked", async () => {
-    const user = userEvent.setup();
-    const props = renderHeader();
-    await user.click(screen.getByRole("button", { name: "Restore window" }));
-    expect(props.onRestoreFront).toHaveBeenCalledTimes(1);
-    expect(props.onExpandFront).not.toHaveBeenCalled();
+  it("does not expose the Restore window control", () => {
+    renderHeader();
+    expect(screen.queryByRole("button", { name: "Restore window" })).not.toBeInTheDocument();
   });
 
   it("no longer announces a 'Minimize window' action (no minimize state exists)", () => {
@@ -66,6 +53,31 @@ describe("Header command-palette entry point (F039 C223)", () => {
   });
 });
 
+describe("Header editor selector", () => {
+  it("does not expose the Preferred editor control in the header", () => {
+    renderHeader();
+    expect(screen.queryByRole("button", { name: /Preferred editor/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Editor:/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Header agent mode switch", () => {
+  it("does not expose the Agent mode switch in the header", () => {
+    renderHeader();
+    expect(screen.queryByRole("group", { name: "Agent mode" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "You" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Header connection status", () => {
+  it("does not expose the shell connection status pill in the header", () => {
+    renderHeader();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+    expect(document.querySelector(".tb-status")).toBeNull();
+  });
+});
+
 describe("Header split action wording (F039 C401)", () => {
   it("uses the CommandPalette's wording 'Split front windows' for title and aria-label", () => {
     renderHeader();
@@ -74,18 +86,15 @@ describe("Header split action wording (F039 C401)", () => {
   });
 });
 
-describe("Header tab strip (C059/C291/C157)", () => {
+describe("Header tab strip", () => {
   it("renders no dead 'New tab' button (no tab model exists)", () => {
     renderHeader();
     expect(screen.queryByRole("button", { name: "New tab" })).toBeNull();
   });
 
-  it("exposes the full project name via the tab's title attribute", () => {
-    renderHeader({ projectName: "conversation-center-hardening-worktree" });
-    const label = screen.getByText("conversation-center-hardening-worktree");
-    expect(label.closest(".tb-tab")?.getAttribute("title")).toBe(
-      "conversation-center-hardening-worktree",
-    );
+  it("does not expose the project tab in the header", () => {
+    renderHeader();
+    expect(document.querySelector(".tb-tabs")).toBeNull();
   });
 });
 
@@ -93,18 +102,11 @@ describe("Header brand (C399)", () => {
   it("keeps the logo decorative next to the visible wordmark (no 'Keiko Keiko')", () => {
     const { container } = render(
       <Header
-        mode="manual"
-        projectName="Keiko"
-        statusLabel="Connected"
-        statusTone="ok"
-        onModeChange={vi.fn()}
         openPalette={vi.fn()}
         openCommandPalette={vi.fn()}
         onTileAll={vi.fn()}
         onSplitFront={vi.fn()}
         onCascade={vi.fn()}
-        onExpandFront={vi.fn()}
-        onRestoreFront={vi.fn()}
       />,
     );
     const logo = container.querySelector(".hd-logo");

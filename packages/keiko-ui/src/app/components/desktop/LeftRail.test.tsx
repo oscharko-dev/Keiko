@@ -1,7 +1,7 @@
 // Issue #189 — tests for the LeftRail navigation links.
 // Verifies that the remaining page-route link (MemoriaViva) renders with correct href and
-// accessible name. Quality Intelligence, Local Knowledge, and Relationships are Workspace tool
-// windows: each renders as a tool button that calls onTool(...).
+// accessible name. Quality Intelligence and Local Knowledge are Workspace tool windows:
+// each renders as a tool button that calls onTool(...).
 // Epic #518 — also verifies aria-pressed state on toggle buttons (WCAG 4.1.2).
 
 import { render, screen } from "@testing-library/react";
@@ -43,6 +43,46 @@ describe("LeftRail — page-route links", () => {
     expect(
       screen.getByRole("navigation", { name: "Primary workspace navigation" }),
     ).toBeInTheDocument();
+  });
+
+  it("does not expose Plugins in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Plugins" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Search in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Search" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Project in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Project" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Keiko Digital Twin in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Keiko" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Automations in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Keiko Mobile in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Keiko Mobile" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Relationships in the left rail while the product surface is hidden", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Relationships" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose the Account user icon in the left rail", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "Account" })).not.toBeInTheDocument();
   });
 
   it("renders the MemoriaViva link with correct href and accessible name", () => {
@@ -112,49 +152,19 @@ describe("LeftRail — page-route links", () => {
     );
   });
 
-  // Epic #532 — Relationships mirrors Quality Intelligence: a singleton tool button, not a route.
-  it("renders Relationships as a tool button (not a page-route link)", () => {
-    renderRail();
-    expect(screen.getByRole("button", { name: "Relationships" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Relationships" })).not.toBeInTheDocument();
-  });
-
-  it("opens the Relationships window via onTool('relationships') when clicked", async () => {
-    const onTool = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LeftRail
-        openTools={new Set()}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Relationships" }));
-    expect(onTool).toHaveBeenCalledWith("relationships");
-  });
-
-  it("marks the Relationships button pressed when its window is open", () => {
-    renderRail(new Set(["relationships"]));
-    expect(screen.getByRole("button", { name: "Relationships" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-  });
 });
 
 describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
   it("sets aria-pressed=false on tool buttons when the panel is closed", () => {
     renderRail(new Set());
-    const projectBtn = screen.getByRole("button", { name: "Project" });
-    expect(projectBtn).toHaveAttribute("aria-pressed", "false");
+    const chatHistoryBtn = screen.getByRole("button", { name: "Chat History" });
+    expect(chatHistoryBtn).toHaveAttribute("aria-pressed", "false");
   });
 
   it("sets aria-pressed=true on tool buttons when the panel is open", () => {
-    renderRail(new Set(["project"]));
-    const projectBtn = screen.getByRole("button", { name: "Project" });
-    expect(projectBtn).toHaveAttribute("aria-pressed", "true");
+    renderRail(new Set(["chatHistory"]));
+    const chatHistoryBtn = screen.getByRole("button", { name: "Chat History" });
+    expect(chatHistoryBtn).toHaveAttribute("aria-pressed", "true");
   });
 
   it("sets aria-pressed=false on the Settings button when settings panel is closed", () => {
