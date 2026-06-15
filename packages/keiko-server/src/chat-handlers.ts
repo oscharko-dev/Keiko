@@ -34,6 +34,10 @@ import {
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
+  maybeRunAutoMaintenance,
+  type AutoMaintenanceState,
+} from "./memory-maintenance-handlers.js";
+import {
   extractCandidatesFromUserText,
   memoryTextEgressRejectionReason,
   type CaptureContext,
@@ -750,6 +754,22 @@ function toMemoryResult(
   };
 }
 
+// Process-lifetime rate-limit cursor for autonomous maintenance (#204, O-V4). One loopback server =
+// one cursor, so the >=6h interval is honoured across chat turns. Module-scoped (not on deps) so it
+// is never shared across test fixtures; auto-maintenance is opt-in (env), so tests that do not set
+// the flag never advance it.
+const memoryMaintenanceCursor: AutoMaintenanceState = {};
+
+// Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. Opt-in
+// via env (default off so existing behaviour is unchanged); short-circuits on the cursor almost
+// every turn and never throws into the chat path.
+function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
+  maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
+    nowMs: Date.now(),
+    enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "1",
+  });
+}
+
 export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -804,6 +824,10 @@ export async function buildMemoryResult(
   if (includedIds.length > 0) {
     vault.recordAccess(includedIds, Date.now());
   }
+  // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
+  // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
+  // free-running background loop.
+  maybeRunChatAutoMaintenance(deps, vault);
   const result = toMemoryResult(retrieval);
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
