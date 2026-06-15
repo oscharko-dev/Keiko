@@ -38,10 +38,13 @@ describe("nullOcrAdapter", () => {
     expect(result.reason).toBe("ocr-not-configured");
   });
 
-  it("does not throw for any input", async () => {
-    await expect(
-      nullOcrAdapter.ocrPage({ bytes: new Uint8Array(1024).fill(0xff), pageNumber: 99 }),
-    ).resolves.not.toThrow();
+  it("resolves to a defined result with ok:false for arbitrary bytes", async () => {
+    const result = await nullOcrAdapter.ocrPage({
+      bytes: new Uint8Array(1024).fill(0xff),
+      pageNumber: 99,
+    });
+    expect(result).toBeDefined();
+    expect(result.ok).toBe(false);
   });
 
   it("is frozen (immutable)", () => {

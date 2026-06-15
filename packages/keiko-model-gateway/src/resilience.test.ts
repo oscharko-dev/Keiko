@@ -275,4 +275,72 @@ describe("CircuitBreaker", () => {
       cb.assertAllowed();
     }).toThrow(CircuitOpenError);
   });
+
+  it("in half-open with halfOpenProbes=1, a second concurrent assertAllowed() throws CircuitOpenError", () => {
+    // RED reasoning: before the fix assertAllowed() did not track in-flight probes,
+    // so a second concurrent call was admitted regardless, allowing unlimited concurrent probes.
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    // First call enters half-open and claims the single probe slot.
+    cb.assertAllowed();
+    expect(cb.status("m").state).toBe("half-open");
+    // Second concurrent call must be rejected — slot is full.
+    expect(() => {
+      cb.assertAllowed();
+    }).toThrow(CircuitOpenError);
+  });
+
+  it("half-open probe slot is freed after recordSuccess, allowing the next probe", () => {
+    // RED reasoning: the slot was never decremented on success before the fix.
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    cb.assertAllowed(); // claims slot 1
+    cb.assertAllowed(); // claims slot 2 (max)
+    // Third call while 2 in-flight must be rejected.
+    expect(() => {
+      cb.assertAllowed();
+    }).toThrow(CircuitOpenError);
+    // After one success the slot is freed, so the next call is admitted.
+    cb.recordSuccess();
+    expect(() => {
+      cb.assertAllowed();
+    }).not.toThrow();
+  });
+
+  it("half-open probe slot is freed after recordFailure (re-opens immediately)", () => {
+    // After a half-open probe fails the circuit re-opens; subsequent assertAllowed()
+    // must throw CircuitOpenError (not pass through a stale in-flight slot).
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    cb.assertAllowed();
+    cb.recordFailure(); // probe fails → re-opens
+    expect(cb.status("m").state).toBe("open");
+    expect(() => {
+      cb.assertAllowed();
+    }).toThrow(CircuitOpenError);
+  });
 });

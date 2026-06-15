@@ -117,7 +117,7 @@ function parsePortFlag(value: string | undefined): ParseResult<number> {
   if (value === undefined || value.startsWith("--")) {
     return { ok: false, message: "missing value for --port" };
   }
-  if (!/^\d{1,6}$/.test(value)) {
+  if (!/^\d{1,5}$/.test(value)) {
     return { ok: false, message: `invalid --port value: ${value}` };
   }
   try {

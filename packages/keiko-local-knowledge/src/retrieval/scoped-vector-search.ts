@@ -685,6 +685,10 @@ export interface SearchOutcome {
     | "incompatible-embedding-identity"
     | "below-min-score"
     | "embedding-failed";
+  // True when the embedding adapter failed for at least one capsule but lexical
+  // candidates kept the result non-empty. Observability signal only — does not
+  // change which references are returned.
+  readonly embeddingDegraded?: true;
 }
 
 // Tracks the accumulated state of a single search pass. Hoisted out of the entry function
@@ -836,7 +840,10 @@ export async function searchVectorsForScope(
   const candidates = mergeCandidates(state.candidates, lexicalCandidates);
   const selection = selectTopCandidates(state, options, profile, candidates);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
-  return { references: buildReferences(store, selection.top, query, options.topK, profile) };
+  const refs = buildReferences(store, selection.top, query, options.topK, profile);
+  return state.embeddingFailed
+    ? { references: refs, embeddingDegraded: true }
+    : { references: refs };
 }
 
 function sourceFilterForCapsule(
