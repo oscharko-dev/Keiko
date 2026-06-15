@@ -260,16 +260,30 @@ describe("planMemoryMaintenance — archive", () => {
 });
 
 describe("planMemoryMaintenance — forget", () => {
-  it("forgets an old archived memory", () => {
+  it("forgets an old, faint archived memory", () => {
     const r = makeRecord({
       id: "m",
       status: "archived",
-      confidence: 0.5,
+      confidence: 0.3,
       createdAt: NOW - 40 * DAY,
     });
+    // strength = 0.3 * 0.5^(40/45) ≈ 0.162 < 0.2 (faint) AND age > 30d => pruned.
     const plan = planFor([r], emptyStats());
     expect(plan.forget.map((f) => f.id)).toEqual(["m"]);
     expect(plan.forget[0]?.reason).toContain("archived");
+  });
+
+  it("retains a strong archived memory even when aged out (O-V5 prune guard)", () => {
+    // The archive route accepts any memory regardless of strength, so a user can archive a
+    // high-confidence record to de-prioritise it. Age alone must not delete it — only disuse.
+    const r = makeRecord({
+      id: "m",
+      status: "archived",
+      confidence: 0.9,
+      createdAt: NOW - 40 * DAY,
+    });
+    // strength = 0.9 * 0.5^(40/45) ≈ 0.485 ≥ 0.2 => not faint => not pruned.
+    expect(planFor([r], emptyStats()).forget).toEqual([]);
   });
 
   it("forgets a very faint, old, unaccessed proposed memory", () => {

@@ -151,7 +151,18 @@ function isValidityExpired(record: MemoryRecord, nowMs: number): boolean {
 
 function shouldForget(c: RecordContext, p: MemoryMaintenancePolicy, nowMs: number): string | null {
   if (isValidityExpired(c.record, nowMs)) return "validity-expired";
-  if (c.record.status === "archived" && c.ageMs > p.forgetArchivedMinAgeMs) {
+  // Multi-condition prune guard (#204, O-V5). Hard-deleting an archived memory requires it to be
+  // BOTH aged out AND genuinely faint — never age alone. The archive ROUTE accepts any memory
+  // regardless of strength (a user can deliberately archive a high-confidence record to
+  // de-prioritise it), so age-only pruning would silently delete a still-valuable, explicitly-kept
+  // memory 30 days on. Reusing `archiveMaxStrength` as the faintness floor keeps the policy
+  // symmetric: a record is pruned only once it is at least as faint as the bar that would archive
+  // it. Archive (de-prioritise) is not consent to delete; only disuse is.
+  if (
+    c.record.status === "archived" &&
+    c.ageMs > p.forgetArchivedMinAgeMs &&
+    c.strength < p.archiveMaxStrength
+  ) {
     return "archived-aged-out";
   }
   if (
