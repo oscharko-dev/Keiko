@@ -10,10 +10,9 @@
 import { describe, expect, it } from "vitest";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import {
-  QualityIntelligenceGeneration,
   bankingDefault,
   regressionDefault,
-} from "@oscharko-dev/keiko-quality-intelligence";
+} from "../../domain/policyProfile.js";
 import {
   GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
   GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
@@ -23,8 +22,14 @@ import {
   GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
   GENERATED_CANDIDATE_TITLE_MAX_CHARS,
 } from "../../generation/candidateBounds.js";
+import {
+  parseGeneratedCandidates,
+  type ParseGeneratedCandidatesInput,
+} from "../../generation/parseGeneratedCandidates.js";
 
-type ParseInput = QualityIntelligenceGeneration.ParseGeneratedCandidatesInput;
+type ParseInput = ParseGeneratedCandidatesInput;
+
+const QualityIntelligenceGeneration = { parseGeneratedCandidates } as const;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

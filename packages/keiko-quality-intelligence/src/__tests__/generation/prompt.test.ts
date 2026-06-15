@@ -7,19 +7,30 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  QualityIntelligenceGeneration,
   bankingDefault,
   insuranceDefault,
   regressionDefault,
-} from "@oscharko-dev/keiko-quality-intelligence";
+} from "../../domain/policyProfile.js";
 import {
   GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
   GENERATED_CANDIDATE_STEP_MAX_ITEMS,
   GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
   GENERATED_CANDIDATE_TITLE_MAX_CHARS,
 } from "../../generation/candidateBounds.js";
+import {
+  buildTestDesignInstruction,
+  type BuildTestDesignInstructionInput,
+  QI_TEST_DESIGN_RESPONSE_SCHEMA,
+  QI_TEST_DESIGN_SYSTEM_PROMPT,
+} from "../../generation/prompt.js";
 
-type BuildInput = QualityIntelligenceGeneration.BuildTestDesignInstructionInput;
+type BuildInput = BuildTestDesignInstructionInput;
+
+const QualityIntelligenceGeneration = {
+  buildTestDesignInstruction,
+  QI_TEST_DESIGN_RESPONSE_SCHEMA,
+  QI_TEST_DESIGN_SYSTEM_PROMPT,
+} as const;
 
 // ─── QI_TEST_DESIGN_SYSTEM_PROMPT ─────────────────────────────────────────────
 
