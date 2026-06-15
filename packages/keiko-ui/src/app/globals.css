@@ -651,6 +651,17 @@ button {
      measured 4.17:1 on dark (FAIL). Override rules on child segments are unaffected. */
   color: var(--fg-muted);
 }
+.ft-brand {
+  position: absolute;
+  left: 50%;
+  max-width: clamp(16ch, calc(100vw - 220px), 52ch);
+  transform: translateX(-50%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  pointer-events: none;
+}
 .ft-seg {
   display: flex;
   align-items: center;
@@ -6412,6 +6423,160 @@ select.dlg-input {
   flex: 1;
 }
 
+.memoria-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+  overflow: hidden;
+  padding: 14px;
+  background: color-mix(in oklch, var(--surface) 74%, var(--card));
+}
+.memoria-window .lk-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.memoria-window .lk-title {
+  min-width: 0;
+  font-size: 15.5px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+.memoria-window .mc-view-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+.memoria-window .mc-policy-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--card) 70%, transparent);
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.memoria-window .mc-policy-switch .auto-toggle {
+  width: 34px;
+  height: 20px;
+}
+.memoria-window .mc-policy-switch .auto-toggle span {
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+}
+.memoria-window .mc-policy-switch .auto-toggle.on span {
+  left: 16px;
+}
+.memoria-window .lk-btn-lg {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+.memoria-window .mc-filters {
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--inset) 72%, transparent);
+}
+.memoria-window .mc-filter-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 10px;
+}
+.memoria-window .mc-filter-label {
+  min-width: 0;
+  padding-top: 5px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+.memoria-window .mc-filter-chips {
+  gap: 5px;
+}
+.memoria-window .mc-chip {
+  height: 23px;
+  padding: 0 8px;
+  font-size: 10.5px;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--card) 84%, transparent);
+}
+.memoria-window .mc-chip[data-active="true"],
+.memoria-window .mc-chip[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--ink-inverse);
+  border-color: var(--accent);
+}
+.memoria-window section[aria-label="Memory records"],
+.memoria-window section[aria-label="Memories awaiting review"] {
+  min-height: 0;
+  padding-right: 2px;
+}
+.memoria-window .lk-empty {
+  min-height: 142px;
+  padding: 28px 18px;
+  border-radius: 8px;
+  border-color: var(--line-soft);
+  background: color-mix(in oklch, var(--card) 56%, transparent);
+}
+.memoria-window .lk-empty-title {
+  font-size: 13px;
+  margin-bottom: 5px;
+}
+.memoria-window .lk-empty-body {
+  max-width: 520px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.memoria-window .mc-row {
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+}
+.memoria-window .mc-consolidation-scroll,
+.memoria-window .mc-detail {
+  gap: 12px;
+  padding-right: 2px;
+}
+.memoria-window .mc-consolidation-scroll > section,
+.memoria-window .mc-consolidation-scroll > section > article {
+  border-radius: 8px !important;
+}
+
+@media (max-width: 620px) {
+  .memoria-window {
+    padding: 10px;
+  }
+  .memoria-window .lk-header {
+    grid-template-columns: 1fr;
+  }
+  .memoria-window .mc-view-actions {
+    justify-content: flex-start;
+  }
+  .memoria-window .mc-policy-switch {
+    order: -1;
+  }
+  .memoria-window .mc-filter-row {
+    grid-template-columns: 1fr;
+  }
+  .memoria-window .mc-filter-label {
+    padding-top: 0;
+  }
+}
+
 /* Header action cluster (Combine + Create) — Issue #189 Slice 4 */
 .lk-header-actions {
   display: flex;
@@ -7447,6 +7612,13 @@ select.dlg-input {
   border: 1px solid var(--line-soft);
   text-decoration: none;
   color: var(--fg);
+}
+
+.mc-row-button {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .mc-row:hover {
@@ -11427,6 +11599,14 @@ ul.integ {
   color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.mc-link-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
 .mc-row-detail-link:hover {
   color: var(--fg);

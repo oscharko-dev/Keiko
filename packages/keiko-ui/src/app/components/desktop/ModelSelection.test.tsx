@@ -301,11 +301,11 @@ describe("ChatWindow send button aria-disabled (AC #1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC #4 — Footer displays the real selected model id
+// Footer intentionally hides model status; model state remains managed by the session.
 // ---------------------------------------------------------------------------
 
-describe("Footer selectedModel display (AC #4)", () => {
-  it("shows the selected model id when a model is configured", () => {
+describe("Footer selectedModel visibility", () => {
+  it("does not show the selected model id when a model is configured", () => {
     render(
       <Footer
         winCount={1}
@@ -322,10 +322,11 @@ describe("Footer selectedModel display (AC #4)", () => {
         evidenceStatusLabel="No review open"
       />,
     );
-    expect(screen.getByText(/gpt-4o/i)).toBeInTheDocument();
+    expect(screen.queryByText(/gpt-4o/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /1 window/ })).toBeInTheDocument();
   });
 
-  it("shows 'No model selected' when selectedModel is undefined", () => {
+  it("does not show 'No model selected' when selectedModel is undefined", () => {
     render(
       <Footer
         winCount={1}
@@ -342,7 +343,8 @@ describe("Footer selectedModel display (AC #4)", () => {
         evidenceStatusLabel="No review open"
       />,
     );
-    expect(screen.getByText(/No model selected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No model selected/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /1 window/ })).toBeInTheDocument();
   });
 });
 
