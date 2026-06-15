@@ -285,8 +285,21 @@ function attribute(tag: string, name: string): string | undefined {
   return match?.[1] === undefined ? undefined : decodeXml(match[1]);
 }
 
-function stripXmlTags(value: string): string {
-  return decodeXml(value.replace(/<[^>]*>/g, ""));
+function xmlTextContent(value: string): string {
+  let out = "";
+  let inTag = false;
+  for (const char of value) {
+    if (char === "<") {
+      inTag = true;
+      continue;
+    }
+    if (inTag) {
+      if (char === ">") inTag = false;
+      continue;
+    }
+    out += char;
+  }
+  return decodeXml(out);
 }
 
 function parseSharedStrings(
@@ -316,7 +329,7 @@ function parseSharedStrings(
     const parts = [...itemXml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)].map((part) =>
       decodeXml(part[1] ?? ""),
     );
-    strings.push(parts.length > 0 ? parts.join("") : stripXmlTags(itemXml));
+    strings.push(parts.length > 0 ? parts.join("") : xmlTextContent(itemXml));
   }
   return { strings, diagnostics };
 }

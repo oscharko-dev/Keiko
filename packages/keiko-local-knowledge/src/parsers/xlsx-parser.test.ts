@@ -146,6 +146,30 @@ describe("xlsxParser", () => {
     );
   });
 
+  it("drops incomplete raw XML tags from shared-string fallback text", async () => {
+    const result = await xlsxParser.parseAsync(
+      selectionFromBytes(
+        workbookZip([
+          {
+            name: "xl/sharedStrings.xml",
+            content: "<sst><si>Safe value<script</si></sst>",
+          },
+          {
+            name: "xl/worksheets/sheet1.xml",
+            content:
+              '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+          },
+        ]),
+        { extension: "xlsx" },
+      ),
+      buildParserOptions(),
+    );
+
+    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    expect(normalizedText).toContain("Safe value");
+    expect(normalizedText).not.toContain("<script");
+  });
+
   it("reports sync calls as unsupported because workbook parsing is async", () => {
     const result = xlsxParser.parse(
       selectionFromBytes(XLSX_SIMPLE, { extension: "xlsx" }),
