@@ -174,6 +174,11 @@ const guardScopeSize = (node: RawFigmaNode, maxNodeCount: number): void => {
 // figmaSnapshotBuilder.ts — so a forward-proxy that requires auth (FIGMA_PROXY_AUTH_REQUIRED) or
 // denies the request by policy (FIGMA_PROXY_BLOCKED_BY_POLICY) on a per-screen fetch aborts the build
 // instead of silently degrading that screen to shallow content.
+// Rate-limit exhaustion is deliberately NOT in this hard-abort set. The discovery fetch still aborts
+// on FIGMA_RATE_LIMITED before this fetcher is constructed, but a single per-screen deepening fetch
+// that exhausts retries can safely degrade to the already-fetched shallow screen while coverage marks
+// it truncated. That keeps large boards reviewable instead of failing the whole snapshot after one
+// expensive branch hits Figma's cost-based limit.
 const DEEP_FETCH_ABORT_CODES: ReadonlySet<string> = new Set([
   "FIGMA_TOKEN_MISSING",
   "FIGMA_TOKEN_INVALID",
@@ -181,7 +186,6 @@ const DEEP_FETCH_ABORT_CODES: ReadonlySet<string> = new Set([
   "FIGMA_TOKEN_REVOKED",
   "FIGMA_INSUFFICIENT_SCOPE",
   "FIGMA_CONSENT_REQUIRED",
-  "FIGMA_RATE_LIMITED",
   "FIGMA_PROXY_EGRESS_FAILED",
   "FIGMA_PROXY_UNREACHABLE",
   "FIGMA_PROXY_AUTH_REQUIRED",
