@@ -390,10 +390,11 @@ function responseWithNullBody(response: Response): Response {
   return new Proxy(response, {
     get(target: Response, prop: PropertyKey): unknown {
       if (prop === "body") return null;
-      if (prop === "json") {
-        return (...args: Parameters<Response["json"]>): Promise<unknown> => target.json(...args);
+      const value: unknown = Reflect.get(target, prop, target);
+      if (typeof value === "function") {
+        return (...args: unknown[]): unknown => Reflect.apply(value, target, args);
       }
-      return undefined;
+      return value;
     },
   });
 }
