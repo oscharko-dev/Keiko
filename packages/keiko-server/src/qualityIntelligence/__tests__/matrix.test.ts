@@ -24,7 +24,11 @@ import {
   type QualityIntelligenceModelRoutedTestDesignInput,
 } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "../../deps.js";
-import { resolveQiMultimodalSelection, resolveQiTestDesignSelection } from "../modelSelection.js";
+import {
+  resolveModelForQiCapability,
+  resolveQiMultimodalSelection,
+  resolveQiTestDesignSelection,
+} from "../modelSelection.js";
 
 function capability(id: string, overrides: Partial<ModelCapability>): ModelCapability {
   return {
@@ -158,6 +162,44 @@ describe("Epic #761 chat+multimodal tier", () => {
       depsWith(configWith([capability("text-only", { supportsImageInput: false })])),
     );
     expect(selection).toEqual({ kind: "unavailable" });
+  });
+});
+
+// Issue #736 adversarial judge tier. A full automatic run also routes the test-quality judge, which
+// uses the qi:judge-logic profile (text + structured-output) and is selected by capability through
+// resolveModelForQiCapability — never by model id. When a structured-output model is configured the
+// judge routes to the lowest-cost one (even when a cheaper chat-only generation model is present);
+// when only chat-only models are configured the judge is a typed QI_CAPABILITY_UNAVAILABLE so the run
+// degrades gracefully — generation falls back to the tolerant-parser path and the unavailable judge is
+// skipped (qualityScore: null, no test-quality findings). The end-to-end skip is pinned in
+// runExecution.test.ts; these rows consolidate the judge cell into the #761/#764 matrix artifact
+// alongside the test-design and multimodal tiers.
+describe("Epic #761 judge tier", () => {
+  it("routes the judge to the configured structured-output model by capability", () => {
+    const selection = resolveModelForQiCapability(
+      depsWith(
+        configWith([
+          capability("chat-only-generation", { structuredOutput: false, costClass: "low" }),
+          capability("structured-judge", { structuredOutput: true, costClass: "medium" }),
+        ]),
+      ),
+      "qi:judge-logic",
+    );
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("structured-judge");
+    }
+  });
+
+  it("degrades to a typed unavailable judge when only chat-only models are configured", () => {
+    const selection = resolveModelForQiCapability(
+      depsWith(configWith([capability("chat-only", { structuredOutput: false })])),
+      "qi:judge-logic",
+    );
+    expect(selection.kind).toBe("unavailable");
+    if (selection.kind === "unavailable") {
+      expect(selection.code).toBe("QI_CAPABILITY_UNAVAILABLE");
+    }
   });
 });
 
