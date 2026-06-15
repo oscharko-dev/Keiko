@@ -24,27 +24,30 @@ export function useCapsuleDetail(
   const [loadStatus, setLoadStatus] = useState<DetailLoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const load = useCallback(async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
-    if (capsuleId === "") {
-      setData(null);
-      setLoadError("No capsule selected.");
-      setLoadStatus("error");
-      return;
-    }
-    if (opts.quiet !== true) {
-      setLoadStatus("loading");
-      setLoadError(null);
-    }
-    try {
-      const result = await fetchImpl(capsuleId);
-      setData(result);
-      setLoadStatus("ready");
-    } catch (error) {
-      if (opts.quiet === true) return;
-      setLoadError(formatError(error));
-      setLoadStatus("error");
-    }
-  }, [capsuleId, fetchImpl]);
+  const load = useCallback(
+    async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
+      if (capsuleId === "") {
+        setData(null);
+        setLoadError("No capsule selected.");
+        setLoadStatus("error");
+        return;
+      }
+      if (opts.quiet !== true) {
+        setLoadStatus("loading");
+        setLoadError(null);
+      }
+      try {
+        const result = await fetchImpl(capsuleId);
+        setData(result);
+        setLoadStatus("ready");
+      } catch (error) {
+        if (opts.quiet === true) return;
+        setLoadError(formatError(error));
+        setLoadStatus("error");
+      }
+    },
+    [capsuleId, fetchImpl],
+  );
 
   useEffect(() => {
     void load();

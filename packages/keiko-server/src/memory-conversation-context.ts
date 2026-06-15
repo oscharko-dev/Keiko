@@ -1,4 +1,10 @@
-import type { ConversationId, MemoryScope, ProjectId, UserId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  ConversationId,
+  MemoryScope,
+  ProjectId,
+  UserId,
+  WorkspaceId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";

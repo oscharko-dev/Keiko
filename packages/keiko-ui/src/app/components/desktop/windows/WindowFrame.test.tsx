@@ -59,10 +59,9 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   };
 }
 
-const windowControlCases = (Object.keys(WIN_TYPES) as AppWindow["type"][]).map((type) => [
-  type,
-  WIN_TYPES[type],
-] as const);
+const windowControlCases = (Object.keys(WIN_TYPES) as AppWindow["type"][]).map(
+  (type) => [type, WIN_TYPES[type]] as const,
+);
 
 describe("WindowFrame content zoom controls", () => {
   it.each(windowControlCases)(

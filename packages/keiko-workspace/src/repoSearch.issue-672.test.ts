@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "./_memfs.js";
-import {
-  DEFAULT_SEARCH_LIMITS,
-  searchText,
-  type SearchScope,
-} from "./repoSearch.js";
+import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -60,7 +56,8 @@ describe("repoSearch issue #672 regressions", () => {
   it("prefers the symbol definition file over imports for natural-language definition questions", async () => {
     const { scope, fs } = memScope({
       "src/deps.ts": "// handleGroundedAsk exact file reference only\n",
-      "src/grounded-qa.ts": "export async function handleGroundedAsk(): Promise<void> { return; }\n",
+      "src/grounded-qa.ts":
+        "export async function handleGroundedAsk(): Promise<void> { return; }\n",
       "src/routes.ts": "import { handleGroundedAsk } from './grounded-qa.js';\n",
     });
     const result = await searchText(
@@ -83,7 +80,9 @@ describe("repoSearch issue #672 regressions", () => {
     });
     const result = await searchText(
       scope,
-      nlq("Which file implements the POST /api/chats/messages/grounded route? Answer briefly and cite evidence."),
+      nlq(
+        "Which file implements the POST /api/chats/messages/grounded route? Answer briefly and cite evidence.",
+      ),
       DEFAULT_SEARCH_LIMITS,
       { fs, nowMs: FIXED_NOW },
     );

@@ -89,11 +89,7 @@ function isSafeDisplayString(value: unknown): value is string {
   return isNonEmptyTrimmedString(value) && isSafeDisplaySummary(value);
 }
 
-function validateSafeDisplayStringField(
-  errors: string[],
-  field: string,
-  value: unknown,
-): void {
+function validateSafeDisplayStringField(errors: string[], field: string, value: unknown): void {
   if (!isSafeDisplayString(value)) {
     errors.push(`${field} must be a browser-safe non-empty trimmed string`);
   }
@@ -472,10 +468,7 @@ function validateFilesWindowNode(node: Record<string, unknown>, errors: string[]
   }
 }
 
-function validateLocalKnowledgeNodeTarget(
-  target: unknown,
-  errors: string[],
-): void {
+function validateLocalKnowledgeNodeTarget(target: unknown, errors: string[]): void {
   if (!isRecord(target)) {
     errors.push("graph.nodes entry.local-knowledge.target must be an object");
     return;
@@ -488,9 +481,7 @@ function validateLocalKnowledgeNodeTarget(
       errors,
     );
     if (!isNonEmptyTrimmedString(target.capsuleId)) {
-      errors.push(
-        "graph.nodes entry.local-knowledge.target.capsuleId must be a non-empty string",
-      );
+      errors.push("graph.nodes entry.local-knowledge.target.capsuleId must be a non-empty string");
     }
     return;
   }
@@ -516,10 +507,7 @@ function validateLocalKnowledgeNode(node: Record<string, unknown>, errors: strin
   validateLocalKnowledgeNodeTarget(node.target, errors);
 }
 
-function validateConversationCenterNode(
-  node: Record<string, unknown>,
-  errors: string[],
-): void {
+function validateConversationCenterNode(node: Record<string, unknown>, errors: string[]): void {
   validateOnlyKeys(
     node,
     ["kind", "nodeId", "conversationId", "route"],

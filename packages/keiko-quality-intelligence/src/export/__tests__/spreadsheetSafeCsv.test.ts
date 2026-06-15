@@ -150,11 +150,11 @@ describe("encodeSpreadsheetSafeCell — RFC-4180 quoting", () => {
     expect(encodeSpreadsheetSafeCell("a,b")).toBe('"a,b"');
   });
 
-  it('wraps a value containing an embedded double-quote and doubles it (RFC-4180)', () => {
+  it("wraps a value containing an embedded double-quote and doubles it (RFC-4180)", () => {
     expect(encodeSpreadsheetSafeCell('say "hello"')).toBe('"say ""hello"""');
   });
 
-  it("composes formula-prefix and RFC-4180 quoting: =cmd|\"calc\" becomes \"'=cmd|\"\"calc\"\"\"", () => {
+  it('composes formula-prefix and RFC-4180 quoting: =cmd|"calc" becomes "\'=cmd|""calc"""', () => {
     // The cell starts with '=' → gets the ' prefix, then contains '"' → gets wrapped+doubled
     expect(encodeSpreadsheetSafeCell('=cmd|"calc"')).toBe('"\'=cmd|""calc"""');
   });

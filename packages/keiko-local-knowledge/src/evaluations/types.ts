@@ -157,9 +157,7 @@ export interface ModelJudgedRetrievalEvalScores {
 }
 
 export interface ModelJudgedRetrievalEvalJudge {
-  readonly judge: (
-    input: ModelJudgedRetrievalEvalInput,
-  ) => Promise<ModelJudgedRetrievalEvalScores>;
+  readonly judge: (input: ModelJudgedRetrievalEvalInput) => Promise<ModelJudgedRetrievalEvalScores>;
 }
 
 export interface RetrievalEvalScorecard {
