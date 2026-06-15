@@ -22,21 +22,15 @@ import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
-  MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import {
-  buildStrengthById,
-  DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
-  DEFAULT_STALE_CONFIDENCE_THRESHOLD,
-  isMemorySuppressed,
-  retrieveMemoryContext,
-} from "@oscharko-dev/keiko-memory-retrieval";
+import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   maybeRunAutoMaintenance,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
+import { buildConversationRetrievalSignals } from "./memory-retrieval-signals.js";
 import {
   extractCandidatesFromUserText,
   memoryTextEgressRejectionReason,
@@ -74,7 +68,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { cosineSimilarity, embedAndStoreMemory, embedMemoryText } from "./memory-embedding.js";
+import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
 import {
@@ -672,63 +666,9 @@ function recordConversationMemoryRetrieval(
   recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
 }
 
-// Gathers the candidate memory ids the retrieval layer will rank for these scopes, so the caller
-// can score each against the query embedding BEFORE retrieval runs. A superset of the eventually-
-// ranked set is harmless: ids the ranker filters out simply never read their semantic score.
-function isSemanticRetrievalCandidate(record: MemoryRecord, nowMs: number): boolean {
-  if (record.status === "superseded") {
-    return false;
-  }
-  return !isMemorySuppressed(record, nowMs, DEFAULT_STALE_CONFIDENCE_THRESHOLD).suppressed;
-}
-
-function gatherCandidateIds(
-  vault: MemoryVaultStore,
-  scopes: readonly MemoryScope[],
-  nowMs: number,
-): readonly MemoryId[] {
-  const port = vaultAsQueryPort(vault);
-  const ids: MemoryId[] = [];
-  const seen = new Set<string>();
-  for (const scope of scopes) {
-    for (const record of port.listByScope(scope, {
-      includeArchived: true,
-      includeForgotten: true,
-      includeExpired: true,
-      maxResults: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
-    })) {
-      if (!isSemanticRetrievalCandidate(record, nowMs)) continue;
-      if (seen.has(record.id)) continue;
-      seen.add(record.id);
-      ids.push(record.id);
-    }
-  }
-  return ids;
-}
-
-// Builds the per-memory semantic score map for the candidate set, or undefined when no embedding
-// model is configured (query embedding null) — that undefined drives the byte-identical lexical
-// fallback in the ranker. A candidate whose stored vector is missing or dimension-mismatched is
-// simply omitted from the map (semantic subscore 0 for it).
-async function buildSemanticScores(
-  deps: UiHandlerDeps,
-  vault: MemoryVaultStore,
-  queryText: string,
-  candidateIds: readonly MemoryId[],
-): Promise<ReadonlyMap<MemoryId, number> | undefined> {
-  if (candidateIds.length === 0) return undefined;
-  const scores = new Map<MemoryId, number>();
-  const embeddings = vault.getEmbeddings(candidateIds);
-  if (embeddings.size === 0) return undefined;
-  const queryEmbedding = await embedMemoryText(deps, queryText);
-  if (queryEmbedding === null) return undefined;
-  for (const id of candidateIds) {
-    const stored = embeddings.get(id);
-    if (stored === undefined) continue;
-    scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
-  }
-  return scores;
-}
+// The candidate-id gathering, semantic scoring, and strength projection that both this chat path and
+// the BFF /api/memory/context route need now live in ONE place — memory-retrieval-signals.ts — so the
+// two surfaces cannot drift (#204, O-F4). See buildConversationRetrievalSignals.
 
 function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
@@ -789,30 +729,26 @@ export async function buildMemoryResult(
     return emptyMemoryResult(true);
   }
   const nowMs = Date.now();
+  // Embedding-cosine (#204, O-F4) + reinforcement-strength (O-P1) ranking signals, built by the
+  // shared helper the BFF route also uses. semanticById is gated on the secondary-model egress check;
+  // both are passed to the ranker only when present so a fresh vault ranks byte-identically.
   const safeForSecondaryModel =
     memoryTextEgressRejectionReason(request.content, memoryCapturePolicyForDeps(deps)) === null;
-  const semanticById = safeForSecondaryModel
-    ? await buildSemanticScores(
-        deps,
-        vault,
-        request.content,
-        gatherCandidateIds(vault, scopes, nowMs),
-      )
-    : undefined;
-  // Reinforcement (#204 plasticity): project the vault's access counters into a per-memory strength
-  // signal so frequently- and recently-recalled memories rank higher online — closing the loop with
-  // the recordAccess reflex below. Deterministic given nowMs and local (no model call). The map is
-  // empty until something has been recalled; it is passed only when non-empty so a fresh vault's
-  // ranking is byte-identical to the pre-strength behaviour (the ranker would otherwise let the
-  // strength weight enter the denominator for an all-zero signal).
-  const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
+  const signals = await buildConversationRetrievalSignals(
+    deps,
+    vault,
+    request.content,
+    scopes,
+    nowMs,
+    safeForSecondaryModel,
+  );
   const retrieval = retrieveMemoryContext(
     {
       scopes,
       queryText: request.content,
       ...(budgetTokens !== undefined ? { budgetTokens } : {}),
-      ...(semanticById !== undefined ? { semanticById } : {}),
-      ...(strengthById.size > 0 ? { strengthById } : {}),
+      ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+      ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
       nowMs,
     },
     vaultAsQueryPort(vault),
