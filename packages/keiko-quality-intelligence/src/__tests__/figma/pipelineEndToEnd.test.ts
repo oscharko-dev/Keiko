@@ -266,10 +266,17 @@ describe("Figma pipeline end-to-end (synthetic board, #757)", () => {
     const titles = out.a11yItems.map((item) => item.title);
 
     // Contrast: black "Sign in to continue" on the card's white background resolves to an exact AA
-    // verdict computed from the extracted colours.
+    // verdict computed from the extracted colours. Pin the VERDICT, not just the item's existence: a
+    // bare `.includes("colour contrast")` also matches an "is below WCAG AA" fail and a "needs a
+    // verifiable colour contrast" coverage notice, so it would survive an inverted AA threshold
+    // (a11yBaseline.ts meetsContrastAa) or broken text-colour extraction. Asserting the computed PASS
+    // at the exact 21:1 ratio pins AC10 ("contrast computed from the extracted tokens") end to end.
     const contrast = out.a11yItems.find((item) => item.title.includes("colour contrast"));
     expect(contrast).toBeDefined();
     expect(contrast?.category).toBe("a11y");
+    expect(contrast?.outcome).toBe("pass");
+    expect(contrast?.title).toContain("meets WCAG AA");
+    expect(contrast?.title).toContain("21:1");
 
     // Alt-text: the image-fill hero node yields an alt-text expectation.
     expect(titles.some((t) => t.includes("alt text"))).toBe(true);

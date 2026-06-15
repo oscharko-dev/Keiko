@@ -67,6 +67,14 @@ const DENIED_SPECIFIER_PREFIXES: readonly string[] = [
   // material into a package whose output must be deterministic and content-free. The package
   // hashes with a hand-rolled non-cryptographic FNV-1a precisely so it never needs this.
   "node:crypto",
+  // The Model Gateway is the productive-model boundary. ADR-0023 D4 makes this package a
+  // pure-domain leaf with "no provider SDKs", and Epic #750 / #757 AC5 require the deterministic
+  // layer (clean → IR → baseline → code) to run with NO model — model augmentation is additive
+  // and lives in the SERVER adapter (figmaSnapshotAdapter), never in the domain. The import-only
+  // node:* scan above enforces "no IO" but had no entry for "no model"; this closes that hole so
+  // a future source-level coupling of the model layer into the deterministic domain is caught in
+  // CI. The package does not even declare keiko-model-gateway as a dependency.
+  "@oscharko-dev/keiko-model-gateway",
 ];
 
 // Bareword module names that must also be absent. Closing-quote anchoring is mandatory:
@@ -272,6 +280,39 @@ describe("domain purity guard (expanded to all of src/)", () => {
 
   it("node:v8 import is denied (V8 heap/serialization internals)", () => {
     expect(checkSource("<v8>", `import v8 from "node:v8";`).length).toBeGreaterThan(0);
+  });
+
+  // ─── #757 AC5 / ADR-0023 D4: the deterministic domain must stay model-free ────
+  // The import-only scan enforced "no IO" (node:*) but had no entry for "no model". A QI domain
+  // file coupling to the Model Gateway — even a type-only import — would have passed every guard,
+  // silently breaking the AC5 "NO model" invariant. These pin the model-layer boundary.
+
+  it("model-gateway value import is denied (#757 AC5 model-free domain boundary)", () => {
+    expect(
+      checkSource(
+        "<mg-value>",
+        `import { selectConfiguredModel } from "@oscharko-dev/keiko-model-gateway";`,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("model-gateway type-only import is denied (type coupling is still a boundary breach)", () => {
+    expect(
+      checkSource(
+        "<mg-type>",
+        `import type { ModelPort } from "@oscharko-dev/keiko-model-gateway";`,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("prose mentioning the model gateway WITHOUT an import specifier does NOT fire", () => {
+    // Mirrors the node:* prose-safety guard: only the quoted specifier form is denied, so a
+    // comment referencing the package by name (no opening quote) must produce zero violations.
+    const prose = [
+      `// Model augmentation is routed through the keiko-model-gateway in the server adapter.`,
+      `const layer = "model gateway boundary";`,
+    ].join("\n");
+    expect(checkSource("<mg-prose>", prose)).toEqual([]);
   });
 
   it("prose containing 'vm', 'cluster', or 'inspector' does NOT trigger the prefix guard", () => {
