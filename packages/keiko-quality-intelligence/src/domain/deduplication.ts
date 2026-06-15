@@ -5,6 +5,7 @@
 // considered equivalent iff their canonical equivalence signature collides.
 // The signature is computed from
 //   * the NFKC-normalised + lower-cased + whitespace-collapsed title
+//   * the canonicalised precondition sequence (each entry normalised the same way)
 //   * the canonicalised step sequence (each step normalised the same way)
 //   * the canonicalised expected-result sequence
 //   * the priority and risk-class fields
@@ -63,6 +64,7 @@ export const computeCandidateEquivalenceSignature = (
   const projection = JSON.stringify({
     v: "1",
     title: canonicaliseLine(candidate.title),
+    preconditions: canonicaliseSequence(candidate.preconditions),
     steps: canonicaliseSequence(candidate.steps),
     expectedResults: canonicaliseSequence(candidate.expectedResults),
     priority: candidate.priority,
