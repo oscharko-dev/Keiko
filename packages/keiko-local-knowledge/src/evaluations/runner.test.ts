@@ -26,6 +26,8 @@ describe("runRetrievalEval — single-topic fixture", () => {
     const scorecard = await runRetrievalEval(singleTopicFixture);
     expect(scorecard.dimensions.recall).toBe(1);
     expect(scorecard.dimensions.precision).toBe(1);
+    expect(scorecard.dimensions.meanReciprocalRank).toBe(1);
+    expect(scorecard.dimensions.ndcg).toBe(1);
     expect(scorecard.passed).toBe(true);
   });
 
@@ -228,6 +230,10 @@ describe("runRetrievalEval — pass threshold breakdown", () => {
       const scorecard = await runRetrievalEval(fixture);
       expect(scorecard.dimensions.recall).toBeGreaterThanOrEqual(PASS_THRESHOLDS.recall);
       expect(scorecard.dimensions.precision).toBeGreaterThanOrEqual(PASS_THRESHOLDS.precision);
+      expect(scorecard.dimensions.meanReciprocalRank).toBeGreaterThanOrEqual(
+        PASS_THRESHOLDS.meanReciprocalRank,
+      );
+      expect(scorecard.dimensions.ndcg).toBeGreaterThanOrEqual(PASS_THRESHOLDS.ndcg);
       expect(scorecard.dimensions.sourceIsolation).toBeGreaterThanOrEqual(
         PASS_THRESHOLDS.sourceIsolation,
       );
