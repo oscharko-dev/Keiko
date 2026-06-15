@@ -314,6 +314,7 @@ export function retrieveMemoryContext(
     ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
     ...(request.semanticById === undefined ? {} : { semanticById: request.semanticById }),
     ...(request.strengthById === undefined ? {} : { strengthById: request.strengthById }),
+    ...(request.fusion === undefined ? {} : { fusion: request.fusion }),
   };
   const ranked = rankMemories(
     filtered.candidates,

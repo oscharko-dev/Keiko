@@ -103,6 +103,12 @@ export const DEFAULT_MAX_INCLUDED = 12;
 export const DEFAULT_STALE_CONFIDENCE_THRESHOLD = 0.3;
 export const DEFAULT_LIST_BY_SCOPE_MAX_RESULTS = 500;
 
+// Signal-fusion strategy (#204, O-F2). "weighted-sum" (default) blends normalized subscores by
+// weight. "rrf" (Reciprocal Rank Fusion) fuses by RANK — score = Σ w/(k+rank) — needing no score
+// normalization and rewarding candidates multiple signals agree on; the documented fix for blending
+// heterogeneous-scale signals (lexical Jaccard vs cosine).
+export type RankingFusionMode = "weighted-sum" | "rrf";
+
 // ─── Request ──────────────────────────────────────────────────────────────────
 export interface MemoryRetrievalRequest {
   readonly scopes: readonly MemoryScope[];
@@ -140,6 +146,9 @@ export interface MemoryRetrievalRequest {
   // relevance vs novelty (1 = pure relevance / inert, lower = more diverse); defaults to 0.7.
   readonly embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
   readonly mmrLambda?: number;
+  // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (byte-identical legacy ranking);
+  // "rrf" opts into rank-based Reciprocal Rank Fusion.
+  readonly fusion?: RankingFusionMode;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────

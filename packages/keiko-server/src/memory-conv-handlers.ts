@@ -63,6 +63,7 @@ import {
 } from "./memory-capture-policy.js";
 import {
   buildConversationRetrievalSignals,
+  conversationFusionMode,
   type ConversationRetrievalSignals,
 } from "./memory-retrieval-signals.js";
 
@@ -252,6 +253,7 @@ function buildRetrievalRequest(
   input: ContextInput,
   nowMs: number,
   signals: ConversationRetrievalSignals,
+  fusion: ReturnType<typeof conversationFusionMode>,
 ): MemoryRetrievalRequest {
   // exactOptionalPropertyTypes: omit undefined fields instead of assigning them.
   const req: {
@@ -263,9 +265,11 @@ function buildRetrievalRequest(
     semanticById?: ReadonlyMap<MemoryId, number>;
     strengthById?: ReadonlyMap<MemoryId, number>;
     embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
+    fusion?: ReturnType<typeof conversationFusionMode>;
   } = {
     scopes,
     nowMs,
+    fusion,
   };
   if (input.queryText !== undefined) req.queryText = input.queryText;
   if (input.types !== undefined) req.types = input.types;
@@ -303,7 +307,10 @@ async function retrieveConversationMemory(
     nowMs,
     safeForSecondaryModel,
   );
-  const result = retrieveMemoryContext(buildRetrievalRequest(scopes, input, nowMs, signals), port);
+  const result = retrieveMemoryContext(
+    buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
+    port,
+  );
   // Reinforcement reflex (#204, O-P1): every recall is an access, same as the chat path.
   const accessedIds = result.included.map((item) => item.memoryId);
   if (accessedIds.length > 0) {

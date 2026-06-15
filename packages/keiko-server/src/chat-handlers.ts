@@ -30,7 +30,10 @@ import {
   maybeRunAutoMaintenance,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
-import { buildConversationRetrievalSignals } from "./memory-retrieval-signals.js";
+import {
+  buildConversationRetrievalSignals,
+  conversationFusionMode,
+} from "./memory-retrieval-signals.js";
 import {
   extractCandidatesFromUserText,
   memoryTextEgressRejectionReason,
@@ -710,6 +713,43 @@ function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStor
   });
 }
 
+// Build the embedding/strength/diversity signals and run scoped retrieval — the shared pipeline the
+// BFF route also uses (#204, O-F2/O-F3/O-F4/O-P1). semanticById is gated on the secondary-model
+// egress check; all signals are passed only when present so a fresh vault ranks byte-identically, and
+// the fusion mode is env-opt-in (default weighted-sum).
+async function retrieveChatMemory(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+  content: string,
+  budgetTokens: number | undefined,
+  nowMs: number,
+): Promise<ReturnType<typeof retrieveMemoryContext>> {
+  const safeForSecondaryModel =
+    memoryTextEgressRejectionReason(content, memoryCapturePolicyForDeps(deps)) === null;
+  const signals = await buildConversationRetrievalSignals(
+    deps,
+    vault,
+    content,
+    scopes,
+    nowMs,
+    safeForSecondaryModel,
+  );
+  return retrieveMemoryContext(
+    {
+      scopes,
+      queryText: content,
+      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+      ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+      ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
+      ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+      fusion: conversationFusionMode(deps),
+      nowMs,
+    },
+    vaultAsQueryPort(vault),
+  );
+}
+
 export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -729,30 +769,13 @@ export async function buildMemoryResult(
     return emptyMemoryResult(true);
   }
   const nowMs = Date.now();
-  // Embedding-cosine (#204, O-F4) + reinforcement-strength (O-P1) ranking signals, built by the
-  // shared helper the BFF route also uses. semanticById is gated on the secondary-model egress check;
-  // both are passed to the ranker only when present so a fresh vault ranks byte-identically.
-  const safeForSecondaryModel =
-    memoryTextEgressRejectionReason(request.content, memoryCapturePolicyForDeps(deps)) === null;
-  const signals = await buildConversationRetrievalSignals(
+  const retrieval = await retrieveChatMemory(
     deps,
     vault,
-    request.content,
     scopes,
+    request.content,
+    budgetTokens,
     nowMs,
-    safeForSecondaryModel,
-  );
-  const retrieval = retrieveMemoryContext(
-    {
-      scopes,
-      queryText: request.content,
-      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
-      ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
-      ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
-      ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
-      nowMs,
-    },
-    vaultAsQueryPort(vault),
   );
   // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
   // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled

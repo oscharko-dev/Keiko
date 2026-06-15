@@ -20,6 +20,7 @@ import {
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
   isMemorySuppressed,
+  type RankingFusionMode,
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryEmbeddingRow, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
@@ -74,6 +75,13 @@ async function semanticScoresFrom(
     scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
   }
   return scores;
+}
+
+// Signal-fusion mode for the conversation retrieval surfaces (#204, O-F2). Opt-in via env to keep
+// the release on the byte-identical weighted-sum default; set KEIKO_MEMORY_FUSION=rrf to enable
+// rank-based Reciprocal Rank Fusion across both the chat and BFF paths.
+export function conversationFusionMode(deps: UiHandlerDeps): RankingFusionMode {
+  return deps.env.KEIKO_MEMORY_FUSION === "rrf" ? "rrf" : "weighted-sum";
 }
 
 export interface ConversationRetrievalSignals {

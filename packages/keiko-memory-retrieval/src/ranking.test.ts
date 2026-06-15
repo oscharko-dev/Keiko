@@ -306,3 +306,58 @@ describe("rankMemories — source-authority importance subscore (#204, O-F5)", (
     expect(control[0]?.memoryId).toBe(memoryId("aaa-inferred"));
   });
 });
+
+describe("rankMemories — RRF fusion (#204, O-F2)", () => {
+  const onlyRelevanceRecency = {
+    ...DEFAULT_RANKING_WEIGHTS,
+    confidence: 0,
+    pinned: 0,
+    correction: 0,
+    graph: 0,
+    semantic: 0,
+    strength: 0,
+    importance: 0,
+    relevance: 1,
+    recency: 1,
+  };
+
+  it("explicit fusion 'weighted-sum' is identical to the default (omitted) fusion", () => {
+    const a = buildRecord({ id: "a", body: "alpha beta", updatedAt: now });
+    const b = buildRecord({ id: "b", body: "alpha gamma", updatedAt: now - 1 });
+    const base = { queryText: "alpha", nowMs: now, weights: DEFAULT_RANKING_WEIGHTS } as const;
+    const def = rankMemories([a, b], base);
+    const explicit = rankMemories([a, b], { ...base, fusion: "weighted-sum" });
+    expect(JSON.stringify(explicit)).toBe(JSON.stringify(def));
+  });
+
+  it("is deterministic and returns every memory", () => {
+    const a = buildRecord({ id: "a", body: "alpha beta", updatedAt: now });
+    const b = buildRecord({ id: "b", body: "gamma", updatedAt: now - 10 });
+    const c = buildRecord({ id: "c", body: "alpha", updatedAt: now - 5 });
+    const q = { queryText: "alpha", nowMs: now, weights: onlyRelevanceRecency, fusion: "rrf" } as const;
+    const r1 = rankMemories([a, b, c], q);
+    const r2 = rankMemories([a, b, c], q);
+    expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));
+    expect(new Set(r1.map((e) => String(e.memoryId)))).toEqual(new Set(["a", "b", "c"]));
+  });
+
+  it("a memory ranked first in every positive-weight signal scores 1.0 and leads", () => {
+    // dominant matches the query (rank 1 relevance) and is the most recent (rank 1 recency).
+    const dominant = buildRecord({ id: "dominant", body: "alpha topic", updatedAt: now });
+    const other = buildRecord({ id: "other", body: "unrelated", updatedAt: now - 30 * 86_400_000 });
+    const ranked = rankMemories([other, dominant], {
+      queryText: "alpha",
+      nowMs: now,
+      weights: onlyRelevanceRecency,
+      fusion: "rrf",
+    });
+    expect(ranked[0]?.memoryId).toBe(memoryId("dominant"));
+    expect(ranked[0]?.score).toBeCloseTo(1, 10);
+    expect(ranked[1]?.memoryId).toBe(memoryId("other"));
+    // normalized RRF keeps every score within [0,1].
+    for (const e of ranked) {
+      expect(e.score).toBeGreaterThanOrEqual(0);
+      expect(e.score).toBeLessThanOrEqual(1);
+    }
+  });
+});

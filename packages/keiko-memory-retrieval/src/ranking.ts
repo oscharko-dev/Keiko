@@ -26,7 +26,12 @@ import type {
 import { graphProximityScore } from "./graph.js";
 import { recencyScore } from "./recency.js";
 import { lexicalRelevance } from "./relevance.js";
-import type { IncludedMemory, IncludedSubscores, RankingWeights } from "./types.js";
+import type {
+  IncludedMemory,
+  IncludedSubscores,
+  RankingFusionMode,
+  RankingWeights,
+} from "./types.js";
 
 export interface RankMemoriesQuery {
   readonly queryText?: string;
@@ -38,6 +43,8 @@ export interface RankMemoriesQuery {
   // Per-memory reinforcement strength in [0,1] keyed by memory id (#204 plasticity). When undefined,
   // the ranker zeroes the strength weight so output is byte-identical to pre-strength behaviour.
   readonly strengthById?: ReadonlyMap<MemoryId, number> | undefined;
+  // Signal-fusion strategy (#204, O-F2). Defaults to weighted-sum (byte-identical); "rrf" fuses ranks.
+  readonly fusion?: RankingFusionMode | undefined;
 }
 
 export interface RankMemoriesOptions {
@@ -207,6 +214,106 @@ function effectiveWeights(query: RankMemoriesQuery): RankingWeights {
   return weights;
 }
 
+// Reciprocal Rank Fusion constant (Cormack et al. 2009). 60 is the field-standard k; larger flattens
+// the rank advantage, smaller sharpens it.
+export const RRF_K = 60;
+
+const SUBSCORE_KEYS: readonly (keyof IncludedSubscores)[] = [
+  "relevance",
+  "recency",
+  "confidence",
+  "pinned",
+  "correction",
+  "graph",
+  "semantic",
+  "strength",
+  "importance",
+];
+
+// Final subscores per memory: baseline + (when edges are supplied) the graph layer. The graph
+// high-rank set is the WEIGHTED-SUM baseline top-N, so graph proximity is computed identically
+// regardless of the final fusion mode (and the weighted-sum path stays byte-identical to before).
+function computeFinalSubscores(
+  memories: readonly MemoryRecord[],
+  query: RankMemoriesQuery,
+  weights: RankingWeights,
+  options: RankMemoriesOptions,
+  recordById: ReadonlyMap<MemoryId, MemoryRecord>,
+): Map<MemoryId, IncludedSubscores> {
+  const map = new Map<MemoryId, IncludedSubscores>();
+  for (const m of memories) map.set(m.id, baselineSubscores(m, query));
+  if (options.edgesByMemory === undefined) return map;
+  const baselineSorted = sortByRank(
+    memories.map((m) => entryFor(m, map.get(m.id)!, weights)),
+    recordById,
+  );
+  const highRankCount = options.graphHighRankCount ?? DEFAULT_GRAPH_HIGH_RANK_COUNT;
+  const highRankIds = new Set<string>(
+    baselineSorted.slice(0, highRankCount).map((e) => e.memoryId),
+  );
+  const edges = options.edgesByMemory;
+  for (const m of memories) {
+    const base = map.get(m.id)!;
+    map.set(m.id, { ...base, graph: graphProximityScore(m.id, edges, highRankIds) });
+  }
+  return map;
+}
+
+// Reciprocal Rank Fusion (#204, O-F2): for each positive-weight signal, rank the memories by that
+// subscore (desc, id tiebreak) and fuse score = Σ w/(RRF_K + rank). Rank-based, so heterogeneous
+// score scales (Jaccard ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals
+// compounds. The fused value is normalized to [0,1] (best possible = rank 1 in every signal) to
+// honour the documented score range; ordering uses the shared (score desc, updatedAt desc, id asc) sort.
+function rrfRank(
+  memories: readonly MemoryRecord[],
+  subscoresById: ReadonlyMap<MemoryId, IncludedSubscores>,
+  weights: RankingWeights,
+  recordById: ReadonlyMap<MemoryId, MemoryRecord>,
+): readonly IncludedMemory[] {
+  const signals = SUBSCORE_KEYS.filter((k) => weights[k] > 0);
+  if (signals.length === 0) {
+    return sortByRank(
+      memories.map((m) => entryFor(m, subscoresById.get(m.id)!, weights)),
+      recordById,
+    );
+  }
+  const rankBySignal = new Map<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>>();
+  for (const sig of signals) {
+    const ordered = [...memories].sort((a, b) => {
+      const av = (subscoresById.get(a.id)!)[sig];
+      const bv = (subscoresById.get(b.id)!)[sig];
+      if (av !== bv) return bv - av;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    const ranks = new Map<MemoryId, number>();
+    ordered.forEach((m, i) => ranks.set(m.id, i + 1));
+    rankBySignal.set(sig, ranks);
+  }
+  const maxFused = signals.reduce((sum, sig) => sum + weights[sig] / (RRF_K + 1), 0);
+  const firstSignal = signals[0]!;
+  const entries = memories.map((m): IncludedMemory => {
+    let fused = 0;
+    let bestSig = firstSignal;
+    let bestContrib = -1;
+    for (const sig of signals) {
+      const rank = (rankBySignal.get(sig)!).get(m.id)!;
+      const contrib = weights[sig] / (RRF_K + rank);
+      fused += contrib;
+      if (contrib > bestContrib) {
+        bestContrib = contrib;
+        bestSig = sig;
+      }
+    }
+    return {
+      memoryId: m.id,
+      score: maxFused > 0 ? fused / maxFused : 0,
+      subscores: subscoresById.get(m.id)!,
+      inclusionReason: inclusionReasonText(bestSig, bestContrib),
+    };
+  });
+  return sortByRank(entries, recordById);
+}
+
 export function rankMemories(
   memories: readonly MemoryRecord[],
   query: RankMemoriesQuery,
@@ -216,25 +323,12 @@ export function rankMemories(
   const recordById = new Map<MemoryId, MemoryRecord>();
   for (const m of memories) recordById.set(m.id, m);
   const weights = effectiveWeights(query);
-
-  // Pass 1 — baseline.
-  const baseline = memories.map((m) => entryFor(m, baselineSubscores(m, query), weights));
-  const baselineSorted = sortByRank(baseline, recordById);
-
-  // No edges supplied → skip pass 2 entirely (cost saving + identical result).
-  if (options.edgesByMemory === undefined) return baselineSorted;
-
-  // Pass 2 — graph layer.
-  const highRankCount = options.graphHighRankCount ?? DEFAULT_GRAPH_HIGH_RANK_COUNT;
-  const highRankIds = new Set<string>(
-    baselineSorted.slice(0, highRankCount).map((e) => e.memoryId),
+  const subscoresById = computeFinalSubscores(memories, query, weights, options, recordById);
+  if (query.fusion === "rrf") {
+    return rrfRank(memories, subscoresById, weights, recordById);
+  }
+  return sortByRank(
+    memories.map((m) => entryFor(m, subscoresById.get(m.id)!, weights)),
+    recordById,
   );
-  const edges = options.edgesByMemory;
-  const layered = memories.map((m) => {
-    const base = baselineSubscores(m, query);
-    const graph = graphProximityScore(m.id, edges, highRankIds);
-    const subscores: IncludedSubscores = { ...base, graph };
-    return entryFor(m, subscores, weights);
-  });
-  return sortByRank(layered, recordById);
 }

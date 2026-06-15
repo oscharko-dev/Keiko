@@ -31,6 +31,7 @@ export {
   type MemoryRetrievalResult,
   type OmittedMemory,
   type OmittedReason,
+  type RankingFusionMode,
   type RankingWeights,
 } from "./types.js";
 
@@ -55,6 +56,7 @@ export { graphProximityScore } from "./graph.js";
 export {
   rankMemories,
   sourceImportance,
+  RRF_K,
   type RankMemoriesOptions,
   type RankMemoriesQuery,
 } from "./ranking.js";
