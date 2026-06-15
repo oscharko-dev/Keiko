@@ -174,16 +174,15 @@ async function waitForPublicReadiness() {
   publicReady = false;
   writeState({ ready: false });
   try {
-    let lastError = "not started";
     while (!shuttingDown) {
-      lastError = await readinessProbe();
-      if (lastError === "ok") {
+      const status = await readinessProbe();
+      if (status === "ok") {
         publicReady = true;
         writeState({ ready: true });
         console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
         return;
       }
-      writeState({ ready: false, starting: lastError });
+      writeState({ ready: false, starting: status });
       await sleep(500);
     }
   } finally {
