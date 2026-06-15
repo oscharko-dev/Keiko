@@ -29,6 +29,9 @@ import { run as runNoMemoryMode } from "./scenarios/no-memory-mode.test.js";
 import { run as runErrorPropagation } from "./scenarios/error-propagation.test.js";
 import { run as runSuppressedMemory } from "./scenarios/suppressed-memory.test.js";
 import { run as runWorkspaceScaleBoundary } from "./scenarios/workspace-scale-boundary.test.js";
+import { run as runGradedRetrievalQuality } from "./scenarios/graded-retrieval-quality.test.js";
+import { run as runAbstention } from "./scenarios/abstention.test.js";
+import { run as runForgettingAccuracy } from "./scenarios/forgetting-accuracy.test.js";
 
 import { createScorecard, serializeScorecard, type Scorecard } from "./scorecard.js";
 import { FIXED_NOW_MS } from "./_support.js";
@@ -49,6 +52,10 @@ const SCENARIOS: readonly {
   { name: "error-propagation", run: runErrorPropagation },
   { name: "suppressed-memory", run: runSuppressedMemory },
   { name: "workspace-scale-boundary", run: runWorkspaceScaleBoundary },
+  // Graded quality scenarios (#215 follow-up): recall@k / precision@k, abstention, and FAMA.
+  { name: "graded-retrieval-quality", run: runGradedRetrievalQuality },
+  { name: "abstention", run: runAbstention },
+  { name: "forgetting-accuracy", run: runForgettingAccuracy },
 ];
 
 async function runAllScenarios(): Promise<Scorecard> {
