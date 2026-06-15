@@ -83,6 +83,15 @@ const BOARD = {
 const URL_OK = "https://www.figma.com/design/KEY123/Board?node-id=0-1";
 const TOKEN = "figd_env-test-token";
 
+const isFigmaApiRequest = (raw: string): boolean => {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && url.hostname === "api.figma.com";
+  } catch {
+    return false;
+  }
+};
+
 // One HTTP port serving BOTH the scoped nodes fetch and the /v1/images render-url call.
 const findById = (n: Record<string, unknown>, id: string): Record<string, unknown> | undefined => {
   if (n.id === id) return n;
@@ -308,12 +317,10 @@ describe("governedSnapshotBuild — audit + metrics (#760)", () => {
 
     expect(result.provenance.version).toBe("ver-999");
     expect(
-      rec.requests
-        .filter((url) => url.includes("api.figma.com"))
-        .every((url) => {
-          const parsed = new URL(url);
-          return parsed.searchParams.get("version") === "ver-999";
-        }),
+      rec.requests.filter(isFigmaApiRequest).every((url) => {
+        const parsed = new URL(url);
+        return parsed.searchParams.get("version") === "ver-999";
+      }),
     ).toBe(true);
   });
 
