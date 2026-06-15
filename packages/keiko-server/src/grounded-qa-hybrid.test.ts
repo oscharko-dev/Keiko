@@ -1048,6 +1048,146 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
   });
 });
 
+// ─── Case 3d: a per-folder EmbeddingAdapterError is skipped (graceful), other errors propagate ──
+//
+// Mirrors the connector path (Case 3b / retrieveOneConnector): a folder whose embedding adapter is
+// unavailable is skipped (reason "embedding-unavailable") so the remaining folders + connectors
+// still answer. EVERY OTHER folder error propagates to the boundary for map+redact — ProviderError
+// -> 502, generic -> 500, ClarificationNeededError -> 400 — covered by grounded-qa.error-redaction
+// .test.ts and the GRD-016 test above. (Silently dropping a folder on a hard error would return a
+// misleadingly "complete" answer, so only the recoverable embedding outage is skipped.)
+
+describe("hybrid grounded ask — folder EmbeddingAdapterError is skipped, not aborted", () => {
+  it("1 embedding-unavailable folder + 1 healthy folder + 1 connector → 200 with healthy-folder and connector citations, embedding-unavailable in uncertainty", async () => {
+    const { capsuleId: capId, label: connLabel } = await seedReadyCapsule("ThrowSkip Connector");
+
+    const goodFolderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/healthy.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("healthy-repo"),
+    };
+    const throwFolderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/throwing.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("throwing-repo"),
+    };
+    const chatId = makeHybridChat(
+      [goodFolderScope, throwFolderScope],
+      [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+    );
+
+    const packMap = new Map<string, ConnectedContextPack>([
+      ["src/healthy.ts", folderPack("src/healthy.ts", 0.8, "healthy-atom")],
+    ]);
+    // Retriever: succeeds for "src/healthy.ts", throws for "src/throwing.ts".
+    const throwingFolderRetriever: GroundedRetriever = (
+      input: OrchestratorInput,
+    ): Promise<RetrievalOnlyOutput> => {
+      const key = input.scope.relativePaths[0] ?? "";
+      if (key === "src/throwing.ts") {
+        return Promise.reject(
+          new EmbeddingAdapterError({
+            status: 503,
+            body: { error: { code: "EMBEDDING_UNAVAILABLE", message: "embedding adapter down" } },
+          }),
+        );
+      }
+      const pack = packMap.get(key);
+      if (pack === undefined) return Promise.reject(new Error(`No fixture pack for path: ${key}`));
+      return Promise.resolve({ pack, elapsedMs: 9, plan: { state: "ready" } as never });
+    };
+
+    const hybrid: HybridSeam = {
+      folderRetriever: throwingFolderRetriever,
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: sentinelAnswerer(),
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What is healthy?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // Must be 200 — the throwing folder is skipped, not propagated.
+    // mutation: removing the try/catch in retrieveFolderPacks → the throw escapes → 500
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+
+    // Healthy folder citations must be present (retrieval for that folder succeeded).
+    // mutation: if the catch also drops the healthy folder, citations would be empty
+    expect(answer.citations.some((c) => c.source === "healthy-repo")).toBe(true);
+
+    // Throwing folder must NOT appear in citations.
+    expect(answer.citations.some((c) => c.source === "throwing-repo")).toBe(false);
+
+    // Connector citations must be present (connectors are unaffected by folder errors).
+    expect(answer.knowledgeCitations.some((kc) => kc.source?.startsWith(`${connLabel} / `))).toBe(
+      true,
+    );
+
+    // Skipped folder surfaces in uncertainty as "embedding-unavailable" (same as the connector path).
+    // mutation: rethrowing EmbeddingAdapterError instead of skipping → 502/500, no skip entry.
+    const skipEntries = answer.uncertainty.filter((u) => u.kind === "embedding-unavailable");
+    expect(skipEntries.length).toBeGreaterThan(0);
+  });
+
+  it("all folders embedding-unavailable + 1 connector → 200 from connector alone with embedding-unavailable skips", async () => {
+    const { capsuleId: capId, label: connLabel } = await seedReadyCapsule(
+      "ThrowSkip Only Connector",
+    );
+    const throwFolder1: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/err1.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("err1-repo"),
+    };
+    const throwFolder2: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/err2.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("err2-repo"),
+    };
+    const chatId = makeHybridChat(
+      [throwFolder1, throwFolder2],
+      [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+    );
+
+    const alwaysThrowRetriever: GroundedRetriever = (): Promise<RetrievalOnlyOutput> =>
+      Promise.reject(
+        new EmbeddingAdapterError({
+          status: 503,
+          body: { error: { code: "EMBEDDING_UNAVAILABLE", message: "embedding adapter down" } },
+        }),
+      );
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Connector only from throw?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: alwaysThrowRetriever,
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    // mutation: reverting the try/catch makes this 500
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.knowledgeCitations.some((kc) => kc.source?.startsWith(`${connLabel} / `))).toBe(
+      true,
+    );
+    expect(answer.uncertainty.filter((u) => u.kind === "embedding-unavailable").length).toBe(2);
+  });
+});
+
 // ─── Case 4a: Folders-only must NOT reach the hybrid branch ──────────────────
 
 describe("AC5 routing — folders-only must not invoke hybrid.answer", () => {

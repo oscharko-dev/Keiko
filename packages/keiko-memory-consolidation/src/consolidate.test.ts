@@ -28,6 +28,7 @@ describe("runConsolidation - skip and empty cases", () => {
     expect(result.staleFlags).toEqual([]);
     expect(result.reviewItems).toEqual([]);
     expect(result.clustersInspected).toBe(0);
+    expect(result.conflictPairsDetected).toBe(0);
     expect(result.recordsInspected).toBe(0);
     expect(result.truncated).toBe(false);
     expect(result.elapsedMs).toBe(0);
@@ -242,7 +243,7 @@ describe("runConsolidation - stale flag integration", () => {
 });
 
 describe("runConsolidation - end-to-end mixed input", () => {
-  it("populates all three result categories in one run", () => {
+  it("populates all three result categories in one run and reports counters independently", () => {
     const stale = makeRecord({
       id: "m-stale",
       body: "stale fact",
@@ -268,6 +269,12 @@ describe("runConsolidation - end-to-end mixed input", () => {
     expect(result.staleFlags.length).toBeGreaterThan(0);
     expect(result.edgesProposed.length).toBeGreaterThan(0);
     expect(result.reviewItems.length).toBeGreaterThan(0);
+    // RED reason (before fix): clustersInspected was computed as
+    // `consumed.clustersInspected + conflictPairs.length`, mixing units. The dup pair
+    // (m-da, m-db) forms 1 cluster; the conflict pair (m-co, m-cn) yields 1 conflictPair.
+    // The old code inflated clustersInspected to 2. After the fix the two counters are separate.
+    expect(result.clustersInspected).toBe(1);
+    expect(result.conflictPairsDetected).toBe(1);
   });
 });
 

@@ -298,39 +298,31 @@ describe("embedChunkBatch — bounded concurrency", () => {
   });
 
   it("never exceeds the configured concurrency", async () => {
-    let inFlight = 0;
-    let peak = 0;
-    const adapter = scriptedAdapter({
-      responder: (_req) => {
-        // Track peak in the synchronous callback; the request is awaited in the batcher
-        // so the responder is invoked once per call and the increment+decrement bracket
-        // the await window for that call.
-        inFlight += 1;
-        if (inFlight > peak) peak = inFlight;
-        const outcome = {
-          ok: true as const,
-          value: {
-            vector: deterministicVector(_req.input, DEFAULT_EMBEDDING.vectorDimensions),
-            modelId: DEFAULT_EMBEDDING.modelId,
-          },
-        };
-        inFlight -= 1;
-        return outcome;
-      },
-    });
+    let outerInFlight = 0;
+    let outerPeak = 0;
 
-    // Wrap in an async layer that holds the in-flight count across a microtask boundary.
-    const original = adapter.request;
-    const trackingAdapter = {
-      ...adapter,
+    // Wrap only the outer adapter.request — this is what the batcher calls and whose
+    // concurrency it controls. Track in-flight count across a microtask boundary so
+    // concurrent awaits are visible.
+    const base = scriptedAdapter({
+      responder: (req) => ({
+        ok: true as const,
+        value: {
+          vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+    const trackingAdapter: typeof base = {
+      ...base,
       request: async (
-        req: Parameters<typeof original>[0],
-      ): Promise<Awaited<ReturnType<typeof original>>> => {
-        inFlight += 1;
-        if (inFlight > peak) peak = inFlight;
+        req: Parameters<typeof base.request>[0],
+      ): Promise<Awaited<ReturnType<typeof base.request>>> => {
+        outerInFlight += 1;
+        if (outerInFlight > outerPeak) outerPeak = outerInFlight;
         await new Promise((r) => setImmediate(r));
-        const outcome = await original(req);
-        inFlight -= 1;
+        const outcome = await base.request(req);
+        outerInFlight -= 1;
         return outcome;
       },
     };
@@ -344,11 +336,8 @@ describe("embedChunkBatch — bounded concurrency", () => {
       idSource: fixedIds("storage"),
     });
 
-    // Peak counts both the inner (synchronous) and outer (async) increments — the outer
-    // is the one the batcher actually controls. We allow ≤ 2*N because the synchronous
-    // increment in the inner responder shares the same counter; the outer wrapper's peak
-    // can be at most `concurrency`.
-    expect(peak).toBeLessThanOrEqual(4);
+    // outerPeak tracks only the batcher-controlled outer calls — must not exceed concurrency=2.
+    expect(outerPeak).toBeLessThanOrEqual(2);
   });
 });
 
@@ -531,7 +520,10 @@ function batchAdapter(identity: EmbeddingModelIdentity = DEFAULT_EMBEDDING): {
     apiKey: ["sk-", "test"].join(""),
     request: (req) => {
       scalarCalls += 1;
-      return Promise.resolve({ ok: true, value: { vector: vec(req.input), modelId: identity.modelId } });
+      return Promise.resolve({
+        ok: true,
+        value: { vector: vec(req.input), modelId: identity.modelId },
+      });
     },
     requestBatch: (req) => {
       batchCallSizes.push(req.inputs.length);

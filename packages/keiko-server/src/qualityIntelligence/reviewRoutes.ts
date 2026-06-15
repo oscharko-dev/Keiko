@@ -8,6 +8,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { loadQualityIntelligenceRun } from "@oscharko-dev/keiko-evidence";
+import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -25,21 +26,28 @@ const ACTIONS: ReadonlySet<string> = new Set<QiReviewAction>([
   "withdraw",
 ]);
 
+class BodyTooLargeError extends Error {}
+
 const readBody = (req: IncomingMessage): Promise<string> =>
   new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let capped = false;
     req.on("data", (chunk: Buffer) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
-        req.resume();
+        if (!capped) {
+          capped = true;
+          chunks.length = 0;
+          reject(new BodyTooLargeError());
+          req.resume();
+        }
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
-      resolve(Buffer.concat(chunks).toString("utf8"));
+      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
   });
@@ -64,10 +72,9 @@ function parseDecision(body: Record<string, unknown>): ParsedDecision | undefine
   if (typeof action !== "string" || !ACTIONS.has(action)) return undefined;
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : undefined;
   const scope = candidateId !== undefined ? "candidate" : "run";
-  const reviewerLabel =
-    typeof body.reviewerLabel === "string" && body.reviewerLabel.trim().length > 0
-      ? body.reviewerLabel.trim().slice(0, 80)
-      : "reviewer";
+  const rawLabel =
+    typeof body.reviewerLabel === "string" ? normaliseCandidateText(body.reviewerLabel) : "";
+  const reviewerLabel = rawLabel.length > 0 ? rawLabel.slice(0, 80) : "reviewer";
   return {
     action: action as QiReviewAction,
     scope,

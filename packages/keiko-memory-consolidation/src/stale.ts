@@ -26,7 +26,9 @@ export interface StaleOptions {
 }
 
 // Records in these statuses are skipped entirely: they have no consolidation work to do.
-const SKIPPED_STATUSES = new Set<MemoryStatus>(["rejected", "forgotten"]);
+// `conflicted` and `proposed` are included because they are pending human review — emitting
+// stale flags for records the reviewer hasn't accepted yet would produce false signal.
+const SKIPPED_STATUSES = new Set<MemoryStatus>(["rejected", "forgotten", "conflicted", "proposed"]);
 
 function isExpired(record: MemoryRecord, nowMs: number): boolean {
   const { validUntil } = record.validity;

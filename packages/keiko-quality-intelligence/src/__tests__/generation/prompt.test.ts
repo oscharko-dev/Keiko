@@ -6,11 +6,7 @@
 //   3. buildTestDesignInstruction — evidence count, profile label/defaults, maxTestCases cap
 
 import { describe, expect, it } from "vitest";
-import {
-  bankingDefault,
-  insuranceDefault,
-  regressionDefault,
-} from "../../domain/policyProfile.js";
+import { bankingDefault, insuranceDefault, regressionDefault } from "../../domain/policyProfile.js";
 import {
   GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
   GENERATED_CANDIDATE_STEP_MAX_ITEMS,
@@ -220,18 +216,28 @@ describe("buildTestDesignInstruction", () => {
     expect(result).toContain(bankingDefault.defaultRiskClass);
   });
 
-  it("caps maxTestCases at 200 (upper boundary: 201 → 200)", () => {
+  it("passes through maxTestCases above 200 unchanged when below GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS (e.g. 300 → 300)", () => {
+    // The old hard-cap was 200; the cap is now GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS (1024).
     const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
       evidenceCount: 5,
       profile: regressionDefault,
-      maxTestCases: 201,
+      maxTestCases: 300,
     });
-    expect(result).toContain("200");
-    // Must NOT contain 201
-    expect(result).not.toContain("201");
+    expect(result).toContain("300");
+    expect(result).not.toContain("200");
   });
 
-  it("clamps maxTestCases exactly at 200 (boundary: 200 → 200, not clamped further)", () => {
+  it("caps maxTestCases at GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS (1025 → 1024)", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 5,
+      profile: regressionDefault,
+      maxTestCases: GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS + 1,
+    });
+    expect(result).toContain(String(GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS));
+    expect(result).not.toContain(String(GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS + 1));
+  });
+
+  it("passes maxTestCases=200 through unchanged (200 < 1024, no clamping)", () => {
     const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
       evidenceCount: 5,
       profile: regressionDefault,

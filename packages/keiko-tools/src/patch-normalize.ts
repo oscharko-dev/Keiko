@@ -64,17 +64,21 @@ function normalizeHunkHeader(header: string, body: readonly string[]): string {
   )} @@${suffix}`;
 }
 
-function hasBodyLineBefore(lines: readonly string[], index: number): boolean {
-  return lines.slice(0, index).some(isBodyLine);
-}
-
-function hasBodyLineAfter(lines: readonly string[], index: number): boolean {
-  return lines.slice(index + 1).some(isBodyLine);
-}
-
 function normalizeBlankContextLines(lines: readonly string[]): readonly string[] {
+  // O(n) forward+backward scan instead of per-blank slice().some() (which is O(n²)).
+  const n = lines.length;
+  // seenBefore[i] is true when at least one body line exists at index < i.
+  const seenBefore = new Uint8Array(n);
+  for (let i = 1; i < n; i += 1) {
+    seenBefore[i] = seenBefore[i - 1] === 1 || isBodyLine(lines[i - 1] ?? "") ? 1 : 0;
+  }
+  // seenAfter[i] is true when at least one body line exists at index > i.
+  const seenAfter = new Uint8Array(n);
+  for (let i = n - 2; i >= 0; i -= 1) {
+    seenAfter[i] = seenAfter[i + 1] === 1 || isBodyLine(lines[i + 1] ?? "") ? 1 : 0;
+  }
   return lines.map((line, index) =>
-    line === "" && hasBodyLineBefore(lines, index) && hasBodyLineAfter(lines, index) ? " " : line,
+    line === "" && seenBefore[index] === 1 && seenAfter[index] === 1 ? " " : line,
   );
 }
 

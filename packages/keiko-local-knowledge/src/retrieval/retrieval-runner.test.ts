@@ -298,6 +298,41 @@ describe("runLocalKnowledgeRetrieval — answerGroundingPolicy", () => {
     expect(result.noEvidence).toBe(true);
     expect(result.reason).toBe("no-vectors");
   });
+
+  it("require-citations-or-state-no-evidence + no refs due to policy → surfaces 'no-evidence-stated', not the search-layer reason", async () => {
+    // A capsule has vectors (so embedding succeeds and search runs), but all candidates
+    // are below a high minScore so the search returns empty refs. The
+    // require-citations-or-state-no-evidence decision has reason='no-evidence-stated';
+    // that must win over the search-layer 'below-min-score' reason.
+    const { store } = getFixture();
+    const capsuleId = "cap-state-no-evidence" as KnowledgeCapsuleId;
+    createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: capsuleId,
+        answerGroundingPolicy: "require-citations-or-state-no-evidence",
+      }),
+    );
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-sne"));
+    await seedCapsuleWithVectors(store, {
+      capsuleId: String(capsuleId),
+      sourceId: "src-sne",
+      skipCapsule: true,
+      skipSource: true,
+    });
+    const result = await runLocalKnowledgeRetrieval(
+      { store, embeddingAdapter: scriptedAdapter() },
+      {
+        capsuleId,
+        text: "query",
+        minScore: 1e9, // impossibly high — all candidates filtered
+      },
+    );
+    expect(result.references).toEqual([]);
+    expect(result.noEvidence).toBe(true);
+    // policy-specific reason must surface, not the search-layer 'below-min-score'
+    expect(result.reason).toBe("no-evidence-stated");
+  });
 });
 
 describe("runLocalKnowledgeRetrieval — capsule-set scope with strictest-policy floor", () => {

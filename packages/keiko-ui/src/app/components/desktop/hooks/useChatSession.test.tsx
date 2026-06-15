@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 import {
+  askGrounded,
   createDesktopChat,
   fetchChatMessages,
   fetchChats,
@@ -9,6 +10,7 @@ import {
   fetchProjects,
 } from "@/lib/api";
 import {
+  GROUNDED_ATTACHMENT_NOTICE,
   isBudgetExceeded,
   isInFlight,
   notifyChatDeleted,
@@ -73,7 +75,10 @@ function model(patch: Partial<ModelCapability> = {}): ModelCapability {
   };
 }
 
-function project(path = "/repo", patch: Partial<ProjectWithAvailability> = {}): ProjectWithAvailability {
+function project(
+  path = "/repo",
+  patch: Partial<ProjectWithAvailability> = {},
+): ProjectWithAvailability {
   return {
     path,
     name: path.split("/").at(-1) ?? path,
@@ -231,7 +236,9 @@ describe("useChatSession bootstrap", () => {
   });
 
   it("does not auto-create when no conversation-eligible model is available", async () => {
-    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "embed", kind: "embedding" })] });
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "embed", kind: "embedding" })],
+    });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
     vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
 
@@ -259,6 +266,59 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() => expect(result.current.chats[0]?.id).toBe("chat-new"));
 
     notifyChatDeleted("chat-new");
-    await waitFor(() => expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false));
+    await waitFor(() =>
+      expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
+    );
+  });
+});
+
+describe("useChatSession sendMessage — grounded attachment guard", () => {
+  // Helper: bootstrap the hook with a grounded chat and a model that accepts documents.
+  async function setupGroundedSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    const groundedChat = chat({
+      id: "chat-grounded",
+      selectedModel: "chat-doc",
+      // connectedScopes is non-empty → hasGroundingScope returns true
+      connectedScopes: [{ kind: "files" as const, relativePaths: ["README.md"], connectedAtMs: 1 }],
+    });
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-doc", supportsDocumentInput: true })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [groundedChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("sets GROUNDED_ATTACHMENT_NOTICE and does not call askGrounded when an attachment is present", async () => {
+    const { result } = await setupGroundedSession();
+
+    // Stage a document attachment (text/plain → "document" kind, no FileReader needed).
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(file);
+      expect(outcome).toEqual({ ok: true });
+    });
+    expect(result.current.pendingAttachments).toHaveLength(1);
+
+    // Set a non-empty draft so the content guard passes.
+    act(() => {
+      result.current.setDraft("Summarise the repo.");
+    });
+
+    // sendMessage must block and surface the notice — NOT forward to askGrounded.
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
+    expect(askGrounded).not.toHaveBeenCalled();
+    // The optimistic user message must NOT have been appended.
+    expect(result.current.messages).toHaveLength(0);
   });
 });

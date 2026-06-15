@@ -153,6 +153,35 @@ describe("deduplicateCandidates", () => {
     expect(result).toHaveLength(2);
   });
 
+  // ─── bidi / zero-width spoofing resistance ────────────────────────────────
+
+  it("produces the SAME equivalence signature for candidates differing only by an injected bidi char (U+200E LRM)", () => {
+    // A bidi left-to-right mark injected into the title must not create a distinct dedup bucket
+    // (Trojan-source hardening: normaliseCandidateText strips U+200B–U+200F before hashing).
+    const clean = baseCandidate({ title: "Verify the login flow" });
+    const withBidi = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-gggggggggggg"),
+      title: "Verify‎ the login flow", // U+200E LEFT-TO-RIGHT MARK injected
+    });
+    expect(computeCandidateEquivalenceSignature(clean)).toBe(
+      computeCandidateEquivalenceSignature(withBidi),
+    );
+    const result = deduplicateCandidates([clean, withBidi]);
+    expect(result).toHaveLength(1);
+  });
+
+  it("produces the SAME equivalence signature for candidates differing only by a zero-width space (U+200B)", () => {
+    // Zero-width space must also be stripped before signature computation.
+    const clean = baseCandidate({ title: "Verify the login flow" });
+    const withZwsp = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-hhhhhhhhhhhh"),
+      title: "Verify​ the login flow", // U+200B ZERO WIDTH SPACE injected
+    });
+    expect(computeCandidateEquivalenceSignature(clean)).toBe(
+      computeCandidateEquivalenceSignature(withZwsp),
+    );
+  });
+
   it("collapses two candidates with EQUAL preconditions (regression: empty → same signature)", () => {
     // Regression guard: candidates with identical (here: empty) preconditions
     // must still dedup to one — equal preconditions must not break dedup.

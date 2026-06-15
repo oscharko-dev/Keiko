@@ -40,17 +40,22 @@ const readBody = (req: IncomingMessage): Promise<string> =>
   new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let capped = false;
     req.on("data", (chunk: Buffer) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
-        req.resume();
+        if (!capped) {
+          capped = true;
+          chunks.length = 0;
+          reject(new Error("body too large"));
+          req.resume();
+        }
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
-      resolve(Buffer.concat(chunks).toString("utf8"));
+      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
   });

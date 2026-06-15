@@ -367,6 +367,29 @@ describe("WindowFrame content zoom controls", () => {
     );
   });
 
+  // #25, WCAG 2.1.1 — port controls must be natively keyboard-operable.
+  // RED: ports are currently <div role="button"> — getByRole("button", { name: /connect/i })
+  // resolves by role but `tagName` is "DIV", not "BUTTON".
+  it("exposes port controls as native <button> elements (#25, WCAG 2.1.1)", () => {
+    render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    // All 4 ports must be native buttons (getByRole finds by implicit role of <button>).
+    const portButtons = screen.getAllByRole("button", { name: /connect agents from/iu });
+    expect(portButtons).toHaveLength(4);
+    for (const btn of portButtons) {
+      expect(btn.tagName).toBe("BUTTON");
+    }
+  });
+
   it("confirms an in-flight valid connection instead of starting a new one", () => {
     const confirmConnect = vi.fn();
     const startConnect = vi.fn();

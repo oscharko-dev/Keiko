@@ -3228,6 +3228,14 @@ button {
   height: 18px;
   display: block;
 }
+/* WCAG 1.4.1: non-colour active-state indicator — ✓ mark visible alongside the
+   colour change so the active mode is distinguishable without colour perception. */
+.modesw-active-cue {
+  font-size: 10px;
+  line-height: 1;
+  margin-left: 2px;
+  opacity: 0.75;
+}
 
 .ft-gov {
   display: flex;

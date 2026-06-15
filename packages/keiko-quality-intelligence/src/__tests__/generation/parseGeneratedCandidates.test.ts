@@ -9,10 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
-import {
-  bankingDefault,
-  regressionDefault,
-} from "../../domain/policyProfile.js";
+import { bankingDefault, regressionDefault } from "../../domain/policyProfile.js";
 import {
   GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
   GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
@@ -321,9 +318,10 @@ describe("parseGeneratedCandidates — field mapping", () => {
   it("coerces steps provided as a newline-delimited string", () => {
     const raw = wrapInTestCases([validItem({ steps: "Step 1\nStep 2\nStep 3" })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    // Steps as a string → split by newline
+    // Steps as a string → split by newline → exactly the three non-empty lines
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]?.steps.length).toBeGreaterThanOrEqual(1);
+    expect(result.candidates[0]?.steps).toHaveLength(3);
+    expect(result.candidates[0]?.steps).toEqual(["Step 1", "Step 2", "Step 3"]);
   });
 
   it("coerces tags: filters out non-string entries", () => {
@@ -648,8 +646,9 @@ describe("parseGeneratedCandidates — adversarial inputs", () => {
   });
 
   it("bounds generated tags by count and per-tag length", () => {
-    const tags = Array.from({ length: GENERATED_CANDIDATE_TAG_MAX_ITEMS + 5 }, (_, i) =>
-      `tag-${String(i)}-${"x".repeat(GENERATED_CANDIDATE_TAG_MAX_CHARS + 20)}`,
+    const tags = Array.from(
+      { length: GENERATED_CANDIDATE_TAG_MAX_ITEMS + 5 },
+      (_, i) => `tag-${String(i)}-${"x".repeat(GENERATED_CANDIDATE_TAG_MAX_CHARS + 20)}`,
     );
     const raw = wrapInTestCases([validItem({ tags })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
