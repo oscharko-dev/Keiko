@@ -805,3 +805,65 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2", "1:3"]);
   });
 });
+
+describe("buildFigmaSnapshot — transient malformed /v1/images body (#750 F8)", () => {
+  it("recovers a transient malformed images body (2xx without an images map) on retry", async () => {
+    const screens = [screen("1:1", "Home")];
+    let imagesCalls = 0;
+    const images: FigmaHttpPort = (request) => {
+      imagesCalls += 1;
+      // First response is 2xx but carries NO `images` map — Figma's render-overload signal.
+      if (imagesCalls === 1) {
+        return Promise.resolve({
+          status: 200,
+          json: { err: "rendering temporarily unavailable" },
+          headers: {},
+        });
+      }
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const { sleep, delays } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    expect(imagesCalls).toBe(2);
+    expect(delays).toEqual([100]); // one malformed-body backoff: baseDelayMs * 2**0
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1"]);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("degrades screens to a skip when the images body stays malformed (no hard build failure)", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
+    let imagesCalls = 0;
+    const images: FigmaHttpPort = () => {
+      imagesCalls += 1;
+      return Promise.resolve({ status: 200, json: { err: "still overloaded" }, headers: {} });
+    };
+    const renders = renderPort({});
+    const { sleep, delays } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    // 1 initial call + MAX_RENDER_BODY_RETRIES(3) retries = 4 calls, then a graceful skip (no throw).
+    expect(imagesCalls).toBe(4);
+    expect(delays).toEqual([100, 200, 400]);
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-url-missing" },
+      { screenId: "1:2", reason: "render-url-missing" },
+    ]);
+    expect(renders.requests).toHaveLength(0);
+  });
+});
