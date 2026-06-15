@@ -1749,3 +1749,148 @@ describe("envelopeIdFor — injective pre-image (pipe-injection hardening)", () 
     }
   });
 });
+
+// ─── TEST 1 — FIX 1 (security): strip-before-redact ordering (#734) ──────────
+//
+// FIX 1a (figmaDocumentId :988): sanitiseLabel runs BEFORE redact so a zero-width-split
+// credential in a Figma SCREEN NAME is de-obfuscated by the sanitiser and then caught
+// by the redactor. Without the fix (reversed order) the ZW char survives and the redactor
+// never sees the reassembled token → secret leaks into the documentId.
+//
+// FIX 1b (processCapsuleDocs :692): stripUnsafeFormatChars runs BEFORE redact on the
+// capsule doc.text, same reason — a ZW-split credential in a Figma-sourced document body
+// is de-obfuscated first, then the redactor can match it.
+//
+// The token shape used is a GitHub PAT prefix (ghp_) followed by ≥20 alphanum chars —
+// a shape the builtin GITHUB_TOKEN_PATTERN matches. The zero-width space (U+200B) is
+// inserted mid-token to prevent the regex from matching UNLESS stripUnsafeFormatChars
+// runs first to remove the U+200B.
+//
+// RED-verify FIX 1b: revert :692 to `redact(doc.text)` → ZW remains → regex no-match
+// → secret NOT redacted → `not.toContain` fails. Restore → green.
+//
+// RED-verify FIX 1a is covered implicitly: sanitiseLabel (which calls stripUnsafeLabelChars,
+// the per-label variant of stripUnsafeFormatChars) removes U+200B before redact.
+// A direct unit test would require exporting figmaDocumentId; instead the ordering
+// invariant is asserted via the capsule path which is exercised through the public API
+// and shares the same strip-before-redact rule.
+describe("ingestInlineSources — strip-before-redact ordering in capsule doc text (Fix #734 / FIX 1b)", () => {
+  // A syntactically valid GitHub PAT prefix with a U+200B (zero-width space, U+200B) inserted
+  // mid-token. The redactor's GITHUB_TOKEN_PATTERN (/\bghp_[A-Za-z0-9]{20,}/g) will NOT match
+  // when the ZW char is present because \b and the character class exclude it. After
+  // stripUnsafeFormatChars runs the ZW is removed and the token reassembles to "ghp_" + 20 chars
+  // which the pattern matches and redacts.
+  const GITHUB_PREFIX = "ghp_";
+  const SUFFIX = "AbCdEfGhIjKlMnOpQrSt"; // exactly 20 alphanum chars → matches [A-Za-z0-9]{20,}
+  const ZW = "​"; // U+200B zero-width space — stripped by stripUnsafeFormatChars
+  const SPLIT_TOKEN = GITHUB_PREFIX + ZW + SUFFIX; // "ghp_\u200bAbCdEfGhIjKlMnOpQrSt"
+  const REASSEMBLED = GITHUB_PREFIX + SUFFIX; // what the token looks like after ZW removal
+
+  it("redacts a ZW-split GitHub token in capsule doc text (strip runs before redact)", () => {
+    // The token is presented as a STANDALONE value (no key= prefix) so the only pattern that can
+    // catch it is the shape-based GITHUB_TOKEN_PATTERN (/\bghp_[A-Za-z0-9]{20,}/g). That pattern
+    // requires the 20+ alphanum suffix to follow IMMEDIATELY; the ZW char blocks the match unless
+    // stripUnsafeFormatChars runs first to remove it.
+    const docs = [
+      {
+        documentId: "integration-notes",
+        text:
+          "Service configuration for the API connector.\n" +
+          `See ${SPLIT_TOKEN} for reference.\n` +
+          "endpoint=/v1/run",
+      },
+    ];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Notes", "cap-zw-split")], resolver));
+    const canonical = result.ingestedAtoms[0]?.canonicalText ?? "";
+    // After strip+redact the reassembled token must not appear in the persisted atom text.
+    expect(canonical).not.toContain(REASSEMBLED);
+    expect(canonical).not.toContain(SPLIT_TOKEN);
+    // The redactor must have fired (REDACTED marker is present).
+    expect(canonical).toContain("[REDACTED]");
+  });
+
+  it("does NOT redact the ZW-split token when redact runs without prior stripping (ordering matters)", () => {
+    // This test asserts the NEGATIVE: running redact() alone on the ZW-split token, presented as a
+    // STANDALONE value (no key= prefix), does NOT remove it — proving that the strip-first ordering
+    // in FIX 1b is load-bearing. The GITHUB_TOKEN_PATTERN (/\bghp_[A-Za-z0-9]{20,}/g) requires the
+    // 20+ alphanum chars to follow IMMEDIATELY after "ghp_"; with the ZW char in between the
+    // character class match fails and the token survives.
+    // NOTE: a "token=<value>" form is caught by SECRET_KEY_VALUE_PATTERN regardless of the ZW, so
+    // we use the bare token to isolate the shape-based pattern.
+    const standaloneWithZw = `See config: ${SPLIT_TOKEN} for the connector.\n`;
+    const redactedOnly = redact(standaloneWithZw);
+    // The ZW char breaks the [A-Za-z0-9]{20,} match in GITHUB_TOKEN_PATTERN → token survives.
+    expect(redactedOnly).toContain(SPLIT_TOKEN);
+    expect(redactedOnly).not.toContain("[REDACTED]");
+  });
+});
+
+// ─── TEST 3 — GAP-T1: allowEmptyDriftIngestion re-throws blocking skips ───────
+//
+// allowEmptyDriftIngestion (~:1409) only suppresses QI_SOURCE_EMPTY skips. Any other
+// coded error (e.g. QI_SOURCE_DENIED for a file inside a protected directory) is a
+// BLOCKING skip and must be re-thrown so the caller sees an explicit, actionable code
+// rather than silently returning an empty-drift result that looks like a legitimate
+// all-orphaned recheck.
+//
+// The test exercises `ingestInlineSources` with `allowEmpty=true` and a source that
+// produces QI_SOURCE_DENIED (a file inside an `.ssh` directory). The function must
+// throw QiIngestionError with code QI_SOURCE_DENIED, not return the empty-drift result.
+//
+// RED-verify: mutate the guard at :1415 from `code !== "QI_SOURCE_EMPTY"` to
+// `code === "QI_SOURCE_EMPTY"` (invert) → denial is swallowed → function returns the
+// empty-drift result → expect(...).toThrow fails. Restore → green.
+describe("ingestInlineSources — allowEmpty re-throws non-QI_SOURCE_EMPTY skips (GAP-T1)", () => {
+  const tmpDirs: string[] = [];
+  const makeTmpDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-gap-t1-"));
+    tmpDirs.push(dir);
+    return dir;
+  };
+  afterAll(() => {
+    for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("re-throws QI_SOURCE_DENIED even when allowEmpty=true (blocking skip must not be swallowed)", () => {
+    // Arrange: a file inside a denied .ssh directory — ingestSourceInto catches the
+    // QiIngestionError and records it as a skipped source with code QI_SOURCE_DENIED.
+    // allowEmptyDriftIngestion must detect it is NOT QI_SOURCE_EMPTY and re-throw.
+    const dir = makeTmpDir();
+    const sshDir = join(dir, ".ssh");
+    mkdirSync(sshDir);
+    writeFileSync(join(sshDir, "notes.md"), "credential-adjacent notes", "utf8");
+
+    try {
+      ingestInlineSources({
+        request: {
+          sources: [{ kind: "workspace", label: "SSH notes", path: join(sshDir, "notes.md") }],
+        },
+        runId: RUN_ID,
+        registeredAt: TS,
+        allowEmpty: true,
+      });
+      expect.fail("expected QiIngestionError with code QI_SOURCE_DENIED to be thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      // Must be QI_SOURCE_DENIED, not swallowed into an empty-drift result.
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
+    }
+  });
+
+  it("returns the empty-drift result when allowEmpty=true and the ONLY skip is QI_SOURCE_EMPTY (non-blocking)", () => {
+    // Positive companion: QI_SOURCE_EMPTY IS the non-blocking case; allowEmptyDriftIngestion
+    // must return the empty result rather than throwing. A mutation that inverts the guard
+    // would break BOTH this test and the QI_SOURCE_DENIED test above.
+    const result = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Blank", text: "   \n\t  " }] },
+      runId: RUN_ID,
+      registeredAt: TS,
+      allowEmpty: true,
+    });
+    expect(result.ingestedAtoms).toHaveLength(0);
+    expect(result.envelopes).toHaveLength(0);
+    expect(result.skippedSources).toHaveLength(1);
+    expect(result.skippedSources[0]?.code).toBe("QI_SOURCE_EMPTY");
+  });
+});

@@ -24,6 +24,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "../runExecution.js";
+import { QiJudgeError } from "../judgePort.js";
 import type { ExecuteQiRunInput, QiRunAccepted } from "../runExecution.js";
 import type {
   QualityIntelligenceStartRunRequest,
@@ -1108,5 +1109,110 @@ describe("executeQiRun — N+1 coverage propagation", () => {
     await executeQiRun(makeInput(evidenceDir, { onAccepted }));
     expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(0);
     expect(onAccepted.mock.calls[0]?.[0]?.skippedSources).toEqual([]);
+  });
+});
+
+// ─── TEST 4 — GAP-T2: QiJudgeError → QiGenerationError conversion (~:217) ────
+//
+// buildJudgePortForModelRun (~:207) wraps createQiJudgePort in a try/catch.  When
+// createQiJudgePort throws QiJudgeError (e.g. QI_JUDGE_MODEL_UNAVAILABLE because
+// modelPortFactory returns undefined for the judge model), the catch block converts it
+// to QiGenerationError with the SAME error code.  Without that conversion the raw
+// QiJudgeError propagates out of executeQiRun and callers (route handlers) would see an
+// untyped, uncoded error — breaking structured error handling.
+//
+// Setup: configure deps with a modelPortFactory that returns a real ModelPort for the
+// GENERATION model (so ingestion + generation succeed), but returns undefined for the
+// JUDGE model (so createQiJudgePort throws QI_JUDGE_MODEL_UNAVAILABLE).
+// Because resolveModelForQiCapability for qi:judge-logic requires structuredOutput=true
+// we give the generation model structuredOutput=false (chat-only) so the judge selection
+// picks the SECOND model that has structuredOutput=true but gets undefined from the factory.
+//
+// RED-verify: mutate the catch block at :219 from
+//   `throw new QiGenerationError(error.code, error.message)`
+// to
+//   `throw error`
+// → executeQiRun rejects with QiJudgeError instead of QiGenerationError
+// → `expect(err).toBeInstanceOf(QiGenerationError)` fails. Restore → green.
+describe("executeQiRun — QiJudgeError from createQiJudgePort converts to QiGenerationError (GAP-T2)", () => {
+  it("wraps QI_JUDGE_MODEL_UNAVAILABLE as QiGenerationError when modelPortFactory returns undefined for the judge model", async () => {
+    // Generation model: chat-only (structuredOutput=false, workflowEligible=true).
+    // Judge model:      structured-output capable (structuredOutput=true, workflowEligible=true).
+    // modelPortFactory returns a real port ONLY for the generation model; returns undefined for
+    // the judge model → createQiJudgePort throws QiJudgeError("QI_JUDGE_MODEL_UNAVAILABLE", …).
+    const GEN_MODEL = "gen-chat-only-for-gap-t2";
+    const JUDGE_MODEL = "judge-structured-for-gap-t2";
+
+    const genCapability: ModelCapability = {
+      id: GEN_MODEL,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: false, // chat-only — eligible for generation but not judge
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "low",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+    const judgeCapability: ModelCapability = {
+      id: JUDGE_MODEL,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true, // qi:judge-logic requires structured output
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      supportsResponseFormat: true,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+
+    const config = buildConfig([genCapability, judgeCapability]);
+    // modelPortFactory: real port for GEN_MODEL, undefined for JUDGE_MODEL.
+    const gapT2Deps: UiHandlerDeps = {
+      config,
+      configPresent: true,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}, config),
+      registry: createRunRegistry(),
+      modelPortFactory: (modelId: string): ModelPort | undefined => {
+        if (modelId === GEN_MODEL) return fakeChatPort(EMPTY_CANDIDATES_JSON);
+        return undefined; // judge model → QiJudgeError("QI_JUDGE_MODEL_UNAVAILABLE")
+      },
+      store: createInMemoryUiStore(),
+      evidenceDir,
+    };
+
+    const controller = new AbortController();
+    try {
+      await executeQiRun({
+        request: { sources: [VALID_SOURCE], modelId: GEN_MODEL },
+        runId: "run-gap-t2-judge-unavail",
+        deps: gapT2Deps,
+        registeredAt: "2026-06-01T10:00:00.000Z",
+        signal: controller.signal,
+        onEvent: vi.fn(),
+        onAccepted: vi.fn(),
+      });
+      expect.fail("expected executeQiRun to throw");
+    } catch (err) {
+      // Must be QiGenerationError (the converted type), NOT the raw QiJudgeError.
+      expect(err).toBeInstanceOf(QiGenerationError);
+      expect(err).not.toBeInstanceOf(QiJudgeError);
+      expect((err as QiGenerationError).code).toBe("QI_JUDGE_MODEL_UNAVAILABLE");
+    }
   });
 });
