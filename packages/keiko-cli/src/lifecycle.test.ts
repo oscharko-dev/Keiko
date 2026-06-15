@@ -13,6 +13,28 @@ interface Captured {
   readonly err: () => string;
 }
 
+async function withEnvVar<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, key);
+  } else {
+    process.env[key] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, key);
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
 function makeIo(): Captured {
   const outChunks: string[] = [];
   const errChunks: string[] = [];
@@ -103,6 +125,109 @@ describe("runLifecycleCli", () => {
     expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe("12345\n");
     expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(true);
     expect(c.out()).toContain("Keiko UI running");
+  });
+
+  it("prefers the active published CLI entry when KEIKO_CLI_BIN_PATH is set", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
+    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+
+    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", "/tmp/fake-keiko-bin.js", async () =>
+      runLifecycleCli(
+        "start",
+        [],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn: (command, args, opts) => {
+            spawned.push({ command, args, opts });
+            return child;
+          },
+          fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+          killProcess: vi.fn(),
+          sleep: () => Promise.resolve(),
+        },
+      ),
+    );
+
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args[0]).toBe("/tmp/fake-keiko-bin.js");
+  });
+
+  it("prefers the built workspace checkout over a stale inherited global bin", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, "dist", "cli"), { recursive: true });
+    mkdirSync(join(root, "dist", "ui", "static"), { recursive: true });
+    writeFileSync(join(root, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
+    writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
+    writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n", "utf8");
+    const c = makeIo();
+    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
+    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+
+    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", "/opt/old-keiko/dist/cli/index.js", async () =>
+      withEnvVar("KEIKO_UI_STATIC_ROOT", "/opt/old-keiko/dist/ui/static", async () =>
+        runLifecycleCli(
+          "start",
+          [],
+          c.io,
+          {},
+          {
+            cwd: root,
+            spawnFn: (command, args, opts) => {
+              spawned.push({ command, args, opts });
+              return child;
+            },
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+            isProcessAlive: () => true,
+            isPortAvailable: () => Promise.resolve(true),
+            killProcess: vi.fn(),
+            sleep: () => Promise.resolve(),
+          },
+        ),
+      ),
+    );
+
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args[0]).toBe(join(root, "dist", "cli", "index.js"));
+    expect(spawned[0]?.opts.env).toMatchObject({
+      KEIKO_CLI_BIN_PATH: join(root, "dist", "cli", "index.js"),
+      KEIKO_UI_STATIC_ROOT: join(root, "dist", "ui", "static"),
+    });
+  });
+
+  it("accepts --open and opens the UI URL after a healthy start", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const openExternal = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--open"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        openExternal,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:1983");
+    expect(c.err()).toBe("");
   });
 
   it("keeps an already-running UI when the health version matches the installed package", async () => {

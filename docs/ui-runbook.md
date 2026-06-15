@@ -11,6 +11,11 @@ npx keiko init
 npm run keiko:start
 ```
 
+Prefer the local `npm run keiko:start` script or a package-manager equivalent in IDE run
+configurations. Do not point WebStorm or Windows terminal shortcuts at a bare global `keiko`
+binary when validating a freshly pulled checkout; an older global install on `PATH` can start a
+stale UI build instead of the project-local package.
+
 Open:
 
 ```text
