@@ -223,7 +223,7 @@ async function waitForPublicReadiness() {
   publicReady = false;
   writeState({ ready: false });
   try {
-    let lastError = "not started";
+    let lastError;
     while (!shuttingDown) {
       lastError = await readinessProbe();
       if (lastError === "ok") {
