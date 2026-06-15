@@ -33,7 +33,9 @@ describe("createOcrPipelineParser — capability.matches", () => {
 
   it("matches PDF by extension", () => {
     expect(
-      parser.capability.matches(selectionFromText("x", { extension: "pdf", mediaType: "application/pdf" })),
+      parser.capability.matches(
+        selectionFromText("x", { extension: "pdf", mediaType: "application/pdf" }),
+      ),
     ).toBe(true);
   });
 
@@ -48,9 +50,7 @@ describe("createOcrPipelineParser — capability.matches", () => {
 
   it("matches image/* media types", () => {
     expect(
-      parser.capability.matches(
-        selectionFromText("x", { extension: "", mediaType: "image/png" }),
-      ),
+      parser.capability.matches(selectionFromText("x", { extension: "", mediaType: "image/png" })),
     ).toBe(true);
   });
 
@@ -63,9 +63,7 @@ describe("createOcrPipelineParser — capability.matches", () => {
   });
 
   it("matches PDF magic bytes even without a known extension", () => {
-    expect(
-      parser.capability.matches(selectionFromBytes(PDF_MAGIC, { extension: "" })),
-    ).toBe(true);
+    expect(parser.capability.matches(selectionFromBytes(PDF_MAGIC, { extension: "" }))).toBe(true);
   });
 
   it("matches PNG magic bytes", () => {
@@ -77,15 +75,15 @@ describe("createOcrPipelineParser — capability.matches", () => {
   });
 
   it("does NOT match zip archives", () => {
-    expect(
-      parser.capability.matches(selectionFromBytes(ZIP_MAGIC, { extension: "zip" })),
-    ).toBe(false);
+    expect(parser.capability.matches(selectionFromBytes(ZIP_MAGIC, { extension: "zip" }))).toBe(
+      false,
+    );
   });
 
   it("does NOT match gzip", () => {
-    expect(
-      parser.capability.matches(selectionFromBytes(GZIP_MAGIC, { extension: "gz" })),
-    ).toBe(false);
+    expect(parser.capability.matches(selectionFromBytes(GZIP_MAGIC, { extension: "gz" }))).toBe(
+      false,
+    );
   });
 });
 
@@ -117,17 +115,17 @@ describe("createOcrPipelineParser — sync parse fallback", () => {
 
   it("returns unsupported-media unit for image input (sync path)", () => {
     const parser = createOcrPipelineParser(nullOcrAdapter);
-    const result = parser.parse(
-      selectionFromBytes(PNG_MAGIC, { extension: "png" }),
-      baseOptions(),
-    );
+    const result = parser.parse(selectionFromBytes(PNG_MAGIC, { extension: "png" }), baseOptions());
     expect(result.units[0]?.kind).toBe("unsupported-media");
   });
 
   it("respects maxBytes and returns OVERSIZED_FILE diagnostic (sync)", () => {
     const parser = createOcrPipelineParser(nullOcrAdapter);
     const bigBytes = new Uint8Array(200);
-    bigBytes[0] = 0x89; bigBytes[1] = 0x50; bigBytes[2] = 0x4e; bigBytes[3] = 0x47; // PNG magic
+    bigBytes[0] = 0x89;
+    bigBytes[1] = 0x50;
+    bigBytes[2] = 0x4e;
+    bigBytes[3] = 0x47; // PNG magic
     const result = parser.parse(
       selectionFromBytes(bigBytes, { extension: "png" }),
       buildParserOptions({ now: () => 0, maxBytes: 10 }),
@@ -187,7 +185,10 @@ describe("createOcrPipelineParser — parseAsync (NullOcrAdapter)", () => {
   it("returns OVERSIZED_FILE diagnostic when input exceeds maxBytes (async)", async () => {
     const parser = createOcrPipelineParser(nullOcrAdapter);
     const bigBytes = new Uint8Array(200);
-    bigBytes[0] = 0x89; bigBytes[1] = 0x50; bigBytes[2] = 0x4e; bigBytes[3] = 0x47;
+    bigBytes[0] = 0x89;
+    bigBytes[1] = 0x50;
+    bigBytes[2] = 0x4e;
+    bigBytes[3] = 0x47;
     const result = await parser.parseAsync(
       selectionFromBytes(bigBytes, { extension: "png" }),
       buildParserOptions({ now: () => 0, maxBytes: 10 }),
@@ -229,9 +230,7 @@ describe("createOcrPipelineParser — parseAsync (NullOcrAdapter)", () => {
 describe("createOcrPipelineParser — parseAsync (scripted adapter — success)", () => {
   it("emits a page unit with correct bounds on OCR success", async () => {
     const text = "Hello, extracted page!";
-    const parser = createOcrPipelineParser(
-      scriptedAdapter({ ok: true, text, confidence: 0.98 }),
-    );
+    const parser = createOcrPipelineParser(scriptedAdapter({ ok: true, text, confidence: 0.98 }));
     const result = await parser.parseAsync(
       selectionFromBytes(PDF_MAGIC, { extension: "pdf" }),
       baseOptions(),
@@ -246,9 +245,7 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
   });
 
   it("emits a page unit with characterEnd=0 for blank page text", async () => {
-    const parser = createOcrPipelineParser(
-      scriptedAdapter({ ok: true, text: "", confidence: 0 }),
-    );
+    const parser = createOcrPipelineParser(scriptedAdapter({ ok: true, text: "", confidence: 0 }));
     const result = await parser.parseAsync(
       selectionFromBytes(PNG_MAGIC, { extension: "png" }),
       baseOptions(),
@@ -273,9 +270,7 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
 
 describe("createOcrPipelineParser — parseAsync (scripted adapter — failure reasons)", () => {
   it("fires unsupported-media with ocr-failed:timeout for timeout reason", async () => {
-    const parser = createOcrPipelineParser(
-      scriptedAdapter({ ok: false, reason: "timeout" }),
-    );
+    const parser = createOcrPipelineParser(scriptedAdapter({ ok: false, reason: "timeout" }));
     const result = await parser.parseAsync(
       selectionFromBytes(PDF_MAGIC, { extension: "pdf" }),
       baseOptions(),

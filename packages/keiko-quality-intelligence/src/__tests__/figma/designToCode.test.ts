@@ -630,6 +630,30 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
     expect(html).toContain(".n-flex-root {");
   });
 
+  it("keeps CSS classes distinct when different Figma ids sanitize to the same slug", () => {
+    const s = screen(
+      "s-collide",
+      "Collide",
+      node("root", "container", {
+        children: [
+          node("1:2", "container", { layout: { mode: "row" } }),
+          node("1;2", "container", { layout: { mode: "column" } }),
+        ],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-collide.html");
+    const classNames = [...html.matchAll(/class="([^"]+)"/gu)].map((match) => match[1]);
+    expect(classNames).toHaveLength(2);
+    expect(new Set(classNames).size).toBe(2);
+    const [firstClass, secondClass] = classNames;
+    if (firstClass === undefined || secondClass === undefined) {
+      throw new Error("expected two emitted class names");
+    }
+    expect(html).toContain(`.${firstClass} {`);
+    expect(html).toContain(`.${secondClass} {`);
+  });
+
   it("emits border-radius when cornerRadius is set", () => {
     const s = screen("s-r", "Radius", node("card", "container", { name: "card", cornerRadius: 8 }));
     const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
@@ -687,7 +711,7 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
       "Typo",
       node("label", "text", {
         text: "Hello",
-        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHeight: 24 },
       }),
     );
     const artifact = emitCode(
@@ -900,6 +924,30 @@ describe("htmlCssAdapter — accessible name fallback for text-less button/link"
     expect(html).not.toContain("aria-label");
     expect(html).toContain("Continue");
   });
+
+  it("does NOT add aria-label when the button's visible label is in a child TEXT node (WCAG 2.5.3)", () => {
+    const s = screen(
+      "s-bc",
+      "BtnChild",
+      node("root", "container", {
+        // A button container whose visible label lives in a child TEXT node — its OWN text is undefined,
+        // so the structural node name ("primary/cta") must NOT be emitted as an overriding aria-label.
+        children: [
+          node("b", "button", {
+            name: "primary/cta",
+            children: [node("b-label", "text", { name: "label", text: "Submit" })],
+          }),
+        ],
+      }),
+    );
+    const html = fileByPath(
+      emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter),
+      "screens/s-bc.html",
+    );
+    expect(html).toContain("Submit");
+    expect(html).not.toMatch(/<button[^>]*aria-label/u);
+    expect(html).not.toContain('aria-label="primary/cta"');
+  });
 });
 
 // ─── Typography inline fallback + flex alignment (mutation coverage) ───────────
@@ -913,7 +961,7 @@ describe("htmlCssAdapter — typography inline fallback and flex alignment", () 
         children: [
           node("label", "text", {
             text: "Hi",
-            typography: { fontFamily: "Roboto", fontSize: 18, fontWeight: 700 },
+            typography: { fontFamily: "Roboto", fontSize: 18, fontWeight: 700, lineHeight: 28 },
           }),
         ],
       }),
@@ -923,8 +971,50 @@ describe("htmlCssAdapter — typography inline fallback and flex alignment", () 
     const html = fileByPath(artifact, "screens/s-it.html");
     expect(html).toContain("font-weight: 700;");
     expect(html).toContain("font-size: 18px;");
+    expect(html).toContain("line-height: 28px;");
     expect(html).toContain('font-family: "Roboto";');
     expect(html).not.toContain("font: var(--font-");
+  });
+
+  it("does not match a typography token with the wrong line height", () => {
+    const typographyTokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typography:Inter|16|400|24",
+          kind: "typography",
+          fontFamily: "Inter",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+        {
+          id: "typography:Inter|16|400|32",
+          kind: "typography",
+          fontFamily: "Inter",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 32,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const s = screen(
+      "s-typo-lh",
+      "Typo LH",
+      node("label", "text", {
+        text: "Hello",
+        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHeight: 32 },
+      }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: typographyTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-typo-lh.html");
+    expect(html).toContain("font: var(--font-2);");
+    expect(html).not.toContain("font: var(--font-1);");
   });
 
   it("emits justify-content and align-items from primaryAlign/counterAlign", () => {
@@ -954,5 +1044,136 @@ describe("htmlCssAdapter — typography inline fallback and flex alignment", () 
       "screens/s-sb.html",
     );
     expect(html).toContain("justify-content: space-between;");
+  });
+});
+
+// ─── Spacing/radius token var emission ─────────────────────────────────────────
+//
+// layoutDeclarations must emit var(--space-N) for gap and each padding side when the value
+// exactly matches a spacing token, and border-radius must emit var(--radius-N) on an exact
+// radius token match. Non-matching values must still fall back to inline px (unchanged).
+
+describe("htmlCssAdapter — spacing/radius token var references", () => {
+  // Tokens: spacing 8 → --space-1, radius 4 → --radius-1.
+  const spaceRadiusTokens: DesignTokens = {
+    colors: [],
+    typography: [],
+    spacing: [{ id: "spacing:8", kind: "spacing", value: 8 }],
+    radius: [{ id: "radius:4", kind: "radius", value: 4 }],
+  };
+
+  it("emits var(--space-1) for gap when itemSpacing exactly matches spacing token", () => {
+    const s = screen(
+      "s-gap",
+      "Gap",
+      node("gap-root", "container", {
+        layout: { mode: "row", itemSpacing: 8 },
+      }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: spaceRadiusTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-gap.html");
+    expect(html).toContain("gap: var(--space-1);");
+    expect(html).not.toContain("gap: 8px;");
+  });
+
+  it("emits var(--space-1) for matching padding sides and px for non-matching sides", () => {
+    // padding [8, 12, 8, 12] — only 8 matches --space-1; 12 has no token → stays px.
+    const s = screen(
+      "s-pad",
+      "Pad",
+      node("pad-root", "container", {
+        layout: { mode: "column", padding: [8, 12, 8, 12] },
+      }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: spaceRadiusTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-pad.html");
+    expect(html).toContain("padding: var(--space-1) 12px var(--space-1) 12px;");
+    expect(html).not.toContain("padding: 8px");
+  });
+
+  it("emits var(--radius-1) for border-radius when cornerRadius exactly matches radius token", () => {
+    const s = screen(
+      "s-rad",
+      "Rad",
+      node("card", "container", { cornerRadius: 4 }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: spaceRadiusTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-rad.html");
+    expect(html).toContain("border-radius: var(--radius-1);");
+    expect(html).not.toContain("border-radius: 4px;");
+  });
+
+  it("falls back to inline px for gap/padding/radius when no token matches (non-match path)", () => {
+    // value 13 has no spacing/radius token → must emit plain px unchanged.
+    const s = screen(
+      "s-nomatch",
+      "NoMatch",
+      node("nm-root", "container", {
+        layout: { mode: "row", itemSpacing: 13, padding: [13, 13, 13, 13] },
+        cornerRadius: 13,
+      }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: spaceRadiusTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-nomatch.html");
+    expect(html).toContain("gap: 13px;");
+    expect(html).toContain("padding: 13px 13px 13px 13px;");
+    expect(html).toContain("border-radius: 13px;");
+    expect(html).not.toContain("var(--space-");
+    expect(html).not.toContain("var(--radius-");
+  });
+
+  it("with NO_TOKENS emits plain px for gap/padding/radius (byte-identical fallback)", () => {
+    const s = screen(
+      "s-notok",
+      "NoTok",
+      node("nt-root", "container", {
+        layout: { mode: "row", itemSpacing: 8, padding: [8, 8, 8, 8] },
+        cornerRadius: 4,
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-notok.html");
+    expect(html).toContain("gap: 8px;");
+    expect(html).toContain("padding: 8px 8px 8px 8px;");
+    expect(html).toContain("border-radius: 4px;");
+    expect(html).not.toContain("var(--space-");
+    expect(html).not.toContain("var(--radius-");
+  });
+});
+
+// ─── WCAG 3.1.1 — no false lang attribute (no locale signal in IR) ──────────
+//
+// The IR/snapshot carries no locale signal, so emitting lang="en" is a false declaration
+// (WCAG 3.1.1). The correct fix is a bare <html> — assistive tech falls back to the
+// user default. This pins both emitted wrappers (per-screen and index) against regression.
+
+describe("htmlCssAdapter — no false lang attribute (WCAG 3.1.1)", () => {
+  it("per-screen HTML does not declare lang and still emits an <html> wrapper", () => {
+    const artifact = emitCode({ screens: [loginScreen()], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-login.html");
+    expect(html).not.toContain('lang="en"');
+    expect(html).toMatch(/<html[^>]*>/u);
+  });
+
+  it("index HTML does not declare lang and still emits an <html> wrapper", () => {
+    const artifact = emitCode(
+      { screens: [loginScreen(), homeScreen()], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
+    const index = fileByPath(artifact, "index.html");
+    expect(index).not.toContain('lang="en"');
+    expect(index).toMatch(/<html[^>]*>/u);
   });
 });

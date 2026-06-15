@@ -20,11 +20,12 @@
 // and a hook-level test pins the API-shape contract (#153 launch action) at the
 // bottom of the file using renderHook + mocked @/lib/api.
 
-import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
+import { LaunchGroundedWorkflowButton, LaunchWorkflowButton } from "./WorkflowHandoff";
 import { useChatSession, type ChatSessionApi } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
@@ -405,6 +406,156 @@ describe("WorkflowHandoff — launch action (AC#1, AC#3)", () => {
 
     expect(screen.queryByRole("button", { name: /launch grounded workflow/i })).toBeNull();
     expect(launch).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorkflowHandoff — dialog edge cases and grounded input matrix", () => {
+  it("keeps the workflow picker open on launch failure, supports Back, and closes on Escape", async () => {
+    const user = userEvent.setup();
+    const launch = vi
+      .fn()
+      .mockResolvedValue({ ok: false as const, reason: "request-failed", message: "gateway down" });
+    render(<LaunchWorkflowButton selectedModel={workflowEligibleModel("wf-model")} launch={launch} />);
+
+    await user.click(screen.getByRole("button", { name: /launch workflow/i }));
+    const dialog = await screen.findByRole("dialog", { name: /launch workflow/i });
+    await user.click(within(dialog).getByRole("button", { name: /generate unit tests/i }));
+    await user.type(within(dialog).getByLabelText(/target file/i), "src/example.ts");
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("gateway down");
+    await user.click(within(dialog).getByRole("button", { name: /^back$/i }));
+    expect(within(dialog).getByRole("button", { name: /investigate bug/i })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape", code: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /launch workflow/i })).toBeNull(),
+    );
+  });
+
+  it("validates grounded unit-test targets and submits changed-files input with explicit checks", async () => {
+    const user = userEvent.setup();
+    const launch = vi.fn().mockResolvedValue({ ok: true as const, runId: "run-1" });
+    render(
+      <LaunchGroundedWorkflowButton
+        answer={connectedGroundedAnswer()}
+        modelId="wf-model"
+        launch={launch}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /launch grounded workflow/i }));
+    const dialog = await screen.findByRole("dialog", { name: /grounded workflow handoff/i });
+    await user.click(within(dialog).getByRole("button", { name: /generate unit tests/i }));
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provide a target file.");
+
+    await user.selectOptions(within(dialog).getByLabelText(/target mode/i), "module");
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Provide a module directory.",
+    );
+
+    await user.selectOptions(within(dialog).getByLabelText(/target mode/i), "changedFiles");
+    await user.type(
+      within(dialog).getByLabelText(/changed files \(one per line\)/i),
+      "src/a.ts\nsrc/b.ts",
+    );
+    await user.type(
+      within(dialog).getByLabelText(/editable paths \(explicit, workspace-relative, one per line\)/i),
+      "tests/a.test.ts\ntests/b.test.ts",
+    );
+    await user.type(within(dialog).getByLabelText(/unknowns/i), "Confirm exported API");
+    await user.click(within(dialog).getByRole("checkbox", { name: "tests" }));
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Select at least one expected check.",
+    );
+
+    await user.click(within(dialog).getByRole("checkbox", { name: "lint" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "manual" }));
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+
+    await waitFor(() => expect(launch).toHaveBeenCalledOnce());
+    expect(launch).toHaveBeenCalledWith({
+      assistantMessageId: "msg-a",
+      modelId: "wf-model",
+      workflowKind: "unit-test-generation",
+      input: { target: { kind: "changedFiles", filePaths: ["src/a.ts", "src/b.ts"] } },
+      editablePaths: ["tests/a.test.ts", "tests/b.test.ts"],
+      expectedChecks: ["lint", "manual"],
+      unknowns: ["Confirm exported API"],
+    });
+  });
+
+  it("builds grounded bug-investigation input from description and suspected files", async () => {
+    const user = userEvent.setup();
+    const launch = vi.fn().mockResolvedValue({ ok: true as const, runId: "run-bug" });
+    render(
+      <LaunchGroundedWorkflowButton
+        answer={connectedGroundedAnswer()}
+        modelId="wf-model"
+        launch={launch}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /launch grounded workflow/i }));
+    const dialog = await screen.findByRole("dialog", { name: /grounded workflow handoff/i });
+    await user.click(within(dialog).getByRole("button", { name: /investigate bug/i }));
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Provide at least a bug description or one suspected target file.",
+    );
+
+    await user.type(
+      within(dialog).getByLabelText(/bug description/i),
+      "Chat grounding loses a selected capsule after retry.",
+    );
+    await user.type(
+      within(dialog).getByLabelText(/suspected target files/i),
+      "src/chat.ts\nsrc/grounding.ts",
+    );
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+
+    await waitFor(() => expect(launch).toHaveBeenCalledOnce());
+    expect(launch.mock.calls[0]?.[0]).toMatchObject({
+      workflowKind: "bug-investigation",
+      input: {
+        report: {
+          description: "Chat grounding loses a selected capsule after retry.",
+          targetFiles: ["src/chat.ts", "src/grounding.ts"],
+        },
+      },
+      expectedChecks: ["verify"],
+    });
+  });
+
+  it("builds grounded verification input and shows the default failure copy without backend detail", async () => {
+    const user = userEvent.setup();
+    const launch = vi.fn().mockResolvedValue({ ok: false as const, reason: "request-failed" });
+    render(
+      <LaunchGroundedWorkflowButton
+        answer={connectedGroundedAnswer()}
+        modelId="wf-model"
+        launch={launch}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /launch grounded workflow/i }));
+    const dialog = await screen.findByRole("dialog", { name: /grounded workflow handoff/i });
+    await user.click(within(dialog).getByRole("button", { name: /run verification/i }));
+    await user.type(within(dialog).getByLabelText(/target files/i), "src/app.ts, src/api.ts");
+    await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
+
+    await waitFor(() => expect(launch).toHaveBeenCalledOnce());
+    expect(launch.mock.calls[0]?.[0]).toMatchObject({
+      workflowKind: "verification",
+      input: { targetFiles: ["src/app.ts", "src/api.ts"] },
+      expectedChecks: ["verify"],
+    });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Could not launch the grounded workflow.",
+    );
   });
 });
 

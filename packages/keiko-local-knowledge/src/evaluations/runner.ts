@@ -34,6 +34,8 @@ import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
 import {
   scoreCitationQuality,
   scoreContextBudgetFit,
+  scoreMeanReciprocalRank,
+  scoreNdcg,
   scoreNoEvidenceAccuracy,
   scorePrecision,
   scoreRecall,
@@ -136,6 +138,8 @@ async function embedAllChunks(
 interface QueryScores {
   readonly recall: number;
   readonly precision: number;
+  readonly meanReciprocalRank: number;
+  readonly ndcg: number;
   readonly sourceIsolation: number;
   readonly citationQuality: number;
   readonly noEvidenceAccuracy: number;
@@ -205,6 +209,8 @@ async function runOneQuery(
     scores: {
       recall: scoreRecall(result.references, expected),
       precision: scorePrecision(result.references, expected),
+      meanReciprocalRank: scoreMeanReciprocalRank(result.references, expected),
+      ndcg: scoreNdcg(result.references, expected),
       sourceIsolation: scoreSourceIsolation(result.references, scopeCapsuleIds(query)),
       citationQuality: scoreCitationQuality(result.references, seeded.chunkUnitKinds),
       noEvidenceAccuracy: scoreNoEvidenceAccuracy(
@@ -266,6 +272,8 @@ function buildScorecard(
   const dimensions = {
     recall: meanOf(perQuery.map((q) => q.scores.recall)),
     precision: meanOf(perQuery.map((q) => q.scores.precision)),
+    meanReciprocalRank: meanOf(perQuery.map((q) => q.scores.meanReciprocalRank)),
+    ndcg: meanOf(perQuery.map((q) => q.scores.ndcg)),
     sourceIsolation: meanOf(perQuery.map((q) => q.scores.sourceIsolation)),
     citationQuality: meanOf(perQuery.map((q) => q.scores.citationQuality)),
     noEvidenceAccuracy: meanOf(perQuery.map((q) => q.scores.noEvidenceAccuracy)),
@@ -275,6 +283,8 @@ function buildScorecard(
   const passed =
     dimensions.recall >= PASS_THRESHOLDS.recall &&
     dimensions.precision >= PASS_THRESHOLDS.precision &&
+    dimensions.meanReciprocalRank >= PASS_THRESHOLDS.meanReciprocalRank &&
+    dimensions.ndcg >= PASS_THRESHOLDS.ndcg &&
     dimensions.sourceIsolation >= PASS_THRESHOLDS.sourceIsolation &&
     dimensions.citationQuality >= PASS_THRESHOLDS.citationQuality &&
     dimensions.noEvidenceAccuracy >= PASS_THRESHOLDS.noEvidenceAccuracy &&

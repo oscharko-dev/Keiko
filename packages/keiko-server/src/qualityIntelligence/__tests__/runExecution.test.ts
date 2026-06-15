@@ -24,6 +24,8 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "../runExecution.js";
+import { QiJudgeError } from "../judgePort.js";
+import type { CapsuleResolver } from "../capsuleAdapter.js";
 import type { ExecuteQiRunInput, QiRunAccepted } from "../runExecution.js";
 import type {
   QualityIntelligenceStartRunRequest,
@@ -33,6 +35,22 @@ import type { QualityIntelligenceRunSummary } from "@oscharko-dev/keiko-workflow
 import type { RouteContext } from "../../routes.js";
 import { handleGetQiRun } from "../uiRoutes.js";
 import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
+
+// ─── capsuleAdapter mock (item: close-handle leak) ───────────────────────────
+// makeCapsuleResolver is mocked so tests can inject a fake resolver with a
+// tracked close() spy without needing a real SQLite path. By default the mock
+// returns undefined (matching real behaviour when uiDbPath is absent), so all
+// other tests in this file are unaffected. vitest hoists vi.mock() calls before
+// any imports regardless of source position, so placing them after imports here
+// is safe and keeps import-order lint clean.
+const mockMakeCapsuleResolver = vi.hoisted(() =>
+  vi.fn<() => CapsuleResolver | undefined>(() => undefined),
+);
+vi.mock("../capsuleAdapter.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../capsuleAdapter.js")>("../capsuleAdapter.js");
+  return { ...actual, makeCapsuleResolver: mockMakeCapsuleResolver };
+});
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -669,7 +687,8 @@ describe("executeQiRun — model selection", () => {
     expectIssue749RunDetail(detail, providerSecret);
   });
 
-  it("does not count the oversized judge-prompt local guard as a gateway dispatch", async () => {
+  it("bounds oversized model candidates before judging and counts the bounded judge dispatch", async () => {
+    const judgeRationale = "bounded candidate remains too broad after parser truncation";
     const oversizedCandidateOutput = JSON.stringify({
       testCases: [
         {
@@ -684,7 +703,10 @@ describe("executeQiRun — model selection", () => {
         },
       ],
     });
-    const { port, calls } = recordingSequencePort([oversizedCandidateOutput]);
+    const { port, calls } = recordingSequencePort([
+      oversizedCandidateOutput,
+      weakJudgeVerdictWithRationale(judgeRationale),
+    ]);
     const deps = buildDeps({
       evidenceDir,
       modelPort: port,
@@ -699,14 +721,18 @@ describe("executeQiRun — model selection", () => {
 
     expect(summary.status).toBe("succeeded");
     expect(summary.qualityScore).toBe(0);
-    // Only the generation request reached the gateway. The oversized judge prompt returned a local
-    // weak verdict before model.call, so the audit trail must not claim a second dispatch.
-    expect(summary.modelGatewayCallCount).toBe(1);
-    expect(calls).toHaveLength(1);
+    // The parser bounds the oversized generated step before persistence/judging, so the judge prompt
+    // now stays under the local prompt guard and the bounded judge dispatch is counted.
+    expect(summary.modelGatewayCallCount).toBe(2);
+    expect(calls).toHaveLength(2);
+    const projection = candidateProjection("run-749-oversize-guard", evidenceDir);
+    const generatedStep = projection.steps.flat().find((step) => step.startsWith("xxx"));
+    expect(generatedStep).toBeDefined();
+    expect(generatedStep?.length).toBeLessThanOrEqual(1000);
     const manifest = loadQualityIntelligenceRun("run-749-oversize-guard", { evidenceDir });
-    expect(manifest?.modelGatewayCallCount).toBe(1);
+    expect(manifest?.modelGatewayCallCount).toBe(2);
     const qualityFinding = testQualityFindingsFrom(manifest)[0];
-    expect(qualityFinding?.summaryRedacted).toContain("model budget");
+    expect(qualityFinding?.summaryRedacted).toContain(judgeRationale);
   });
 
   it("counts capability-routed Figma vision calls in run evidence", async () => {
@@ -1063,13 +1089,10 @@ describe("executeQiRun — candidate artifact persistence", () => {
       onEvent: vi.fn(),
       onAccepted: vi.fn(),
     });
-    if (summary.status === "succeeded") {
-      const artifact = loadQualityIntelligenceCandidates("run-candidates", { evidenceDir });
-      // A candidates artifact should be present.
-      expect(artifact).toBeDefined();
-    }
-    // Either succeeded (artifact present) or failed (test passes trivially).
-    // The test is meaningful on the success path.
+    expect(summary.status).toBe("succeeded");
+    const artifact = loadQualityIntelligenceCandidates("run-candidates", { evidenceDir });
+    // A candidates artifact must be present for a succeeded run.
+    expect(artifact).toBeDefined();
   });
 });
 
@@ -1108,5 +1131,160 @@ describe("executeQiRun — N+1 coverage propagation", () => {
     await executeQiRun(makeInput(evidenceDir, { onAccepted }));
     expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(0);
     expect(onAccepted.mock.calls[0]?.[0]?.skippedSources).toEqual([]);
+  });
+});
+
+// ─── TEST 4 — GAP-T2: QiJudgeError → QiGenerationError conversion (~:217) ────
+//
+// buildJudgePortForModelRun (~:207) wraps createQiJudgePort in a try/catch.  When
+// createQiJudgePort throws QiJudgeError (e.g. QI_JUDGE_MODEL_UNAVAILABLE because
+// modelPortFactory returns undefined for the judge model), the catch block converts it
+// to QiGenerationError with the SAME error code.  Without that conversion the raw
+// QiJudgeError propagates out of executeQiRun and callers (route handlers) would see an
+// untyped, uncoded error — breaking structured error handling.
+//
+// Setup: configure deps with a modelPortFactory that returns a real ModelPort for the
+// GENERATION model (so ingestion + generation succeed), but returns undefined for the
+// JUDGE model (so createQiJudgePort throws QI_JUDGE_MODEL_UNAVAILABLE).
+// Because resolveModelForQiCapability for qi:judge-logic requires structuredOutput=true
+// we give the generation model structuredOutput=false (chat-only) so the judge selection
+// picks the SECOND model that has structuredOutput=true but gets undefined from the factory.
+//
+// RED-verify: mutate the catch block at :219 from
+//   `throw new QiGenerationError(error.code, error.message)`
+// to
+//   `throw error`
+// → executeQiRun rejects with QiJudgeError instead of QiGenerationError
+// → `expect(err).toBeInstanceOf(QiGenerationError)` fails. Restore → green.
+describe("executeQiRun — QiJudgeError from createQiJudgePort converts to QiGenerationError (GAP-T2)", () => {
+  it("wraps QI_JUDGE_MODEL_UNAVAILABLE as QiGenerationError when modelPortFactory returns undefined for the judge model", async () => {
+    // Generation model: chat-only (structuredOutput=false, workflowEligible=true).
+    // Judge model:      structured-output capable (structuredOutput=true, workflowEligible=true).
+    // modelPortFactory returns a real port ONLY for the generation model; returns undefined for
+    // the judge model → createQiJudgePort throws QiJudgeError("QI_JUDGE_MODEL_UNAVAILABLE", …).
+    const GEN_MODEL = "gen-chat-only-for-gap-t2";
+    const JUDGE_MODEL = "judge-structured-for-gap-t2";
+
+    const genCapability: ModelCapability = {
+      id: GEN_MODEL,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: false, // chat-only — eligible for generation but not judge
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "low",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+    const judgeCapability: ModelCapability = {
+      id: JUDGE_MODEL,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true, // qi:judge-logic requires structured output
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      supportsResponseFormat: true,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+
+    const config = buildConfig([genCapability, judgeCapability]);
+    // modelPortFactory: real port for GEN_MODEL, undefined for JUDGE_MODEL.
+    const gapT2Deps: UiHandlerDeps = {
+      config,
+      configPresent: true,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}, config),
+      registry: createRunRegistry(),
+      modelPortFactory: (modelId: string): ModelPort | undefined => {
+        if (modelId === GEN_MODEL) return fakeChatPort(EMPTY_CANDIDATES_JSON);
+        return undefined; // judge model → QiJudgeError("QI_JUDGE_MODEL_UNAVAILABLE")
+      },
+      store: createInMemoryUiStore(),
+      evidenceDir,
+    };
+
+    const controller = new AbortController();
+    try {
+      await executeQiRun({
+        request: { sources: [VALID_SOURCE], modelId: GEN_MODEL },
+        runId: "run-gap-t2-judge-unavail",
+        deps: gapT2Deps,
+        registeredAt: "2026-06-01T10:00:00.000Z",
+        signal: controller.signal,
+        onEvent: vi.fn(),
+        onAccepted: vi.fn(),
+      });
+      expect.fail("expected executeQiRun to throw");
+    } catch (err) {
+      // Must be QiGenerationError (the converted type), NOT the raw QiJudgeError.
+      expect(err).toBeInstanceOf(QiGenerationError);
+      expect(err).not.toBeInstanceOf(QiJudgeError);
+      expect((err as QiGenerationError).code).toBe("QI_JUDGE_MODEL_UNAVAILABLE");
+    }
+  });
+});
+
+// ─── CapsuleResolver.close() is called in executeQiRun's finally block ───────
+//
+// RED: before the finally block was added, close() was never called → the assertion
+//   `expect(closeSpy).toHaveBeenCalledTimes(1)` fails (call count = 0).
+// GREEN: the finally block calls `capsuleResolver?.close()` unconditionally after
+//   the workflow completes → close() is called exactly once.
+//
+// The mock returns a fake resolver whose close() is a vi.fn() spy; the default
+// mock returns undefined (matching real behaviour for deps without uiDbPath), so
+// all other tests in this file are unaffected by the top-level vi.mock.
+describe("executeQiRun — capsule resolver handle is closed in finally block", () => {
+  afterEach(() => {
+    mockMakeCapsuleResolver.mockReset();
+    mockMakeCapsuleResolver.mockImplementation(() => undefined);
+  });
+
+  it("calls close() on the capsule resolver exactly once after a succeeded run", async () => {
+    const closeSpy = vi.fn<() => void>();
+    const fakeResolver: CapsuleResolver = {
+      capsule: (): readonly never[] => [],
+      capsuleSet: (): readonly never[] => [],
+      close: closeSpy,
+    };
+    mockMakeCapsuleResolver.mockReturnValue(fakeResolver);
+
+    await executeQiRun(makeInput(evidenceDir));
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls close() on the capsule resolver exactly once even when the run fails", async () => {
+    const closeSpy = vi.fn<() => void>();
+    const fakeResolver: CapsuleResolver = {
+      capsule: (): readonly never[] => [],
+      capsuleSet: (): readonly never[] => [],
+      close: closeSpy,
+    };
+    mockMakeCapsuleResolver.mockReturnValue(fakeResolver);
+
+    // fakeUnparseablePort() causes the workflow to reach status 'failed' rather than throwing.
+    await executeQiRun(
+      makeInput(evidenceDir, {
+        deps: buildDeps({ evidenceDir, modelPort: fakeUnparseablePort() }),
+      }),
+    );
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });

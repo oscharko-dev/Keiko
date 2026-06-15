@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { fetchHealth } from "@/lib/api";
 import { Icons } from "./Icons";
 import type { TwinMode } from "./hooks/useTwinMode";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
@@ -33,18 +34,28 @@ export function Footer({
   onToggleWindowPalette,
   onSelectWindow,
   onCloseWindowPalette,
-  mode,
-  selectedModel,
-  projectName,
-  branchLabel,
-  shellStatusLabel,
-  evidenceStatusLabel,
   statusRef,
 }: FooterProps): ReactNode {
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
-  const modelLabel = selectedModel ?? "No model selected";
+  const [installedVersion, setInstalledVersion] = useState("version loading");
   const windowLabel = `${String(winCount)} ${winCount === 1 ? "window" : "windows"}`;
   const sortedWindows = [...windows].sort((a, b) => b.z - a.z);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadInstalledVersion(): Promise<void> {
+      try {
+        const health = await fetchHealth();
+        if (!cancelled) setInstalledVersion(health.version);
+      } catch {
+        if (!cancelled) setInstalledVersion("version unavailable");
+      }
+    }
+    void loadInstalledVersion();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!windowPaletteOpen) return;
@@ -73,13 +84,6 @@ export function Footer({
     };
   }, [onCloseWindowPalette, winCount, windowPaletteOpen]);
 
-  // Each pill carries a title (uiux-fix F011 C360) so meaning and any truncated
-  // value (C158) stay reachable, and aria-atomic so live updates are announced
-  // as the whole pill instead of a context-free fragment (C400).
-  const govTitle =
-    mode === "autonomous"
-      ? "Governance mode: Keiko governs agents per your policy"
-      : "Governance mode: you approve every privileged action";
   return (
     // SH-02: tabIndex={-1} is intentional — this footer is a programmatic focus target
     // for the Alt+S "jump to status region" shortcut (AppShell dispatchShortcut
@@ -92,34 +96,10 @@ export function Footer({
       aria-label="Workspace status"
       aria-live="polite"
     >
-      <span className="ft-seg ft-gov" data-mode={mode} aria-atomic="true" title={govTitle}>
-        {mode === "autonomous" ? (
-          // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG via .ft-orca
-          <img className="ft-orca" src="/assets/keiko-logo.svg" alt="" />
-        ) : (
-          /* decorative person glyph; the adjacent text carries the information (C128/C293) */
-          <span className="ft-you" aria-hidden="true">
-            <Icons.user size={10} />
-          </span>
-        )}
-        {mode === "autonomous" ? "Keiko governing" : "You · manual"}
-      </span>
-      <span className="ft-seg ft-opt2" aria-atomic="true" title={`Active project: ${projectName}`}>
-        <Icons.folder size={13} />
-        <span className="ft-val">{projectName}</span>
-      </span>
-      <span className="ft-seg ft-opt1" aria-atomic="true" title={`Git branch: ${branchLabel}`}>
-        <Icons.branch size={13} />
-        <span className="ft-val">{branchLabel}</span>
-      </span>
-      <span
-        className="ft-seg ft-opt2"
-        aria-atomic="true"
-        title={`Shell status: ${shellStatusLabel}`}
-      >
-        <Icons.cube size={13} /> {shellStatusLabel}
-      </span>
       <span className="spacer" />
+      <span className="ft-brand" aria-label={`Keiko version ${installedVersion}`}>
+        Keiko | {installedVersion}
+      </span>
       <span className="ft-window-wrap" ref={windowPaletteRef}>
         <button
           type="button"
@@ -178,18 +158,6 @@ export function Footer({
             </div>
           </div>
         ) : null}
-      </span>
-      <span className="ft-seg ft-opt2" aria-atomic="true" title={`Selected model: ${modelLabel}`}>
-        {/* --accent-text keeps AA contrast on the light surface (C073); dark is identical to --accent */}
-        <Icons.bolt size={13} style={{ color: "var(--accent-text)" }} />
-        <span className="ft-val">{modelLabel}</span>
-      </span>
-      <span
-        className="ft-seg ft-accent"
-        aria-atomic="true"
-        title={`Review evidence status: ${evidenceStatusLabel}`}
-      >
-        <Icons.review size={13} /> {evidenceStatusLabel}
       </span>
     </footer>
   );

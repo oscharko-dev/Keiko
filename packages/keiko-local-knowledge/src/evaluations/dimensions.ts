@@ -58,6 +58,53 @@ export function scorePrecision(
   return hits / returned.length;
 }
 
+// ─── Ranking quality ────────────────────────────────────────────────────────
+// MRR captures how quickly the first relevant chunk appears. Recall/precision alone can pass even
+// when a relevant chunk is buried late in the retrieved list; MRR makes that regression visible.
+
+export function scoreMeanReciprocalRank(
+  returned: readonly RetrievalReference[],
+  expected: readonly ChunkId[],
+): number {
+  if (expected.length === 0) return 1;
+  const expectedIds = new Set<string>();
+  for (const id of expected) expectedIds.add(String(id));
+  for (let index = 0; index < returned.length; index += 1) {
+    if (expectedIds.has(String(returned[index]?.chunkId))) {
+      return 1 / (index + 1);
+    }
+  }
+  return 0;
+}
+
+function discountedGain(rankIndex: number): number {
+  return 1 / Math.log2(rankIndex + 2);
+}
+
+// Binary relevance nDCG@returned.length. This rewards relevant chunks appearing earlier while
+// staying deterministic and independent of model-judged graded relevance.
+export function scoreNdcg(
+  returned: readonly RetrievalReference[],
+  expected: readonly ChunkId[],
+): number {
+  if (expected.length === 0) return 1;
+  if (returned.length === 0) return 0;
+  const expectedIds = new Set<string>();
+  for (const id of expected) expectedIds.add(String(id));
+  let dcg = 0;
+  for (let index = 0; index < returned.length; index += 1) {
+    if (expectedIds.has(String(returned[index]?.chunkId))) {
+      dcg += discountedGain(index);
+    }
+  }
+  const idealCount = Math.min(expectedIds.size, returned.length);
+  let ideal = 0;
+  for (let index = 0; index < idealCount; index += 1) {
+    ideal += discountedGain(index);
+  }
+  return ideal === 0 ? 0 : dcg / ideal;
+}
+
 // ─── Source isolation ────────────────────────────────────────────────────────
 // A retrieval is source-isolated iff every returned reference belongs to a capsule that is
 // in `scopeCapsuleIds`. A single leak across the capsule boundary drops the score to 0 —

@@ -393,9 +393,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const onDeleted = vi.fn();
     const onActionComplete = vi.fn();
     render(
-      <CapsuleActions
-        {...defaultProps({ deleteCapsuleImpl, onActionComplete, onDeleted })}
-      />,
+      <CapsuleActions {...defaultProps({ deleteCapsuleImpl, onActionComplete, onDeleted })} />,
     );
 
     await user.click(screen.getByRole("button", { name: /delete capsule/i }));

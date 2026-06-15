@@ -257,6 +257,29 @@ describe("handleQiTraceabilityExport — parseFormat robustness (T-C)", () => {
     expect(body.contentType).toBe("text/csv");
   });
 
+  it("falls back to csv for a chunked oversized body (cap fires mid-stream)", async () => {
+    // Arrange — send the oversized body across two chunks so the second data event arrives
+    // after the cap fires. Without the `capped` flag, `chunks` holds the first chunk's bytes
+    // until GC and `resolve()` is called from the `end` handler after `reject()` (silently
+    // ignored by the Promise). With `capped`: chunks are cleared immediately and `end` is a
+    // no-op. Observable assertion: parseFormat catches the rejection and falls back to csv.
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    const half = "x".repeat(3 * 1024);
+    const req = Readable.from([
+      Buffer.from(half, "utf8"),
+      Buffer.from(half, "utf8"),
+    ]) as unknown as IncomingMessage;
+
+    // Act — exercises the multi-chunk path through readBody
+    const result = await handleQiTraceabilityExport(ctx(RUN_ID, req), deps(evidenceDir));
+
+    // Assert — cap fires on first chunk → capped=true → second chunk + end handler are no-ops
+    expect(result.status).toBe(200);
+    const body = result.body as { format: string; contentType: string };
+    expect(body.format).toBe("csv");
+    expect(body.contentType).toBe("text/csv");
+  });
+
   it("falls back to csv for an unknown format value", async () => {
     // Arrange
     recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });

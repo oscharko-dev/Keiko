@@ -156,9 +156,9 @@ export function GatewaySetupDialog({
   }
 
   // Issue #422: when this dialog is opened from the Settings panel, its
-  // ancestors include `.ws-scene`, which carries `will-change: transform` and
-  // a CSS `zoom`. Both establish a containing block for `position: fixed`
-  // descendants in Chromium, so the backdrop ends up sized to the zoomed
+  // ancestors include `.ws-scene`, which applies CSS `zoom` and a translated
+  // scene layer. Those can establish a containing block for `position: fixed`
+  // descendants in Chromium, so the backdrop can end up sized to the zoomed
   // scene (which has zero intrinsic width/height) instead of the viewport.
   // Portalling to `document.body` makes the backdrop fixed to the viewport
   // regardless of where the dialog is mounted in the React tree.

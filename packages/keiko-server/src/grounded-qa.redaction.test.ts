@@ -25,6 +25,7 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildGroundedGatewayMessages,
   handleGroundedAsk,
+  redactString,
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -324,5 +325,29 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
     assertNoSecretShape(serialised, "full wire response");
     expect(serialised).not.toContain("PRIVATE KEY");
     expect(serialised).not.toContain("how do I use");
+  });
+});
+
+describe("grounded redaction strips Trojan-source format chars (GRD-001)", () => {
+  it("redactString removes bidi / zero-width / control code points before redaction", () => {
+    const redactor = buildRedactor({});
+    // Build invisible code points via fromCodePoint (no irregular-whitespace literals in source):
+    // U+202E reverse, U+202C pop, U+200B zero-width, U+0007 BEL control, U+FEFF BOM.
+    const rlo = String.fromCodePoint(0x202e);
+    const pdf = String.fromCodePoint(0x202c);
+    const zwsp = String.fromCodePoint(0x200b);
+    const bel = String.fromCodePoint(0x0007);
+    const bom = String.fromCodePoint(0xfeff);
+    const hostile = `claim${rlo}reversed${pdf} x${zwsp}y${bel}z${bom}`;
+    const out = redactString(redactor, hostile);
+    expect(out).toBe("claimreversed xyz");
+    for (const ch of [rlo, pdf, zwsp, bel, bom]) {
+      expect(out).not.toContain(ch);
+    }
+  });
+
+  it("redactString preserves TAB / LF / CR and ordinary text", () => {
+    const redactor = buildRedactor({});
+    expect(redactString(redactor, "a\tb\nc\r\nd")).toBe("a\tb\nc\r\nd");
   });
 });

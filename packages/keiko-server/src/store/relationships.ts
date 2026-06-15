@@ -1153,21 +1153,15 @@ function expandNeighbours(
 ): readonly StoredRelationship[] {
   const out: StoredRelationship[] = [];
   if (direction !== "incoming") {
-    const rows = outgoingStatement?.all(
-      workspaceId,
-      node.kind,
-      node.id,
-      MAX_LIST_LIMIT,
-    ) as RelationshipRow[] | undefined;
+    const rows = outgoingStatement?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT) as
+      | RelationshipRow[]
+      | undefined;
     for (const row of rows ?? []) out.push(rowToRelationship(row));
   }
   if (direction !== "outgoing") {
-    const rows = incomingStatement?.all(
-      workspaceId,
-      node.kind,
-      node.id,
-      MAX_LIST_LIMIT,
-    ) as RelationshipRow[] | undefined;
+    const rows = incomingStatement?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT) as
+      | RelationshipRow[]
+      | undefined;
     for (const row of rows ?? []) out.push(rowToRelationship(row));
   }
   return out;

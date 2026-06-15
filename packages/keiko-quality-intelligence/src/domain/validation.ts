@@ -22,14 +22,16 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseText } from "./assertions.js";
+import { normaliseCandidateText, normaliseText } from "./assertions.js";
 
 const NEGATION_PATTERN = /\b(not|never|no longer|cannot|isn't|aren't|won't|doesn't|do not)\b/iu;
 
 const collapseWhitespace = (value: string): string => value.replace(/\s+/gu, " ").trim();
 
+// Use normaliseCandidateText (NFKC + bidi/zero-width strip + trim) so that two candidates
+// differing only by injected bidi or zero-width spoofing chars produce the same equivalence key.
 const canonicaliseLine = (value: string): string =>
-  collapseWhitespace(normaliseText(value).toLowerCase());
+  collapseWhitespace(normaliseCandidateText(value).toLowerCase());
 
 const stripNegation = (value: string): string =>
   value.replace(NEGATION_PATTERN, " ").replace(/\s+/gu, " ").trim();

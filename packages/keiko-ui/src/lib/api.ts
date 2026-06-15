@@ -711,15 +711,26 @@ async function consumeSseStream(
   const decoder = new TextDecoder();
   let lineBuffer = "";
   let pendingEvent: string | undefined;
+  let reachedEof = false;
 
   try {
     while (!signal.aborted) {
       const read = await reader.read();
-      if (read.done) break;
+      if (read.done) {
+        reachedEof = true;
+        break;
+      }
       lineBuffer += decoder.decode(read.value, { stream: true });
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
       pendingEvent = processSseLines(lines, pendingEvent, handlers);
+    }
+    // Flush any residual content left in lineBuffer when the stream ends
+    // naturally (EOF). A proxy or buffer that drops the terminal \n\n would
+    // otherwise silently lose the final SSE frame. Skipped on abort because
+    // the contract is "stop reading without dispatching further events".
+    if (reachedEof && lineBuffer !== "") {
+      processSseLines([lineBuffer], pendingEvent, handlers);
     }
   } finally {
     reader.releaseLock();

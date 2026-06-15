@@ -5,10 +5,10 @@ This document summarizes the current approved customer-facing surface for
 
 ## Root product package — `@oscharko-dev/keiko`
 
-| Surface                                    | Resolution                                                           | Contract |
-| ------------------------------------------ | -------------------------------------------------------------------- | -------- |
-| `import { ... } from "@oscharko-dev/keiko"` | `package.json` `exports["."]` → `dist/index.js` / `dist/index.d.ts` | Stable public root barrel. |
-| `npx keiko ...` / installed `keiko` bin     | `package.json` `bin.keiko` → `dist/cli/index.js`                    | Stable CLI entrypoint. |
+| Surface                                     | Resolution                                                          | Contract                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `import { ... } from "@oscharko-dev/keiko"` | `package.json` `exports["."]` → `dist/index.js` / `dist/index.d.ts` | Stable public root barrel.                                                |
+| `npx keiko ...` / installed `keiko` bin     | `package.json` `bin.keiko` → `dist/cli/index.js`                    | Stable CLI entrypoint.                                                    |
 | Bundled UI static export                    | `dist/ui/static/**` served by `@oscharko-dev/keiko-server`          | Runtime artifact is stable; hashed filenames may change between releases. |
 
 The root manifest exports only `"."`. There are no root subpath exports. This monolithic root

@@ -30,21 +30,21 @@ The severity field on each entry uses the following scale. It is a
 documentation convention only; Keiko itself does not emit severity
 levels.
 
-| Severity     | Meaning                                                                                  |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| Blocker      | Keiko cannot start, cannot serve the UI, or cannot reach any chat model.                 |
-| High         | A core workflow (chat, generate tests, investigate, verify) is unusable.                 |
-| Medium       | A specific surface or command fails while other workflows continue to work.              |
-| Low          | Usability or visual defect with a clear local workaround.                                |
+| Severity | Meaning                                                                     |
+| -------- | --------------------------------------------------------------------------- |
+| Blocker  | Keiko cannot start, cannot serve the UI, or cannot reach any chat model.    |
+| High     | A core workflow (chat, generate tests, investigate, verify) is unusable.    |
+| Medium   | A specific surface or command fails while other workflows continue to work. |
+| Low      | Usability or visual defect with a clear local workaround.                   |
 
 ## Log locations and debug mode
 
-| Path                   | Purpose                                                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `.keiko/ui.log`        | Local UI process log. Written by `keiko start` for the background UI process.                        |
-| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.    |
-| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).          |
-| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                            |
+| Path                   | Purpose                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `.keiko/ui.log`        | Local UI process log. Written by `keiko start` for the background UI process.                     |
+| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive. |
+| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).       |
+| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                         |
 
 To capture verbose output for a single command run, invoke the CLI in the
 foreground and redirect both streams to a file you control. For example:
@@ -70,11 +70,11 @@ project content.
 
 ### 1. UI process does not become healthy after `keiko start`
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | Blocker                                                                                        |
-| Surface          | CLI lifecycle, local UI                                                                        |
-| Stable identifier | `keiko start: UI did not become healthy`                                                      |
+| Field             | Value                                    |
+| ----------------- | ---------------------------------------- |
+| Severity          | Blocker                                  |
+| Surface           | CLI lifecycle, local UI                  |
+| Stable identifier | `keiko start: UI did not become healthy` |
 
 **Symptom**
 
@@ -131,11 +131,11 @@ than a process crash.
 
 ### 2. Port is already in use
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | High                                                                                           |
-| Surface          | CLI lifecycle, local UI                                                                        |
-| Stable identifier | `EADDRINUSE :1983`                                                                            |
+| Field             | Value                   |
+| ----------------- | ----------------------- |
+| Severity          | High                    |
+| Surface           | CLI lifecycle, local UI |
+| Stable identifier | `EADDRINUSE :1983`      |
 
 **Symptom**
 
@@ -181,10 +181,10 @@ cat .keiko/ui.pid 2>/dev/null && ps -p "$(cat .keiko/ui.pid)" || echo "no live k
 
 ### 3. Gateway TLS trust failure (self-signed or corporate CA)
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | Blocker                                                                                        |
-| Surface          | Model gateway, first-run setup                                                                 |
+| Field             | Value                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| Severity          | Blocker                                                                                               |
+| Surface           | Model gateway, first-run setup                                                                        |
 | Stable identifier | `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` / `SELF_SIGNED_CERT_IN_CHAIN` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE` |
 
 **Symptom**
@@ -252,11 +252,11 @@ same base URL, the host trust store is missing the chain.
 
 ### 4. First-run gateway setup returns no usable models
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | Blocker                                                                                        |
-| Surface          | First-run gateway setup                                                                        |
-| Stable identifier | `GATEWAY_DEPLOYMENTS_REQUIRED` / `GATEWAY_SETUP_FAILED`                                       |
+| Field             | Value                                                   |
+| ----------------- | ------------------------------------------------------- |
+| Severity          | Blocker                                                 |
+| Surface           | First-run gateway setup                                 |
+| Stable identifier | `GATEWAY_DEPLOYMENTS_REQUIRED` / `GATEWAY_SETUP_FAILED` |
 
 **Symptom**
 
@@ -317,11 +317,11 @@ shell. Do not paste the token into chat tools or commit it.
 
 ### 5. API responses return `NO_MODEL`
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | High                                                                                           |
-| Surface          | Run engine, chat handlers                                                                      |
-| Stable identifier | `{ "code": "NO_MODEL", "message": "No model provider is configured." }`                       |
+| Field             | Value                                                                   |
+| ----------------- | ----------------------------------------------------------------------- |
+| Severity          | High                                                                    |
+| Surface           | Run engine, chat handlers                                               |
+| Stable identifier | `{ "code": "NO_MODEL", "message": "No model provider is configured." }` |
 
 **Symptom**
 
@@ -372,11 +372,11 @@ npx keiko models validate
 
 ### 6. Local project path rejected during workspace selection
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | Medium                                                                                         |
-| Surface          | Project sidebar, workspace API                                                                 |
-| Stable identifier | `invalid_path` / `path_not_directory` / `path_not_found` / `PATH_ESCAPE`                      |
+| Field             | Value                                                                    |
+| ----------------- | ------------------------------------------------------------------------ |
+| Severity          | Medium                                                                   |
+| Surface           | Project sidebar, workspace API                                           |
+| Stable identifier | `invalid_path` / `path_not_directory` / `path_not_found` / `PATH_ESCAPE` |
 
 **Symptom**
 
@@ -430,11 +430,11 @@ drive path consistently for the duration of the session.
 
 ### 7. Verification or terminal command is denied or times out
 
-| Field            | Value                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Severity         | Medium                                                                                         |
-| Surface          | Terminal widget, `keiko verify`, run engine                                                    |
-| Stable identifier | `COMMAND_DENIED` / `CWD_OUTSIDE_PROJECT` / `TIMEOUT` / `EXECUTION_LIMIT_EXCEEDED`              |
+| Field             | Value                                                                             |
+| ----------------- | --------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                            |
+| Surface           | Terminal widget, `keiko verify`, run engine                                       |
+| Stable identifier | `COMMAND_DENIED` / `CWD_OUTSIDE_PROJECT` / `TIMEOUT` / `EXECUTION_LIMIT_EXCEEDED` |
 
 **Symptom**
 

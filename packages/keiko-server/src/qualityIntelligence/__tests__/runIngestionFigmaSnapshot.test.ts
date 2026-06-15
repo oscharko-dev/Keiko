@@ -10,7 +10,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
+import {
+  ingestInlineSources,
+  ingestInlineSourcesAsync,
+  QiIngestionError,
+} from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { FigmaSnapshotLoader, FigmaVisionHintProvider } from "../figmaSnapshotAdapter.js";
 import type { FigmaSnapshotRecord } from "@oscharko-dev/keiko-evidence";
@@ -311,6 +315,89 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
     expect(first.envelopes[0]?.provenance.integrityHashSha256Hex).toBe(
       second.envelopes[0]?.provenance.integrityHashSha256Hex,
     );
+  });
+
+  it("caps vision augmentation to the first twelve eligible screens", () => {
+    const screens = Array.from({ length: 15 }, (_value, index) =>
+      screenRow(
+        `screen-visual-${String(index)}`,
+        screenIr(
+          `screen-visual-${String(index)}`,
+          `Visual ${String(index)}`,
+          irNode("root", "container", {
+            children: [
+              irNode("hero", "image", {
+                name: "Hero artwork",
+                type: "RECTANGLE",
+                imageFills: [{ imageRef: `img-${String(index)}` }],
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+    const calls: string[] = [];
+    const vision: FigmaVisionHintProvider = (request) => {
+      calls.push(request.screenId);
+      return [`vision hint for ${request.screenId}`];
+    };
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record(screens)),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toHaveLength(12);
+    expect(calls).toEqual(
+      Array.from({ length: 12 }, (_value, index) => `screen-visual-${String(index)}`),
+    );
+    const text = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(text).toContain("vision hint for screen-visual-11");
+    expect(text).not.toContain("vision hint for screen-visual-12");
+  });
+
+  it("caps async vision augmentation to the first twelve eligible screens", async () => {
+    const screens = Array.from({ length: 15 }, (_value, index) =>
+      screenRow(
+        `screen-async-${String(index)}`,
+        screenIr(
+          `screen-async-${String(index)}`,
+          `Async ${String(index)}`,
+          irNode("root", "container", {
+            children: [
+              irNode("hero", "image", {
+                name: "Hero artwork",
+                type: "RECTANGLE",
+                imageFills: [{ imageRef: `async-img-${String(index)}` }],
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+    const calls: string[] = [];
+    const vision: FigmaVisionHintProvider = async (request) => {
+      await Promise.resolve();
+      calls.push(request.screenId);
+      return [`async vision hint for ${request.screenId}`];
+    };
+
+    const result = await ingestInlineSourcesAsync(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record(screens)),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toHaveLength(12);
+    expect(calls).toEqual(
+      Array.from({ length: 12 }, (_value, index) => `screen-async-${String(index)}`),
+    );
+    const text = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(text).toContain("async vision hint for screen-async-11");
+    expect(text).not.toContain("async vision hint for screen-async-12");
   });
 });
 
@@ -711,6 +798,7 @@ describe("figma-snapshot ingestion — four-kind cross-source composition (Issue
             capsuleResolver: {
               capsule: () => [capsuleDoc],
               capsuleSet: () => [],
+              close: (): void => undefined,
             },
           },
         ),

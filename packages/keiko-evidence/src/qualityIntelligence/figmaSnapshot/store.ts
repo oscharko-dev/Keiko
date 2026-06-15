@@ -122,6 +122,11 @@ export interface FigmaSnapshotImageBytes {
 export interface FigmaSnapshotStore {
   readonly record: (input: RecordFigmaSnapshotInput) => RecordFigmaSnapshotResult;
   readonly load: (runId: string) => FigmaSnapshotRecord | undefined;
+  /**
+   * Loads and verifies the JSON snapshot record and hash graph without reading every image side-file.
+   * Callers that stream one image must then verify that requested side-file with loadImage().
+   */
+  readonly loadMetadata: (runId: string) => FigmaSnapshotRecord | undefined;
   readonly loadImage: (runId: string, image: FigmaSnapshotImageRef) => FigmaSnapshotImageBytes;
   readonly location: (runId: string) => string;
   /**
@@ -539,6 +544,10 @@ function verifyPersistedScreens(ctx: StoreCtx, rec: FigmaSnapshotRecord, runId: 
   }
 }
 
+function verifyPersistedScreenMetadata(rec: FigmaSnapshotRecord, runId: string): void {
+  for (const screen of rec.screens) verifyScreenIntegrity(screen, runId);
+}
+
 // Parse one raw JSON string from a snapshot record file into a scope entry, or null when the
 // file does not belong to the requested scope or cannot be parsed.
 function parseScopeEntry(
@@ -723,6 +732,33 @@ function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
   return verifyOptionalArtifactHashes(rec, runId);
 }
 
+function loadMetadataOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
+  assertValidRunId(runId);
+  ctx.ensureSwept();
+  const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
+  if (realBase === undefined) return undefined;
+  const target = join(realBase, `${runId}${SNAPSHOT_SUFFIX}`);
+  if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(target, "utf8"));
+  } catch (error) {
+    throw new EvidenceReadError(
+      `Figma snapshot is not valid JSON: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+  if (!validateFigmaSnapshotRecord(parsed).ok) return undefined;
+  const rec = parsed as FigmaSnapshotRecord;
+  verifyPersistedScreenMetadata(rec, runId);
+  const expected = recomputeSnapshotIntegrityHash(rec);
+  if (rec.integrityHash !== expected) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: hash mismatch`,
+    );
+  }
+  return verifyOptionalArtifactHashes(rec, runId);
+}
+
 function loadImageOp(
   ctx: StoreCtx,
   runId: string,
@@ -778,6 +814,7 @@ export function createNodeFigmaSnapshotStore(
   return {
     record: (input) => recordOp(ctx, input),
     load: (runId) => loadOp(ctx, runId),
+    loadMetadata: (runId) => loadMetadataOp(ctx, runId),
     loadImage: (runId, image) => loadImageOp(ctx, runId, image),
     location: (runId): string => {
       assertValidRunId(runId);

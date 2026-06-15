@@ -44,6 +44,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
 import { EmbeddingAdapterError, type ConnectorRetrieve } from "./grounded-qa-hybrid.js";
@@ -622,6 +623,49 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(uniqueLabels.size).toBe(2);
   });
 
+  it("maps a planner ClarificationNeededError to an actionable 400, not a 500 (GRD-016)", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Clarify Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("alpha-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const hybrid: HybridSeam = {
+      folderRetriever: () =>
+        Promise.reject(
+          new ClarificationNeededError({
+            reason: "no-anchors",
+            suggestedQuestions: ["What does parseConfig do?"],
+            minimumAnchorCount: 1,
+          }),
+        ),
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: throwingHybridAnswerer(),
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "tell me everything" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // GRD-016: a vague/no-anchor question is client-actionable → 400, not an opaque 500.
+    expect(result.status, JSON.stringify(result.body)).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toContain("too broad");
+    expect(body.error.message).not.toContain("clarification needed:");
+  });
+
   it("returns no evidence without calling the model when connector retrieval returns zero references", async () => {
     const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
     const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
@@ -1001,6 +1045,146 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       true,
     );
     expect(answer.uncertainty.filter((u) => u.kind === "pack-validation-failed").length).toBe(2);
+  });
+});
+
+// ─── Case 3d: a per-folder EmbeddingAdapterError is skipped (graceful), other errors propagate ──
+//
+// Mirrors the connector path (Case 3b / retrieveOneConnector): a folder whose embedding adapter is
+// unavailable is skipped (reason "embedding-unavailable") so the remaining folders + connectors
+// still answer. EVERY OTHER folder error propagates to the boundary for map+redact — ProviderError
+// -> 502, generic -> 500, ClarificationNeededError -> 400 — covered by grounded-qa.error-redaction
+// .test.ts and the GRD-016 test above. (Silently dropping a folder on a hard error would return a
+// misleadingly "complete" answer, so only the recoverable embedding outage is skipped.)
+
+describe("hybrid grounded ask — folder EmbeddingAdapterError is skipped, not aborted", () => {
+  it("1 embedding-unavailable folder + 1 healthy folder + 1 connector → 200 with healthy-folder and connector citations, embedding-unavailable in uncertainty", async () => {
+    const { capsuleId: capId, label: connLabel } = await seedReadyCapsule("ThrowSkip Connector");
+
+    const goodFolderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/healthy.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("healthy-repo"),
+    };
+    const throwFolderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/throwing.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("throwing-repo"),
+    };
+    const chatId = makeHybridChat(
+      [goodFolderScope, throwFolderScope],
+      [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+    );
+
+    const packMap = new Map<string, ConnectedContextPack>([
+      ["src/healthy.ts", folderPack("src/healthy.ts", 0.8, "healthy-atom")],
+    ]);
+    // Retriever: succeeds for "src/healthy.ts", throws for "src/throwing.ts".
+    const throwingFolderRetriever: GroundedRetriever = (
+      input: OrchestratorInput,
+    ): Promise<RetrievalOnlyOutput> => {
+      const key = input.scope.relativePaths[0] ?? "";
+      if (key === "src/throwing.ts") {
+        return Promise.reject(
+          new EmbeddingAdapterError({
+            status: 503,
+            body: { error: { code: "EMBEDDING_UNAVAILABLE", message: "embedding adapter down" } },
+          }),
+        );
+      }
+      const pack = packMap.get(key);
+      if (pack === undefined) return Promise.reject(new Error(`No fixture pack for path: ${key}`));
+      return Promise.resolve({ pack, elapsedMs: 9, plan: { state: "ready" } as never });
+    };
+
+    const hybrid: HybridSeam = {
+      folderRetriever: throwingFolderRetriever,
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: sentinelAnswerer(),
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What is healthy?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // Must be 200 — the throwing folder is skipped, not propagated.
+    // mutation: removing the try/catch in retrieveFolderPacks → the throw escapes → 500
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+
+    // Healthy folder citations must be present (retrieval for that folder succeeded).
+    // mutation: if the catch also drops the healthy folder, citations would be empty
+    expect(answer.citations.some((c) => c.source === "healthy-repo")).toBe(true);
+
+    // Throwing folder must NOT appear in citations.
+    expect(answer.citations.some((c) => c.source === "throwing-repo")).toBe(false);
+
+    // Connector citations must be present (connectors are unaffected by folder errors).
+    expect(answer.knowledgeCitations.some((kc) => kc.source?.startsWith(`${connLabel} / `))).toBe(
+      true,
+    );
+
+    // Skipped folder surfaces in uncertainty as "embedding-unavailable" (same as the connector path).
+    // mutation: rethrowing EmbeddingAdapterError instead of skipping → 502/500, no skip entry.
+    const skipEntries = answer.uncertainty.filter((u) => u.kind === "embedding-unavailable");
+    expect(skipEntries.length).toBeGreaterThan(0);
+  });
+
+  it("all folders embedding-unavailable + 1 connector → 200 from connector alone with embedding-unavailable skips", async () => {
+    const { capsuleId: capId, label: connLabel } = await seedReadyCapsule(
+      "ThrowSkip Only Connector",
+    );
+    const throwFolder1: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/err1.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("err1-repo"),
+    };
+    const throwFolder2: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/err2.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("err2-repo"),
+    };
+    const chatId = makeHybridChat(
+      [throwFolder1, throwFolder2],
+      [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+    );
+
+    const alwaysThrowRetriever: GroundedRetriever = (): Promise<RetrievalOnlyOutput> =>
+      Promise.reject(
+        new EmbeddingAdapterError({
+          status: 503,
+          body: { error: { code: "EMBEDDING_UNAVAILABLE", message: "embedding adapter down" } },
+        }),
+      );
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Connector only from throw?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: alwaysThrowRetriever,
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    // mutation: reverting the try/catch makes this 500
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.knowledgeCitations.some((kc) => kc.source?.startsWith(`${connLabel} / `))).toBe(
+      true,
+    );
+    expect(answer.uncertainty.filter((u) => u.kind === "embedding-unavailable").length).toBe(2);
   });
 });
 
@@ -1646,5 +1830,102 @@ describe("ask-path source cap — connectors capped at maxLocalKnowledgeSources"
     const kciLabels = answer.knowledgeCitations.map((kc) => kc.source ?? "");
     expect(kciLabels.some((l) => l.startsWith(`${labelA} / `))).toBe(true);
     expect(kciLabels.some((l) => l.startsWith(`${labelB} / `))).toBe(true);
+  });
+});
+
+describe("ask-path source cap — combined folder and connector total", () => {
+  it("retrieves only the combined cap when a persisted chat carries 10 folders and 10 connectors", async () => {
+    const seededCapsules: { readonly capsuleId: KnowledgeCapsuleId; readonly label: string }[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      seededCapsules.push(await seedReadyCapsule(`Combined Cap ${String(index)}`));
+    }
+    const folders: ChatConnectedScope[] = Array.from({ length: 10 }, (_unused, index) => ({
+      kind: "directory",
+      relativePaths: [`src/combined-${String(index)}.ts`],
+      connectedAtMs: NOW + index,
+      root: tempRoot(`combined-folder-${String(index)}`),
+    }));
+    const connectors: ChatLocalKnowledgeScope[] = seededCapsules.map((seeded, index) => ({
+      kind: "capsule",
+      capsuleId: seeded.capsuleId,
+      connectedAtMs: NOW + 10 + index,
+    }));
+    const project = store.createProject(tmp, "combined-cap-legacy");
+    const chat = store.createChat(project.path, "Combined cap legacy", CHAT_MODEL);
+    const legacyLimits = { maxConnectedSources: 20, maxLocalKnowledgeSources: 20 };
+    store.updateChat(chat.id, { connectedScopes: folders }, legacyLimits);
+    store.updateChat(chat.id, { localKnowledgeScopes: connectors }, legacyLimits);
+    const chatId = chat.id;
+
+    const retrievedFolders: string[] = [];
+    const packMap = new Map(
+      folders.map((folder, index) => [
+        folder.relativePaths[0] ?? "",
+        folderPack(folder.relativePaths[0] ?? "", 0.9 - index / 100, `combined-${String(index)}`),
+      ]),
+    );
+    const trackingRetriever: GroundedRetriever = (input: OrchestratorInput) => {
+      const key = input.scope.relativePaths[0] ?? "";
+      retrievedFolders.push(key);
+      const pack = packMap.get(key);
+      if (pack === undefined) throw new Error(`No fixture pack for path: ${key}`);
+      return Promise.resolve({ pack, elapsedMs: 5, plan: { state: "ready" } as never });
+    };
+
+    const retrievedConnectors: string[] = [];
+    const trackingConnectorRetrieve: ConnectorRetrieve = (
+      _store,
+      scope,
+    ): Promise<RetrievalResult> => {
+      if (scope.kind !== "capsule") {
+        return Promise.resolve({ references: [], noEvidence: true, reason: "no-scope" });
+      }
+      retrievedConnectors.push(String(scope.capsuleId));
+      return Promise.resolve({
+        references: [connectorReference(scope.capsuleId, 1, `doc-${String(scope.capsuleId)}`)],
+        noEvidence: false,
+      });
+    };
+
+    const capDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 16,
+          maxLocalKnowledgeSources: 16,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 24,
+          hybridMaxExcerptBytes: 100_000,
+        },
+      },
+      configPresent: true,
+    });
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Combined cap?" })),
+      capDeps,
+      undefined,
+      undefined,
+      {
+        folderRetriever: trackingRetriever,
+        connectorRetrieve: trackingConnectorRetrieve,
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(retrievedFolders).toHaveLength(10);
+    expect(retrievedConnectors).toHaveLength(6);
+    expect(retrievedFolders.length + retrievedConnectors.length).toBe(16);
+    expect(retrievedConnectors).not.toContain(String(seededCapsules[6]?.capsuleId));
+
+    const answer = asHybrid(result.body as GroundedAnswer);
+    const skipped = answer.uncertainty.filter((u) => u.kind === "source-skipped");
+    expect(skipped).toHaveLength(4);
+    expect(answer.contextPack.folderSourceCount).toBe(10);
+    expect(answer.contextPack.connectorSourceCount).toBe(10);
   });
 });

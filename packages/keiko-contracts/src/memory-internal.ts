@@ -73,11 +73,7 @@ export function validateTags(field: string, input: unknown, errors: string[]): v
   }
 }
 
-export function validateRetentionHint(
-  field: string,
-  input: unknown,
-  errors: string[],
-): void {
+export function validateRetentionHint(field: string, input: unknown, errors: string[]): void {
   if (!isRecord(input)) {
     errors.push(`${field} must be an object when set`);
     return;

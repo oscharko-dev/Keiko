@@ -30,6 +30,9 @@ import { RetrievalError } from "./types.js";
 
 const SEARCH_EXCERPT_MAX_CHARS = 1_600;
 const SEARCH_CONTEXT_BEFORE_CHARS = 420;
+const LEXICAL_RECALL_EXCERPT_CHARS = 900;
+const LEXICAL_RECALL_MAX_TERMS = 12;
+const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
 const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
 const BROAD_QUERY_PATTERN =
   /\b(compare|comparez|summari[sz]e|overview|explain|describe|analyse|analyze|erkl[aä]re|ueberblick|überblick|vergleiche|zusammenfassung)\b/iu;
@@ -97,6 +100,7 @@ interface QueryProfile {
   readonly strategy: "balanced" | "exact" | "broad";
   readonly tokens: readonly string[];
   readonly exactTerms: readonly string[];
+  readonly lexicalRecallTerms: readonly string[];
   readonly lexicalWeight: number;
   readonly phraseWeight: number;
   readonly metadataWeight: number;
@@ -402,6 +406,251 @@ function scoreCapsuleVectors(
   return scored.slice(0, candidateLimit);
 }
 
+interface LexicalDocumentRow {
+  readonly document_id: string;
+  readonly source_id: string;
+  readonly safe_display_name: string | null;
+  readonly normalized_text: string;
+}
+
+interface LexicalChunkRow {
+  readonly chunk_id: string;
+  readonly capsule_id: string;
+}
+
+interface LexicalHit {
+  readonly position: number;
+  readonly searchText: string;
+}
+
+function lexicalRecallLimit(topK: number, profile: QueryProfile): number {
+  if (profile.exactTerms.some(isStrongLexicalRecallTerm)) return 1;
+  const multiplier = profile.strategy === "exact" ? 16 : profile.strategy === "broad" ? 8 : 10;
+  const cap = profile.strategy === "exact" ? topK + 144 : topK + 96;
+  return Math.max(topK, Math.min(topK * multiplier, cap));
+}
+
+function lexicalBaseScore(profile: QueryProfile): number {
+  if (profile.strategy === "exact") return 0.88;
+  if (profile.strategy === "broad") return 0.68;
+  return 0.78;
+}
+
+function lexicalCandidateScore(searchText: string, profile: QueryProfile): number {
+  if (profile.lexicalRecallTerms.length === 0) return 0;
+  let termHits = 0;
+  for (const term of profile.lexicalRecallTerms) {
+    if (searchText.includes(term)) termHits += 1;
+  }
+  let exactHits = 0;
+  for (const term of profile.exactTerms) {
+    if (searchText.includes(term)) exactHits += 1;
+  }
+  const coverage = termHits / profile.lexicalRecallTerms.length;
+  return (
+    lexicalBaseScore(profile) + Math.min(0.24, coverage * 0.24) + Math.min(0.16, exactHits * 0.04)
+  );
+}
+
+function sourceFilterClause(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  qualifier: string,
+): string {
+  if (sourceFilter === undefined) return "";
+  if (sourceFilter.length === 0) return " AND 0";
+  return ` AND ${qualifier}source_id IN (${sourceFilter
+    .map((_, i) => `:source${String(i)}`)
+    .join(", ")})`;
+}
+
+function sourceParams(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (sourceFilter !== undefined) {
+    for (let i = 0; i < sourceFilter.length; i += 1) {
+      params[`source${String(i)}`] = String(sourceFilter[i]);
+    }
+  }
+  return params;
+}
+
+function lexicalDocumentSql(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
+  return [
+    "SELECT d.id AS document_id, d.source_id, d.safe_display_name, dt.normalized_text",
+    "FROM documents AS d",
+    "JOIN document_texts AS dt ON dt.capsule_id = d.capsule_id AND dt.document_id = d.id",
+    `WHERE d.capsule_id = :capsule_id${sourceFilterClause(sourceFilter, "d.")}`,
+    "ORDER BY d.safe_display_name ASC, d.id ASC",
+  ].join(" ");
+}
+
+function readLexicalDocuments(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+): readonly LexicalDocumentRow[] {
+  const rows = store._internal.db
+    .prepare(lexicalDocumentSql(sourceFilter))
+    .all({ capsule_id: String(capsuleId), ...sourceParams(sourceFilter) });
+  return rows as unknown as readonly LexicalDocumentRow[];
+}
+
+function lexicalChunkSql(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  mode: "contains" | "nearest",
+): string {
+  const positionStart = "COALESCE(c.character_start, pu.character_start, 0)";
+  const positionEnd =
+    "COALESCE(c.character_end, pu.character_end, COALESCE(c.character_start, pu.character_start, 0) + 1)";
+  const predicate =
+    mode === "contains" ? `AND ${positionStart} <= :position AND ${positionEnd} >= :position` : "";
+  const order =
+    mode === "contains"
+      ? "ORDER BY c.order_index ASC, c.id ASC"
+      : `ORDER BY ABS(${positionStart} - :position) ASC, c.order_index ASC, c.id ASC`;
+  return [
+    "SELECT c.id AS chunk_id, c.capsule_id AS capsule_id",
+    "FROM chunks AS c",
+    "JOIN vectors AS v ON v.capsule_id = c.capsule_id AND v.chunk_id = c.id",
+    "LEFT JOIN parsed_units AS pu ON pu.capsule_id = c.capsule_id AND pu.id = c.parsed_unit_id",
+    `WHERE c.capsule_id = :capsule_id AND c.document_id = :document_id${sourceFilterClause(
+      sourceFilter,
+      "c.",
+    )}`,
+    predicate,
+    order,
+    "LIMIT 3",
+  ].join(" ");
+}
+
+function chunkRowsForHit(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  documentId: string,
+  position: number,
+): readonly LexicalChunkRow[] {
+  const params = {
+    capsule_id: String(capsuleId),
+    document_id: documentId,
+    position,
+    ...sourceParams(sourceFilter),
+  };
+  const contained = store._internal.db
+    .prepare(lexicalChunkSql(sourceFilter, "contains"))
+    .all(params) as unknown as readonly LexicalChunkRow[];
+  if (contained.length > 0) return contained;
+  return store._internal.db
+    .prepare(lexicalChunkSql(sourceFilter, "nearest"))
+    .all(params) as unknown as readonly LexicalChunkRow[];
+}
+
+function lexicalSearchExcerpt(text: string, position: number, profile: QueryProfile): string {
+  const start = Math.max(0, position - profile.contextBeforeChars);
+  const end = Math.min(text.length, position + LEXICAL_RECALL_EXCERPT_CHARS);
+  return text.slice(start, end).toLowerCase();
+}
+
+function lexicalHitsForDocument(
+  doc: LexicalDocumentRow,
+  profile: QueryProfile,
+  limit: number,
+): readonly LexicalHit[] {
+  const hits: LexicalHit[] = [];
+  const seenBuckets = new Set<number>();
+  const text = doc.normalized_text.toLowerCase();
+  const metadata = normaliseForSearch(doc.safe_display_name ?? "");
+  for (const term of profile.lexicalRecallTerms) {
+    let position = text.indexOf(term);
+    if (position < 0 && metadata.includes(term)) position = 0;
+    if (position < 0) continue;
+    const bucket = Math.floor(position / Math.max(1, LEXICAL_RECALL_EXCERPT_CHARS));
+    if (seenBuckets.has(bucket)) continue;
+    seenBuckets.add(bucket);
+    hits.push({ position, searchText: lexicalSearchExcerpt(text, position, profile) });
+    if (hits.length >= limit) break;
+  }
+  return hits;
+}
+
+function lexicalRecallCandidatesForCapsule(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  profile: QueryProfile,
+  topK: number,
+): readonly ScoredCandidate[] {
+  if (profile.lexicalRecallTerms.length === 0) return [];
+  const limit = lexicalRecallLimit(topK, profile);
+  const out: ScoredCandidate[] = [];
+  for (const doc of readLexicalDocuments(store, capsule.id, sourceFilter)) {
+    const remaining = Math.max(0, limit - out.length);
+    if (remaining === 0) break;
+    const hits = lexicalHitsForDocument(doc, profile, remaining);
+    for (const hit of hits) {
+      for (const row of chunkRowsForHit(
+        store,
+        capsule.id,
+        sourceFilter,
+        doc.document_id,
+        hit.position,
+      )) {
+        out.push({
+          chunkId: row.chunk_id,
+          capsuleId: capsule.id,
+          score: lexicalCandidateScore(hit.searchText, profile),
+        });
+        if (out.length >= limit) break;
+      }
+      if (out.length >= limit) break;
+    }
+  }
+  return out.filter((candidate) => candidate.score > 0).sort(scoreDesc);
+}
+
+function mergeCandidates(
+  candidates: readonly ScoredCandidate[],
+  lexicalCandidates: readonly ScoredCandidate[],
+): readonly ScoredCandidate[] {
+  if (lexicalCandidates.length === 0) return candidates;
+  const byKey = new Map<string, ScoredCandidate>();
+  for (const candidate of candidates) {
+    byKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, candidate);
+  }
+  for (const candidate of lexicalCandidates) {
+    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const existing = byKey.get(key);
+    if (existing === undefined || candidate.score > existing.score) {
+      byKey.set(key, candidate);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function collectLexicalRecallCandidates(
+  store: KnowledgeStore,
+  capsules: readonly KnowledgeCapsule[],
+  scope: RetrievalScopeInput,
+  profile: QueryProfile,
+  topK: number,
+): readonly ScoredCandidate[] {
+  if (profile.lexicalRecallTerms.length === 0) return [];
+  const out: ScoredCandidate[] = [];
+  for (const capsule of capsules) {
+    out.push(
+      ...lexicalRecallCandidatesForCapsule(
+        store,
+        capsule,
+        sourceFilterForCapsule(scope.sourceFilter, capsule),
+        profile,
+        topK,
+      ),
+    );
+  }
+  return out;
+}
+
 function oversampleTopK(topK: number, profile: QueryProfile): number {
   const multiplier = profile.strategy === "exact" ? 12 : profile.strategy === "broad" ? 10 : 8;
   const cap = profile.strategy === "exact" ? topK + 96 : topK + 64;
@@ -436,6 +685,10 @@ export interface SearchOutcome {
     | "incompatible-embedding-identity"
     | "below-min-score"
     | "embedding-failed";
+  // True when the embedding adapter failed for at least one capsule but lexical
+  // candidates kept the result non-empty. Observability signal only — does not
+  // change which references are returned.
+  readonly embeddingDegraded?: true;
 }
 
 // Tracks the accumulated state of a single search pass. Hoisted out of the entry function
@@ -532,16 +785,17 @@ function selectTopCandidates(
   state: SearchState,
   options: SearchOptions,
   profile: QueryProfile,
+  candidates: readonly ScoredCandidate[] = state.candidates,
 ): CandidateSelection {
   if (!state.anyVectorSeen) return { ok: false, reason: "no-vectors" };
-  if (state.embeddingFailed && state.candidates.length === 0) {
+  if (state.embeddingFailed && candidates.length === 0) {
     return { ok: false, reason: "embedding-failed" };
   }
   if (!state.anyDimensionCompatible) {
     return { ok: false, reason: "incompatible-embedding-identity" };
   }
-  state.candidates.sort(scoreDesc);
-  const top = state.candidates.slice(0, oversampleTopK(options.topK, profile));
+  const sorted = [...candidates].sort(scoreDesc);
+  const top = sorted.slice(0, oversampleTopK(options.topK, profile));
   if (top.length === 0) return { ok: false, reason: "below-min-score" };
   return { ok: true, top };
 }
@@ -572,9 +826,24 @@ export async function searchVectorsForScope(
       state,
     );
   }
-  const selection = selectTopCandidates(state, options, profile);
+  // GRD-002 / GRD-024: `minScore` is a DENSE relevance floor. Lexical recall is a recall booster
+  // whose candidates carry a lexical base score (0.68–0.88) unrelated to vector similarity, so
+  // they would bypass the floor (a ~0-cosine chunk that merely shares a query token could surface
+  // above a 0.9 floor). When a caller sets `minScore`, suppress lexical recall so only
+  // vector candidates that already passed the cosine floor (scoreCapsuleVectors) survive — and so
+  // the `below-min-score` no-evidence reason becomes reachable when none do. The default path
+  // (no `minScore`) keeps hybrid lexical recall unchanged.
+  const lexicalCandidates =
+    state.anyDimensionCompatible && options.minScore === undefined
+      ? collectLexicalRecallCandidates(store, capsules, scope, profile, options.topK)
+      : [];
+  const candidates = mergeCandidates(state.candidates, lexicalCandidates);
+  const selection = selectTopCandidates(state, options, profile, candidates);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
-  return { references: buildReferences(store, selection.top, query, options.topK, profile) };
+  const refs = buildReferences(store, selection.top, query, options.topK, profile);
+  return state.embeddingFailed
+    ? { references: refs, embeddingDegraded: true }
+    : { references: refs };
 }
 
 function sourceFilterForCapsule(
@@ -861,7 +1130,7 @@ function resolveQueryStrategy(
   requested: SearchOptions["strategy"] | undefined,
 ): QueryProfile["strategy"] {
   if (requested !== undefined && requested !== "auto") return requested;
-  if (exactTerms.length > 0) return "exact";
+  if (exactTerms.some(isStrongLexicalRecallTerm)) return "exact";
   if (tokens.length >= 8 || BROAD_QUERY_PATTERN.test(query)) return "broad";
   return "balanced";
 }
@@ -871,6 +1140,7 @@ function exactQueryProfile(tokens: readonly string[], exactTerms: readonly strin
     strategy: "exact",
     tokens,
     exactTerms,
+    lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
     lexicalWeight: 0.22,
     phraseWeight: 0.06,
     metadataWeight: 0.16,
@@ -885,6 +1155,7 @@ function broadQueryProfile(tokens: readonly string[], exactTerms: readonly strin
     strategy: "broad",
     tokens,
     exactTerms,
+    lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
     lexicalWeight: 0.16,
     phraseWeight: 0.04,
     metadataWeight: 0.1,
@@ -902,6 +1173,7 @@ function balancedQueryProfile(
     strategy: "balanced",
     tokens,
     exactTerms,
+    lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
     lexicalWeight: 0.18,
     phraseWeight: 0.045,
     metadataWeight: 0.12,
@@ -930,8 +1202,34 @@ function isExactTerm(value: string): boolean {
   return value.length >= 3 && value === value.toUpperCase() && /\p{L}/u.test(value);
 }
 
+function hasDigitAndLetter(value: string): boolean {
+  return /\d/u.test(value) && /\p{L}/u.test(value);
+}
+
+function isUppercaseLetterTerm(value: string): boolean {
+  return value === value.toUpperCase() && /\p{L}/u.test(value);
+}
+
+function isStrongLexicalRecallTerm(value: string): boolean {
+  const checks = [
+    value.length >= 4 && /[._:/#-]/u.test(value),
+    value.length >= 4 && hasDigitAndLetter(value),
+    value.length >= 8 && /\p{L}/u.test(value),
+    value.length >= 6 && isUppercaseLetterTerm(value),
+  ];
+  return checks.includes(true);
+}
+
 function uniqueTokens(tokens: readonly string[]): readonly string[] {
   return [...new Set(tokens)];
+}
+
+function buildLexicalRecallTerms(
+  tokens: readonly string[],
+  exactTerms: readonly string[],
+): readonly string[] {
+  const tokenTerms = tokens.filter((token) => token.length >= LEXICAL_RECALL_MIN_TOKEN_LENGTH);
+  return uniqueTokens([...exactTerms, ...tokenTerms]).slice(0, LEXICAL_RECALL_MAX_TERMS);
 }
 
 function tokenise(value: string): readonly string[] {

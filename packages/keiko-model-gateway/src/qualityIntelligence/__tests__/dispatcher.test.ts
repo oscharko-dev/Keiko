@@ -93,6 +93,11 @@ function createMockModelPort(behaviour: Behaviour): MockModelPort {
           resolve(normalisedResponse("late"));
         }, behaviour.sleepMs);
         if (signal !== undefined) {
+          if (signal.aborted) {
+            clearTimeout(timer);
+            reject(new Error("aborted by signal"));
+            return;
+          }
           signal.addEventListener(
             "abort",
             () => {
@@ -210,7 +215,9 @@ describe("dispatchQualityIntelligenceRequest", () => {
     const profile = getQualityIntelligenceTaskProfile("qi:judge-logic");
     const port = createMockModelPort({
       kind: "throw",
-      error: new Error(`DOWNSTREAM Bearer ${["sk-", "leaked"].join("")} endpoint=https://prod.test/v1`),
+      error: new Error(
+        `DOWNSTREAM Bearer ${["sk-", "leaked"].join("")} endpoint=https://prod.test/v1`,
+      ),
     });
     let caught: unknown;
     try {

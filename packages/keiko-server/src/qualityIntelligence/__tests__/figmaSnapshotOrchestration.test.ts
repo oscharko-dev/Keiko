@@ -31,7 +31,7 @@ const TEXT_STYLE = { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHei
 // reaction navigating to s2 (→ a nav transition / link). Shallow enough that one depth fetch captures all.
 const BOARD = {
   id: "0:1",
-  name: "Canvas",
+  name: "Release",
   type: "CANVAS",
   children: [
     {
@@ -83,6 +83,15 @@ const BOARD = {
 const URL_OK = "https://www.figma.com/design/KEY123/Board?node-id=0-1";
 const TOKEN = "figd_env-test-token";
 
+const isFigmaApiRequest = (raw: string): boolean => {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && url.hostname === "api.figma.com";
+  } catch {
+    return false;
+  }
+};
+
 // One HTTP port serving BOTH the scoped nodes fetch and the /v1/images render-url call.
 const findById = (n: Record<string, unknown>, id: string): Record<string, unknown> | undefined => {
   if (n.id === id) return n;
@@ -96,17 +105,21 @@ const findById = (n: Record<string, unknown>, id: string): Record<string, unknow
 interface PortRecorder {
   readonly port: FigmaHttpPort;
   readonly tokens: string[];
+  readonly requests: string[];
 }
 
 const httpPort = (board: Record<string, unknown> = BOARD): PortRecorder => {
   const tokens: string[] = [];
+  const requests: string[] = [];
   const port: FigmaHttpPort = (request) => {
     tokens.push(request.headers["X-Figma-Token"] ?? "");
+    requests.push(request.url);
     const url = new URL(request.url);
     if (url.pathname.includes("/v1/images/")) {
       const ids = (url.searchParams.get("ids") ?? "").split(",");
       const images: Record<string, string> = {};
-      for (const id of ids) images[id] = `https://ephemeral/${encodeURIComponent(id)}.png`;
+      for (const id of ids)
+        images[id] = `https://s3-alpha-sig.figma.com/${encodeURIComponent(id)}.png`;
       return Promise.resolve({ status: 200, json: { images }, headers: {} });
     }
     const id = url.searchParams.get("ids") ?? "";
@@ -118,7 +131,7 @@ const httpPort = (board: Record<string, unknown> = BOARD): PortRecorder => {
       headers: {},
     });
   };
-  return { port, tokens };
+  return { port, tokens, requests };
 };
 
 const singleTextBoard = (textFill: {
@@ -127,7 +140,7 @@ const singleTextBoard = (textFill: {
   b: number;
 }): Record<string, unknown> => ({
   id: "0:1",
-  name: "Canvas",
+  name: "Release",
   type: "CANVAS",
   children: [
     {
@@ -276,6 +289,39 @@ describe("governedSnapshotBuild — audit + metrics (#760)", () => {
     expect(result.metrics.augmentation.modelAugmentedShare).toBe(0);
     expect(result.metrics.augmentation.deterministic).toBe(0);
     expect(result.metrics.augmentation.modelAugmented).toBe(0);
+  });
+
+  it("refuses unready scopes before render or persistence", async () => {
+    const draftBoard = { id: "0:1", name: "Drafts", type: "CANVAS", children: [] };
+    const rec = httpPort(draftBoard);
+
+    await expect(
+      governedSnapshotBuild(URL_OK, depsWith({ httpPort: rec.port, acknowledgeReadOnly: true })),
+    ).rejects.toMatchObject({ code: "FIGMA_NOT_READY" });
+
+    expect(rec.requests.some((url) => url.includes("/v1/images/"))).toBe(false);
+    const audit = loadFigmaConnectorAudit(deriveFigmaScopeRef("KEY123", "0:1"), dir);
+    expect(audit?.auditLog.at(-1)).toMatchObject({
+      action: "snapshot",
+      outcome: "error",
+      errorCode: "FIGMA_NOT_READY",
+    });
+  });
+
+  it("threads a pinned Figma version through scoped fetch, render fetch, and provenance", async () => {
+    const rec = httpPort();
+    const result = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({ httpPort: rec.port, acknowledgeReadOnly: true, version: "ver-999" }),
+    );
+
+    expect(result.provenance.version).toBe("ver-999");
+    expect(
+      rec.requests.filter(isFigmaApiRequest).every((url) => {
+        const parsed = new URL(url);
+        return parsed.searchParams.get("version") === "ver-999";
+      }),
+    ).toBe(true);
   });
 
   it("emits a one-time connect audit entry on the first read-only acknowledgement", async () => {

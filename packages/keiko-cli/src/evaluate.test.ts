@@ -309,7 +309,14 @@ describe("--live fail-closed", () => {
     try {
       const configPath = writeGatewayConfig(dir);
       const code = await runEvaluateCli(
-        ["--fixture", "bug-investigation/investigation-only", "--live", "--json", "--config", configPath],
+        [
+          "--fixture",
+          "bug-investigation/investigation-only",
+          "--live",
+          "--json",
+          "--config",
+          configPath,
+        ],
         io,
         { KEIKO_DEFAULT_API_KEY: secret },
         {
@@ -367,7 +374,14 @@ describe("--live fail-closed", () => {
         ],
       });
       const code = await runEvaluateCli(
-        ["--fixture", "bug-investigation/investigation-only", "--live", "--json", "--config", configPath],
+        [
+          "--fixture",
+          "bug-investigation/investigation-only",
+          "--live",
+          "--json",
+          "--config",
+          configPath,
+        ],
         io,
         {},
         {
@@ -452,15 +466,7 @@ describe("--live fail-closed", () => {
         ],
       });
       const code = await runEvaluateCli(
-        [
-          "--suite",
-          "all",
-          "--live",
-          "--model",
-          "configured-live-model",
-          "--config",
-          configPath,
-        ],
+        ["--suite", "all", "--live", "--model", "configured-live-model", "--config", configPath],
         io,
       );
       expect(code).toBe(1);
@@ -508,6 +514,28 @@ describe("--output flag", () => {
     const parsed = JSON.parse(readFileSync(outputPath, "utf8")) as Record<string, unknown>;
     expect(typeof parsed.evaluatedAt).toBe("string");
     expect(parsed.mode).toBe("offline");
+  });
+
+  it("--output to an existing path + --json still prints JSON to stdout", async () => {
+    // RED reason: old emit() called writeScorecard before io.out, so EEXIST was caught
+    // by runSuite's catch before JSON was ever written to stdout.
+    const outputPath = join(dir, "existing-for-json.json");
+    writeFileSync(outputPath, "keep me", "utf8");
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(
+      ["--suite", "all", "--output", outputPath, "--json"],
+      io,
+      {},
+      offlineDeps(),
+    );
+    // File write fails (EEXIST) → exit 1
+    expect(code).toBe(1);
+    expect(captured().err).toContain("output file already exists");
+    // JSON must still have been emitted to stdout before the write was attempted
+    const parsed = JSON.parse(captured().out) as Record<string, unknown>;
+    expect(parsed.schemaVersion).toBe("1");
+    // Existing file must be untouched
+    expect(readFileSync(outputPath, "utf8")).toBe("keep me");
   });
 
   it("refuses to overwrite an existing output file", async () => {

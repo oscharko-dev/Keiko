@@ -22,6 +22,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { SSE_HEADERS } from "../sse.js";
+import { writeOrDestroy } from "../sse-write.js";
 import {
   STREAMING,
   type HandlerOutcome,
@@ -358,15 +359,16 @@ export async function handleStartQiRun(
 
   const runId = `qi-run-${randomUUID()}`;
   const registeredAt = new Date().toISOString();
-  ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
-  const write: WriteFn = (message) => {
-    ctx.res.write(`data: ${JSON.stringify(message)}\n\n`);
-  };
-
+  // Register and wire the disconnect listener BEFORE writeHead to close the narrow race where a
+  // client disconnects after parsing succeeds but before the response is committed.
   const controller = qiRunRegistry.register(runId, registeredAt);
   ctx.res.on("close", () => {
     controller.abort();
   });
+  ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
+  const write: WriteFn = (message) => {
+    writeOrDestroy(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
+  };
 
   await streamRunExecution(deps, parsed.request, runId, registeredAt, controller.signal, write);
   ctx.res.end();

@@ -49,6 +49,8 @@ import type {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const INITIAL_GALLERY_LIMIT = 24;
+
 /**
  * Client-side Figma URL validator. Accepts:
  *   https://www.figma.com/design/{key}/{name}?node-id={id}
@@ -61,7 +63,8 @@ function isValidFigmaLink(raw: string): boolean {
   try {
     const url = new URL(raw.trim());
     const host = url.hostname.toLowerCase();
-    if (host !== "figma.com" && !host.endsWith(".figma.com")) return false;
+    if (url.protocol !== "https:") return false;
+    if (host !== "figma.com" && host !== "www.figma.com") return false;
     if (!/^\/(design|file)\//u.test(url.pathname)) return false;
     const nodeId = url.searchParams.get("node-id");
     return nodeId !== null && nodeId.length > 0;
@@ -164,8 +167,13 @@ function figmaLinkValidationMessage(raw: string): string | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0 || isValidFigmaLink(trimmed)) return null;
   try {
-    const host = new URL(trimmed).hostname.toLowerCase();
-    if (host === "figma.com" || host.endsWith(".figma.com")) {
+    const url = new URL(trimmed);
+    const host = url.hostname.toLowerCase();
+    if (
+      url.protocol === "https:" &&
+      (host === "figma.com" || host === "www.figma.com") &&
+      /^\/(design|file)\//u.test(url.pathname)
+    ) {
       return "Add a node-id by selecting a frame or section in Figma and copying its link (Copy link to selection).";
     }
   } catch {
@@ -295,6 +303,7 @@ export function FigmaSnapshotWindow({
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const revokeConfirmRef = useRef<HTMLButtonElement | null>(null);
   const revokeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [visibleScreenCount, setVisibleScreenCount] = useState(INITIAL_GALLERY_LIMIT);
 
   const linkValid = isValidFigmaLink(boardLink);
   const linkError = figmaLinkValidationMessage(boardLink);
@@ -477,6 +486,10 @@ export function FigmaSnapshotWindow({
       });
   }, [busy, loadImpl, snapshotRunId, updateCfg]);
 
+  useEffect(() => {
+    setVisibleScreenCount(INITIAL_GALLERY_LIMIT);
+  }, [summary?.runId]);
+
   const handleRevokeConfirmed = useCallback((): void => {
     setRevokeConfirming(false);
     setRevokeError(null);
@@ -546,7 +559,7 @@ export function FigmaSnapshotWindow({
           </button>
         </div>
         {linkError !== null && (
-          <p id={validationId} className="figma-snapshot-link-error">
+          <p id={validationId} className="figma-snapshot-link-error" role="alert">
             {linkError}
           </p>
         )}
@@ -835,22 +848,37 @@ export function FigmaSnapshotWindow({
 
           {/* Screen gallery */}
           {summary.screens.length > 0 ? (
-            <section
-              className="figma-snapshot-gallery"
-              aria-label={`${String(summary.screenCount)} captured screen${summary.screenCount !== 1 ? "s" : ""}`}
-            >
-              {summary.screens.map((screen, i) => (
-                <ScreenCard
-                  key={screen.screenId}
-                  index={i}
-                  screenId={screen.screenId}
-                  name={screen.name}
-                  irSummary={screen.irSummary}
-                  imageSrc={figmaSnapshotScreenImageUrl(summary.runId, i)}
-                  imageByteLength={screen.imageByteLength}
-                />
-              ))}
-            </section>
+            <>
+              <section
+                className="figma-snapshot-gallery"
+                aria-label={`${String(summary.screenCount)} captured screen${summary.screenCount !== 1 ? "s" : ""}`}
+              >
+                {summary.screens.slice(0, visibleScreenCount).map((screen, i) => (
+                  <ScreenCard
+                    key={screen.screenId}
+                    index={i}
+                    screenId={screen.screenId}
+                    name={screen.name}
+                    irSummary={screen.irSummary}
+                    imageSrc={figmaSnapshotScreenImageUrl(summary.runId, i)}
+                    imageByteLength={screen.imageByteLength}
+                  />
+                ))}
+              </section>
+              {visibleScreenCount < summary.screens.length ? (
+                <button
+                  type="button"
+                  className="figma-snapshot-gallery-more"
+                  onClick={() =>
+                    setVisibleScreenCount((count) =>
+                      Math.min(count + INITIAL_GALLERY_LIMIT, summary.screens.length),
+                    )
+                  }
+                >
+                  Show more screens
+                </button>
+              ) : null}
+            </>
           ) : (
             <div className="lk-empty">
               <p className="lk-empty-body">No screens were captured from this board section.</p>

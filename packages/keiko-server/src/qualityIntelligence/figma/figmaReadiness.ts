@@ -5,13 +5,12 @@
 //
 //   1. version  — a pinned version id was supplied (operator pinned a named version).
 //   2. section  — a node anywhere in the subtree is named with a configurable release
-//                 marker (default case-insensitive substring `release`).
+//                 marker (default case-insensitive token `release`).
 //   3. devStatus — one or more nodes carry Dev-Mode `devStatus.type === "READY_FOR_DEV"`.
 //
 // `devStatus` is OPTIONAL in the Figma REST response and may be absent for an entire
 // account/plan. When it is absent (or no node is READY_FOR_DEV) and the higher signals
-// did not fire, the result degrades to `{ source: "none", ready: false }`. The connector
-// still returns the scoped subtree — readiness is advisory provenance, not a gate here.
+// did not fire, the result degrades to `{ source: "none", ready: false }`.
 
 export interface FigmaDevStatus {
   readonly type: string;
@@ -38,6 +37,9 @@ export type ReadinessSignal =
 
 const DEFAULT_RELEASE_MARKER = "release";
 const READY_FOR_DEV = "READY_FOR_DEV";
+const TOKEN_SPLIT = /[^a-z0-9]+/u;
+const NEGATED_RELEASE_NAME =
+  /\b(?:unreleased|not\s+(?:for\s+)?release|no\s+release|non[-\s]+release)\b/iu;
 
 const walk = (node: FigmaNode, visit: (n: FigmaNode) => boolean): boolean => {
   if (visit(node)) return true;
@@ -48,10 +50,15 @@ const walk = (node: FigmaNode, visit: (n: FigmaNode) => boolean): boolean => {
 };
 
 const findReleaseNamedNode = (root: FigmaNode, marker: string): FigmaNode | undefined => {
-  const needle = marker.toLowerCase();
+  const needle = marker.trim().toLowerCase();
+  if (needle.length === 0) return undefined;
   let match: FigmaNode | undefined;
   walk(root, (node) => {
-    if (node.name.toLowerCase().includes(needle)) {
+    const lowerName = node.name.toLowerCase();
+    const tokens = lowerName.split(TOKEN_SPLIT).filter((token) => token.length > 0);
+    const markerMatched =
+      tokens.includes(needle) || (needle === DEFAULT_RELEASE_MARKER && tokens.includes("released"));
+    if (markerMatched && !NEGATED_RELEASE_NAME.test(lowerName)) {
       match = node;
       return true;
     }

@@ -12,8 +12,10 @@ import {
   fetchModels,
   fetchProjects,
   saveFilesContent,
+  sendDesktopChatStream,
   startGroundedWorkflowHandoff,
   fetchWorkspaceSummary,
+  type StreamHandlers,
 } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -384,6 +386,93 @@ describe("askGrounded", () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// consumeSseStream — residual lineBuffer flush (Issue #3 / WP-API)
+// ---------------------------------------------------------------------------
+
+function makeSseStream(chunks: readonly string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let idx = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller): void {
+      if (idx < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[idx++]));
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
+function makeStreamHandlers(overrides: Partial<StreamHandlers> = {}): StreamHandlers {
+  return {
+    onToken: vi.fn(),
+    onDone: vi.fn(),
+    onError: vi.fn(),
+    onCancelled: vi.fn(),
+    ...overrides,
+  };
+}
+
+function makeSseResponse(stream: ReadableStream<Uint8Array>): Response {
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // ITEM #3: a 'done' frame whose final data line arrives WITHOUT a trailing \n
+  // must still dispatch onDone. Against the pre-fix code this test is RED
+  // because the residual lineBuffer is never flushed when read.done fires.
+  it("dispatches onDone when the final done frame has no trailing newline", async () => {
+    const donePayload = { chat: { id: "c1" }, messages: [] };
+    // Normal SSE: two chunks. First carries the event line + data line.
+    // Second chunk is the data payload with NO trailing \n\n — simulating a
+    // proxy that drops the terminal blank line.
+    const stream = makeSseStream([
+      "event: done\n",
+      `data: ${JSON.stringify(donePayload)}`, // intentionally no trailing \n
+    ]);
+
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+
+    await sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+    expect(handlers.onDone).toHaveBeenCalledWith(expect.objectContaining({ chat: { id: "c1" } }));
+    expect(handlers.onToken).not.toHaveBeenCalled();
+    expect(handlers.onError).not.toHaveBeenCalled();
+  });
+
+  // Regression: normal \n\n-terminated streams must still work correctly.
+  it("dispatches onDone for a normally newline-terminated done frame", async () => {
+    const donePayload = { chat: { id: "c2" }, messages: [] };
+    const stream = makeSseStream([`event: done\ndata: ${JSON.stringify(donePayload)}\n\n`]);
+
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+
+    await sendDesktopChatStream(
+      { chatId: "c2", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+    expect(handlers.onError).not.toHaveBeenCalled();
   });
 });
 

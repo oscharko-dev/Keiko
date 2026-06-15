@@ -6,14 +6,27 @@
 //   3. buildTestDesignInstruction — evidence count, profile label/defaults, maxTestCases cap
 
 import { describe, expect, it } from "vitest";
+import { bankingDefault, insuranceDefault, regressionDefault } from "../../domain/policyProfile.js";
 import {
-  QualityIntelligenceGeneration,
-  bankingDefault,
-  insuranceDefault,
-  regressionDefault,
-} from "@oscharko-dev/keiko-quality-intelligence";
+  GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
+  GENERATED_CANDIDATE_STEP_MAX_ITEMS,
+  GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
+  GENERATED_CANDIDATE_TITLE_MAX_CHARS,
+} from "../../generation/candidateBounds.js";
+import {
+  buildTestDesignInstruction,
+  type BuildTestDesignInstructionInput,
+  QI_TEST_DESIGN_RESPONSE_SCHEMA,
+  QI_TEST_DESIGN_SYSTEM_PROMPT,
+} from "../../generation/prompt.js";
 
-type BuildInput = QualityIntelligenceGeneration.BuildTestDesignInstructionInput;
+type BuildInput = BuildTestDesignInstructionInput;
+
+const QualityIntelligenceGeneration = {
+  buildTestDesignInstruction,
+  QI_TEST_DESIGN_RESPONSE_SCHEMA,
+  QI_TEST_DESIGN_SYSTEM_PROMPT,
+} as const;
 
 // ─── QI_TEST_DESIGN_SYSTEM_PROMPT ─────────────────────────────────────────────
 
@@ -145,6 +158,23 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
     expect(enumVals).toContain("visual");
     expect(enumVals).toHaveLength(5);
   });
+
+  it("bounds response size and candidate field sizes in the schema", () => {
+    const props = QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA.properties as Record<
+      string,
+      unknown
+    >;
+    const testCases = props.testCases as Record<string, unknown>;
+    const items = testCases.items as Record<string, unknown>;
+    const itemProps = items.properties as Record<string, unknown>;
+    const title = itemProps.title as Record<string, unknown>;
+    const steps = itemProps.steps as Record<string, unknown>;
+    const stepItems = steps.items as Record<string, unknown>;
+    expect(testCases.maxItems).toBe(GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS);
+    expect(title.maxLength).toBe(GENERATED_CANDIDATE_TITLE_MAX_CHARS);
+    expect(steps.maxItems).toBe(GENERATED_CANDIDATE_STEP_MAX_ITEMS);
+    expect(stepItems.maxLength).toBe(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS);
+  });
 });
 
 // ─── buildTestDesignInstruction ───────────────────────────────────────────────
@@ -186,18 +216,28 @@ describe("buildTestDesignInstruction", () => {
     expect(result).toContain(bankingDefault.defaultRiskClass);
   });
 
-  it("caps maxTestCases at 200 (upper boundary: 201 → 200)", () => {
+  it("passes through maxTestCases above 200 unchanged when below GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS (e.g. 300 → 300)", () => {
+    // The old hard-cap was 200; the cap is now GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS (1024).
     const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
       evidenceCount: 5,
       profile: regressionDefault,
-      maxTestCases: 201,
+      maxTestCases: 300,
     });
-    expect(result).toContain("200");
-    // Must NOT contain 201
-    expect(result).not.toContain("201");
+    expect(result).toContain("300");
+    expect(result).not.toContain("200");
   });
 
-  it("clamps maxTestCases exactly at 200 (boundary: 200 → 200, not clamped further)", () => {
+  it("caps maxTestCases at GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS (1025 → 1024)", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 5,
+      profile: regressionDefault,
+      maxTestCases: GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS + 1,
+    });
+    expect(result).toContain(String(GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS));
+    expect(result).not.toContain(String(GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS + 1));
+  });
+
+  it("passes maxTestCases=200 through unchanged (200 < 1024, no clamping)", () => {
     const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
       evidenceCount: 5,
       profile: regressionDefault,
@@ -235,6 +275,17 @@ describe("buildTestDesignInstruction", () => {
       maxTestCases: 50,
     });
     expect(result).toContain("50");
+  });
+
+  it("includes bounded-output guidance for generated candidate fields", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 10,
+      profile: regressionDefault,
+      maxTestCases: 50,
+    });
+    expect(result).toContain(String(GENERATED_CANDIDATE_TITLE_MAX_CHARS));
+    expect(result).toContain(String(GENERATED_CANDIDATE_STEP_MAX_ITEMS));
+    expect(result).toContain(String(GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS));
   });
 
   it("uses regressionDefault profile when no profile is provided", () => {

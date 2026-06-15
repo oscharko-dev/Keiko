@@ -2,13 +2,22 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, GroundedAnswer, ModelCapability } from "@/lib/types";
+import { updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    updateChat: vi.fn(),
+  };
+});
 
 vi.mock("@/lib/local-knowledge-api", () => ({
   fetchCapsules: vi.fn(async () => ({ capsules: [] })),
@@ -92,6 +101,15 @@ function renderWindow(session: ChatSessionApi): void {
 
 const fetchCapsulesMock = vi.mocked(fetchCapsules);
 const fetchCapsuleSetsMock = vi.mocked(fetchCapsuleSets);
+const updateChatMock = vi.mocked(updateChat);
+
+beforeEach(() => {
+  fetchCapsulesMock.mockReset();
+  fetchCapsulesMock.mockResolvedValue({ capsules: [] });
+  fetchCapsuleSetsMock.mockReset();
+  fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+  updateChatMock.mockReset();
+});
 
 function makeCapsuleId(value: string): KnowledgeCapsuleId {
   return value as KnowledgeCapsuleId;
@@ -371,6 +389,313 @@ describe("ChatWindow memory disclosure", () => {
 });
 
 describe("ChatWindow local knowledge scope disclosure", () => {
+  it("switches from Files grounding to a ready knowledge capsule and clears file scopes", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-release"),
+          displayName: "Release notes",
+          lifecycleState: "ready",
+          sourceCount: 6,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-indexing"),
+          displayName: "Still indexing",
+          lifecycleState: "indexing",
+          sourceCount: 2,
+          updatedAt: 2,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    const updated = makeChat({
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: makeCapsuleId("cap-release"), connectedAtMs: 123 },
+      ],
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 1 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: "Live Files context" })).not.toBeDisabled();
+    expect(screen.queryByRole("option", { name: /Still indexing/i })).toBeNull();
+
+    await user.selectOptions(select, "capsule:cap-release");
+
+    await waitFor(() => {
+      // GRD-009: connecting a connector must NOT clear connected folders (no connectedScopes
+      // key in the PATCH) and appends to the connector list — hybrid grounding is supported.
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        localKnowledgeScopes: [
+          expect.objectContaining({ kind: "capsule", capsuleId: "cap-release" }),
+        ],
+      });
+    });
+    expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("appends a second connector and preserves connected folders + existing connector (GRD-009 hybrid)", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-a"),
+          displayName: "Alpha",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-b"),
+          displayName: "Bravo",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockResolvedValueOnce({ chat: makeChat({}) });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 1 },
+          ],
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-a"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+
+    await waitFor(() => {
+      const arg = updateChatMock.mock.calls[0]?.[1] as {
+        readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
+      };
+      // Connected folders preserved (not cleared) — hybrid grounding holds.
+      expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
+      // Appended, not replaced: both the pre-existing cap-a and the newly picked cap-b survive.
+      expect(arg.localKnowledgeScopes).toEqual([
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-a" }),
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-b" }),
+      ]);
+    });
+  });
+
+  it("re-selecting an already-connected capsule does not duplicate it (GRD-009 dedupe)", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-a"),
+          displayName: "Alpha",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-b"),
+          displayName: "Bravo",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockResolvedValueOnce({ chat: makeChat({}) });
+    // Both already connected; the picker shows cap-a, so selecting cap-b is a real change event
+    // that hits the dedupe branch (cap-b already present -> no duplicate, list unchanged).
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-a"), connectedAtMs: 1 },
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-b"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await waitFor(() => {
+      const arg = updateChatMock.mock.calls[0]?.[1] as {
+        readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
+      };
+      expect(arg.localKnowledgeScopes).toEqual([
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-a" }),
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-b" }),
+      ]);
+    });
+  });
+
+  it("appends to a legacy single localKnowledgeScope chat (GRD-009 legacy normalisation)", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-a"),
+          displayName: "Alpha",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-b"),
+          displayName: "Bravo",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockResolvedValueOnce({ chat: makeChat({}) });
+    // Legacy singular field only (no plural list) — currentConnectorScopes must normalise it.
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: makeCapsuleId("cap-a"),
+            connectedAtMs: 1,
+          },
+        }),
+        replaceChat,
+      }),
+    );
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await waitFor(() => {
+      const arg = updateChatMock.mock.calls[0]?.[1] as {
+        readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
+      };
+      expect(arg.localKnowledgeScopes).toEqual([
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-a" }),
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-b" }),
+      ]);
+    });
+  });
+
+  it("switches to a capsule set and disables Files mode when no folder scope exists", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({
+      capsuleSets: [
+        {
+          id: makeCapsuleSetId("set-release"),
+          displayName: "Release pack",
+          capsuleCount: 4,
+          composedAt: 2,
+        },
+      ],
+    });
+    const updated = makeChat({
+      localKnowledgeScopes: [
+        { kind: "capsule-set", capsuleSetId: makeCapsuleSetId("set-release"), connectedAtMs: 456 },
+      ],
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
+
+    const filesOption = (await screen.findByRole("option", {
+      name: "Live Files context",
+    })) as HTMLOptionElement;
+    expect(filesOption.disabled).toBe(true);
+
+    await user.selectOptions(screen.getByLabelText("Grounding mode"), "capsule-set:set-release");
+
+    await waitFor(() => {
+      // GRD-009: non-destructive — no connectedScopes clear; appends the capsule set.
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        localKnowledgeScopes: [
+          expect.objectContaining({ kind: "capsule-set", capsuleSetId: "set-release" }),
+        ],
+      });
+    });
+    expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("clears mixed folder and knowledge grounding when Model only is selected", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    // #2 — selecting "none" with active scopes triggers window.confirm; auto-confirm here.
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const updated = makeChat();
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+          ],
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-release"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: null,
+        localKnowledgeScopes: null,
+      });
+    });
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+    confirmSpy.mockRestore();
+  });
+
+  it("surfaces scope update failures without changing the active chat cache", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-release"),
+          displayName: "Release notes",
+          lifecycleState: "ready",
+          sourceCount: 6,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockRejectedValueOnce(new Error("knowledge store unavailable"));
+    renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-release");
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("knowledge store unavailable");
+    });
+    expect(replaceChat).not.toHaveBeenCalled();
+  });
+
   it("keeps the active capsule visible when it is no longer in the ready capsule list", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
     fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
@@ -889,5 +1214,247 @@ describe("ChatWindow message copy", () => {
     if (clipboardDescriptor !== undefined) {
       Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
     }
+  });
+});
+
+// ─── #2 / #19 — confirmation guard for "Model only" destructive clear ────────
+
+describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
+  it("prompts for confirmation when active scopes exist and cancelling leaves chat unchanged", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+          ],
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-1"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    await user.selectOptions(select, "none");
+
+    // Confirmation was shown.
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    // updateChat must NOT have been called (user cancelled).
+    expect(updateChatMock).not.toHaveBeenCalled();
+    // replaceChat must NOT have been called.
+    expect(replaceChat).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+  });
+
+  it("proceeds with the clear when the user confirms", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const updated = makeChat();
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: null,
+        localKnowledgeScopes: null,
+      });
+    });
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+
+    confirmSpy.mockRestore();
+  });
+
+  it("skips confirmation and clears immediately when no sources are active", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm");
+    const updated = makeChat();
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+
+    renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
+
+    // No capsules loaded so the default "none" is the current value;
+    // navigate away to "files" first (disabled but selectable via fireEvent),
+    // then back to "none" — or just use fireEvent.change directly to force
+    // the value="none" onChange without the browser disabling it.
+    // Actually the select already shows "none" (no scopes), so changing to
+    // the same value won't fire onChange. We need an intermediate value.
+    // Use fireEvent.change to simulate picking "none" when already at "none"
+    // by jumping through "files" (even though it's disabled in UA, the
+    // event still fires in jsdom).
+    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    // Jump to "files" (zero folder scopes so button is disabled in UA, but
+    // fireEvent bypasses that), then back to "none".
+    fireEvent.change(select, { target: { value: "none" } });
+
+    // confirm must NOT have been called because there are no active sources.
+    expect(confirmSpy).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+  });
+
+  it("keeps connectedScopes when switching to 'files' arm (GRD-009 #19)", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-x"),
+          displayName: "Cap X",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    const updated = makeChat({
+      connectedScopes: [{ kind: "files", relativePaths: ["src"], connectedAtMs: 1 }],
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [{ kind: "files", relativePaths: ["src"], connectedAtMs: 1 }],
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-x"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    // The chat has 2 sources → "multi" is shown. Selecting "files" clears
+    // localKnowledgeScopes but keeps connectedScopes (the "files" arm only
+    // sends { localKnowledgeScopes: null }).
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "files");
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", { localKnowledgeScopes: null });
+    });
+    expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+});
+
+// ─── #28 — multi-scope display sentinel ──────────────────────────────────────
+
+describe("ChatWindow multi-scope grounding display (#28)", () => {
+  it("shows 'Multiple sources' when two capsule scopes are active", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-a"),
+          displayName: "Alpha",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-b"),
+          displayName: "Bravo",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-a"), connectedAtMs: 1 },
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-b"), connectedAtMs: 2 },
+          ],
+        }),
+      }),
+    );
+
+    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    // The select value must be "multi", not just the first capsule id.
+    await waitFor(() => {
+      expect(select.value).toBe("multi");
+    });
+    // A disabled read-only "Multiple sources" option is present.
+    expect(screen.getByRole("option", { name: "Multiple sources" })).toBeInTheDocument();
+  });
+});
+
+// ─── #28 — MemoryActionCard rejected kind ────────────────────────────────────
+
+describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
+  it("renders 'Memory proposal declined' title and the reason for a rejected action", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [
+            {
+              kind: "rejected",
+              reason: "Below salience threshold.",
+            },
+          ],
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
+    expect(screen.getByText("Below salience threshold.")).toBeInTheDocument();
+  });
+
+  it("renders the fallback reason when the rejected reason is empty", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [
+            {
+              kind: "rejected",
+              reason: "",
+            },
+          ],
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
+    expect(screen.getByText("No reason provided")).toBeInTheDocument();
   });
 });

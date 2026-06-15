@@ -89,6 +89,45 @@ describe("runLifecycleCli", () => {
     expect(c.err()).toBe("");
   });
 
+  it("prints lifecycle help without touching runtime state", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycleCli("start", ["--help"], c.io, {}, { cwd: root, spawnFn });
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko start");
+    expect(c.out()).toContain("keiko status");
+    expect(c.err()).toBe("");
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("reports a live pid through status without probing health", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const fetchImpl = vi.fn();
+
+    const code = await runLifecycleCli(
+      "status",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        fetchImpl,
+        isProcessAlive: () => true,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Keiko UI is running on http://127.0.0.1:1983");
+    expect(c.out()).toContain("pid 12345");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("starts the packaged UI through the compiled CLI entry and records runtime state", async () => {
     const root = makeRoot();
     const c = makeIo();
@@ -106,7 +145,7 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -145,7 +184,8 @@ describe("runLifecycleCli", () => {
             spawned.push({ command, args, opts });
             return child;
           },
-          fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+          fetchImpl: () =>
+            Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
           isProcessAlive: () => true,
           isPortAvailable: () => Promise.resolve(true),
           killProcess: vi.fn(),
@@ -170,27 +210,31 @@ describe("runLifecycleCli", () => {
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
 
-    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", "/opt/old-keiko/dist/cli/index.js", async () =>
-      withEnvVar("KEIKO_UI_STATIC_ROOT", "/opt/old-keiko/dist/ui/static", async () =>
-        runLifecycleCli(
-          "start",
-          [],
-          c.io,
-          {},
-          {
-            cwd: root,
-            spawnFn: (command, args, opts) => {
-              spawned.push({ command, args, opts });
-              return child;
+    const code = await withEnvVar(
+      "KEIKO_CLI_BIN_PATH",
+      "/opt/old-keiko/dist/cli/index.js",
+      async () =>
+        withEnvVar("KEIKO_UI_STATIC_ROOT", "/opt/old-keiko/dist/ui/static", async () =>
+          runLifecycleCli(
+            "start",
+            [],
+            c.io,
+            {},
+            {
+              cwd: root,
+              spawnFn: (command, args, opts) => {
+                spawned.push({ command, args, opts });
+                return child;
+              },
+              fetchImpl: () =>
+                Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+              isProcessAlive: () => true,
+              isPortAvailable: () => Promise.resolve(true),
+              killProcess: vi.fn(),
+              sleep: () => Promise.resolve(),
             },
-            fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
-            isProcessAlive: () => true,
-            isPortAvailable: () => Promise.resolve(true),
-            killProcess: vi.fn(),
-            sleep: () => Promise.resolve(),
-          },
+          ),
         ),
-      ),
     );
 
     expect(code).toBe(0);
@@ -216,7 +260,7 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -281,8 +325,22 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () =>
-          Promise.resolve(Response.json({ status: "ok", version: "0.1.2" }, { status: 200 })),
+        fetchImpl: (() => {
+          let probe = 0;
+          return (): Promise<Response> => {
+            probe += 1;
+            // 1st probe = the stale existing process (triggers the restart); after the restart
+            // the freshly-spawned child reports the current SDK version so waitForHealth succeeds.
+            return Promise.resolve(
+              Response.json(
+                probe === 1
+                  ? { status: "ok", version: "0.1.2" }
+                  : { status: "ok", version: SDK_VERSION },
+                { status: 200 },
+              ),
+            );
+          };
+        })(),
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
@@ -295,6 +353,93 @@ describe("runLifecycleCli", () => {
     expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
     expect(spawned).toHaveLength(1);
     expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("67890\n");
+  });
+
+  it("restarts an existing process when health is reachable but does not expose a version", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const child = { pid: 67890, unref: vi.fn() } as unknown as ChildProcess;
+    let oldProcessAlive = true;
+    const killProcess = vi.fn((pid: number) => {
+      if (pid === 12345) oldProcessAlive = false;
+    });
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--start-timeout", "1", "--stop-timeout", "1"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: (() => {
+          let probe = 0;
+          return (): Promise<Response> => {
+            probe += 1;
+            // 1st probe = existing process with no version field (triggers restart); the fresh
+            // child after the restart reports the current SDK version so startup completes.
+            return Promise.resolve(
+              Response.json(
+                probe === 1 ? { status: "ok" } : { status: "ok", version: SDK_VERSION },
+                { status: 200 },
+              ),
+            );
+          };
+        })(),
+        isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("health check did not return the current Keiko version");
+    expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
+    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("67890\n");
+  });
+
+  it("restarts an existing process when its health endpoint is unreachable", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const child = { pid: 67890, unref: vi.fn() } as unknown as ChildProcess;
+    let oldProcessAlive = true;
+    let fetchCalls = 0;
+    const killProcess = vi.fn((pid: number) => {
+      if (pid === 12345) oldProcessAlive = false;
+    });
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--start-timeout", "1", "--stop-timeout", "1"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: () => {
+          fetchCalls += 1;
+          return fetchCalls === 1
+            ? Promise.reject(new Error("connection refused"))
+            : Promise.resolve(
+                Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 }),
+              );
+        },
+        isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("health check is unreachable");
+    expect(fetchCalls).toBeGreaterThanOrEqual(2);
+    expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
   });
 
   it("returns a usage error for invalid ports", async () => {
@@ -365,5 +510,175 @@ describe("runLifecycleCli", () => {
     expect(c.err()).toContain("UI did not become healthy");
     expect(killProcess).toHaveBeenCalledWith(24680, "SIGTERM");
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+  });
+
+  it("rejects a health response whose version does not match the installed SDK version", async () => {
+    // RED reason: the old waitForHealth only checked response.ok and isProcessAlive; a
+    // 200 with a mismatched version field caused it to return true (healthy) even though
+    // the running process is a different version.  fetchImpl was also mutation-blind in
+    // the sibling test (isProcessAlive:false short-circuits before the fetch).  After the
+    // fix, waitForHealth delegates to probeHealth and checks health.version === SDK_VERSION,
+    // so a wrong-version 200 keeps looping until the deadline and returns false.
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 24681, unref: vi.fn() } as unknown as ChildProcess;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(Response.json({ status: "ok", version: "0.0.0-wrong" }, { status: 200 })),
+    );
+    const killProcess = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now");
+    // Call 1 sets deadline (0 + startTimeoutMs); call 2 is the first while-check (0 ≤ deadline →
+    // enter the loop, run exactly one fetch); call 3+ exceeds the deadline so the loop exits after
+    // that single wrong-version probe and waitForHealth returns false.
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(1_000_000);
+
+    try {
+      const code = await runLifecycleCli(
+        "start",
+        ["--port", "4322", "--start-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn: () => child,
+          fetchImpl,
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+          killProcess,
+          sleep: () => Promise.resolve(),
+        },
+      );
+
+      // fetchImpl must have been called (the seam is exercised)
+      expect(fetchImpl).toHaveBeenCalled();
+      // A 200 with a mismatched version is not a healthy start
+      expect(code).toBe(1);
+      expect(c.err()).toContain("UI did not become healthy");
+      expect(killProcess).toHaveBeenCalledWith(24681, "SIGTERM");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("fails cleanly when the UI child process has no pid", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: undefined, unref: vi.fn() } as unknown as ChildProcess;
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("failed to spawn");
+    expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+  });
+
+  it("keeps a healthy start successful when opening the browser fails", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--open"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        openExternal: () => {
+          throw new Error("no desktop opener");
+        },
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Keiko UI running");
+    expect(c.err()).toContain("failed to open http://127.0.0.1:1983");
+  });
+
+  it("escalates stop to SIGKILL when the process misses the graceful deadline", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+
+    try {
+      const code = await runLifecycleCli(
+        "stop",
+        ["--stop-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          isProcessAlive: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+          killProcess,
+          sleep: () => Promise.resolve(),
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(killProcess).toHaveBeenNthCalledWith(1, 12345, "SIGTERM");
+      expect(killProcess).toHaveBeenNthCalledWith(2, 12345, "SIGKILL");
+      expect(c.err()).toContain("sending SIGKILL");
+      expect(c.out()).toContain("stopped (forced)");
+      expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("returns failure when the process is still alive after SIGKILL", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+
+    try {
+      const code = await runLifecycleCli(
+        "stop",
+        ["--stop-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          isProcessAlive: () => true,
+          killProcess,
+          sleep: () => Promise.resolve(),
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(killProcess).toHaveBeenNthCalledWith(1, 12345, "SIGTERM");
+      expect(killProcess).toHaveBeenNthCalledWith(2, 12345, "SIGKILL");
+      expect(c.err()).toContain("failed to stop pid 12345");
+      expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("12345\n");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

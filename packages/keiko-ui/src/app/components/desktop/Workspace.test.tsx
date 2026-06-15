@@ -1,6 +1,7 @@
 import { createRef } from "react";
-import { createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
@@ -160,6 +161,105 @@ describe("Workspace card connections", () => {
     expect(
       screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" }),
     ).toBeNull();
+  });
+
+  it("exposes a semantic workspace outline with window actions and textual relationships", async () => {
+    const restore = vi.fn();
+    const minimize = vi.fn();
+    const maximize = vi.fn();
+    const close = vi.fn();
+    const removeConn = vi.fn();
+    const tileAll = vi.fn();
+    const openPalette = vi.fn();
+    const user = userEvent.setup();
+    const workspaceApi = api({ restore, minimize, maximize, close, removeConn, tileAll });
+    const wins = [
+      appWindow({
+        id: "chat-1",
+        type: "chat",
+        z: 2,
+        cfg: { title: "Release review" },
+      }),
+      appWindow({
+        id: "files-1",
+        type: "files",
+        x: 420,
+        z: 1,
+        cfg: { root: "/repo", activeFilePath: "src/app.ts" },
+      }),
+    ];
+
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          conns: [{ id: "conn-1", a: "chat-1", b: "files-1" }],
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={openPalette}
+      />,
+    );
+
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(outline).toHaveTextContent("2 workspace windows, 1 relationship.");
+    expect(
+      screen.getByRole("heading", { name: "Chat: Release review", level: 4 }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Files: /repo", level: 4 })).toBeInTheDocument();
+    expect(outline).toHaveTextContent("Chat: Release review uses app.ts Files: /repo.");
+
+    const outlineQueries = within(outline);
+    await user.click(outlineQueries.getByRole("button", { name: "Tile all windows" }));
+    await user.click(outlineQueries.getByRole("button", { name: "Open Chat: Release review" }));
+    await user.click(outlineQueries.getByRole("button", { name: "Minimize Chat: Release review" }));
+    await user.click(outlineQueries.getByRole("button", { name: "Maximize Chat: Release review" }));
+    await user.click(outlineQueries.getByRole("button", { name: "Close Chat: Release review" }));
+    await user.click(
+      outlineQueries.getByRole("button", {
+        name: "Remove relationship between Chat: Release review and Files: /repo",
+      }),
+    );
+    await user.click(outlineQueries.getByRole("button", { name: "New window" }));
+
+    expect(tileAll).toHaveBeenCalledTimes(1);
+    expect(restore).toHaveBeenCalledWith("chat-1");
+    expect(minimize).toHaveBeenCalledWith("chat-1");
+    expect(maximize).toHaveBeenCalledWith("chat-1");
+    expect(close).toHaveBeenCalledWith("chat-1");
+    expect(removeConn).toHaveBeenCalledWith("conn-1");
+    expect(openPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes axe with the semantic workspace outline and a connected relationship", async () => {
+    const wins = [
+      appWindow({
+        id: "chat-1",
+        type: "chat",
+        z: 2,
+        cfg: { title: "Release review" },
+      }),
+      appWindow({
+        id: "files-1",
+        type: "files",
+        x: 420,
+        z: 1,
+        cfg: { root: "/repo", activeFilePath: "src/app.ts" },
+      }),
+    ];
+
+    const { container } = render(
+      <Workspace
+        ws={workspace({
+          wins,
+          conns: [{ id: "conn-1", a: "chat-1", b: "files-1" }],
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={vi.fn()}
+      />,
+    );
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", () => {

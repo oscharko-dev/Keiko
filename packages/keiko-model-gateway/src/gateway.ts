@@ -4,7 +4,7 @@
 // the audit ledger (issue #10) has a reliable typed target on every response.
 
 import { randomUUID } from "node:crypto";
-import { UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { CancelledError, UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { findConfiguredCapability } from "./model-selection.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
@@ -91,7 +91,10 @@ export class Gateway {
       }
       breaker.recordSuccess();
     } catch (error) {
-      breaker.recordFailure();
+      // A client-initiated cancel is not a provider fault — skip the breaker.
+      if (!(error instanceof CancelledError)) {
+        breaker.recordFailure();
+      }
       throw error;
     }
   }
@@ -151,7 +154,10 @@ export class Gateway {
       breaker.recordSuccess();
       return response;
     } catch (error) {
-      breaker.recordFailure();
+      // A client-initiated cancel is not a provider fault — skip the breaker.
+      if (!(error instanceof CancelledError)) {
+        breaker.recordFailure();
+      }
       throw error;
     }
   }

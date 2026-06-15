@@ -17,12 +17,14 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { isAbsolute } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import {
   ALL_POLICY_PROFILES,
   buildAtomCoverageStatuses,
   buildCoverageMap,
   compareStaleness,
+  deduplicateCandidates,
   regressionDefault,
   validateCandidates,
   type AtomCoverageStatus,
@@ -92,17 +94,22 @@ const readBody = (req: IncomingMessage): Promise<string> =>
   new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let capped = false;
     req.on("data", (chunk: Buffer) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
-        req.resume();
+        if (!capped) {
+          capped = true;
+          chunks.length = 0;
+          reject(new Error("body too large"));
+          req.resume();
+        }
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
-      resolve(Buffer.concat(chunks).toString("utf8"));
+      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
   });
@@ -247,6 +254,16 @@ async function parseSources(req: IncomingMessage): Promise<ParseSourcesOutcome> 
       return {
         ok: false,
         result: errorResult(400, "QI_BAD_SOURCE", "A source entry is malformed."),
+      };
+    }
+    if (source.kind === "file" && !isAbsolute(source.path)) {
+      return {
+        ok: false,
+        result: errorResult(
+          400,
+          "QI_BAD_SOURCE",
+          "File source paths must be absolute local paths.",
+        ),
       };
     }
     sources.push(source);
@@ -1127,10 +1144,23 @@ function buildMergedCandidates(
   preservedCandidates: readonly QualityIntelligenceCandidateRow[],
   regeneratedCandidates: readonly QiTestCaseCandidate[],
 ): readonly QiTestCaseCandidate[] {
-  return [
+  return deduplicateCandidates([
     ...preservedCandidates.map((candidate) => rowToCandidate(candidate, newRunId)),
     ...regeneratedCandidates,
-  ];
+  ]);
+}
+
+function assertMergedCandidateBudget(
+  preservedCandidates: readonly QualityIntelligenceCandidateRow[],
+  regeneratedCandidates: readonly QiTestCaseCandidate[],
+): RouteResult | null {
+  const limit = QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS.maxCandidatesPerRun;
+  if (preservedCandidates.length + regeneratedCandidates.length <= limit) return null;
+  return errorResult(
+    409,
+    "QI_REGEN_CANDIDATE_CAP_EXCEEDED",
+    "Regenerating the stale tests would exceed the per-run candidate limit. Reduce the stale scope or start a fresh QI run against the current source.",
+  );
 }
 
 function assertMergedCandidateBudget(

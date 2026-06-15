@@ -55,7 +55,7 @@ const harness = (screenIds: readonly string[]): Harness => {
     imagesCalls += 1;
     const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
     const images: Record<string, string> = {};
-    for (const id of ids) images[id] = `https://ephemeral/${id}.png`;
+    for (const id of ids) images[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
     return Promise.resolve({ status: 200, json: { images }, headers: {} });
   };
   const renderPort: FigmaRenderPort = () =>

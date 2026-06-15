@@ -5,7 +5,10 @@ import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { deriveIntent } from "../domain/intentDerivation.js";
 import type { IntentSummary } from "../domain/intentDerivation.js";
 import { bankingDefault, regressionDefault } from "../domain/policyProfile.js";
-import { designTestCaseCandidates } from "../domain/testDesignModel.js";
+import {
+  designTestCaseCandidates,
+  DETERMINISTIC_BASELINE_PROVENANCE_TAG,
+} from "../domain/testDesignModel.js";
 import { loadFixture, type LoadedFixture } from "./_fixtureLoader.js";
 
 // Unsafe bidi / zero-width / C0-C1 / DEL code points that must never reach a
@@ -145,6 +148,163 @@ describe("designTestCaseCandidates", () => {
     });
     const round: unknown = JSON.parse(JSON.stringify(candidates));
     expect(round).toEqual(candidates);
+  });
+
+  // Render-layer consumers (presenter scripts + the product CandidatesPane) sort
+  // deterministic-baseline candidates to the END so the judged model-delta candidates lead the
+  // user-facing deliverable. The discriminator must be an EXPLICIT provenance tag, not a null
+  // qualityVerdict (also null when the judge stage is skipped). The model-delta builder
+  // (parseGeneratedCandidates) never emits this tag, so its absence reliably distinguishes a judged
+  // candidate from a determinism-floor stub. The persisted manifest order itself is unchanged.
+  it("tags every deterministic-baseline candidate with the provenance discriminator", () => {
+    const fixture = loadFixture("bankingRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, bankingDefault);
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const candidate of candidates) {
+      expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+  });
+
+  it("keeps the provenance tag additive — existing risk-class/theme tags survive", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, regressionDefault);
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    const first = candidates[0];
+    if (first === undefined) {
+      throw new Error("fixture produced no candidates");
+    }
+    expect(first.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    expect(first.tags.some((tag) => tag.startsWith("risk-class:"))).toBe(true);
+    // Still canonical: sorted ascending and free of duplicates.
+    expect([...first.tags]).toEqual([...first.tags].sort());
+    expect(new Set(first.tags).size).toBe(first.tags.length);
+  });
+});
+
+// Epic #711 / Issue #724 residual: the deterministic-baseline candidate builder is the
+// production-default export path when no model is configured (local-first install). Its
+// candidate fields must be export-safe — free of bidi/zero-width/control code points — just
+// like the model path was hardened in #1038 (parseGeneratedCandidates). Untrusted text enters
+// the deterministic builder only via `intent` (derived from source displayLabel, which
+// sanitiseLabel does NOT strip these code points from), so the chokepoint lives in
+// designTestCaseCandidates.
+describe("designTestCaseCandidates — export-safe candidate text", () => {
+  it("strips bidi/zero-width/control code points out of every candidate field", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const spoofedLabel = `Login ${ZW}flow user must approve ${RLO}reganam${C1} role ${BOM}grant`;
+    const envelope = { ...firstEnvelope(fixture), displayLabel: spoofedLabel };
+    const intent = deriveIntent([envelope], regressionDefault);
+
+    // Precondition: the spoofing code points DID survive ingestion-side derivation, so this
+    // test exercises the real residual rather than a sanitised input. If this fails the test
+    // is no longer guarding the documented gap.
+    expect(intent.requirementCandidates.some(hasUnsafeCodePoint)).toBe(true);
+
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+    expect(candidates.length).toBeGreaterThan(0);
+
+    for (const candidate of candidates) {
+      for (const field of allFieldStrings(candidate)) {
+        expect(hasUnsafeCodePoint(field)).toBe(false);
+      }
+    }
+
+    // The requirement text still flows through (only the spoofing code points are removed),
+    // proving the field was exercised and not merely emptied.
+    const everyExpectedResult = candidates.flatMap((candidate) => candidate.expectedResults);
+    expect(everyExpectedResult.some((line) => line.includes("user must approve reganam"))).toBe(
+      true,
+    );
+  });
+
+  it("collapses a zero-width-spoofed theme into a single canonical tag (no duplicate)", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    // Two tokens that differ only by an inner zero-width space: "login" and "log" + ZW + "in".
+    const envelope = { ...firstEnvelope(fixture), displayLabel: `login log${ZW}in` };
+    const intent = deriveIntent([envelope], regressionDefault);
+
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+
+    for (const candidate of candidates) {
+      const themeTags = candidate.tags.filter((tag) => tag === "theme:login");
+      expect(themeTags.length).toBe(1);
+      expect(new Set(candidate.tags).size).toBe(candidate.tags.length);
+      for (const tag of candidate.tags) {
+        expect(hasUnsafeCodePoint(tag)).toBe(false);
+      }
+    }
+  });
+
+  it("drops a fragment that becomes empty after stripping (no blank precondition)", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent: IntentSummary = {
+      themes: [],
+      requirementCandidates: [`${ZW}${ZW}${ZW}`, "Genuine requirement that must hold"],
+      riskHints: [],
+      priorityHint: "unknown",
+    };
+
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+    });
+
+    for (const candidate of candidates) {
+      // The all-zero-width fragment strips to "" and is dropped entirely; only the genuine
+      // requirement survives. Against the unfixed builder the zero-width fragment is retained,
+      // so the length-1 assertion is what makes this mutation-proof.
+      expect(candidate.preconditions).toEqual(["Genuine requirement that must hold"]);
+      for (const precondition of candidate.preconditions) {
+        expect(hasUnsafeCodePoint(precondition)).toBe(false);
+      }
+    }
+  });
+
+  it("does not shift candidate IDs when the source label carries spoofing code points", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const base = firstEnvelope(fixture);
+    const cleanIntent = deriveIntent(
+      [{ ...base, displayLabel: "Login flow user must approve role grant" }],
+      regressionDefault,
+    );
+    const spoofedIntent = deriveIntent(
+      [
+        {
+          ...base,
+          displayLabel: `Login ${ZW}flow user must approve ${RLO}reganam${C1} role ${BOM}grant`,
+        },
+      ],
+      regressionDefault,
+    );
+    const cleanIds = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent: cleanIntent,
+      atoms: fixture.atoms,
+    }).map((candidate) => candidate.id);
+    const spoofedIds = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent: spoofedIntent,
+      atoms: fixture.atoms,
+    }).map((candidate) => candidate.id);
+    expect(spoofedIds).toEqual(cleanIds);
   });
 });
 

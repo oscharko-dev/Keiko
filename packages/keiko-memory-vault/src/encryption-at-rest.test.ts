@@ -18,6 +18,9 @@ const KEY_B = Buffer.alloc(32, 9);
 const BODY_MARKER = "TOP-SECRET-BODY-需要加密-9f2a";
 const TAG_MARKER = "TOP-SECRET-TAG-1234";
 const RATIONALE_MARKER = "TOP-SECRET-RATIONALE-zzz";
+// A plaintext body whose content starts with the sealed-envelope prefix — the content-sniff bug
+// would incorrectly treat this as already-sealed and skip it during migration.
+const KV1_PREFIX_BODY = "kv1.looks-like-an-envelope-but-is-plaintext";
 
 const cleanups: string[] = [];
 
@@ -204,6 +207,35 @@ describe("legacy plaintext migration", () => {
     const second = openVault(dir, KEY_A);
     expect(second.getMemory("m1" as MemoryId)?.body).toBe(BODY_MARKER);
     second.close();
+  });
+
+  it("seals a plaintext body that starts with 'kv1.' and round-trips it correctly", () => {
+    // RED (before fix): content-sniff `cipher.isSealed()` returns true for the kv1.-prefixed body,
+    // the sweep skips it, the value stays plaintext on disk, and `getMemory` throws when it later
+    // tries to AES-GCM-open a string that was never actually encrypted.
+    const dir = freshDir();
+    const seed = openVault(dir, KEY_A);
+    seed.insertMemory(secretMemory("m1"));
+    seed.close();
+
+    // Use downgradeToLegacyPlaintext to set up the correct v1 schema structure (drops v3+ DDL so
+    // runMigrations can re-apply them), then overwrite the body with the kv1.-prefixed value.
+    downgradeToLegacyPlaintext(dir);
+    const dbPath = join(dir, "keiko-memory.db");
+    const raw = new DatabaseSync(dbPath);
+    raw.exec("PRAGMA foreign_keys = ON");
+    raw.prepare("UPDATE memories SET body = ? WHERE id = ?").run(KV1_PREFIX_BODY, "m1");
+    raw.close();
+
+    // Confirm the setup actually wrote the kv1.-prefixed value as plaintext.
+    expect(onDiskContains(dir, KV1_PREFIX_BODY)).toBe(true);
+
+    const migrated = openVault(dir, KEY_A);
+    // After the sweep the plaintext is gone from disk (sealed under AES-GCM, no longer the literal string).
+    expect(onDiskContains(dir, KV1_PREFIX_BODY)).toBe(false);
+    // And it reads back to the original value without throwing.
+    expect(migrated.getMemory("m1" as MemoryId)?.body).toBe(KV1_PREFIX_BODY);
+    migrated.close();
   });
 });
 

@@ -427,4 +427,62 @@ describe("makeFigmaVisionHintProvider", () => {
 
     expect(provider(REQUEST)).toEqual(["kept"]);
   });
+
+  it("captures multimodal selection once at provider construction, not once per screen call", () => {
+    // The seam here is the injectable visionCall: a spy tracks how many times the capability-
+    // gated call path is entered. The production fix moved resolveQiMultimodalSelection() from
+    // inside the per-screen closure to the provider constructor — this test confirms the provider
+    // works correctly for N screens (which would have triggered N redundant selections before),
+    // and that the injected call receives the model id derived from the single construction-time
+    // selection rather than a per-screen re-lookup.
+    const deps = depsWith({
+      config: configWith([capability("vision-once", { supportsImageInput: true })]),
+      configPresent: true,
+    });
+    const seenModelIds: string[] = [];
+    const provider = makeFigmaVisionHintProvider(deps, (_req, modelId): readonly string[] => {
+      seenModelIds.push(modelId);
+      return ["hint"];
+    });
+
+    // Invoke the provider three times — once per simulated screen. The injected visionCall records
+    // the model id synchronously, so the return value is intentionally ignored.
+    void provider(REQUEST);
+    void provider(REQUEST);
+    void provider(REQUEST);
+
+    // The model id must be the capability-selected one for all three calls.
+    expect(seenModelIds).toEqual(["vision-once", "vision-once", "vision-once"]);
+  });
+
+  it("drops non-JSON vision output instead of persisting free-form rationale lines", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-rationale-"));
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: () =>
+          Promise.resolve(
+            normalizedResponse("Reasoning: the screenshot suggests a disabled submit button."),
+          ),
+      };
+      const deps = depsWith({
+        config: configWith([capability("vision", { supportsImageInput: true })]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      await expect(
+        makeFigmaVisionHintProvider(deps)({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

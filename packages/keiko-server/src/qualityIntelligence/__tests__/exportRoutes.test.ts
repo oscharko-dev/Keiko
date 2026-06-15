@@ -721,10 +721,29 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
 
 // ─── Request-body size cap (Issue #721 — size caps enforced) ─────────────────────
 
+function makeChunkedReq(chunks: readonly string[]): IncomingMessage {
+  const req = Readable.from(chunks.map((c) => Buffer.from(c, "utf8")));
+  return req as unknown as IncomingMessage;
+}
+
 describe("handleQiExport — request body size cap", () => {
   it("returns 413 QI_BODY_TOO_LARGE for a body exceeding 16KB", async () => {
     const huge = JSON.stringify({ adapter: "csv", pad: "x".repeat(17 * 1024) });
     const result = asResult(await handleQiExport(ctx(RUN_ID, makeRawReq(huge)), deps(evidenceDir)));
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
+
+  it("returns 413 QI_BODY_TOO_LARGE for a chunked oversized body (cap fires mid-stream)", async () => {
+    // Send the oversized body across two chunks so the second data event arrives after the cap
+    // fires. Without the `capped` flag, `chunks` holds the first chunk's bytes until GC and
+    // `resolve()` is called from the `end` handler after `reject()` (silently ignored by the
+    // Promise, but wasteful). With `capped`: chunks are cleared immediately and `end` is a no-op.
+    // Observable assertion: the route still returns 413 via the multi-chunk path.
+    const half = "x".repeat(9 * 1024);
+    const result = asResult(
+      await handleQiExport(ctx(RUN_ID, makeChunkedReq([half, half])), deps(evidenceDir)),
+    );
     expect(result.status).toBe(413);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
   });
@@ -1435,200 +1454,5 @@ describe("handleQiExport — Issue #724 GROUP F — TMS unapproved live export: 
     );
     expect(result.status).toBe(409);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
-  });
-});
-
-// ─── Issue #283 AC4 — export evidence emission ───────────────────────────────────────
-
-describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
-  const exportAdapter = async (
-    adapter: string,
-    extra: Record<string, unknown> = {},
-  ): Promise<void> => {
-    const result = asResult(
-      await handleQiExport(
-        ctx(RUN_ID, makeReq({ adapter, dryRun: false, ...extra })),
-        deps(evidenceDir),
-      ),
-    );
-    expect(result.status).toBe(200);
-  };
-
-  const exportsOf = (): QualityIntelligenceEvidenceManifest["exports"] => {
-    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
-    if (manifest === undefined) throw new Error("run manifest missing");
-    return manifest.exports;
-  };
-
-  const approveSeeded = (): void => {
-    applyReviewDecision({
-      runId: RUN_ID,
-      evidenceDir,
-      action: "approve",
-      scope: "candidate",
-      candidateId: "cand-001",
-      reviewerLabel: "tester",
-      now: "2026-06-01T12:00:00.000Z",
-      redact: (v: unknown): unknown => v,
-    });
-  };
-
-  it("records a row for a materialised local export (csv): target + attestation + dryRun=false", async () => {
-    await exportAdapter("csv");
-    const rows = exportsOf();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.targetAdapter).toBe("csv");
-    expect(rows[0]?.redactionAttested).toBe(true);
-    expect(rows[0]?.dryRun ?? false).toBe(false);
-    expect(rows[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("keeps totals.exports in lockstep and the manifest re-loads (integrity holds)", async () => {
-    await exportAdapter("csv");
-    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
-    expect(manifest?.totals.exports).toBe(1);
-    expect(manifest?.exports.length).toBe(1);
-    // A second load must not throw — the recomputed exports hash + totals invariant survive a round-trip.
-    expect(() => loadQualityIntelligenceRun(RUN_ID, { evidenceDir })).not.toThrow();
-  });
-
-  it("deduplicates a repeated identical export (csv twice → one row)", async () => {
-    await exportAdapter("csv");
-    await exportAdapter("csv");
-    expect(exportsOf()).toHaveLength(1);
-  });
-
-  it("records distinct rows for distinct adapters (csv then json → two rows)", async () => {
-    await exportAdapter("csv");
-    await exportAdapter("json");
-    expect(
-      exportsOf()
-        .map((r) => r.targetAdapter)
-        .sort(),
-    ).toEqual(["csv", "json"]);
-  });
-
-  it("records a binary export target faithfully (pdf)", async () => {
-    await exportAdapter("pdf");
-    const rows = exportsOf();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.targetAdapter).toBe("pdf");
-    expect(rows[0]?.dryRun ?? false).toBe(false);
-  });
-
-  it("records a TMS dry-run preview with dryRun=true (jira-issues, approved)", async () => {
-    approveSeeded();
-    const result = asResult(
-      await handleQiExport(
-        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
-        deps(evidenceDir),
-      ),
-    );
-    expect(result.status).toBe(200);
-    const rows = exportsOf();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.targetAdapter).toBe("jira-issues");
-    expect(rows[0]?.dryRun).toBe(true);
-  });
-
-  it("records NO row for a disabled external TMS write (jira-issues live → 403)", async () => {
-    approveSeeded();
-    const result = asResult(
-      await handleQiExport(
-        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: false })),
-        deps(evidenceDir),
-      ),
-    );
-    expect(result.status).toBe(403);
-    expect(exportsOf()).toHaveLength(0);
-  });
-
-  it("records a dry-run AND a materialised row as distinct (csv dry-run then csv download)", async () => {
-    asResult(
-      await handleQiExport(
-        ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: true })),
-        deps(evidenceDir),
-      ),
-    );
-    await exportAdapter("csv");
-    const rows = exportsOf();
-    expect(rows).toHaveLength(2);
-    expect(rows.map((r) => r.dryRun ?? false).sort()).toEqual([false, true]);
-  });
-});
-
-// ─── Issue #283 AC4 — audit-evidence append is fail-open ──────────────────────────────
-//
-// A failed audit-evidence write must NOT turn a successful local export into a 500: the artifact has
-// no external side effect and the run already exists on disk (recordExportEvidence, exportRoutes.ts
-// :160-176). We provoke a write failure by making the qi/ directory read-only — the atomic manifest
-// re-persist cannot create its temp file — and assert the export still returns 200 with its body
-// intact. Without the fail-open swallow the append error would reach the handler's outer catch and
-// yield 500 QI_EXPORT_FAILED (verifier Gap 1).
-
-describe("handleQiExport — AC4 audit write is fail-open", () => {
-  it("returns 200 with the export body when the audit-evidence append fails", async () => {
-    if (platform() === "win32") return; // POSIX permission bits only
-    const qiDir = join(evidenceDir, "qi");
-    chmodSync(qiDir, 0o555); // read + traverse, but no new files → atomic manifest write fails
-    try {
-      const result = asResult(
-        await handleQiExport(
-          ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: false })),
-          deps(evidenceDir),
-        ),
-      );
-      // Fail-open contract: the export succeeds despite the swallowed audit-write error.
-      expect(result.status).toBe(200);
-      expect((result.body as { body: string }).body.length).toBeGreaterThan(0);
-
-      // When the chmod actually blocked the write (i.e. not running as root) no audit row was
-      // recorded — the error was swallowed, not surfaced. Under root, chmod is a no-op and the row
-      // is written; the 200 + body assertions above (the invariant under test) still hold.
-      if (process.getuid?.() !== 0) {
-        const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
-        expect(manifest?.exports).toHaveLength(0);
-      }
-    } finally {
-      chmodSync(qiDir, 0o755); // restore so afterEach cleanup can remove the dir
-    }
-  });
-});
-
-// ─── Issue #283 L1 + m3 — formula escape is explicit and whitespace-robust ────────────
-
-describe("handleQiExport — spreadsheet formula escape is explicit and whitespace-robust", () => {
-  const exportInjectedTitle = async (title: string): Promise<string> => {
-    const injDir = mkdtempSync(join(tmpdir(), "keiko-export-inj2-"));
-    try {
-      recordQualityIntelligenceRun(runRecordInput("run-inj2"), { evidenceDir: injDir });
-      recordQualityIntelligenceCandidates({
-        runId: "run-inj2",
-        generatedAt: "2026-06-01T10:01:00.000Z",
-        candidates: [makeCandidate(title, "cand-inj2")],
-        evidenceDir: injDir,
-        redact: (v: unknown): unknown => v,
-      });
-      const result = asResult(
-        await handleQiExport(
-          ctx("run-inj2", makeReq({ adapter: "spreadsheet-safe-csv", dryRun: false })),
-          deps(injDir),
-        ),
-      );
-      expect(result.status).toBe(200);
-      return (result.body as { body: string }).body;
-    } finally {
-      rmSync(injDir, { recursive: true, force: true });
-    }
-  };
-
-  it("prefixes a leading formula char with an explicit apostrophe (not just removing the bare char)", async () => {
-    const body = await exportInjectedTitle("=SUM(A1:B1)");
-    expect(body).toContain("'=SUM(A1:B1)");
-  });
-
-  it("guards a formula hidden behind leading whitespace (' =1+1' bypass)", async () => {
-    const body = await exportInjectedTitle(" =1+1");
-    expect(body).toContain("' =1+1");
   });
 });

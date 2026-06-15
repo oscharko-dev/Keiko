@@ -51,6 +51,9 @@ describe("EditorWidget", () => {
 
     const textbox = await screen.findByRole("textbox", { name: "Editor: src/app.ts" });
     expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts");
+    await waitFor(() => {
+      expect(textbox).not.toBeDisabled();
+    });
     await userEvent.clear(textbox);
     await userEvent.type(textbox, "const value = 2;{enter}");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));

@@ -447,6 +447,49 @@ describe("handleQiReview — reviewerLabel handling", () => {
   });
 });
 
+// ─── Bidi/zero-width normalisation of reviewerLabel (WP-REVIEW item 1) ──────
+//
+// A reviewerLabel containing U+202E (RIGHT-TO-LEFT OVERRIDE) must be stripped before the value
+// lands in the append-only .review.json audit log.  editRoutes.ts already passes the label
+// through normaliseCandidateText; reviewRoutes.ts now mirrors that (FIX: apply
+// normaliseCandidateText before slice).  RED reason: the old code used only trim()+slice() so
+// U+202E survived into the persisted audit entry.
+
+describe("handleQiReview — reviewerLabel bidi normalisation", () => {
+  it("strips U+202E (RLO) from reviewerLabel before it lands in the audit log", async () => {
+    // 'Admin' + U+202E + 'rotidua' — the classic Trojan-source RLO spoofing pattern.
+    const rlo = "‮";
+    const spoofedLabel = `Admin${rlo}rotidua`;
+    const req = makeReq({
+      action: "approve",
+      candidateId: "cand-bidi",
+      reviewerLabel: spoofedLabel,
+    });
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(200);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    const entry = after?.auditLog[0];
+    expect(entry).toBeDefined();
+    // The RLO code point must NOT be present in the persisted label.
+    expect(entry?.reviewerLabel).not.toContain(rlo);
+  });
+
+  it("falls back to 'reviewer' when reviewerLabel consists only of bidi/format characters", async () => {
+    // A label made entirely of format characters normalises to empty string → default fallback.
+    const formatOnly = "‮​‌";
+    const req = makeReq({
+      action: "approve",
+      candidateId: "cand-format",
+      reviewerLabel: formatOnly,
+    });
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(200);
+    const after = loadRunReviewState("run-review-001", evidenceDir);
+    const entry = after?.auditLog[0];
+    expect(entry?.reviewerLabel).toBe("reviewer");
+  });
+});
+
 // ─── FIX L1 (Issue #282) — prototype-pollution defense for candidate ids ─────
 
 describe("handleQiReview — prototype-pollution defense", () => {

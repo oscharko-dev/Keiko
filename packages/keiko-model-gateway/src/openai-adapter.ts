@@ -413,20 +413,31 @@ export class OpenAiAdapter implements ProviderAdapter {
     yield { type: "done", response: redactResponse(assembled, secrets) };
   };
 
-  // Iterates the SSE stream, yielding each redacted content token while mutating
-  // `acc` with the raw accumulated content, finish reason, and final usage counts.
+  // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.
+  // Redaction is applied to the full accumulated buffer on every delta so that a
+  // configured secret straddling two SSE chunk boundaries is still caught.  We track
+  // how many characters of the REDACTED output we have already emitted and yield only
+  // the new suffix each time.  When a cross-delta match shrinks the redacted string
+  // relative to what was emitted, the cursor overshoots and the tail (containing the
+  // secret or its replacement) is deferred to the terminal `done` chunk, which always
+  // redacts the full `acc.content` independently via redactResponse().
   private async *streamDeltas(
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
     acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
   ): AsyncGenerator<string> {
+    let emittedRedactedLength = 0;
     try {
       for await (const chunk of readSseStream(response)) {
         const content = deltaFromChunk(chunk);
         if (content !== undefined) {
           acc.content += content;
-          yield redact(content, secrets);
+          const redacted = redact(acc.content, secrets);
+          if (redacted.length > emittedRedactedLength) {
+            yield redacted.slice(emittedRedactedLength);
+            emittedRedactedLength = redacted.length;
+          }
         }
         const finish = finishReasonFromChunk(chunk);
         if (finish !== undefined) acc.finishReason = finish;

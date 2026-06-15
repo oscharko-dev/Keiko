@@ -117,6 +117,25 @@ describe("findStaleMemories - already-terminal records skipped", () => {
   });
 });
 
+describe("findStaleMemories - pending-review records skipped (conflicted and proposed)", () => {
+  // RED reason (before fix): SKIPPED_STATUSES only contained "rejected"/"forgotten", so a
+  // conflicted/proposed record with stale signals would produce StaleFlags. After adding both
+  // to SKIPPED_STATUSES the function returns [] for these statuses.
+  it.each(["conflicted", "proposed"] as const)(
+    "skips records in status %s even when all stale signals fire",
+    (status) => {
+      const r = makeRecord({
+        id: "m-1",
+        status,
+        validUntil: FIXED_NOW_MS - 1,
+        confidence: 0.01,
+        updatedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
+      });
+      expect(findStaleMemories([r], options())).toEqual([]);
+    },
+  );
+});
+
 describe("findStaleMemories - multiple reasons on one record", () => {
   it("emits one flag per reason, sorted by reason ASC", () => {
     const r = makeRecord({

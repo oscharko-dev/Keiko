@@ -26,6 +26,7 @@ const parseUrl = (value: string): URL | null => {
 export const parseFigmaTarget = (value: string): FigmaTarget | null => {
   const url = parseUrl(value.trim());
   if (url === null) return null;
+  if (url.protocol !== "https:") return null;
   if (!ACCEPTED_HOSTS.includes(url.hostname)) return null;
 
   const segments = url.pathname.split("/").filter((part) => part.length > 0);

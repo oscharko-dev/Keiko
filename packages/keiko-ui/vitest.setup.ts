@@ -32,3 +32,43 @@ if (typeof window !== "undefined" && window.matchMedia === undefined) {
     }),
   });
 }
+
+// jsdom deliberately omits canvas rendering. Components and axe checks only need a harmless
+// 2D-context facade so tests exercise UI behavior without emitting environment noise.
+if (typeof window !== "undefined" && typeof HTMLCanvasElement !== "undefined") {
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value: function getContext(contextId: string) {
+      if (contextId !== "2d") {
+        return null;
+      }
+      return {
+        canvas: this,
+        clearRect: () => {},
+        fillRect: () => {},
+        getImageData: () => ({ data: new Uint8ClampedArray(0) }),
+        putImageData: () => {},
+        createImageData: () => [],
+        setTransform: () => {},
+        drawImage: () => {},
+        save: () => {},
+        fillText: () => {},
+        restore: () => {},
+        beginPath: () => {},
+        moveTo: () => {},
+        lineTo: () => {},
+        closePath: () => {},
+        stroke: () => {},
+        translate: () => {},
+        scale: () => {},
+        rotate: () => {},
+        arc: () => {},
+        fill: () => {},
+        measureText: () => ({ width: 0 }),
+        transform: () => {},
+        rect: () => {},
+        clip: () => {},
+      } as unknown as CanvasRenderingContext2D;
+    },
+  });
+}

@@ -133,6 +133,8 @@ export interface RetrievalEvalFixture {
 export interface RetrievalEvalDimensionScores {
   readonly recall: number;
   readonly precision: number;
+  readonly meanReciprocalRank: number;
+  readonly ndcg: number;
   readonly sourceIsolation: number;
   readonly citationQuality: number;
   readonly noEvidenceAccuracy: number;
@@ -157,9 +159,7 @@ export interface ModelJudgedRetrievalEvalScores {
 }
 
 export interface ModelJudgedRetrievalEvalJudge {
-  readonly judge: (
-    input: ModelJudgedRetrievalEvalInput,
-  ) => Promise<ModelJudgedRetrievalEvalScores>;
+  readonly judge: (input: ModelJudgedRetrievalEvalInput) => Promise<ModelJudgedRetrievalEvalScores>;
 }
 
 export interface RetrievalEvalScorecard {
@@ -178,6 +178,8 @@ export interface RetrievalEvalScorecard {
 export interface RetrievalEvalThresholds {
   readonly recall: number;
   readonly precision: number;
+  readonly meanReciprocalRank: number;
+  readonly ndcg: number;
   readonly sourceIsolation: number;
   readonly citationQuality: number;
   readonly noEvidenceAccuracy: number;
@@ -187,6 +189,8 @@ export interface RetrievalEvalThresholds {
 export const PASS_THRESHOLDS: RetrievalEvalThresholds = Object.freeze({
   recall: 0.9,
   precision: 0.8,
+  meanReciprocalRank: 0.9,
+  ndcg: 0.9,
   sourceIsolation: 1.0,
   citationQuality: 0.9,
   noEvidenceAccuracy: 1.0,

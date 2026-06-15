@@ -419,15 +419,9 @@ async function waitForHealth(
   const deadline = Date.now() + options.startTimeoutMs;
   while (Date.now() <= deadline) {
     if (!deps.isProcessAlive(pid)) return false;
-    try {
-      const response = await deps.fetchImpl(healthUrl(options), {
-        signal: AbortSignal.timeout(1_000),
-      });
-      if (response.ok && deps.isProcessAlive(pid)) {
-        return true;
-      }
-    } catch {
-      // Startup is still in progress.
+    const health = await probeHealth(options, deps.fetchImpl);
+    if (health.version === SDK_VERSION && deps.isProcessAlive(pid)) {
+      return true;
     }
     await deps.sleep(500);
   }
@@ -457,10 +451,14 @@ async function cmdStart(
   if (running !== undefined) {
     const health = await probeHealth(options, deps.fetchImpl);
     if (health.version === SDK_VERSION) {
-      io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`);
+      io.out(
+        `Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`,
+      );
       return 0;
     }
-    io.out(`Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`);
+    io.out(
+      `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`,
+    );
     const stopped = await cmdStop(options, io, deps);
     if (stopped !== 0) return stopped;
   }
@@ -510,7 +508,8 @@ async function cmdStop(
 
   io.err("keiko stop: UI did not exit gracefully; sending SIGKILL.\n");
   deps.killProcess(pid, "SIGKILL");
-  await deps.sleep(500);
+  // Sleep at most 500 ms but respect whatever budget remains in stopTimeoutMs.
+  await deps.sleep(Math.max(0, Math.min(500, deadline - Date.now())));
   if (deps.isProcessAlive(pid)) {
     io.err(`keiko stop: failed to stop pid ${String(pid)}.\n`);
     return 1;
@@ -530,9 +529,7 @@ function cmdStatus(
     io.out("Keiko UI is not running.\n");
     return 0;
   }
-  io.out(
-    `Keiko UI is running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`,
-  );
+  io.out(`Keiko UI is running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
   return 0;
 }
 

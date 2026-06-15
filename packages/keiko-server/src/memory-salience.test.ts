@@ -159,7 +159,7 @@ describe("captureSalientFromTurn", () => {
     expect(countMemories(vault, ctx)).toBe(3);
   });
 
-  it("does not forward assistant output to the salience model prompt", async () => {
+  it("forwards assistant text to the salience model as context-only", async () => {
     const vault = makeVault();
     let saliencePrompt = "";
     const deps = makeDeps({
@@ -190,10 +190,12 @@ describe("captureSalientFromTurn", () => {
       { content: USER_TEXT, memory: { enabled: true } },
       ctx,
       "gpt-test",
-      "assistant-only-sensitive-context",
+      "assistant-context-marker",
     );
+    // User text is the extraction subject; assistant text is forwarded as a context-only block so
+    // the model can resolve ambiguous affirmative turns (e.g. "yes, exactly that").
     expect(saliencePrompt).toContain(USER_TEXT);
-    expect(saliencePrompt).not.toContain("assistant-only-sensitive-context");
+    expect(saliencePrompt).toContain("assistant-context-marker");
   });
 
   it("persists records that carry tags and the salience captureRationale through validation", async () => {
@@ -363,6 +365,58 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toEqual([{ kind: "rejected", reason: "sensitive-memory-requires-approval" }]);
     expect(countMemories(vault, ctx)).toBe(0);
+  });
+
+  it("isPersistableMemoryCandidate guard emits rejected for sensitive and candidate for public", async () => {
+    // Model returns two items: one with an email address (triggers confidential sensitivity →
+    // requiresApproval → isPersistableMemoryCandidate false → {kind:"rejected"}) and one plain
+    // fact (public sensitivity → isPersistableMemoryCandidate true → {kind:"candidate"}).
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              body: "The user's contact email is private@example.com.",
+              type: "fact",
+              confidence: 0.7,
+              scope: "user",
+              tags: ["contact"],
+            },
+            {
+              body: "The user works in the payments domain.",
+              type: "fact",
+              confidence: 0.7,
+              scope: "user",
+              tags: ["payments"],
+            },
+          ]),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      // User text is safe (no email/secret) so the egress guard passes; the model response
+      // contains one sensitive item (email → confidential) and one public item.
+      {
+        content: "I work in the payments domain and have a contact address.",
+        memory: { enabled: true },
+      },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    expect(actions).toHaveLength(2);
+    const rejected = actions.filter((a) => a.kind === "rejected");
+    const candidates = actions.filter((a) => a.kind === "candidate");
+    expect(rejected).toHaveLength(1);
+    expect(candidates).toHaveLength(1);
+    expect((rejected[0] as { kind: "rejected"; reason: string }).reason).toBe(
+      "sensitive-memory-requires-approval",
+    );
+    // Only the non-sensitive candidate is persisted
+    expect(countMemories(vault, ctx)).toBe(1);
   });
 
   it("skips the salience model call when the user text is unsafe for memory egress", async () => {
