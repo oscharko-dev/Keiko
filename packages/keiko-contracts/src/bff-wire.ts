@@ -30,6 +30,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "./local-knowledge.js";
+import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
 
 export interface Project {
@@ -345,6 +346,12 @@ export interface ConversationMemoryContextEntryWire {
   readonly memoryId: string;
   readonly bodyExcerpt: string;
   readonly inclusionReason: string;
+  readonly sourceKind: MemorySourceKind;
+  readonly captureRationale?: string | undefined;
+  readonly sensitivity: MemorySensitivity;
+  readonly confidence: number;
+  readonly status: MemoryStatus;
+  readonly capturedAt: number;
 }
 
 export interface ConversationMemoryContextWire {

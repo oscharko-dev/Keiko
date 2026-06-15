@@ -94,6 +94,26 @@ export type QualityIntelligenceSourceEnvelope =
   | QualityIntelligenceHumanContextEnvelope
   | QualityIntelligenceConnectorDocumentEnvelope;
 
+// True for a bidi-override/isolate, zero-width, BOM, LRM/RLM, or Arabic-letter-mark code point — the
+// invisible / text-reordering characters that can spoof a display surface's reading order. A numeric
+// scan (rather than a regex) keeps the set auditable and avoids embedding invisible literals in the
+// source. All targets are ≥ U+061C, so no control-range regex / `no-control-regex` concern arises.
+// Mirrors keiko-quality-intelligence `isUnsafeHigh`; kept inline because keiko-contracts is the base
+// layer and must not depend on the QI domain package.
+const isBidiOrZeroWidthCodePoint = (cp: number): boolean =>
+  cp === 0x061c ||
+  (cp >= 0x200b && cp <= 0x200f) ||
+  (cp >= 0x202a && cp <= 0x202e) ||
+  (cp >= 0x2066 && cp <= 0x2069) ||
+  cp === 0xfeff;
+
+const containsBidiOrZeroWidth = (value: string): boolean => {
+  for (const ch of value) {
+    if (isBidiOrZeroWidthCodePoint(ch.codePointAt(0) ?? 0)) return true;
+  }
+  return false;
+};
+
 /**
  * Returns `true` if a field value looks safe to surface in a browser context.
  * Rejects when the value contains:
@@ -101,6 +121,10 @@ export type QualityIntelligenceSourceEnvelope =
  *   (b) well-known credential token prefixes (AWS AKIA, GitHub ghp_/gho_/github_pat_,
  *       Slack xox[baprs]-, OpenAI sk-, Bearer token, PEM PRIVATE KEY header)
  *   (c) an absolute filesystem path (POSIX `/`, Windows drive `C:\`, UNC `\\`)
+ *   (d) a bidi-override/isolate, zero-width, BOM, LRM/RLM, or Arabic-letter-mark code point —
+ *       invisible or text-reordering characters that can spoof the reading order of a browser
+ *       display surface. The runtime that builds envelopes strips these at ingestion; this is the
+ *       defence-in-depth mirror (Epic #729 — symmetric with the candidate-text scrubber).
  */
 const fieldLooksUnsafe = (value: string): boolean => {
   // (a) any scheme://
@@ -114,6 +138,8 @@ const fieldLooksUnsafe = (value: string): boolean => {
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(value)) return true;
   // (c) absolute filesystem paths
   if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(value)) return true;
+  // (d) bidi-override / isolate, zero-width, BOM, LRM/RLM, Arabic letter mark
+  if (containsBidiOrZeroWidth(value)) return true;
   return false;
 };
 
@@ -129,6 +155,7 @@ const fieldLooksUnsafe = (value: string): boolean => {
  *   - a well-known credential shape (AWS AKIA*, GitHub ghp_/gho_/github_pat_*,
  *     Slack xox[baprs]-, OpenAI sk-*, Bearer token, PEM PRIVATE KEY header)
  *   - an absolute filesystem path (POSIX `/`, Windows drive, or UNC `\\`)
+ *   - a bidi-override/isolate, zero-width, BOM, LRM/RLM, or Arabic-letter-mark code point
  *
  * Additionally rejects when:
  *   - `displayLabel` is empty or exceeds 256 characters

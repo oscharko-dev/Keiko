@@ -54,7 +54,7 @@ const BRIDGE_DEFS: readonly (readonly [keyof Bridges, string, IconName])[] = [
   ["docs", "Docs", "files"],
 ];
 
-type Tab = "policy" | "eval" | "memory" | "bridges" | "persona";
+type Tab = "policy" | "eval" | "bridges" | "persona";
 
 function PolicyTab({
   policy,
@@ -137,53 +137,6 @@ function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision 
   );
 }
 
-function MemoryTab({
-  memory,
-  setMemory,
-}: {
-  memory: readonly string[];
-  setMemory: (next: (prev: readonly string[]) => readonly string[]) => void;
-}): ReactNode {
-  const [text, setText] = useState("");
-  const add = (): void => {
-    const t = text.trim();
-    if (t === "") return;
-    setMemory((m) => [t, ...m]);
-    setText("");
-  };
-  return (
-    <div className="mem">
-      <div className="mem-add">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Teach Keiko something about you…"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") add();
-          }}
-        />
-        <button type="button" onClick={add} aria-label="Add memory">
-          <Icons.plus size={15} />
-        </button>
-      </div>
-      {memory.map((m, i) => (
-        <div className="mem-row" key={`${String(i)}-${m}`}>
-          <Icons.spark size={12} />
-          <span className="mem-text">{m}</span>
-          <button
-            type="button"
-            className="mem-x"
-            aria-label={`Remove memory: ${m}`}
-            onClick={() => setMemory((mm) => mm.filter((_, j) => j !== i))}
-          >
-            <Icons.close size={12} />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function BridgesTab({
   bridges,
   setBridges,
@@ -254,7 +207,6 @@ function PersonaTab({
 const TAB_LABELS: readonly (readonly [Tab, string])[] = [
   ["policy", "Policy"],
   ["eval", "EVAL"],
-  ["memory", "MemoriaViva"],
   ["bridges", "Connections"],
   ["persona", "Persona"],
 ];
@@ -291,7 +243,6 @@ export function KeikoTwinPanel(): ReactNode {
       <div className="twin-body">
         {tab === "policy" && <PolicyTab policy={twin.policy} setPolicy={twin.setPolicy} />}
         {tab === "eval" && <EvalTab decide={twin.decide} />}
-        {tab === "memory" && <MemoryTab memory={twin.memory} setMemory={twin.setMemory} />}
         {tab === "bridges" && <BridgesTab bridges={twin.bridges} setBridges={twin.setBridges} />}
         {tab === "persona" && <PersonaTab persona={twin.persona} setPersona={twin.setPersona} />}
       </div>

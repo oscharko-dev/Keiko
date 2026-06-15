@@ -76,6 +76,11 @@ export interface ObservedSnapshotInput {
   readonly extras?: FigmaConnectorMetricsExtras;
   /** `true` for a re-snapshot action, `false`/omitted for an initial snapshot. */
   readonly isResnapshot?: boolean;
+  /**
+   * Defaults to true. Route orchestration sets this false so success is audited only after the
+   * snapshot record has been durably written and reloaded from Evidence.
+   */
+  readonly auditSuccess?: boolean;
   /** Performs the actual render + assembly (delegates to buildFigmaSnapshot / resnapshotFigma). */
   readonly run: () => Promise<FigmaSnapshot>;
 }
@@ -113,14 +118,16 @@ export const observeFigmaSnapshot = async (
     input.augmentation,
     input.extras ?? {},
   );
-  appendFigmaConnectorAudit({
-    scopeRef,
-    evidenceDir: input.ctx.evidenceDir,
-    action,
-    outcome: "ok",
-    counts: countsOf(input.ir, snapshot),
-    now: input.ctx.now,
-  });
+  if (input.auditSuccess !== false) {
+    appendFigmaConnectorAudit({
+      scopeRef,
+      evidenceDir: input.ctx.evidenceDir,
+      action,
+      outcome: "ok",
+      counts: countsOf(input.ir, snapshot),
+      now: input.ctx.now,
+    });
+  }
   return { snapshot, metrics, scopeRef };
 };
 

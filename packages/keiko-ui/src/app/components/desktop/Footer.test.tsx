@@ -174,4 +174,12 @@ describe("Footer — shell-level status indicators (epic #518 #526)", () => {
     footer.focus();
     expect(footer).toHaveFocus();
   });
+
+  // SH-02 (WCAG 2.4.3) — the footer is a programmatic jump-to-region target (Alt+S);
+  // tabIndex={-1} keeps it out of natural tab order while still accepting .focus() calls.
+  it("has tabIndex=-1 so it is a programmatic focus target but not a natural tab stop", () => {
+    renderFooter();
+    const footer = screen.getByRole("contentinfo", { name: "Workspace status" });
+    expect(footer).toHaveAttribute("tabindex", "-1");
+  });
 });

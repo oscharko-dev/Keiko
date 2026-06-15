@@ -378,6 +378,12 @@ export interface EvidenceDeps {
 export interface EvidenceStore {
   // Persist one manifest atomically under the base dir, named <runId>.json. Returns the path.
   readonly put: (runId: string, json: string) => string;
+  // Atomically update one manifest when the adapter can serialize read-modify-write. Consumers
+  // may fall back to get+put when absent, but audit ledgers should prefer this to avoid lost
+  // append evidence.
+  readonly update?:
+    | ((runId: string, update: (existingJson: string | undefined) => string) => string)
+    | undefined;
   // List runIds present in the base dir (deterministic, sorted), reading ONLY the base dir.
   readonly list: () => readonly string[];
   // Load one manifest's raw JSON by runId, or undefined if absent.

@@ -35,7 +35,7 @@ const CONFIDENCE_MAX = 0.9;
 const MAX_CANDIDATES = 6;
 // Jaccard char-bigram similarity at/above which a candidate is treated as a near-duplicate.
 const DEDUP_THRESHOLD = 0.8;
-// Provenance string surfaced in the Memory Center detail view (decision 2). Salience reuses the
+// Provenance string surfaced in the MemoriaViva detail view (decision 2). Salience reuses the
 // "system-default" source kind (no dedicated conversation-inferred kind exists yet), so this
 // rationale is the explainability signal that the memory was inferred, not user-instructed.
 const SALIENCE_RATIONALE = "Automatically inferred from conversation (salience capture)";

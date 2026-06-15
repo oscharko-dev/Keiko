@@ -31,8 +31,7 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find(
         (route) =>
-          route.method === "POST" &&
-          route.pattern === "/api/chats/messages/grounded/handoff",
+          route.method === "POST" && route.pattern === "/api/chats/messages/grounded/handoff",
       ),
     ).toBeDefined();
   });
@@ -144,9 +143,15 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
-  it("includes the 18 memory routes (12 from #211, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204)", () => {
+  it("includes the 20 memory routes (12 from #211, 2 #209 governance routes, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204)", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(18);
+    expect(memoryRoutes).toHaveLength(20);
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/forget"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/conflicts/resolve"),
+    ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/maintenance"),
     ).toBeDefined();

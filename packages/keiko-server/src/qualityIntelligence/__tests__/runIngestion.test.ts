@@ -8,9 +8,11 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
+import { envelopeIdFor, ingestInlineSources, QiIngestionError } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
@@ -488,6 +490,27 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     const displayLabel = result.envelopes[0]?.displayLabel ?? "";
     expect(displayLabel).not.toContain("\n");
     expect(displayLabel).toBe("passwd root:x:0:0:injected second line");
+  });
+
+  it("drops bidi-override, zero-width, and C1 spoofing code points from a source label (Epic #729)", () => {
+    // Epic #729 display-surface hardening, symmetric with the candidate-text scrubber
+    // (stripUnsafeFormatChars / isUnsafeFormatCodePoint). sanitiseLabel maps C0/DEL to a space (so the
+    // label stays single-line) and DROPS bidi overrides (RLO U+202E), zero-width (ZWSP U+200B), BOM,
+    // and C1 controls (NEL U+0085) so a crafted filename / capsule id cannot reorder or hide content in
+    // the browser-streamed displayLabel. Vectors are built via String.fromCodePoint so the test source
+    // stays pure ASCII (no invisible literals in the file).
+    const RLO = String.fromCodePoint(0x202e);
+    const ZWSP = String.fromCodePoint(0x200b);
+    const NEL = String.fromCodePoint(0x0085);
+    const label = `Spec${RLO}${ZWSP}${NEL}A\tB`;
+    const result = ingestInlineSources(input([requirementsSource(label, VALID_TEXT)]));
+    const displayLabel = result.envelopes[0]?.displayLabel ?? "";
+    // The invisible / reordering code points are gone entirely…
+    expect(displayLabel).not.toContain(RLO);
+    expect(displayLabel).not.toContain(ZWSP);
+    expect(displayLabel).not.toContain(NEL);
+    // …the C0 TAB collapsed to a space (single-line preserved) and the visible text survives in order.
+    expect(displayLabel).toBe("SpecA B");
   });
 });
 
@@ -983,6 +1006,104 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
     }
   });
+
+  // ── Integrity hash provenance derives from the REDACTED corpus, never the raw text (Issue #719) ──
+  // The envelope's integrityHashSha256Hex is computed over the post-redaction joined corpus
+  // (processCapsuleDocs runs redact() before buildCapsuleSource joins the document text). No existing
+  // test pins this: a mutation that hashed the raw resolver text would survive AND would let a secret
+  // be reconstructed/confirmed from the audit-ledger hash input. This anchors the hash to the bytes
+  // the model actually sees.
+  it("derives the envelope integrity hash from the REDACTED corpus, not the raw capsule text", () => {
+    const awsAccessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const rawText = `service config\naws_access_key_id=${awsAccessKeyId}\nendpoint=/v1/run`;
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => [
+      { documentId: "cfg", text: rawText },
+    ];
+    const result = ingest(inputWithResolver([capsuleSource("Cfg", "cap-hash")], resolver));
+    const hash = result.envelopes[0]?.provenance.integrityHashSha256Hex;
+    // The stored hash equals the hash of the single document's redacted text (the corpus the model
+    // actually sees), and is NOT the hash of the raw secret-bearing text.
+    expect(hash).toBe(sha256Hex(redact(rawText)));
+    expect(hash).not.toBe(sha256Hex(rawText));
+  });
+
+  // ── Drift correctness: a capsule atom id is keyed by documentId, never corpus position (Epic #735) ──
+  // capsuleDocAtom derives the atom id from (envelopeId, documentId) only. Adding or removing a sibling
+  // document must NOT shift an unchanged document's atom id, or re-ingestion would false-orphan its
+  // existing candidates. The runIngestion.ts comment asserts this invariant; this pins it executably
+  // (parity with the workspace stability test) so a regression to a position-indexed id is caught.
+  it("keeps an unchanged capsule document's atom id stable when a sibling document is prepended", () => {
+    const stable = {
+      documentId: "stable-req",
+      text: "The system shall validate every input field.",
+    };
+    const before = ingest(inputWithResolver([capsuleSource("Spec", "cap-drift")], () => [stable]));
+    const after = ingest(
+      inputWithResolver([capsuleSource("Spec", "cap-drift")], () => [
+        { documentId: "new-req", text: "A newly added requirement appears first." },
+        stable,
+      ]),
+    );
+    const beforeAtom = before.ingestedAtoms[0];
+    const afterAtom = after.ingestedAtoms.find((a) => a.canonicalText.startsWith("stable-req\n"));
+    expect(beforeAtom?.atom.id).toBeDefined();
+    // Same id and same content hash regardless of the sibling's presence or the doc's new position.
+    expect(afterAtom?.atom.id).toBe(beforeAtom?.atom.id);
+    expect(afterAtom?.atom.canonicalHashSha256Hex).toBe(beforeAtom?.atom.canonicalHashSha256Hex);
+  });
+
+  // ── Grounding fidelity: a blank middle document is skipped without dropping its neighbours ──
+  // processCapsuleDocs uses `continue` (not `break`) when a document trims to nothing after
+  // redaction, so a blank document between two usable ones must not truncate the corpus. A
+  // continue→break mutation would silently drop every document after the first blank — a
+  // grounded-generation data-loss bug.
+  it("skips a blank middle capsule document while keeping the documents around it", () => {
+    const docs = [
+      { documentId: "before", text: "The system shall enforce a daily transfer limit." },
+      { documentId: "blank", text: "   \n\t  " },
+      { documentId: "after", text: "The system shall record every login attempt." },
+    ];
+    const result = ingest(inputWithResolver([capsuleSource("Mixed", "cap-mixed")], () => docs));
+    expect(result.ingestedAtoms.length).toBe(2);
+    const firstLines = result.ingestedAtoms.map((a) => a.canonicalText.split("\n")[0]);
+    expect(firstLines).toContain("before");
+    expect(firstLines).toContain("after");
+    expect(firstLines).not.toContain("blank");
+  });
+
+  // ── Folder/file binding UNAFFECTED by capsule co-connection (Issue #719 acceptance criterion) ──
+  // Connecting a capsule alongside a folder must not alter the folder's atoms. With folder content
+  // that fits the (now byte-shared) budget, the workspace atom's id, content, and content hash must
+  // be byte-identical to the lone-folder run — proving the capsule path never contaminates or
+  // re-identifies the workspace atom.
+  it("leaves the folder atom byte-identical when a capsule source is connected alongside it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-719-folder-"));
+    writeFileSync(
+      join(dir, "spec.md"),
+      "The system shall throttle repeated failed logins.\n",
+      "utf8",
+    );
+    try {
+      const alone = ingest(input([{ kind: "workspace", label: "Spec", path: dir }]));
+      const withCapsule = ingest(
+        inputWithResolver(
+          [{ kind: "workspace", label: "Spec", path: dir }, capsuleSource("Cap", "cap-co")],
+          () => [{ documentId: "d1", text: "An unrelated capsule requirement." }],
+        ),
+      );
+      const aloneAtom = alone.ingestedAtoms[0];
+      const wsEnvId = withCapsule.envelopes.find((e) => e.kind === "repository-context")?.id;
+      const wsAtom = withCapsule.ingestedAtoms.find(
+        (a) => String(a.atom.sourceEnvelopeId) === String(wsEnvId),
+      );
+      expect(aloneAtom?.atom.id).toBeDefined();
+      expect(wsAtom?.atom.id).toBe(aloneAtom?.atom.id);
+      expect(wsAtom?.canonicalText).toBe(aloneAtom?.canonicalText);
+      expect(wsAtom?.atom.canonicalHashSha256Hex).toBe(aloneAtom?.atom.canonicalHashSha256Hex);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Capsule-set source (Epic #710, Issue #716/#718) ──────────────────────────
@@ -1045,6 +1166,32 @@ describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(QiIngestionError);
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
+  });
+
+  // ── Redaction parity across capsule-set members (Issue #719 — leakage stop-condition) ──
+  // The single-capsule redaction test (cap-secret) exercises ONE document. processCapsuleDocs runs
+  // for EVERY member of an expanded set, so this plants a distinct secret in TWO members and proves
+  // both are scrubbed. A mutation that redacted only the first member (or dropped redact() on the
+  // capsule-set path) would leak the second member's secret into an atom the model sees — exactly
+  // the leakage the issue's stop-condition guards against.
+  it("redacts secrets in EVERY capsule-set member document, not only the first", () => {
+    const bearerToken = ["sk-", "live-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"].join("");
+    const awsAccessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const setDocs = [
+      { documentId: "m1", text: `Member one config. Authorization: Bearer ${bearerToken}` },
+      { documentId: "m2", text: `Member two config. aws_access_key_id=${awsAccessKeyId}` },
+    ];
+    const result = ingest(
+      inputWithResolver([capsuleSetSource("SecSet", "set-secret")], undefined, () => setDocs),
+    );
+    expect(result.ingestedAtoms.length).toBe(2);
+    const joined = result.ingestedAtoms.map((a) => a.canonicalText).join("\n");
+    expect(joined).not.toContain(bearerToken);
+    expect(joined).not.toContain(awsAccessKeyId);
+    expect(joined).toContain("[REDACTED]");
+    for (const a of result.ingestedAtoms) {
+      expect(a.atom.redactionStatus).toBe("redacted");
     }
   });
 });
@@ -1272,6 +1419,333 @@ describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #73
     } finally {
       rmSync(wsDir, { recursive: true, force: true });
       rmSync(fileDir, { recursive: true, force: true });
+    }
+  });
+
+  // Mutation caught: stamping a source's atom with a SIBLING envelope's id (a permutation the
+  // existing membership-only test cannot detect), or miscounting per-source atomCount for a
+  // multi-doc capsule. The content markers are ALL-CAPS, space-free, and redaction-safe so they
+  // survive the redact() pass byte-for-byte.
+  it("binds each source kind's content to its own envelope and reports per-source atomCount (mutation-proof attribution)", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-732-ws-"));
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-732-file-"));
+    try {
+      // Single-sentence .md → split.length <= 1 → workspaceAtom fallback → exactly 1 atom.
+      writeFileSync(
+        join(wsDir, "login.md"),
+        "The WORKSPACEONLYMARKER login screen shall validate credentials.",
+        "utf8",
+      );
+      const filePath = join(fileDir, "transfer.md");
+      writeFileSync(filePath, "The FILEONLYMARKER transfer shall enforce the daily limit.", "utf8");
+      const capsuleDocs = [
+        { documentId: "cap-doc-1", text: "The CAPSULEONLYMARKER policy governs session expiry." },
+        { documentId: "cap-doc-2", text: "The CAPSULEONLYMARKER rule requires two-factor login." },
+      ] as const;
+
+      const result = ingest(
+        inputWithResolver(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            capsuleSource("PolicyCap", "cap-policy"),
+          ],
+          () => capsuleDocs,
+        ),
+      );
+
+      // (1) Three sources → three envelopes in source order.
+      expect(result.envelopes.length).toBe(3);
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file", "capsule"]);
+      expect(result.envelopes.map((e) => e.provenance.origin)).toEqual([
+        "workspace",
+        "file",
+        "local-knowledge-capsule:cap-policy",
+      ]);
+
+      // (2) Per-source atomCount must be [1, 1, 2] and the sum must match ingestedAtoms.length.
+      expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([1, 1, 2]);
+      expect(result.ingestedAtoms.length).toBe(
+        result.sourceSummaries.reduce((sum, s) => sum + s.atomCount, 0),
+      );
+
+      // (3) Content↔envelope cross-wire guard: each envelope's atoms must contain ONLY its own
+      // marker and must not contain any sibling marker.
+      const wsEnv = result.envelopes[0];
+      const fileEnv = result.envelopes[1];
+      const capEnv = result.envelopes[2];
+      expect(wsEnv).toBeDefined();
+      expect(fileEnv).toBeDefined();
+      expect(capEnv).toBeDefined();
+
+      const atomsFor = (envId: unknown): readonly string[] =>
+        result.ingestedAtoms
+          .filter((a) => String(a.atom.sourceEnvelopeId) === String(envId))
+          .map((a) => a.canonicalText);
+
+      const wsTexts = atomsFor(wsEnv?.id);
+      expect(wsTexts.length).toBe(1);
+      expect(wsTexts.every((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(true);
+      expect(wsTexts.some((t) => t.includes("FILEONLYMARKER"))).toBe(false);
+      expect(wsTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
+
+      const fileTexts = atomsFor(fileEnv?.id);
+      expect(fileTexts.length).toBe(1);
+      expect(fileTexts.every((t) => t.includes("FILEONLYMARKER"))).toBe(true);
+      expect(fileTexts.some((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(false);
+      expect(fileTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
+
+      const capTexts = atomsFor(capEnv?.id);
+      expect(capTexts.length).toBe(2);
+      expect(capTexts.every((t) => t.includes("CAPSULEONLYMARKER"))).toBe(true);
+      expect(capTexts.some((t) => t.includes("WORKSPACEONLYMARKER"))).toBe(false);
+      expect(capTexts.some((t) => t.includes("FILEONLYMARKER"))).toBe(false);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+  });
+
+  // Mutation caught: a failing connected source throwing instead of being skipped (ingest would
+  // throw rather than succeed), or the skipped source still emitting an envelope (envelopes.length
+  // would be 3 instead of 2).
+  it("keeps the healthy kinds attributable when one connected kind is unavailable", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-732-skip-ws-"));
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-732-skip-file-"));
+    try {
+      writeFileSync(
+        join(wsDir, "login.md"),
+        "The WORKSPACEONLYMARKER login screen shall validate credentials.",
+        "utf8",
+      );
+      const filePath = join(fileDir, "transfer.md");
+      writeFileSync(filePath, "The FILEONLYMARKER transfer shall enforce the daily limit.", "utf8");
+
+      // capsule resolver returns [] → QI_CAPSULE_UNAVAILABLE for that source only.
+      const result = ingest(
+        inputWithResolver(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            capsuleSource("Cap", "cap-unavail"),
+          ],
+          () => [],
+        ),
+      );
+
+      // (1) Run succeeds; healthy sources produced atoms.
+      expect(result.ingestedAtoms.length).toBeGreaterThanOrEqual(2);
+
+      // (2) Only the two healthy sources have envelopes.
+      expect(result.envelopes.length).toBe(2);
+      expect(result.envelopes.map((e) => e.provenance.origin)).toEqual(["workspace", "file"]);
+
+      // (3) Every atom's envelopeId ∈ the 2-envelope set, and both are cited.
+      const envelopeIds = new Set(result.envelopes.map((e) => String(e.id)));
+      for (const a of result.ingestedAtoms) {
+        expect(envelopeIds.has(String(a.atom.sourceEnvelopeId))).toBe(true);
+      }
+      const cited = new Set(result.ingestedAtoms.map((a) => String(a.atom.sourceEnvelopeId)));
+      expect(cited.size).toBe(2);
+
+      // (4) The capsule appears in skippedSources with the right kind and code.
+      expect(result.skippedSources.length).toBe(1);
+      expect(result.skippedSources[0]?.kind).toBe("capsule");
+      expect(result.skippedSources[0]?.code).toBe("QI_CAPSULE_UNAVAILABLE");
+
+      // (5) sourceSummaries only tracks the ingested sources.
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file"]);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Capsule / capsule-set byte-budget at n > 1 (Issue #730 byte containment) ──────────────────
+//
+// Existing capsule byte tests either run at n=1 (where perSourceByteBudget(1) === 196 608 so the
+// byteBudget param to processCapsuleDocs is always inert) or use a tiny corpus far below the per-run
+// budget. A mutation that drops `byteBudget` from processCapsuleDocs would be invisible to both.
+// These tests use n=2 so perSourceByteBudget(2) = floor(196608/2) = 98 304 < 196 608, making the
+// byteBudget param load-bearing. They mirror the figma-snapshot multi-source composition test
+// (runIngestionFigmaSnapshot.test.ts:345) for the capsule and capsule-set entry points.
+
+// UTF-8 byte length helper (mirrors the implementation's TextEncoder counter).
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+describe("ingestInlineSources — capsule byte budget at n=2 (Issue #730 containment)", () => {
+  // C1: capsule source, n=2.
+  //
+  // Build a capsule corpus that would exceed perSourceByteBudget(2) = 98 304 if byteBudget is
+  // ignored, then connect a second source so the capsule must share the global pool.
+  //
+  // Corpus: 30 docs × 5 000 bytes each = 150 000 raw bytes > 98 304 (our fair share).
+  // Each doc fits within CAPSULE_MAX_BYTES_PER_DOCUMENT (16 384), so the per-doc cap never fires;
+  // only the per-run budget gate inside processCapsuleDocs limits intake here.
+  //
+  // Slack: each accepted document contributes its documentId prefix + "\n" (at most ~20 bytes per
+  // doc) on top of the body bytes. We allow 30 × 20 = 600 bytes of prefix overhead.
+  it(
+    "capsule source paired with a second source stays within perSourceByteBudget(2) = 98 304 " +
+      "(mutation-proof: fails if byteBudget is dropped from processCapsuleDocs)",
+    () => {
+      // 30 docs × 5 000 bytes = 150 000 raw bytes > perSourceByteBudget(2) = 98 304.
+      const largeDocs = Array.from({ length: 30 }, (_, i) => ({
+        documentId: `cap-doc-${String(i)}`,
+        text: "C".repeat(5_000),
+      }));
+      const capsuleResolver = (_id: string): readonly { documentId: string; text: string }[] =>
+        largeDocs;
+
+      // Pair: capsule + requirements (n=2 → byteBudget = floor(196608/2) = 98 304)
+      const pair = ingest(
+        inputWithResolver(
+          [capsuleSource("BigCapsule", "cap-byte-c1"), requirementsSource("R", VALID_TEXT)],
+          capsuleResolver,
+        ),
+      );
+
+      const capsuleEnvId = pair.envelopes.find((e) => e.kind === "local-knowledge-capsule")?.id;
+      expect(capsuleEnvId).toBeDefined();
+      const capsuleAtoms = pair.ingestedAtoms.filter(
+        (a) => String(a.atom.sourceEnvelopeId) === String(capsuleEnvId),
+      );
+
+      // Sum the UTF-8 byte length of every capsule atom's canonical text.
+      const capsuleTotalBytes = capsuleAtoms.reduce(
+        (sum, a) => sum + utf8ByteLength(a.canonicalText),
+        0,
+      );
+      // Must not exceed the fair share (98 304) plus prefix overhead (30 docs × 20 bytes slack).
+      // Prefix overhead comment: each accepted doc contributes "cap-doc-N\n" ≤ 12 bytes on top
+      // of the (possibly truncated) body — we allow 30 × 20 = 600 bytes of headroom.
+      expect(capsuleTotalBytes).toBeLessThanOrEqual(98_304 + 600); // floor(196608/2) + prefix slack
+
+      // Mutation-robustness: the same capsule connected ALONE (n=1, full budget) must produce
+      // MORE capsule bytes than when paired. If byteBudget is dropped from processCapsuleDocs the
+      // pair total would equal the lone total, making the comparison fail.
+      const lone = ingest(
+        inputWithResolver([capsuleSource("BigCapsule", "cap-byte-c1")], capsuleResolver),
+      );
+      const loneCapsuleAtoms = lone.ingestedAtoms;
+      const loneTotalBytes = loneCapsuleAtoms.reduce(
+        (sum, a) => sum + utf8ByteLength(a.canonicalText),
+        0,
+      );
+      expect(loneTotalBytes).toBeGreaterThan(capsuleTotalBytes);
+    },
+  );
+
+  // C2: capsule-set source, n=2.
+  //
+  // Same large-corpus scenario via the capsule-set entry point (ingestCapsuleSet →
+  // buildCapsuleSource → processCapsuleDocs), confirming the byteBudget flows through the
+  // capsule-set path as well. Belt-and-suspenders for the second entry point.
+  it(
+    "capsule-set source paired with a second source stays within perSourceByteBudget(2) = 98 304 " +
+      "(belt-and-suspenders: capsule-set entry point also routes through processCapsuleDocs)",
+    () => {
+      // Same 30 × 5 000 byte corpus, routed through the capsule-set resolver.
+      const largeDocs = Array.from({ length: 30 }, (_, i) => ({
+        documentId: `set-doc-${String(i)}`,
+        text: "C".repeat(5_000),
+      }));
+      const capsuleSetResolver = (_id: string): readonly { documentId: string; text: string }[] =>
+        largeDocs;
+
+      // Pair: capsule-set + requirements (n=2 → byteBudget = floor(196608/2) = 98 304)
+      const pair = ingest(
+        inputWithResolver(
+          [capsuleSetSource("BigSet", "set-byte-c2"), requirementsSource("R", VALID_TEXT)],
+          undefined,
+          capsuleSetResolver,
+        ),
+      );
+
+      const capsuleEnvId = pair.envelopes.find((e) => e.kind === "local-knowledge-capsule")?.id;
+      expect(capsuleEnvId).toBeDefined();
+      const capsuleAtoms = pair.ingestedAtoms.filter(
+        (a) => String(a.atom.sourceEnvelopeId) === String(capsuleEnvId),
+      );
+
+      const capsuleTotalBytes = capsuleAtoms.reduce(
+        (sum, a) => sum + utf8ByteLength(a.canonicalText),
+        0,
+      );
+      // Same slack reasoning as C1: 30 docs × 20 bytes prefix overhead = 600 bytes.
+      expect(capsuleTotalBytes).toBeLessThanOrEqual(98_304 + 600); // floor(196608/2) + prefix slack
+    },
+  );
+});
+
+// ─── AC3 Chat-parity: QI source cap matches DEFAULT_GROUNDING_LIMITS (Issue #730) ──────────────
+//
+// Issue #730 stop-condition: "the QI source cap diverges from Chat's MAX_CONNECTED_SOURCES". The
+// QI cap (MAX_QI_SOURCES = 16) is a local constant; DEFAULT_GROUNDING_LIMITS.maxConnectedSources
+// is the Chat-side value. If either side drifts the test fails — the constant is the single source
+// of truth for the cap, so this test is the only executable guard against divergence.
+
+describe("ingestInlineSources — AC3 Chat-parity source cap (Issue #730)", () => {
+  it("ingests exactly DEFAULT_GROUNDING_LIMITS.maxConnectedSources sources and drops 1 when one over", () => {
+    // Build maxConnectedSources + 1 valid requirements sources so the cap fires exactly once.
+    const cap = DEFAULT_GROUNDING_LIMITS.maxConnectedSources;
+    const sources = Array.from({ length: cap + 1 }, (_, i) => manyReqs(`Chat${String(i)}`, 3));
+    const result = ingest(input(sources));
+
+    // Exactly `cap` sources ingested — the overflow is silently dropped (not an error).
+    expect(result.sourceSummaries.length).toBe(cap);
+    // Exactly 1 dropped — mutation check: a cap of `cap+1` would give droppedSourceCount=0.
+    expect(result.droppedSourceCount).toBe(1);
+  });
+});
+
+// ─── Envelope-id pre-image injectivity (pipe-injection hardening, #732 security follow-up) ──────
+//
+// envelopeIdFor hashes "qi-src-v1|<index>|<label>|<content>"; label and content are
+// user/path-controlled. escapeEnvelopeField escapes "\" then "|" in each field so a value can never
+// inject a raw delimiter and shift a field boundary — making the pre-image injective regardless of
+// field order. Clean values (no "\" or "|") are unchanged, so their envelope ids stay byte-stable.
+
+describe("envelopeIdFor — injective pre-image (pipe-injection hardening)", () => {
+  it("gives distinct ids to label/content splits that share the same raw bytes", () => {
+    // Same index; ("x|a","b") vs ("x","a|b") both flatten to the bytes "x|a|b". Without field
+    // escaping both hash "qi-src-v1|0|x|a|b" and collide; escaping keeps the two ids distinct.
+    expect(String(envelopeIdFor(0, "x|a", "b"))).not.toBe(String(envelopeIdFor(0, "x", "a|b")));
+  });
+
+  it("escapes the backslash too, so a trailing backslash cannot fake an escaped delimiter", () => {
+    expect(String(envelopeIdFor(0, "a\\", "b"))).not.toBe(String(envelopeIdFor(0, "a", "\\b")));
+  });
+
+  it("keeps clean labels/content byte-identical to the unescaped pre-image (behavior-preserving)", () => {
+    // Clean inputs must keep their existing envelope id so persisted runs and the atom ids derived
+    // from the envelope id are unchanged after this hardening.
+    const expected = `qi-src-${sha256Hex("qi-src-v1|0|Doc|src/app.ts").slice(0, 24)}`;
+    expect(String(envelopeIdFor(0, "Doc", "src/app.ts"))).toBe(expected);
+  });
+
+  it("is deterministic for identical inputs", () => {
+    const first = String(envelopeIdFor(2, "Spec", "key-1"));
+    const second = String(envelopeIdFor(2, "Spec", "key-1"));
+    expect(first).toBe(second);
+  });
+
+  it("ingests pipe-bearing-label sources with distinct envelopes and correct attribution", () => {
+    const docs = [{ documentId: "d1", text: "The system shall log audit events." }];
+    const result = ingest(
+      inputWithResolver(
+        [capsuleSource("Cap|One", "cap-a"), capsuleSource("Cap|Two", "cap-b")],
+        (_id: string): readonly { documentId: string; text: string }[] => docs,
+      ),
+    );
+    expect(result.envelopes.length).toBe(2);
+    const ids = new Set(result.envelopes.map((e) => String(e.id)));
+    expect(ids.size).toBe(2);
+    for (const atom of result.ingestedAtoms) {
+      expect(ids.has(String(atom.atom.sourceEnvelopeId))).toBe(true);
     }
   });
 });

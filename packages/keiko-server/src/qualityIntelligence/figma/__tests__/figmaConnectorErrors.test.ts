@@ -31,6 +31,7 @@ const ALL_CODES: readonly FigmaConnectorErrorCode[] = [
   "FIGMA_NETWORK_UNREACHABLE",
   "FIGMA_EGRESS_TIMEOUT",
   "FIGMA_EGRESS_FAILED",
+  "FIGMA_BUILD_TIMEOUT",
   "FIGMA_INTERNAL",
 ];
 

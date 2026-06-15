@@ -13,7 +13,7 @@
 //   4. Apply suppression (status / validity / confidence) -> "suppressed-by-status".
 //      Apply type filter when request.types is set -> "type-filtered".
 //   5. Build an edges-by-memory map for the candidate set if the port exposes
-//      listOutgoingEdges (bounded fetch — we only ask about the candidates we still hold).
+//      listOutgoingEdges/listIncomingEdges (bounded fetch — only candidates we still hold).
 //   6. Rank with the hybrid ranker; assemble with the token-budgeted greedy assembler.
 //   7. Attach request to the assembler's result and return.
 //
@@ -194,6 +194,14 @@ function applyFilters(
       omitted.push({ memoryId: r.id, reason: "type-filtered" });
       continue;
     }
+    if (r.status === "superseded" && request.includeSuperseded !== true) {
+      omitted.push({
+        memoryId: r.id,
+        reason: "suppressed-by-status",
+        suppressionDetail: "superseded",
+      });
+      continue;
+    }
     const sup = isMemorySuppressed(r, request.nowMs, resolved.staleConfidenceThreshold);
     if (sup.suppressed) {
       // sup.reason is optional on SuppressionResult; under exactOptionalPropertyTypes we
@@ -214,24 +222,37 @@ function buildEdgesIndex(
   port: MemoryQueryPort,
   candidates: readonly MemoryRecord[],
 ): ReadonlyMap<MemoryId, readonly MemoryEdge[]> | undefined {
-  if (port.listOutgoingEdges === undefined) return undefined;
+  if (port.listOutgoingEdges === undefined && port.listIncomingEdges === undefined)
+    return undefined;
   const map = new Map<MemoryId, readonly MemoryEdge[]>();
   for (const c of candidates) {
     try {
       // Call through the port object directly so `this` binds correctly on a class-based
       // port implementation (avoids the @typescript-eslint/unbound-method trap).
-      const edges = port.listOutgoingEdges(c.id);
+      const edges = dedupeEdges([
+        ...(port.listOutgoingEdges?.(c.id) ?? []),
+        ...(port.listIncomingEdges?.(c.id) ?? []),
+      ]);
       if (edges.length > 0) map.set(c.id, edges);
     } catch (cause) {
-      throw new RetrievalError("port-failure", `listOutgoingEdges threw for ${c.id}`, { cause });
+      throw new RetrievalError("port-failure", `listEdges threw for ${c.id}`, { cause });
     }
   }
   return map;
 }
 
-function hasPositiveSemanticSignal(
-  semanticById: MemoryRetrievalRequest["semanticById"],
-): boolean {
+function dedupeEdges(edges: readonly MemoryEdge[]): readonly MemoryEdge[] {
+  const seen = new Set<string>();
+  const out: MemoryEdge[] = [];
+  for (const edge of edges) {
+    if (seen.has(edge.id)) continue;
+    seen.add(edge.id);
+    out.push(edge);
+  }
+  return out;
+}
+
+function hasPositiveSemanticSignal(semanticById: MemoryRetrievalRequest["semanticById"]): boolean {
   if (semanticById === undefined) return false;
   for (const score of semanticById.values()) {
     if (score > 0) return true;
@@ -240,8 +261,7 @@ function hasPositiveSemanticSignal(
 }
 
 function hasQuerySignal(request: MemoryRetrievalRequest): boolean {
-  const lexicalSignal =
-    request.queryText !== undefined && tokenize(request.queryText).length > 0;
+  const lexicalSignal = request.queryText !== undefined && tokenize(request.queryText).length > 0;
   return lexicalSignal || hasPositiveSemanticSignal(request.semanticById);
 }
 

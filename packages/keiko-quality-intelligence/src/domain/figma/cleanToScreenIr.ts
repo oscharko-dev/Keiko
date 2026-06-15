@@ -58,6 +58,9 @@ export const cleanScopedNodesToScreenIr = (rawRoot: unknown): ScreenIrResult => 
     })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
+  // keptNodeCount counts only IR nodes under detected screens, so surviving scope containers
+  // (CANVAS/SECTION) that are not themselves screens count toward removal. removedRatio is therefore
+  // the fraction of raw input nodes not retained in any screen IR, not the fraction the pruner dropped.
   const keptNodeCount = screens.reduce((sum, screen) => sum + countIrNodes(screen.root), 0);
 
   return {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { retrieveMemoryContext } from "./retrieve.js";
 import { RetrievalError } from "./errors.js";
 import type { MemoryQueryPort, MemoryRetrievalRequest } from "./types.js";
-import { buildRecord, memoryId, projectScope, userScope } from "./_support.js";
+import { buildEdge, buildRecord, memoryId, projectScope, userScope } from "./_support.js";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 
 const now = 7 * 86_400_000;
@@ -253,6 +253,72 @@ describe("retrieveMemoryContext — AC4 stale suppression", () => {
     });
   });
 
+  it("omits superseded memories by default", () => {
+    const accepted = buildRecord({ id: "accepted", body: "formatter is biome", updatedAt: now });
+    const superseded = buildRecord({
+      id: "superseded",
+      status: "superseded",
+      body: "formatter unique-token-superseded is prettier",
+      updatedAt: now,
+    });
+    const { port } = portReturning({ "user:u1": [accepted, superseded] });
+    const result = retrieveMemoryContext(baseRequest({ budgetTokens: 500 }), port);
+
+    expect(result.included.map((i) => i.memoryId)).toEqual([memoryId("accepted")]);
+    expect(result.contextBlock.text).not.toContain("unique-token-superseded");
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("superseded"),
+      reason: "suppressed-by-status",
+      suppressionDetail: "superseded",
+    });
+  });
+
+  it("includes superseded memories only when explicitly requested", () => {
+    const superseded = buildRecord({
+      id: "superseded",
+      status: "superseded",
+      body: "formatter is prettier",
+      updatedAt: now,
+    });
+    const { port } = portReturning({ "user:u1": [superseded] });
+    const result = retrieveMemoryContext(
+      baseRequest({ includeSuperseded: true, budgetTokens: 500 }),
+      port,
+    );
+
+    expect(result.included.map((i) => i.memoryId)).toEqual([memoryId("superseded")]);
+    expect(result.omitted).toEqual([]);
+  });
+
+  it("keeps accepted corrections visible under the original memory type filter", () => {
+    const oldPreference = buildRecord({
+      id: "old-pref",
+      type: "preference",
+      status: "superseded",
+      body: "package manager is yarn",
+      updatedAt: now - 10,
+    });
+    const correctedPreference = buildRecord({
+      id: "corrected-pref",
+      type: "preference",
+      sourceKind: "accepted-correction",
+      body: "package manager is npm ci",
+      updatedAt: now,
+    });
+    const { port } = portReturning({ "user:u1": [oldPreference, correctedPreference] });
+    const result = retrieveMemoryContext(
+      baseRequest({ types: ["preference"], queryText: "package manager", budgetTokens: 500 }),
+      port,
+    );
+
+    expect(result.included.map((i) => i.memoryId)).toEqual([memoryId("corrected-pref")]);
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("old-pref"),
+      reason: "suppressed-by-status",
+      suppressionDetail: "superseded",
+    });
+  });
+
   it("requests archived, forgotten, and expired rows from the port for explainable omissions", () => {
     const optionsSeen: unknown[] = [];
     const expired = buildRecord({ id: "exp", validFrom: 0, validUntil: now - 1 });
@@ -417,5 +483,20 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
       memoryId: memoryId("schedule"),
       reason: "below-threshold",
     });
+  });
+
+  it("uses incoming graph edges when computing graph proximity", () => {
+    const anchor = buildRecord({ id: "anchor", pinned: true, updatedAt: now });
+    const linked = buildRecord({ id: "linked", updatedAt: now - 1 });
+    const port: MemoryQueryPort = {
+      listByScope: () => [anchor, linked],
+      listIncomingEdges: (id) =>
+        id === memoryId("linked") ? [buildEdge({ from: "anchor", to: "linked" })] : [],
+    };
+
+    const result = retrieveMemoryContext(baseRequest({ budgetTokens: 500 }), port);
+
+    const linkedEntry = result.included.find((entry) => entry.memoryId === memoryId("linked"));
+    expect(linkedEntry?.subscores.graph).toBeGreaterThan(0);
   });
 });

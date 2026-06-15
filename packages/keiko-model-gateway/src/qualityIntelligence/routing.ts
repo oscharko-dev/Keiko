@@ -8,6 +8,7 @@
 
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceSafeErrorException, makeCapabilityMismatchError } from "./safeError.js";
+import { modelSupportsCapability } from "./capabilityMapping.js";
 import type {
   QualityIntelligenceCapability,
   QualityIntelligenceTaskProfile,
@@ -22,25 +23,12 @@ export interface QualityIntelligenceSelectedModel {
   readonly capability: ModelCapability;
 }
 
-function modelSupports(capability: QualityIntelligenceCapability, model: ModelCapability): boolean {
-  switch (capability) {
-    case "text":
-      return model.kind === "chat";
-    case "vision":
-      return model.supportsImageInput;
-    case "structured-output":
-      return model.structuredOutput;
-    case "function-calling":
-      return model.toolCalling;
-  }
-}
-
 function satisfiesAll(
   required: readonly QualityIntelligenceCapability[],
   model: ModelCapability,
 ): boolean {
   for (const cap of required) {
-    if (!modelSupports(cap, model)) {
+    if (!modelSupportsCapability(cap, model)) {
       return false;
     }
   }

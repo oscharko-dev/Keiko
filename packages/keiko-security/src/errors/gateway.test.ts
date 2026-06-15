@@ -6,6 +6,7 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   ERROR_CODES,
+  GatewayEgressError,
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
@@ -30,6 +31,11 @@ describe("error code constants", () => {
     expect(ERROR_CODES.PROVIDER_ERROR).toBe("GATEWAY_PROVIDER_ERROR");
     expect(ERROR_CODES.CONFIG_INVALID).toBe("GATEWAY_CONFIG_INVALID");
     expect(ERROR_CODES.UNKNOWN_MODEL).toBe("GATEWAY_UNKNOWN_MODEL");
+    expect(ERROR_CODES.PROXY_UNREACHABLE).toBe("GATEWAY_PROXY_UNREACHABLE");
+    expect(ERROR_CODES.PROXY_AUTH_REQUIRED).toBe("GATEWAY_PROXY_AUTH_REQUIRED");
+    expect(ERROR_CODES.PROXY_EGRESS_FAILED).toBe("GATEWAY_PROXY_EGRESS_FAILED");
+    expect(ERROR_CODES.PROXY_BLOCKED_BY_POLICY).toBe("GATEWAY_PROXY_BLOCKED_BY_POLICY");
+    expect(ERROR_CODES.TLS_CA_FAILURE).toBe("GATEWAY_TLS_CA_FAILURE");
   });
 });
 
@@ -47,6 +53,11 @@ describe("error subclasses", () => {
     [new ProviderError("a", 500), ERROR_CODES.PROVIDER_ERROR, false],
     [new ConfigInvalidError("a"), ERROR_CODES.CONFIG_INVALID, false],
     [new UnknownModelError("a"), ERROR_CODES.UNKNOWN_MODEL, false],
+    [
+      new GatewayEgressError(ERROR_CODES.PROXY_BLOCKED_BY_POLICY, "a"),
+      ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
+      false,
+    ],
   ] as const;
 
   it.each(cases)("%s carries the right code and is a GatewayError", (err, code, retryable) => {
@@ -67,6 +78,13 @@ describe("error subclasses", () => {
 
   it("ProviderError carries the http status", () => {
     expect(new ProviderError("boom", 503).httpStatus).toBe(503);
+  });
+
+  it("GatewayEgressError carries a distinct non-retryable egress code", () => {
+    const err = new GatewayEgressError(ERROR_CODES.TLS_CA_FAILURE, "TLS verification failed");
+    expect(err.code).toBe(ERROR_CODES.TLS_CA_FAILURE);
+    expect(err.retryable).toBe(false);
+    expect(err).toBeInstanceOf(GatewayError);
   });
 
   it("redacts secrets in the message at construction time", () => {

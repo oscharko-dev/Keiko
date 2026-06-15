@@ -20,6 +20,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { Buffer } from "node:buffer";
 
 import type {
   MemoryEdge,
@@ -340,6 +341,7 @@ export function loadFixture(filename: string): readonly MemoryEvalFixture[] {
 // ─── Fixed clock + counter ID source ─────────────────────────────────────────
 export const FIXED_NOW_MS = DEFAULT_TIMESTAMP;
 export const fixedClock = (): number => FIXED_NOW_MS;
+export const TEST_VAULT_KEY: Buffer = Buffer.alloc(32, 7);
 
 export function counterIdSource(prefix: string): () => string {
   let n = 0;

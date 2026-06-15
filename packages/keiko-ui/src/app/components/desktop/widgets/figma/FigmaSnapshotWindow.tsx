@@ -31,11 +31,13 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import Image from "next/image";
 import { ApiError } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
+  figmaSnapshotScreenImageUrl,
   generateFigmaCode,
   revokeFigmaToken,
 } from "@/lib/figma-snapshot-api";
@@ -179,6 +181,7 @@ interface ScreenCardProps {
   readonly screenId: string;
   readonly name: string;
   readonly irSummary: string;
+  readonly imageSrc: string;
   readonly imageByteLength: number;
 }
 
@@ -187,6 +190,7 @@ function ScreenCard({
   screenId,
   name,
   irSummary,
+  imageSrc,
   imageByteLength,
 }: ScreenCardProps): ReactNode {
   return (
@@ -194,22 +198,15 @@ function ScreenCard({
       className="figma-snapshot-screen-card"
       aria-label={`Screen ${String(index + 1)}: ${name}`}
     >
-      {/* uiux-fix F045 C378: the tile is a deliberate thumbnail surrogate (no image-serving
-          endpoint yet) — a frame glyph above the index reads as "screen N", not as a
-          failed image load. */}
-      <div className="figma-snapshot-screen-placeholder" aria-hidden="true">
-        <svg
-          className="figma-snapshot-screen-frame-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        >
-          <path d="M7 2v20M17 2v20M2 7h20M2 17h20" />
-        </svg>
-        <span className="figma-snapshot-screen-index">{String(index + 1)}</span>
-      </div>
+      <Image
+        className="figma-snapshot-screen-image"
+        src={imageSrc}
+        alt={`Captured preview for ${name}`}
+        loading="lazy"
+        width={72}
+        height={54}
+        unoptimized
+      />
       <div className="figma-snapshot-screen-meta">
         {/* uiux-fix F045 C252: the name is ellipsised user content — title makes the
             full name reachable on hover for mouse users. */}
@@ -281,6 +278,7 @@ export function FigmaSnapshotWindow({
 
   // Fix #7: AbortController for the active build/load fetch.
   const abortRef = useRef<AbortController | null>(null);
+  const codeAbortRef = useRef<AbortController | null>(null);
 
   const flagConsentRequired = useCallback((): void => {
     setConsentInvalid(true);
@@ -321,6 +319,7 @@ export function FigmaSnapshotWindow({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      codeAbortRef.current?.abort();
     };
   }, []);
 
@@ -328,6 +327,8 @@ export function FigmaSnapshotWindow({
     async (link: string, isResnapshot: boolean): Promise<void> => {
       // Abort any previous in-flight request before starting a new one.
       abortRef.current?.abort();
+      codeAbortRef.current?.abort();
+      codeAbortRef.current = null;
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -411,18 +412,34 @@ export function FigmaSnapshotWindow({
   const handleGenerateCode = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
     if (runId === undefined || runId.length === 0 || codeState === "generating") return;
+    const controller = new AbortController();
+    codeAbortRef.current = controller;
     setCodeState("generating");
     setCodeError(null);
-    codegenImpl(runId)
+    codegenImpl(runId, controller.signal)
       .then((result) => {
         setCode(result);
         setCodeState("done");
       })
       .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setCodeState("idle");
+          return;
+        }
         setCodeError(formatError(err));
         setCodeState("error");
+      })
+      .finally(() => {
+        if (codeAbortRef.current === controller) codeAbortRef.current = null;
       });
   }, [codegenImpl, codeState, snapshotRunId, summary]);
+
+  const handleCancelCodegen = useCallback((): void => {
+    codeAbortRef.current?.abort();
+    codeAbortRef.current = null;
+    setCodeState("idle");
+    setCodeError(null);
+  }, []);
 
   // Load a previously stored snapshot (e.g. after window re-open) when runId is in cfg but no
   // in-memory summary is present.
@@ -555,7 +572,7 @@ export function FigmaSnapshotWindow({
           />
           <span>
             I acknowledge the configured Figma PAT is read-only and least-privilege (
-            <code>files:read</code>).{" "}
+            <code>file_content:read</code>).{" "}
             <span className="figma-snapshot-consent-required">
               Required before the first snapshot of a board.
             </span>
@@ -708,15 +725,26 @@ export function FigmaSnapshotWindow({
           {/* Design-to-code (#755): generate reviewable HTML/CSS + design tokens from the stored
               snapshot. Deterministic + model-free server-side; the result is a proposal for review. */}
           <div className="figma-snapshot-codegen">
-            <button
-              type="button"
-              className="figma-snapshot-codegen-btn"
-              onClick={handleGenerateCode}
-              aria-disabled={codeState === "generating" ? "true" : undefined}
-              aria-busy={codeState === "generating"}
-            >
-              {codeState === "generating" ? "Generating code…" : "Generate code"}
-            </button>
+            <div className="figma-snapshot-codegen-actions">
+              <button
+                type="button"
+                className="figma-snapshot-codegen-btn"
+                onClick={handleGenerateCode}
+                aria-disabled={codeState === "generating" ? "true" : undefined}
+                aria-busy={codeState === "generating"}
+              >
+                {codeState === "generating" ? "Generating code…" : "Generate code"}
+              </button>
+              {codeState === "generating" && (
+                <button
+                  type="button"
+                  className="figma-snapshot-codegen-cancel-btn"
+                  onClick={handleCancelCodegen}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
             {codeState === "error" && codeError !== null && (
               <p className="figma-snapshot-error" role="alert">
                 {codeError}
@@ -746,15 +774,14 @@ export function FigmaSnapshotWindow({
             <summary className="figma-snapshot-scopes-summary">Required Figma PAT scopes</summary>
             <ul className="figma-snapshot-scopes-list">
               <li>
-                <code>file_read</code> — read design file structure and node metadata
-              </li>
-              <li>
-                <code>files:read</code> — read file content (REST API scope)
+                <code>file_content:read</code> — read design file structure, node metadata, and
+                rendered images
               </li>
             </ul>
             <p className="figma-snapshot-scopes-note">
-              The token is read server-side from the <code>FIGMA_ACCESS_TOKEN</code> environment
-              variable or vault. This window never holds or transmits the token.
+              The token is read server-side from the vault, Keiko config, or{" "}
+              <code>FIGMA_ACCESS_TOKEN</code> environment variable. This window never holds or
+              transmits the token.
             </p>
             {/* Fix #3: two-step inline confirm for PAT revoke (mirrors ContextBudget pattern).
                 Revoke removes the stored encrypted PAT from the server vault (#758). */}
@@ -819,6 +846,7 @@ export function FigmaSnapshotWindow({
                   screenId={screen.screenId}
                   name={screen.name}
                   irSummary={screen.irSummary}
+                  imageSrc={figmaSnapshotScreenImageUrl(summary.runId, i)}
                   imageByteLength={screen.imageByteLength}
                 />
               ))}

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
+import { WIN_TYPES } from "./WindowsRegistry";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   return {
@@ -58,8 +59,40 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   };
 }
 
+const windowControlCases = (Object.keys(WIN_TYPES) as AppWindow["type"][]).map((type) => [
+  type,
+  WIN_TYPES[type],
+] as const);
+
 describe("WindowFrame content zoom controls", () => {
-  it("minimizes through the yellow traffic-light control", async () => {
+  it.each(windowControlCases)(
+    "orders %s window controls as minimize, maximize, close",
+    (type, def) => {
+      const { unmount } = render(
+        <WindowFrame
+          win={appWindow({ type })}
+          top
+          connState={null}
+          view={{ x: 0, y: 0, zoom: 1 }}
+          api={api()}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
+
+      const controls = screen.getByRole("group", { name: `${def.title} window controls` });
+      const buttons = Array.from(controls.querySelectorAll("button"));
+
+      expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+        `Minimize ${def.title} window`,
+        `Maximize ${def.title} window`,
+        `Close ${def.title} window`,
+      ]);
+
+      unmount();
+    },
+  );
+
+  it("minimizes through the minimize window control", async () => {
     const minimize = vi.fn();
     const close = vi.fn();
     const user = userEvent.setup();

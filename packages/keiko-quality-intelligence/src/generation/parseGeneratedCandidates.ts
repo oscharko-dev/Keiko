@@ -9,7 +9,7 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseText } from "../domain/assertions.js";
+import { normaliseCandidateText } from "../domain/assertions.js";
 import type { PolicyProfile } from "../domain/policyProfile.js";
 import { regressionDefault } from "../domain/policyProfile.js";
 
@@ -124,7 +124,7 @@ const toStringList = (value: unknown): readonly string[] => {
   const out: string[] = [];
   for (const entry of source) {
     if (typeof entry !== "string") continue;
-    const text = normaliseText(entry);
+    const text = normaliseCandidateText(entry);
     if (text.length > 0) out.push(text);
   }
   return out;
@@ -162,8 +162,13 @@ const resolveDerivedAtomIds = (
   return fallback === undefined ? Object.freeze([]) : Object.freeze([fallback]);
 };
 
-const deriveCandidateId = (runId: RunId, index: number, title: string): string => {
-  const digest = sha256Hex(`qi-cand-v1|${String(runId)}|${String(index)}|${title}`).slice(0, 32);
+const deriveCandidateId = (
+  index: number,
+  title: string,
+  derivedFromAtomIds: readonly AtomId[],
+): string => {
+  const atomRefs = derivedFromAtomIds.map(String).join("|");
+  const digest = sha256Hex(`qi-cand-v2|${String(index)}|${title}|${atomRefs}`).slice(0, 32);
   return `qi-candidate-${digest}`;
 };
 
@@ -173,17 +178,22 @@ const buildCandidate = (
   input: ParseGeneratedCandidatesInput,
   profile: PolicyProfile,
 ): Candidate | undefined => {
-  const title = normaliseText(typeof raw.title === "string" ? raw.title : "");
+  const title = normaliseCandidateText(typeof raw.title === "string" ? raw.title : "");
   const steps = toStringList(raw.steps);
   if (title.length === 0 || steps.length === 0) return undefined;
   const expectedResults = toStringList(raw.expectedResults);
   const tags = toStringList(raw.tags);
+  const derivedFromAtomIds = resolveDerivedAtomIds(
+    raw.derivedFromEvidenceIndexes,
+    input.atomIds,
+    index,
+  );
   return Object.freeze<Candidate>({
     id: QualityIntelligence.asQualityIntelligenceTestCaseId(
-      deriveCandidateId(input.runId, index, title),
+      deriveCandidateId(index, title, derivedFromAtomIds),
     ),
     runId: input.runId,
-    derivedFromAtomIds: resolveDerivedAtomIds(raw.derivedFromEvidenceIndexes, input.atomIds, index),
+    derivedFromAtomIds,
     title,
     preconditions: toStringList(raw.preconditions),
     steps,

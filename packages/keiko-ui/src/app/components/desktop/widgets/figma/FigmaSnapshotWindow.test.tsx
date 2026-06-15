@@ -44,6 +44,7 @@ import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
 type TriggerFn = Required<FigmaSnapshotWindowProps>["triggerImpl"];
 type LoadFn = Required<FigmaSnapshotWindowProps>["loadImpl"];
+type CodegenFn = Required<FigmaSnapshotWindowProps>["codegenImpl"];
 type RevokeFn = Required<FigmaSnapshotWindowProps>["revokeImpl"];
 
 interface TriggerMock extends TriggerFn {
@@ -241,6 +242,26 @@ describe("FigmaSnapshotWindow", () => {
         expect(screen.getByRole("article", { name: /screen 1/iu })).toBeInTheDocument(),
       );
       expect(screen.getByRole("article", { name: /screen 2/iu })).toBeInTheDocument();
+    });
+
+    it("renders captured screen images from the token-free BFF route", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(
+          screen.getByRole("img", { name: /captured preview for screen 1/iu }),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.getByRole("img", { name: /captured preview for screen 1/iu })).toHaveAttribute(
+        "src",
+        "/api/figma/snapshots/fs-test-run-id-1234/screens/0/image",
+      );
+      expect(screen.getByRole("img", { name: /captured preview for screen 2/iu })).toHaveAttribute(
+        "src",
+        "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
+      );
     });
 
     it("shows skipped-count notice when skippedCount > 0", async () => {
@@ -624,6 +645,21 @@ describe("FigmaSnapshotWindow", () => {
       // Security: no token input/field anywhere in the component.
       expect(screen.queryByRole("textbox", { name: /token/iu })).not.toBeInTheDocument();
     });
+
+    it("shows the canonical read-only Figma PAT scopes", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(screen.getByText(/required figma pat scopes/iu)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByText(/required figma pat scopes/iu));
+      expect(screen.getAllByText("file_content:read").length).toBeGreaterThan(0);
+      expect(screen.queryByText("file_read")).not.toBeInTheDocument();
+      expect(screen.queryByText("files:read")).not.toBeInTheDocument();
+      expect(screen.queryByText("file_dev_resources:read")).not.toBeInTheDocument();
+    });
   });
 
   describe("accessibility (jest-axe)", () => {
@@ -655,6 +691,17 @@ describe("FigmaSnapshotWindow", () => {
 
     it("has no axe violations in load-stored state", async () => {
       const { container } = renderWindow({ snapshotRunId: "fs-abc123" });
+      const results = await axe(container);
+      expect(results).toHaveNoViolations();
+    });
+
+    it("has no axe violations in building state (Cancel button visible) — #756 audit", async () => {
+      // A never-resolving trigger keeps buildState==="building" so the Cancel button renders.
+      const trigger = makeTrigger((_link) => new Promise<FigmaSnapshotSummary>(() => {}));
+      const { container } = renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      expect(screen.getByRole("button", { name: /cancel/iu })).toBeInTheDocument();
       const results = await axe(container);
       expect(results).toHaveNoViolations();
     });
@@ -889,14 +936,27 @@ describe("FigmaSnapshotWindow", () => {
       ],
     };
 
-    function resolvingCodegen(): Required<FigmaSnapshotWindowProps>["codegenImpl"] & {
+    function resolvingCodegen(): CodegenFn & {
       mock: { calls: unknown[][] };
     } {
       return vi.fn(
-        async (_runId: string) => MOCK_CODE,
-      ) as unknown as Required<FigmaSnapshotWindowProps>["codegenImpl"] & {
+        async (_runId: string, _signal?: AbortSignal) => MOCK_CODE,
+      ) as unknown as CodegenFn & {
         mock: { calls: unknown[][] };
       };
+    }
+
+    function pendingCodegen(): CodegenFn & { mock: { calls: unknown[][] } } {
+      return vi.fn(
+        (_runId: string, signal?: AbortSignal) =>
+          new Promise<FigmaCodegenResponse>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      ) as unknown as CodegenFn & { mock: { calls: unknown[][] } };
     }
 
     it("generates reviewable code from the stored snapshot and lists the files", async () => {
@@ -906,10 +966,33 @@ describe("FigmaSnapshotWindow", () => {
       await typeAndSubmit(user);
       await waitForDone();
       await user.click(screen.getByRole("button", { name: /generate code/iu }));
-      await waitFor(() => expect(codegen).toHaveBeenCalledWith("fs-test-run-id-1234"));
+      await waitFor(() => expect(codegen).toHaveBeenCalled());
+      expect(codegen.mock.calls[0]?.[0]).toBe("fs-test-run-id-1234");
+      expect(codegen.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
       expect(await screen.findByText("index.html")).toBeInTheDocument();
       expect(screen.getByText("tokens.css")).toBeInTheDocument();
       expect(screen.getByText(/proposal only, never auto-applied/iu)).toBeInTheDocument();
+    });
+
+    it("cancels an in-flight code generation request", async () => {
+      const codegen = pendingCodegen();
+      renderWindow({ triggerImpl: resolvingTrigger(), codegenImpl: codegen });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      await user.click(screen.getByRole("button", { name: /generate code/iu }));
+      await waitFor(() => expect(codegen).toHaveBeenCalled());
+      const signal = codegen.mock.calls[0]?.[1] as AbortSignal | undefined;
+      expect(signal?.aborted).toBe(false);
+
+      await user.click(screen.getByRole("button", { name: /cancel/iu }));
+
+      expect(signal?.aborted).toBe(true);
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /cancel/iu })).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole("button", { name: /generate code/iu })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
   });
 });

@@ -28,6 +28,7 @@ import { run as runCrossScopeIsolation } from "./scenarios/cross-scope-isolation
 import { run as runNoMemoryMode } from "./scenarios/no-memory-mode.test.js";
 import { run as runErrorPropagation } from "./scenarios/error-propagation.test.js";
 import { run as runSuppressedMemory } from "./scenarios/suppressed-memory.test.js";
+import { run as runWorkspaceScaleBoundary } from "./scenarios/workspace-scale-boundary.test.js";
 
 import { createScorecard, serializeScorecard, type Scorecard } from "./scorecard.js";
 import { FIXED_NOW_MS } from "./_support.js";
@@ -47,6 +48,7 @@ const SCENARIOS: readonly {
   { name: "no-memory-mode", run: runNoMemoryMode },
   { name: "error-propagation", run: runErrorPropagation },
   { name: "suppressed-memory", run: runSuppressedMemory },
+  { name: "workspace-scale-boundary", run: runWorkspaceScaleBoundary },
 ];
 
 async function runAllScenarios(): Promise<Scorecard> {

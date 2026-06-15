@@ -55,6 +55,11 @@ import {
 } from "./memory-conversation-context.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import {
+  enforcePersistableMemoryOutcome,
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+} from "./memory-capture-policy.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -391,14 +396,15 @@ export async function handleMemoryCaptureFromConversation(
   const outcomes: readonly CaptureOutcome[] = extractCandidatesFromUserText(
     input.text,
     captureContext,
-    { resolver: createMemoryTargetResolver(vault) },
+    memoryCapturePolicyForDeps(deps, { resolver: createMemoryTargetResolver(vault) }),
   );
   // Issue #642: persist every candidate outcome as a `proposed` memory record so the
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
-  persistCandidateOutcomes(vault, outcomes);
+  const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
+  persistCandidateOutcomes(vault, persistableOutcomes);
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
-  return { status: 200, body: deps.redactor({ outcomes }) };
+  return { status: 200, body: deps.redactor({ outcomes: persistableOutcomes }) };
 }
 
 function persistCandidateOutcomes(
@@ -406,7 +412,7 @@ function persistCandidateOutcomes(
   outcomes: readonly CaptureOutcome[],
 ): void {
   for (const outcome of outcomes) {
-    if (outcome.kind !== "candidate") continue;
+    if (!isPersistableMemoryCandidate(outcome)) continue;
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
     if (record !== null) {

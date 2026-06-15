@@ -11,19 +11,27 @@
 import { randomUUID } from "node:crypto";
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { MemoryId, MemoryProposalId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import { redact } from "@oscharko-dev/keiko-security";
 import {
   extractSalientMemories,
+  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
+import { currentRedactionSecrets } from "./deps.js";
 import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
+import {
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+  SENSITIVE_MEMORY_REJECTION_REASON,
+} from "./memory-capture-policy.js";
 
 // Mirror of chat-handlers' private scopeLabel (decision 3 — mirrored rather than exported to keep
 // the modules decoupled). Pure and trivial.
@@ -97,6 +105,11 @@ function buildCallModel(
   };
 }
 
+function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redact(message, currentRedactionSecrets(deps));
+}
+
 // Persists one salience candidate and returns its wire action, or null when the outcome is not a
 // candidate or no record could be built. Best-effort embed-on-capture (#204): the inserted memory
 // is embedded and the vector stored when an embedding model is configured; failure is swallowed by
@@ -108,6 +121,9 @@ async function persistCandidate(
 ): Promise<ConversationMemoryActionWire | null> {
   if (outcome.kind !== "candidate") {
     return null;
+  }
+  if (!isPersistableMemoryCandidate(outcome)) {
+    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
@@ -137,7 +153,7 @@ export async function captureSalientFromTurn(
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   modelId: string,
-  assistantText: string,
+  _assistantText: string,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   const vault = deps.memoryVault;
   if (request.memory === undefined || !request.memory.enabled || vault === undefined) {
@@ -148,12 +164,16 @@ export async function captureSalientFromTurn(
     if (callModel === null) {
       return [];
     }
+    const policy = memoryCapturePolicyForDeps(deps);
+    if (memoryTextEgressRejectionReason(request.content, policy) !== null) {
+      return [];
+    }
     const outcomes = await extractSalientMemories(
       {
         userText: request.content,
-        assistantText,
         existingBodies: gatherExistingBodies(vault, context),
         context: buildSalienceContext(context),
+        policy,
       },
       {
         callModel,
@@ -173,7 +193,7 @@ export async function captureSalientFromTurn(
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
     // eslint-disable-next-line no-console
-    console.error("salience capture failed", error);
+    console.error("salience capture failed", redactedErrorMessage(error, deps));
     return [];
   }
 }

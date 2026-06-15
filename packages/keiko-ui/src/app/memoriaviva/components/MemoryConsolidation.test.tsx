@@ -53,6 +53,7 @@ function runningJob(): MemoryConsolidationJobResponse {
         staleConfidenceThreshold: 0.3,
         maxAgeMs: 7_776_000_000,
         maxClustersPerRun: 100,
+        maxRecordsPerRun: 1_000,
       },
       memoryCount: 2,
       cancelRequested: false,
@@ -93,6 +94,8 @@ function completedJob(): MemoryConsolidationJobResponse {
             },
           ],
           clustersInspected: 3,
+          recordsInspected: 2,
+          truncated: false,
           elapsedMs: 250,
         },
       },
@@ -103,6 +106,7 @@ function completedJob(): MemoryConsolidationJobResponse {
         staleConfidenceThreshold: 0.3,
         maxAgeMs: 7_776_000_000,
         maxClustersPerRun: 100,
+        maxRecordsPerRun: 1_000,
       },
       memoryCount: 2,
       cancelRequested: false,
@@ -113,6 +117,14 @@ function completedJob(): MemoryConsolidationJobResponse {
 describe("MemoryConsolidation", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("renders the initial empty job state", () => {
+    render(
+      <MemoryConsolidation startJobImpl={vi.fn()} fetchJobImpl={vi.fn()} cancelJobImpl={vi.fn()} />,
+    );
+
+    expect(screen.getByText("No consolidation job started yet.")).toBeInTheDocument();
   });
 
   it("starts a job with explicit settings and renders polled results", async () => {
@@ -137,6 +149,7 @@ describe("MemoryConsolidation", () => {
       staleConfidenceThreshold: 0.3,
       maxAgeMs: 7_776_000_000,
       maxClustersPerRun: 100,
+      maxRecordsPerRun: 1_000,
     });
 
     await waitFor(() => {
@@ -147,7 +160,30 @@ describe("MemoryConsolidation", () => {
       expect(screen.getByText(/mem-stale/i)).toBeInTheDocument();
       expect(screen.getByText(/derived-from/i)).toBeInTheDocument();
     });
+    expect(screen.getByLabelText("Consolidation job status")).not.toHaveAttribute("aria-live");
     expect(screen.getByRole("status")).toHaveTextContent("completed");
+  });
+
+  it("announces the results section politely when results arrive (MV-03)", async () => {
+    const startJobImpl = vi.fn().mockResolvedValue(runningJob());
+    const fetchJobImpl = vi.fn().mockResolvedValue(completedJob());
+    const cancelJobImpl = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryConsolidation
+        startJobImpl={startJobImpl}
+        fetchJobImpl={fetchJobImpl}
+        cancelJobImpl={cancelJobImpl}
+        pollIntervalMs={5}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Consolidation results")).toHaveAttribute("aria-live", "polite");
+    });
   });
 
   it("cancels an active job", async () => {
@@ -168,6 +204,7 @@ describe("MemoryConsolidation", () => {
           staleConfidenceThreshold: 0.3,
           maxAgeMs: 7_776_000_000,
           maxClustersPerRun: 100,
+          maxRecordsPerRun: 1_000,
         },
         memoryCount: 2,
         cancelRequested: true,

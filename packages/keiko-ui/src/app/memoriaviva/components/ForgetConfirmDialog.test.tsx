@@ -55,7 +55,7 @@ describe("ForgetConfirmDialog — rendering", () => {
       />,
     );
     expect(screen.getByRole("heading", { name: /delete this memory/i })).toBeInTheDocument();
-    expect(screen.getByText(/hard-deleted without a tombstone audit record/i)).toBeInTheDocument();
+    expect(screen.getByText(/tombstone audit record will be created/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /delete permanently/i })).toBeInTheDocument();
   });
 });
@@ -160,7 +160,7 @@ describe("ForgetConfirmDialog — interaction", () => {
     await waitFor(() => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
-    expect(deleteImpl).toHaveBeenCalledWith("mem-forget-1");
+    expect(deleteImpl).toHaveBeenCalledWith("mem-forget-1", expect.any(String));
   });
 
   it("shows error alert when the destructive action rejects", async () => {

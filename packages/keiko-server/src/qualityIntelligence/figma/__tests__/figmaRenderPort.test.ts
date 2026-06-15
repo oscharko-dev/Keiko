@@ -65,6 +65,27 @@ describe("createDefaultFigmaRenderPort", () => {
       port({ url: "https://ephemeral.figma/render.png", headers: {} }),
     ).rejects.toBeInstanceOf(FigmaConnectorError);
   });
+
+  it("forwards maxResponseBytes to the gateway prefetch cap", async () => {
+    vi.resetModules();
+    const gatewayFetch = vi.fn(() =>
+      Promise.resolve(new Response(PNG_BYTES.buffer, { status: 200 })),
+    );
+    vi.doMock("@oscharko-dev/keiko-model-gateway/internal/http", () => ({ gatewayFetch }));
+    try {
+      const { createDefaultFigmaRenderPort: createPort } = await import("../figmaRenderPort.js");
+      const port = createPort(undefined, undefined, { maxResponseBytes: 123 });
+
+      await port({ url: "https://ephemeral.figma/render.png", headers: {} });
+
+      expect(gatewayFetch).toHaveBeenCalledWith(
+        "https://ephemeral.figma/render.png",
+        expect.objectContaining({ maxResponseBytes: 123 }),
+      );
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-model-gateway/internal/http");
+    }
+  });
 });
 
 describe("createDefaultFigmaRenderPort — transport error classification", () => {

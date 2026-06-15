@@ -11,6 +11,7 @@
 // and there are no timestamps — so the export is byte-stable for identical inputs.
 
 import type { CoverageStatus } from "../../domain/coverageRelevance.js";
+import { inlineField } from "../textSafety.js";
 import { encodeSpreadsheetSafeRow, startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 
 /**
@@ -95,10 +96,12 @@ function invertToReverseRows(
 
 // Escape Markdown table delimiters so an id containing a pipe cannot break the row structure, and
 // neutralise a spreadsheet formula lead (=,+,-,@) so a cell stays inert if the table is pasted into
-// a spreadsheet. Backslashes are escaped FIRST so a literal backslash cannot consume the following
-// escape and a pre-existing `\|` cannot smuggle an unescaped pipe through (CWE-20).
+// a spreadsheet. inlineField runs FIRST so embedded newlines/tabs cannot split one logical row across
+// two physical Markdown lines (CWE-1284). Backslashes are escaped BEFORE pipes so a literal backslash
+// cannot consume the following escape and a pre-existing `\|` cannot smuggle an unescaped pipe (CWE-20).
 const mdCell = (value: string): string => {
-  const safe = startsWithFormulaLead(value) ? `'${value}` : value;
+  const oneLine = inlineField(value);
+  const safe = startsWithFormulaLead(oneLine) ? `'${oneLine}` : oneLine;
   return safe.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|");
 };
 
@@ -118,11 +121,11 @@ export function adaptToTraceabilityCsv(
   body += encodeSpreadsheetSafeRow(TRACEABILITY_HEADERS);
   for (const row of sorted) {
     body += encodeSpreadsheetSafeRow([
-      row.atomId,
-      row.requirementExcerptRedacted ?? ABSENT,
+      inlineField(row.atomId),
+      inlineField(row.requirementExcerptRedacted ?? ABSENT),
       row.status,
       fixed2(row.confidence),
-      joinSemicolon(row.coveringCandidateIds),
+      inlineField(joinSemicolon(row.coveringCandidateIds)),
       String(row.coveringCandidateIds.length),
     ]);
   }
@@ -131,9 +134,9 @@ export function adaptToTraceabilityCsv(
   body += encodeSpreadsheetSafeRow(TRACEABILITY_REVERSE_HEADERS);
   for (const reverse of invertToReverseRows(sorted)) {
     body += encodeSpreadsheetSafeRow([
-      reverse.candidateId,
-      display.candidateTitleById?.get(reverse.candidateId) ?? ABSENT,
-      joinSemicolon(reverse.requirementIds),
+      inlineField(reverse.candidateId),
+      inlineField(display.candidateTitleById?.get(reverse.candidateId) ?? ABSENT),
+      inlineField(joinSemicolon(reverse.requirementIds)),
       String(reverse.requirementIds.length),
     ]);
   }

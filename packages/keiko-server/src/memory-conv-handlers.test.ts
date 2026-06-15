@@ -6,7 +6,7 @@
 //   - POST /api/memory/capture-from-conversation → handleMemoryCaptureFromConversation
 //
 // These tests intentionally do NOT spin up the HTTP server — the dispatch layer is shared
-// with the Memory Center routes (#211) and is already covered by routes.test.ts.
+// with the MemoriaViva routes (#211) and is already covered by routes.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -250,8 +250,22 @@ describe("handleMemoryRetrieveContext", () => {
     );
     expect(result.status).toBe(200);
     const body = asJson(result);
-    const block = body.contextBlock as { text: string; memories: readonly unknown[] };
+    const block = body.contextBlock as {
+      text: string;
+      memories: readonly {
+        sourceKind: string;
+        sensitivity: string;
+        confidence: number;
+        status: string;
+        capturedAt: number;
+      }[];
+    };
     expect(block.memories).toHaveLength(1);
+    expect(block.memories[0]?.sourceKind).toBe("explicit-user-instruction");
+    expect(block.memories[0]?.sensitivity).toBe("public");
+    expect(block.memories[0]?.confidence).toBe(0.9);
+    expect(block.memories[0]?.status).toBe("accepted");
+    expect(block.memories[0]?.capturedAt).toBeGreaterThan(0);
     expect(block.text.length).toBeGreaterThan(0);
     expect(body.included).toHaveLength(1);
   });
@@ -578,12 +592,10 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(asJson(result).outcomes).toEqual([
-      { kind: "rejected", reason: "provider-base-url" },
-    ]);
-    expect(vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true })).toEqual(
-      [],
-    );
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "provider-base-url" }]);
+    expect(
+      vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true }),
+    ).toEqual([]);
   });
 
   it("rejects raw log excerpts at the capture boundary and persists nothing", async () => {
@@ -598,12 +610,47 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(asJson(result).outcomes).toEqual([
-      { kind: "rejected", reason: "raw-log-content" },
-    ]);
-    expect(vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true })).toEqual(
-      [],
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "raw-log-content" }]);
+    expect(
+      vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true }),
+    ).toEqual([]);
+  });
+
+  it("blocks confidential candidates instead of durably persisting them before approval", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-confidential");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that my private support email is developer@example.com",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
     );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
+    ]);
+    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+  });
+
+  it("uses deployment redaction literals as customer identifier rejection matchers", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      redactionSecrets: ["CustomerOmega"],
+    });
+    const chat = registerChat(deps, "capture-customer-id");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that CustomerOmega requires SSO for releases",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
+    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
   });
 
   it("resolves an explicit forget intent against in-scope memories", async () => {

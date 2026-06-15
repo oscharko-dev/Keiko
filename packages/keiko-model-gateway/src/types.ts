@@ -17,6 +17,9 @@ export type {
   LatencyClass,
   ModelCapability,
   ChatMessage,
+  ChatMessageContentPart,
+  ChatMessageImageUrlContentPart,
+  ChatMessageTextContentPart,
   ToolDefinition,
   ResponseFormat,
   GatewayRequest,
@@ -55,12 +58,17 @@ export interface CircuitBreakerConfig {
   readonly halfOpenProbes: number;
 }
 
+export interface FigmaConnectorConfig {
+  readonly accessToken?: string | undefined;
+}
+
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  readonly figma?: FigmaConnectorConfig | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────

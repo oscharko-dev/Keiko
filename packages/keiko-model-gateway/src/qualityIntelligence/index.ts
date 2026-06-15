@@ -24,7 +24,10 @@ export type {
 export { buildPromptSegments } from "./promptSegmentation.js";
 
 // ─── M1: capability gate ─────────────────────────────────────────────────────
-export { assertProfileCompatibleWithModel } from "./capabilityGate.js";
+export {
+  assertProfileCompatibleWithModel,
+  buildSelectionQueryForCapabilities,
+} from "./capabilityGate.js";
 
 // ─── M1: safe-error taxonomy ─────────────────────────────────────────────────
 export type {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
   RefObject,
@@ -199,6 +200,32 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     startBgPan(api.panBy, event);
   };
 
+  // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
+  // focused. Guard event.target === event.currentTarget so arrow keys inside a
+  // focused window child are not captured here (those are handled by WindowFrame).
+  const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (event.target !== event.currentTarget) return;
+    const base = 48;
+    const step = event.shiftKey ? base * 4 : base;
+    switch (event.key) {
+      case "ArrowLeft":
+        api.panBy(step, 0);
+        break;
+      case "ArrowRight":
+        api.panBy(-step, 0);
+        break;
+      case "ArrowUp":
+        api.panBy(0, step);
+        break;
+      case "ArrowDown":
+        api.panBy(0, -step);
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+  };
+
   const bgStyle: CSSProperties = useMemo(
     () => ({
       backgroundSize: `${String(22 * view.zoom)}px ${String(22 * view.zoom)}px`,
@@ -304,15 +331,17 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
   const empty = wins !== null && wins.length === 0;
 
+  /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the workspace landmark is also the OS-style drop target for connector payloads.
     <main
       className="workspace"
       ref={wsRef}
       aria-label="Workspace surface"
+      tabIndex={0}
       data-connecting={connecting !== null ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
+      onKeyDown={onSurfaceKeyDown}
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
@@ -411,4 +440,5 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       {palette ?? null}
     </main>
   );
+  /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 }

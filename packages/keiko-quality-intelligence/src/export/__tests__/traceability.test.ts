@@ -130,6 +130,20 @@ describe("adaptToTraceabilityCsv", () => {
     // The ABSENT placeholder is "—" (em-dash)
     expect(out).toContain("—");
   });
+
+  it("writes the weakly-covered status verbatim into the requirements row (Epic #734 D2/D3)", () => {
+    // The row() factory defaults to "covered"; the third CoverageStatus value, "weakly-covered",
+    // must reach the audit-ready export as a standalone status cell so an auditor can distinguish a
+    // weakly-covered requirement from a fully-covered one.
+    const r = row("atom-weak", ["tc-broad"], { status: "weakly-covered", confidence: 0.5 });
+    const out = adaptToTraceabilityCsv([r]);
+    const weakRow = out
+      .split("\r\n")
+      .find((line) => line.includes("atom-weak") && !line.includes("Requirement ID"));
+    expect(weakRow).toBeDefined();
+    // Standalone token (word boundary), not a substring of an id — mirrors #741.
+    expect(weakRow).toMatch(/(?<![a-z])weakly-covered(?![\w-])/u);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -215,6 +229,15 @@ describe("adaptToTraceabilityMarkdown", () => {
     expect(reverseSection).toContain("—");
   });
 
+  it("renders the weakly-covered status verbatim in the requirements table (Epic #734 D2/D3)", () => {
+    const r = row("atom-weak", ["tc-broad"], { status: "weakly-covered", confidence: 0.5 });
+    const out = adaptToTraceabilityMarkdown([r]);
+    const reqSection = out.split("## Tests → Requirements")[0] ?? "";
+    const weakRow = reqSection.split("\n").find((line) => line.includes("atom-weak"));
+    expect(weakRow).toBeDefined();
+    expect(weakRow).toMatch(/(?<![a-z])weakly-covered(?![\w-])/u);
+  });
+
   it("is deterministic: identical input yields byte-identical output", () => {
     const rows = [row("atom-1", ["tc-1"]), row("atom-2", ["tc-2"])];
     expect(adaptToTraceabilityMarkdown(rows)).toBe(adaptToTraceabilityMarkdown(rows));
@@ -222,5 +245,78 @@ describe("adaptToTraceabilityMarkdown", () => {
 
   it("handles an empty rows array without throwing", () => {
     expect(() => adaptToTraceabilityMarkdown([])).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T1 — newline folding (Slice A regression, CWE-1284)
+// ---------------------------------------------------------------------------
+// A candidate title or requirementExcerptRedacted containing an embedded \n
+// must render as a SINGLE physical line in the Markdown output (the logical
+// table row is not split). The CSV cell must also be single-line/folded.
+
+describe("T1: embedded newline in title/excerpt renders as single physical line", () => {
+  const titleWithNewline = "Line one\nLine two";
+  const excerptWithNewline = "Excerpt first\nExcerpt second";
+  const titleMap = new Map([["tc-1", titleWithNewline]]);
+
+  it("Markdown: reverse-section candidateTitle with \\n stays on one physical line", () => {
+    const r = row("atom-1", ["tc-1"]);
+    const out = adaptToTraceabilityMarkdown([r], { candidateTitleById: titleMap });
+    const reverseIdx = out.indexOf("## Tests → Requirements");
+    const reverseSection = out.slice(reverseIdx);
+    // The whole reverse row — including the folded title — stays on one physical line; an
+    // unfolded "\n" would split it and this exact single-line row would be absent.
+    expect(reverseSection).toContain("| tc-1 | Line one Line two | atom-1 | 1 |");
+  });
+
+  it("Markdown: requirementExcerptRedacted with \\n stays on one physical line", () => {
+    const r = row("atom-1", ["tc-1"], { requirementExcerptRedacted: excerptWithNewline });
+    const out = adaptToTraceabilityMarkdown([r]);
+    const reqIdx = out.indexOf("## Requirements → Tests");
+    const reqSection = out.slice(reqIdx, out.indexOf("## Tests → Requirements"));
+    const dataLines = reqSection.split("\n").filter((l) => l.startsWith("|") && !l.includes("---"));
+    // The data row should be a single entry (header + 1 data row = 2 total lines)
+    expect(dataLines).toHaveLength(2);
+    expect(dataLines[1]).toContain("Excerpt first Excerpt second");
+  });
+
+  it("CSV: candidateTitle with \\n is folded to a single-line cell", () => {
+    const r = row("atom-1", ["tc-1"]);
+    const out = adaptToTraceabilityCsv([r], { candidateTitleById: titleMap });
+    const testsIdx = out.indexOf("Tests to requirements");
+    const reverseSection = out.slice(testsIdx);
+    expect(reverseSection).not.toContain("\nLine two");
+    expect(reverseSection).toContain("Line one Line two");
+  });
+
+  it("CSV: requirementExcerptRedacted with \\n is folded to a single-line cell", () => {
+    const r = row("atom-1", ["tc-1"], { requirementExcerptRedacted: excerptWithNewline });
+    const out = adaptToTraceabilityCsv([r]);
+    expect(out).not.toContain("\nExcerpt second");
+    expect(out).toContain("Excerpt first Excerpt second");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T2 — backslash+pipe smuggling (CWE-20, mutation-blind in prior suite)
+// ---------------------------------------------------------------------------
+// mdCell must escape backslash BEFORE pipe. A value "a\|b" must render as
+// "a\\\|b" (escaped backslash + escaped pipe). If the order is swapped
+// (pipe-first) the backslash introduced for the pipe is itself consumed by the
+// subsequent backslash-escape, yielding "a\\\\|b" — an unescaped pipe.
+
+describe("T2: mdCell backslash-first ordering for backslash adjacent to pipe", () => {
+  it("atomId with backslash adjacent to pipe renders safe form a\\\\\\|b in Markdown", () => {
+    // JS string "a\\|b" is the two-character sequence: a, \, |, b
+    const out = adaptToTraceabilityMarkdown([row("a\\|b", ["tc-1"])]);
+    // Expected: escaped backslash (\\) then escaped pipe (\|) → "a\\\|b" in the output string
+    expect(out).toContain("a\\\\\\|b");
+  });
+
+  it("excerpt with backslash adjacent to pipe renders safe form in Markdown", () => {
+    const r = row("atom-1", ["tc-1"], { requirementExcerptRedacted: "check\\|fail" });
+    const out = adaptToTraceabilityMarkdown([r]);
+    expect(out).toContain("check\\\\\\|fail");
   });
 });

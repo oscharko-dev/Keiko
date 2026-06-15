@@ -102,6 +102,109 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rejects Figma PATs submitted through browser gateway setup", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        figmaAccessToken: " figd_setup-config-token ",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("server-side");
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBeUndefined();
+    expect(JSON.stringify(result.body)).not.toContain("figd_setup-config-token");
+    const savedPath = deps.gatewayConfig?.storagePath;
+    if (savedPath !== undefined && existsSync(savedPath)) {
+      expect(readFileSync(savedPath, "utf8")).not.toContain("figd_setup-config-token");
+    }
+    deps.store.close();
+  });
+
+  it("stores selected image-input capabilities only for tested model ids", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-image-input-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-input-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: " vision-chat \n vision-chat ",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers: readonly {
+        readonly modelId: string;
+        readonly capability: { readonly supportsImageInput: boolean };
+      }[];
+    };
+    expect(
+      saved.providers.map((provider) => ({
+        modelId: provider.modelId,
+        supportsImageInput: provider.capability.supportsImageInput,
+      })),
+    ).toEqual([
+      { modelId: "text-chat", supportsImageInput: false },
+      { modelId: "vision-chat", supportsImageInput: true },
+    ]);
+    expect(JSON.stringify(result.body)).toContain('"supportsImageInput":true');
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it("does not store image-input capability claims for models that fail setup testing", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: () => Promise.resolve(["text-chat"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    expect(existsSync(deps.gatewayConfig?.storagePath ?? "")).toBe(false);
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
   it("passes env egress to discovery and smoke tests without persisting topology", async () => {
     const uiDir = await tempDir("keiko-gw-ui-egress-");
     const evidenceDir = await tempDir("keiko-gw-ev-egress-");
@@ -140,6 +243,58 @@ describe("handleGatewaySetup", () => {
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
     expect(saved).not.toContain("proxy.internal.example");
     expect(saved).not.toContain("internal-ca.pem");
+    expect(saved).not.toContain("egress");
+    deps.store.close();
+  });
+
+  it("passes config-file-only egress to discovery and smoke tests without configured providers", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-file-egress-");
+    const evidenceDir = await tempDir("keiko-gw-ev-file-egress-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        egress: {
+          httpsProxy: "http://proxy.config.internal.example:8443",
+          noProxy: "localhost,.corp.example",
+          caBundlePath: "/etc/keiko/config-ca.pem",
+        },
+      }),
+      "utf8",
+    );
+    let discoveryEgress: unknown;
+    let testerEgress: unknown;
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: (_baseUrl, _apiKey, _apiKeyHeaderName, egress) => {
+        discoveryEgress = egress;
+        return Promise.resolve(["example-chat-model"]);
+      },
+      gatewaySetupTester: (config, modelIds) => {
+        testerEgress = config.egress;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    const expectedEgress = {
+      httpsProxy: "http://proxy.config.internal.example:8443/",
+      noProxy: ["localhost", ".corp.example"],
+      caBundlePath: "/etc/keiko/config-ca.pem",
+    };
+    expect(result.status).toBe(200);
+    expect(deps.config).toBeUndefined();
+    expect(discoveryEgress).toEqual(expectedEgress);
+    expect(testerEgress).toEqual(expectedEgress);
+    expect(currentGatewayConfig(deps)?.egress).toEqual(expectedEgress);
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).not.toContain("proxy.config.internal.example");
+    expect(saved).not.toContain("config-ca.pem");
     expect(saved).not.toContain("egress");
     deps.store.close();
   });

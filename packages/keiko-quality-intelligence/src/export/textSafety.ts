@@ -15,6 +15,13 @@ const LINE_BREAKING_RUN = /[\r\n\t\u000b\f\u0085\u2028\u2029]+/gu;
 /**
  * Collapse embedded line-breaking / tab whitespace in a single field value to one space. Leaves all
  * other characters (including ordinary spaces and non-ASCII text) untouched.
+ *
+ * Scope note: this folds ONLY the line-breaking / tab run above — its sole job is to keep a field on
+ * one logical line so it cannot break the structure of a line-oriented serializer. It does NOT strip
+ * other C0/C1/DEL control characters (NUL, BEL, backspace, …) or bidi/zero-width code points; the
+ * line-oriented Markdown / plain-text serializers assume candidate text is already control-clean and
+ * redacted by the upstream persist-time redactor (#278/#284), which is the single content-safety
+ * chokepoint. This helper is a structural folder, not a content scrubber.
  */
 export function inlineField(value: string): string {
   return value.replace(LINE_BREAKING_RUN, " ");

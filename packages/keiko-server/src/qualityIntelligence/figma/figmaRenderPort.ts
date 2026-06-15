@@ -106,6 +106,7 @@ export const createDefaultFigmaRenderPort = (
         headers: { ...request.headers },
         redirect: "manual",
         signal,
+        maxResponseBytes,
         ...(egress !== undefined ? { egress } : {}),
         ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       });

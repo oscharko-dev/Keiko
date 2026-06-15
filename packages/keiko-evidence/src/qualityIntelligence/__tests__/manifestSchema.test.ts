@@ -88,6 +88,32 @@ describe("validateQualityIntelligenceEvidenceManifest", () => {
     expect(result.reason).toContain("unknownExtra");
   });
 
+  // Issue #763 (Epic #761): the closed-key gate must ACCEPT the model-provenance fields added for
+  // reproducibility. The reject test above only pins the deny branch; if any of modelId /
+  // modelParameters / seedUsed were dropped from ALLOWED_TOP_LEVEL_KEYS, every model-attributed run
+  // would fail to load on read with no test catching the regression.
+  it("accepts a manifest carrying modelId, modelParameters, and a numeric seedUsed", () => {
+    const withProvenance = {
+      ...buildValidManifest(),
+      modelId: "gpt-4o",
+      modelParameters: { responseFormat: "json_schema", seed: 42 },
+      seedUsed: 42,
+    };
+    const result = validateQualityIntelligenceEvidenceManifest(withProvenance);
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("accepts a model run with seedUsed: null (model did not apply a seed)", () => {
+    const withNullSeed = { ...buildValidManifest(), modelId: "gpt-4o", seedUsed: null };
+    expect(validateQualityIntelligenceEvidenceManifest(withNullSeed).ok).toBe(true);
+  });
+
+  it("accepts seedUsed: 0 present independently of the other optional model fields", () => {
+    const onlySeedUsed = { ...buildValidManifest(), seedUsed: 0 };
+    expect(validateQualityIntelligenceEvidenceManifest(onlySeedUsed).ok).toBe(true);
+  });
+
   it("rejects an invalid status enum", () => {
     const bad = { ...buildValidManifest(), status: "exploded" };
     const result = validateQualityIntelligenceEvidenceManifest(bad);

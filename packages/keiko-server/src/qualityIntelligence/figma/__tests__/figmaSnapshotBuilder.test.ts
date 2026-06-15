@@ -220,6 +220,28 @@ describe("buildFigmaSnapshot", () => {
     ).rejects.toBeInstanceOf(FigmaConnectorError);
   });
 
+  it.each([
+    { status: 401, json: { err: "Invalid token" }, code: "FIGMA_TOKEN_INVALID" },
+    { status: 403, json: { err: "Token has expired" }, code: "FIGMA_TOKEN_EXPIRED" },
+    { status: 403, json: { message: "This token was revoked" }, code: "FIGMA_TOKEN_REVOKED" },
+    { status: 403, json: { err: "Invalid scope(s)" }, code: "FIGMA_INSUFFICIENT_SCOPE" },
+    { status: 403, json: {}, code: "FIGMA_TOKEN_INVALID" },
+    { status: 407, json: {}, code: "FIGMA_PROXY_EGRESS_FAILED" },
+    { status: 502, json: {}, code: "FIGMA_UPSTREAM_UNAVAILABLE" },
+    { status: 503, json: {}, code: "FIGMA_UPSTREAM_UNAVAILABLE" },
+  ] as const)(
+    "maps /v1/images $status to $code through the #758 token-failure taxonomy",
+    async ({ status, json, code }) => {
+      const screens = [screen("1:1", "Home")];
+      const images: FigmaHttpPort = () => Promise.resolve({ status, json, headers: {} });
+      const renders = renderPort({});
+
+      await expect(
+        buildFigmaSnapshot(baseInput(screens, images, renders.port)),
+      ).rejects.toMatchObject({ code });
+    },
+  );
+
   it("never embeds the token anywhere in the assembled snapshot value", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
@@ -355,6 +377,26 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     expect(renders.requests).toHaveLength(0);
   });
 
+  it("skips a screen whose render URL is an IPv6 literal (SSRF)", async () => {
+    const screens = [screen("1:1", "Home")];
+    // The Figma API could (in a compromised/MITM'd response) return an IPv6-literal render host;
+    // WHATWG URL exposes it bracketed as the hostname, which isBlockedHostname rejects via the
+    // leading-"[" check. Pins the IPv6 branch of the SSRF guard.
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://[::1]/render/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
   it("allows a legitimate https://ephemeral/ render URL (existing fixtures still work)", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
@@ -453,6 +495,36 @@ describe("buildFigmaSnapshot — render egress abort codes (#750 audit)", () => 
     await expect(
       buildFigmaSnapshot(baseInput(screens, images.port, renders)),
     ).rejects.toMatchObject({ code: "FIGMA_PROXY_UNREACHABLE" });
+  });
+
+  it("re-throws a FIGMA_PROXY_EGRESS_FAILED from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_EGRESS_FAILED"));
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_EGRESS_FAILED" });
+  });
+
+  it("re-throws a FIGMA_PROXY_AUTH_REQUIRED from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_AUTH_REQUIRED"));
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_AUTH_REQUIRED" });
+  });
+
+  it("re-throws a FIGMA_PROXY_BLOCKED_BY_POLICY from the render port (abort the build)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = () =>
+      Promise.reject(new FigmaConnectorError("FIGMA_PROXY_BLOCKED_BY_POLICY"));
+    await expect(
+      buildFigmaSnapshot(baseInput(screens, images.port, renders)),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_BLOCKED_BY_POLICY" });
   });
 
   it("skips with coded reason for a non-abort coded error (FIGMA_RATE_LIMITED)", async () => {
@@ -631,6 +703,84 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
 
     expect(peak).toBeLessThanOrEqual(2);
     expect(snapshot.screens).toHaveLength(6);
+  });
+
+  it("batches /v1/images calls when the screen count exceeds batchSize (multi-pass)", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B"), screen("1:3", "C")];
+    let callCount = 0;
+    // One ephemeral url per requested id; counts how many /v1/images calls the builder makes.
+    const images: FigmaHttpPort = (request) => {
+      callCount += 1;
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "")
+        .split(",")
+        .filter((id) => id.length > 0);
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({
+      "https://ephemeral/1:1.png": png(10),
+      "https://ephemeral/1:2.png": png(20),
+      "https://ephemeral/1:3.png": png(30),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      batchSize: 1,
+    });
+
+    // batchSize=1 → the chunk() loop runs once per screen and each batch's url map is merged.
+    expect(callCount).toBe(3);
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2", "1:3"]);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("normalizes an invalid batchSize instead of stalling the chunk loop", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B")];
+    let callCount = 0;
+    const images: FigmaHttpPort = (request) => {
+      callCount += 1;
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "")
+        .split(",")
+        .filter((id) => id.length > 0);
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({
+      "https://ephemeral/1:1.png": png(10),
+      "https://ephemeral/1:2.png": png(20),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      batchSize: 0,
+    });
+
+    expect(callCount).toBe(1);
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2"]);
+  });
+
+  it("normalizes an invalid downloadConcurrency before entering the worker pool", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B"), screen("1:3", "C")];
+    const images = imagesPort();
+    let active = 0;
+    let peak = 0;
+    const renders: FigmaRenderPort = async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
+      return { status: 200, bytes: png(1), headers: {} };
+    };
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      downloadConcurrency: Number.NaN,
+    });
+
+    expect(peak).toBeGreaterThan(0);
+    expect(snapshot.screens).toHaveLength(3);
   });
 
   it("preserves screen order even when downloads complete out of order", async () => {

@@ -27,6 +27,10 @@ import type {
   TestQualityJudgeVerdict,
   TestQualityRubricDimension,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
+  TEST_QUALITY_RUBRIC_DIMENSIONS,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 
 export class QiJudgeError extends Error {
@@ -106,38 +110,6 @@ function promptInjectionFlag(scrubbedText: string): string {
   return scan.safe ? "" : ` flagged="prompt-injection:${scan.injections.join(",")}"`;
 }
 
-const RUBRIC_DIMENSIONS: readonly TestQualityDimensionName[] = [
-  "verifiability",
-  "atomicity",
-  "determinism",
-  "ac-fidelity",
-];
-
-// JSON schema for the judge verdict, used as the gateway responseFormat when the model supports
-// structured output. Mirrors the parse contract in parseJudgeVerdict (four named dimensions, integer
-// scores 0-100, an overall rationale).
-const QI_JUDGE_RESPONSE_SCHEMA: Record<string, unknown> = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  required: ["dimensions", "overallRationale"],
-  properties: {
-    dimensions: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["name", "score", "rationale"],
-        properties: {
-          name: { type: "string", enum: [...RUBRIC_DIMENSIONS] },
-          score: { type: "integer", minimum: 0, maximum: 100 },
-          rationale: { type: "string" },
-        },
-      },
-    },
-    overallRationale: { type: "string" },
-  },
-});
-
 function formatSourceContext(sourceContext: readonly JudgeSourceContext[]): string {
   if (sourceContext.length === 0) {
     return "No originating requirement or acceptance-criteria context was available.";
@@ -179,7 +151,7 @@ export function buildJudgePrompt(
 const SAFE_DEFAULT_VERDICT: TestQualityJudgeVerdict = Object.freeze({
   verdict: "weak" as const,
   dimensions: Object.freeze(
-    RUBRIC_DIMENSIONS.map((name) =>
+    TEST_QUALITY_RUBRIC_DIMENSIONS.map((name) =>
       Object.freeze<TestQualityRubricDimension>({
         name,
         score: 0,
@@ -188,6 +160,20 @@ const SAFE_DEFAULT_VERDICT: TestQualityJudgeVerdict = Object.freeze({
     ),
   ),
   overallRationale: "judge output could not be parsed; defaulting to weak",
+});
+
+const SAFE_PROMPT_TOO_LARGE_VERDICT: TestQualityJudgeVerdict = Object.freeze({
+  verdict: "weak" as const,
+  dimensions: Object.freeze(
+    TEST_QUALITY_RUBRIC_DIMENSIONS.map((name) =>
+      Object.freeze<TestQualityRubricDimension>({
+        name,
+        score: 0,
+        rationale: "judge prompt exceeded the model budget",
+      }),
+    ),
+  ),
+  overallRationale: "judge prompt exceeded the model budget; defaulting to weak",
 });
 
 function isRubricDimensionName(value: string): value is TestQualityDimensionName {
@@ -199,20 +185,39 @@ function isRubricDimensionName(value: string): value is TestQualityDimensionName
   );
 }
 
-function parseDimension(raw: unknown): TestQualityRubricDimension | null {
+interface RawDimensionFields {
+  readonly name: string;
+  readonly score: number;
+  readonly rationale: string;
+}
+
+function scrubJudgeRationale(text: string, maxLength: number): string {
+  return scrubCandidateText(text).slice(0, maxLength);
+}
+
+function rawDimensionFields(raw: unknown): RawDimensionFields | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
+  if (!hasOnlyKeys(r, ["name", "score", "rationale"])) return null;
   const name = r.name;
   const score = r.score;
   const rationale = r.rationale;
   if (typeof name !== "string" || typeof score !== "number" || typeof rationale !== "string") {
     return null;
   }
+  return { name, score, rationale };
+}
+
+function parseDimension(raw: unknown): TestQualityRubricDimension | null {
+  const fields = rawDimensionFields(raw);
+  if (fields === null) return null;
+  const { name, score, rationale } = fields;
   if (!isRubricDimensionName(name)) return null;
+  if (!Number.isInteger(score) || score < 0 || score > 100) return null;
   return Object.freeze({
     name,
-    score: Math.max(0, Math.min(100, Math.round(score))),
-    rationale: rationale.slice(0, 500),
+    score,
+    rationale: scrubJudgeRationale(rationale, 500),
   });
 }
 
@@ -269,24 +274,8 @@ function tryParseJsonObject(candidate: string): Record<string, unknown> | null {
   }
 }
 
-/**
- * Extract the judge verdict object from raw model text. Prefers a parsed object that carries the
- * judge shape (a `dimensions` field); falls back to the first object that parses at all. Returns
- * null when nothing parses, so the caller can emit the safe-default ("weak") verdict.
- */
-function extractJsonObject(rawText: string): Record<string, unknown> | null {
-  let firstParsed: Record<string, unknown> | null = null;
-  for (const candidate of balancedJsonObjectCandidates(rawText)) {
-    const parsed = tryParseJsonObject(candidate);
-    if (parsed === null) continue;
-    firstParsed ??= parsed;
-    if (Array.isArray(parsed.dimensions)) return parsed;
-  }
-  return firstParsed;
-}
-
 function parseDimensions(raw: unknown): readonly TestQualityRubricDimension[] | null {
-  if (!Array.isArray(raw) || raw.length !== RUBRIC_DIMENSIONS.length) return null;
+  if (!Array.isArray(raw) || raw.length !== TEST_QUALITY_RUBRIC_DIMENSIONS.length) return null;
   const parsed: TestQualityRubricDimension[] = [];
   for (const item of raw) {
     const dimension = parseDimension(item);
@@ -294,9 +283,9 @@ function parseDimensions(raw: unknown): readonly TestQualityRubricDimension[] | 
     parsed.push(dimension);
   }
   const byName = new Map(parsed.map((dimension) => [dimension.name, dimension]));
-  if (byName.size !== RUBRIC_DIMENSIONS.length) return null;
+  if (byName.size !== TEST_QUALITY_RUBRIC_DIMENSIONS.length) return null;
   const ordered: TestQualityRubricDimension[] = [];
-  for (const name of RUBRIC_DIMENSIONS) {
+  for (const name of TEST_QUALITY_RUBRIC_DIMENSIONS) {
     const dimension = byName.get(name);
     if (dimension === undefined) return null;
     ordered.push(dimension);
@@ -304,24 +293,39 @@ function parseDimensions(raw: unknown): readonly TestQualityRubricDimension[] | 
   return Object.freeze(ordered);
 }
 
-export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
-  const obj = extractJsonObject(rawText);
-  if (obj === null) return SAFE_DEFAULT_VERDICT;
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function parseJudgeObject(obj: Record<string, unknown>): TestQualityJudgeVerdict | null {
+  if (!hasOnlyKeys(obj, ["dimensions", "overallRationale"])) return null;
   const dimensions = parseDimensions(obj.dimensions);
-  const overallRationale =
-    typeof obj.overallRationale === "string" && obj.overallRationale.trim().length > 0
-      ? obj.overallRationale.slice(0, 1000)
-      : null;
-  if (dimensions === null || overallRationale === null) return SAFE_DEFAULT_VERDICT;
+  if (typeof obj.overallRationale !== "string") return null;
+  const overallRationale = scrubJudgeRationale(obj.overallRationale, 1000);
+  if (dimensions === null || overallRationale.trim().length === 0) return null;
   const verdict = verdictFromScore(scoreFromDimensions(dimensions));
   return Object.freeze({ verdict, dimensions: Object.freeze(dimensions), overallRationale });
+}
+
+export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
+  let parsedVerdict: TestQualityJudgeVerdict | null = null;
+  for (const candidate of balancedJsonObjectCandidates(rawText)) {
+    const obj = tryParseJsonObject(candidate);
+    if (obj === null) continue;
+    const verdict = parseJudgeObject(obj);
+    if (verdict === null) continue;
+    if (parsedVerdict !== null) return SAFE_DEFAULT_VERDICT;
+    parsedVerdict = verdict;
+  }
+  return parsedVerdict ?? SAFE_DEFAULT_VERDICT;
 }
 
 export interface QiJudgePort {
   readonly judge: (
     input: JudgePromptInput,
     signal?: AbortSignal,
-  ) => Promise<TestQualityJudgeVerdict>;
+  ) => Promise<TestQualityJudgeVerdict & { readonly gatewayCallCount: number }>;
 }
 
 /**
@@ -358,19 +362,27 @@ export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudge
     judge: async (
       input: JudgePromptInput,
       signal?: AbortSignal,
-    ): Promise<TestQualityJudgeVerdict> => {
+    ): Promise<TestQualityJudgeVerdict & { readonly gatewayCallCount: number }> => {
       const messages = buildJudgePrompt(input.candidateText, input.sourceContext);
+      const userContent = messages[1]?.content ?? "";
+      const size = QualityIntelligenceHardening.assertPromptSize(userContent);
+      if (!size.ok) return { ...SAFE_PROMPT_TOO_LARGE_VERDICT, gatewayCallCount: 0 };
       const effectiveSignal = signal ?? new AbortController().signal;
       const request: GatewayRequest = {
         modelId,
         messages,
         stream: false,
         ...(useResponseFormat
-          ? { responseFormat: { type: "json_schema", schema: { ...QI_JUDGE_RESPONSE_SCHEMA } } }
+          ? {
+              responseFormat: {
+                type: "json_schema",
+                schema: { ...TEST_QUALITY_JUDGE_RESPONSE_SCHEMA },
+              },
+            }
           : {}),
       };
       const response = await model.call(request, effectiveSignal);
-      return parseJudgeVerdict(response.content);
+      return { ...parseJudgeVerdict(response.content), gatewayCallCount: 1 };
     },
   };
 }

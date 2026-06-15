@@ -22,6 +22,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createAuditRedactor } from "@oscharko-dev/keiko-evidence";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { UiStoreError, type ChatMessage, type NewChatMessage } from "./store/index.js";
+import { memoryCaptureCustomerMatchers } from "./memory-capture-policy.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -292,6 +293,7 @@ function engineContextFor(
       { additionalSecrets: currentRedactionSecrets(deps) },
       deps.env,
     ),
+    memoryCustomerIdentifierMatchers: memoryCaptureCustomerMatchers(deps),
   };
 }
 

@@ -4,12 +4,15 @@ import {
   AuthenticationError,
   CancelledError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { OutboundHttpEgressError } from "./http.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const CONFIG: ModelProviderConfig = {
@@ -101,6 +104,48 @@ describe("OpenAiAdapter.call", () => {
     expect(seenCustom).toBe(CONFIG.apiKey);
   });
 
+  it("serializes image content parts in OpenAI-compatible message payloads", async () => {
+    let seenBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      seenBody = JSON.parse(body) as unknown;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        modelId: "example-chat-model",
+        messages: [
+          {
+            role: "user",
+            content: "Inspect this screen",
+            contentParts: [
+              { type: "text", text: "Inspect this screen" },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
+              },
+            ],
+          },
+        ],
+      },
+      CONFIG,
+    );
+
+    expect(seenBody).toMatchObject({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Inspect this screen" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+          ],
+        },
+      ],
+    });
+  });
+
   it("throws AuthenticationError on HTTP 401", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({ error: "bad key" }, { status: 401 })),
@@ -179,6 +224,21 @@ describe("OpenAiAdapter.call", () => {
   it("throws TransportError when fetch rejects with a network TypeError", async () => {
     const adapter = adapterWith(() => Promise.reject(new TypeError("network down")));
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(TransportError);
+  });
+
+  it("maps outbound egress failures to distinct non-retryable gateway errors", async () => {
+    const adapter = adapterWith(() =>
+      Promise.reject(new OutboundHttpEgressError("PROXY_AUTH_REQUIRED", "proxy password was bad")),
+    );
+    try {
+      await adapter.call(REQUEST, CONFIG);
+      expect.unreachable("should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(GatewayEgressError);
+      expect((error as GatewayEgressError).code).toBe(ERROR_CODES.PROXY_AUTH_REQUIRED);
+      expect((error as GatewayEgressError).retryable).toBe(false);
+      expect((error as Error).message).not.toContain("password");
+    }
   });
 
   it("throws CancelledError when the cancellation signal is already aborted", async () => {
@@ -318,6 +378,25 @@ describe("OpenAiAdapter.call", () => {
     });
     await adapter.call({ ...REQUEST, seed: 13 }, CONFIG);
     expect((sentBody as { seed?: number }).seed).toBe(13);
+  });
+
+  // Issue #763 (Epic #761): determinism parameters must NOT leak into the provider payload when the
+  // gateway request does not carry them. A regression that always spreads `{ seed: 0 }` (or a
+  // response_format) would send an unrequested deterministic seed to every call and falsely record
+  // reproducibility. Assert the keys are absent, not merely undefined.
+  it("omits seed and response_format from the request body when the gateway request provides neither", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "plain" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, CONFIG);
+    const body = sentBody as Record<string, unknown>;
+    expect("seed" in body).toBe(false);
+    expect("response_format" in body).toBe(false);
   });
 
   it("normalises assistant text-part arrays from OpenAI-compatible providers", async () => {

@@ -56,6 +56,8 @@ describe("createFigmaConnector — scoped fetch", () => {
     expect(url).toContain("ids=12%3A34");
     expect(url).toMatch(/[?&]depth=\d+/);
     expect(url).not.toMatch(/\/v1\/files\/KEY123(\?|$)/);
+    // No version pinned ⇒ the version param must be ABSENT (guards buildScopedUrl's undefined check).
+    expect(url).not.toContain("version=");
   });
 
   it("pins the version query param when supplied", async () => {
@@ -486,6 +488,29 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
     expect(countText(deep.nodes)).toBe(1);
     expect(deep.coverage?.screensDeepFetched).toBe(1);
   });
+
+  // A hard forward-proxy failure (#802) surfaces from the transport boundary as a FigmaConnectorError
+  // (figmaHttpPort maps an OutboundHttpEgressError → the coded proxy error). On a per-screen deep
+  // fetch it MUST abort the build (symmetric with RENDER_EGRESS_ABORT_CODES), never soft-skip the
+  // screen to shallow content while hiding a misconfigured proxy.
+  it.each(["FIGMA_PROXY_AUTH_REQUIRED", "FIGMA_PROXY_BLOCKED_BY_POLICY"] as const)(
+    "aborts the deep build when a per-screen fetch hits a hard proxy failure (%s), never a silent shallow degrade",
+    async (code) => {
+      const base = treePort(fullTree(["s1", "s2"]));
+      const port: FigmaHttpPort = (req) => {
+        const id = new URL(req.url).searchParams.get("ids") ?? "";
+        // Discovery (12:34) succeeds; the s1 deep fetch throws the hard proxy error.
+        if (id === "s1") return Promise.reject(new FigmaConnectorError(code));
+        return base(req);
+      };
+      const connector = createFigmaConnector({
+        http: port,
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+        config: deepConfig,
+      });
+      await expect(connector.fetchScopedNodesDeep(URL_OK)).rejects.toMatchObject({ code });
+    },
+  );
 });
 
 describe("createFigmaConnector — resilience (#759)", () => {

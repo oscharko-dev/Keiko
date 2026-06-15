@@ -14,6 +14,8 @@ import {
   QualityIntelligenceGeneration,
   QualityIntelligenceHardening,
   QualityIntelligenceFigma,
+  isUnsafeFormatCodePoint,
+  stripUnsafeFormatChars,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   detectWorkspaceAt,
@@ -134,15 +136,31 @@ const CREDENTIAL_LABEL_SHAPES: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu,
 ];
 
-// Replace every control character (C0 range incl. tab/newline/CR, plus DEL) with a space using a
-// code-point scan — the `no-control-regex` lint rule forbids a control-range regex literal, and a
-// scan is the established in-package idiom (mirrors generationPort.scrubEvidenceText). Keeps a
-// label single-line.
-function collapseControlCharsToSpace(value: string): string {
+// Make a source label single-line AND spoof-safe with one code-point scan (the `no-control-regex`
+// lint rule forbids a control-range regex literal, and a scan is the established in-package idiom —
+// mirrors generationPort.scrubEvidenceText):
+//   - C0 controls (incl. tab/newline/CR) and DEL become a SPACE, so a multi-line or control-laden
+//     label can never glue a second line of content into the streamed displayLabel (#277/#278).
+//   - Bidi overrides/isolates, zero-width/BOM, LRM/RLM, the Arabic letter mark, and C1 controls are
+//     DROPPED outright. These are invisible or reorder surrounding text, so a source filename /
+//     capsule id cannot smuggle a right-to-left or zero-width spoof into the browser-streamed
+//     envelope display surface. The drop set is the SHARED `isUnsafeFormatCodePoint` predicate used
+//     by the candidate-text scrubber (keiko-quality-intelligence stripUnsafeFormatChars), so the
+//     source-label path is symmetric with the persisted/exported candidate-text path (Epic #729;
+//     the bidi/zero-width display-hygiene class of #280/#284). C0/DEL are handled first (→ space)
+//     because a single-line label spaces line breaks rather than gluing them.
+function stripUnsafeLabelChars(value: string): string {
   let out = "";
   for (const ch of value) {
     const cp = ch.codePointAt(0) ?? 0;
-    out += cp <= 0x1f || cp === 0x7f ? " " : ch;
+    if (cp <= 0x1f || cp === 0x7f) {
+      out += " ";
+      continue;
+    }
+    if (isUnsafeFormatCodePoint(cp)) {
+      continue;
+    }
+    out += ch;
   }
   return out;
 }
@@ -153,12 +171,15 @@ const sanitiseLabel = (label: string): string => {
   // into the envelope display surface that is streamed back to the client (#277/#278).
   let cleaned = label.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, " ");
   for (const shape of CREDENTIAL_LABEL_SHAPES) cleaned = cleaned.replace(shape, " ");
-  // Replace every control character (newline, CR, tab, NUL, DEL, …) with a space so a multi-line or
-  // control-laden label can never carry a second line of content into the browser-streamed envelope
-  // displayLabel. Without this, the absolute-path basename-collapse below (which splits on "/" only)
-  // would keep a trailing "\n<more content>" glued inside the final path segment — defeating the
-  // basename defence and emitting a multi-line label (#277/#278 envelope display-surface invariant).
-  cleaned = collapseControlCharsToSpace(cleaned);
+  // Map control characters (newline, CR, tab, NUL, DEL, …) to spaces and DROP bidi-override,
+  // zero-width, BOM, and C1 spoofing code points so a multi-line, control-laden, or
+  // visually-reordered label can never carry a second line of content into — or spoof the reading
+  // order of — the browser-streamed envelope displayLabel. Without the control→space step the
+  // absolute-path basename-collapse below (which splits on "/" only) would keep a trailing
+  // "\n<more content>" glued inside the final path segment, defeating the basename defence; without
+  // the bidi/zero-width drop a crafted filename could reorder the displayed label (#277/#278
+  // envelope display-surface invariant; Epic #729 symmetry with the candidate-text scrubber).
+  cleaned = stripUnsafeLabelChars(cleaned);
   cleaned = cleaned.trim();
   // Collapse an absolute POSIX / Windows-drive / UNC path label to its final segment so the
   // display label never leaks the filesystem layout (the basename is the useful display token).
@@ -209,12 +230,24 @@ function assertRealPathNotDenied(absPath: string, label: string, noun: string): 
   }
 }
 
-const envelopeIdFor = (
+// Escape the field delimiter ("|") and the escape character ("\") in each user/path-controlled
+// field so a label or content value can never inject a raw delimiter and forge another source's
+// envelope id. The strictly-increasing loop index already disambiguates sources today; escaping
+// makes the pre-image injective on its own — robust even if the fields were ever reordered —
+// closing the latent cross-source provenance-spoofing surface flagged by the #732 composition
+// security audit. A value with no "\" or "|" encodes to itself, so clean labels/paths keep their
+// existing envelope id (and the atom ids derived from it), preserving re-check stability.
+const escapeEnvelopeField = (value: string): string =>
+  value.split("\\").join("\\\\").split("|").join("\\|");
+
+export const envelopeIdFor = (
   index: number,
   label: string,
   content: string,
 ): QI.QualityIntelligenceSourceEnvelopeId => {
-  const digest = sha256Hex(`qi-src-v1|${String(index)}|${label}|${content}`).slice(0, 24);
+  const digest = sha256Hex(
+    `qi-src-v1|${String(index)}|${escapeEnvelopeField(label)}|${escapeEnvelopeField(content)}`,
+  ).slice(0, 24);
   return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(`qi-src-${digest}`);
 };
 
@@ -229,6 +262,11 @@ const requirementsEnvelopeIdFor = (index: number): QI.QualityIntelligenceSourceE
 
 const stableLocalRef = (prefix: string, value: string): string =>
   `${prefix}:${sha256Hex(value).slice(0, 24)}`;
+
+const replacementGroupIdFor = (
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  stableKey: string,
+): string => sha256Hex(`qi-replace-v1|${String(envelopeId)}|${stableKey}`);
 
 const auditSummaryIdFor = (runId: string): QI.QualityIntelligenceAuditSummaryId =>
   QualityIntelligence.asQualityIntelligenceAuditSummaryId(
@@ -273,7 +311,16 @@ function ingestRequirements(
     },
     localRef: `req:${String(index)}`,
   };
-  return { envelope, atoms };
+  return {
+    envelope,
+    atoms: atoms.map((entry, ordinal) =>
+      Object.freeze({
+        ...entry,
+        replacementGroupId: replacementGroupIdFor(envelopeId, `requirements:${String(index)}`),
+        replacementOrdinal: ordinal,
+      }),
+    ),
+  };
 }
 
 const WORKSPACE_BUDGET_BYTES = 196_608;
@@ -342,7 +389,7 @@ function documentRequirementAtoms(
   );
   if (split.length <= 1) return Object.freeze([]);
   return Object.freeze(
-    split.map((requirement) => {
+    split.map((requirement, ordinal) => {
       const canonicalText = `${entry.path}\n${requirement.canonicalText}`;
       const atom: QI.QualityIntelligenceRequirementAtom = {
         kind: "requirement",
@@ -352,7 +399,12 @@ function documentRequirementAtoms(
         redactionStatus: "redacted",
         lifecycleStatus: "draft",
       };
-      return Object.freeze({ atom: Object.freeze(atom), canonicalText });
+      return Object.freeze({
+        atom: Object.freeze(atom),
+        canonicalText,
+        replacementGroupId: replacementGroupIdFor(envelopeId, `document:${entry.path}`),
+        replacementOrdinal: ordinal,
+      });
     }),
   );
 }
@@ -620,6 +672,7 @@ function truncateToUtf8Bytes(text: string, maxBytes: number): string {
 interface CorpusDoc {
   readonly documentId: string;
   readonly text: string;
+  readonly fingerprintText?: string | undefined;
 }
 
 // Redact every member document and cap it. The LK corpus text is NOT redacted at index time — the
@@ -656,8 +709,10 @@ function capsuleDocAtom(
   docId: string,
   text: string,
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  fingerprintText = text,
 ): QualityIntelligenceIngestedAtom {
   const canonicalText = `${docId}\n${text}`;
+  const fingerprintCanonicalText = `${docId}\n${fingerprintText}`;
   // Derive the atom id from the stable document id only — never its position in the corpus order
   // (Epic #735 drift correctness, mirrors workspaceAtom). A capsule document id (and a Figma
   // screen id) is unique within its envelope, so adding/removing a sibling document never shifts an
@@ -668,7 +723,7 @@ function capsuleDocAtom(
     kind: "document-excerpt",
     id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
     sourceEnvelopeId: envelopeId,
-    canonicalHashSha256Hex: sha256Hex(canonicalText),
+    canonicalHashSha256Hex: sha256Hex(fingerprintCanonicalText),
     redactionStatus: "redacted",
     lifecycleStatus: "draft",
   };
@@ -776,20 +831,109 @@ function ingestCapsuleSet(
 // redacted before the atom is built (defense in depth — the snapshot is already redacted at persist)
 // and budget-capped exactly like the capsule path so a large board degrades gracefully.
 
+type MaybePromise<T> = T | Promise<T>;
+
+function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
+  return typeof (value as Promise<T>).then === "function";
+}
+
+interface FigmaScreenTexts {
+  readonly text: string;
+  readonly fingerprintText: string;
+}
+
+interface IrStats {
+  readonly imageFillCount: number;
+  readonly textNodeCount: number;
+  readonly semanticNodeCount: number;
+}
+
+function collectIrStats(node: QualityIntelligenceFigma.IrNode, stats: IrStats): IrStats {
+  const next: IrStats = {
+    imageFillCount: stats.imageFillCount + node.imageFills.length,
+    textNodeCount:
+      stats.textNodeCount + (node.text !== undefined && node.text.trim().length > 0 ? 1 : 0),
+    semanticNodeCount:
+      stats.semanticNodeCount +
+      (node.interactionHint === "button" ||
+      node.interactionHint === "input" ||
+      node.interactionHint === "link"
+        ? 1
+        : 0),
+  };
+  return node.children.reduce<IrStats>((acc, child) => collectIrStats(child, acc), next);
+}
+
+function screenNeedsVisionAugmentation(
+  ir: QualityIntelligenceFigma.ScreenIr,
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+): boolean {
+  const stats = collectIrStats(ir.root, {
+    imageFillCount: 0,
+    textNodeCount: 0,
+    semanticNodeCount: 0,
+  });
+  const structuralItems = baseline.items.filter((item) => item.category !== "screen-render").length;
+  return (
+    stats.imageFillCount > 0 ||
+    stats.textNodeCount === 0 ||
+    stats.semanticNodeCount === 0 ||
+    structuralItems === 0
+  );
+}
+
+function figmaVisionRequest(
+  record: FigmaSnapshotRecord,
+  screen: FigmaSnapshotRecord["screens"][number],
+  baselineText: string,
+): Parameters<FigmaVisionHintProvider>[0] {
+  return {
+    snapshotRunId: record.runId,
+    screenId: screen.screenId,
+    image: screen.image,
+    imageRelativePath: screen.image.relativePath,
+    baselineText,
+  };
+}
+
+function mergeFigmaVisionHints(baselineText: string, hints: readonly string[]): FigmaScreenTexts {
+  return {
+    text: QualityIntelligenceFigma.mergeVisionHints(baselineText, hints).text,
+    fingerprintText: baselineText,
+  };
+}
+
 /** Vision-augment one screen's baseline text without ever overriding it (additive only). */
 function visionAugmentedScreenText(
   baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+  ir: QualityIntelligenceFigma.ScreenIr,
+  record: FigmaSnapshotRecord,
   screen: FigmaSnapshotRecord["screens"][number],
   vision: FigmaVisionHintProvider | undefined,
-): string {
+): FigmaScreenTexts {
   const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
-  if (vision === undefined) return baselineText;
-  const hints = vision({
-    screenId: screen.screenId,
-    imageRelativePath: screen.image.relativePath,
-    baselineText,
-  });
-  return QualityIntelligenceFigma.mergeVisionHints(baselineText, hints).text;
+  if (vision === undefined || !screenNeedsVisionAugmentation(ir, baseline)) {
+    return { text: baselineText, fingerprintText: baselineText };
+  }
+  const hints = vision(figmaVisionRequest(record, screen, baselineText));
+  return isPromiseLike(hints)
+    ? { text: baselineText, fingerprintText: baselineText }
+    : mergeFigmaVisionHints(baselineText, hints);
+}
+
+async function visionAugmentedScreenTextAsync(
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+  ir: QualityIntelligenceFigma.ScreenIr,
+  record: FigmaSnapshotRecord,
+  screen: FigmaSnapshotRecord["screens"][number],
+  vision: FigmaVisionHintProvider | undefined,
+): Promise<FigmaScreenTexts> {
+  const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
+  if (vision === undefined || !screenNeedsVisionAugmentation(ir, baseline)) {
+    return { text: baselineText, fingerprintText: baselineText };
+  }
+  const hints = await vision(figmaVisionRequest(record, screen, baselineText));
+  return mergeFigmaVisionHints(baselineText, hints);
 }
 
 interface ParsedScreen {
@@ -836,6 +980,22 @@ function a11yItemsByScreen(
   return QualityIntelligenceFigma.deriveA11yTestItemsByScreen(parsed.map((p) => p.ir));
 }
 
+function figmaDocumentId(screenId: string, screenName: string): string {
+  const redactedName = redact(screenName);
+  const safeName = sanitiseLabel(redactedName);
+  return `${screenId} (${truncateToUtf8Bytes(safeName, MAX_LABEL_CHARS)})`;
+}
+
+// Strip Unicode bidi-override / zero-width / C1 spoofing code points from the untrusted Figma-derived
+// atom text BEFORE secret redaction. Two reasons for this order (the #734 strip-before-redact rule):
+// stripping first DE-OBFUSCATES a zero-width-split secret so the redactor can still match it, and it
+// removes the bidi/zero-width chars that would otherwise ride a Figma screen name or prototype trigger
+// verbatim into the QI atom text and every downstream export (bidi-spoofing of generated test titles).
+// Symmetric with the candidate-text path (buildRequirementExcerpt) and the source-label path
+// (sanitiseLabel / stripUnsafeLabelChars). TAB/LF/CR are preserved so the multi-line baseline structure
+// stays intact; clean inputs are byte-identical, so the atom hash and budget accounting are unchanged.
+const redactFigmaAtomText = (text: string): string => redact(stripUnsafeFormatChars(text));
+
 // Derive the redacted, budget-capped canonical text for every parseable screen. Each screen's
 // deterministic structural baseline (#754) is augmented additively with its navigation/flow test
 // items (#811) AND its accessibility test items (#812) — concatenated, neither replacing the other —
@@ -861,12 +1021,54 @@ function figmaScreenDocs(
   for (const { row, ir } of parsed) {
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
-    const augmented = visionAugmentedScreenText(baseline, row, vision);
-    const capped = truncateToUtf8Bytes(redact(augmented), perDocBudget);
+    const augmented = visionAugmentedScreenText(baseline, ir, record, row, vision);
+    const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
     if (capped.trim().length === 0) continue;
+    const fingerprintText = truncateToUtf8Bytes(
+      redactFigmaAtomText(augmented.fingerprintText),
+      perDocBudget,
+    );
     const bytes = utf8ByteLength(capped);
     if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
-    docs.push({ documentId: `${row.screenId} (${ir.name})`, text: capped });
+    docs.push({
+      documentId: figmaDocumentId(row.screenId, ir.name),
+      text: capped,
+      fingerprintText,
+    });
+    totalBytes += bytes;
+  }
+  return docs;
+}
+
+async function figmaScreenDocsAsync(
+  record: FigmaSnapshotRecord,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<readonly CorpusDoc[]> {
+  const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
+  const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
+  const parsed = parseScreens(record);
+  const navItems = navItemsByScreen(parsed, record.links ?? []);
+  const a11yItems = a11yItemsByScreen(parsed);
+  const docs: CorpusDoc[] = [];
+  let totalBytes = 0;
+  for (const { row, ir } of parsed) {
+    const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
+    const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
+    const augmented = await visionAugmentedScreenTextAsync(baseline, ir, record, row, vision);
+    const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
+    if (capped.trim().length === 0) continue;
+    const fingerprintText = truncateToUtf8Bytes(
+      redactFigmaAtomText(augmented.fingerprintText),
+      perDocBudget,
+    );
+    const bytes = utf8ByteLength(capped);
+    if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
+    docs.push({
+      documentId: figmaDocumentId(row.screenId, ir.name),
+      text: capped,
+      fingerprintText,
+    });
     totalBytes += bytes;
   }
   return docs;
@@ -898,7 +1100,7 @@ function ingestFigmaSnapshot(
       `Figma snapshot "${label}" produced no usable screen baseline.`,
     );
   }
-  const joinedText = docs.map((d) => d.text).join("\n");
+  const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
   const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
   // A stored Figma Snapshot is figma evidence, not repository context. Use the dedicated
   // `figma-evidence` envelope kind (#278 AC2 "represented as an explicit connector-backed source"
@@ -911,11 +1113,58 @@ function ingestFigmaSnapshot(
     provenance: {
       origin: `figma-snapshot:${source.snapshotRunId}`,
       registeredAt,
-      integrityHashSha256Hex: sha256Hex(joinedText),
+      integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
     },
     localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
   };
-  const atoms = docs.map((d) => capsuleDocAtom(d.documentId, d.text, envelopeId));
+  const atoms = docs.map((d) =>
+    capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
+  );
+  return { envelope, atoms };
+}
+
+async function ingestFigmaSnapshotAsync(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<OneSource> {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
+    );
+  }
+  if (record.screens.length === 0) {
+    throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
+  }
+  const docs = await figmaScreenDocsAsync(record, vision, byteBudget);
+  if (docs.length === 0) {
+    throw new QiIngestionError(
+      "QI_SOURCE_EMPTY",
+      `Figma snapshot "${label}" produced no usable screen baseline.`,
+    );
+  }
+  const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
+  const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "figma-evidence",
+    displayLabel: label,
+    provenance: {
+      origin: `figma-snapshot:${source.snapshotRunId}`,
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
+    },
+    localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
+  };
+  const atoms = docs.map((d) =>
+    capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
+  );
   return { envelope, atoms };
 }
 
@@ -969,10 +1218,51 @@ function ingestOne(
   }
 }
 
+async function ingestOneAsync(
+  source: QualityIntelligenceInlineSource,
+  index: number,
+  registeredAt: string,
+  capsuleResolver: CapsuleResolver | undefined,
+  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
+  figmaVision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<OneSource> {
+  if (source.kind !== "figma-snapshot") {
+    return ingestOne(
+      source,
+      index,
+      registeredAt,
+      capsuleResolver,
+      figmaSnapshotLoader,
+      figmaVision,
+      byteBudget,
+    );
+  }
+  if (figmaSnapshotLoader === undefined) {
+    throw new QiIngestionError(
+      "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+    );
+  }
+  return ingestFigmaSnapshotAsync(
+    source,
+    index,
+    registeredAt,
+    figmaSnapshotLoader,
+    figmaVision,
+    byteBudget,
+  );
+}
+
 export interface IngestInlineSourcesInput {
   readonly request: QualityIntelligenceStartRunRequest;
   readonly runId: string;
   readonly registeredAt: string;
+  /**
+   * Drift-only mode: an existing run whose current source is now empty must still be comparable so all
+   * old candidates classify as orphaned-stale. Initial run creation keeps the strict non-empty guard.
+   */
+  readonly allowEmpty?: boolean | undefined;
   /** Optional capsule resolver (Epic #710, Issue #717). Absent → capsule sources throw QI_CAPSULE_UNAVAILABLE. */
   readonly capsuleResolver?: CapsuleResolver | undefined;
   /**
@@ -1055,6 +1345,78 @@ function ingestSourceInto(
   });
 }
 
+async function ingestSourceIntoAsync(
+  acc: IngestAccumulator,
+  source: QualityIntelligenceInlineSource,
+  index: number,
+  input: IngestInlineSourcesInput,
+  budgets: PerSourceBudgets,
+): Promise<void> {
+  let ingested: OneSource;
+  try {
+    ingested = await ingestOneAsync(
+      source,
+      index,
+      input.registeredAt,
+      input.capsuleResolver,
+      input.figmaSnapshotLoader,
+      input.figmaVision,
+      budgets.byteBudget,
+    );
+  } catch (error) {
+    if (!(error instanceof QiIngestionError)) throw error;
+    acc.firstSkipError ??= error;
+    acc.skippedSources.push({
+      label: sanitiseLabel(source.label),
+      kind: source.kind,
+      code: error.code,
+      message: error.message,
+    });
+    return;
+  }
+  const { envelope, atoms } = ingested;
+  const take = Math.min(budgets.atomBudget, MAX_TOTAL_ATOMS - acc.ingestedAtoms.length);
+  const taken = take <= 0 ? [] : atoms.slice(0, take);
+  acc.envelopes.push(envelope);
+  acc.ingestedAtoms.push(...taken);
+  acc.sourceSummaries.push({
+    label: envelope.displayLabel,
+    kind: source.kind,
+    atomCount: taken.length,
+  });
+}
+
+function emptyDriftIngestionResult(
+  input: IngestInlineSourcesInput,
+  droppedSourceCount: number,
+  skippedSources: readonly QiSkippedSource[],
+): QiIngestionResult {
+  return {
+    envelopes: [],
+    ingestedAtoms: [],
+    provenanceRefs: {
+      envelopeIds: [],
+      auditSummaryId: auditSummaryIdFor(input.runId),
+    },
+    sourceSummaries: [],
+    droppedSourceCount,
+    skippedSources,
+  };
+}
+
+function allowEmptyDriftIngestion(
+  input: IngestInlineSourcesInput,
+  acc: IngestAccumulator,
+  droppedSourceCount: number,
+): QiIngestionResult | undefined {
+  if (input.allowEmpty !== true) return undefined;
+  const blockingSkip = acc.skippedSources.find((source) => source.code !== "QI_SOURCE_EMPTY");
+  if (blockingSkip !== undefined) {
+    throw new QiIngestionError(blockingSkip.code, blockingSkip.message);
+  }
+  return emptyDriftIngestionResult(input, droppedSourceCount, acc.skippedSources);
+}
+
 export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestionResult {
   // Read through the typed property in the loop: `Array.isArray` would widen a local binding of the
   // readonly union array to `any[]`, so the guard checks length on the typed property directly.
@@ -1088,6 +1450,53 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
     ingestSourceInto(acc, source, i, input, budgets);
   }
   if (acc.ingestedAtoms.length === 0) {
+    const emptyDrift = allowEmptyDriftIngestion(input, acc, droppedSourceCount);
+    if (emptyDrift !== undefined) return emptyDrift;
+    throw (
+      acc.firstSkipError ??
+      new QiIngestionError("QI_SOURCE_EMPTY", "No usable evidence was produced from the sources.")
+    );
+  }
+  return {
+    envelopes: acc.envelopes,
+    ingestedAtoms: acc.ingestedAtoms,
+    provenanceRefs: {
+      envelopeIds: acc.envelopes.map((e) => String(e.id)),
+      auditSummaryId: auditSummaryIdFor(input.runId),
+    },
+    sourceSummaries: acc.sourceSummaries,
+    droppedSourceCount,
+    skippedSources: acc.skippedSources,
+  };
+}
+
+export async function ingestInlineSourcesAsync(
+  input: IngestInlineSourcesInput,
+): Promise<QiIngestionResult> {
+  const allSources: readonly QualityIntelligenceInlineSource[] = input.request.sources;
+  if (allSources.length === 0) {
+    throw new QiIngestionError("QI_NO_SOURCES", "At least one source is required to start a run.");
+  }
+  const sources = allSources.slice(0, MAX_QI_SOURCES);
+  const droppedSourceCount = allSources.length - sources.length;
+  const budgets: PerSourceBudgets = {
+    atomBudget: perSourceAtomBudget(MAX_TOTAL_ATOMS, sources.length),
+    byteBudget: perSourceByteBudget(sources.length),
+  };
+  const acc: IngestAccumulator = {
+    envelopes: [],
+    ingestedAtoms: [],
+    sourceSummaries: [],
+    skippedSources: [],
+  };
+  for (let i = 0; i < sources.length; i += 1) {
+    const source = sources[i];
+    if (source === undefined) continue;
+    await ingestSourceIntoAsync(acc, source, i, input, budgets);
+  }
+  if (acc.ingestedAtoms.length === 0) {
+    const emptyDrift = allowEmptyDriftIngestion(input, acc, droppedSourceCount);
+    if (emptyDrift !== undefined) return emptyDrift;
     throw (
       acc.firstSkipError ??
       new QiIngestionError("QI_SOURCE_EMPTY", "No usable evidence was produced from the sources.")

@@ -100,4 +100,104 @@ describe("adaptToQualityCenter", () => {
     expect(out).not.toMatch(/bearer\s|api[_-]?key|sk-[a-z0-9]/iu);
     expect(out).not.toMatch(/system prompt|you are an? /iu);
   });
+
+  it("renders every key-value field with its label and the candidate value", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-fields", "Login works"),
+      priority: "P2",
+      riskClass: "regression",
+      status: "accepted",
+      tags: ["smoke", "auth"],
+      preconditions: ["User exists"],
+      steps: ["Open login", "Submit"],
+      expectedResults: ["Dashboard shown"],
+    };
+    const out = adaptToQualityCenter(bundle([c]), [c]);
+    expect(out).toContain("QC-0001 Login works");
+    // Each label line must carry the correct value. The label→value gap is matched as a run of
+    // spaces (` +`) so the assertion pins the label text and the value without being brittle on the
+    // exact padding width — a dropped line, a renamed label, or a wrong value all fail.
+    expect(out).toMatch(/\n {2}ID: +tc-fields(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Priority: +P2(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Risk class: +regression(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Status: +accepted(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Tags: +smoke \| auth(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Precond: +User exists(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Steps: +Open login \| Submit(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Expected: +Dashboard shown(?:\n|$)/u);
+  });
+
+  it("numbers two real candidates contiguously as QC-0001 and QC-0002", () => {
+    const a = candidate("tc-1", "Alpha");
+    const b = candidate("tc-2", "Beta");
+    const out = adaptToQualityCenter(bundle([a, b]), [a, b]);
+    expect(out).toContain("QC-0001 Alpha");
+    expect(out).toContain("QC-0002 Beta");
+  });
+
+  it("skips a bundle entry whose candidate is absent without burning a sequence number", () => {
+    const a = candidate("tc-1", "Alpha");
+    const g = candidate("tc-3", "Gamma");
+    // `contents` references tc-1, tc-2 (a phantom absent from the candidates array), and tc-3.
+    const withPhantom: QualityIntelligenceExportBundle = {
+      ...bundle([a, g]),
+      contents: [
+        {
+          candidateId: Q.asQualityIntelligenceTestCaseId("tc-1"),
+          coverageMapRefs: [],
+          findingRefs: [],
+        },
+        {
+          candidateId: Q.asQualityIntelligenceTestCaseId("tc-2"),
+          coverageMapRefs: [],
+          findingRefs: [],
+        },
+        {
+          candidateId: Q.asQualityIntelligenceTestCaseId("tc-3"),
+          coverageMapRefs: [],
+          findingRefs: [],
+        },
+      ],
+    };
+    const out = adaptToQualityCenter(withPhantom, [a, g]);
+    expect(out).toContain("QC-0001 Alpha");
+    // Gamma must take QC-0002, NOT QC-0003 — the skipped phantom entry must not consume a number.
+    expect(out).toContain("QC-0002 Gamma");
+    expect(out).not.toContain("QC-0003");
+    // The phantom id is never rendered.
+    expect(out).not.toContain("tc-2");
+  });
+
+  it("joins three-item lists with ' | ' in input order across every list field", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "Three"),
+      tags: ["alpha", "beta", "gamma"],
+      preconditions: ["p1", "p2", "p3"],
+      steps: ["s1", "s2", "s3"],
+      expectedResults: ["e1", "e2", "e3"],
+    };
+    const out = adaptToQualityCenter(bundle([c]), [c]);
+    expect(out).toMatch(/\n {2}Tags: +alpha \| beta \| gamma(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Precond: +p1 \| p2 \| p3(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Steps: +s1 \| s2 \| s3(?:\n|$)/u);
+    expect(out).toMatch(/\n {2}Expected: +e1 \| e2 \| e3(?:\n|$)/u);
+  });
+
+  it("throws when a TMS-targeted bundle does not attest redaction (invariant enforced at the adapter)", () => {
+    const c = candidate("tc-1", "X");
+    const unattested: QualityIntelligenceExportBundle = {
+      ...bundle([c]),
+      redactionAttested: false,
+    };
+    expect(() => adaptToQualityCenter(unattested, [c])).toThrow(/redactionAttested/u);
+  });
+
+  it("throws when the integrity hash is not a lowercase sha256 hex string", () => {
+    const c = candidate("tc-1", "X");
+    const badHash: QualityIntelligenceExportBundle = {
+      ...bundle([c]),
+      integrityHashSha256Hex: "not-a-hash",
+    };
+    expect(() => adaptToQualityCenter(badHash, [c])).toThrow(/integrity hash/iu);
+  });
 });

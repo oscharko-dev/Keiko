@@ -143,6 +143,12 @@ export function ExportBar({
           className="qi-select"
           value={adapter}
           disabled={busy}
+          // Issue #723 AC2 a11y: when a TMS (preview-only) adapter such as Quality Center is
+          // selected, associate the "preview only — configure a connector" note with the picker so
+          // forms-mode screen-reader users hear the disabled/preview state on the control itself,
+          // not only when reading sequentially. Omitted for local formats (no such note renders),
+          // which keeps the reference from ever dangling.
+          aria-describedby={isTms ? "qi-export-connector-hint" : undefined}
           onChange={(e) => {
             setAdapter(e.target.value);
             setPreview(null);
@@ -210,7 +216,12 @@ export function ExportBar({
             : ""}
       </p>
       {isTms ? (
-        <p className="qi-export-hint" role="note" data-testid="qi-export-connector-hint">
+        <p
+          id="qi-export-connector-hint"
+          className="qi-export-hint"
+          role="note"
+          data-testid="qi-export-connector-hint"
+        >
           {selected?.id === "quality-center"
             ? "Quality Center is preview-only. Configure a connector to enable live export."
             : "External target — preview only. Configure a connector to enable live export."}
