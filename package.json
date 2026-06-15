@@ -70,7 +70,8 @@
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
     "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:qi-supply-chain",
     "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:qi-supply-chain",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "test:mutation:security": "npx --yes @stryker-mutator/core@9 @stryker-mutator/vitest-runner@9 stryker run stryker.security.conf.json"
   },
   "overrides": {
     "postcss": "8.5.15",

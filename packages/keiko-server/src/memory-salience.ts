@@ -153,7 +153,7 @@ export async function captureSalientFromTurn(
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   modelId: string,
-  _assistantText: string,
+  assistantText: string,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   const vault = deps.memoryVault;
   if (request.memory === undefined || !request.memory.enabled || vault === undefined) {
@@ -171,6 +171,7 @@ export async function captureSalientFromTurn(
     const outcomes = await extractSalientMemories(
       {
         userText: request.content,
+        assistantText,
         existingBodies: gatherExistingBodies(vault, context),
         context: buildSalienceContext(context),
         policy,

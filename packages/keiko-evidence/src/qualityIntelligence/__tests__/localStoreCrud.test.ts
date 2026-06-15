@@ -473,6 +473,56 @@ describe("load-time integrity verification (issue #637)", () => {
     );
   });
 
+  it("rejects a load when integrityHashes.coverageMatrix is deleted while the collection is kept (fail-closed)", async () => {
+    // RED against assertOptionalHashMatches: stored===undefined → early return → loads.
+    // GREEN after switching to assertHashMatches with derived expected (mirrors atomFingerprints).
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-cov-nohash"),
+        coverageMatrix: [
+          { atomId: "atom-1", status: "covered", confidence: 0.9, coveringCandidateIds: ["tc-1"] },
+        ],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-cov-nohash");
+    const integrityHashes = original.integrityHashes as Record<string, unknown>;
+    // Simulate an attacker who deletes the stored sub-hash so the optional guard passes.
+    const hashesWithoutCoverage = { ...integrityHashes };
+    delete hashesWithoutCoverage.coverageMatrix;
+    await writeManifest("run-tamper-cov-nohash", {
+      ...original,
+      integrityHashes: hashesWithoutCoverage,
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-cov-nohash", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("rejects a load when integrityHashes.sourceFingerprints is deleted while the collection is kept (fail-closed)", async () => {
+    // RED against assertOptionalHashMatches: stored===undefined → early return → loads.
+    // GREEN after switching to assertHashMatches with derived expected (mirrors atomFingerprints).
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-srcfp-nohash"),
+        sourceFingerprints: [{ envelopeId: "env-1", integrityHashSha256Hex: "a".repeat(64) }],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-srcfp-nohash");
+    const integrityHashes = original.integrityHashes as Record<string, unknown>;
+    // Simulate an attacker who deletes the stored sub-hash so the optional guard passes.
+    const hashesWithoutSrcFp = { ...integrityHashes };
+    delete hashesWithoutSrcFp.sourceFingerprints;
+    await writeManifest("run-tamper-srcfp-nohash", {
+      ...original,
+      integrityHashes: hashesWithoutSrcFp,
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-srcfp-nohash", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
   it("untampered manifests still load cleanly after the integrity check (happy path)", () => {
     recordQualityIntelligenceRun(inputWithFinding("run-integrity-happy"), { evidenceDir });
     const loaded = loadQualityIntelligenceRun("run-integrity-happy", { evidenceDir });

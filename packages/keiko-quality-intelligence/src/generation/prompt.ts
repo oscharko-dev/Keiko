@@ -105,7 +105,7 @@ export interface BuildTestDesignInstructionInput {
  */
 export const buildTestDesignInstruction = (input: BuildTestDesignInstructionInput): string => {
   const profile = input.profile ?? regressionDefault;
-  const cap = Math.max(1, Math.min(input.maxTestCases, 200));
+  const cap = Math.max(1, Math.min(input.maxTestCases, GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS));
   return [
     `Design up to ${String(cap)} test cases from the ${String(input.evidenceCount)} evidence`,
     `item(s) provided below as <qi-evidence> blocks (numbered 1..${String(input.evidenceCount)}).`,

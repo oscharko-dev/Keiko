@@ -109,6 +109,20 @@ describe("listCapsuleDocumentTexts", () => {
     const [entry] = listCapsuleDocumentTexts(store, CAP_ID);
     expect(entry).toMatchObject({ documentId: "doc-1", text: "Hello world" });
   });
+
+  it("returns at most maxDocuments documents when cap is smaller than total count", () => {
+    // Seed 3 documents but cap at 2 — at most 2 must be returned.
+    createCapsule(store, sampleCapsuleInput({ id: CAP_ID }));
+    seedDocumentText(CAP_ID, "doc-p", "First document content.");
+    seedDocumentText(CAP_ID, "doc-q", "Second document content.");
+    seedDocumentText(CAP_ID, "doc-r", "Third document content.");
+
+    const result = listCapsuleDocumentTexts(store, CAP_ID, { maxDocuments: 2 });
+    expect(result).toHaveLength(2);
+    // ORDER BY document_id → doc-p, doc-q are the first two alphabetically.
+    expect(result[0]?.documentId).toBe("doc-p");
+    expect(result[1]?.documentId).toBe("doc-q");
+  });
 });
 
 describe("listCapsuleSetDocumentTexts (Epic #710, Issue #716)", () => {

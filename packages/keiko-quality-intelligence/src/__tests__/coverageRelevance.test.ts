@@ -167,6 +167,8 @@ describe("classifyAtomCoverage", () => {
     const result = classifyAtomCoverage(atom, mapping);
     expect(result.status).toBe("uncovered");
     expect(result.coveringCandidateIds).toHaveLength(0);
+    // The dropped id must NOT appear in the output — explicit pin so a mutant that passes ids through is caught.
+    expect(result.coveringCandidateIds.map(String)).not.toContain("tc-should-be-dropped");
     // The raw mapping confidence is preserved (distinct from the undefined-mapping → 0 path).
     expect(result.confidence).toBe(0.1);
   });

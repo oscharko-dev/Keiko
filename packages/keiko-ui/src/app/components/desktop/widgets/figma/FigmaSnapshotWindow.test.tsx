@@ -823,6 +823,18 @@ describe("FigmaSnapshotWindow", () => {
         screen.getByText(/add a node-id by selecting a frame or section/iu),
       ).toBeInTheDocument();
     });
+
+    // #24, WCAG 3.3.1 — the validation error must be announced dynamically.
+    // RED: the <p> currently has no live-region role so screen readers are silent.
+    it("exposes the board-link validation error as an alert live region (#24, WCAG 3.3.1)", async () => {
+      renderWindow();
+      const user = userEvent.setup();
+      await user.type(screen.getByLabelText(/board link/iu), "https://not-figma.com/nope");
+      // Must be reachable via getByRole("alert") — the paragraph must carry role="alert"
+      // (or aria-live="assertive" aria-atomic="true") so AT announces it on insertion.
+      const validationError = screen.getByRole("alert");
+      expect(validationError).toHaveTextContent(/doesn't look like a figma board link/iu);
+    });
   });
 
   describe("error handling polish (C209/C211)", () => {

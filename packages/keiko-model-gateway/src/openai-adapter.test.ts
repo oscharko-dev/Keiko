@@ -593,6 +593,33 @@ describe("OpenAiAdapter.callStream", () => {
     expect(serialized).not.toContain(customSecret);
   });
 
+  it("redacts a configured secret that is split across two SSE deltas", async () => {
+    // RED reasoning: the old per-delta redact(content, secrets) only saw each raw delta
+    // in isolation, so a secret split at a delta boundary was never matched by the regex
+    // and leaked in the concatenated output. The fix redacts against the accumulated buffer.
+    const customSecret = "opaque-split-secret-value-xyz";
+    const half = Math.floor(customSecret.length / 2);
+    const part1 = customSecret.slice(0, half); // first half
+    const part2 = customSecret.slice(half); // second half
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        sseResponse([deltaLine(`prefix-${part1}`), deltaLine(`${part2}-suffix`), "data: [DONE]\n"]),
+      ),
+    );
+    const chunks = await collectStream(
+      adapter.callStream(REQUEST, { ...CONFIG, apiKey: customSecret }),
+    );
+    // The concatenated delta tokens must not contain the secret.
+    const deltaTokens = chunks
+      .filter((c): c is Extract<typeof c, { type: "delta" }> => c.type === "delta")
+      .map((c) => c.token)
+      .join("");
+    expect(deltaTokens).not.toContain(customSecret);
+    // Nor must the done chunk's assembled content.
+    const serialized = JSON.stringify(chunks);
+    expect(serialized).not.toContain(customSecret);
+  });
+
   it("maps a non-ok streaming status to the matching gateway error", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({ error: "bad key" }, { status: 401 })),

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://stryker-mutator.io/schemas/stryker-schema.json#",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "mutate": [
+    "packages/keiko-security/src/redaction.ts",
+    "packages/keiko-security/src/secretbox.ts",
+    "packages/keiko-security/src/hashing.ts",
+    "packages/keiko-security/src/secrets.ts",
+    "packages/keiko-evidence/src/redaction.ts",
+    "packages/keiko-evidence/src/qualityIntelligence/redaction.ts",
+    "packages/keiko-memory-vault/src/redact-record.ts",
+    "packages/keiko-model-gateway/src/openai-adapter.ts",
+    "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
+    "packages/keiko-evidence/src/qualityIntelligence/store.ts",
+    "packages/keiko-memory-vault/src/cipher.ts",
+    "packages/keiko-memory-vault/src/migrate-encrypt.ts"
+  ],
+  "reporters": ["html", "clear-text", "progress"],
+  "htmlReporter": {
+    "fileName": "reports/mutation/security/index.html"
+  },
+  "thresholds": {
+    "high": 80,
+    "low": 65,
+    "break": 50
+  },
+  "coverageAnalysis": "perTest",
+  "timeoutMS": 30000,
+  "timeoutFactor": 2.5,
+  "concurrency": 4,
+  "tempDirName": ".stryker-tmp"
+}

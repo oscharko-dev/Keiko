@@ -559,7 +559,7 @@ export function FigmaSnapshotWindow({
           </button>
         </div>
         {linkError !== null && (
-          <p id={validationId} className="figma-snapshot-link-error">
+          <p id={validationId} className="figma-snapshot-link-error" role="alert">
             {linkError}
           </p>
         )}

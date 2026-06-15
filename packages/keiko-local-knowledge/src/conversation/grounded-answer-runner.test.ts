@@ -134,6 +134,29 @@ describe("runGroundedAnswer — no-evidence short-circuit", () => {
   });
 });
 
+describe("runGroundedAnswer — generator rejection propagation", () => {
+  it("rejects with the same error when the generator rejects", async () => {
+    // RED: without this test the propagation path was untested. GREEN: runGroundedAnswer
+    // does not catch the generator's rejection — it propagates naturally via the awaited
+    // `deps.answerGenerator.generate(...)` call.
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-rej" });
+    const boom = new Error("generator exploded");
+    const rejectingGenerator: AnswerGenerator = {
+      generate: (): Promise<string> => Promise.reject(boom),
+    };
+    await expect(
+      runGroundedAnswer(
+        {
+          retrieval: { store, embeddingAdapter: scriptedAdapter() },
+          answerGenerator: rejectingGenerator,
+        },
+        { conversationId: "conv-rej", capsuleId: seeded.capsuleId, text: "alpha" },
+      ),
+    ).rejects.toBe(boom);
+  });
+});
+
 describe("runGroundedAnswer — cancellation", () => {
   it("forwards the AbortSignal to the generator", async () => {
     const { store } = getFixture();

@@ -1,8 +1,11 @@
 // Eager v1→v2 encryption sweep (ADR-0035). v1 DBs stored content columns in plaintext; this sweep
 // re-encrypts every existing plaintext content value in place, inside the migration transaction, so
-// the upgrade is atomic. It is IDEMPOTENT: a value already sealed (kv1.* for strings, 0x01-prefixed
-// for the embedding BLOB) is skipped, so re-running on an already-migrated DB is a no-op and a
-// half-migrated DB (interrupted before COMMIT) re-runs cleanly because user_version stayed < 2.
+// the upgrade is atomic. It is IDEMPOTENT: the user_version gate in runMigrations ensures this sweep
+// runs at most once (when user_version < ENCRYPTION_VERSION), so a half-migrated DB (interrupted
+// before COMMIT) re-runs cleanly because user_version stayed < 2. Each string column is sealed
+// unless it is already a genuine envelope (see isAlreadySealed: a try-open, NOT a "kv1." prefix
+// sniff — a plaintext value that merely starts with "kv1." must still be encrypted, not skipped).
+// That keeps the sweep idempotent for a genuinely sealed value without the prefix false-positive.
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryContentCipher } from "./cipher.js";
@@ -28,6 +31,22 @@ const STRING_TARGETS: readonly { readonly table: string; readonly column: string
   { table: "memory_tombstones", column: "reason" },
 ];
 
+// A value is "already sealed" only if it actually AES-GCM-opens. The "kv1." prefix alone is
+// ambiguous — a legacy plaintext body can literally start with "kv1." (see KV1_PREFIX_BODY in the
+// tests); a prefix sniff would wrongly skip it, leave it as plaintext, and crash on the next read.
+// A genuine envelope opens cleanly; a "kv1."-prefixed plaintext throws. This keeps the sweep
+// idempotent (a genuinely sealed value — e.g. from an interrupted or mixed migration — is skipped
+// rather than double-sealed) without the prefix false-positive.
+function isAlreadySealed(cipher: MemoryContentCipher, value: string): boolean {
+  if (!cipher.isSealed(value)) return false;
+  try {
+    cipher.openString(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function sweepStringColumn(
   db: DatabaseSync,
   table: string,
@@ -41,7 +60,7 @@ function sweepStringColumn(
     .all() as unknown as readonly IdStringRow[];
   const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
   for (const row of rows) {
-    if (row.value === null || cipher.isSealed(row.value)) continue;
+    if (row.value === null || isAlreadySealed(cipher, row.value)) continue;
     update.run(cipher.sealString(row.value), row.rowid);
   }
 }

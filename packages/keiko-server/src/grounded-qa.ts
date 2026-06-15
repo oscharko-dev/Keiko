@@ -389,7 +389,8 @@ function requestAbortSignal(ctx: RouteContext): AbortSignal {
       controller.abort("grounded request cancelled");
     }
   };
-  ctx.req.on("aborted", abort);
+  // The req "aborted" event is deprecated since Node 17 and fires unreliably.
+  // The res "close" event is the canonical signal for a disconnected client.
   ctx.res.on("close", () => {
     if (!ctx.res.writableEnded) abort();
   });

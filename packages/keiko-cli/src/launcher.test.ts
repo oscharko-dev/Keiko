@@ -280,6 +280,14 @@ describe("runLauncherCli install — refusals (security)", () => {
     const c = makeIo();
     expect(runLauncherCli(["install", "--port", "70000"], c.io, {}, h.deps)).toBe(2);
   });
+  it("refuses a 6-digit port string (regex rejects before range check)", () => {
+    // RED reason: the old regex /^\d{1,6}$/ accepted "100000"; after the fix to
+    // /^\d{1,5}$/ the format check rejects it immediately as invalid.
+    const h = makeHarness();
+    const c = makeIo();
+    expect(runLauncherCli(["install", "--port", "100000"], c.io, {}, h.deps)).toBe(2);
+    expect(c.err().toLowerCase()).toContain("port");
+  });
   it("refuses --port non-integer", () => {
     const h = makeHarness();
     const c = makeIo();

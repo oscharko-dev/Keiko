@@ -849,6 +849,7 @@ function inputWithResolver(
       : {
           capsule: capsule ?? ((): readonly never[] => []),
           capsuleSet: capsuleSet ?? ((): readonly never[] => []),
+          close: (): void => undefined,
         };
   return { request: reqWith(sources), runId: RUN_ID, registeredAt: TS, capsuleResolver };
 }

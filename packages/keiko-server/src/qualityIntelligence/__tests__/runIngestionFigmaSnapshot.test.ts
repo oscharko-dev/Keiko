@@ -798,6 +798,7 @@ describe("figma-snapshot ingestion — four-kind cross-source composition (Issue
             capsuleResolver: {
               capsule: () => [capsuleDoc],
               capsuleSet: () => [],
+              close: (): void => undefined,
             },
           },
         ),

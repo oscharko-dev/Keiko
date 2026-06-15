@@ -119,6 +119,10 @@ export interface ConsolidationResult {
   readonly staleFlags: readonly StaleFlag[];
   readonly reviewItems: readonly ReviewItem[];
   readonly clustersInspected: number;
+  // Conflict pairs discovered by the cross-cluster pass (`findConflictPairs`). Kept separate from
+  // `clustersInspected` because the two counters measure different things: clusters counted by the
+  // duplicate-scan sweep vs. (older, newer) pairs found across non-overlapping clusters.
+  readonly conflictPairsDetected: number;
   readonly recordsInspected: number;
   readonly truncated: boolean;
   // The engine is pure (no clock reads), so `elapsedMs` is always `0` from `runConsolidation`.

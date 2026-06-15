@@ -832,7 +832,7 @@ function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteRe
 
 function redactText(deps: UiHandlerDeps, value: string): string {
   const redacted = deps.redactor(value);
-  return typeof redacted === "string" ? redacted : value;
+  return typeof redacted === "string" ? redacted : stripUnsafeFormatChars(value);
 }
 
 type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;

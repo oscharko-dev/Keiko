@@ -296,15 +296,43 @@ describe("compareStaleness — unknown atom", () => {
     const args: CompareStalenessArgs = {
       oldFingerprints: [fp("env-1", "aaa")],
       evidenceRefs: [ref("env-1", "atom-1")],
-      // tc-unknown derives from atom-999 which has no evidenceRef mapping
+      // tc-unknown derives from atom-999 which has no evidenceRef mapping →
+      // classifyCandidate: atomToEnvelope lacks "atom-999" → source-changed with UNKNOWN_ENVELOPE
       candidates: [cand("tc-unknown", "atom-999")],
       currentFingerprints: [fp("env-1", "aaa")],
     };
     const result = compareStaleness(args);
     expect(result.fresh).toHaveLength(0);
-    expect(result.changedStale.length + result.orphanedStale.length).toBeGreaterThanOrEqual(1);
-    const stale = [...result.changedStale, ...result.orphanedStale];
-    expect(stale.some((r) => r.candidateId === "tc-unknown")).toBe(true);
+    expect(result.orphanedStale).toHaveLength(0);
+    expect(result.changedStale).toHaveLength(1);
+    expect(result.changedStale[0]?.candidateId).toBe("tc-unknown");
+    expect(result.changedStale[0]?.envelopeId).toBe("unknown");
+    expect(result.changedStale[0]?.reason).toBe("source-changed");
+  });
+});
+
+describe("compareStaleness — partial atom metadata", () => {
+  it("falls back to envelope-level classification when oldAtomFingerprints covers only one of two atoms", () => {
+    // hasAtomMetadata requires EVERY derivedFromAtomId to be present in oldAtoms.
+    // With only atom-1 covered by oldAtomFingerprints, atom-2 is missing → hasAtomMetadata=false
+    // → falls through to envelope-level → env-1 hash changed → changedStale.
+    const args: CompareStalenessArgs = {
+      oldFingerprints: [fp("env-1", "aaa")],
+      oldAtomFingerprints: [
+        // Only one of the two atoms is recorded — partial metadata.
+        atomFp("atom-1", "env-1", "hash-atom-1"),
+      ],
+      evidenceRefs: [ref("env-1", "atom-1"), ref("env-1", "atom-2")],
+      candidates: [cand("tc-partial", "atom-1", "atom-2")],
+      currentFingerprints: [fp("env-1", "bbb")],
+    };
+    const result = compareStaleness(args);
+    expect(result.fresh).toHaveLength(0);
+    expect(result.orphanedStale).toHaveLength(0);
+    expect(result.changedStale).toHaveLength(1);
+    expect(result.changedStale[0]?.candidateId).toBe("tc-partial");
+    expect(result.changedStale[0]?.reason).toBe("source-changed");
+    expect(result.changedStale[0]?.envelopeId).toBe("env-1");
   });
 });
 

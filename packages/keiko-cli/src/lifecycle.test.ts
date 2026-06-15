@@ -145,7 +145,7 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -184,7 +184,8 @@ describe("runLifecycleCli", () => {
             spawned.push({ command, args, opts });
             return child;
           },
-          fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+          fetchImpl: () =>
+            Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
           isProcessAlive: () => true,
           isPortAvailable: () => Promise.resolve(true),
           killProcess: vi.fn(),
@@ -225,7 +226,8 @@ describe("runLifecycleCli", () => {
                 spawned.push({ command, args, opts });
                 return child;
               },
-              fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+              fetchImpl: () =>
+                Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
               isProcessAlive: () => true,
               isPortAvailable: () => Promise.resolve(true),
               killProcess: vi.fn(),
@@ -258,7 +260,7 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -323,8 +325,22 @@ describe("runLifecycleCli", () => {
           spawned.push({ command, args, opts });
           return child;
         },
-        fetchImpl: () =>
-          Promise.resolve(Response.json({ status: "ok", version: "0.1.2" }, { status: 200 })),
+        fetchImpl: (() => {
+          let probe = 0;
+          return (): Promise<Response> => {
+            probe += 1;
+            // 1st probe = the stale existing process (triggers the restart); after the restart
+            // the freshly-spawned child reports the current SDK version so waitForHealth succeeds.
+            return Promise.resolve(
+              Response.json(
+                probe === 1
+                  ? { status: "ok", version: "0.1.2" }
+                  : { status: "ok", version: SDK_VERSION },
+                { status: 200 },
+              ),
+            );
+          };
+        })(),
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
@@ -358,7 +374,20 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(Response.json({ status: "ok" }, { status: 200 })),
+        fetchImpl: (() => {
+          let probe = 0;
+          return (): Promise<Response> => {
+            probe += 1;
+            // 1st probe = existing process with no version field (triggers restart); the fresh
+            // child after the restart reports the current SDK version so startup completes.
+            return Promise.resolve(
+              Response.json(
+                probe === 1 ? { status: "ok" } : { status: "ok", version: SDK_VERSION },
+                { status: 200 },
+              ),
+            );
+          };
+        })(),
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
         killProcess,
@@ -396,7 +425,9 @@ describe("runLifecycleCli", () => {
           fetchCalls += 1;
           return fetchCalls === 1
             ? Promise.reject(new Error("connection refused"))
-            : Promise.resolve(Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 }));
+            : Promise.resolve(
+                Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 }),
+              );
         },
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
         isPortAvailable: () => Promise.resolve(true),
@@ -481,6 +512,54 @@ describe("runLifecycleCli", () => {
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
   });
 
+  it("rejects a health response whose version does not match the installed SDK version", async () => {
+    // RED reason: the old waitForHealth only checked response.ok and isProcessAlive; a
+    // 200 with a mismatched version field caused it to return true (healthy) even though
+    // the running process is a different version.  fetchImpl was also mutation-blind in
+    // the sibling test (isProcessAlive:false short-circuits before the fetch).  After the
+    // fix, waitForHealth delegates to probeHealth and checks health.version === SDK_VERSION,
+    // so a wrong-version 200 keeps looping until the deadline and returns false.
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 24681, unref: vi.fn() } as unknown as ChildProcess;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(Response.json({ status: "ok", version: "0.0.0-wrong" }, { status: 200 })),
+    );
+    const killProcess = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now");
+    // Call 1 sets deadline (0 + startTimeoutMs); call 2 is the first while-check (0 ≤ deadline →
+    // enter the loop, run exactly one fetch); call 3+ exceeds the deadline so the loop exits after
+    // that single wrong-version probe and waitForHealth returns false.
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(1_000_000);
+
+    try {
+      const code = await runLifecycleCli(
+        "start",
+        ["--port", "4322", "--start-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn: () => child,
+          fetchImpl,
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+          killProcess,
+          sleep: () => Promise.resolve(),
+        },
+      );
+
+      // fetchImpl must have been called (the seam is exercised)
+      expect(fetchImpl).toHaveBeenCalled();
+      // A 200 with a mismatched version is not a healthy start
+      expect(code).toBe(1);
+      expect(c.err()).toContain("UI did not become healthy");
+      expect(killProcess).toHaveBeenCalledWith(24681, "SIGTERM");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("fails cleanly when the UI child process has no pid", async () => {
     const root = makeRoot();
     const c = makeIo();
@@ -520,7 +599,7 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),

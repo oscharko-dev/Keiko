@@ -721,10 +721,29 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
 
 // ─── Request-body size cap (Issue #721 — size caps enforced) ─────────────────────
 
+function makeChunkedReq(chunks: readonly string[]): IncomingMessage {
+  const req = Readable.from(chunks.map((c) => Buffer.from(c, "utf8")));
+  return req as unknown as IncomingMessage;
+}
+
 describe("handleQiExport — request body size cap", () => {
   it("returns 413 QI_BODY_TOO_LARGE for a body exceeding 16KB", async () => {
     const huge = JSON.stringify({ adapter: "csv", pad: "x".repeat(17 * 1024) });
     const result = asResult(await handleQiExport(ctx(RUN_ID, makeRawReq(huge)), deps(evidenceDir)));
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
+
+  it("returns 413 QI_BODY_TOO_LARGE for a chunked oversized body (cap fires mid-stream)", async () => {
+    // Send the oversized body across two chunks so the second data event arrives after the cap
+    // fires. Without the `capped` flag, `chunks` holds the first chunk's bytes until GC and
+    // `resolve()` is called from the `end` handler after `reject()` (silently ignored by the
+    // Promise, but wasteful). With `capped`: chunks are cleared immediately and `end` is a no-op.
+    // Observable assertion: the route still returns 413 via the multi-chunk path.
+    const half = "x".repeat(9 * 1024);
+    const result = asResult(
+      await handleQiExport(ctx(RUN_ID, makeChunkedReq([half, half])), deps(evidenceDir)),
+    );
     expect(result.status).toBe(413);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
   });

@@ -884,6 +884,62 @@ describe("searchVectorsForScope — citation fields", () => {
   });
 });
 
+describe("searchVectorsForScope — embeddingDegraded", () => {
+  it("sets embeddingDegraded=true when one capsule's embedding fails but another capsule's vectors keep result non-empty", async () => {
+    // Two capsules share the same identity. Capsule A: embedding returns wrong dim →
+    // embeddingFailed=true for that identity, but the dim-check path means anyDimensionCompatible
+    // is false for A. Capsule B: embedding succeeds (correct dim) → anyDimensionCompatible=true,
+    // vector candidates surface.
+    // Because embeddingFailed=true AND anyDimensionCompatible=true AND candidates>0,
+    // the outcome has references (from B) AND embeddingDegraded=true.
+    const { store } = getFixture();
+    const identity = DEFAULT_EMBEDDING;
+    // Capsule A: has vectors but its embedding call will fail.
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-deg-a",
+      sourceId: "src-deg-a",
+      documentId: "doc-deg-a",
+      identity,
+      text: "alpha beta gamma delta epsilon zeta",
+    });
+    // Capsule B: has vectors and its embedding call will succeed.
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-deg-b",
+      sourceId: "src-deg-b",
+      documentId: "doc-deg-b",
+      identity,
+      text: "alpha beta gamma delta epsilon zeta",
+    });
+    let callCount = 0;
+    // First call (for cap-deg-a) fails; subsequent calls succeed.
+    const partiallyFailingAdapter = scriptedAdapter({
+      identity,
+      responder: (req): OpenAIEmbeddingOutcome => {
+        callCount += 1;
+        if (callCount === 1) return { ok: false, kind: "transport" };
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, identity.vectorDimensions),
+            modelId: identity.modelId,
+          },
+        };
+      },
+    });
+    const outcome = await searchVectorsForScope(
+      store,
+      partiallyFailingAdapter,
+      { capsuleIds: [seededA.capsuleId, seededB.capsuleId] },
+      "alpha beta",
+      { topK: 10 },
+    );
+    // Capsule B's vectors surface despite capsule A's embedding failure.
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+  });
+});
+
 describe("toScopeInput — single capsule sugar", () => {
   it("wraps a { capsuleId } object into a RetrievalScopeInput", () => {
     const input = toScopeInput({ capsuleId: "cap-a" as KnowledgeCapsuleId });
