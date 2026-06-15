@@ -79,6 +79,7 @@ function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
     correction: request.correctionBoost ?? DEFAULT_RANKING_WEIGHTS.correction,
     graph: request.graphProximityBoost ?? DEFAULT_RANKING_WEIGHTS.graph,
     semantic: request.semanticWeight ?? DEFAULT_RANKING_WEIGHTS.semantic,
+    strength: request.strengthWeight ?? DEFAULT_RANKING_WEIGHTS.strength,
   };
 }
 
@@ -310,6 +311,7 @@ export function retrieveMemoryContext(
     weights: resolved.weights,
     ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
     ...(request.semanticById === undefined ? {} : { semanticById: request.semanticById }),
+    ...(request.strengthById === undefined ? {} : { strengthById: request.strengthById }),
   };
   const ranked = rankMemories(
     filtered.candidates,

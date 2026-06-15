@@ -109,6 +109,7 @@ describe("rankMemories — basic ordering", () => {
       correction: 0,
       graph: 0,
       semantic: 0,
+      strength: 0,
     });
   });
 
@@ -218,5 +219,46 @@ describe("rankMemories — semantic similarity signal (#204)", () => {
     const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
     const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
     expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+  });
+});
+
+describe("rankMemories — reinforcement strength subscore (#204 plasticity)", () => {
+  it("is dormant by default: no strengthById => strength subscore 0 and the lexical denominator", () => {
+    const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
+    const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
+    expect(first?.subscores.strength).toBe(0);
+    // The strength weight is zeroed alongside semantic, so the denominator stays the documented 1.15
+    // — supplying no strengthById must not perturb any legacy score.
+    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+  });
+
+  it("ranks a reused memory above an otherwise-identical never-accessed one", () => {
+    const reused = buildRecord({ id: "reused", updatedAt: now });
+    const fresh = buildRecord({ id: "fresh", updatedAt: now });
+    const strengthById = new Map([[memoryId("reused"), 0.9]]);
+    const ranked = rankMemories([fresh, reused], {
+      nowMs: now,
+      weights: DEFAULT_RANKING_WEIGHTS,
+      strengthById,
+    });
+    expect(ranked[0]?.memoryId).toBe(memoryId("reused"));
+    expect(ranked[0]?.subscores.strength).toBe(0.9);
+    expect(ranked[1]?.subscores.strength).toBe(0);
+    // CONTROL: with no strengthById the two are equal and fall back to the id tiebreak (fresh < reused),
+    // proving the re-ordering above is the strength signal, not fixture chance.
+    const control = rankMemories([fresh, reused], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
+    expect(control[0]?.memoryId).toBe(memoryId("fresh"));
+  });
+
+  it("names reinforcement as the inclusion reason when strength dominates", () => {
+    // Stale (low recency), bodyless, zero-confidence record so strength is the only live signal.
+    const r = buildRecord({ id: "x", body: "", confidence: 0, updatedAt: now - 30 * 86_400_000 });
+    const strengthById = new Map([[memoryId("x"), 1]]);
+    const [first] = rankMemories([r], {
+      nowMs: now,
+      weights: DEFAULT_RANKING_WEIGHTS,
+      strengthById,
+    });
+    expect(first?.inclusionReason).toContain("reinforced");
   });
 });

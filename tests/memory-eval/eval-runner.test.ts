@@ -32,6 +32,7 @@ import { run as runWorkspaceScaleBoundary } from "./scenarios/workspace-scale-bo
 import { run as runGradedRetrievalQuality } from "./scenarios/graded-retrieval-quality.test.js";
 import { run as runAbstention } from "./scenarios/abstention.test.js";
 import { run as runForgettingAccuracy } from "./scenarios/forgetting-accuracy.test.js";
+import { run as runReinforcementRanking } from "./scenarios/reinforcement-ranking.test.js";
 
 import { createScorecard, serializeScorecard, type Scorecard } from "./scorecard.js";
 import { FIXED_NOW_MS } from "./_support.js";
@@ -56,6 +57,7 @@ const SCENARIOS: readonly {
   { name: "graded-retrieval-quality", run: runGradedRetrievalQuality },
   { name: "abstention", run: runAbstention },
   { name: "forgetting-accuracy", run: runForgettingAccuracy },
+  { name: "reinforcement-ranking", run: runReinforcementRanking },
 ];
 
 async function runAllScenarios(): Promise<Scorecard> {

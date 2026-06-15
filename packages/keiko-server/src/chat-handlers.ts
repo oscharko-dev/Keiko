@@ -26,6 +26,7 @@ import type {
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
 import {
+  buildStrengthById,
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
   isMemorySuppressed,
@@ -778,12 +779,20 @@ export async function buildMemoryResult(
         gatherCandidateIds(vault, scopes, nowMs),
       )
     : undefined;
+  // Reinforcement (#204 plasticity): project the vault's access counters into a per-memory strength
+  // signal so frequently- and recently-recalled memories rank higher online — closing the loop with
+  // the recordAccess reflex below. Deterministic given nowMs and local (no model call). The map is
+  // empty until something has been recalled; it is passed only when non-empty so a fresh vault's
+  // ranking is byte-identical to the pre-strength behaviour (the ranker would otherwise let the
+  // strength weight enter the denominator for an all-zero signal).
+  const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
   const retrieval = retrieveMemoryContext(
     {
       scopes,
       queryText: request.content,
       ...(budgetTokens !== undefined ? { budgetTokens } : {}),
       ...(semanticById !== undefined ? { semanticById } : {}),
+      ...(strengthById.size > 0 ? { strengthById } : {}),
       nowMs,
     },
     vaultAsQueryPort(vault),

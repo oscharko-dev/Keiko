@@ -44,6 +44,13 @@ export {
 // ─── Ranking primitives + orchestration ──────────────────────────────────────
 export { tokenize, lexicalRelevance } from "./relevance.js";
 export { recencyScore, RECENCY_HALF_LIFE_MS } from "./recency.js";
+export {
+  reinforcementStrength,
+  buildStrengthById,
+  STRENGTH_HALF_LIFE_MS,
+  STRENGTH_FREQUENCY_SATURATION,
+  type MemoryAccessStat,
+} from "./strength.js";
 export { graphProximityScore } from "./graph.js";
 export { rankMemories, type RankMemoriesOptions, type RankMemoriesQuery } from "./ranking.js";
 

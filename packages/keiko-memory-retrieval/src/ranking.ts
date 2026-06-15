@@ -30,6 +30,9 @@ export interface RankMemoriesQuery {
   // Per-memory cosine similarity in [0,1] keyed by memory id (#204). When undefined, the ranker
   // zeroes the semantic weight so output is byte-identical to pre-semantic lexical behaviour.
   readonly semanticById?: ReadonlyMap<MemoryId, number> | undefined;
+  // Per-memory reinforcement strength in [0,1] keyed by memory id (#204 plasticity). When undefined,
+  // the ranker zeroes the strength weight so output is byte-identical to pre-strength behaviour.
+  readonly strengthById?: ReadonlyMap<MemoryId, number> | undefined;
 }
 
 export interface RankMemoriesOptions {
@@ -52,6 +55,7 @@ function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): Incl
         : 0,
     graph: 0,
     semantic: query.semanticById?.get(record.id) ?? 0,
+    strength: query.strengthById?.get(record.id) ?? 0,
   };
 }
 
@@ -63,9 +67,17 @@ function weightedScore(s: IncludedSubscores, w: RankingWeights): number {
     s.pinned * w.pinned +
     s.correction * w.correction +
     s.graph * w.graph +
-    s.semantic * w.semantic;
+    s.semantic * w.semantic +
+    s.strength * w.strength;
   const totalWeight =
-    w.relevance + w.recency + w.confidence + w.pinned + w.correction + w.graph + w.semantic;
+    w.relevance +
+    w.recency +
+    w.confidence +
+    w.pinned +
+    w.correction +
+    w.graph +
+    w.semantic +
+    w.strength;
   if (totalWeight <= 0) return 0;
   return raw / totalWeight;
 }
@@ -77,6 +89,9 @@ function topContributor(s: IncludedSubscores, w: RankingWeights): string {
     // Semantic before relevance/recency/confidence so the stronger embedding signal wins a tie
     // against the lexical signals; pinned/correction stay above it as today.
     { key: "semantic", value: s.semantic * w.semantic },
+    // Reinforcement sits just below semantic: a heavily-reused memory wins a tie against the lexical
+    // signals but not against an explicit pin, a fresh correction, or a strong embedding match.
+    { key: "strength", value: s.strength * w.strength },
     { key: "relevance", value: s.relevance * w.relevance },
     { key: "recency", value: s.recency * w.recency },
     { key: "confidence", value: s.confidence * w.confidence },
@@ -103,6 +118,7 @@ function inclusionReasonText(key: keyof IncludedSubscores, value: number): strin
     correction: "recent correction overrides older facts",
     graph: "graph proximity to other top memories",
     semantic: "semantic similarity to query",
+    strength: "frequently recalled (reinforced)",
   };
   return `top signal: ${label[key]}`;
 }
@@ -151,10 +167,17 @@ function sortByRank(
 // every score, reason, and ordering is identical to the pre-semantic lexical ranker. Only when
 // `semanticById` is present does the configured semantic weight participate.
 function effectiveWeights(query: RankMemoriesQuery): RankingWeights {
+  // Each optional signal zeroes its own weight when the caller supplied no scores for it, so the
+  // weighted sum AND its denominator are untouched and the output is byte-identical to the behaviour
+  // before that signal existed. The two conditions are independent.
+  let weights = query.weights;
   if (query.semanticById === undefined) {
-    return { ...query.weights, semantic: 0 };
+    weights = { ...weights, semantic: 0 };
   }
-  return query.weights;
+  if (query.strengthById === undefined) {
+    weights = { ...weights, strength: 0 };
+  }
+  return weights;
 }
 
 export function rankMemories(

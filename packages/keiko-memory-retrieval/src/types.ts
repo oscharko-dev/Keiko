@@ -65,6 +65,12 @@ export interface RankingWeights {
   // ranker zeroes this weight in that case so the denominator (and therefore every score) is
   // byte-identical to the pre-semantic lexical behaviour.
   readonly semantic: number;
+  // Reinforcement strength derived from access frequency + recency-of-use (#204 plasticity).
+  // Closes the reinforcement loop online: a frequently-recalled memory ranks above a never-touched
+  // one. The subscore is 0 for every memory when no per-memory strength scores are supplied, AND the
+  // ranker zeroes this weight in that case so the score is byte-identical to the pre-strength
+  // behaviour. See strength.ts for the cognitive (ACT-R base-level) basis.
+  readonly strength: number;
 }
 
 // Defaults are documented at the request-type boundary; this table is the single source of
@@ -78,6 +84,10 @@ export const DEFAULT_RANKING_WEIGHTS: RankingWeights = Object.freeze({
   correction: 0.1,
   graph: 0.15,
   semantic: 0.25,
+  // Reinforcement weight (#204). Sits between recency and semantic: reuse is a strong signal but must
+  // not override an explicit pin or a fresh correction. Only participates when the caller supplies
+  // per-memory strength scores; otherwise the ranker forces it to 0 (byte-identical legacy behaviour).
+  strength: 0.2,
 });
 
 export const DEFAULT_BUDGET_TOKENS = 1500;
@@ -108,6 +118,12 @@ export interface MemoryRetrievalRequest {
   // gateway and the vault's stored vectors); the retrieval layer stays pure and IO-free. When
   // undefined or empty, the ranker falls back to byte-identical lexical behaviour.
   readonly semanticById?: ReadonlyMap<MemoryId, number>;
+  // Per-memory reinforcement strength (in [0,1]) derived from access frequency + recency-of-use,
+  // keyed by memory id (#204 plasticity). Computed by the caller from the vault's access counters
+  // via reinforcementStrength(); the retrieval layer stays pure and IO-free. When undefined, the
+  // ranker zeroes the strength weight so output is byte-identical to the pre-strength behaviour.
+  readonly strengthById?: ReadonlyMap<MemoryId, number>;
+  readonly strengthWeight?: number;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────
@@ -140,6 +156,9 @@ export interface IncludedSubscores {
   // Cosine similarity in [0,1] of the query embedding to this memory's stored embedding (#204).
   // 0 when no semantic scores were supplied for this memory.
   readonly semantic: number;
+  // Reinforcement strength in [0,1] from access frequency + recency-of-use (#204 plasticity).
+  // 0 when no strength scores were supplied for this memory (the never-reused default).
+  readonly strength: number;
 }
 
 export interface IncludedMemory {
