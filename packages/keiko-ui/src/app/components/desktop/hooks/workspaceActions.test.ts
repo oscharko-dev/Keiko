@@ -15,10 +15,18 @@ import {
   filesChatBindRoot,
   filesVisibleScope,
   makeConnectActions,
+  makeLayoutActions,
   makeMutations,
+  makeSnapActions,
   removeConnectorScope,
+  removeConnectedScope,
   removeScope,
   resolvedFilesRoot,
+  boundScopeOf,
+  appendConnectedScope,
+  isRootConnected,
+  isScopeConnected,
+  totalSourceCap,
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
@@ -427,6 +435,250 @@ function makeConnectHarness(
 function conn(a: string, b: string): Connection {
   return { id: `${a}~${b}`, a, b };
 }
+
+function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
+  store.value = typeof update === "function" ? (update as (previous: T) => T)(store.value) : update;
+}
+
+const layoutViewport = { x: 10, y: 20, w: 900, h: 600 };
+
+describe("layout and snap actions", () => {
+  it("tiles all windows into a deterministic grid and clears stale maximize geometry", () => {
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), prev: { x: 1, y: 1, w: 2, h: 2 }, max: true },
+        { ...win("chat", {}, "chat-1"), minimized: true },
+        win("quality", {}, "quality-1"),
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.tileAll();
+
+    expect(store.value).toHaveLength(3);
+    expect(store.value.map((w) => w.max)).toEqual([false, false, false]);
+    expect(store.value.map((w) => w.minimized)).toEqual([false, false, false]);
+    expect(store.value[0]).toMatchObject({ x: 22, y: 32 });
+    expect(store.value[1]?.x).toBeGreaterThan(store.value[0]?.x ?? 0);
+    expect("prev" in store.value[0]!).toBe(false);
+  });
+
+  it("splits the two frontmost visible windows and leaves minimized windows untouched", () => {
+    const minimized = { ...win("terminal", {}, "terminal-1"), minimized: true, z: 20 };
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), z: 5 },
+        { ...win("chat", {}, "chat-1"), z: 10 },
+        { ...win("quality", {}, "quality-1"), z: 1 },
+        minimized,
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.splitFront();
+
+    expect(store.value.find((w) => w.id === "chat-1")).toMatchObject({
+      x: layoutViewport.x,
+      y: layoutViewport.y,
+      w: layoutViewport.w / 2,
+      h: layoutViewport.h,
+    });
+    expect(store.value.find((w) => w.id === "files-1")).toMatchObject({
+      x: layoutViewport.x + layoutViewport.w / 2,
+      y: layoutViewport.y,
+      w: layoutViewport.w / 2,
+      h: layoutViewport.h,
+    });
+    expect(store.value.find((w) => w.id === "terminal-1")).toBe(minimized);
+  });
+
+  it("cascades floating windows inside the current viewport with increasing z-order", () => {
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), max: true },
+        { ...win("chat", {}, "chat-1"), minimized: true },
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.cascade();
+
+    expect(store.value[0]).toMatchObject({ x: 34, y: 44, w: 560, h: 420, z: 1 });
+    expect(store.value[1]).toMatchObject({ x: 64, y: 74, w: 560, h: 420, z: 2 });
+    expect(store.value.every((w) => w.max === false && w.minimized === false)).toBe(true);
+  });
+
+  it("previews and commits a maximize snap with a restore rectangle", () => {
+    let preview: unknown = undefined;
+    const snapZone = ref<"maxi" | null>(null);
+    const updates: Array<{ id: string; patch: Partial<AppWindow> }> = [];
+    const actions = makeSnapActions({
+      setSnapPrev: (update) => {
+        const store = { value: preview };
+        applyState(store, update as SetStateAction<unknown>);
+        preview = store.value;
+      },
+      snapZone,
+      worldVP: () => layoutViewport,
+      update: (id, patch) => {
+        updates.push({ id, patch });
+      },
+    });
+
+    actions.setSnap("maxi");
+    expect(preview).toMatchObject(layoutViewport);
+    actions.commitSnap("chat-1");
+
+    expect(snapZone.current).toBeNull();
+    expect(updates).toEqual([
+      {
+        id: "chat-1",
+        patch: expect.objectContaining({
+          max: true,
+          x: layoutViewport.x,
+          y: layoutViewport.y,
+          w: layoutViewport.w,
+          h: layoutViewport.h,
+          prev: { x: layoutViewport.x + 40, y: layoutViewport.y + 40, w: 480, h: 360 },
+        }),
+      },
+    ]);
+  });
+});
+
+describe("connected workspace source readers", () => {
+  it("chooses the highest-z linked Files window with an active file for single-source context", () => {
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("files", { resolvedRoot: "/repo-a" }, "files-a"),
+        win("files", { resolvedRoot: "/repo-b", activeFilePath: "src/main.ts" }, "files-b"),
+        win("files", { resolvedRoot: "/repo-c", activeFilePath: "docs/spec.md" }, "files-c"),
+      ].map((w) =>
+        w.id === "files-b" ? { ...w, z: 20 } : w.id === "files-c" ? { ...w, z: 10 } : w,
+      ),
+      [conn("quality", "files-a"), conn("quality", "files-b"), conn("quality", "files-c")],
+    );
+
+    expect(harness.linkedFilesContext("quality")).toEqual({
+      id: "files-b",
+      root: "/repo-b",
+      activeFilePath: "src/main.ts",
+    });
+  });
+
+  it("dedupes and caps linked file roots at the release source limit", () => {
+    const files = Array.from({ length: MAX_SCOPES + 4 }, (_unused, i) =>
+      win("files", { resolvedRoot: i === 3 ? "/repo-2/" : `/repo-${String(i)}` }, `files-${i}`),
+    );
+    const harness = makeConnectHarness(
+      [win("quality", {}, "quality"), ...files],
+      files.map((w) => conn("quality", w.id)),
+    );
+
+    expect(harness.linkedAllFilesRoots("quality")).toHaveLength(MAX_SCOPES);
+    expect(harness.linkedAllFilesRoots("quality")).toContain("/repo-2");
+  });
+
+  it("falls back from a missing linked file to the active Files window context", () => {
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        { ...win("files", { resolvedRoot: "/active", activeFilePath: "notes.md" }, "files-a"), z: 9 },
+        { ...win("files", { resolvedRoot: "/other" }, "files-b"), z: 1 },
+      ],
+      [],
+    );
+
+    expect(harness.currentFilesContext()).toEqual({
+      id: "files-a",
+      root: "/active",
+      activeFilePath: "notes.md",
+    });
+  });
+
+  it("dedupes and caps connected Figma snapshot run ids", () => {
+    const figmas = Array.from({ length: MAX_SCOPES + 3 }, (_unused, i) =>
+      win("figma", { snapshotRunId: i === 2 ? "run-1" : `run-${String(i)}` }, `figma-${i}`),
+    );
+    const harness = makeConnectHarness(
+      [win("quality", {}, "quality"), ...figmas, win("figma", { snapshotRunId: "   " }, "blank")],
+      [...figmas.map((w) => conn("quality", w.id)), conn("quality", "blank")],
+    );
+
+    const ids = harness.linkedFigmaSnapshotRunIds("quality");
+    expect(ids).toHaveLength(MAX_SCOPES);
+    expect(ids.filter((id) => id === "run-1")).toHaveLength(1);
+    expect(ids).not.toContain("   ");
+  });
+});
+
+describe("scope normalization helpers", () => {
+  it("normalizes connected file scopes by path kind, relative path and Windows separators", () => {
+    const current = [
+      {
+        kind: "files",
+        relativePaths: ["src/main.ts"],
+        root: "C:\\repo\\",
+        connectedAtMs: 1,
+      } satisfies ChatConnectedScope,
+    ];
+    const duplicate: ChatConnectedScope = {
+      kind: "files",
+      relativePaths: ["/src\\main.ts/"],
+      root: "C:/repo",
+      connectedAtMs: 2,
+    };
+
+    expect(isScopeConnected(current, duplicate)).toBe(true);
+    expect(appendConnectedScope(current, duplicate)).toBe(current);
+    expect(removeConnectedScope(current, duplicate)).toEqual([]);
+  });
+
+  it("rejects invalid connected scopes and preserves total source-cap parity", () => {
+    expect(appendConnectedScope([], { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 }))
+      .toBeNull();
+    expect(isRootConnected([scope("C:/repo/")], "C:\\repo")).toBe(true);
+    expect(
+      totalSourceCap({
+        maxConnectedSources: 12,
+        maxLocalKnowledgeSources: 16,
+      }),
+    ).toBe(16);
+  });
+
+  it("reconstructs bind-time file snapshots for workspace roots, directories and files", () => {
+    expect(boundScopeOf({ boundRoot: "/repo" })).toMatchObject({
+      kind: "workspace-root",
+      root: "/repo",
+      relativePaths: [],
+    });
+    expect(
+      boundScopeOf({
+        boundRoot: "/repo/",
+        boundScopeKind: "directory",
+        boundRelativePath: "/src/",
+      }),
+    ).toMatchObject({ kind: "directory", root: "/repo", relativePaths: ["src"] });
+    expect(
+      boundScopeOf({
+        boundRoot: "/repo",
+        boundScopeKind: "files",
+        boundRelativePath: "\\src\\main.ts",
+      }),
+    ).toMatchObject({ kind: "files", root: "/repo", relativePaths: ["src/main.ts"] });
+    expect(boundScopeOf({ boundRoot: "/repo", boundScopeKind: "files" })).toBeNull();
+  });
+});
 
 describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
   it("returns empty when the quality window has no connections", () => {

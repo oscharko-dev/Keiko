@@ -5,6 +5,7 @@
 import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorGraph } from "./connector-graph";
 import {
@@ -20,6 +21,19 @@ import type {
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 
 const pushMock = vi.fn();
+
+type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  readonly href: string;
+  readonly children: ReactNode;
+};
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: MockLinkProps) => (
+    <a href={href} onClick={(event) => event.preventDefault()} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),

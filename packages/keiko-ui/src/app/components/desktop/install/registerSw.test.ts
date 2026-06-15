@@ -9,6 +9,8 @@ interface FakeServiceWorkerContainer {
   controller?: ServiceWorker | null;
 }
 
+const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
+
 function installServiceWorker(container: FakeServiceWorkerContainer): void {
   Object.defineProperty(navigator, "serviceWorker", {
     value: container,
@@ -24,13 +26,36 @@ function removeServiceWorker(): void {
   }
 }
 
+function installCaches(caches: Pick<CacheStorage, "keys" | "delete">): void {
+  Object.defineProperty(globalThis, "caches", {
+    value: caches,
+    configurable: true,
+  });
+}
+
+function restoreCaches(): void {
+  if (originalCaches === undefined) {
+    Reflect.deleteProperty(globalThis, "caches");
+    return;
+  }
+  Object.defineProperty(globalThis, "caches", originalCaches);
+}
+
+async function flushMicrotasks(times = 4): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("registerSw (issue #126)", () => {
   beforeEach(() => {
     removeServiceWorker();
+    restoreCaches();
   });
 
   afterEach(() => {
     removeServiceWorker();
+    restoreCaches();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -98,11 +123,42 @@ describe("registerSw (issue #126)", () => {
 
     registerSw();
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(register).not.toHaveBeenCalled();
     expect(getRegistrations).toHaveBeenCalledOnce();
     expect(unregister).toHaveBeenCalledOnce();
+  });
+
+  it("removes only Keiko shell caches during development cleanup", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const getRegistrations = vi.fn().mockResolvedValue([]);
+    const register = vi.fn().mockResolvedValue({});
+    const keys = vi.fn().mockResolvedValue(["keiko-shell-v1", "images", "keiko-shell-v2"]);
+    const deleteCache = vi.fn().mockResolvedValue(true);
+    installServiceWorker({ controller: null, getRegistrations, register });
+    installCaches({ keys, delete: deleteCache });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(register).not.toHaveBeenCalled();
+    expect(keys).toHaveBeenCalledOnce();
+    expect(deleteCache.mock.calls).toEqual([["keiko-shell-v1"], ["keiko-shell-v2"]]);
+  });
+
+  it("does not throw when development cleanup cannot enumerate registrations", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const getRegistrations = vi.fn().mockImplementation(() => {
+      throw new Error("blocked by browser policy");
+    });
+    const register = vi.fn().mockResolvedValue({});
+    installServiceWorker({ controller: null, getRegistrations, register });
+
+    expect(() => {
+      registerSw();
+    }).not.toThrow();
+    expect(register).not.toHaveBeenCalled();
   });
 });

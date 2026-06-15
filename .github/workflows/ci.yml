@@ -48,7 +48,8 @@ jobs:
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
-      - run: npm test
+      - name: Coverage quality gates
+        run: npm run test:coverage:quality
 
   actionlint:
     name: actionlint
@@ -208,8 +209,14 @@ jobs:
         run: npm run build --workspace @oscharko-dev/keiko-ui
       - name: Generate UI CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
-      - name: Test UI (jsdom + axe a11y)
-        run: npm run test --workspace @oscharko-dev/keiko-ui
+      - name: Test UI with coverage (jsdom + axe a11y)
+        run: npm run test:coverage:ui
+      - name: UI coverage ratchet
+        run: npm run check:coverage:ui
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Release smoke E2E
+        run: npm run test:e2e:smoke
       - name: Build package and UI assets
         run: |
           npm run build

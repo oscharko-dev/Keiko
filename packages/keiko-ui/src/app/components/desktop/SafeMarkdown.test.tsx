@@ -204,16 +204,24 @@ describe("SafeMarkdownBoundary — SM-1 plain-text fallback", () => {
 
     const { SafeMarkdownBoundary } = await import("./SafeMarkdown");
     // Silence React's expected error-boundary console noise for this render.
+    const onError = (event: ErrorEvent): void => {
+      const message = event.error instanceof Error ? event.error.message : event.message;
+      if (message.includes("forced parser defect")) event.preventDefault();
+    };
+    window.addEventListener("error", onError);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    render(<SafeMarkdownBoundary source={THROWING_SOURCE} />);
-    errorSpy.mockRestore();
+    try {
+      render(<SafeMarkdownBoundary source={THROWING_SOURCE} />);
 
-    const fallback = document.querySelector('[data-markdown-fallback="true"]');
-    expect(fallback).not.toBeNull();
-    expect(fallback?.textContent).toBe(THROWING_SOURCE);
-
-    vi.doUnmock("@/lib/safe-markdown");
-    vi.resetModules();
+      const fallback = document.querySelector('[data-markdown-fallback="true"]');
+      expect(fallback).not.toBeNull();
+      expect(fallback?.textContent).toBe(THROWING_SOURCE);
+    } finally {
+      errorSpy.mockRestore();
+      window.removeEventListener("error", onError);
+      vi.doUnmock("@/lib/safe-markdown");
+      vi.resetModules();
+    }
   });
 
   it("renders parsed markdown normally when the renderer does not throw", async () => {

@@ -23,6 +23,7 @@ export default defineConfig({
       "src/app/**/*.test.tsx",
       "src/components/**/*.test.tsx",
       "src/lib/**/*.test.ts",
+      "src/lib/**/*.test.tsx",
       "__tests__/**/*.test.ts",
     ],
     exclude: ["node_modules/**", "out/**", ".next/**"],

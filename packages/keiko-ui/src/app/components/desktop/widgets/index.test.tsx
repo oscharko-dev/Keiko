@@ -1,0 +1,329 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
+import type { WindowRenderContext } from "../windows/WindowsRegistry";
+
+type UpdateCfg = (patch: Record<string, string | number | boolean | undefined>) => void;
+
+vi.mock("../ChatWindow", () => ({
+  ChatWindow: ({
+    mini,
+    linkedRoot,
+  }: {
+    readonly mini?: boolean;
+    readonly linkedRoot?: string | null;
+  }) => <div data-testid="chat-window">{`${String(mini)}:${linkedRoot ?? ""}`}</div>,
+}));
+
+vi.mock("../context/ChatSessionContext", () => ({
+  ChatSessionProvider: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("../hooks/useChatSession", () => ({
+  useChatSession: () => ({
+    activeChat: { id: "chat-1", title: "Chat 1", status: "open" },
+    chats: [{ id: "chat-1", title: "Chat 1", status: "open" }],
+    loading: false,
+    openChat: vi.fn(),
+    openNewChat: vi.fn(async () => ({ id: "created-chat", title: "Created chat" })),
+  }),
+}));
+
+vi.mock("./panels/ProjectPanel", () => ({ ProjectPanel: () => <div>ProjectPanel</div> }));
+vi.mock("./panels/ChatHistoryPanel", () => ({
+  ChatHistoryPanel: ({
+    openChatWindow,
+  }: {
+    readonly openChatWindow: (chat: { readonly id: string; readonly title: string }) => void;
+  }) => (
+    <button type="button" onClick={() => openChatWindow({ id: "chat-2", title: "Chat 2" })}>
+      Open history chat
+    </button>
+  ),
+}));
+vi.mock("./panels/SearchPanel", () => ({ SearchPanel: () => <div>SearchPanel</div> }));
+vi.mock("./panels/PluginsPanel", () => ({ PluginsPanel: () => <div>PluginsPanel</div> }));
+vi.mock("./panels/AutomationsPanel", () => ({
+  AutomationsPanel: () => <div>AutomationsPanel</div>,
+}));
+vi.mock("./panels/MobilePanel", () => ({ MobilePanel: () => <div>MobilePanel</div> }));
+vi.mock("./panels/InspectorPanel", () => ({ InspectorPanel: () => <div>InspectorPanel</div> }));
+vi.mock("./panels/NotificationsPanel", () => ({
+  NotificationsPanel: () => <div>NotificationsPanel</div>,
+}));
+vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>ResourcesPanel</div> }));
+vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
+vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
+vi.mock("./panels/SettingsPanel", () => ({ SettingsPanel: () => <div>SettingsPanel</div> }));
+
+vi.mock("./cards/FilesWidget", () => ({
+  FilesWidget: ({
+    root,
+    onActiveFileChange,
+    onRootChange,
+    onOpenFile,
+  }: {
+    readonly root?: string;
+    readonly onActiveFileChange: (
+      path: string | null,
+      root: string | null,
+      activeDirectoryPath?: string | null,
+    ) => void;
+    readonly onRootChange: (root: string) => void;
+    readonly onOpenFile: (root: string, path: string) => void;
+  }) => (
+    <div>
+      <span data-testid="files-root">{root ?? "none"}</span>
+      <button type="button" onClick={() => onActiveFileChange("src/app.ts", "/repo", "/repo/src")}>
+        Active file
+      </button>
+      <button type="button" onClick={() => onRootChange("/next")}>
+        Change root
+      </button>
+      <button type="button" onClick={() => onOpenFile("/repo", "src/app.ts")}>
+        Open file
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./cards/EditorWidget", () => ({
+  EditorWidget: ({ root, file }: { readonly root?: string; readonly file?: string }) => (
+    <div data-testid="editor-widget">{`${root ?? ""}:${file ?? ""}`}</div>
+  ),
+}));
+vi.mock("./cards/BrowserWidget", () => ({
+  BrowserWidget: ({ url }: { readonly url?: string }) => (
+    <div data-testid="browser-widget">{url ?? "blank"}</div>
+  ),
+}));
+vi.mock("./cards/TerminalWidget", () => ({
+  TerminalWidget: ({
+    cwd,
+    projectPath,
+  }: {
+    readonly cwd?: string;
+    readonly projectPath?: string;
+  }) => <div data-testid="terminal-widget">{`${cwd ?? ""}:${projectPath ?? ""}`}</div>,
+}));
+vi.mock("./cards/ReviewWidget", () => ({
+  ReviewWidget: ({
+    runId,
+    onRunIdSubmit,
+  }: {
+    readonly runId?: string;
+    readonly onRunIdSubmit: (runId: string) => void;
+  }) => (
+    <button type="button" data-testid="review-widget" onClick={() => onRunIdSubmit("run-entered")}>
+      {runId ?? "no-run"}
+    </button>
+  ),
+}));
+vi.mock("./cards/AgentRunWidget", () => ({
+  AgentRunWidget: ({
+    cfg,
+    linkedRoot,
+    linkedFilePath,
+  }: {
+    readonly cfg: Record<string, unknown>;
+    readonly linkedRoot: string | null;
+    readonly linkedFilePath?: string;
+  }) => (
+    <div data-testid="agent-widget">{`${String(cfg.workflow)}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}`}</div>
+  ),
+}));
+vi.mock("./cards/IntegrationsWidget", () => ({
+  IntegrationsWidget: () => <div>IntegrationsWidget</div>,
+}));
+vi.mock("./cards/ConnectorPickerWidget", () => ({
+  ConnectorPickerWidget: ({
+    presentation,
+    selectedId,
+    onSelect,
+    onManageConnectors,
+  }: {
+    readonly presentation?: string;
+    readonly selectedId?: string;
+    readonly onSelect: (patch: Record<string, string>) => void;
+    readonly onManageConnectors: () => void;
+  }) => (
+    <div>
+      <span data-testid="connector-widget">{`${presentation ?? ""}:${selectedId ?? ""}`}</span>
+      <button
+        type="button"
+        onClick={() => onSelect({ selectedKind: "capsule", selectedId: "cap-1" })}
+      >
+        Select connector
+      </button>
+      <button type="button" onClick={onManageConnectors}>
+        Manage connectors
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./figma/FigmaSnapshotWindow", () => ({
+  FigmaSnapshotWindow: ({
+    snapshotRunId,
+    updateCfg,
+  }: {
+    readonly snapshotRunId?: string;
+    readonly updateCfg: (patch: Record<string, string>) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="figma-window"
+      onClick={() => updateCfg({ snapshotRunId: "fs-2" })}
+    >
+      {snapshotRunId ?? "new"}
+    </button>
+  ),
+}));
+vi.mock("./quality-intelligence/QiHubPanel", () => ({
+  QiHubPanel: ({
+    openRun,
+    connectedRoot,
+  }: {
+    readonly openRun: (runId: string) => void;
+    readonly connectedRoot: string | null;
+  }) => (
+    <button type="button" data-testid="qi-hub" onClick={() => openRun("qi-run-1")}>
+      {connectedRoot ?? "no-root"}
+    </button>
+  ),
+}));
+vi.mock("./quality-intelligence/QiRunCard", () => ({
+  QiRunCard: ({
+    runId,
+    onRegenerated,
+  }: {
+    readonly runId: string;
+    readonly onRegenerated: (result: { readonly runId: string }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="qi-run-card"
+      onClick={() => onRegenerated({ runId: "qi-run-2" })}
+    >
+      {runId}
+    </button>
+  ),
+}));
+vi.mock("../../../relationships/RelationshipsView", () => ({
+  RelationshipsView: () => <div>RelationshipsView</div>,
+}));
+vi.mock("../../../local-knowledge/connector-graph", () => ({
+  ConnectorGraph: ({ showBackToWorkspace }: { readonly showBackToWorkspace: boolean }) => (
+    <div data-testid="connector-graph">{String(showBackToWorkspace)}</div>
+  ),
+}));
+
+import "./index";
+import { WIN_TYPES } from "../windows/WindowsRegistry";
+
+function makeCtx(): WindowRenderContext & {
+  readonly updateCfg: ReturnType<typeof vi.fn<UpdateCfg>>;
+  readonly openWindow: ReturnType<typeof vi.fn>;
+} {
+  return {
+    mini: true,
+    linkedRoot: "/repo",
+    linkedFilePath: "src/app.ts",
+    linkedRoots: ["/repo", "/docs"],
+    linkedCapsuleIds: ["cap-1"],
+    linkedCapsuleSetIds: ["set-1"],
+    linkedFigmaSnapshotRunIds: ["fs-1"],
+    updateCfg: vi.fn<UpdateCfg>(),
+    openWindow: vi.fn(() => "win-1"),
+  };
+}
+
+describe("workspace widget renderer registry", () => {
+  it("maps window cfg into widget props and follow-up workspace actions", () => {
+    const ctx = makeCtx();
+    const view = render(<>{WIN_TYPES.files.render({ root: "/repo" }, ctx)}</>);
+
+    expect(screen.getByTestId("files-root")).toHaveTextContent("/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Active file" }));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      activeFilePath: "src/app.ts",
+      activeDirectoryPath: "/repo/src",
+      resolvedRoot: "/repo",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Change root" }));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      root: "/next",
+      activeFilePath: undefined,
+      activeDirectoryPath: undefined,
+      resolvedRoot: undefined,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("editor", { root: "/repo", file: "src/app.ts" });
+
+    view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
+    fireEvent.click(screen.getByTestId("review-widget"));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ runId: "run-entered" });
+
+    view.rerender(
+      <>
+        {WIN_TYPES.editor.render({ root: "/repo", file: "src/app.ts" }, ctx)}
+        {WIN_TYPES.browser.render({ url: "https://example.test" }, ctx)}
+        {WIN_TYPES.terminal.render({ cwd: "/repo", projectPath: "/repo" }, ctx)}
+        {WIN_TYPES.agents.render({ workflow: "verify", access: "full", keikoMode: true }, ctx)}
+      </>,
+    );
+    expect(screen.getByTestId("editor-widget")).toHaveTextContent("/repo:src/app.ts");
+    expect(screen.getByTestId("browser-widget")).toHaveTextContent("https://example.test");
+    expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
+    expect(screen.getByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");
+  });
+
+  it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", () => {
+    const ctx = makeCtx();
+    const view = render(<>{WIN_TYPES.quality.render({}, ctx)}</>);
+
+    fireEvent.click(screen.getByTestId("qi-hub"));
+    expect(ctx.openWindow).toHaveBeenCalledWith(
+      "qiRun",
+      expect.objectContaining({ runId: "qi-run-1" }),
+    );
+
+    view.rerender(<>{WIN_TYPES.qiRun.render({ runId: "qi-run-1" }, ctx)}</>);
+    fireEvent.click(screen.getByTestId("qi-run-card"));
+    expect(ctx.openWindow).toHaveBeenCalledWith(
+      "qiRun",
+      expect.objectContaining({ runId: "qi-run-2" }),
+    );
+
+    view.rerender(
+      <>
+        {WIN_TYPES.connector.render(
+          { presentation: "inline", selectedKind: "capsule", selectedId: "cap-1" },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("connector-widget")).toHaveTextContent("inline:cap-1");
+    fireEvent.click(screen.getByRole("button", { name: "Select connector" }));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ selectedKind: "capsule", selectedId: "cap-1" });
+    fireEvent.click(screen.getByRole("button", { name: "Manage connectors" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("localKnowledge");
+
+    view.rerender(<>{WIN_TYPES.figma.render({ snapshotRunId: "fs-1" }, ctx)}</>);
+    fireEvent.click(screen.getByTestId("figma-window"));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ snapshotRunId: "fs-2" });
+
+    view.rerender(<>{WIN_TYPES.chatHistory.render({}, ctx)}</>);
+    fireEvent.click(screen.getByRole("button", { name: "Open history chat" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("chat", { chatId: "chat-2", title: "Chat 2" });
+
+    view.rerender(
+      <>
+        {WIN_TYPES.chat.render({ chatId: "chat-1" }, ctx)}
+        {WIN_TYPES.localKnowledge.render({}, ctx)}
+        {WIN_TYPES.relationships.render({}, ctx)}
+      </>,
+    );
+    expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo");
+    expect(screen.getByTestId("connector-graph")).toHaveTextContent("false");
+    expect(screen.getByText("RelationshipsView")).toBeInTheDocument();
+  });
+});

@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "target": 85,
+  "metric": "lines",
+  "generatedBy": "scripts/check-package-coverage.mjs",
+  "policy": "Packages below target are ratcheted at their recorded baseline until domain tests raise them; non-strict ratchet floors allow 0.10 percentage points of platform noise.",
+  "packages": {
+    "keiko-cli": {
+      "files": 21,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 213,
+      "totalLines": 1703,
+      "coverage": {
+        "lines": 87.49,
+        "statements": 85.98,
+        "branches": 79.33,
+        "functions": 90.06
+      }
+    },
+    "keiko-contracts": {
+      "files": 54,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 207,
+      "totalLines": 1970,
+      "coverage": {
+        "lines": 89.49,
+        "statements": 89.44,
+        "branches": 86.96,
+        "functions": 97.14
+      }
+    },
+    "keiko-evaluations": {
+      "files": 18,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 30,
+      "totalLines": 331,
+      "coverage": {
+        "lines": 90.94,
+        "statements": 90.54,
+        "branches": 77.36,
+        "functions": 95.05
+      }
+    },
+    "keiko-evidence": {
+      "files": 26,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 122,
+      "totalLines": 1357,
+      "coverage": {
+        "lines": 91.01,
+        "statements": 89.98,
+        "branches": 76.78,
+        "functions": 94.01
+      }
+    },
+    "keiko-harness": {
+      "files": 20,
+      "uncoveredFiles": 1,
+      "uncoveredLines": 35,
+      "totalLines": 342,
+      "coverage": {
+        "lines": 89.77,
+        "statements": 89.8,
+        "branches": 85.5,
+        "functions": 81.73
+      }
+    },
+    "keiko-local-knowledge": {
+      "files": 77,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 392,
+      "totalLines": 3920,
+      "coverage": {
+        "lines": 90,
+        "statements": 88.09,
+        "branches": 77.55,
+        "functions": 93.31
+      }
+    },
+    "keiko-memory-capture": {
+      "files": 15,
+      "uncoveredFiles": 1,
+      "uncoveredLines": 28,
+      "totalLines": 388,
+      "coverage": {
+        "lines": 92.78,
+        "statements": 92.84,
+        "branches": 87.3,
+        "functions": 100
+      }
+    },
+    "keiko-memory-consolidation": {
+      "files": 11,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 18,
+      "totalLines": 299,
+      "coverage": {
+        "lines": 93.98,
+        "statements": 91.5,
+        "branches": 77.52,
+        "functions": 100
+      }
+    },
+    "keiko-memory-governance": {
+      "files": 11,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 22,
+      "totalLines": 303,
+      "coverage": {
+        "lines": 92.74,
+        "statements": 91.42,
+        "branches": 87.83,
+        "functions": 100
+      }
+    },
+    "keiko-memory-retrieval": {
+      "files": 11,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 10,
+      "totalLines": 292,
+      "coverage": {
+        "lines": 96.58,
+        "statements": 92.96,
+        "branches": 88.73,
+        "functions": 100
+      }
+    },
+    "keiko-memory-vault": {
+      "files": 19,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 73,
+      "totalLines": 542,
+      "coverage": {
+        "lines": 86.53,
+        "statements": 86.15,
+        "branches": 82.58,
+        "functions": 89.74
+      }
+    },
+    "keiko-model-gateway": {
+      "files": 26,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 111,
+      "totalLines": 1312,
+      "coverage": {
+        "lines": 91.54,
+        "statements": 90.84,
+        "branches": 84.53,
+        "functions": 93.52
+      }
+    },
+    "keiko-quality-intelligence": {
+      "files": 65,
+      "uncoveredFiles": 3,
+      "uncoveredLines": 220,
+      "totalLines": 2433,
+      "coverage": {
+        "lines": 90.96,
+        "statements": 89.65,
+        "branches": 78.94,
+        "functions": 94.22
+      }
+    },
+    "keiko-sdk": {
+      "files": 2,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 0,
+      "totalLines": 14,
+      "coverage": {
+        "lines": 100,
+        "statements": 100,
+        "branches": 100,
+        "functions": 100
+      }
+    },
+    "keiko-security": {
+      "files": 15,
+      "uncoveredFiles": 1,
+      "uncoveredLines": 11,
+      "totalLines": 234,
+      "coverage": {
+        "lines": 95.3,
+        "statements": 95.4,
+        "branches": 92.52,
+        "functions": 92.73
+      }
+    },
+    "keiko-server": {
+      "files": 123,
+      "uncoveredFiles": 1,
+      "uncoveredLines": 1426,
+      "totalLines": 11495,
+      "coverage": {
+        "lines": 87.59,
+        "statements": 85.69,
+        "branches": 75.75,
+        "functions": 92.57
+      }
+    },
+    "keiko-tools": {
+      "files": 19,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 131,
+      "totalLines": 1271,
+      "coverage": {
+        "lines": 89.69,
+        "statements": 88.02,
+        "branches": 78.84,
+        "functions": 88.96
+      }
+    },
+    "keiko-ui": {
+      "files": 146,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 1175,
+      "totalLines": 9820,
+      "coverage": {
+        "lines": 88.03,
+        "statements": 84.05,
+        "branches": 74.74,
+        "functions": 85.46
+      }
+    },
+    "keiko-verification": {
+      "files": 10,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 37,
+      "totalLines": 279,
+      "coverage": {
+        "lines": 86.74,
+        "statements": 86.93,
+        "branches": 77.27,
+        "functions": 92.65
+      }
+    },
+    "keiko-workflows": {
+      "files": 58,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 115,
+      "totalLines": 1836,
+      "coverage": {
+        "lines": 93.74,
+        "statements": 93.64,
+        "branches": 83.44,
+        "functions": 97.56
+      }
+    },
+    "keiko-workspace": {
+      "files": 27,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 129,
+      "totalLines": 1300,
+      "coverage": {
+        "lines": 90.08,
+        "statements": 90.09,
+        "branches": 83.27,
+        "functions": 98.94
+      }
+    }
+  }
+}

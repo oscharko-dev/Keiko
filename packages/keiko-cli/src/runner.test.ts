@@ -129,6 +129,30 @@ describe("runCli", () => {
     expect(c.err().toLowerCase()).toContain("usage");
   });
 
+  it.each([
+    ["context", ["--help"], "keiko context"],
+    ["verify", ["--help"], "keiko verify"],
+    ["evaluate", ["--suite", "definitely-not-a-suite"], "unknown suite"],
+    ["memory", [], "Usage:"],
+  ] as const)("dispatches %s through the top-level command table", async (_name, rest, marker) => {
+    const c = makeIo();
+    const code = await runCli([_name, ...rest], c.io);
+    expect([0, 2]).toContain(code);
+    expect(`${c.out()}\n${c.err()}`).toContain(marker);
+  });
+
+  it.each(["start", "stop", "status", "restart"] as const)(
+    "dispatches %s lifecycle help without starting processes",
+    async (command) => {
+      const c = makeIo();
+      const code = await runCli([command, "--help"], c.io);
+      expect(code).toBe(0);
+      expect(c.out()).toContain("keiko start");
+      expect(c.out()).toContain("keiko status");
+      expect(c.err()).not.toContain("internal error");
+    },
+  );
+
   it("returns 2 and reports the offending token for an unknown command", () => {
     const c = makeIo();
     const code = runCli(["frobnicate"], c.io);

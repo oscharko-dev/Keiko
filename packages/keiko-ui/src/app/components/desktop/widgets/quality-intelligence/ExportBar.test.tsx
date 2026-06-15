@@ -16,9 +16,21 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExportBar } from "./ExportBar";
 import type { QiExportResult } from "@/lib/quality-intelligence-api";
+
+let anchorClickSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  anchorClickSpy = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  anchorClickSpy.mockRestore();
+});
 
 // ---------------------------------------------------------------------------
 // exportImpl seam — bound to the real exportQiRun contract.

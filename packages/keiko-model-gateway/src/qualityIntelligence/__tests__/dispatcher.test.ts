@@ -93,6 +93,11 @@ function createMockModelPort(behaviour: Behaviour): MockModelPort {
           resolve(normalisedResponse("late"));
         }, behaviour.sleepMs);
         if (signal !== undefined) {
+          if (signal.aborted) {
+            clearTimeout(timer);
+            reject(new Error("aborted by signal"));
+            return;
+          }
           signal.addEventListener(
             "abort",
             () => {
