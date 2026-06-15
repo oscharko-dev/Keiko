@@ -134,7 +134,9 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
         <span className="ed-status" role={error !== null ? "alert" : "status"}>
           {statusText}
         </span>
-        {maxBytes !== null ? <span className="ed-limit mono">Limit {maxBytes.toLocaleString()} B</span> : null}
+        {maxBytes !== null ? (
+          <span className="ed-limit mono">Limit {maxBytes.toLocaleString()} B</span>
+        ) : null}
       </div>
       {!hasTarget ? (
         <div className="ed-empty" role="note">

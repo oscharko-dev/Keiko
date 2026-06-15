@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
 import {
+  CancelledError,
   CircuitOpenError,
   ERROR_CODES,
   GatewayEgressError,
@@ -353,6 +354,26 @@ describe("Gateway.chatStream", () => {
     });
     await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(TransportError);
     expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(1);
+  });
+
+  it("does not count a CancelledError as a breaker fault — consecutiveFailures stays 0 and state stays closed", async () => {
+    // RED reasoning: before the fix both catch blocks called recordFailure() unconditionally,
+    // so a cancel mid-stream incremented consecutiveFailures and could eventually trip the breaker.
+    const cancelling: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "x" };
+        throw new CancelledError("client cancelled");
+      },
+    };
+    const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
+      adapter: cancelling,
+      clock: stubClock(),
+    });
+    await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(CancelledError);
+    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+    expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });
 
   it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {

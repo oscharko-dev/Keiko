@@ -46,10 +46,13 @@ import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
   verifyEmbeddingCapability,
   type GatewayConfig,
   type ModelProviderConfig,
   type OpenAIEmbeddingAdapter,
+  type OpenAIEmbeddingBatchOutcome,
+  type OpenAIEmbeddingBatchRequest,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -664,24 +667,28 @@ function buildCapsuleHealth(
 function createEmbeddingAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  batchImpl?: (request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>,
 ): OpenAIEmbeddingAdapter {
-  return {
+  const providerCreds = {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
     ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-    request: (request) =>
-      requestImpl({
-        ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-      }),
+  };
+  return {
+    ...providerCreds,
+    request: (request) => requestImpl({ ...request, ...providerCreds }),
+    // #189 GRD-004: the indexing batcher prefers this array-batch port when present, turning
+    // up to batchSize per-chunk HTTPS round-trips into a single array call. Omitted when no
+    // batch impl is wired (scalar-stub tests) so those keep the one-request-per-chunk path.
+    ...(batchImpl !== undefined
+      ? {
+          requestBatch: (request: OpenAIEmbeddingBatchRequest) =>
+            batchImpl({ ...request, ...providerCreds }),
+        }
+      : {}),
   };
 }
 
@@ -689,6 +696,18 @@ function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
+}
+
+// #189 GRD-004: returns the array-batch impl, or undefined to fall back to per-chunk scalar
+// embedding. A test that stubs only the scalar request (localKnowledgeEmbeddingRequest) gets
+// no batch port unless it also stubs the batch request — keeping existing call-count tests valid.
+function requestEmbeddingBatchImpl(
+  deps: UiHandlerDeps,
+): ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined {
+  if (deps.localKnowledgeEmbeddingRequest !== undefined) {
+    return deps.localKnowledgeEmbeddingBatchRequest;
+  }
+  return requestOpenAIEmbeddingBatch;
 }
 
 function canonicalizeScopeRoot(scope: KnowledgeSourceScope): KnowledgeSourceScope {
@@ -875,7 +894,11 @@ async function verifiedNewCapsuleEmbeddingIdentity(
   | { readonly ok: true; readonly identity: KnowledgeCapsule["embeddingModelIdentity"] }
   | { readonly ok: false; readonly result: RouteResult }
 > {
-  const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  const adapter = createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+  );
   try {
     const result = await verifyEmbeddingCapability(adapter, {
       modelId: provider.modelId,
@@ -1050,7 +1073,11 @@ async function runCapsuleIndexingJob(
     return { kind: "job-failed", jobId: "" };
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
-  const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  const adapter = createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+  );
   const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
   if (!sourceSelection.shouldRun) {
     return undefined;

@@ -168,13 +168,27 @@ function ActivityIcon({
     case "hollow-circle":
       return (
         <svg {...svgProps}>
-          <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth={strokeWidth} />
+          <circle
+            cx="6"
+            cy="6"
+            r="4.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={strokeWidth}
+          />
         </svg>
       );
     case "clock":
       return (
         <svg {...svgProps}>
-          <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth={strokeWidth} />
+          <circle
+            cx="6"
+            cy="6"
+            r="4.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={strokeWidth}
+          />
           <path
             d="M6 3v3l2 1"
             stroke="currentColor"

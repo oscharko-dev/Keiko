@@ -47,6 +47,8 @@ import {
   type ConsolidationJobRegistry,
 } from "./memory-consolidation-registry.js";
 import type {
+  OpenAIEmbeddingBatchOutcome,
+  OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -136,6 +138,12 @@ export interface UiHandlerDeps {
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:
     | ((request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>)
+    | undefined;
+  // #189 GRD-004 array-batch embedding seam. Production leaves this undefined and uses
+  // requestOpenAIEmbeddingBatch; tests that set localKnowledgeEmbeddingRequest only get the
+  // batch path when they also provide a batch stub, so existing scalar-stub tests are unchanged.
+  readonly localKnowledgeEmbeddingBatchRequest?:
+    | ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>)
     | undefined;
   // Issue #539 (Epic #532) — relationship engine handler deps. Optional so legacy tests
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
@@ -324,7 +332,12 @@ export function currentGatewayEgressConfig(
 // misconfigured env does not prevent the server from starting.
 function parseEnvPositiveInt(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
-  const n = Number.parseInt(raw, 10);
+  // GRD-037: strict parse so a typo'd value is genuinely ignored (as the comment promises) rather
+  // than silently coerced — Number.parseInt("16abc")→16 and ("4.9")→4. Mirrors the loud
+  // config-file validator's all-digits rule, but here a bad env var falls back to the default.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const n = Number.parseInt(trimmed, 10);
   return Number.isFinite(n) && n >= 1 ? n : undefined;
 }
 

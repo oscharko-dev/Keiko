@@ -126,10 +126,65 @@ function teeSink(sinks: readonly EventSink[]): EventSink {
   return {
     retainsRawContent: true,
     emit: (event: HarnessEvent): void => {
+      const redacted = redactEventForNonRetainingSink(event);
       for (const sink of sinks) {
-        sink.emit(event);
+        sink.emit(sink.retainsRawContent === true ? event : redacted);
       }
     },
+  };
+}
+
+function redactEventForNonRetainingSink(event: HarnessEvent): HarnessEvent {
+  if (event.type === "run:failed") {
+    return redactRunFailedEvent(event);
+  }
+  if (event.type === "run:completed") {
+    return redactRunCompletedEvent(event);
+  }
+  if (event.type === "reasoning:trace") {
+    return redactReasoningTraceEvent(event);
+  }
+  if (event.type === "run:cancelled" && event.reason !== undefined) {
+    return { ...event, reason: redact(event.reason) };
+  }
+  if (event.type === "model:call:failed" || event.type === "tool:call:failed") {
+    return { ...event, message: redact(event.message) };
+  }
+  if (event.type === "patch:proposed") return { ...event, diff: redact(event.diff) };
+  if (event.type === "verification:result") return { ...event, detail: redact(event.detail) };
+  return event;
+}
+
+function redactRunFailedEvent(
+  event: Extract<HarnessEvent, { type: "run:failed" }>,
+): HarnessEvent {
+  return {
+    ...event,
+    failure: {
+      ...event.failure,
+      message: redact(event.failure.message),
+      ...(event.failure.detail === undefined ? {} : { detail: redact(event.failure.detail) }),
+    },
+  };
+}
+
+function redactRunCompletedEvent(
+  event: Extract<HarnessEvent, { type: "run:completed" }>,
+): HarnessEvent {
+  return {
+    ...event,
+    report: redact(event.report),
+    ...(event.patchDiff === undefined ? {} : { patchDiff: redact(event.patchDiff) }),
+  };
+}
+
+function redactReasoningTraceEvent(
+  event: Extract<HarnessEvent, { type: "reasoning:trace" }>,
+): HarnessEvent {
+  return {
+    ...event,
+    rationale: redact(event.rationale),
+    ...(event.modelResponse === undefined ? {} : { modelResponse: redact(event.modelResponse) }),
   };
 }
 
@@ -255,7 +310,8 @@ function outcomeToExitCode(result: RunResult, io: CliIo): number {
     return 1;
   }
   const category = result.failure?.category ?? "HARNESS_INTERNAL";
-  io.err(`run ${result.runId} ${result.outcome} [${category}]: ${result.failure?.message ?? ""}\n`);
+  const message = redact(result.failure?.message ?? "");
+  io.err(`run ${result.runId} ${result.outcome} [${category}]: ${message}\n`);
   return 1;
 }
 

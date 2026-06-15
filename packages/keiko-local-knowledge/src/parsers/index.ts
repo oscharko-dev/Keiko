@@ -33,6 +33,7 @@ export { csvParser } from "./csv-parser.js";
 export { htmlParser } from "./html-parser.js";
 export { pdfParser } from "./pdf-parser.js";
 export { docxParser } from "./docx-parser.js";
+export { xlsxParser } from "./xlsx-parser.js";
 
 // Convenience: a registry pre-populated with every shipped adapter. Resolution order is
 // JSON → CSV/TSV → HTML → text. Text registers last because its `matches` predicate is
@@ -45,6 +46,7 @@ import { pdfParser } from "./pdf-parser.js";
 import { createParserRegistry, registerParser } from "./registry.js";
 import { textParser } from "./text-parser.js";
 import type { ParserRegistry } from "./types.js";
+import { xlsxParser } from "./xlsx-parser.js";
 
 export function createDefaultParserRegistry(): ParserRegistry {
   let registry = createParserRegistry();
@@ -53,6 +55,7 @@ export function createDefaultParserRegistry(): ParserRegistry {
   registry = registerParser(registry, htmlParser);
   registry = registerParser(registry, pdfParser);
   registry = registerParser(registry, docxParser);
+  registry = registerParser(registry, xlsxParser);
   // Text parser is registered last among the real adapters because its `matches` predicate
   // is the most permissive (it accepts any `text/*` media type), so it must not shadow the
   // structured adapters.

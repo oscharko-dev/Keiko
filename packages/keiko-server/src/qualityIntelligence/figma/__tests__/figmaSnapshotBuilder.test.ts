@@ -60,7 +60,8 @@ const imagesPort = (missing: ReadonlySet<string> = new Set()): ImagesPortStub =>
     const url = new URL(request.url);
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => id.length > 0);
     const images: Record<string, string | null> = {};
-    for (const id of ids) images[id] = missing.has(id) ? null : `https://ephemeral/${id}.png`;
+    for (const id of ids)
+      images[id] = missing.has(id) ? null : `https://s3-alpha-sig.figma.com/${id}.png`;
     return Promise.resolve({ status: 200, json: { err: null, images }, headers: {} });
   };
   return { port, requests };
@@ -112,8 +113,8 @@ describe("buildFigmaSnapshot", () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
     const images = imagesPort();
     const renders = renderPort({
-      "https://ephemeral/1:1.png": png(10),
-      "https://ephemeral/1:2.png": png(20),
+      "https://s3-alpha-sig.figma.com/1:1.png": png(10),
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
     });
 
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
@@ -130,7 +131,7 @@ describe("buildFigmaSnapshot", () => {
   it("renders ONLY screen frame ids and NEVER the canvas root node id", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
 
     await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
 
@@ -144,7 +145,7 @@ describe("buildFigmaSnapshot", () => {
   it("authenticates the /v1/images call with the token header but never the byte download", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
 
     await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
 
@@ -155,7 +156,7 @@ describe("buildFigmaSnapshot", () => {
   it("skips a screen whose render url is missing and keeps the rest (partial)", async () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
     const images = imagesPort(new Set(["1:2"]));
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
 
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
 
@@ -166,7 +167,7 @@ describe("buildFigmaSnapshot", () => {
   it("skips a screen whose byte download fails", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
-    const renders = renderPort({}, { "https://ephemeral/1:1.png": { status: 500 } });
+    const renders = renderPort({}, { "https://s3-alpha-sig.figma.com/1:1.png": { status: 500 } });
 
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
 
@@ -177,7 +178,7 @@ describe("buildFigmaSnapshot", () => {
   it("skips a screen with empty render bytes", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
-    const renders = renderPort({}, { "https://ephemeral/1:1.png": { empty: true } });
+    const renders = renderPort({}, { "https://s3-alpha-sig.figma.com/1:1.png": { empty: true } });
 
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
 
@@ -188,7 +189,7 @@ describe("buildFigmaSnapshot", () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
     const big = new Uint8Array(64);
-    const renders = renderPort({ "https://ephemeral/1:1.png": big });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": big });
 
     const snapshot = await buildFigmaSnapshot({
       ...baseInput(screens, images.port, renders.port),
@@ -245,7 +246,7 @@ describe("buildFigmaSnapshot", () => {
   it("never embeds the token anywhere in the assembled snapshot value", async () => {
     const screens = [screen("1:1", "Home")];
     const images = imagesPort();
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
 
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
 
@@ -259,8 +260,8 @@ describe("buildFigmaSnapshot", () => {
   it("snapshot integrity hash is DETERMINISTIC and independent of fetchedAt (drift-stable)", async () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
     const bytes = {
-      "https://ephemeral/1:1.png": png(10),
-      "https://ephemeral/1:2.png": png(20),
+      "https://s3-alpha-sig.figma.com/1:1.png": png(10),
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
     };
 
     const first = await buildFigmaSnapshot(
@@ -277,7 +278,7 @@ describe("buildFigmaSnapshot", () => {
 
   it("snapshot integrity hash changes when the pinned version changes (drift signal)", async () => {
     const screens = [screen("1:1", "Home")];
-    const bytes = { "https://ephemeral/1:1.png": png(10) };
+    const bytes = { "https://s3-alpha-sig.figma.com/1:1.png": png(10) };
 
     const first = await buildFigmaSnapshot(
       baseInput(screens, imagesPort().port, renderPort(bytes).port),
@@ -320,27 +321,6 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     expect(snapshot.screens).toHaveLength(0);
     expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
     expect(renders.requests).toHaveLength(0);
-  });
-
-  it("skips a screen whose render URL points at a non-Figma domain with https", async () => {
-    const screens = [screen("1:1", "Home")];
-    const images: FigmaHttpPort = () =>
-      Promise.resolve({
-        status: 200,
-        json: { images: { "1:1": "https://evil.internal/leak?path=/etc/passwd" } },
-        headers: {},
-      });
-    const renders = renderPort({});
-
-    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
-
-    // evil.internal is not an IP, so it passes the IP-literal check — but it IS an https URL
-    // that could resolve internally. The IP-block strategy does not block arbitrary hostnames
-    // (only IP literals and localhost/.local). This test documents the current contract and
-    // confirms the render call is still made for non-IP https URLs (the CDN allowlist would
-    // block this; we use the IP-block strategy — see figmaSnapshotBuilder.ts comment).
-    // The renderPort stub returns empty bytes for unknown URLs → render-empty skip.
-    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-empty" }]);
   });
 
   it("skips a screen whose render URL is an IPv4 loopback address (SSRF)", async () => {
@@ -397,12 +377,33 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     expect(renders.requests).toHaveLength(0);
   });
 
-  it("allows a legitimate https://ephemeral/ render URL (existing fixtures still work)", async () => {
+  it("blocks an arbitrary non-Figma HTTPS render hostname (SSRF)", async () => {
     const screens = [screen("1:1", "Home")];
-    const images = imagesPort();
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://evil.internal/leak?path=/etc/passwd" } },
+        headers: {},
+      });
+    const renders = renderPort({});
 
-    const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("allows a legitimate Figma render URL", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://s3-alpha-sig.figma.com/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
 
     expect(snapshot.screens).toHaveLength(1);
     expect(snapshot.skippedScreens).toHaveLength(0);
@@ -462,15 +463,118 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     const images: FigmaHttpPort = () =>
       Promise.resolve({
         status: 200,
-        json: { images: { "1:1": "https://ephemeral:443/1:1.png" } },
+        json: { images: { "1:1": "https://s3-alpha-sig.figma.com:443/1:1.png" } },
         headers: {},
       });
-    const renders = renderPort({ "https://ephemeral:443/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com:443/1:1.png": png(10) });
 
     const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
 
     expect(snapshot.screens).toHaveLength(1);
     expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("caps rendered screens and records deterministic skipped coverage for the remainder", async () => {
+    const screens = [screen("1:1", "A"), screen("1:2", "B"), screen("1:3", "C")];
+    const images = imagesPort();
+    const renders = renderPort({
+      "https://s3-alpha-sig.figma.com/1:1.png": png(10),
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
+      "https://s3-alpha-sig.figma.com/1:3.png": png(30),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders.port),
+      maxScreensRendered: 2,
+    });
+
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2"]);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:3", reason: "render-screen-cap-exceeded" },
+    ]);
+    const requestedIds = images.requests.flatMap((r) =>
+      (new URL(r.url).searchParams.get("ids") ?? "").split(","),
+    );
+    expect(requestedIds).toEqual(["1:1", "1:2"]);
+  });
+});
+
+describe("buildFigmaSnapshot — render URL allowlist positive branches (#750 SSRF)", () => {
+  // Each test exercises a DISTINCT positive branch of isAllowedFigmaRenderUrl so a regression
+  // that silently removes a branch is caught before it enables SSRF.
+  const allowedUrl = (
+    url: string,
+  ): Promise<{
+    readonly screens: readonly unknown[];
+    readonly skippedScreens: readonly unknown[];
+  }> => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({ status: 200, json: { images: { "1:1": url } }, headers: {} });
+    const renders = renderPort({ [url]: png(10) });
+    return buildFigmaSnapshot(baseInput(screens, images, renders.port));
+  };
+
+  it("allows cdn.figma.com (figma CDN front)", async () => {
+    const snapshot = await allowedUrl("https://cdn.figma.com/renders/1:1.png");
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("allows static.figma.com (figma static front)", async () => {
+    const snapshot = await allowedUrl("https://static.figma.com/renders/1:1.png");
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("allows a regional Figma S3 bucket (figma-prod.s3.eu-west-1.amazonaws.com)", async () => {
+    const snapshot = await allowedUrl(
+      "https://figma-prod.s3.eu-west-1.amazonaws.com/renders/1:1.png",
+    );
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("allows the legacy us-west-2 path-style S3 bucket with figma path prefix", async () => {
+    const snapshot = await allowedUrl("https://s3-us-west-2.amazonaws.com/figma-data/1:1.png");
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("blocks evil-figma.s3.amazonaws.com (bucket name in S3 hostname, wrong format — no region)", async () => {
+    // The regex requires figma*.s3.<region>.amazonaws.com; a bare s3.amazonaws.com hostname with
+    // a bucket-like prefix does NOT match because there is no region segment.
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://evil-figma.s3.amazonaws.com/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("blocks figma.com.evil.com (look-alike domain — not a .figma.com subdomain)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://figma.com.evil.com/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
   });
 });
 
@@ -574,10 +678,10 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
       const url = new URL(request.url);
       const ids = (url.searchParams.get("ids") ?? "").split(",");
       const map: Record<string, string> = {};
-      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      for (const id of ids) map[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
       return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
     };
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
     const { sleep, delays } = recordingSleep();
 
     const snapshot = await buildFigmaSnapshot({
@@ -601,10 +705,10 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
       }
       const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
       const map: Record<string, string> = {};
-      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      for (const id of ids) map[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
       return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
     };
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
     const { sleep, delays } = recordingSleep();
 
     await buildFigmaSnapshot({
@@ -659,7 +763,7 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
     const images = imagesPort();
     const renders: FigmaRenderPort = (request) => {
-      if (request.url === "https://ephemeral/1:2.png") {
+      if (request.url === "https://s3-alpha-sig.figma.com/1:2.png") {
         return Promise.resolve({ status: 429, bytes: new Uint8Array(0), headers: {} });
       }
       return Promise.resolve({ status: 200, bytes: png(10), headers: {} });
@@ -715,13 +819,13 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
         .split(",")
         .filter((id) => id.length > 0);
       const map: Record<string, string> = {};
-      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      for (const id of ids) map[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
       return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
     };
     const renders = renderPort({
-      "https://ephemeral/1:1.png": png(10),
-      "https://ephemeral/1:2.png": png(20),
-      "https://ephemeral/1:3.png": png(30),
+      "https://s3-alpha-sig.figma.com/1:1.png": png(10),
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
+      "https://s3-alpha-sig.figma.com/1:3.png": png(30),
     });
 
     const snapshot = await buildFigmaSnapshot({
@@ -744,12 +848,12 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
         .split(",")
         .filter((id) => id.length > 0);
       const map: Record<string, string> = {};
-      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      for (const id of ids) map[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
       return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
     };
     const renders = renderPort({
-      "https://ephemeral/1:1.png": png(10),
-      "https://ephemeral/1:2.png": png(20),
+      "https://s3-alpha-sig.figma.com/1:1.png": png(10),
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
     });
 
     const snapshot = await buildFigmaSnapshot({
@@ -787,9 +891,9 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail"), screen("1:3", "Settings")];
     const images = imagesPort();
     const delayByUrl: Record<string, number> = {
-      "https://ephemeral/1:1.png": 3,
-      "https://ephemeral/1:2.png": 1,
-      "https://ephemeral/1:3.png": 2,
+      "https://s3-alpha-sig.figma.com/1:1.png": 3,
+      "https://s3-alpha-sig.figma.com/1:2.png": 1,
+      "https://s3-alpha-sig.figma.com/1:3.png": 2,
     };
     const renders: FigmaRenderPort = async (request) => {
       const ticks = delayByUrl[request.url] ?? 0;
@@ -803,5 +907,67 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     });
 
     expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2", "1:3"]);
+  });
+});
+
+describe("buildFigmaSnapshot — transient malformed /v1/images body (#750 F8)", () => {
+  it("recovers a transient malformed images body (2xx without an images map) on retry", async () => {
+    const screens = [screen("1:1", "Home")];
+    let imagesCalls = 0;
+    const images: FigmaHttpPort = (request) => {
+      imagesCalls += 1;
+      // First response is 2xx but carries NO `images` map — Figma's render-overload signal.
+      if (imagesCalls === 1) {
+        return Promise.resolve({
+          status: 200,
+          json: { err: "rendering temporarily unavailable" },
+          headers: {},
+        });
+      }
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
+    const { sleep, delays } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    expect(imagesCalls).toBe(2);
+    expect(delays).toEqual([100]); // one malformed-body backoff: baseDelayMs * 2**0
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1"]);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("degrades screens to a skip when the images body stays malformed (no hard build failure)", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
+    let imagesCalls = 0;
+    const images: FigmaHttpPort = () => {
+      imagesCalls += 1;
+      return Promise.resolve({ status: 200, json: { err: "still overloaded" }, headers: {} });
+    };
+    const renders = renderPort({});
+    const { sleep, delays } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    // 1 initial call + MAX_RENDER_BODY_RETRIES(3) retries = 4 calls, then a graceful skip (no throw).
+    expect(imagesCalls).toBe(4);
+    expect(delays).toEqual([100, 200, 400]);
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-url-missing" },
+      { screenId: "1:2", reason: "render-url-missing" },
+    ]);
+    expect(renders.requests).toHaveLength(0);
   });
 });

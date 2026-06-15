@@ -91,6 +91,9 @@ export {
 
 export {
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
+  type OpenAIEmbeddingBatchOutcome,
+  type OpenAIEmbeddingBatchRequest,
   type OpenAIEmbeddingErrorKind,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,

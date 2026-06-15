@@ -245,21 +245,6 @@ function assertHashMatches(
   }
 }
 
-// Backward-compatible group check: a group that shipped before it was integrity-hashed (coverageMatrix
-// #738, sourceFingerprints #735) may exist on a legacy manifest without a stored hash. Enforce the
-// check only once a stored hash is present; new manifests always carry it, so tampering with a current
-// group is still caught.
-function assertOptionalHashMatches(
-  label: string,
-  value: unknown,
-  stored: string | undefined,
-): void {
-  if (stored === undefined) return;
-  if (sha256OfJson(value) !== stored) {
-    throw new EvidenceReadError(`QI manifest ${label} integrity hash mismatch`);
-  }
-}
-
 function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifest): void {
   const expected = buildIntegrityHashes(manifest.findings, manifest.exports, manifest.evidenceRefs);
   assertHashMatches("findings", expected.findings, manifest.integrityHashes.findings);
@@ -274,14 +259,23 @@ function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifes
     expectedAtomFingerprints,
     manifest.integrityHashes.atomFingerprints,
   );
-  assertOptionalHashMatches(
+  // coverageMatrix and sourceFingerprints: derive expected = (collection === undefined ? undefined :
+  // sha256OfJson(collection)) and compare with assertHashMatches so a present collection with a
+  // deleted stored sub-hash FAILS CLOSED (mirrors atomFingerprints above — removal-proof).
+  const expectedCoverageMatrix =
+    manifest.coverageMatrix === undefined ? undefined : sha256OfJson(manifest.coverageMatrix);
+  assertHashMatches(
     "coverageMatrix",
-    manifest.coverageMatrix,
+    expectedCoverageMatrix,
     manifest.integrityHashes.coverageMatrix,
   );
-  assertOptionalHashMatches(
+  const expectedSourceFingerprints =
+    manifest.sourceFingerprints === undefined
+      ? undefined
+      : sha256OfJson(manifest.sourceFingerprints);
+  assertHashMatches(
     "sourceFingerprints",
-    manifest.sourceFingerprints,
+    expectedSourceFingerprints,
     manifest.integrityHashes.sourceFingerprints,
   );
 }

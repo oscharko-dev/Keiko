@@ -47,7 +47,9 @@ export async function rmIfExistsSafe(rootReal, targetPath) {
   }
   const resolvedTarget = stats.isSymbolicLink() ? await realpath(targetPath) : resolve(targetPath);
   if (!isWithin(rootReal, resolvedTarget)) {
-    throw new Error(`refusing to delete path outside repository: ${targetPath} -> ${resolvedTarget}`);
+    throw new Error(
+      `refusing to delete path outside repository: ${targetPath} -> ${resolvedTarget}`,
+    );
   }
   await rm(targetPath, { recursive: true, force: true });
   console.log(`removed ${targetPath}`);

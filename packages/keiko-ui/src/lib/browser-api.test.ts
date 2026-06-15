@@ -4,13 +4,16 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  browserApplyScreenshot,
   browserContent,
+  browserEventsUrl,
   browserNavigate,
   browserScreenshot,
   createBrowserSession,
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "./browser-api";
+import { ApiError } from "./api";
 
 function jsonOk(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -85,10 +88,12 @@ describe("browserFetch header injection", () => {
 
     await browserNavigate("s-1", "http://127.0.0.1:5173/");
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
     expect(headers["X-Keiko-CSRF"]).toBe("1");
+    expect(path).toBe(`/api/browser/sessions/${encodeURIComponent("s-1")}/navigate`);
+    expect(init.body).toBe(JSON.stringify({ url: "http://127.0.0.1:5173/" }));
   });
 
   it("POST (browserScreenshot) sends Content-Type and CSRF headers", async () => {
@@ -110,6 +115,27 @@ describe("browserFetch header injection", () => {
     expect(headers["X-Keiko-CSRF"]).toBe("1");
   });
 
+  it("POST (browserApplyScreenshot) sends captureSeq and URL-encodes session id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        seq: 2,
+        viewportPx: { width: 1280, height: 800 },
+        dataBase64: "BBBB",
+        persisted: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await browserApplyScreenshot("session/with slash", 7);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(path).toBe(`/api/browser/sessions/${encodeURIComponent("session/with slash")}/apply`);
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["X-Keiko-CSRF"]).toBe("1");
+    expect(init.body).toBe(JSON.stringify({ captureSeq: 7 }));
+  });
+
   it("POST (browserContent) sends Content-Type and CSRF headers", async () => {
     const fetchMock = vi
       .fn()
@@ -122,5 +148,52 @@ describe("browserFetch header injection", () => {
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
     expect(headers["X-Keiko-CSRF"]).toBe("1");
+    expect(init.body).toBe(JSON.stringify({}));
+  });
+
+  it("returns undefined for 204 deletes while preserving the encoded route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteBrowserSession("session/with slash")).resolves.toBeUndefined();
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(`/api/browser/sessions/${encodeURIComponent("session/with slash")}`);
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("throws ApiError envelopes without exposing response bodies", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: "BROWSER_NOT_REACHABLE", message: "CDP unavailable" } }),
+          { status: 503, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createBrowserSession(9222)).rejects.toMatchObject({
+      code: "BROWSER_NOT_REACHABLE",
+      message: "CDP unavailable",
+      status: 503,
+    } satisfies Partial<ApiError>);
+  });
+
+  it("falls back to a generic ApiError when error JSON cannot be parsed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("not-json", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchBrowserStatus(9222)).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "HTTP 500",
+      status: 500,
+    } satisfies Partial<ApiError>);
+  });
+
+  it("builds the browser SSE URL with encoded session id", () => {
+    expect(browserEventsUrl("session/with slash")).toBe(
+      `/api/browser/sessions/${encodeURIComponent("session/with slash")}/events`,
+    );
   });
 });

@@ -798,6 +798,32 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
     ).toThrow(UiStoreError);
   });
 
+  it("rejects a list entry with a whitespace-only capsule id", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        localKnowledgeScopes: [
+          { kind: "capsule", capsuleId: "   ", connectedAtMs: 1 },
+        ] as ChatLocalKnowledgeScope[],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("trims connector ids before persistence", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: " cap-a ", connectedAtMs: 1 },
+        { kind: "capsule-set", capsuleSetId: " set-b ", connectedAtMs: 2 },
+      ] as ChatLocalKnowledgeScope[],
+    });
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes).toEqual([
+      { kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 },
+      { kind: "capsule-set", capsuleSetId: "set-b", connectedAtMs: 2 },
+    ]);
+  });
+
   it("prefers localKnowledgeScopes over localKnowledgeScope when both are present in a patch", () => {
     const c = store.createChat(proj, "t", "m");
     const updated = store.updateChat(c.id, {

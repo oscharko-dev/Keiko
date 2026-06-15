@@ -115,7 +115,70 @@ export interface DecodedText {
   readonly bomBytes: number;
 }
 
+// GRD-012: detect UTF-16 LE/BE by BOM (common Windows .txt/.csv/.json exports) and re-decode
+// with the matching codec. Without this they decode as UTF-8 mojibake (every other byte a NUL /
+// replacement char) and are silently chunked/embedded as garbage. UTF-32 LE (FF FE 00 00) is
+// explicitly excluded so it is not mis-read as UTF-16 LE.
+function utf16CodecForBom(bytes: Uint8Array): "utf-16le" | "utf-16be" | undefined {
+  if (bytes.byteLength < 2) return undefined;
+  const b0 = bytes[0];
+  const b1 = bytes[1];
+  if (b0 === 0xfe && b1 === 0xff) return "utf-16be";
+  if (b0 !== 0xff || b1 !== 0xfe) return undefined;
+  // FF FE is UTF-16 LE — unless it is the UTF-32 LE BOM (FF FE 00 00), which is not handled here.
+  const isUtf32Le = bytes.byteLength >= 4 && bytes[2] === 0x00 && bytes[3] === 0x00;
+  return isUtf32Le ? undefined : "utf-16le";
+}
+
+function decodeUtf16(bytes: Uint8Array): DecodedText | undefined {
+  const codec = utf16CodecForBom(bytes);
+  if (codec === undefined) return undefined;
+  const text = new TextDecoder(codec, { fatal: false }).decode(bytes);
+  // The 2-byte UTF-16 BOM is normally consumed by TextDecoder; strip defensively so a leading
+  // U+FEFF never survives into offsets. bomBytes is the consumed BOM byte length (2).
+  const stripped = text.length > 0 && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return { text: stripped, bomBytes: 2 };
+}
+
+// GRD-027: decode an XML numeric character reference body (the part between `&#` and `;`),
+// e.g. "8217" (decimal) or "xE9" / "x2019" (hex). Returns undefined for malformed or
+// out-of-range references (incl. surrogates) so the caller leaves the literal text intact —
+// String.fromCodePoint throws on those, which must never crash the parser.
+// Valid Unicode scalar value: in range and not a lone surrogate (String.fromCodePoint throws
+// on surrogates / out-of-range).
+function isValidScalarCodePoint(cp: number): boolean {
+  if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) return false;
+  return cp < 0xd800 || cp > 0xdfff;
+}
+
+function decodeNumericCharacterReference(body: string): string | undefined {
+  const isHex = body.startsWith("x") || body.startsWith("X");
+  const digits = isHex ? body.slice(1) : body;
+  if (digits.length === 0) return undefined;
+  if (!(isHex ? /^[0-9a-fA-F]+$/ : /^[0-9]+$/).test(digits)) return undefined;
+  const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
+  return isValidScalarCodePoint(codePoint) ? String.fromCodePoint(codePoint) : undefined;
+}
+
+// Shared OOXML/HTML entity decoder for docx/xlsx text runs. Decodes numeric references first
+// (decimal `&#8217;` and hex `&#xE9;` — smart quotes, accents), then the five named refs, with
+// `&amp;` LAST so an escaped ampersand (`&amp;#65;`) is not re-interpreted as a numeric ref.
+export function decodeXmlEntities(value: string): string {
+  const withNumeric = value.replace(
+    /&#(x?[0-9a-fA-F]+);/g,
+    (match: string, body: string): string => decodeNumericCharacterReference(body) ?? match,
+  );
+  return withNumeric
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+}
+
 export function decodeUtf8(bytes: Uint8Array): DecodedText {
+  const utf16 = decodeUtf16(bytes);
+  if (utf16 !== undefined) return utf16;
   const decoder = new TextDecoder("utf-8", { fatal: false });
   const raw = decoder.decode(bytes);
   if (raw.length > 0 && raw.charCodeAt(0) === 0xfeff) {

@@ -465,11 +465,7 @@ function hasStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function appendPrefixedReasons(
-  result: ValidationResult,
-  prefix: string,
-  reasons: string[],
-): void {
+function appendPrefixedReasons(result: ValidationResult, prefix: string, reasons: string[]): void {
   if (result.ok) {
     return;
   }
@@ -501,8 +497,7 @@ function isConnectedFileRole(value: unknown): value is ConnectedFileRole {
 
 function isUncertaintyMarkerKind(value: unknown): value is UncertaintyMarkerKind {
   return (
-    typeof value === "string" &&
-    UNCERTAINTY_MARKER_KINDS.includes(value as UncertaintyMarkerKind)
+    typeof value === "string" && UNCERTAINTY_MARKER_KINDS.includes(value as UncertaintyMarkerKind)
   );
 }
 
@@ -716,11 +711,7 @@ function validatePackExcerptAtom(
   if (atomScopePath !== entryScopePath) {
     reasons.push("pack.files excerpt atom.scopePath does not match parent scopePath");
   }
-  appendPrefixedReasons(
-    validateEvidenceAtom(atom as EvidenceAtom),
-    "pack.files excerpt ",
-    reasons,
-  );
+  appendPrefixedReasons(validateEvidenceAtom(atom as EvidenceAtom), "pack.files excerpt ", reasons);
   if (typeof atomScopePath === "string" && !isPathWithinSelectedScope(scope, atomScopePath)) {
     reasons.push("pack.files excerpt atom.scopePath falls outside selected scope");
   }

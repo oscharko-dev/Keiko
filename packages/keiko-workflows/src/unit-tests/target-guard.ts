@@ -38,10 +38,7 @@ export function assertTargetWithinWorkspace(
     const absolute = resolveWithinWorkspace(workspace.root, candidate);
     const normalizedRelative = toPosix(relative(workspace.root, absolute));
     if (normalizedRelative !== "" && isDenied(normalizedRelative)) {
-      throw new PathDeniedError(
-        `path is denied by workspace policy: ${candidate}`,
-        candidate,
-      );
+      throw new PathDeniedError(`path is denied by workspace policy: ${candidate}`, candidate);
     }
     assertContainedRealPath(fs, workspace.root, absolute, "unit-test-target");
   }

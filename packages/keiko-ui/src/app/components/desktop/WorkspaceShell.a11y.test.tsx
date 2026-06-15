@@ -91,18 +91,11 @@ describe("Workspace shell accessibility", () => {
     const { container } = render(
       <div className="app">
         <Header
-          mode="manual"
-          projectName="Keiko"
-          statusLabel="Connected"
-          statusTone="ok"
-          onModeChange={vi.fn()}
           openPalette={vi.fn()}
           openCommandPalette={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
           onCascade={vi.fn()}
-          onExpandFront={vi.fn()}
-          onRestoreFront={vi.fn()}
         />
         <div className="mid">
           <LeftRail
@@ -145,13 +138,7 @@ describe("Workspace shell accessibility", () => {
     expect(results).toHaveNoViolations();
   });
 
-  // Autonomous mode swaps the footer governance pill to the accent-bordered
-  // "Keiko governing" variant (orca glyph + accent-dim fill). Render that path
-  // so jest-axe exercises the autonomous footer structure. Note: axe-core
-  // cannot resolve oklch()/color-mix() contrast under jsdom, so the pill's text
-  // ratio is verified separately (the fix uses the theme-adaptive --fg-muted
-  // label color, AA in both themes) and recorded in the PR.
-  it("passes jest-axe for the autonomous-mode footer governance pill", async () => {
+  it("passes jest-axe for the autonomous-mode footer window trigger", async () => {
     const { container } = render(
       <Footer
         winCount={2}

@@ -172,6 +172,22 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(image.sha256).toBe(firstScreen(loaded).image.sha256);
   });
 
+  it("loads metadata without verifying every image side-file, then verifies the requested image", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    const loaded = loadOrThrow(store, RUN_ID);
+    const second = loaded.screens[1];
+    if (second === undefined) throw new Error("expected a second screen");
+    writeFileSync(join(result.sideFileDir, second.image.relativePath), png(99));
+
+    const metadata = store.loadMetadata(RUN_ID);
+    expect(metadata?.screens).toHaveLength(2);
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+    expect(Array.from(store.loadImage(RUN_ID, firstScreen(loaded).image).bytes)).toEqual(
+      Array.from(png(10)),
+    );
+  });
+
   it("is WRITE-ONCE: a second record for the same runId is refused", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());

@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { setTimeout } from "node:timers";
+import { clearTimeout, setTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
@@ -62,6 +63,54 @@ if (!["auto", "turbopack", "webpack"].includes(nextBundlerPreference)) {
 if (!Number.isInteger(maxRestarts) || maxRestarts < 0) {
   console.error(`Invalid KEIKO_DEV_MAX_RESTARTS: ${String(process.env.KEIKO_DEV_MAX_RESTARTS)}`);
   process.exit(2);
+}
+
+/**
+ * Checks whether the given TCP port is free by attempting a connection.
+ * Resolves to `true` when the port is free, `false` when something is already listening.
+ * Exported for testing.
+ */
+export function checkNextPortFree(checkHost, checkPort, timeoutMs = 500) {
+  return new Promise((resolvePortFree) => {
+    const socket = connect({ host: checkHost, port: checkPort });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolvePortFree(true);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolvePortFree(false);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolvePortFree(true);
+    });
+  });
+}
+
+/**
+ * Reads the Next.js dev-server lock file written by the bundler.
+ * The file lives at `<uiDir>/.next/lock` and contains `{pid, port, appUrl}`.
+ * Resolves to the parsed object, or `undefined` if absent or unreadable.
+ * Exported for testing.
+ */
+export async function readNextLockInfo(lockPath) {
+  try {
+    const content = await readFile(lockPath, "utf8");
+    const parsed = JSON.parse(content);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      typeof parsed["pid"] === "number" &&
+      typeof parsed["port"] === "number"
+    ) {
+      return /** @type {{ pid: number; port: number; appUrl: string }} */ (parsed);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function writeState(extra = {}) {
@@ -174,15 +223,16 @@ async function waitForPublicReadiness() {
   publicReady = false;
   writeState({ ready: false });
   try {
+    let lastError;
     while (!shuttingDown) {
-      const status = await readinessProbe();
-      if (status === "ok") {
+      lastError = await readinessProbe();
+      if (lastError === "ok") {
         publicReady = true;
         writeState({ ready: true });
         console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
         return;
       }
-      writeState({ ready: false, starting: status });
+      writeState({ ready: false, starting: lastError });
       await sleep(500);
     }
   } finally {
@@ -330,41 +380,67 @@ function shutdown(code = 0) {
   if (children.size === 0) process.exit(code);
 }
 
-startBff();
-startNext();
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("dev-runner.mjs");
 
-server = createServer((req, res) => {
-  const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
-  if (url.pathname === "/sw.js") {
-    serveDevServiceWorker(res);
-    return;
-  }
-  if (!publicReady) {
-    serveStarting(res);
-    return;
-  }
-  proxyHttp(req, res, targetPortFor(url.pathname));
-});
-
-server.on("upgrade", (req, socket, head) => {
-  if (!publicReady) {
-    socket.end(
-      "HTTP/1.1 503 Service Unavailable\r\n" +
-        "Connection: close\r\n" +
-        "Retry-After: 1\r\n" +
-        "\r\n",
+if (invokedDirectly) {
+  // PREFLIGHT: fail fast if next dev is already running on the configured port.
+  const nextLockPath = join(uiDir, ".next", "lock");
+  const [portFree, lockInfo] = await Promise.all([
+    checkNextPortFree(host, nextPort),
+    readNextLockInfo(nextLockPath),
+  ]);
+  if (!portFree) {
+    const pidHint =
+      lockInfo !== undefined ? ` (PID ${String(lockInfo.pid)}, ${lockInfo.appUrl})` : "";
+    const stopHint =
+      lockInfo !== undefined
+        ? `kill ${String(lockInfo.pid)}`
+        : `lsof -ti tcp:${String(nextPort)} | xargs kill`;
+    console.error(`[dev] PREFLIGHT FAILED: port ${String(nextPort)} is already in use${pidHint}.`);
+    console.error(`[dev] A next dev server is already running for this project.`);
+    console.error(`[dev] To stop it, run: ${stopHint}`);
+    console.error(
+      `[dev] Or start on a different port: KEIKO_DEV_NEXT_PORT=3001 node scripts/dev-runner.mjs`,
     );
-    return;
+    process.exit(1);
   }
-  const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
-  proxyUpgrade(req, socket, head, targetPortFor(url.pathname));
-});
 
-server.listen(publicPort, host, () => {
-  writeState({ ready: false, starting: "waiting for API and UI" });
-  console.log(`[dev] listening on http://${host}:${String(publicPort)} (warming up)`);
-  void waitForPublicReadiness();
-});
+  startBff();
+  startNext();
 
-process.once("SIGINT", () => shutdown(0));
-process.once("SIGTERM", () => shutdown(0));
+  server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
+    if (url.pathname === "/sw.js") {
+      serveDevServiceWorker(res);
+      return;
+    }
+    if (!publicReady) {
+      serveStarting(res);
+      return;
+    }
+    proxyHttp(req, res, targetPortFor(url.pathname));
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    if (!publicReady) {
+      socket.end(
+        "HTTP/1.1 503 Service Unavailable\r\n" +
+          "Connection: close\r\n" +
+          "Retry-After: 1\r\n" +
+          "\r\n",
+      );
+      return;
+    }
+    const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
+    proxyUpgrade(req, socket, head, targetPortFor(url.pathname));
+  });
+
+  server.listen(publicPort, host, () => {
+    writeState({ ready: false, starting: "waiting for API and UI" });
+    console.log(`[dev] listening on http://${host}:${String(publicPort)} (warming up)`);
+    void waitForPublicReadiness();
+  });
+
+  process.once("SIGINT", () => shutdown(0));
+  process.once("SIGTERM", () => shutdown(0));
+}

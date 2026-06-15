@@ -263,6 +263,54 @@ describe("searchVectorsForScope — minScore filtering", () => {
       expect(ref.score).toBeGreaterThanOrEqual(threshold);
     }
   });
+
+  it("suppresses lexical-only matches under a minScore floor and reports below-min-score (GRD-002/024)", async () => {
+    const { store } = getFixture();
+    const dims = DEFAULT_EMBEDDING.vectorDimensions;
+    const blob = (a: number, b: number): Uint8Array => {
+      const v = new Float32Array(dims);
+      v[0] = a;
+      v[1] = b;
+      return new Uint8Array(v.buffer.slice(0));
+    };
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      text: "treasury ".repeat(40),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Lexical recall material: the document text contains the query token.
+    store._internal.db
+      .prepare(
+        "INSERT OR REPLACE INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: "cap-a", d: String(seeded.documentId), t: "treasury treasury treasury treasury" });
+    // Make every chunk vector ORTHOGONAL to the query vector (cosine ~ 0).
+    for (const ch of seeded.chunkIds) {
+      store._internal.db
+        .prepare("UPDATE vectors SET embedding = :e WHERE capsule_id = :c AND chunk_id = :id")
+        .run({ e: blob(0, 1), c: "cap-a", id: String(ch) });
+    }
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: { vector: new Float32Array(blob(1, 0).buffer), modelId: DEFAULT_EMBEDDING.modelId },
+      }),
+    });
+    const scope = { capsuleIds: ["cap-a" as KnowledgeCapsuleId] };
+
+    // With a high dense floor, the lexical-only (orthogonal-vector) chunk must NOT surface.
+    const floored = await searchVectorsForScope(store, adapter, scope, "treasury", {
+      topK: 50,
+      minScore: 0.95,
+    });
+    expect(floored.references).toHaveLength(0);
+    expect(floored.noEvidenceReason).toBe("below-min-score");
+
+    // Control: without the floor, hybrid lexical recall DOES surface it (so the suppression
+    // above is the floor's doing, not a missing fixture).
+    const unfloored = await searchVectorsForScope(store, adapter, scope, "treasury", { topK: 50 });
+    expect(unfloored.references.length).toBeGreaterThan(0);
+  });
 });
 
 describe("searchVectorsForScope — embedding dim mismatch", () => {
@@ -710,6 +758,74 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("release-notes.txt");
   });
 
+  it("recalls exact text matches outside the raw vector oversampling window", async () => {
+    const { store } = getFixture();
+    const capsuleId = "cap-recall" as KnowledgeCapsuleId;
+    const sourceId = "src-recall";
+    const distractorChunks: string[] = [];
+    for (let i = 0; i < 120; i += 1) {
+      const seeded = await seedCapsuleWithVectors(store, {
+        capsuleId,
+        sourceId,
+        documentId: `doc-distractor-${String(i).padStart(3, "0")}`,
+        safeDisplayName: `distractor-${String(i).padStart(3, "0")}.txt`,
+        text: "generic platform implementation overview without the target identifier",
+        skipCapsule: i > 0,
+        skipSource: i > 0,
+        unitId: `unit-distractor-${String(i).padStart(3, "0")}`,
+        contentHash: String(i).padStart(64, "0"),
+        chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+      });
+      const chunk = seeded.chunkIds[0];
+      if (chunk !== undefined) distractorChunks.push(String(chunk));
+    }
+    const exactText =
+      "Escalation record XR-7788 documents the treasury connector recovery checklist.";
+    const exact = await seedCapsuleWithVectors(store, {
+      capsuleId,
+      sourceId,
+      documentId: "doc-exact",
+      safeDisplayName: "treasury-recovery.txt",
+      text: exactText,
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-exact",
+      contentHash: "f".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: String(capsuleId), d: String(exact.documentId), t: exactText });
+    for (const chunkId of distractorChunks) {
+      setChunkVector(store, capsuleId, chunkId, vectorBlob(1, 0));
+    }
+    const exactChunk = exact.chunkIds[0];
+    if (exactChunk === undefined) throw new Error("expected exact chunk");
+    setChunkVector(store, capsuleId, exactChunk, vectorBlob(0.1, Math.sqrt(1 - 0.1 * 0.1)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [capsuleId] },
+      "XR-7788 treasury recovery checklist",
+      { topK: 1 },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("treasury-recovery.txt");
+  });
+
   it("diversifies broad query results across documents when scores are otherwise close", async () => {
     const { store } = getFixture();
     const first = await seedCapsuleWithVectors(store, {
@@ -765,6 +881,62 @@ describe("searchVectorsForScope — citation fields", () => {
       "doc-a",
       "doc-b",
     ]);
+  });
+});
+
+describe("searchVectorsForScope — embeddingDegraded", () => {
+  it("sets embeddingDegraded=true when one capsule's embedding fails but another capsule's vectors keep result non-empty", async () => {
+    // Two capsules share the same identity. Capsule A: embedding returns wrong dim →
+    // embeddingFailed=true for that identity, but the dim-check path means anyDimensionCompatible
+    // is false for A. Capsule B: embedding succeeds (correct dim) → anyDimensionCompatible=true,
+    // vector candidates surface.
+    // Because embeddingFailed=true AND anyDimensionCompatible=true AND candidates>0,
+    // the outcome has references (from B) AND embeddingDegraded=true.
+    const { store } = getFixture();
+    const identity = DEFAULT_EMBEDDING;
+    // Capsule A: has vectors but its embedding call will fail.
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-deg-a",
+      sourceId: "src-deg-a",
+      documentId: "doc-deg-a",
+      identity,
+      text: "alpha beta gamma delta epsilon zeta",
+    });
+    // Capsule B: has vectors and its embedding call will succeed.
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-deg-b",
+      sourceId: "src-deg-b",
+      documentId: "doc-deg-b",
+      identity,
+      text: "alpha beta gamma delta epsilon zeta",
+    });
+    let callCount = 0;
+    // First call (for cap-deg-a) fails; subsequent calls succeed.
+    const partiallyFailingAdapter = scriptedAdapter({
+      identity,
+      responder: (req): OpenAIEmbeddingOutcome => {
+        callCount += 1;
+        if (callCount === 1) return { ok: false, kind: "transport" };
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, identity.vectorDimensions),
+            modelId: identity.modelId,
+          },
+        };
+      },
+    });
+    const outcome = await searchVectorsForScope(
+      store,
+      partiallyFailingAdapter,
+      { capsuleIds: [seededA.capsuleId, seededB.capsuleId] },
+      "alpha beta",
+      { topK: 10 },
+    );
+    // Capsule B's vectors surface despite capsule A's embedding failure.
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.noEvidenceReason).toBeUndefined();
   });
 });
 

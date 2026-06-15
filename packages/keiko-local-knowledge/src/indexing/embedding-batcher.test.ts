@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
@@ -297,39 +298,31 @@ describe("embedChunkBatch — bounded concurrency", () => {
   });
 
   it("never exceeds the configured concurrency", async () => {
-    let inFlight = 0;
-    let peak = 0;
-    const adapter = scriptedAdapter({
-      responder: (_req) => {
-        // Track peak in the synchronous callback; the request is awaited in the batcher
-        // so the responder is invoked once per call and the increment+decrement bracket
-        // the await window for that call.
-        inFlight += 1;
-        if (inFlight > peak) peak = inFlight;
-        const outcome = {
-          ok: true as const,
-          value: {
-            vector: deterministicVector(_req.input, DEFAULT_EMBEDDING.vectorDimensions),
-            modelId: DEFAULT_EMBEDDING.modelId,
-          },
-        };
-        inFlight -= 1;
-        return outcome;
-      },
-    });
+    let outerInFlight = 0;
+    let outerPeak = 0;
 
-    // Wrap in an async layer that holds the in-flight count across a microtask boundary.
-    const original = adapter.request;
-    const trackingAdapter = {
-      ...adapter,
+    // Wrap only the outer adapter.request — this is what the batcher calls and whose
+    // concurrency it controls. Track in-flight count across a microtask boundary so
+    // concurrent awaits are visible.
+    const base = scriptedAdapter({
+      responder: (req) => ({
+        ok: true as const,
+        value: {
+          vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+    const trackingAdapter: typeof base = {
+      ...base,
       request: async (
-        req: Parameters<typeof original>[0],
-      ): Promise<Awaited<ReturnType<typeof original>>> => {
-        inFlight += 1;
-        if (inFlight > peak) peak = inFlight;
+        req: Parameters<typeof base.request>[0],
+      ): Promise<Awaited<ReturnType<typeof base.request>>> => {
+        outerInFlight += 1;
+        if (outerInFlight > outerPeak) outerPeak = outerInFlight;
         await new Promise((r) => setImmediate(r));
-        const outcome = await original(req);
-        inFlight -= 1;
+        const outcome = await base.request(req);
+        outerInFlight -= 1;
         return outcome;
       },
     };
@@ -343,11 +336,8 @@ describe("embedChunkBatch — bounded concurrency", () => {
       idSource: fixedIds("storage"),
     });
 
-    // Peak counts both the inner (synchronous) and outer (async) increments — the outer
-    // is the one the batcher actually controls. We allow ≤ 2*N because the synchronous
-    // increment in the inner responder shares the same counter; the outer wrapper's peak
-    // can be at most `concurrency`.
-    expect(peak).toBeLessThanOrEqual(4);
+    // outerPeak tracks only the batcher-controlled outer calls — must not exceed concurrency=2.
+    expect(outerPeak).toBeLessThanOrEqual(2);
   });
 });
 
@@ -513,5 +503,89 @@ describe("embedChunkBatch — transient-failure retry", () => {
     // First attempt fails transient → enters backoff → sleep aborts → loop bails.
     expect(calls).toBe(1);
     expect(result.vectors).toEqual([]);
+  });
+});
+
+// ─── #189 GRD-004: array-batch embedding port ────────────────────────────────
+function batchAdapter(identity: EmbeddingModelIdentity = DEFAULT_EMBEDDING): {
+  adapter: OpenAIEmbeddingAdapter;
+  batchCallSizes: number[];
+  scalarCalls: () => number;
+} {
+  const batchCallSizes: number[] = [];
+  let scalarCalls = 0;
+  const vec = (t: string): Float32Array => deterministicVector(t, identity.vectorDimensions);
+  const adapter: OpenAIEmbeddingAdapter = {
+    endpoint: "https://example.test/v1",
+    apiKey: ["sk-", "test"].join(""),
+    request: (req) => {
+      scalarCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        value: { vector: vec(req.input), modelId: identity.modelId },
+      });
+    },
+    requestBatch: (req) => {
+      batchCallSizes.push(req.inputs.length);
+      return Promise.resolve({
+        ok: true,
+        value: req.inputs.map((t) => ({ vector: vec(t), modelId: identity.modelId })),
+      });
+    },
+  };
+  return { adapter, batchCallSizes, scalarCalls: () => scalarCalls };
+}
+
+describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
+  it("uses requestBatch (never the scalar request) and persists one vector per chunk", async () => {
+    const { store, cleanup, seeded, chunks } = buildFixture();
+    const { adapter, batchCallSizes, scalarCalls } = batchAdapter();
+    const result = await embedChunkBatch(chunks, {
+      adapter,
+      store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 4,
+      now: fixedClock(),
+      idSource: fixedIds("vec"),
+    });
+    expect(scalarCalls()).toBe(0);
+    expect(batchCallSizes.length).toBe(1);
+    expect(batchCallSizes[0]).toBe(chunks.length);
+    expect(result.vectors).toHaveLength(chunks.length);
+    expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+      chunks.length,
+    );
+    cleanup();
+  });
+
+  it("splits more chunks than the per-request item cap into ceil(N/cap) array calls", async () => {
+    const { store, cleanup } = freshStore();
+    const seeded = seedCapsuleSourceAndDocument(store);
+    const longText = "alpha beta gamma delta epsilon zeta eta theta ".repeat(4000);
+    const chunkIds = seedDocumentWithChunks(store, seeded, longText);
+    expect(chunkIds.length).toBeGreaterThan(96);
+    const chunks: ChunkToEmbed[] = chunkIds.map((id, i) => ({
+      id,
+      capsuleId: seeded.capsuleId,
+      sourceId: seeded.sourceId,
+      documentId: seeded.documentId,
+      text: `chunk-${String(i)}-distinct-payload`,
+    }));
+    const { adapter, batchCallSizes, scalarCalls } = batchAdapter();
+    const result = await embedChunkBatch(chunks, {
+      adapter,
+      store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 4,
+      now: fixedClock(),
+      idSource: fixedIds("vec"),
+    });
+    expect(scalarCalls()).toBe(0);
+    // Item cap is 96; N>96 must fan out into more than one call, never one-per-chunk.
+    expect(batchCallSizes.length).toBe(Math.ceil(chunks.length / 96));
+    expect(batchCallSizes.length).toBeLessThan(chunks.length);
+    expect(batchCallSizes.reduce((a, b) => a + b, 0)).toBe(chunks.length);
+    expect(result.vectors).toHaveLength(chunks.length);
+    cleanup();
   });
 });

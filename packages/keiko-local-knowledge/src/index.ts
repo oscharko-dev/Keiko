@@ -66,6 +66,7 @@ export {
   resolveParser,
   textParser,
   unsupportedParser,
+  xlsxParser,
   type AsyncParserAdapter,
   type ParserAdapter,
   type ParserCapability,

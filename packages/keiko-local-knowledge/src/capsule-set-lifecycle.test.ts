@@ -109,9 +109,9 @@ describe("deleteCapsuleSet", () => {
   });
 
   it("raises KnowledgeNotFoundError on unknown set id", () => {
-    expect(() => { deleteCapsuleSet(store, "ghost" as CapsuleSetId); }).toThrow(
-      KnowledgeNotFoundError,
-    );
+    expect(() => {
+      deleteCapsuleSet(store, "ghost" as CapsuleSetId);
+    }).toThrow(KnowledgeNotFoundError);
   });
 });
 
@@ -149,8 +149,8 @@ describe("listCapsuleSets — no N+1 queries", () => {
     expect(sets).toHaveLength(5);
     // One schema_meta query for all sets + one members query per set = 1 + 5 = 6 calls.
     // The old N+1 path would issue 1 + 5*(1 schema_meta + 1 members) = 11 calls.
-    const schemaMeta = prepareSpy.mock.calls.filter(([sql]) =>
-      typeof sql === "string" && sql.includes("schema_meta"),
+    const schemaMeta = prepareSpy.mock.calls.filter(
+      ([sql]) => typeof sql === "string" && sql.includes("schema_meta"),
     );
     expect(schemaMeta).toHaveLength(1);
     prepareSpy.mockRestore();

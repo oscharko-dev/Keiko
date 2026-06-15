@@ -4,7 +4,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryList } from "./MemoryList";
+import { MemoryList, MemoryListContent } from "./MemoryList";
+import type { MemoryFilterState } from "./MemoryFilters";
 import type { MemoryListResponse } from "@/lib/memory-api";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 
@@ -79,6 +80,12 @@ function fetchWith(records: readonly MemoryRecord[]) {
 }
 
 const emptyFetch = vi.fn().mockResolvedValue(makeListResponse([]));
+const emptyFilters: MemoryFilterState = {
+  scope: [],
+  type: [],
+  status: [],
+  sensitivity: [],
+};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -181,6 +188,89 @@ describe("MemoryList — populated state", () => {
       const link = screen.getByRole("link", { name: /linked memory/i });
       expect(link).toHaveAttribute("href", "/memoriaviva/detail?id=mem-42");
     });
+  });
+
+  it("opens rows through internal navigation in workspace-window mode", async () => {
+    const onOpenDetail = vi.fn();
+    const user = userEvent.setup();
+    const record = makeRecord({ id: makeMemoryId(42), body: "Window memory" });
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchWith([record])}
+        onOpenDetail={onOpenDetail}
+        showWorkspaceBackLink={false}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /window memory/i }));
+    expect(onOpenDetail).toHaveBeenCalledWith("mem-42");
+    expect(screen.queryByRole("link", { name: /window memory/i })).not.toBeInTheDocument();
+  });
+
+  it("uses internal navigation buttons for secondary views in workspace-window mode", async () => {
+    const onOpenConsolidation = vi.fn();
+    const onOpenReviewQueue = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchWith([makeRecord()])}
+        onOpenConsolidation={onOpenConsolidation}
+        onOpenReviewQueue={onOpenReviewQueue}
+        showWorkspaceBackLink={false}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /consolidation/i }));
+    await user.click(screen.getByRole("button", { name: /review queue/i }));
+    expect(onOpenConsolidation).toHaveBeenCalledTimes(1);
+    expect(onOpenReviewQueue).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("link", { name: /back to workspace/i })).not.toBeInTheDocument();
+  });
+
+  it("renders a default-on policy switch in the header and toggles it", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchWith([makeRecord()])}
+        showWorkspaceBackLink={false}
+      />,
+    );
+
+    const policySwitch = await screen.findByRole("switch", {
+      name: "Enable MemoriaViva policy",
+    });
+    expect(policySwitch).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Policy on")).toBeInTheDocument();
+
+    await user.click(policySwitch);
+
+    expect(policySwitch).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Policy off")).toBeInTheDocument();
+  });
+
+  it("routes the policy switch through controlled workspace-window state", async () => {
+    const onPolicyEnabledChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchWith([makeRecord()])}
+        policyEnabled
+        onPolicyEnabledChange={onPolicyEnabledChange}
+        showWorkspaceBackLink={false}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }),
+    );
+
+    expect(onPolicyEnabledChange).toHaveBeenCalledWith(false);
   });
 
   it("shows the consolidation entry point in the header", async () => {

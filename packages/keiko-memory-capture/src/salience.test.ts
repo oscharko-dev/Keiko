@@ -285,6 +285,39 @@ describe("extractSalientMemories", () => {
     expect(called).toBe(false);
   });
 
+  it("accepts a near-duplicate of a secret-rejected candidate (secret body absent from results)", async () => {
+    // secretBody triggers the api_key= credential-shape pattern → buildCandidate returns null and
+    // the body's bigrams are NEVER added to `seen`.  nearDuplicate is textually similar (Jaccard
+    // ≈ 0.91 > DEDUP_THRESHOLD=0.8) but contains no secret shape → should be accepted, not
+    // suppressed, because the rejected candidate never seeded the dedup set.
+    const secretBody = "The user's api_key=abc123";
+    const nearDuplicate = "The user's api key is abc123";
+    const model = JSON.stringify([
+      {
+        body: secretBody,
+        type: "fact",
+        confidence: 0.7,
+        scope: "user",
+        tags: [],
+      },
+      {
+        body: nearDuplicate,
+        type: "fact",
+        confidence: 0.7,
+        scope: "user",
+        tags: [],
+      },
+    ]);
+    const result = await extractSalientMemories(input(), deps(model));
+    const candidates = candidatesOnly(result);
+    expect(candidates).toHaveLength(1);
+    const bodies = candidates.map((c) => (c.kind === "candidate" ? c.proposal.body : ""));
+    expect(bodies[0]).toBe(nearDuplicate);
+    for (const body of bodies) {
+      expect(body).not.toContain("api_key=");
+    }
+  });
+
   it("drops items whose scope cannot resolve (project hint, no projectId)", async () => {
     const model = JSON.stringify([
       { body: "Atlas uses PostgreSQL.", type: "fact", confidence: 0.8, scope: "project", tags: [] },

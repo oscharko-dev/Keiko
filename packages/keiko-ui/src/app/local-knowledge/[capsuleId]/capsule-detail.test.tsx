@@ -6,6 +6,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CapsuleDetail } from "./capsule-detail";
 import type { CapsuleDetail as CapsuleDetailData } from "@/lib/local-knowledge-api";
@@ -20,6 +21,19 @@ import type {
 // ---------------------------------------------------------------------------
 
 let mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
+
+type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  readonly href: string;
+  readonly children: ReactNode;
+};
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: MockLinkProps) => (
+    <a href={href} onClick={(event) => event.preventDefault()} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => mockSearchParams,

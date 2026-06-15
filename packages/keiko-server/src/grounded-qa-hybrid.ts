@@ -52,7 +52,11 @@ import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
 import { currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
 import type { Chat } from "./store/index.js";
-import { type RetrievalOnlyOutput } from "./grounded-orchestrator.js";
+import {
+  ClarificationNeededError,
+  clarificationUserMessage,
+  type RetrievalOnlyOutput,
+} from "./grounded-orchestrator.js";
 import {
   buildConnectedScopes,
   defaultRetriever,
@@ -79,6 +83,7 @@ import {
 } from "./grounded-answer.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import {
+  badRequest,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
@@ -87,6 +92,7 @@ import {
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
+  mappedWorkspaceError,
   persistGroundedExchange,
   promptSafeExcerptText,
   redactString,
@@ -284,12 +290,30 @@ async function retrieveFolderPacks(
     const label = labels[i];
     if (cs === undefined || label === undefined) continue;
     const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
-    const out: RetrievalOnlyOutput = await retriever({
-      scope,
-      query,
-      workspaceRoot: scope.workspaceRoot,
-      budget,
-    });
+    let out: RetrievalOnlyOutput;
+    try {
+      out = await retriever({
+        scope,
+        query,
+        workspaceRoot: scope.workspaceRoot,
+        budget,
+      });
+    } catch (error) {
+      // Mirror retrieveOneConnector (GRD-006): a per-source embedding-adapter outage is a skippable
+      // degradation (answer from the remaining sources, record the skip). EVERY other error MUST
+      // propagate — ClarificationNeededError -> 400, ProviderError -> 502, generic -> 500 — so the
+      // boundary maps and redacts it instead of silently dropping a folder and returning a
+      // misleadingly "complete" answer.
+      if (error instanceof EmbeddingAdapterError) {
+        skipped.push({
+          label,
+          reason: "embedding-unavailable",
+          message: "Embedding adapter unavailable.",
+        });
+        continue;
+      }
+      throw error;
+    }
     if (!isValidGroundedPack(out.pack)) {
       skipped.push({ label, reason: "pack-validation-failed", message: "Pack validation failed." });
       continue;
@@ -973,35 +997,146 @@ interface CappedSources {
   readonly overCapConnectorSkipped: readonly SkippedConnector[];
 }
 
-// Cap both source lists at their respective operator limits before any budget-split or retrieval
-// loop. A chat row may carry legacy over-limit sources (e.g. operator lowered maxConnectedSources
-// after connection, or a direct DB edit). Capping here is the single choke-point: all loops
-// downstream derive their iteration counts from these sliced lists. Over-cap entries are tagged as
-// "source-skipped" uncertainties so callers can observe the omission without path information.
-function capSourcesToLimits(
-  ctx: HybridGroundedAskCtx,
-  limits: ReturnType<typeof currentGroundingLimits>,
-): CappedSources {
-  const all = buildConnectedScopes(ctx.chat);
-  const allConnectors = buildLocalKnowledgeScopes(ctx.chat);
+interface CapCandidate {
+  readonly kind: "folder" | "connector";
+  readonly index: number;
+  readonly connectedAtMs: number;
+}
+
+function combinedSourceCap(limits: ReturnType<typeof currentGroundingLimits>): number {
+  return Math.max(limits.maxConnectedSources, limits.maxLocalKnowledgeSources);
+}
+
+function combinedSourceCandidates(
+  folders: readonly ChatConnectedScope[],
+  connectors: readonly ChatLocalKnowledgeScope[],
+): readonly CapCandidate[] {
+  return [
+    ...folders.map(
+      (scope, index): CapCandidate => ({
+        kind: "folder",
+        index,
+        connectedAtMs: scope.connectedAtMs,
+      }),
+    ),
+    ...connectors.map(
+      (scope, index): CapCandidate => ({
+        kind: "connector",
+        index,
+        connectedAtMs: scope.connectedAtMs,
+      }),
+    ),
+  ].sort((a, b) => {
+    if (a.connectedAtMs !== b.connectedAtMs) return a.connectedAtMs - b.connectedAtMs;
+    if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+    return a.index - b.index;
+  });
+}
+
+function capSelectedIndexes(
+  folders: readonly ChatConnectedScope[],
+  connectors: readonly ChatLocalKnowledgeScope[],
+  totalCap: number,
+): { readonly folderIndexes: ReadonlySet<number>; readonly connectorIndexes: ReadonlySet<number> } {
+  const selected = combinedSourceCandidates(folders, connectors).slice(0, totalCap);
   return {
-    folderScopes: all.slice(0, limits.maxConnectedSources),
-    connectorScopes: allConnectors.slice(0, limits.maxLocalKnowledgeSources),
-    allFolderCount: all.length,
-    allConnectorCount: allConnectors.length,
-    overCapFolderSkipped: all.slice(limits.maxConnectedSources).map(
+    folderIndexes: new Set(
+      selected
+        .filter((candidate) => candidate.kind === "folder")
+        .map((candidate) => candidate.index),
+    ),
+    connectorIndexes: new Set(
+      selected
+        .filter((candidate) => candidate.kind === "connector")
+        .map((candidate) => candidate.index),
+    ),
+  };
+}
+
+function skippedFoldersForCaps(
+  all: readonly ChatConnectedScope[],
+  perListFolders: readonly ChatConnectedScope[],
+  selected: { readonly folderIndexes: ReadonlySet<number> },
+  limits: ReturnType<typeof currentGroundingLimits>,
+): readonly SkippedConnector[] {
+  return [
+    ...perListFolders.flatMap((cs, index): readonly SkippedConnector[] =>
+      selected.folderIndexes.has(index)
+        ? []
+        : [
+            {
+              label: sourceLabels([cs])[0] ?? `folder-${String(index)}`,
+              reason: "source-skipped",
+              message: "Exceeded combined source limit.",
+            },
+          ],
+    ),
+    ...all.slice(limits.maxConnectedSources).map(
       (cs, i): SkippedConnector => ({
         label: sourceLabels([cs])[0] ?? `folder-${String(limits.maxConnectedSources + i)}`,
         reason: "source-skipped",
         message: "Exceeded maxConnectedSources limit.",
       }),
     ),
-    overCapConnectorSkipped: allConnectors.slice(limits.maxLocalKnowledgeSources).map(
+  ];
+}
+
+function skippedConnectorsForCaps(
+  allConnectors: readonly ChatLocalKnowledgeScope[],
+  perListConnectors: readonly ChatLocalKnowledgeScope[],
+  selected: { readonly connectorIndexes: ReadonlySet<number> },
+  limits: ReturnType<typeof currentGroundingLimits>,
+): readonly SkippedConnector[] {
+  return [
+    ...perListConnectors.flatMap((_cs, index): readonly SkippedConnector[] =>
+      selected.connectorIndexes.has(index)
+        ? []
+        : [
+            {
+              label: `connector-${String(index)}`,
+              reason: "source-skipped",
+              message: "Exceeded combined source limit.",
+            },
+          ],
+    ),
+    ...allConnectors.slice(limits.maxLocalKnowledgeSources).map(
       (_cs, i): SkippedConnector => ({
         label: `connector-${String(limits.maxLocalKnowledgeSources + i)}`,
         reason: "source-skipped",
         message: "Exceeded maxLocalKnowledgeSources limit.",
       }),
+    ),
+  ];
+}
+
+// Cap both source lists at their respective operator limits before any budget-split or retrieval
+// loop, then cap the combined total to the release contract ("up to 16 sources" total by default).
+// A chat row may carry legacy over-limit sources (e.g. operator lowered a limit after connection,
+// or a direct DB edit). Capping here is the single choke-point: all loops downstream derive their
+// iteration counts from these sliced lists. Over-cap entries are tagged as "source-skipped"
+// uncertainties so callers can observe the omission without path information.
+function capSourcesToLimits(
+  ctx: HybridGroundedAskCtx,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): CappedSources {
+  const all = buildConnectedScopes(ctx.chat);
+  const allConnectors = buildLocalKnowledgeScopes(ctx.chat);
+  const perListFolders = all.slice(0, limits.maxConnectedSources);
+  const perListConnectors = allConnectors.slice(0, limits.maxLocalKnowledgeSources);
+  const selected = capSelectedIndexes(perListFolders, perListConnectors, combinedSourceCap(limits));
+  return {
+    folderScopes: perListFolders.filter((_scope, index) => selected.folderIndexes.has(index)),
+    connectorScopes: perListConnectors.filter((_scope, index) =>
+      selected.connectorIndexes.has(index),
+    ),
+    allFolderCount: all.length,
+    allConnectorCount: allConnectors.length,
+    overCapFolderSkipped: skippedFoldersForCaps(all, perListFolders, selected, limits),
+    overCapConnectorSkipped: skippedConnectorsForCaps(
+      allConnectors,
+      perListConnectors,
+      selected,
+      limits,
     ),
   };
 }
@@ -1098,6 +1233,12 @@ async function answerAndAssemble(
 function mapHybridError(error: unknown, deps: UiHandlerDeps): RouteResult {
   const gatewayResult = mappedGatewayError(error, deps);
   if (gatewayResult !== undefined) return gatewayResult;
+  // GRD-016: mirror the single-source and multi-source paths — a vague/no-anchor question
+  // (ClarificationNeededError) or a typed workspace read error is a client-actionable 400, not
+  // an opaque 500. Without these branches a folders+connectors ask with no anchors 500s.
+  if (error instanceof ClarificationNeededError) return badRequest(clarificationUserMessage(error));
+  const workspaceResult = mappedWorkspaceError(error);
+  if (workspaceResult !== undefined) return workspaceResult;
   if (error instanceof Error) {
     return internalError(redact(error.message, currentRedactionSecrets(deps)));
   }

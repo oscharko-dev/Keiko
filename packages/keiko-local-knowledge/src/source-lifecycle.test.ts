@@ -101,17 +101,17 @@ describe("removeSourceFromCapsule", () => {
 
   it("raises KnowledgeNotFoundError when the source does not belong to the capsule", () => {
     addSourceToCapsule(store, capsuleId, sampleSourceInput("src-y"));
-    expect(() =>
-      { removeSourceFromCapsule(store, "other" as KnowledgeCapsuleId, "src-y" as KnowledgeSourceId); },
-    ).toThrow(KnowledgeNotFoundError);
+    expect(() => {
+      removeSourceFromCapsule(store, "other" as KnowledgeCapsuleId, "src-y" as KnowledgeSourceId);
+    }).toThrow(KnowledgeNotFoundError);
     // Source still present
     expect(listCapsuleSources(store, capsuleId)).toHaveLength(1);
   });
 
   it("raises KnowledgeNotFoundError on completely unknown source", () => {
-    expect(() =>
-      { removeSourceFromCapsule(store, capsuleId, "ghost" as KnowledgeSourceId); },
-    ).toThrow(KnowledgeNotFoundError);
+    expect(() => {
+      removeSourceFromCapsule(store, capsuleId, "ghost" as KnowledgeSourceId);
+    }).toThrow(KnowledgeNotFoundError);
   });
 
   it("cascades to documents that referenced the source", () => {

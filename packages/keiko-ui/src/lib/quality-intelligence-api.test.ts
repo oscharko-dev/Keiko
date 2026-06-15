@@ -11,9 +11,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { QualityIntelligenceRunStreamMessage } from "@oscharko-dev/keiko-contracts";
 
-import { startQiRun } from "./quality-intelligence-api.js";
+import {
+  cancelQiRun,
+  deleteQiRun,
+  editQiCandidate,
+  exportQiRun,
+  exportQiRunTraceability,
+  fetchQiRunDetail,
+  fetchQiRuns,
+  reCheckQiRun,
+  regenerateStaleQiRun,
+  reviewQiRun,
+  startQiRun,
+} from "./quality-intelligence-api.js";
 
 type Frame = QualityIntelligenceRunStreamMessage;
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 function makeStreamResponse(frames: readonly Frame[]): {
   response: Response;
@@ -75,17 +94,35 @@ describe("startQiRun — stream lifecycle", () => {
 
   it("parses and delivers each SSE frame to onMessage", async () => {
     const { response } = makeStreamResponse([ACCEPTED, DONE]);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", fetchMock);
     const messages: Frame[] = [];
 
     await startQiRun(
-      { sources: [], profileId: "regression-default" },
+      { sources: [], profileId: "regression-default", modelId: "model 1", seed: 17 },
       new AbortController().signal,
       (m) => {
         messages.push(m);
       },
     );
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sources: [],
+          profileId: "regression-default",
+          modelId: "model 1",
+          seed: 17,
+        }),
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
     expect(messages).toEqual([ACCEPTED, DONE]);
   });
 
@@ -131,5 +168,177 @@ describe("startQiRun — stream lifecycle", () => {
 
     // The finally block must still cancel the body stream even when read() threw.
     expect(calls).toContain("cancel");
+  });
+
+  it("throws typed errors for JSON pre-stream failures and missing stream bodies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { error: { code: "QI_PROFILE_DISABLED", message: "Profile disabled" } },
+            409,
+          ),
+        )
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: { get: () => "text/event-stream" },
+          body: null,
+        } as unknown as Response),
+    );
+
+    await expect(
+      startQiRun(
+        { sources: [], profileId: "regression-default" },
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toMatchObject({
+      code: "QI_PROFILE_DISABLED",
+      message: "Profile disabled",
+      status: 409,
+    });
+    await expect(
+      startQiRun(
+        { sources: [], profileId: "regression-default" },
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toMatchObject({
+      code: "QI_NO_STREAM",
+      message: "The server did not return a progress stream.",
+      status: 200,
+    });
+  });
+});
+
+describe("quality intelligence JSON BFF helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("encodes run lifecycle, review, edit, drift, export, and traceability routes", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          runs: [],
+          run: { id: "run 1" },
+          runId: "run 1",
+          status: "deleted",
+          removedCompanionSuffixes: [".qi.json"],
+          cancelled: true,
+          runState: "approved",
+          candidateStates: { "candidate 1": "approved" },
+          auditCount: 1,
+          candidate: { id: "candidate 1", title: "Edited" },
+          staleCandidates: [],
+          createdRunId: "run 2",
+          dryRun: true,
+          adapter: "csv",
+          candidateCount: 1,
+          byteLen: 7,
+          preview: "id,title",
+          format: "csv",
+          filename: "trace.csv",
+          contentType: "text/csv",
+          body: "id,title",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchQiRuns();
+    await fetchQiRunDetail("run 1");
+    await deleteQiRun("run 1");
+    await cancelQiRun("run 1");
+    await reviewQiRun("run 1", "approve", "candidate 1", "release reviewer");
+    await editQiCandidate("run 1", "candidate 1", { title: "Edited", priority: "P1" }, "qa");
+    await reCheckQiRun("run 1", []);
+    await regenerateStaleQiRun("run 1", []);
+    await exportQiRun("run 1", "csv", { dryRun: true, approvedOnly: true });
+    await exportQiRunTraceability("run 1", "csv");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/cancel",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          action: "approve",
+          candidateId: "candidate 1",
+          reviewerLabel: "release reviewer",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/edit",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          candidateId: "candidate 1",
+          edited: { title: "Edited", priority: "P1" },
+          editorLabel: "qa",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/regenerate-stale",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ sources: [] }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/export",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ adapter: "csv", dryRun: true, approvedOnly: true }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/traceability",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ format: "csv" }),
+      }),
+    );
+  });
+
+  it("maps BFF JSON errors and unparseable failures to ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ error: { code: "QI_NOT_FOUND", message: "Run not found" } }, 404),
+        )
+        .mockResolvedValueOnce(new Response("stack trace", { status: 500 })),
+    );
+
+    await expect(fetchQiRunDetail("missing")).rejects.toMatchObject({
+      code: "QI_NOT_FOUND",
+      message: "Run not found",
+      status: 404,
+    });
+    await expect(deleteQiRun("broken")).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "HTTP 500",
+      status: 500,
+    });
   });
 });

@@ -52,6 +52,7 @@ const PUBLIC_EXPORTS = [
   "resolveParser",
   "textParser",
   "unsupportedParser",
+  "xlsxParser",
   // Composition + source routing (#263)
   "addSourcesToCapsule",
   "buildComposedRetrievalScope",

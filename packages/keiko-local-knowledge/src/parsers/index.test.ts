@@ -21,6 +21,7 @@ describe("parsers barrel", () => {
     expect(parsers.htmlParser).toBeDefined();
     expect(parsers.pdfParser).toBeDefined();
     expect(parsers.docxParser).toBeDefined();
+    expect(parsers.xlsxParser).toBeDefined();
     expect(parsers.unsupportedParser).toBeDefined();
   });
 
@@ -106,5 +107,18 @@ describe("createDefaultParserRegistry", () => {
     expect(resolution.kind).toBe("matched");
     if (resolution.kind !== "matched") throw new Error("unreachable");
     expect(resolution.adapter.capability.parserId).toBe("docx");
+  });
+
+  it("routes XLSX to the XLSX parser", () => {
+    const registry = parsers.createDefaultParserRegistry();
+    const resolution = registry.resolve(
+      selectionFromBytes(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), {
+        extension: "xlsx",
+        mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    expect(resolution.kind).toBe("matched");
+    if (resolution.kind !== "matched") throw new Error("unreachable");
+    expect(resolution.adapter.capability.parserId).toBe("xlsx");
   });
 });

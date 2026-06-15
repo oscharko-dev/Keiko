@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { DETERMINISTIC_BASELINE_PROVENANCE_TAG } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   createInMemoryQualityIntelligenceLocalStore,
   type QualityIntelligenceEvidenceManifest,
@@ -208,13 +209,22 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
 
     expect(summary.status).toBe("succeeded");
     expect(recorded).toHaveLength(4);
-    expect(recorded.slice(0, 2).map((candidate) => candidate.derivedFromAtomIds.map(String))).toEqual(
-      [["atom-1"], ["atom-2"]],
-    );
+    expect(
+      recorded.slice(0, 2).map((candidate) => candidate.derivedFromAtomIds.map(String)),
+    ).toEqual([["atom-1"], ["atom-2"]]);
     expect(recorded.slice(2).map((candidate) => candidate.title)).toEqual([
       "Test atom 1 behavior",
       "Test atom 2 behavior",
     ]);
+    // Provenance discriminator: only the deterministic baseline (slice 0..2) carries the tag;
+    // the appended model-delta candidates (slice 2..) never do. This is what lets the render layer
+    // sort baselines to the end while the PERSISTED order above stays [...baseline, ...delta].
+    for (const baseline of recorded.slice(0, 2)) {
+      expect(baseline.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+    for (const delta of recorded.slice(2)) {
+      expect(delta.tags).not.toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
     const manifest = store.load(String(PLAN.id));
     expect(manifest?.modelId).toBe("test-model");
     expect(manifest?.totals.candidates).toBe(4);

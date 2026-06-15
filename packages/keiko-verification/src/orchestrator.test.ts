@@ -195,6 +195,35 @@ describe("runVerification — cancellation (D5)", () => {
     expect(rec.calls()).toHaveLength(0);
   });
 
+  it("a shape-valid but #6-denied step with concurrent abort resolves without throwing (stop?.() guard)", async () => {
+    // The existing denied-step tests all fail isValidVerificationStep → preExecutionResult
+    // short-circuits before runStep is entered, so stop?.() in runStep's finally is never reached.
+    // This case passes shape validation but fails #6's isCommandAllowed (no PATH → executable not
+    // found) → runCommand rejects before deps.spawn is called → stop stays undefined.
+    // A mutation removing the ?. (stop() instead of stop?.()) would throw TypeError here.
+    const ws = makeWorkspace();
+    const ac = new AbortController();
+    const rec = recordingSpawn();
+    const monitor = fakeMonitor();
+    // Abort concurrently so the harness-abort listener teardown also runs from the finally block.
+    queueMicrotask(() => {
+      ac.abort();
+    });
+    const report = await runVerification(planOf([step()], ws.info.root), {
+      workspace: ws.info,
+      spawn: rec.fn,
+      monitor,
+      signal: ac.signal,
+      // Empty PATH → defaultResolveExecutable throws CommandDeniedError before spawning.
+      processEnv: {},
+      now: () => 1_000,
+    });
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+    expect(monitor.watched()).toHaveLength(0);
+    expect(report.overallStatus).toBe("failed");
+  });
+
   it("a mismatched workspace root fails closed before any step executes", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();

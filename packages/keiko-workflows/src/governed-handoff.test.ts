@@ -77,9 +77,7 @@ describe("governed handoff enforcement helpers", () => {
     }).not.toThrow();
     expect((): void => {
       scoped.writeFileUtf8(denied, "blocked");
-    }).toThrow(
-      /Patch scope forbids writing/u,
-    );
+    }).toThrow(/Patch scope forbids writing/u);
     expect(writes).toEqual([allowed]);
   });
 });

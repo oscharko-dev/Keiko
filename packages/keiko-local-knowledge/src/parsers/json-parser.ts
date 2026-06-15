@@ -169,6 +169,41 @@ function parseJsonValue(
   }
 }
 
+// GRD-011: JSON Lines / NDJSON is a sequence of independent JSON values, one per line — NOT a
+// single JSON document. Whole-document `JSON.parse` always throws on a multi-record file, so
+// `.jsonl`/`.ndjson` (advertised as supported) were 100% unparseable. Detect and parse per line.
+const JSONL_EXTENSIONS: ReadonlySet<string> = new Set(["jsonl", "ndjson"]);
+function isJsonLines(input: ParserSelectionInput): boolean {
+  if (JSONL_EXTENSIONS.has(input.extension.toLowerCase())) return true;
+  return input.mediaType.toLowerCase() === "application/x-ndjson";
+}
+
+// Parse each non-empty line independently and walk it under an `/<lineIndex>` pointer prefix
+// (RFC 6901 array-index style), so a record on file line N cites as `/N/...`. A malformed line
+// is surfaced as a non-fatal `warning` diagnostic and skipped — one bad line never discards the
+// whole file's good records.
+function walkJsonLines(ctx: ScanContext): void {
+  const lines = ctx.text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    if (ctx.stopped) return;
+    const raw = lines[i];
+    if (raw === undefined || raw.trim().length === 0) continue;
+    const parsed = parseJsonValue(raw);
+    if (!parsed.ok) {
+      ctx.diagnostics.push(
+        diagnostic(
+          "MALFORMED_INPUT",
+          `JSONL line ${String(i)} parse failed: ${parsed.error}`,
+          ctx.input.documentId,
+          "warning",
+        ),
+      );
+      continue;
+    }
+    walk(ctx, parsed.value, joinPointer("", String(i)), 0);
+  }
+}
+
 export const jsonParser: ParserAdapter = Object.freeze({
   capability: Object.freeze({
     parserId: PARSER_ID,
@@ -182,8 +217,10 @@ export const jsonParser: ParserAdapter = Object.freeze({
       ]);
     }
     const decoded = decodeUtf8(input.bytes);
-    const parsed = parseJsonValue(decoded.text);
-    if (!parsed.ok) {
+    const jsonLines = isJsonLines(input);
+    // Whole-document parse only for true JSON; JSONL is parsed line-by-line below.
+    const parsed = jsonLines ? undefined : parseJsonValue(decoded.text);
+    if (parsed !== undefined && !parsed.ok) {
       return emptyResult(jsonParser.capability, input.documentId, options, [
         diagnostic(
           "MALFORMED_INPUT",
@@ -204,7 +241,11 @@ export const jsonParser: ParserAdapter = Object.freeze({
       normalizedLength: 0,
       stopped: false,
     };
-    walk(ctx, parsed.value, "", 0);
+    if (jsonLines) {
+      walkJsonLines(ctx);
+    } else if (parsed?.ok === true) {
+      walk(ctx, parsed.value, "", 0);
+    }
     if (ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")) {
       return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
     }

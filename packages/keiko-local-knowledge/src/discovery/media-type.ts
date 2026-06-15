@@ -39,6 +39,7 @@ const MEDIA_TYPES: Readonly<Record<string, string>> = Object.freeze({
   // unsupported binaries (the unsupported adapter still classifies these explicitly)
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",

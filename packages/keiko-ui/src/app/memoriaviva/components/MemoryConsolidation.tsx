@@ -47,7 +47,25 @@ function formatElapsed(ms: number): string {
 
 /* Raw memory ids were plain text — link each id to the detail route so review
    decisions are actionable (uiux-fix F034, C240; pattern: .mc-row-detail-link) */
-function MemoryIdLink({ id }: { readonly id: string }): ReactNode {
+function MemoryIdLink({
+  id,
+  onOpenDetail,
+}: {
+  readonly id: string;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
+  if (onOpenDetail !== undefined) {
+    return (
+      <button
+        type="button"
+        className="mc-id-link mc-link-button"
+        title={id}
+        onClick={() => onOpenDetail(id)}
+      >
+        {id}
+      </button>
+    );
+  }
   return (
     <Link
       href={`/memoriaviva/detail?id=${encodeURIComponent(id)}`}
@@ -59,41 +77,59 @@ function MemoryIdLink({ id }: { readonly id: string }): ReactNode {
   );
 }
 
-function MemoryIdList({ ids }: { readonly ids: readonly string[] }): ReactNode {
+function MemoryIdList({
+  ids,
+  onOpenDetail,
+}: {
+  readonly ids: readonly string[];
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
   return (
     <>
       {ids.map((id, index) => (
         <Fragment key={`${index.toString()}:${id}`}>
           {index > 0 ? ", " : null}
-          <MemoryIdLink id={id} />
+          <MemoryIdLink id={id} onOpenDetail={onOpenDetail} />
         </Fragment>
       ))}
     </>
   );
 }
 
-function ReviewAction({ item }: { readonly item: MemoryConsolidationReviewItem }): ReactNode {
+function ReviewAction({
+  item,
+  onOpenDetail,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
   if (item.proposedAction === undefined) return <>No automatic action proposed.</>;
   if (item.proposedAction.kind === "merge") {
     return (
       <>
-        Merge into <MemoryIdLink id={item.proposedAction.winner} />; replace{" "}
-        <MemoryIdList ids={item.proposedAction.losers} />.
+        Merge into <MemoryIdLink id={item.proposedAction.winner} onOpenDetail={onOpenDetail} />;
+        replace <MemoryIdList ids={item.proposedAction.losers} onOpenDetail={onOpenDetail} />.
       </>
     );
   }
   return (
     <>
-      Supersede <MemoryIdLink id={item.proposedAction.older} /> with{" "}
-      <MemoryIdLink id={item.proposedAction.newer} />.
+      Supersede <MemoryIdLink id={item.proposedAction.older} onOpenDetail={onOpenDetail} /> with{" "}
+      <MemoryIdLink id={item.proposedAction.newer} onOpenDetail={onOpenDetail} />.
     </>
   );
 }
 
-function StaleFlagEntry({ flag }: { readonly flag: MemoryConsolidationStaleFlag }): ReactNode {
+function StaleFlagEntry({
+  flag,
+  onOpenDetail,
+}: {
+  readonly flag: MemoryConsolidationStaleFlag;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
   return (
     <>
-      <MemoryIdLink id={flag.memoryId} /> — {flag.reason}
+      <MemoryIdLink id={flag.memoryId} onOpenDetail={onOpenDetail} /> — {flag.reason}
     </>
   );
 }
@@ -158,6 +194,8 @@ interface MemoryConsolidationProps {
   readonly fetchJobImpl?: typeof fetchMemoryConsolidationJob;
   readonly cancelJobImpl?: typeof cancelMemoryConsolidationJob;
   readonly pollIntervalMs?: number;
+  readonly onBack?: (() => void) | undefined;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
 }
 
 export function MemoryConsolidation({
@@ -165,6 +203,8 @@ export function MemoryConsolidation({
   fetchJobImpl = fetchMemoryConsolidationJob,
   cancelJobImpl = cancelMemoryConsolidationJob,
   pollIntervalMs = 2_000,
+  onBack,
+  onOpenDetail,
 }: MemoryConsolidationProps): ReactNode {
   const [settings, setSettings] = useState<StartMemoryConsolidationInput>(DEFAULT_SETTINGS);
   const [jobRecord, setJobRecord] = useState<MemoryConsolidationJobEnvelope | null>(null);
@@ -266,9 +306,15 @@ export function MemoryConsolidation({
             queued or running.
           </p>
         </div>
-        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to MemoriaViva
-        </Link>
+        {onBack !== undefined ? (
+          <button type="button" className="lk-btn lk-btn-ghost lk-btn-lg" onClick={onBack}>
+            Back to MemoriaViva
+          </button>
+        ) : (
+          <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
+            Back to MemoriaViva
+          </Link>
+        )}
       </header>
 
       {/* Scroll container (uiux-fix F005): html,body clip overflow globally —
@@ -540,10 +586,13 @@ export function MemoryConsolidation({
                         {item.reason.replaceAll("-", " ")}
                       </strong>
                       <span>
-                        <MemoryIdList ids={item.relatedMemoryIds} />
+                        <MemoryIdList
+                          ids={item.relatedMemoryIds}
+                          onOpenDetail={onOpenDetail}
+                        />
                       </span>
                       <span style={{ color: "var(--fg-muted)" }}>
-                        <ReviewAction item={item} />
+                        <ReviewAction item={item} onOpenDetail={onOpenDetail} />
                       </span>
                     </li>
                   ))}
@@ -570,7 +619,7 @@ export function MemoryConsolidation({
                 <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
                   {activeJob.result.staleFlags.map((flag) => (
                     <li key={`${flag.memoryId}:${flag.reason}`}>
-                      <StaleFlagEntry flag={flag} />
+                      <StaleFlagEntry flag={flag} onOpenDetail={onOpenDetail} />
                     </li>
                   ))}
                 </ul>
@@ -598,8 +647,8 @@ export function MemoryConsolidation({
                     <li key={edge.id} style={{ display: "grid", gap: 4 }}>
                       <strong>{edge.kind}</strong>
                       <span>
-                        <MemoryIdLink id={edge.fromMemoryId} /> →{" "}
-                        <MemoryIdLink id={edge.toMemoryId} />
+                        <MemoryIdLink id={edge.fromMemoryId} onOpenDetail={onOpenDetail} /> →{" "}
+                        <MemoryIdLink id={edge.toMemoryId} onOpenDetail={onOpenDetail} />
                       </span>
                       {edge.provenanceSummary !== undefined ? (
                         <span style={{ color: "var(--fg-muted)" }}>{edge.provenanceSummary}</span>

@@ -14,23 +14,24 @@ export function renderRetrievalEvalQualityGateReport(
   const header = [
     "# Local Knowledge Retrieval Quality Gate",
     "",
-    "| Fixture | Recall | Precision | Isolation | Citation | No-evidence | Context budget | Latency | Pass |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| Fixture | Recall | Precision | MRR | nDCG | Isolation | Citation | No-evidence | Context budget | Latency | Pass |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   ];
   const rows = scorecards.map((scorecard) => {
     const d = scorecard.dimensions;
-    return [
-      `| ${scorecard.fixtureId}`,
+    return `| ${[
+      scorecard.fixtureId,
       format(d.recall),
       format(d.precision),
+      format(d.meanReciprocalRank),
+      format(d.ndcg),
       format(d.sourceIsolation),
       format(d.citationQuality),
       format(d.noEvidenceAccuracy),
       format(d.contextBudgetFit),
       format(d.latencyMs),
       scorecard.passed ? "PASS" : "FAIL",
-      "|",
-    ].join(" | ");
+    ].join(" | ")} |`;
   });
   return [...header, ...rows].join("\n");
 }

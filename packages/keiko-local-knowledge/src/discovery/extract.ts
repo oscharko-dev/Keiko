@@ -210,6 +210,26 @@ function persistFailureRow(
   }
 }
 
+// GRD-010: decide whether to persist a cascade-deleting failure row. A TRANSIENT IO failure
+// (READ_FAILED / STAT_FAILED) on an incremental refresh must NOT destroy a previously-good index
+// — persisting overwrites the document row and CASCADE-deletes its chunks+vectors. When a prior
+// NON-failed row exists, skip persistence so a momentary lock / NFS hiccup / permission flap
+// preserves retrievable content (the orchestrator then reports a non-destructive skip). Permanent
+// failures (MALFORMED_INPUT, PARSER_FAILED, OVERSIZED_FILE, …) and first-time failures still persist.
+function shouldPersistFailureRow(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  error: DiscoveryError,
+  optionPersist: boolean,
+): boolean {
+  if (!optionPersist) return false;
+  const isTransient = error.code === "READ_FAILED" || error.code === "STAT_FAILED";
+  if (!isTransient) return true;
+  const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
+  return existing === undefined || existing.status === "failed";
+}
+
 function buildFailureResult(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -238,7 +258,7 @@ function buildFailureResult(
     status: "failed",
     safeDisplayName: safeDisplay(params.file.relativePath),
   };
-  if (options.persist) {
+  if (shouldPersistFailureRow(deps, params, documentId, error, options.persist)) {
     persistFailureRow(deps, params, documentId, document, diagnostic, now);
   }
   const outcome: ExtractionOutcome = {
@@ -463,6 +483,48 @@ function selectedRelativePath(
   return relativePath;
 }
 
+function resolveRealPathTarget(
+  deps: ExtractDocumentDeps,
+  path: string,
+  relativePath: string,
+  message: string,
+): string | TargetResolution {
+  try {
+    return deps.fs.realPath(path);
+  } catch {
+    return targetError({ code: "READ_FAILED", message, relativePath }, true);
+  }
+}
+
+function containedRealFileTarget(
+  realRoot: string,
+  real: string,
+  relativePath: string,
+): TargetResolution | undefined {
+  if (!isContained(realRoot, real)) {
+    return targetError(
+      {
+        code: "PATH_ESCAPE",
+        message: `realpath escapes scope root: ${relativePath}`,
+        relativePath,
+      },
+      true,
+    );
+  }
+  const realRelativePath = toPosixRelative(realRoot, real);
+  if (isDenied(realRelativePath)) {
+    return targetError(
+      {
+        code: "READ_FAILED",
+        message: "resolved file is denied by workspace policy",
+        relativePath,
+      },
+      true,
+    );
+  }
+  return undefined;
+}
+
 function resolveTargetPath(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -477,40 +539,22 @@ function resolveTargetPath(
   }
   const root = policy.rootPath;
   const absolute = joinAbs(root, relativePath);
-  let real: string;
-  try {
-    real = deps.fs.realPath(absolute);
-  } catch {
-    return targetError(
-      {
-        code: "READ_FAILED",
-        message: "realPath failed for selected file",
-        relativePath,
-      },
-      true,
-    );
-  }
-  if (!isContained(root, real)) {
-    return targetError(
-      {
-        code: "PATH_ESCAPE",
-        message: `realpath escapes scope root: ${relativePath}`,
-        relativePath,
-      },
-      true,
-    );
-  }
-  const realRelativePath = toPosixRelative(root, real);
-  if (isDenied(realRelativePath)) {
-    return targetError(
-      {
-        code: "READ_FAILED",
-        message: "resolved file is denied by workspace policy",
-        relativePath,
-      },
-      true,
-    );
-  }
+  const realRoot = resolveRealPathTarget(
+    deps,
+    root,
+    relativePath,
+    "realPath failed for selected source root",
+  );
+  if (typeof realRoot !== "string") return realRoot;
+  const real = resolveRealPathTarget(
+    deps,
+    absolute,
+    relativePath,
+    "realPath failed for selected file",
+  );
+  if (typeof real !== "string") return real;
+  const containmentError = containedRealFileTarget(realRoot, real, relativePath);
+  if (containmentError !== undefined) return containmentError;
   // Normalise to forward slashes so subsequent IO calls (readFileBytes, stat) receive
   // a consistent path even when realPath returned a Windows backslash path.
   return { absolutePath: normaliseSep(real), requestedAbsolutePath: absolute, relativePath };

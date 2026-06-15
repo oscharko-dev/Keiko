@@ -28,6 +28,7 @@ import {
   parseFigmaTarget,
   recordReadOnlyConsent,
   resolveFigmaToken,
+  resolveScopedPaginationLimits,
   resolveFigmaVaultKey,
   type FigmaConnectorMetrics,
   type FigmaHttpPort,
@@ -36,6 +37,7 @@ import {
   type FigmaRenderPort,
   type FigmaScopeCoverage,
   type FigmaScopeRef,
+  type FigmaScopedResult,
   type FigmaSnapshot,
   type ScopedPaginationLimits,
 } from "./figma/index.js";
@@ -62,6 +64,8 @@ export interface GovernedSnapshotDeps {
   readonly deferSuccessAudit?: boolean;
   /** Deep scoped-pagination overrides (#837). */
   readonly pagination?: Partial<ScopedPaginationLimits>;
+  /** Optional pinned Figma file version. When present it is sent to the scoped REST fetch. */
+  readonly version?: string | undefined;
   /** Optional Keiko config PAT alternate (#751). Vault remains higher precedence. */
   readonly configToken?: string | undefined;
   /** Shared enterprise egress settings for Figma API + render downloads (#802). */
@@ -166,7 +170,6 @@ const gateConsent = (deps: GovernedSnapshotDeps, scopeRef: FigmaScopeRef): void 
 };
 
 type FigmaConnector = ReturnType<typeof createFigmaConnector>;
-type FigmaScopedResult = Awaited<ReturnType<FigmaConnector["fetchScopedNodesDeep"]>>;
 
 interface SnapshotPorts {
   readonly httpPort: FigmaHttpPort;
@@ -236,7 +239,10 @@ const auditedDeepFetch = async (
   action: "snapshot" | "resnapshot",
 ): Promise<FigmaScopedResult> => {
   try {
-    return await connector.fetchScopedNodesDeep(boardLink, { fetchedAt: deps.now });
+    return await connector.fetchScopedNodesDeep(boardLink, {
+      fetchedAt: deps.now,
+      ...(deps.version !== undefined ? { version: deps.version } : {}),
+    });
   } catch (error) {
     appendFigmaConnectorAudit({
       scopeRef,
@@ -248,6 +254,24 @@ const auditedDeepFetch = async (
     });
     throw error;
   }
+};
+
+const assertReadyForSnapshot = (
+  scoped: FigmaScopedResult,
+  deps: GovernedSnapshotDeps,
+  scopeRef: FigmaScopeRef,
+  action: "snapshot" | "resnapshot",
+): void => {
+  if (scoped.readiness.ready) return;
+  appendFigmaConnectorAudit({
+    scopeRef,
+    evidenceDir: deps.evidenceDir,
+    action,
+    outcome: "error",
+    errorCode: "FIGMA_NOT_READY",
+    now: deps.now,
+  });
+  throw new FigmaConnectorError("FIGMA_NOT_READY");
 };
 
 /**
@@ -276,7 +300,9 @@ export const governedSnapshotBuild = async (
   const connector = createGovernedConnector(deps, httpPort, vaultToken);
 
   const scoped = await auditedDeepFetch(connector, boardLink, deps, scopeRef, action);
+  assertReadyForSnapshot(scoped, deps, scopeRef, action);
   const ir = QualityIntelligenceFigma.cleanScopedNodesToScreenIr(scoped.nodes);
+  const renderLimits = resolveScopedPaginationLimits(deps.pagination);
   const observed = await observeFigmaSnapshot({
     ctx: { evidenceDir: deps.evidenceDir, now: deps.now },
     provenance: scoped.provenance,
@@ -294,6 +320,7 @@ export const governedSnapshotBuild = async (
         token,
         imagesPort: httpPort,
         renderPort,
+        maxScreensRendered: renderLimits.maxScreensDeep,
       }),
   });
 

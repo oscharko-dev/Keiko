@@ -145,18 +145,32 @@ function buildRunPlan(input: ExecuteQiRunInput): QI.QualityIntelligenceRunPlan {
 export async function executeQiRun(
   input: ExecuteQiRunInput,
 ): Promise<QualityIntelligenceRunSummary> {
-  const { deps, runId, request } = input;
-  const evidenceDir = deps.evidenceDir;
+  const evidenceDir = input.deps.evidenceDir;
   if (evidenceDir === undefined) {
     throw new QiGenerationError("QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
+  // The capsule resolver owns a SQLite handle; close it in a finally so a thrown ingestion/generation
+  // never leaks it. The run body is extracted so this entrypoint stays within the line budget.
+  const capsuleResolver = makeCapsuleResolver(input.deps);
+  try {
+    return await runResolvedQi(input, evidenceDir, capsuleResolver);
+  } finally {
+    capsuleResolver?.close();
+  }
+}
 
+async function runResolvedQi(
+  input: ExecuteQiRunInput,
+  evidenceDir: string,
+  capsuleResolver: ReturnType<typeof makeCapsuleResolver>,
+): Promise<QualityIntelligenceRunSummary> {
+  const { deps, runId, request } = input;
   let ingestionModelGatewayCallCount = 0;
   const ingestion = await ingestInlineSourcesAsync({
     request,
     runId,
     registeredAt: input.registeredAt,
-    capsuleResolver: makeCapsuleResolver(deps),
+    capsuleResolver,
     figmaSnapshotLoader: makeFigmaSnapshotLoader(deps),
     figmaVision: makeFigmaVisionHintProvider(deps, undefined, {
       onGatewayCallAttempt: () => {
@@ -170,7 +184,7 @@ export async function executeQiRun(
 
   input.onAccepted(buildAccepted(input, ingestion, modelId));
 
-  return runQualityIntelligenceModelRoutedTestDesign(
+  return await runQualityIntelligenceModelRoutedTestDesign(
     {
       plan: buildRunPlan(input),
       envelopes: ingestion.envelopes,

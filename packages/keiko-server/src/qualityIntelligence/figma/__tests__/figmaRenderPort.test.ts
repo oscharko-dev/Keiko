@@ -88,6 +88,22 @@ describe("createDefaultFigmaRenderPort", () => {
   });
 });
 
+describe("createDefaultFigmaRenderPort — legitimate CDN URL (refactor-safety anchor)", () => {
+  it("accepts and downloads bytes from a legitimate s3-alpha-sig.figma.com render URL", async () => {
+    // Pins the port against a real CDN hostname so a refactor that changes the URL shape or
+    // transport layer cannot silently break the happy path.
+    const port = createDefaultFigmaRenderPort(undefined, stubFetch(200, PNG_BYTES.buffer));
+
+    const result = await port({
+      url: "https://s3-alpha-sig.figma.com/img/1234/5678/abcdef1234567890.png",
+      headers: {},
+    });
+
+    expect(result.status).toBe(200);
+    expect(Array.from(result.bytes)).toEqual(Array.from(PNG_BYTES));
+  });
+});
+
 describe("createDefaultFigmaRenderPort — transport error classification", () => {
   const RENDER_REQ = { url: "https://ephemeral.figma/render.png", headers: {} };
 

@@ -135,6 +135,31 @@ describe("walkSource — Windows separator normalisation", () => {
 });
 
 describe("walkSource — path containment", () => {
+  it("yields files when the selected scope root resolves through a realpath symlink", () => {
+    const baseFs = memoryFs(ROOT, [{ relativePath: "docs/report.md", content: "ok" }]);
+    const realRoot = `/private${ROOT}`;
+    const toRequestedPath = (absolutePath: string): string =>
+      absolutePath.startsWith(`${realRoot}/`)
+        ? `${ROOT}/${absolutePath.slice(realRoot.length + 1)}`
+        : absolutePath;
+    const fs: ReturnType<typeof memoryFs> = {
+      ...baseFs,
+      realPath: (absolutePath: string): string => {
+        if (absolutePath === ROOT) return realRoot;
+        if (absolutePath === `${ROOT}/docs/report.md`) return `${realRoot}/docs/report.md`;
+        return baseFs.realPath(absolutePath);
+      },
+      stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
+      readFileBytes: (absolutePath: string, maxBytes: number) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes) ??
+        Promise.reject(new Error("readFileBytes unavailable")),
+    };
+
+    const files = collect(folderScope(ROOT), fs);
+
+    expect(files).toStrictEqual(["docs/report.md"]);
+  });
+
   it("emits a PATH_ESCAPE error when a file's realPath escapes the scope root", () => {
     const fs = memoryFs(ROOT, [
       { relativePath: "README.md", content: "ok" },

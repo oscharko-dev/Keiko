@@ -1,0 +1,40 @@
+{
+  "providers": [
+    {
+      "modelId": "e2e-chat-model",
+      "baseUrl": "https://provider.invalid/v1",
+      "apiKey": "e2e-test-token-1234567890",
+      "timeoutMs": 30000,
+      "maxRetries": 3,
+      "retryBaseDelayMs": 500
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "e2e-chat-model",
+      "kind": "chat",
+      "contextWindow": 8192,
+      "maxOutputTokens": 1024,
+      "toolCalling": true,
+      "structuredOutput": true,
+      "streaming": true,
+      "supportsImageInput": false,
+      "supportsDocumentInput": true,
+      "workflowEligible": true,
+      "costClass": "low",
+      "latencyClass": "fast",
+      "throughputHint": "E2E fixture model used only for UI smoke validation.",
+      "preferredUseCases": ["Release smoke tests"],
+      "knownLimitations": ["The release smoke suite never calls this provider endpoint."]
+    }
+  ],
+  "circuitBreaker": {
+    "failureThreshold": 5,
+    "cooldownMs": 30000,
+    "halfOpenProbes": 2
+  },
+  "grounding": {
+    "maxConnectedSources": 16,
+    "maxLocalKnowledgeSources": 16
+  }
+}

@@ -72,9 +72,7 @@ function insertAuditEventRow(statement: RunStatement, event: CapsuleAuditEvent):
 }
 
 function redactChunkIds(chunkIds: readonly string[]): readonly string[] {
-  return chunkIds.map((chunkId) =>
-    createHash("sha256").update(chunkId).digest("hex").slice(0, 16),
-  );
+  return chunkIds.map((chunkId) => createHash("sha256").update(chunkId).digest("hex").slice(0, 16));
 }
 
 function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | null {

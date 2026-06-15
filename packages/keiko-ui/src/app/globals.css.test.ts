@@ -264,6 +264,20 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+describe("Visual quality — workspace text rendering", () => {
+  it(".ws-scene does not force transform layer promotion", () => {
+    const block = cssBlock(".ws-scene");
+    expect(block).not.toContain("will-change: transform");
+  });
+});
+
+describe("WCAG 2.5.8 — footer target size", () => {
+  it(".ft-window-trigger keeps at least a 24px hit target", () => {
+    const block = cssBlock(".ft-window-trigger");
+    expect(block).toContain("min-height: 24px");
+  });
+});
+
 describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
   it("quality score tiers use the state tokens that are contrast-pinned in both themes", () => {
     const highBlock = cssBlock(".qi-quality-high {");
@@ -654,5 +668,15 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(block).toContain("width: 72px");
     expect(block).toContain("height: 54px");
     expect(block).toContain("object-fit: contain");
+  });
+
+  it(".figma-snapshot-error-card uses the contrast-pinned danger token, not raw red HSL", () => {
+    const card = cssBlock(".figma-snapshot-error-card {");
+    const title = cssBlock(".figma-snapshot-error-title {");
+    const detail = cssBlock(".figma-snapshot-error-detail {");
+    expect(card).toContain("var(--danger)");
+    expect(card).not.toMatch(/hsl\(/u);
+    expect(title).toContain("color: var(--danger)");
+    expect(detail).toContain("color: var(--fg)");
   });
 });

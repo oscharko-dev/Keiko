@@ -9,6 +9,7 @@
 // JSON RouteResult BEFORE any SSE header so the client can fall back to the buffered route.
 
 import { SSE_HEADERS } from "./sse.js";
+import { writeOrDestroy } from "./sse-write.js";
 import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { Chat, ChatMessage } from "./store/index.js";
@@ -37,12 +38,11 @@ function sseMessage(event: string, data: unknown): string {
 }
 
 // Wires the request/response lifecycle to the AbortController so a client disconnect cancels the
-// in-flight gateway stream (mirrors #152 AC#3 — no partial persistence on cancel).
+// in-flight gateway stream (mirrors #152 AC#3 — no partial persistence on cancel). The req
+// "aborted" event is deprecated since Node 17 and fires unreliably; res "close" is the canonical
+// signal for a disconnected client and covers the same lifecycle.
 function abortOnDisconnect(ctx: RouteContext): AbortController {
   const controller = new AbortController();
-  ctx.req.on("aborted", () => {
-    controller.abort();
-  });
   ctx.res.on("close", () => {
     controller.abort();
   });
@@ -55,16 +55,22 @@ interface StreamedTurn {
 
 // Iterates the gateway stream: writes one redacted `token` event per delta, returns the terminal
 // response from the `done` chunk. Returns undefined if the signal aborted (no `done` arrived).
+// Backpressure (res.write → false) aborts the controller and destroys the socket via writeOrDestroy
+// so a slow client is detected immediately rather than buffering without bound.
 async function streamConversation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   stream: AsyncIterable<import("@oscharko-dev/keiko-model-gateway").GatewayStreamChunk>,
-  signal: AbortSignal,
+  controller: AbortController,
 ): Promise<StreamedTurn | undefined> {
   for await (const chunk of stream) {
-    if (signal.aborted) return undefined;
+    if (controller.signal.aborted) return undefined;
     if (chunk.type === "delta") {
-      ctx.res.write(sseMessage("token", { text: deps.redactor(chunk.token) }));
+      writeOrDestroy(
+        ctx.res,
+        sseMessage("token", { text: deps.redactor(chunk.token) }),
+        controller,
+      );
     } else {
       return { response: chunk.response };
     }
@@ -156,7 +162,7 @@ async function streamAndPersist(
   const userMessage = createUserMessage(deps, request);
   const messages = buildGatewayMessages(deps, request, memory.context.text);
   const stream = callStream({ modelId, messages }, controller.signal);
-  const turn = await streamConversation(ctx, deps, stream, controller.signal);
+  const turn = await streamConversation(ctx, deps, stream, controller);
   if (turn === undefined || controller.signal.aborted) {
     ctx.res.write(sseMessage("cancelled", {}));
     return;

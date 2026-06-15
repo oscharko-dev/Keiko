@@ -384,8 +384,8 @@ export function WindowFrame({
   // (focus + drag) cannot race with the port-initiated connect handshake.
   const startPortConnect = useCallback(
     (
-      target: HTMLDivElement,
-      event: ReactPointerEvent<HTMLDivElement> | ReactKeyboardEvent<HTMLDivElement>,
+      target: HTMLButtonElement,
+      event: ReactPointerEvent<HTMLButtonElement> | ReactKeyboardEvent<HTMLButtonElement>,
     ): void => {
       const rect = target.getBoundingClientRect();
       api.startConnect(win.id, {
@@ -399,7 +399,7 @@ export function WindowFrame({
   );
 
   const onPortPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>): void => {
+    (e: ReactPointerEvent<HTMLButtonElement>): void => {
       e.preventDefault();
       e.stopPropagation();
       startPortConnect(e.currentTarget, e);
@@ -408,7 +408,7 @@ export function WindowFrame({
   );
 
   const onPortKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    (e: ReactKeyboardEvent<HTMLButtonElement>): void => {
       if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
       // Keyboard completion of click-to-connect (WCAG 2.1.1, audit C004):
       // when this window is a valid target of an in-flight connect, Enter or
@@ -609,13 +609,12 @@ export function WindowFrame({
         : null}
       {!win.max && canStartConnection
         ? PORTS.map((d: Port) => (
-            <div
+            <button
               key={`p${d}`}
+              type="button"
               className={`win-port wp-${d}`}
               title="Click to connect to another window"
               aria-label={`Connect ${def.title} from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
-              role="button"
-              tabIndex={0}
               onPointerDown={onPortPointerDown}
               onKeyDown={onPortKeyDown}
             />

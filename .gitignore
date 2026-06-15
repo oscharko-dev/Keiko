@@ -144,6 +144,11 @@ keiko-live-start.png
 # workspace-relative default base dir by default; never commit it.
 .keiko/
 
+# E2E QI pipeline scratch harness: live-BFF driver scripts, isolated run config + state, and
+# generated per-board artifacts. Session-local instrumentation that sources real credentials from
+# the parent .env; never commit.
+/.keiko-e2e/
+
 # Wave 1 UI build artifacts (ADR-0011 D3; relocated to packages/keiko-ui by issue #167). Only
 # the package's source + package.json are committed. Build outputs, the Next typegen file, and
 # the incremental tsbuildinfo are generated and must never be committed.

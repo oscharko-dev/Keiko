@@ -49,6 +49,9 @@ class MockResponse extends EventEmitter {
   public headers: Record<string, string> | undefined;
   public chunks: string[] = [];
   public ended = false;
+  public destroyed = false;
+  // Set to false to simulate TCP backpressure (write returns false).
+  public writeReturns = true;
 
   writeHead(statusCode: number, headers: Record<string, string>): this {
     this.statusCode = statusCode;
@@ -58,12 +61,16 @@ class MockResponse extends EventEmitter {
 
   write(chunk: string): boolean {
     this.chunks.push(chunk);
-    return true;
+    return this.writeReturns;
   }
 
   end(): this {
     this.ended = true;
     return this;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
   }
 }
 
@@ -646,5 +653,42 @@ describe("toStreamEvent — reasonSummary redaction backstop (#279 AC3)", () => 
     const message = toStreamEvent(event, buildRedactor({})) as { reasonSummary?: string };
 
     expect(message.reasonSummary).toBe("qi-run-error");
+  });
+});
+
+// ─── SSE backpressure (write returns false → destroy) ────────────────────────────────────────────
+//
+// RED reason: before this fix the `write` closure in handleStartQiRun called ctx.res.write()
+// directly and discarded the return value, so a slow client's backpressure signal was silently
+// ignored. GREEN reason: writeOrDestroy checks the return value and calls
+// controller.abort() + res.destroy().
+
+describe("handleStartQiRun — SSE backpressure: slow client triggers socket destroy", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("calls res.destroy() when res.write() returns false during SSE streaming", async () => {
+    // Use a real file so ingestion succeeds and at least one SSE frame (error or accepted) is
+    // written — that first write with writeReturns=false must trigger destroy.
+    const dir = mkdtempSync(join(tmpdir(), "qi-bp-"));
+    tmpDirs.push(dir);
+    const path = join(dir, "spec.md");
+    writeFileSync(path, "# Spec\nThe system shall log all events.\n", "utf8");
+    const res = new MockResponse();
+    res.writeReturns = false; // simulate TCP send-buffer full
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources: [{ kind: "file", label: "Spec", path }] }), res),
+      deps(),
+    );
+
+    // Handler committed to SSE regardless of backpressure.
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    // The socket must have been destroyed after the first backpressured write.
+    expect(res.destroyed).toBe(true);
   });
 });

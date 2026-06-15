@@ -62,6 +62,7 @@ export type RetrievalNoEvidenceReason =
   | "incompatible-embedding-identity"
   | "below-min-score"
   | "answer-grounding-rejected"
+  | "no-evidence-stated"
   | "empty-query"
   | "embedding-failed";
 
@@ -69,6 +70,10 @@ export interface RetrievalResult {
   readonly references: readonly RetrievalReference[];
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
+  // True when the embedding adapter failed for at least one capsule but lexical
+  // candidates kept the result non-empty. Observability signal for callers; does
+  // not change which references are returned or whether noEvidence fires.
+  readonly embeddingDegraded?: true;
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────

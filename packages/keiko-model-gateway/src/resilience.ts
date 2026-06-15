@@ -136,6 +136,8 @@ export class CircuitBreaker {
   private consecutiveFailures = 0;
   private openedAt: number | null = null;
   private probesRemaining = 0;
+  // Tracks how many half-open probe slots are currently in-flight.
+  private probesInFlight = 0;
 
   constructor(
     private readonly modelId: string,
@@ -146,19 +148,29 @@ export class CircuitBreaker {
   // Called before forwarding a request. Throws CircuitOpenError when the breaker is
   // open and the cooldown has not elapsed; otherwise lets the call through (entering
   // half-open as a side effect when cooldown has passed).
+  // In half-open, at most config.halfOpenProbes concurrent probes are admitted; excess
+  // callers receive CircuitOpenError until a probe slot is freed by recordSuccess/Failure.
   assertAllowed(): void {
     if (this.state === "open") {
       if (this.openedAt !== null && this.clock.now() - this.openedAt >= this.config.cooldownMs) {
         this.state = "half-open";
         this.probesRemaining = this.config.halfOpenProbes;
-        return;
+        this.probesInFlight = 0;
+      } else {
+        throw new CircuitOpenError(`circuit open for model '${this.modelId}'`);
       }
-      throw new CircuitOpenError(`circuit open for model '${this.modelId}'`);
+    }
+    if (this.state === "half-open") {
+      if (this.probesInFlight >= this.config.halfOpenProbes) {
+        throw new CircuitOpenError(`circuit half-open for model '${this.modelId}'`);
+      }
+      this.probesInFlight += 1;
     }
   }
 
   recordSuccess(): void {
     if (this.state === "half-open") {
+      this.probesInFlight = Math.max(0, this.probesInFlight - 1);
       this.probesRemaining -= 1;
       if (this.probesRemaining <= 0) {
         this.close();
@@ -170,6 +182,7 @@ export class CircuitBreaker {
 
   recordFailure(): void {
     if (this.state === "half-open") {
+      this.probesInFlight = Math.max(0, this.probesInFlight - 1);
       this.open();
       return;
     }
@@ -192,6 +205,7 @@ export class CircuitBreaker {
     this.state = "open";
     this.openedAt = this.clock.now();
     this.probesRemaining = 0;
+    this.probesInFlight = 0;
   }
 
   private close(): void {
@@ -199,5 +213,6 @@ export class CircuitBreaker {
     this.consecutiveFailures = 0;
     this.openedAt = null;
     this.probesRemaining = 0;
+    this.probesInFlight = 0;
   }
 }

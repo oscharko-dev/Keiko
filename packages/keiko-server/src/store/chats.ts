@@ -275,20 +275,28 @@ function decodeLocalKnowledgeScopePayload(
   scope: Record<string, unknown>,
   connectedAtMs: number,
 ): ChatLocalKnowledgeScope | undefined {
-  if (scope.kind === "capsule" && typeof scope.capsuleId === "string") {
+  if (
+    scope.kind === "capsule" &&
+    typeof scope.capsuleId === "string" &&
+    scope.capsuleId.trim().length > 0
+  ) {
     return {
       kind: "capsule",
-      capsuleId: scope.capsuleId as Extract<
+      capsuleId: scope.capsuleId.trim() as Extract<
         ChatLocalKnowledgeScope,
         { readonly kind: "capsule" }
       >["capsuleId"],
       connectedAtMs,
     };
   }
-  if (scope.kind === "capsule-set" && typeof scope.capsuleSetId === "string") {
+  if (
+    scope.kind === "capsule-set" &&
+    typeof scope.capsuleSetId === "string" &&
+    scope.capsuleSetId.trim().length > 0
+  ) {
     return {
       kind: "capsule-set",
-      capsuleSetId: scope.capsuleSetId as Extract<
+      capsuleSetId: scope.capsuleSetId.trim() as Extract<
         ChatLocalKnowledgeScope,
         { readonly kind: "capsule-set" }
       >["capsuleSetId"],
@@ -494,12 +502,12 @@ function validateLocalKnowledgeScopeShape(scope: ChatLocalKnowledgeScope): void 
   }
   switch (scope.kind) {
     case "capsule":
-      if (typeof scope.capsuleId !== "string" || scope.capsuleId.length === 0) {
+      if (typeof scope.capsuleId !== "string" || scope.capsuleId.trim().length === 0) {
         throw invalidRequest("localKnowledgeScope.capsuleId must be a non-empty string.");
       }
       return;
     case "capsule-set":
-      if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.length === 0) {
+      if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.trim().length === 0) {
         throw invalidRequest("localKnowledgeScope.capsuleSetId must be a non-empty string.");
       }
       return;
@@ -654,8 +662,12 @@ interface LocalKnowledgeScopeUpdateParams {
 
 function encodeLocalKnowledgeScopeObject(value: ChatLocalKnowledgeScope): Record<string, unknown> {
   return value.kind === "capsule"
-    ? { kind: "capsule", capsuleId: value.capsuleId, connectedAtMs: value.connectedAtMs }
-    : { kind: "capsule-set", capsuleSetId: value.capsuleSetId, connectedAtMs: value.connectedAtMs };
+    ? { kind: "capsule", capsuleId: value.capsuleId.trim(), connectedAtMs: value.connectedAtMs }
+    : {
+        kind: "capsule-set",
+        capsuleSetId: value.capsuleSetId.trim(),
+        connectedAtMs: value.connectedAtMs,
+      };
 }
 
 // Epic #189 — resolve the effective connector-patch intent. `localKnowledgeScopes` (plural)

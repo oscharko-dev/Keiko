@@ -163,24 +163,17 @@ const CARD_TYPES: readonly WindowType[] = [
   // TYPE_ORDER) so it is launchable like every other card.
   "figma",
   "files",
-  "editor",
-  "browser",
   "terminal",
   "review",
-  "agents",
-  "integ",
 ];
 const TOOL_TYPES: readonly WindowType[] = [
-  // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
-  // with LeftRail buttons but were missing here, so the command palette could not open them
+  // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
+  // with rail buttons but were missing here, so the command palette could not open them
   // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
   // the WindowsRegistry declaration.
   "chatHistory",
-  "keiko",
+  "memoria",
   "settings",
-  "project",
-  "search",
-  "plugins",
   "automations",
   "mobile",
   "inspector",
@@ -498,16 +491,6 @@ function AppShellInner(): ReactNode {
     },
     [ws.api],
   );
-  // uiux-fix F013 C023 — the header's window buttons act on the front (highest-z)
-  // window via the existing maximize toggle: expand maximizes a windowed front
-  // window, restore returns a maximized one to its previous geometry (the toggle's
-  // restore branch keeps w.prev intact). No-op when no window is open.
-  const onExpandFront = useCallback((): void => {
-    if (active !== null && !active.max) ws.api.maximize(active.id);
-  }, [active, ws.api]);
-  const onRestoreFront = useCallback((): void => {
-    if (active !== null && active.max) ws.api.maximize(active.id);
-  }, [active, ws.api]);
   const pick = useCallback((type: WindowType): void => {
     setPalOpen(false);
     setPending(type);
@@ -644,15 +627,6 @@ function AppShellInner(): ReactNode {
     projectAvailable,
     noEligibleModels: session.noEligibleModels,
   });
-  // uiux-fix F008 C043/C118 — the header pill mirrors the same session state as the footer
-  // (it used to be a hardcoded green "connected" that contradicted the footer during outages).
-  const headerStatusValue = headerStatus({
-    loading: session.loading,
-    error: session.error,
-    hasProject,
-    projectAvailable,
-    noEligibleModels: session.noEligibleModels,
-  });
   const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
   const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
 
@@ -667,18 +641,11 @@ function AppShellInner(): ReactNode {
           {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
           <h1 className="visually-hidden">Keiko workspace</h1>
           <Header
-            mode={twin.mode}
-            projectName={projectName}
-            statusLabel={headerStatusValue.label}
-            statusTone={headerStatusValue.tone}
-            onModeChange={twin.setMode}
             openPalette={openPalette}
             openCommandPalette={openCmdk}
             onTileAll={ws.api.tileAll}
             onSplitFront={ws.api.splitFront}
             onCascade={ws.api.cascade}
-            onExpandFront={onExpandFront}
-            onRestoreFront={onRestoreFront}
           />
           <div className="mid">
             <LeftRail

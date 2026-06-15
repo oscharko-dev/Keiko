@@ -27,6 +27,7 @@ interface ReviewRowProps {
   readonly onAccept: (record: MemoryRecord) => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
 }
 
 function ReviewRow({
@@ -36,6 +37,7 @@ function ReviewRow({
   onAccept,
   onReject,
   onArchive,
+  onOpenDetail,
 }: ReviewRowProps): ReactNode {
   const labelId = `memory-review-body-${record.id}`;
   const detailLinkLabel = `View details for memory ${record.id}: ${record.body.slice(0, 80)}`;
@@ -63,13 +65,24 @@ function ReviewRow({
             ) : null}
             {/* full text + provenance/conflict context before deciding —
                 unlike the list, queue rows are not links (uiux-fix F035) */}
-            <Link
-              href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
-              className="mc-row-detail-link"
-              aria-label={detailLinkLabel}
-            >
-              View details
-            </Link>
+            {onOpenDetail !== undefined ? (
+              <button
+                type="button"
+                className="mc-row-detail-link mc-link-button"
+                aria-label={detailLinkLabel}
+                onClick={() => onOpenDetail(record.id)}
+              >
+                View details
+              </button>
+            ) : (
+              <Link
+                href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
+                className="mc-row-detail-link"
+                aria-label={detailLinkLabel}
+              >
+                View details
+              </Link>
+            )}
           </div>
           {rowError !== null ? (
             <p role="alert" className="mc-action-error">
@@ -148,6 +161,8 @@ interface ReviewQueueProps {
   readonly acceptImpl?: typeof acceptMemoryProposal;
   readonly rejectImpl?: typeof rejectMemoryProposal;
   readonly archiveImpl?: typeof archiveMemory;
+  readonly onBack?: (() => void) | undefined;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
 }
 
 export function ReviewQueue({
@@ -155,6 +170,8 @@ export function ReviewQueue({
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
   archiveImpl = archiveMemory,
+  onBack,
+  onOpenDetail,
 }: ReviewQueueProps): ReactNode {
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -290,9 +307,15 @@ export function ReviewQueue({
         <span role="status" aria-live="polite" className="mc-badge-count">
           {records.length.toString()} awaiting review
         </span>
-        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to MemoriaViva
-        </Link>
+        {onBack !== undefined ? (
+          <button type="button" className="lk-btn lk-btn-ghost lk-btn-lg" onClick={onBack}>
+            Back to MemoriaViva
+          </button>
+        ) : (
+          <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
+            Back to MemoriaViva
+          </Link>
+        )}
       </header>
 
       {/* Dedicated live region: row removals are not announced by the list
@@ -364,6 +387,7 @@ export function ReviewQueue({
                 onArchive={(row) => {
                   void runRowAction(row, "archive");
                 }}
+                onOpenDetail={onOpenDetail}
               />
             ))}
           </ul>

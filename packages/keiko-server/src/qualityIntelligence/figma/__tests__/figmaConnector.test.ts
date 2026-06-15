@@ -489,6 +489,23 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
     expect(deep.coverage?.screensDeepFetched).toBe(1);
   });
 
+  it("soft-skips a per-screen rate-limit exhaustion, keeping shallow content and coverage", async () => {
+    const port = treePort(fullTree(["s1", "s2"]), new Map([["s1", 429]]));
+    const connector = createFigmaConnector({
+      http: port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+      retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      sleep: () => Promise.resolve(),
+    });
+
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+    expect(countText(deep.nodes)).toBe(1);
+    expect(deep.coverage?.screensDeepFetched).toBe(1);
+    expect(deep.coverage?.screensTruncated).toBe(1);
+  });
+
   // A hard forward-proxy failure (#802) surfaces from the transport boundary as a FigmaConnectorError
   // (figmaHttpPort maps an OutboundHttpEgressError → the coded proxy error). On a per-screen deep
   // fetch it MUST abort the build (symmetric with RENDER_EGRESS_ABORT_CODES), never soft-skip the
