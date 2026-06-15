@@ -663,7 +663,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
         },
         controller.signal,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(expect.objectContaining({ name: "AbortError" }));
   });
 
   it("omits responseFormat when the model does not advertise structured-output response format", async () => {

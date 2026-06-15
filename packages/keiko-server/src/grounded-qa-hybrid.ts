@@ -290,12 +290,30 @@ async function retrieveFolderPacks(
     const label = labels[i];
     if (cs === undefined || label === undefined) continue;
     const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
-    const out: RetrievalOnlyOutput = await retriever({
-      scope,
-      query,
-      workspaceRoot: scope.workspaceRoot,
-      budget,
-    });
+    let out: RetrievalOnlyOutput;
+    try {
+      out = await retriever({
+        scope,
+        query,
+        workspaceRoot: scope.workspaceRoot,
+        budget,
+      });
+    } catch (error) {
+      // Mirror retrieveOneConnector (GRD-006): a per-source embedding-adapter outage is a skippable
+      // degradation (answer from the remaining sources, record the skip). EVERY other error MUST
+      // propagate — ClarificationNeededError -> 400, ProviderError -> 502, generic -> 500 — so the
+      // boundary maps and redacts it instead of silently dropping a folder and returning a
+      // misleadingly "complete" answer.
+      if (error instanceof EmbeddingAdapterError) {
+        skipped.push({
+          label,
+          reason: "embedding-unavailable",
+          message: "Embedding adapter unavailable.",
+        });
+        continue;
+      }
+      throw error;
+    }
     if (!isValidGroundedPack(out.pack)) {
       skipped.push({ label, reason: "pack-validation-failed", message: "Pack validation failed." });
       continue;

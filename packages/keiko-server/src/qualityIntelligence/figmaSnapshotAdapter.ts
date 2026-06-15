@@ -238,6 +238,11 @@ function makeGatewayFigmaVisionCall(
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) return undefined;
   const store = createNodeFigmaSnapshotStore(evidenceDir);
+  // Capture the structured-output flag once at closure-creation, not per screen. The multimodal
+  // selection is stable for the lifetime of the provider (deps is immutable after server init),
+  // so re-calling resolveQiMultimodalSelection on every vision call is redundant work.
+  const closureSelection = resolveQiMultimodalSelection(deps);
+  const closureModelSelection = closureSelection.kind === "model" ? closureSelection : undefined;
   return async (request: FigmaVisionScreenRequest, modelId: string): Promise<readonly string[]> => {
     if (request.image.byteLength > MAX_VISION_IMAGE_BYTES) return [];
     const model = deps.modelPortFactory(modelId);
@@ -249,11 +254,9 @@ function makeGatewayFigmaVisionCall(
       redactedString(deps, request.baselineText),
       MAX_VISION_BASELINE_BYTES,
     );
-    const selection = resolveQiMultimodalSelection(deps);
     const structuredOutput =
-      selection.kind === "model" &&
-      selection.modelId === modelId &&
-      selection.capability.supportsResponseFormat === true;
+      closureModelSelection?.modelId === modelId &&
+      closureModelSelection.capability.supportsResponseFormat === true;
     const gatewayRequest = buildVisionRequest(
       request,
       modelId,

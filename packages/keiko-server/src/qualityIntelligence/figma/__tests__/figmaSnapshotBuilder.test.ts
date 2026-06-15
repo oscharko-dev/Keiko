@@ -499,6 +499,85 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
   });
 });
 
+describe("buildFigmaSnapshot — render URL allowlist positive branches (#750 SSRF)", () => {
+  // Each test exercises a DISTINCT positive branch of isAllowedFigmaRenderUrl so a regression
+  // that silently removes a branch is caught before it enables SSRF.
+  const allowedUrl = (
+    url: string,
+  ): Promise<{
+    readonly screens: readonly unknown[];
+    readonly skippedScreens: readonly unknown[];
+  }> => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({ status: 200, json: { images: { "1:1": url } }, headers: {} });
+    const renders = renderPort({ [url]: png(10) });
+    return buildFigmaSnapshot(baseInput(screens, images, renders.port));
+  };
+
+  it("allows cdn.figma.com (figma CDN front)", async () => {
+    const snapshot = await allowedUrl("https://cdn.figma.com/renders/1:1.png");
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("allows static.figma.com (figma static front)", async () => {
+    const snapshot = await allowedUrl("https://static.figma.com/renders/1:1.png");
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("allows a regional Figma S3 bucket (figma-prod.s3.eu-west-1.amazonaws.com)", async () => {
+    const snapshot = await allowedUrl(
+      "https://figma-prod.s3.eu-west-1.amazonaws.com/renders/1:1.png",
+    );
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("allows the legacy us-west-2 path-style S3 bucket with figma path prefix", async () => {
+    const snapshot = await allowedUrl("https://s3-us-west-2.amazonaws.com/figma-data/1:1.png");
+    expect(snapshot.screens).toHaveLength(1);
+    expect(snapshot.skippedScreens).toHaveLength(0);
+  });
+
+  it("blocks evil-figma.s3.amazonaws.com (bucket name in S3 hostname, wrong format — no region)", async () => {
+    // The regex requires figma*.s3.<region>.amazonaws.com; a bare s3.amazonaws.com hostname with
+    // a bucket-like prefix does NOT match because there is no region segment.
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://evil-figma.s3.amazonaws.com/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+
+  it("blocks figma.com.evil.com (look-alike domain — not a .figma.com subdomain)", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () =>
+      Promise.resolve({
+        status: 200,
+        json: { images: { "1:1": "https://figma.com.evil.com/1:1.png" } },
+        headers: {},
+      });
+    const renders = renderPort({});
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-url-blocked" }]);
+    expect(renders.requests).toHaveLength(0);
+  });
+});
+
 describe("buildFigmaSnapshot — render egress abort codes (#750 audit)", () => {
   it("re-throws a FIGMA_TLS_CA_FAILURE from the render port (abort the build)", async () => {
     const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];

@@ -386,8 +386,7 @@ function newMemoryEdgeId(): MemoryEdgeId {
 }
 
 function buildRunOptions(
-  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
-  jobId: string,
+  scheduledRecord: ConsolidationJobRecord | undefined,
   createdAt: number,
   settings: ConsolidationJobSettings,
 ): Parameters<typeof runConsolidation>[1] {
@@ -400,7 +399,10 @@ function buildRunOptions(
     maxAgeMs: settings.maxAgeMs,
     maxClustersPerRun: settings.maxClustersPerRun,
     maxRecordsPerRun: settings.maxRecordsPerRun,
-    cancellationSignal: (): boolean => registry.get(jobId)?.cancelRequested === true,
+    // Capture the record reference at schedule-time rather than re-fetching via the registry on
+    // every poll — eliminates a theoretical race where the registry entry is replaced under the
+    // closure before the signal is first checked.
+    cancellationSignal: (): boolean => scheduledRecord?.cancelRequested === true,
   };
 }
 
@@ -509,10 +511,11 @@ function scheduleJob(
     }
     const running = transitionJob(afterLoad.job, "running");
     registry.setRunning(jobId, running);
+    const scheduledRecord = registry.get(jobId);
     try {
       const result = runConsolidation(
         memories,
-        buildRunOptions(registry, jobId, queued.createdAt, settings),
+        buildRunOptions(scheduledRecord, queued.createdAt, settings),
       );
       finalizeTerminalJob(registry, running, jobId, memories, result, loaded.truncated);
     } catch (error) {

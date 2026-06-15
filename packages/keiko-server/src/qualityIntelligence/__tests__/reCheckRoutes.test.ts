@@ -2428,3 +2428,72 @@ describe("handleQiRegenerateStale — buildMergedCandidates deduplicates equival
     expect(titles.filter((t) => t === sharedTitle)).toHaveLength(1);
   });
 });
+
+// ─── re-check / regenerate-stale: absolute-path guard for file sources (#791) ─
+//
+// parseSources() in reCheckRoutes.ts shares the same isAbsolute contract as runRoutes.ts
+// (Issue #791 route-boundary contract). Without the guard a caller can pass a relative path
+// like "docs/spec.md" and reach the OS-level read with a working-directory-relative path —
+// a different file depending on where the server process runs.
+describe("handleQiReCheck — relative file source path rejected (#791)", () => {
+  it("returns 400 QI_BAD_SOURCE for a relative file source path", async () => {
+    const body = { sources: [{ kind: "file", label: "Relative", path: "docs/spec.md" }] };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string; message: string } }).error).toMatchObject({
+      code: "QI_BAD_SOURCE",
+    });
+    expect((result.body as { error: { code: string; message: string } }).error.message).toMatch(
+      /absolute local paths/i,
+    );
+  });
+});
+
+describe("handleQiRegenerateStale — relative file source path rejected (#791)", () => {
+  it("returns 400 QI_BAD_SOURCE for a relative file source path", async () => {
+    const body = { sources: [{ kind: "file", label: "Relative", path: "docs/spec.md" }] };
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx("regenerate-stale", RUN_ID, makeReq(body)),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string; message: string } }).error).toMatchObject({
+      code: "QI_BAD_SOURCE",
+    });
+    expect((result.body as { error: { code: string; message: string } }).error.message).toMatch(
+      /absolute local paths/i,
+    );
+  });
+});
+
+// ─── re-check / regenerate-stale: readBody oversize cap ──────────────────────
+//
+// The capped guard (runRoutes.ts:45-61 pattern) ensures that once the 2 MB threshold is hit
+// the promise rejects exactly once (capped=true gate) and the end handler never resolves with
+// a partial buffer. Without `if (!capped)` in the end handler the promise could settle twice
+// (reject then resolve), causing the 413 branch to be skipped on short-lingering streams.
+describe("handleQiReCheck — body too large returns 413", () => {
+  it("returns 413 QI_BODY_TOO_LARGE when the request body exceeds 2 MB", async () => {
+    const oversized = Buffer.alloc(2 * 1024 * 1024 + 1, 0x41); // 2 MB + 1 byte of 'A'
+    const req = Readable.from([oversized]) as unknown as IncomingMessage;
+    const result = asResult(await handleQiReCheck(ctx("re-check", RUN_ID, req), deps(evidenceDir)));
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
+});
+
+describe("handleQiRegenerateStale — body too large returns 413", () => {
+  it("returns 413 QI_BODY_TOO_LARGE when the request body exceeds 2 MB", async () => {
+    const oversized = Buffer.alloc(2 * 1024 * 1024 + 1, 0x41);
+    const req = Readable.from([oversized]) as unknown as IncomingMessage;
+    const result = asResult(
+      await handleQiRegenerateStale(ctx("regenerate-stale", RUN_ID, req), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
+});

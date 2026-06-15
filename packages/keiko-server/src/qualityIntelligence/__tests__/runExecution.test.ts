@@ -25,6 +25,7 @@ import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "../runExecution.js";
 import { QiJudgeError } from "../judgePort.js";
+import type { CapsuleResolver } from "../capsuleAdapter.js";
 import type { ExecuteQiRunInput, QiRunAccepted } from "../runExecution.js";
 import type {
   QualityIntelligenceStartRunRequest,
@@ -34,6 +35,22 @@ import type { QualityIntelligenceRunSummary } from "@oscharko-dev/keiko-workflow
 import type { RouteContext } from "../../routes.js";
 import { handleGetQiRun } from "../uiRoutes.js";
 import { hashSnapshot } from "../figma/figmaSnapshotHash.js";
+
+// ─── capsuleAdapter mock (item: close-handle leak) ───────────────────────────
+// makeCapsuleResolver is mocked so tests can inject a fake resolver with a
+// tracked close() spy without needing a real SQLite path. By default the mock
+// returns undefined (matching real behaviour when uiDbPath is absent), so all
+// other tests in this file are unaffected. vitest hoists vi.mock() calls before
+// any imports regardless of source position, so placing them after imports here
+// is safe and keeps import-order lint clean.
+const mockMakeCapsuleResolver = vi.hoisted(() =>
+  vi.fn<() => CapsuleResolver | undefined>(() => undefined),
+);
+vi.mock("../capsuleAdapter.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../capsuleAdapter.js")>("../capsuleAdapter.js");
+  return { ...actual, makeCapsuleResolver: mockMakeCapsuleResolver };
+});
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -1072,13 +1089,10 @@ describe("executeQiRun — candidate artifact persistence", () => {
       onEvent: vi.fn(),
       onAccepted: vi.fn(),
     });
-    if (summary.status === "succeeded") {
-      const artifact = loadQualityIntelligenceCandidates("run-candidates", { evidenceDir });
-      // A candidates artifact should be present.
-      expect(artifact).toBeDefined();
-    }
-    // Either succeeded (artifact present) or failed (test passes trivially).
-    // The test is meaningful on the success path.
+    expect(summary.status).toBe("succeeded");
+    const artifact = loadQualityIntelligenceCandidates("run-candidates", { evidenceDir });
+    // A candidates artifact must be present for a succeeded run.
+    expect(artifact).toBeDefined();
   });
 });
 
@@ -1222,5 +1236,55 @@ describe("executeQiRun — QiJudgeError from createQiJudgePort converts to QiGen
       expect(err).not.toBeInstanceOf(QiJudgeError);
       expect((err as QiGenerationError).code).toBe("QI_JUDGE_MODEL_UNAVAILABLE");
     }
+  });
+});
+
+// ─── CapsuleResolver.close() is called in executeQiRun's finally block ───────
+//
+// RED: before the finally block was added, close() was never called → the assertion
+//   `expect(closeSpy).toHaveBeenCalledTimes(1)` fails (call count = 0).
+// GREEN: the finally block calls `capsuleResolver?.close()` unconditionally after
+//   the workflow completes → close() is called exactly once.
+//
+// The mock returns a fake resolver whose close() is a vi.fn() spy; the default
+// mock returns undefined (matching real behaviour for deps without uiDbPath), so
+// all other tests in this file are unaffected by the top-level vi.mock.
+describe("executeQiRun — capsule resolver handle is closed in finally block", () => {
+  afterEach(() => {
+    mockMakeCapsuleResolver.mockReset();
+    mockMakeCapsuleResolver.mockImplementation(() => undefined);
+  });
+
+  it("calls close() on the capsule resolver exactly once after a succeeded run", async () => {
+    const closeSpy = vi.fn<() => void>();
+    const fakeResolver: CapsuleResolver = {
+      capsule: (): readonly never[] => [],
+      capsuleSet: (): readonly never[] => [],
+      close: closeSpy,
+    };
+    mockMakeCapsuleResolver.mockReturnValue(fakeResolver);
+
+    await executeQiRun(makeInput(evidenceDir));
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls close() on the capsule resolver exactly once even when the run fails", async () => {
+    const closeSpy = vi.fn<() => void>();
+    const fakeResolver: CapsuleResolver = {
+      capsule: (): readonly never[] => [],
+      capsuleSet: (): readonly never[] => [],
+      close: closeSpy,
+    };
+    mockMakeCapsuleResolver.mockReturnValue(fakeResolver);
+
+    // fakeUnparseablePort() causes the workflow to reach status 'failed' rather than throwing.
+    await executeQiRun(
+      makeInput(evidenceDir, {
+        deps: buildDeps({ evidenceDir, modelPort: fakeUnparseablePort() }),
+      }),
+    );
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });

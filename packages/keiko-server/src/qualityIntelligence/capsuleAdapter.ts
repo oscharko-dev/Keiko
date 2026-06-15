@@ -26,10 +26,14 @@ export interface CapsuleDocumentText {
  * capsule; `capsuleSet` fans out over a capsule-set's members. Both share one lazily-opened store
  * handle and return `[]` on any failure (unknown id, store-open error) so the ingestion layer maps
  * the empty result to a coded, user-actionable QI_CAPSULE_UNAVAILABLE error.
+ *
+ * `close` releases the underlying SQLite handle; must be called once per resolver lifetime (e.g. in
+ * the finally block of executeQiRun) to prevent a handle leak per QI run.
  */
 export interface CapsuleResolver {
   readonly capsule: (capsuleId: string) => readonly CapsuleDocumentText[];
   readonly capsuleSet: (capsuleSetId: string) => readonly CapsuleDocumentText[];
+  readonly close: () => void;
 }
 
 /**
@@ -77,5 +81,8 @@ export function makeCapsuleResolver(deps: UiHandlerDeps): CapsuleResolver | unde
     capsule: (capsuleId) => read(capsuleId, QualityIntelligenceHandoff.listCapsuleDocumentTexts),
     capsuleSet: (capsuleSetId) =>
       read(capsuleSetId, QualityIntelligenceHandoff.listCapsuleSetDocumentTexts),
+    close: (): void => {
+      store?.close();
+    },
   };
 }

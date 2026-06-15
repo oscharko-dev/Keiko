@@ -127,6 +127,15 @@ const isAllowedFigmaRenderUrl = (url: URL, host: string): boolean => {
   if (host === "s3-alpha-sig.figma.com") return true;
   if (host === "cdn.figma.com" || host === "static.figma.com") return true;
   if (host.endsWith(".figma.com")) return true;
+  // Multi-region S3 bucket allowlist: accepts any globally-unique bucket whose NAME starts with
+  // "figma" (e.g. figma-prod.s3.eu-west-1.amazonaws.com). The residual risk is that an attacker
+  // who can create an S3 bucket named figma-anything could serve a crafted render response. In
+  // practice the risk is low: (a) render URLs are returned by the authenticated Figma API over
+  // TLS, so a MITM or API compromise is a prerequisite; (b) the URLs are short-lived/pre-signed
+  // and carry no Figma auth header (the token is injected only into the /v1/images API call);
+  // (c) the byte-cap + oversized-skip guard limits the blast radius of a poisoned response.
+  // Tightening to a fixed bucket list would break legitimate Figma render fronts that span many
+  // regions; revisit if Figma publishes an authoritative set of render origins.
   if (/^figma[-a-z0-9]*\.s3[.-][a-z0-9-]+\.amazonaws\.com$/u.test(host)) return true;
   if (
     (host === "s3-us-west-2.amazonaws.com" || host === "s3.us-west-2.amazonaws.com") &&
