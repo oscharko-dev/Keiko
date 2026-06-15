@@ -18,4 +18,10 @@ describe("exponentialDecay (#204, O-P2)", () => {
     expect(v).toBeGreaterThanOrEqual(0);
     expect(v).toBeLessThanOrEqual(1);
   });
+
+  it("clamps a super-unit result (negative half-life) back to 1", () => {
+    // A negative half-life flips the exponent positive, so the raw decay exceeds 1; the upper guard
+    // clamps it so a nonsensical config can never poison the weighted sum with a >1 factor.
+    expect(exponentialDecay(100, -50)).toBe(1);
+  });
 });

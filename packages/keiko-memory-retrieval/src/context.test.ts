@@ -78,6 +78,15 @@ describe("assembleContextBlock — caps and pressure", () => {
     expect(result.omitted.every((o) => o.reason === "budget-exceeded")).toBe(true);
   });
 
+  it("omits a ranked memory whose record is absent (out-of-scope)", () => {
+    // 'ghost' is ranked but has no record in the supplied set — it must be omitted, not crash.
+    const present = buildRecord({ id: "present", body: "hello world" });
+    const ranked = [included("present"), included("ghost")];
+    const result = assembleContextBlock(ranked, [present], { budgetTokens: 1000, maxIncluded: 12 });
+    expect(result.included.map((e) => String(e.memoryId))).toEqual(["present"]);
+    expect(result.omitted).toContainEqual({ memoryId: memoryId("ghost"), reason: "out-of-scope" });
+  });
+
   it("under heavy budget pressure (100 candidates, tiny budget) omits most as budget-exceeded", () => {
     const records = Array.from({ length: 100 }, (_, i) =>
       buildRecord({ id: `m${String(i)}`, body: "alpha beta gamma delta epsilon zeta eta theta" }),

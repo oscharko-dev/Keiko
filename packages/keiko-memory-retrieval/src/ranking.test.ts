@@ -267,10 +267,12 @@ describe("rankMemories — reinforcement strength subscore (#204 plasticity)", (
 
 describe("sourceImportance (#204, O-F5)", () => {
   it("ranks capture provenance by authority, descending", () => {
-    expect(sourceImportance(buildRecord({ id: "a", sourceKind: "explicit-user-instruction" }))).toBe(
-      1,
+    expect(
+      sourceImportance(buildRecord({ id: "a", sourceKind: "explicit-user-instruction" })),
+    ).toBe(1);
+    expect(sourceImportance(buildRecord({ id: "b", sourceKind: "accepted-correction" }))).toBe(
+      0.85,
     );
-    expect(sourceImportance(buildRecord({ id: "b", sourceKind: "accepted-correction" }))).toBe(0.85);
     expect(sourceImportance(buildRecord({ id: "c", sourceKind: "workflow-outcome" }))).toBe(0.6);
     expect(sourceImportance(buildRecord({ id: "d", sourceKind: "consolidation" }))).toBe(0.5);
     expect(sourceImportance(buildRecord({ id: "e", sourceKind: "system-default" }))).toBe(0.4);
@@ -293,7 +295,11 @@ describe("rankMemories — source-authority importance subscore (#204, O-F5)", (
       sourceKind: "explicit-user-instruction",
       updatedAt: now,
     });
-    const inferred = buildRecord({ id: "aaa-inferred", sourceKind: "system-default", updatedAt: now });
+    const inferred = buildRecord({
+      id: "aaa-inferred",
+      sourceKind: "system-default",
+      updatedAt: now,
+    });
     const ranked = rankMemories([inferred, explicit], {
       nowMs: now,
       weights: { ...DEFAULT_RANKING_WEIGHTS, importance: 0.5 },
@@ -302,7 +308,10 @@ describe("rankMemories — source-authority importance subscore (#204, O-F5)", (
     expect(ranked[0]?.subscores.importance).toBe(1);
     // CONTROL: at the default importance weight 0 the two tie and fall back to the id order,
     // surfacing the inferred record first — proving the re-order above is the importance signal.
-    const control = rankMemories([inferred, explicit], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
+    const control = rankMemories([inferred, explicit], {
+      nowMs: now,
+      weights: DEFAULT_RANKING_WEIGHTS,
+    });
     expect(control[0]?.memoryId).toBe(memoryId("aaa-inferred"));
   });
 });
@@ -330,11 +339,44 @@ describe("rankMemories — RRF fusion (#204, O-F2)", () => {
     expect(JSON.stringify(explicit)).toBe(JSON.stringify(def));
   });
 
+  it("RRF with no positive-weight signals falls back to the rank sort (full tie breaks on id asc)", () => {
+    // All weights zero => no RRF signals => the early return path; the weighted sum is also 0 for
+    // every entry, so the two records tie on score AND updatedAt and the comparator's id tiebreak
+    // decides the order (z after a).
+    const zeroWeights = {
+      ...DEFAULT_RANKING_WEIGHTS,
+      relevance: 0,
+      recency: 0,
+      confidence: 0,
+      pinned: 0,
+      correction: 0,
+      graph: 0,
+      semantic: 0,
+      strength: 0,
+      importance: 0,
+    };
+    const z = buildRecord({ id: "z", body: "x", updatedAt: now });
+    const a = buildRecord({ id: "a", body: "x", updatedAt: now });
+    const out = rankMemories([z, a], {
+      queryText: "x",
+      nowMs: now,
+      weights: zeroWeights,
+      fusion: "rrf",
+    });
+    expect(out.map((e) => String(e.memoryId))).toEqual(["a", "z"]);
+    expect(out.every((e) => e.score === 0)).toBe(true);
+  });
+
   it("is deterministic and returns every memory", () => {
     const a = buildRecord({ id: "a", body: "alpha beta", updatedAt: now });
     const b = buildRecord({ id: "b", body: "gamma", updatedAt: now - 10 });
     const c = buildRecord({ id: "c", body: "alpha", updatedAt: now - 5 });
-    const q = { queryText: "alpha", nowMs: now, weights: onlyRelevanceRecency, fusion: "rrf" } as const;
+    const q = {
+      queryText: "alpha",
+      nowMs: now,
+      weights: onlyRelevanceRecency,
+      fusion: "rrf",
+    } as const;
     const r1 = rankMemories([a, b, c], q);
     const r2 = rankMemories([a, b, c], q);
     expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));

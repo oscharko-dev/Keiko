@@ -57,4 +57,48 @@ describe("reorderByMmr (#204, O-F3)", () => {
     expect(order).toHaveLength(3);
     expect(new Set(order)).toEqual(new Set(["a", "b", "c"]));
   });
+
+  it("treats a candidate with no embedding as maximally novel (no diversity penalty)", () => {
+    // 'noemb' has no vector: maxSimilarity must short-circuit to 0 and it must never be pushed to the
+    // selected-vector set. With three items the MMR loop runs; the no-embedding item keeps its score.
+    const ranked = [item("dup1", 0.9), item("dup2", 0.85), item("noemb", 0.84)];
+    const vecs = new Map([
+      [memoryId("dup1"), DUP],
+      [memoryId("dup2"), DUP2],
+    ]);
+    const order = reorderByMmr(ranked, vecs, 0.7).map((i) => String(i.memoryId));
+    expect(order[0]).toBe("dup1");
+    // noemb (novel, penalty 0) is pulled ahead of dup2 (near-identical to dup1).
+    expect(order[1]).toBe("noemb");
+    expect(order[2]).toBe("dup2");
+  });
+
+  it("scores degenerate vectors as zero similarity (length mismatch, zero norm, opposite)", () => {
+    // Each non-top candidate exercises one defensive cosine branch against the selected top vector:
+    //   wronglen -> length mismatch    zero -> zero magnitude    opposite -> non-positive cosine
+    // All yield similarity 0, so the loop completes and every item survives in score order.
+    const ranked = [
+      item("top", 0.9),
+      item("opposite", 0.8),
+      item("wronglen", 0.7),
+      item("zero", 0.6),
+    ];
+    const vecs = new Map([
+      [memoryId("top"), Float32Array.from([1, 0, 0])],
+      [memoryId("opposite"), Float32Array.from([-1, 0, 0])],
+      [memoryId("wronglen"), Float32Array.from([1, 0])],
+      [memoryId("zero"), Float32Array.from([0, 0, 0])],
+    ]);
+    const order = reorderByMmr(ranked, vecs, 0.7).map((i) => String(i.memoryId));
+    expect(order[0]).toBe("top");
+    expect(order).toHaveLength(4);
+    expect(new Set(order)).toEqual(new Set(["top", "opposite", "wronglen", "zero"]));
+  });
+
+  it("returns a copy (not the same reference) on the inert path", () => {
+    const ranked = [item("a", 0.9), item("b", 0.8)];
+    const out = reorderByMmr(ranked, new Map());
+    expect(out).toEqual(ranked);
+    expect(out).not.toBe(ranked);
+  });
 });
