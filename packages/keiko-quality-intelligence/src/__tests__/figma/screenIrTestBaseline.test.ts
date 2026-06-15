@@ -93,6 +93,21 @@ describe("deriveScreenTestBaseline", () => {
     expect(render[0]?.title).toContain("Dashboard");
   });
 
+  // The render item must NOT assert reachability — navGraph is the single source of truth for
+  // reachability and the adversarial judge flagged the contradiction on multi-screen boards.
+  it('screen-render title is "renders correctly" and does NOT contain "reachable"', () => {
+    const ir = screen(
+      "s-render-title",
+      "Splash",
+      node("root", "container", { children: [] }),
+    );
+
+    const render = deriveScreenTestBaseline(ir).items.find((i) => i.category === "screen-render");
+
+    expect(render?.title).toBe('Screen "Splash" renders correctly');
+    expect(render?.title).not.toContain("reachable");
+  });
+
   it("derives a state test from a generic state/variant naming convention", () => {
     const ir = screen(
       "s4",
