@@ -347,8 +347,14 @@ describe("memory handlers", () => {
     );
 
     expect(acceptResult.status).toBe(200);
-    expect(vault.getMemory(memoryId("memory-correct-accept"))?.status).toBe("superseded");
+    const superseded = vault.getMemory(memoryId("memory-correct-accept"));
+    expect(superseded?.status).toBe("superseded");
+    // Bi-temporal-lite (#204, C1): the superseded fact's belief window is CLOSED at acceptance, so
+    // "what did we believe as of T" is answerable and it drops out of default retrieval.
+    expect(superseded?.validity.validUntil).toBeGreaterThan(superseded?.validity.validFrom ?? 0);
     expect(vault.getMemory(correction.id)?.status).toBe("accepted");
+    // The replacement's window stays OPEN (the current belief).
+    expect(vault.getMemory(correction.id)?.validity.validUntil).toBeUndefined();
     expect(vault.getMemory(correction.id)?.type).toBe("preference");
     expect(vault.getMemory(correction.id)?.provenance.sourceKind).toBe("accepted-correction");
 

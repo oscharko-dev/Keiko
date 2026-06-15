@@ -32,6 +32,7 @@ import {
   buildUnpinOperation,
   detectConflictPair,
   selectMemoriesForForget,
+  supersededValidity,
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
 import {
@@ -1075,9 +1076,16 @@ function persistConflictTransitions(
   reason: string,
 ): void {
   for (const transition of resolution.statusTransitions) {
+    // Bi-temporal-lite (#204, C1): a record losing a conflict and being SUPERSEDED gets its belief
+    // window closed at the transition time, same as the correction path. Other transitions (e.g.
+    // the winner re-accepted) leave validity untouched.
+    const existing =
+      transition.to === "superseded" ? vault.getMemory(transition.memoryId) : undefined;
+    const validity =
+      existing !== undefined ? supersededValidity(existing, transition.transitionedAt) : null;
     vault.updateMemory(
       transition.memoryId,
-      { status: transition.to, staleReason: reason },
+      { status: transition.to, staleReason: reason, ...(validity !== null ? { validity } : {}) },
       transition.transitionedAt,
     );
   }
@@ -1396,14 +1404,21 @@ function buildCorrectionAcceptanceUpdates(
 ): readonly MemoryBatchUpdate[] {
   return [
     { id: proposalId, patch: acceptPatch, nowMs },
-    ...origins.map(({ edge, original }) => ({
-      id: original.id,
-      patch: {
-        status: "superseded" as const,
-        staleReason: edge.provenanceSummary ?? "accepted correction",
-      },
-      nowMs,
-    })),
+    ...origins.map(({ edge, original }) => {
+      // Bi-temporal-lite (#204, C1): close the superseded fact's belief window at acceptance time so
+      // it drops out of default retrieval and "as of date T" stays answerable. Additive — only when
+      // it forms a valid, non-extending interval.
+      const validity = supersededValidity(original, nowMs);
+      return {
+        id: original.id,
+        patch: {
+          status: "superseded" as const,
+          staleReason: edge.provenanceSummary ?? "accepted correction",
+          ...(validity !== null ? { validity } : {}),
+        },
+        nowMs,
+      };
+    }),
   ];
 }
 
