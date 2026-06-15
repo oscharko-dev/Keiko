@@ -34,6 +34,7 @@ export interface FigmaSnapshotImageRef {
 export type FigmaSnapshotSkipReason =
   | "render-url-missing"
   | "render-url-blocked"
+  | "render-screen-cap-exceeded"
   | "render-fetch-failed"
   | `render-fetch-failed:${string}`
   | "render-empty"

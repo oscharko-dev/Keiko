@@ -419,7 +419,7 @@ describe("parseScreenIr — layout/sizing/cornerRadius/typography round trip", (
               type: "TEXT",
               interactionHint: "text",
               text: "Hallo",
-              typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+              typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHeight: 24 },
               imageFills: [],
               children: [],
             },
@@ -439,6 +439,7 @@ describe("parseScreenIr — layout/sizing/cornerRadius/typography round trip", (
       fontFamily: "Inter",
       fontSize: 16,
       fontWeight: 400,
+      lineHeight: 24,
     });
   });
 

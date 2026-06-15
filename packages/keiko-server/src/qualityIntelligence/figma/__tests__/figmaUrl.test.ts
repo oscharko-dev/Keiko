@@ -39,6 +39,10 @@ describe("parseFigmaTarget — generic, deterministic", () => {
     expect(parseFigmaTarget("https://figma.com.evil.com/design/KEY/N?node-id=1-2")).toBeNull();
   });
 
+  it("rejects non-HTTPS Figma links", () => {
+    expect(parseFigmaTarget("http://www.figma.com/design/KEY/N?node-id=1-2")).toBeNull();
+  });
+
   it("rejects malformed and non-design paths", () => {
     expect(parseFigmaTarget("not a url")).toBeNull();
     expect(parseFigmaTarget("https://www.figma.com/")).toBeNull();

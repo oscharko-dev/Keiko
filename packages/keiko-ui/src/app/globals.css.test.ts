@@ -655,4 +655,14 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(block).toContain("height: 54px");
     expect(block).toContain("object-fit: contain");
   });
+
+  it(".figma-snapshot-error-card uses the contrast-pinned danger token, not raw red HSL", () => {
+    const card = cssBlock(".figma-snapshot-error-card {");
+    const title = cssBlock(".figma-snapshot-error-title {");
+    const detail = cssBlock(".figma-snapshot-error-detail {");
+    expect(card).toContain("var(--danger)");
+    expect(card).not.toMatch(/hsl\(/u);
+    expect(title).toContain("color: var(--danger)");
+    expect(detail).toContain("color: var(--fg)");
+  });
 });

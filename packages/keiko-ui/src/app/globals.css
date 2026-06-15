@@ -9206,9 +9206,9 @@ select.dlg-input {
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, hsl(6 80% 52%) 55%, transparent);
+  border: 1px solid color-mix(in oklch, var(--danger) 55%, transparent);
   border-radius: var(--radius-sm, 6px);
-  background: color-mix(in srgb, hsl(6 80% 52%) 12%, transparent);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
 }
 
 .figma-snapshot-error-title,
@@ -9220,12 +9220,12 @@ select.dlg-input {
 }
 
 .figma-snapshot-error-title {
-  color: hsl(6 82% 58%);
+  color: var(--danger);
   font-weight: 700;
 }
 
 .figma-snapshot-error-detail {
-  color: hsl(6 80% 62%);
+  color: var(--fg);
 }
 
 .figma-snapshot-error-status,
@@ -9496,6 +9496,23 @@ select.dlg-input {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.figma-snapshot-gallery-more {
+  align-self: flex-start;
+  min-height: 24px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-gallery-more:focus-visible {
+  outline: 2px solid var(--accent);
 }
 
 .figma-snapshot-screen-card {

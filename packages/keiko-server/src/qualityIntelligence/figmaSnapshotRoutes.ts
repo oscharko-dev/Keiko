@@ -87,6 +87,8 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   FIGMA_INSUFFICIENT_SCOPE: `The configured Figma PAT lacks the required read-only scopes (${READ_ONLY_SCOPE_HINT}).`,
   FIGMA_NOT_FOUND:
     "The Figma board was not found. Check the link and that the PAT can access this file.",
+  FIGMA_NOT_READY:
+    "The selected Figma scope is not release-ready. Pin a Figma version, select a Release section, or mark the frame Ready for dev before snapshotting.",
   FIGMA_UPSTREAM_UNAVAILABLE: "Figma API is temporarily unavailable. Please try again.",
   FIGMA_PROXY_EGRESS_FAILED:
     "The forward proxy rejected the Figma egress request. Check proxy configuration.",
@@ -98,7 +100,8 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     "The forward proxy blocked the Figma egress request. Ask the proxy operator to allow api.figma.com.",
   FIGMA_TLS_CA_FAILURE:
     "The Figma egress TLS certificate could not be verified. Check the configured CA bundle.",
-  FIGMA_RATE_LIMITED: "Figma rate-limited the snapshot-build. Please wait a moment and try again.",
+  FIGMA_RATE_LIMITED:
+    "Figma rate-limited the snapshot-build. Retry with a narrower Release section or lower the Figma fetch limits before re-running.",
   FIGMA_OVERSIZED_SCOPE:
     "The selected Figma board section is too large. Select a smaller section (frame or page).",
   FIGMA_RESPONSE_TOO_LARGE:
@@ -159,6 +162,7 @@ const FIGMA_502_CODES = new Set<FigmaConnectorErrorCode>([
 function figmaStatusForCode(code: FigmaConnectorErrorCode): number {
   if (FIGMA_502_CODES.has(code)) return 502;
   if (code === "FIGMA_NOT_FOUND") return 404;
+  if (code === "FIGMA_NOT_READY") return 412;
   if (code === "FIGMA_RATE_LIMITED") return 429;
   if (code === "FIGMA_OVERSIZED_SCOPE") return 422;
   // Precondition Required: the operator must acknowledge the read-only scope before the build (#760).
@@ -379,6 +383,23 @@ function appendSnapshotRouteFailureAudit(
 
 // ─── POST /api/figma/snapshots — parse + validate ─────────────────────────────
 
+function parseTriggerJson(raw: string): Record<string, unknown> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  return typeof parsed === "object" && parsed !== null
+    ? (parsed as Record<string, unknown>)
+    : undefined;
+}
+
+function parseTriggerBoardLink(body: Record<string, unknown>): string | undefined {
+  const boardLink = typeof body.boardLink === "string" ? body.boardLink.trim() : "";
+  return boardLink.length > 0 && parseFigmaTarget(boardLink) !== null ? boardLink : undefined;
+}
+
 /** Reads and validates the POST body, returning the board link or an error result. */
 async function parseTriggerBody(req: IncomingMessage): Promise<ParsedTriggerBody | RouteResult> {
   let raw: string;
@@ -387,22 +408,21 @@ async function parseTriggerBody(req: IncomingMessage): Promise<ParsedTriggerBody
   } catch {
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
+  const body = parseTriggerJson(raw);
+  if (body === undefined) {
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
   }
-  if (typeof parsed !== "object" || parsed === null) {
+  const boardLink = parseTriggerBoardLink(body);
+  if (boardLink === undefined) {
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
   }
-  const body = parsed as Record<string, unknown>;
-  const boardLink = typeof body.boardLink === "string" ? body.boardLink.trim() : "";
-  if (boardLink.length === 0 || parseFigmaTarget(boardLink) === null) {
-    return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
-  }
+  const requestedVersion =
+    typeof body.version === "string" ? parseFigmaVersion(body.version) : undefined;
+  const linkVersion = parseFigmaVersionFromLink(boardLink);
+  const version = requestedVersion ?? linkVersion;
   return {
     boardLink,
+    ...(version !== undefined ? { version } : {}),
     // Explicit read-only-scope acknowledgement (#760): records consent BEFORE the first fetch.
     acknowledgeReadOnly: body.acknowledgeReadOnly === true,
     // Audited as a re-snapshot (#759): a fresh, explicit, full scoped re-fetch — never a delta.
@@ -412,8 +432,26 @@ async function parseTriggerBody(req: IncomingMessage): Promise<ParsedTriggerBody
 
 interface ParsedTriggerBody {
   readonly boardLink: string;
+  readonly version?: string;
   readonly acknowledgeReadOnly: boolean;
   readonly isResnapshot: boolean;
+}
+
+const FIGMA_VERSION_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+
+function parseFigmaVersion(raw: string): string | undefined {
+  const value = raw.trim();
+  return FIGMA_VERSION_PATTERN.test(value) ? value : undefined;
+}
+
+function parseFigmaVersionFromLink(boardLink: string): string | undefined {
+  try {
+    const url = new URL(boardLink);
+    const raw = url.searchParams.get("version-id") ?? url.searchParams.get("version");
+    return raw === null ? undefined : parseFigmaVersion(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 // Deployment-overridable deep scoped-pagination budgets (#837). Operators on a tighter Figma plan can
@@ -548,10 +586,11 @@ function coalescingKeyFor(
   boardLink: string,
   acknowledgeReadOnly: boolean,
   isResnapshot: boolean,
+  version?: string,
 ): string | undefined {
   const target = parseFigmaTarget(boardLink);
   if (target === null) return undefined;
-  return `${target.fileKey}:${target.nodeId}:${isResnapshot ? "resnapshot" : "snapshot"}:${acknowledgeReadOnly ? "ack" : "noack"}`;
+  return `${target.fileKey}:${target.nodeId}:${version ?? "latest"}:${isResnapshot ? "resnapshot" : "snapshot"}:${acknowledgeReadOnly ? "ack" : "noack"}`;
 }
 
 // Starts the governed build + persist and removes the map entry on settle.
@@ -578,6 +617,7 @@ function startCoalescedBuild(
           env: deps.env,
           now: new Date().toISOString(),
           acknowledgeReadOnly: body.acknowledgeReadOnly,
+          version: body.version,
           pagination: figmaPaginationFromEnv(deps.env),
           egress: currentGatewayEgressConfig(deps),
           configToken: currentGatewayConfig(deps)?.figma?.accessToken,
@@ -645,7 +685,12 @@ export async function handleFigmaTriggerSnapshot(
   if ("status" in bodyResult) return bodyResult;
   const body: ParsedTriggerBody = bodyResult;
 
-  const scopeKey = coalescingKeyFor(body.boardLink, body.acknowledgeReadOnly, body.isResnapshot);
+  const scopeKey = coalescingKeyFor(
+    body.boardLink,
+    body.acknowledgeReadOnly,
+    body.isResnapshot,
+    body.version,
+  );
   if (scopeKey === undefined) {
     // parseTriggerBody already validates the board link; this is a belt-and-suspenders guard.
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
@@ -730,7 +775,7 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
   const store = createNodeFigmaSnapshotStore(evidenceDir);
   let record: FigmaSnapshotRecord | undefined;
   try {
-    record = store.load(runId);
+    record = store.loadMetadata(runId);
   } catch {
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }

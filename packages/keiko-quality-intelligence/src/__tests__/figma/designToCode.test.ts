@@ -630,6 +630,30 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
     expect(html).toContain(".n-flex-root {");
   });
 
+  it("keeps CSS classes distinct when different Figma ids sanitize to the same slug", () => {
+    const s = screen(
+      "s-collide",
+      "Collide",
+      node("root", "container", {
+        children: [
+          node("1:2", "container", { layout: { mode: "row" } }),
+          node("1;2", "container", { layout: { mode: "column" } }),
+        ],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-collide.html");
+    const classNames = [...html.matchAll(/class="([^"]+)"/gu)].map((match) => match[1]);
+    expect(classNames).toHaveLength(2);
+    expect(new Set(classNames).size).toBe(2);
+    const [firstClass, secondClass] = classNames;
+    if (firstClass === undefined || secondClass === undefined) {
+      throw new Error("expected two emitted class names");
+    }
+    expect(html).toContain(`.${firstClass} {`);
+    expect(html).toContain(`.${secondClass} {`);
+  });
+
   it("emits border-radius when cornerRadius is set", () => {
     const s = screen("s-r", "Radius", node("card", "container", { name: "card", cornerRadius: 8 }));
     const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
@@ -687,7 +711,7 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
       "Typo",
       node("label", "text", {
         text: "Hello",
-        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHeight: 24 },
       }),
     );
     const artifact = emitCode(
@@ -913,7 +937,7 @@ describe("htmlCssAdapter — typography inline fallback and flex alignment", () 
         children: [
           node("label", "text", {
             text: "Hi",
-            typography: { fontFamily: "Roboto", fontSize: 18, fontWeight: 700 },
+            typography: { fontFamily: "Roboto", fontSize: 18, fontWeight: 700, lineHeight: 28 },
           }),
         ],
       }),
@@ -923,8 +947,50 @@ describe("htmlCssAdapter — typography inline fallback and flex alignment", () 
     const html = fileByPath(artifact, "screens/s-it.html");
     expect(html).toContain("font-weight: 700;");
     expect(html).toContain("font-size: 18px;");
+    expect(html).toContain("line-height: 28px;");
     expect(html).toContain('font-family: "Roboto";');
     expect(html).not.toContain("font: var(--font-");
+  });
+
+  it("does not match a typography token with the wrong line height", () => {
+    const typographyTokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typography:Inter|16|400|24",
+          kind: "typography",
+          fontFamily: "Inter",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+        {
+          id: "typography:Inter|16|400|32",
+          kind: "typography",
+          fontFamily: "Inter",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 32,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const s = screen(
+      "s-typo-lh",
+      "Typo LH",
+      node("label", "text", {
+        text: "Hello",
+        typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHeight: 32 },
+      }),
+    );
+    const artifact = emitCode(
+      { screens: [s], tokens: typographyTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const html = fileByPath(artifact, "screens/s-typo-lh.html");
+    expect(html).toContain("font: var(--font-2);");
+    expect(html).not.toContain("font: var(--font-1);");
   });
 
   it("emits justify-content and align-items from primaryAlign/counterAlign", () => {

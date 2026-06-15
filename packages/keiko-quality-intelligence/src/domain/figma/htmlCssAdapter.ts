@@ -159,7 +159,7 @@ const VOID_ROLES = new Set<EmissionRole>(["input", "image"]);
 interface TokenLookups {
   /** hex color value → CSS var name, e.g. "#112233" → "--color-1" */
   readonly colorVar: ReadonlyMap<string, string>;
-  /** typography key → CSS var name, e.g. "Inter|16|400" → "--font-1" */
+  /** typography key → CSS var name, e.g. "Inter|16|400|24" → "--font-1" */
   readonly fontVar: ReadonlyMap<string, string>;
 }
 
@@ -170,9 +170,9 @@ const fontVar = (index: number): string => `--font-${String(index + 1)}`;
 
 // Typography key used to match per-node typography against the global token table.
 const typographyKey = (t: IrTypography): string =>
-  `${t.fontFamily}|${String(t.fontSize)}|${String(t.fontWeight)}`;
+  `${t.fontFamily}|${String(t.fontSize)}|${String(t.fontWeight)}|${String(t.lineHeight ?? "")}`;
 const typographyTokenKey = (t: TypographyToken): string =>
-  `${t.fontFamily}|${String(t.fontSize)}|${String(t.fontWeight)}`;
+  `${t.fontFamily}|${String(t.fontSize)}|${String(t.fontWeight)}|${String(t.lineHeight)}`;
 
 const buildTokenLookups = (tokens: DesignTokens): TokenLookups => {
   const colorMap = new Map<string, string>();
@@ -189,10 +189,29 @@ const buildTokenLookups = (tokens: DesignTokens): TokenLookups => {
 // ─── Per-node CSS class generation ───────────────────────────────────────────
 //
 // A deterministic class name is derived from the node id by replacing non-alphanumeric characters
-// with "-" and prefixing "n-". This is stable: same id → same class name every run.
+// with "-" and prefixing "n-". When two raw ids sanitize to the same slug, append a stable raw-id
+// hash to the later class so distinct Figma nodes cannot alias onto one CSS selector.
 
 const sanitizeIdForClass = (id: string): string => id.replace(/[^a-zA-Z0-9]/gu, "-");
-const nodeClass = (id: string): string => `n-${sanitizeIdForClass(id)}`;
+const classHash = (id: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+};
+const nodeClassBase = (id: string): string => `n-${sanitizeIdForClass(id) || "node"}`;
+const nodeClass = (id: string, ctx: ScreenStyleContext): string => {
+  const existing = ctx.classMap.get(id);
+  if (existing !== undefined) return existing;
+  const base = nodeClassBase(id);
+  const owner = ctx.usedClasses.get(base);
+  const cls = owner === undefined || owner === id ? base : `${base}-${classHash(id)}`;
+  ctx.usedClasses.set(cls, id);
+  ctx.classMap.set(id, cls);
+  return cls;
+};
 
 const ALIGN_CSS: Readonly<Record<AlignItems, string>> = {
   start: "flex-start",
@@ -240,6 +259,9 @@ const typographyDeclarations = (typo: IrTypography, lookups: TokenLookups): read
   const decls: string[] = [];
   if (Number.isFinite(typo.fontWeight)) decls.push(`font-weight: ${String(typo.fontWeight)};`);
   if (Number.isFinite(typo.fontSize)) decls.push(`font-size: ${String(typo.fontSize)}px;`);
+  if (typo.lineHeight !== undefined && Number.isFinite(typo.lineHeight)) {
+    decls.push(`line-height: ${String(typo.lineHeight)}px;`);
+  }
   if (typo.fontFamily.length > 0) decls.push(`font-family: ${safeFontFamily(typo.fontFamily)};`);
   return decls;
 };
@@ -248,6 +270,8 @@ interface ScreenStyleContext {
   readonly lookups: TokenLookups;
   /** Map from node id to CSS class name — populated while building; used when rendering attributes. */
   readonly classMap: Map<string, string>;
+  /** Reverse class ownership for collision-resistant class generation. */
+  readonly usedClasses: Map<string, string>;
   /** Accumulated CSS rules for the screen, in element-tree order. */
   readonly rules: string[];
 }
@@ -266,8 +290,7 @@ const collectStyles = (element: EmissionElement, ctx: ScreenStyleContext): void 
   ];
 
   if (decls.length > 0) {
-    const cls = nodeClass(element.id);
-    ctx.classMap.set(element.id, cls);
+    const cls = nodeClass(element.id, ctx);
     ctx.rules.push(`.${cls} {`);
     for (const decl of decls) ctx.rules.push(`  ${decl}`);
     ctx.rules.push("}");
@@ -350,7 +373,12 @@ function renderScreenHtml(
   lookups: TokenLookups,
 ): string {
   // Collect per-node styles first so classMap is populated before HTML rendering.
-  const ctx: ScreenStyleContext = { lookups, classMap: new Map(), rules: [] };
+  const ctx: ScreenStyleContext = {
+    lookups,
+    classMap: new Map(),
+    usedClasses: new Map(),
+    rules: [],
+  };
   collectStyles(screen.root, ctx);
 
   const styleBlock: string[] =
