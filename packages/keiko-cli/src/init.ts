@@ -3,15 +3,15 @@ import { resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 
-export const KEIKO_START_SCRIPT = "keiko start";
-export const KEIKO_STOP_SCRIPT = "keiko stop";
+export const KEIKO_START_SCRIPT = "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start";
+export const KEIKO_STOP_SCRIPT = "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop";
 
 const USAGE = `Usage:
   keiko init [--package PATH] [--force] [--dry-run]
 
 Adds local package.json scripts for running Keiko:
-  keiko:start  -> keiko start
-  keiko:stop   -> keiko stop
+  keiko:start  -> node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start
+  keiko:stop   -> node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop
 
 Run this from the project where @oscharko-dev/keiko is installed.
 `;
