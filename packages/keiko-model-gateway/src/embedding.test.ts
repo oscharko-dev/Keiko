@@ -722,3 +722,108 @@ describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
     if (!outcome.ok) expect(outcome.kind).toBe("rate-limited");
   });
 });
+
+describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () => {
+  type NarrowFetch = (url: string, init?: RequestInit) => Promise<Response>;
+  function mockFetch(
+    handler: (url: string, init: RequestInit) => Promise<Response> | Response,
+  ): typeof fetch {
+    const f: NarrowFetch = async (url, init) => handler(url, init ?? {});
+    return f as unknown as typeof fetch;
+  }
+  function ok(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("uses a custom apiKeyHeaderName and forwards the caller signal", async () => {
+    let header: string | null = null;
+    let hadSignal = false;
+    const fetchImpl = mockFetch((_url, init) => {
+      header = (init.headers as Record<string, string>)["api-key"] ?? null;
+      hadSignal = init.signal != null;
+      return ok({ data: [{ index: 0, embedding: [1, 2] }] });
+    });
+    const out = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "raw-key",
+      apiKeyHeaderName: "api-key",
+      modelId: "m",
+      inputs: ["a"],
+      signal: new AbortController().signal,
+      fetchImpl,
+    });
+    expect(out.ok).toBe(true);
+    expect(header).toBe("raw-key");
+    expect(hadSignal).toBe(true);
+  });
+
+  it("resolves modelId per item, then top-level model, then the request modelId", async () => {
+    // item-level model wins
+    const a = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1], model: "item-model" }] })),
+    });
+    expect(a.ok && a.value[0]?.modelId).toBe("item-model");
+    // top-level model when no item model
+    const b = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ model: "top-model", data: [{ index: 0, embedding: [1] }] })),
+    });
+    expect(b.ok && b.value[0]?.modelId).toBe("top-model");
+    // request modelId when neither present
+    const c = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1] }] })),
+    });
+    expect(c.ok && c.value[0]?.modelId).toBe("req-model");
+  });
+
+  it("carries model_revision when the payload provides one", async () => {
+    const out = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ model_revision: "rev-9", data: [{ index: 0, embedding: [1] }] })),
+    });
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.value[0]?.modelRevision).toBe("rev-9");
+  });
+
+  it("rejects a non-record data item, a missing index, and a non-array embedding", async () => {
+    for (const data of [[42], [{ embedding: [1] }], [{ index: 0, embedding: "nope" }]]) {
+      const out = await requestOpenAIEmbeddingBatch({
+        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+        fetchImpl: mockFetch(() => ok({ data })),
+      });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.kind).toBe("invalid-response");
+    }
+  });
+
+  it("rejects when the payload is not an object or has no data array", async () => {
+    for (const body of ["[]", JSON.stringify({ data: "x" })]) {
+      const out = await requestOpenAIEmbeddingBatch({
+        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+        fetchImpl: mockFetch(() => new Response(body, { status: 200, headers: { "content-type": "application/json" } })),
+      });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.kind).toBe("invalid-response");
+    }
+  });
+
+  it("maps a transport failure and a 500 status to error kinds", async () => {
+    const thrown = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      fetchImpl: mockFetch(() => { throw new Error("socket hang up"); }),
+    });
+    expect(thrown.ok).toBe(false);
+    if (!thrown.ok) expect(thrown.kind).toBe("transport");
+    const server = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      fetchImpl: mockFetch(() => new Response("", { status: 500 })),
+    });
+    expect(server.ok).toBe(false);
+    if (!server.ok) expect(server.kind).toBe("transport");
+  });
+});
