@@ -55,6 +55,18 @@ export interface RankMemoriesOptions {
 
 const DEFAULT_GRAPH_HIGH_RANK_COUNT = 8;
 
+// Internal invariant guard. The subscore / rank maps below are built with exactly one entry per
+// memory in `memories`, so a lookup keyed by a memory from that same list is always present. This
+// makes the invariant explicit instead of asserting it away with `!` — a miss is a programmer error,
+// not a recoverable input, so it fails loud rather than silently scoring against a wrong value.
+function requireEntry<K, V>(map: ReadonlyMap<K, V>, key: K): V {
+  const value = map.get(key);
+  if (value === undefined) {
+    throw new Error("ranking invariant violated: missing map entry for a known memory");
+  }
+  return value;
+}
+
 // Frozen source-authority importance (#204, O-F5). A deterministic function of the immutable capture
 // provenance: a fact the user stated outright outranks one passively inferred by the system, at equal
 // relevance. Reproducible and caller-input-free.
@@ -244,7 +256,7 @@ function computeFinalSubscores(
   for (const m of memories) map.set(m.id, baselineSubscores(m, query));
   if (options.edgesByMemory === undefined) return map;
   const baselineSorted = sortByRank(
-    memories.map((m) => entryFor(m, map.get(m.id)!, weights)),
+    memories.map((m) => entryFor(m, requireEntry(map, m.id), weights)),
     recordById,
   );
   const highRankCount = options.graphHighRankCount ?? DEFAULT_GRAPH_HIGH_RANK_COUNT;
@@ -253,7 +265,7 @@ function computeFinalSubscores(
   );
   const edges = options.edgesByMemory;
   for (const m of memories) {
-    const base = map.get(m.id)!;
+    const base = requireEntry(map, m.id);
     map.set(m.id, { ...base, graph: graphProximityScore(m.id, edges, highRankIds) });
   }
   return map;
@@ -271,17 +283,18 @@ function rrfRank(
   recordById: ReadonlyMap<MemoryId, MemoryRecord>,
 ): readonly IncludedMemory[] {
   const signals = SUBSCORE_KEYS.filter((k) => weights[k] > 0);
-  if (signals.length === 0) {
+  const firstSignal = signals[0];
+  if (firstSignal === undefined) {
     return sortByRank(
-      memories.map((m) => entryFor(m, subscoresById.get(m.id)!, weights)),
+      memories.map((m) => entryFor(m, requireEntry(subscoresById, m.id), weights)),
       recordById,
     );
   }
   const rankBySignal = new Map<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>>();
   for (const sig of signals) {
     const ordered = [...memories].sort((a, b) => {
-      const av = (subscoresById.get(a.id)!)[sig];
-      const bv = (subscoresById.get(b.id)!)[sig];
+      const av = requireEntry(subscoresById, a.id)[sig];
+      const bv = requireEntry(subscoresById, b.id)[sig];
       if (av !== bv) return bv - av;
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
@@ -290,13 +303,12 @@ function rrfRank(
     rankBySignal.set(sig, ranks);
   }
   const maxFused = signals.reduce((sum, sig) => sum + weights[sig] / (RRF_K + 1), 0);
-  const firstSignal = signals[0]!;
   const entries = memories.map((m): IncludedMemory => {
     let fused = 0;
     let bestSig = firstSignal;
     let bestContrib = -1;
     for (const sig of signals) {
-      const rank = (rankBySignal.get(sig)!).get(m.id)!;
+      const rank = requireEntry(requireEntry(rankBySignal, sig), m.id);
       const contrib = weights[sig] / (RRF_K + rank);
       fused += contrib;
       if (contrib > bestContrib) {
@@ -307,7 +319,7 @@ function rrfRank(
     return {
       memoryId: m.id,
       score: maxFused > 0 ? fused / maxFused : 0,
-      subscores: subscoresById.get(m.id)!,
+      subscores: requireEntry(subscoresById, m.id),
       inclusionReason: inclusionReasonText(bestSig, bestContrib),
     };
   });
@@ -328,7 +340,7 @@ export function rankMemories(
     return rrfRank(memories, subscoresById, weights, recordById);
   }
   return sortByRank(
-    memories.map((m) => entryFor(m, subscoresById.get(m.id)!, weights)),
+    memories.map((m) => entryFor(m, requireEntry(subscoresById, m.id), weights)),
     recordById,
   );
 }
