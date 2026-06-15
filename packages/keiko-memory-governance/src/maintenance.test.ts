@@ -57,17 +57,106 @@ describe("effectiveStrength", () => {
     expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(expected, 10);
   });
 
-  it("uses lastAccessedAt (not createdAt) for the recency factor when present", () => {
+  it("anchors recency on lastAccessedAt once the memory has a real access", () => {
     const r = makeRecord({ id: "m", confidence: 0.8, createdAt: NOW - 90 * DAY });
-    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 0 }]]);
-    // recent touch resets decay => strength back to ~confidence
-    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.8, 6);
+    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 3 }]]);
+    // A genuine recall (count > 0) resets the decay anchor to lastAccessedAt (NOW), so recency = 1
+    // and only the frequency boost applies.
+    const expected = 0.8 * (1 + 0.15 * Math.log1p(3));
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(expected, 10);
+  });
+
+  it("anchors recency on createdAt for an outcome-only row (accessCount 0)", () => {
+    // O-V1: an outcome was recorded (lastAccessedAt set) but the memory was never recalled (count 0),
+    // so recency must fall back to createdAt — one half-life => 0.5, NOT the lastAccessedAt's 1.0.
+    const r = makeRecord({ id: "m", confidence: 0.8, createdAt: NOW - 45 * DAY });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 1, utilitySum: 0.5 }],
+    ]);
+    // recency 0.5 (createdAt anchor), freqBoost 1, utilityFactor 1.0 (mean 0.5) => 0.8 * 0.5 = 0.4
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.4, 6);
   });
 
   it("clamps to [0,1]", () => {
     const r = makeRecord({ id: "m", confidence: 1, createdAt: NOW });
     const s = stats([["m", { lastAccessedAt: NOW, accessCount: 1000 }]]);
     expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBe(1);
+  });
+});
+
+describe("effectiveStrength — outcome-gated utility factor (O-V1)", () => {
+  it("is byte-identical when the stat carries no outcome fields", () => {
+    const r = makeRecord({ id: "m", confidence: 0.5, createdAt: NOW });
+    const withAccess = stats([["m", { lastAccessedAt: NOW, accessCount: 4 }]]);
+    const withZeroOutcomes = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 4, outcomeCount: 0, utilitySum: 0 }],
+    ]);
+    expect(effectiveStrength(r, withAccess.get("m" as MemoryId), NOW)).toBe(
+      effectiveStrength(r, withZeroOutcomes.get("m" as MemoryId), NOW),
+    );
+  });
+
+  it("boosts strength 1.5x when every outcome is positive", () => {
+    const r = makeRecord({ id: "m", confidence: 0.5, createdAt: NOW });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 2, utilitySum: 2 }],
+    ]);
+    // meanUtility 1 => factor 1.5; freqBoost 1, recency 1 => 0.5 * 1.5 = 0.75
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.75, 10);
+  });
+
+  it("halves strength when every outcome is negative", () => {
+    const r = makeRecord({ id: "m", confidence: 0.6, createdAt: NOW });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 3, utilitySum: 0 }],
+    ]);
+    // meanUtility 0 => factor 0.5 => 0.6 * 0.5 = 0.3
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.3, 10);
+  });
+
+  it("is neutral (factor 1) for a mean utility of 0.5", () => {
+    const r = makeRecord({ id: "m", confidence: 0.5, createdAt: NOW });
+    const s = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 2, utilitySum: 1 }],
+    ]);
+    expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.5, 10);
+  });
+});
+
+describe("planMemoryMaintenance — outcome-driven forgetting (O-V1)", () => {
+  it("archives a negative-outcome accepted memory the neutral one would keep", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "accepted",
+      confidence: 0.35,
+      createdAt: NOW - 4 * DAY,
+    });
+    // Neutral: strength ≈ 0.35 * 0.940 ≈ 0.329 ≥ 0.2 => kept.
+    expect(planFor([r], emptyStats()).archive).toEqual([]);
+    // Proven bad (mean 0 => 0.5x): ≈ 0.165 < 0.2, age > 3d => archived.
+    const bad = stats([
+      ["m", { lastAccessedAt: NOW - 4 * DAY, accessCount: 0, outcomeCount: 2, utilitySum: 0 }],
+    ]);
+    expect(planFor([r], bad).archive).toEqual(["m"]);
+  });
+
+  it("keeps a positive-outcome accepted memory the neutral one would archive", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "accepted",
+      confidence: 0.45,
+      createdAt: NOW - 60 * DAY,
+    });
+    // Neutral: strength ≈ 0.45 * 0.397 ≈ 0.179 < 0.2 => archived.
+    expect(planFor([r], emptyStats()).archive).toEqual(["m"]);
+    // Proven useful (mean 1 => 1.5x): ≈ 0.268 ≥ 0.2 => survives with no decision.
+    const good = stats([
+      ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 1, utilitySum: 1 }],
+    ]);
+    const plan = planFor([r], good);
+    expect(plan.archive).toEqual([]);
+    expect(plan.forget).toEqual([]);
+    expect(plan.promote).toEqual([]);
   });
 });
 
@@ -117,41 +206,20 @@ describe("planMemoryMaintenance — promote", () => {
   });
 });
 
-describe("planMemoryMaintenance — reinforce", () => {
-  it("reinforces an accepted, frequently-recalled, recent memory", () => {
+describe("planMemoryMaintenance — confidence is immutable (O-V2)", () => {
+  it("never emits a confidence-mutating decision (no reinforce/decay fields on the plan)", () => {
     const r = makeRecord({ id: "m", status: "accepted", confidence: 0.7, createdAt: NOW });
     const s = stats([["m", { lastAccessedAt: NOW, accessCount: 5 }]]);
     const plan = planFor([r], s);
-    expect(plan.reinforce).toHaveLength(1);
-    expect(plan.reinforce[0]?.id).toBe("m");
-    // confidence + 0.1; asserted with closeTo to absorb IEEE-754 round-off (0.7 + 0.1).
-    expect(plan.reinforce[0]?.confidence).toBeCloseTo(0.8, 10);
+    // The plan surface carries ONLY status-changing decisions; confidence (provenance) is never a
+    // target. Reuse strengthens memories live in retrieval ranking, not by patching confidence here.
+    expect(Object.keys(plan).sort()).toEqual(["archive", "forget", "promote"]);
   });
 
-  it("caps reinforced confidence at 0.98", () => {
-    const r = makeRecord({ id: "m", status: "accepted", confidence: 0.95, createdAt: NOW });
-    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 5 }]]);
-    expect(planFor([r], s).reinforce).toEqual([{ id: "m", confidence: 0.98 }]);
-  });
-
-  it("does not reinforce with fewer than 2 accesses", () => {
-    const r = makeRecord({ id: "m", status: "accepted", confidence: 0.7, createdAt: NOW });
-    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 1 }]]);
-    expect(planFor([r], s).reinforce).toEqual([]);
-  });
-
-  it("does not reinforce when recencyFactor is below 0.6", () => {
-    // 60 days with HALF_LIFE 45 => recencyFactor = 0.5^(60/45) ≈ 0.397 < 0.6
-    const r = makeRecord({ id: "m", status: "accepted", confidence: 0.7, createdAt: NOW });
-    const s = stats([["m", { lastAccessedAt: NOW - 60 * DAY, accessCount: 5 }]]);
-    expect(planFor([r], s).reinforce).toEqual([]);
-  });
-});
-
-describe("planMemoryMaintenance — decay", () => {
-  it("decays an unaccessed, stale, aged memory whose strength is still above the archive floor", () => {
-    // confidence 0.7, 60 days, no access => recencyFactor ≈ 0.397 < 0.5; strength ≈ 0.278 ≥ 0.2 so
-    // ARCHIVE does not pre-empt. decay => 0.7 * 0.6 = 0.42.
+  it("leaves an aged, unaccessed, mid-strength accepted memory untouched (was a decay candidate)", () => {
+    // confidence 0.7, 60 days, no access => recencyFactor ≈ 0.397; strength ≈ 0.278 ≥ archive floor
+    // 0.2, so it is NOT archived. Previously this would have decayed confidence to 0.42; now it is
+    // simply left alone — disuse is reflected by its live strength, not a rewritten confidence.
     const r = makeRecord({
       id: "m",
       status: "accepted",
@@ -159,43 +227,9 @@ describe("planMemoryMaintenance — decay", () => {
       createdAt: NOW - 60 * DAY,
     });
     const plan = planFor([r], emptyStats());
-    expect(plan.decay).toHaveLength(1);
-    expect(plan.decay[0]?.id).toBe("m");
-    expect(plan.decay[0]?.confidence).toBeCloseTo(0.42, 10);
-  });
-
-  it("floors decayed confidence at 0.05", () => {
-    // A `conflicted` record dodges both archive (accepted-only) and forget (archived/proposed/
-    // expired-only), so a very low confidence reaches the decay floor cleanly: 0.06 * 0.6 = 0.036,
-    // floored to 0.05.
-    const r = makeRecord({
-      id: "m",
-      status: "conflicted",
-      confidence: 0.06,
-      createdAt: NOW - 60 * DAY,
-    });
-    expect(planFor([r], emptyStats()).decay).toEqual([{ id: "m", confidence: 0.05 }]);
-  });
-
-  it("does not decay a recently-accessed memory", () => {
-    const r = makeRecord({
-      id: "m",
-      status: "accepted",
-      confidence: 0.5,
-      createdAt: NOW - 60 * DAY,
-    });
-    const s = stats([["m", { lastAccessedAt: NOW, accessCount: 0 }]]);
-    expect(planFor([r], s).decay).toEqual([]);
-  });
-
-  it("does not decay a young memory even if unaccessed and faint", () => {
-    const r = makeRecord({
-      id: "m",
-      status: "accepted",
-      confidence: 0.5,
-      createdAt: NOW - 2 * DAY,
-    });
-    expect(planFor([r], emptyStats()).decay).toEqual([]);
+    expect(plan.promote).toEqual([]);
+    expect(plan.archive).toEqual([]);
+    expect(plan.forget).toEqual([]);
   });
 });
 
@@ -211,7 +245,7 @@ describe("planMemoryMaintenance — archive", () => {
     expect(planFor([r], emptyStats()).archive).toEqual(["m"]);
   });
 
-  it("prefers archive over decay (priority) for a faint accepted memory", () => {
+  it("archives a faint accepted memory (and emits no other decision for it)", () => {
     const r = makeRecord({
       id: "m",
       status: "accepted",
@@ -220,21 +254,36 @@ describe("planMemoryMaintenance — archive", () => {
     });
     const plan = planFor([r], emptyStats());
     expect(plan.archive).toEqual(["m"]);
-    expect(plan.decay).toEqual([]);
+    expect(plan.promote).toEqual([]);
+    expect(plan.forget).toEqual([]);
   });
 });
 
 describe("planMemoryMaintenance — forget", () => {
-  it("forgets an old archived memory", () => {
+  it("forgets an old, faint archived memory", () => {
     const r = makeRecord({
       id: "m",
       status: "archived",
-      confidence: 0.5,
+      confidence: 0.3,
       createdAt: NOW - 40 * DAY,
     });
+    // strength = 0.3 * 0.5^(40/45) ≈ 0.162 < 0.2 (faint) AND age > 30d => pruned.
     const plan = planFor([r], emptyStats());
     expect(plan.forget.map((f) => f.id)).toEqual(["m"]);
     expect(plan.forget[0]?.reason).toContain("archived");
+  });
+
+  it("retains a strong archived memory even when aged out (O-V5 prune guard)", () => {
+    // The archive route accepts any memory regardless of strength, so a user can archive a
+    // high-confidence record to de-prioritise it. Age alone must not delete it — only disuse.
+    const r = makeRecord({
+      id: "m",
+      status: "archived",
+      confidence: 0.9,
+      createdAt: NOW - 40 * DAY,
+    });
+    // strength = 0.9 * 0.5^(40/45) ≈ 0.485 ≥ 0.2 => not faint => not pruned.
+    expect(planFor([r], emptyStats()).forget).toEqual([]);
   });
 
   it("forgets a very faint, old, unaccessed proposed memory", () => {
@@ -280,7 +329,7 @@ describe("planMemoryMaintenance — forget", () => {
 });
 
 describe("planMemoryMaintenance — pinned protection & determinism", () => {
-  it("never decays/archives/forgets a pinned memory", () => {
+  it("never archives/forgets a pinned memory", () => {
     const r = makeRecord({
       id: "m",
       status: "archived",
@@ -291,7 +340,6 @@ describe("planMemoryMaintenance — pinned protection & determinism", () => {
     const plan = planFor([r], emptyStats());
     expect(plan.forget).toEqual([]);
     expect(plan.archive).toEqual([]);
-    expect(plan.decay).toEqual([]);
   });
 
   it("assigns at most one decision per record", () => {
@@ -304,8 +352,6 @@ describe("planMemoryMaintenance — pinned protection & determinism", () => {
     const plan = planFor([r], emptyStats());
     const appearances =
       plan.promote.filter((x) => x === "m").length +
-      plan.reinforce.filter((x) => x.id === "m").length +
-      plan.decay.filter((x) => x.id === "m").length +
       plan.archive.filter((x) => x === "m").length +
       plan.forget.filter((x) => x.id === "m").length;
     expect(appearances).toBe(1);

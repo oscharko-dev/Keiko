@@ -8,7 +8,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  type MemoryEmbeddingInput,
+  type MemoryEmbeddingRow,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -19,6 +24,10 @@ import {
   cosineSimilarity,
   embedAndStoreMemory,
   embedMemoryText,
+  findRelatedNeighbors,
+  findSemanticDuplicate,
+  insertSalienceMemoryWithNoveltyGate,
+  RELATED_LINK_COSINE_THRESHOLD,
   selectMemoryEmbeddingModelId,
 } from "./memory-embedding.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -279,5 +288,222 @@ describe("cosineSimilarity (#204)", () => {
 
   it("returns 0 for a zero-magnitude vector", () => {
     expect(cosineSimilarity(Float32Array.from([0, 0]), Float32Array.from([1, 1]))).toBe(0);
+  });
+});
+
+function makeRecord(
+  body: string,
+  id = `mem-${Math.random().toString(36).slice(2, 10)}`,
+  user = "local-operator",
+): MemoryRecord {
+  const now = Date.now();
+  return {
+    id: memoryId(id),
+    schemaVersion: "1",
+    scope: { kind: "user", userId: memoryUserId(user) },
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "system-default",
+      capturedAt: now,
+      confidence: 0.6,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+describe("findSemanticDuplicate (#204, O-F1)", () => {
+  const embRow = (id: string, vector: Float32Array): MemoryEmbeddingRow => ({
+    memoryId: memoryId(id),
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    dimensions: vector.length,
+    metric: "cosine",
+    vector,
+    createdAt: 0,
+  });
+  const candidate: MemoryEmbeddingInput = {
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    metric: "cosine",
+    vector: Float32Array.from([1, 0, 0]),
+  };
+
+  it("returns null for a null candidate (no embedder)", () => {
+    expect(findSemanticDuplicate(null, new Map())).toBeNull();
+  });
+
+  it("returns null when no neighbour is similar enough", () => {
+    const neighbors = new Map([[memoryId("a"), embRow("a", Float32Array.from([0, 1, 0]))]]);
+    expect(findSemanticDuplicate(candidate, neighbors)).toBeNull();
+  });
+
+  it("returns the nearest neighbour at or above the threshold", () => {
+    const neighbors = new Map([
+      [memoryId("far"), embRow("far", Float32Array.from([0, 1, 0]))],
+      [memoryId("near"), embRow("near", Float32Array.from([1, 0, 0]))],
+    ]);
+    expect(findSemanticDuplicate(candidate, neighbors)).toBe(memoryId("near"));
+  });
+
+  it("does not merge a moderately-similar value-change below the threshold", () => {
+    // A vector that shares direction but is clearly distinct (cosine ~0.83 < 0.95).
+    const neighbors = new Map([[memoryId("v"), embRow("v", Float32Array.from([1, 0.66, 0]))]]);
+    expect(findSemanticDuplicate(candidate, neighbors)).toBeNull();
+  });
+});
+
+describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
+  it("inserts a genuinely new memory and stores its embedding", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const rec = makeRecord("the user prefers tabs over spaces");
+    const { inserted, mergedInto } = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    expect(mergedInto).toBeNull();
+    expect(inserted?.id).toBe(rec.id);
+    expect(vault.getEmbedding(rec.id)).toBeDefined();
+  });
+
+  it("merges a semantic near-duplicate into the canonical and reinforces it instead of inserting", async () => {
+    // okAdapter returns one fixed vector for every input => candidate cosine 1 to the canonical.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const canonical = makeRecord("the user prefers postgres", "id-canonical");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
+    const before = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
+
+    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
+    expect(result.inserted).toBeNull();
+    expect(result.mergedInto).toBe(canonical.id);
+    expect(vault.getMemory(dup.id)).toBeUndefined();
+    const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
+    expect(after).toBe(before + 1);
+  });
+
+  it("does NOT merge across scopes even with an identical vector (isolation)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const alice = makeRecord("shared body text", "id-alice", "alice");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, alice);
+    const bob = makeRecord("shared body text", "id-bob", "bob");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, bob);
+    expect(result.mergedInto).toBeNull();
+    expect(result.inserted?.id).toBe(bob.id);
+  });
+
+  it("inserts plainly when no embedding model is configured (graceful)", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const rec = makeRecord("anything at all");
+    const { inserted, mergedInto } = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    expect(mergedInto).toBeNull();
+    expect(inserted?.id).toBe(rec.id);
+    expect(vault.getEmbedding(rec.id)).toBeUndefined();
+  });
+});
+
+describe("findRelatedNeighbors (#204, O-P4)", () => {
+  const row = (id: string, vector: Float32Array): MemoryEmbeddingRow => ({
+    memoryId: memoryId(id),
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    dimensions: vector.length,
+    metric: "cosine",
+    vector,
+    createdAt: 0,
+  });
+  const candidate: MemoryEmbeddingInput = {
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    metric: "cosine",
+    vector: Float32Array.from([1, 0, 0]),
+  };
+
+  it("returns nothing for a null candidate", () => {
+    expect(findRelatedNeighbors(null, new Map())).toEqual([]);
+  });
+
+  it("includes a band neighbour but excludes below-band and duplicate neighbours", () => {
+    const neighbors = new Map([
+      [memoryId("below"), row("below", Float32Array.from([1, 1, 0]))], // cosine ~0.707 < 0.82
+      [memoryId("band"), row("band", Float32Array.from([0.9, 0.436, 0]))], // cosine ~0.9, in band
+      [memoryId("dup"), row("dup", Float32Array.from([1, 0, 0]))], // cosine 1.0 >= 0.95, a duplicate
+    ]);
+    expect(findRelatedNeighbors(candidate, neighbors)).toEqual([memoryId("band")]);
+  });
+
+  it("ranks by similarity descending and caps at maxLinks", () => {
+    const neighbors = new Map([
+      [memoryId("n1"), row("n1", Float32Array.from([0.85, 0.527, 0]))], // ~0.85
+      [memoryId("n2"), row("n2", Float32Array.from([0.93, 0.367, 0]))], // ~0.93
+      [memoryId("n3"), row("n3", Float32Array.from([0.9, 0.436, 0]))], // ~0.90
+      [memoryId("n4"), row("n4", Float32Array.from([0.88, 0.475, 0]))], // ~0.88
+    ]);
+    // top-3 by similarity desc: n2, n3, n4; n1 dropped by the cap of 3.
+    expect(findRelatedNeighbors(candidate, neighbors)).toEqual([
+      memoryId("n2"),
+      memoryId("n3"),
+      memoryId("n4"),
+    ]);
+  });
+
+  it("honours the configured lower-band threshold constant", () => {
+    expect(RELATED_LINK_COSINE_THRESHOLD).toBeGreaterThan(0.5);
+    expect(RELATED_LINK_COSINE_THRESHOLD).toBeLessThan(0.95);
+  });
+});
+
+describe("insertSalienceMemoryWithNoveltyGate auto-linking (#204, O-P4)", () => {
+  function perTextAdapter(): (r: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
+    return vi.fn((r: OpenAIEmbeddingRequest) => {
+      const text = typeof r.input === "string" ? r.input : "";
+      const vector = text.includes("alpha")
+        ? Float32Array.from([1, 0, 0])
+        : text.includes("beta")
+          ? Float32Array.from([0.9, 0.436, 0]) // cosine ~0.9 to alpha => related band
+          : Float32Array.from([0, 0, 1]);
+      return Promise.resolve({ ok: true as const, value: { vector, modelId: EMBEDDING_MODEL } });
+    });
+  }
+
+  it("links a novel capture to its in-band neighbour when KEIKO_MEMORY_AUTO_LINK=1", async () => {
+    const deps: UiHandlerDeps = {
+      ...makeDeps({ embeddingRequest: perTextAdapter() }),
+      env: { KEIKO_MEMORY_AUTO_LINK: "1" },
+    };
+    const vault = makeVault();
+    const a = await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("alpha note", "id-alpha"),
+    );
+    const b = await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("beta note", "id-beta"),
+    );
+    expect(a.inserted?.id).toBe(memoryId("id-alpha"));
+    expect(b.inserted?.id).toBe(memoryId("id-beta"));
+    const edges = vault.listOutgoingEdges(memoryId("id-beta"));
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("related");
+    expect(edges[0]?.toMemoryId).toBe(memoryId("id-alpha"));
+    // The first capture had no neighbours, so it forms no link.
+    expect(vault.listOutgoingEdges(memoryId("id-alpha"))).toEqual([]);
+  });
+
+  it("forms no links when the flag is off (default — byte-identical)", async () => {
+    const deps = makeDeps({ embeddingRequest: perTextAdapter() });
+    const vault = makeVault();
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("alpha note", "id-alpha"));
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("beta note", "id-beta"));
+    expect(vault.listOutgoingEdges(memoryId("id-beta"))).toEqual([]);
   });
 });

@@ -1,0 +1,43 @@
+[
+  {
+    "id": "knowledge-update-deploy-region",
+    "description": "A fact whose value changed: the old value is marked superseded and the new value is accepted, joined by a supersedes edge. Used by forgetting-accuracy to assert the current (valid) value is surfaced while the superseded value is correctly omitted — the bi-temporal knowledge-update competency.",
+    "memories": [
+      {
+        "id": "ku-region-old",
+        "scope": { "kind": "project", "projectId": "proj-keiko" },
+        "type": "semantic-fact",
+        "body": "the primary deploy region is us-east-1",
+        "tags": ["deploy", "region"],
+        "status": "superseded",
+        "confidence": 0.85,
+        "capturedAt": 1699000000000,
+        "validFrom": 1699000000000,
+        "createdAt": 1699000000000,
+        "updatedAt": 1699000000000
+      },
+      {
+        "id": "ku-region-new",
+        "scope": { "kind": "project", "projectId": "proj-keiko" },
+        "type": "correction",
+        "body": "the primary deploy region is eu-central-1",
+        "tags": ["deploy", "region"],
+        "sourceKind": "accepted-correction",
+        "confidence": 0.95,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ],
+    "edges": [
+      {
+        "id": "ku-edge-supersedes",
+        "from": "ku-region-new",
+        "to": "ku-region-old",
+        "kind": "supersedes",
+        "createdAt": 1700000000000
+      }
+    ]
+  }
+]

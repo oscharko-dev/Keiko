@@ -143,6 +143,12 @@ export interface MemoryVaultStore {
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
   readonly recordAccess: (ids: readonly MemoryId[], nowMs: number) => void;
+  // Outcome tracking (#204, O-V1). `recordOutcome` appends a governed retention judgement (utility
+  // in [0,1]) for each id — a proposal accepted (1) / rejected (0), a conflict won (1) / lost (0),
+  // an accepted correction superseding its origin (0). It never advances the access counter or
+  // timestamp; the maintenance planner folds the mean utility into effective strength so a
+  // proven-useful memory resists disuse-forgetting and a proven-bad one fades sooner.
+  readonly recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number) => void;
   readonly getAccessStats: (ids?: readonly MemoryId[]) => ReadonlyMap<MemoryId, MemoryAccessStat>;
   readonly close: () => void;
 }

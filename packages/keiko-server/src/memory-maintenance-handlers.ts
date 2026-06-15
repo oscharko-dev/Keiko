@@ -6,8 +6,10 @@
 //   2. Run consolidation on the accepted subset; persist auto-applicable relationship edges and
 //      return unresolved review items for MemoriaViva or CLI operators. Conflict and merge review
 //      items are NEVER auto-applied here.
-//   3. Compute the maintenance plan and apply it: promote (-> accepted), reinforce / decay
-//      (confidence patch), archive (-> archived), forget (vault delete + tombstone + reason).
+//   3. Compute the maintenance plan and apply it: promote (-> accepted), archive (-> archived),
+//      forget (vault delete + tombstone + reason). Confidence is immutable provenance and is never
+//      patched here (O-V2): reuse strengthens memories live in retrieval ranking, and disuse-decay
+//      is computed on the fly via the strength curve that gates archive/forget.
 //   4. Emit one audit event per applied effect and return the counts.
 //
 // CSRF: the server dispatch layer enforces x-keiko-csrf for POST, so this route is guarded without
@@ -38,8 +40,6 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 
 export interface MaintenanceCounts {
   promoted: number;
-  reinforced: number;
-  decayed: number;
   archived: number;
   forgotten: number;
   superseded: number;
@@ -59,8 +59,6 @@ interface MaintenanceAccumulator extends MaintenanceCounts {
 function emptyCounts(): MaintenanceAccumulator {
   return {
     promoted: 0,
-    reinforced: 0,
-    decayed: 0,
     archived: 0,
     forgotten: 0,
     superseded: 0,
@@ -89,6 +87,7 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
 
 function emitAudit(
   evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
   kind: MemoryAuditEvent["kind"],
   surface: MemoryAuditInitiatorSurface,
   summary: string,
@@ -99,17 +98,12 @@ function emitAudit(
     schemaVersion: "1",
     kind,
     eventId: randomUUID(),
-    occurredAt: Date.now(),
+    occurredAt: nowMs,
     initiatorSurface: surface,
     summary,
     ...extra,
   } as MemoryAuditEvent;
   recordMemoryAudit({ evidenceStore }, event);
-}
-
-// Patch a record's confidence by rebuilding the provenance envelope (confidence lives there).
-function patchConfidence(vault: MemoryVaultStore, record: MemoryRecord, confidence: number): void {
-  vault.updateMemory(record.id, { provenance: { ...record.provenance, confidence } }, Date.now());
 }
 
 function recordsById(records: readonly MemoryRecord[]): Map<MemoryId, MemoryRecord> {
@@ -140,11 +134,12 @@ function applyEdges(
 
 function runConsolidationPass(
   vault: MemoryVaultStore,
+  nowMs: number,
   records: readonly MemoryRecord[],
   counts: MaintenanceAccumulator,
 ): void {
   const result = runConsolidation(records, {
-    nowMs: Date.now(),
+    nowMs,
     newEdgeId: (): MemoryEdgeId => randomUUID() as unknown as MemoryEdgeId,
     newReviewItemId: (): string => randomUUID(),
   });
@@ -155,25 +150,29 @@ function runConsolidationPass(
 }
 
 // ─── Plan application ──────────────────────────────────────────────────────────
-// Applies the reinforce / decay / archive / forget effects on the post-consolidation snapshot.
-// Promotions are applied SEPARATELY and BEFORE consolidation (see runMemoryMaintenance) so that
-// freshly-accepted memories are visible to conflict detection within the same maintenance pass.
-function applyDecayEffects(
+// Applies the archive / forget effects on the post-consolidation snapshot. Promotions are applied
+// SEPARATELY and BEFORE consolidation (see runMemoryMaintenance) so that freshly-accepted memories
+// are visible to conflict detection within the same maintenance pass.
+//
+// Confidence is NEVER mutated here (#204, O-V2): reinforcement-on-reuse is realised live in
+// retrieval ranking, and disuse-decay is computed on the fly via the strength curve that already
+// gates archive/forget — so provenance stays intact and every run is idempotent.
+function applyFadeEffects(
   vault: MemoryVaultStore,
   evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
 ): void {
-  applyConfidencePatches(vault, plan.reinforce, byId, (n) => (counts.reinforced += n));
-  applyConfidencePatches(vault, plan.decay, byId, (n) => (counts.decayed += n));
-  applyArchives(vault, evidenceStore, plan.archive, byId, counts);
-  applyForgets(vault, evidenceStore, plan.forget, byId, counts);
+  applyArchives(vault, evidenceStore, nowMs, plan.archive, byId, counts);
+  applyForgets(vault, evidenceStore, nowMs, plan.forget, byId, counts);
 }
 
 function applyPromotions(
   vault: MemoryVaultStore,
   evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
@@ -181,10 +180,11 @@ function applyPromotions(
   for (const id of ids) {
     const record = byId.get(id);
     if (record === undefined) continue;
-    vault.updateMemory(id, { status: "accepted" }, Date.now());
+    vault.updateMemory(id, { status: "accepted" }, nowMs);
     counts.promoted += 1;
     emitAudit(
       evidenceStore,
+      nowMs,
       "memory:accepted",
       "memory-center",
       "Promoted a strong proposed memory.",
@@ -193,23 +193,10 @@ function applyPromotions(
   }
 }
 
-function applyConfidencePatches(
-  vault: MemoryVaultStore,
-  patches: readonly { id: MemoryId; confidence: number }[],
-  byId: Map<MemoryId, MemoryRecord>,
-  bump: (n: number) => void,
-): void {
-  for (const patch of patches) {
-    const record = byId.get(patch.id);
-    if (record === undefined) continue;
-    patchConfidence(vault, record, patch.confidence);
-    bump(1);
-  }
-}
-
 function applyArchives(
   vault: MemoryVaultStore,
   evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
@@ -217,9 +204,9 @@ function applyArchives(
   for (const id of ids) {
     const record = byId.get(id);
     if (record === undefined) continue;
-    vault.updateMemory(id, { status: "archived" }, Date.now());
+    vault.updateMemory(id, { status: "archived" }, nowMs);
     counts.archived += 1;
-    emitAudit(evidenceStore, "memory:archived", "retention", "Archived a faded memory.", {
+    emitAudit(evidenceStore, nowMs, "memory:archived", "retention", "Archived a faded memory.", {
       memoryId: id,
       scope: record.scope,
     });
@@ -229,6 +216,7 @@ function applyArchives(
 function applyForgets(
   vault: MemoryVaultStore,
   evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
   forgets: readonly { id: MemoryId; reason: string }[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceCounts,
@@ -240,11 +228,12 @@ function applyForgets(
       tombstone: true,
       forgetterSurface: "memory-maintenance",
       reason: forget.reason,
-      nowMs: Date.now(),
+      nowMs,
     });
     counts.forgotten += 1;
     emitAudit(
       evidenceStore,
+      nowMs,
       "memory:forgotten",
       "retention",
       `Forgot a memory (${forget.reason}).`,
@@ -260,10 +249,20 @@ function applyForgets(
 // Reusable maintenance core. Drives consolidation + the governance plan against a vault, emitting
 // audit events when an evidence store is supplied. Exported so both the BFF route handler and the
 // `keiko memory maintain` CLI run the SAME pass — no duplicated orchestration.
+export interface RunMaintenanceOptions {
+  /** Injected clock. Defaults to Date.now(). Pass a fixed value to make the pass replay-stable. */
+  readonly nowMs?: number;
+}
+
 export function runMemoryMaintenance(
   vault: MemoryVaultStore,
   evidenceStore?: EvidenceStore,
+  options?: RunMaintenanceOptions,
 ): MaintenanceResult {
+  // ONE clock for the whole pass: both plan phases and every vault write / audit timestamp use the
+  // same nowMs, so selection is consistent within a run and fully replay-stable when nowMs is
+  // injected (the deterministic-verification invariant the rest of the stack honours).
+  const nowMs = options?.nowMs ?? Date.now();
   const counts = emptyCounts();
   // Phase 1 — promote strong `proposed` memories FIRST. Consolidation and conflict detection only
   // inspect `accepted` records, so without this a vault full of freshly-captured `proposed`
@@ -271,21 +270,79 @@ export function runMemoryMaintenance(
   // resolved. Promoting up front makes a single "Run maintenance" fully effective.
   const beforePromote = vault.listMemories({ includeExpired: true });
   const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
-  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, { nowMs: Date.now() });
-  applyPromotions(vault, evidenceStore, promotePlan.promote, recordsById(beforePromote), counts);
+  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, { nowMs });
+  applyPromotions(
+    vault,
+    evidenceStore,
+    nowMs,
+    promotePlan.promote,
+    recordsById(beforePromote),
+    counts,
+  );
   // Phase 2 — consolidate the now-accepted set: link safe near-duplicate metadata and surface
   // conflicts / merges as explicit review items. Status mutations require a later governed review.
   const accepted = vault
     .listMemories({ includeExpired: true })
     .filter((record) => record.status === "accepted");
-  runConsolidationPass(vault, accepted, counts);
-  // Phase 3 — reinforce / decay / archive / forget on the post-consolidation snapshot. The access
-  // stats feed the strength model.
+  runConsolidationPass(vault, nowMs, accepted, counts);
+  // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
+  // strength model; confidence itself is never mutated (O-V2).
   const all = vault.listMemories({ includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
-  const plan = planMemoryMaintenance(all, accessStats, { nowMs: Date.now() });
-  applyDecayEffects(vault, evidenceStore, plan, recordsById(all), counts);
+  const plan = planMemoryMaintenance(all, accessStats, { nowMs });
+  applyFadeEffects(vault, evidenceStore, nowMs, plan, recordsById(all), counts);
   return counts;
+}
+
+// ─── Bounded autonomous maintenance (#204, O-V4) ───────────────────────────────
+// The strength/decay/forget pass only "lives" if it actually runs. Rather than a free-running
+// background loop (forbidden by the no-unbounded-hidden-activity invariant), maintenance is fired
+// opportunistically — once memory is used — and rate-limited to at most once per interval. The pass
+// itself is already bounded (maxForgetPerRun) and audited, so an autonomous fire is governed.
+
+export const MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+// Pure: due iff never run, or the interval has elapsed. A non-finite/negative interval is treated as
+// "never auto-run" so a misconfiguration can only DISABLE, never spin.
+export function isMaintenanceDue(
+  lastRunAtMs: number | undefined,
+  nowMs: number,
+  minIntervalMs: number = MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS,
+): boolean {
+  if (!Number.isFinite(minIntervalMs) || minIntervalMs <= 0) return false;
+  if (lastRunAtMs === undefined) return true;
+  return nowMs - lastRunAtMs >= minIntervalMs;
+}
+
+// Caller-held cursor so the rate-limit state is explicit and testable (no module-global clock).
+export interface AutoMaintenanceState {
+  lastRunAtMs?: number;
+}
+
+export interface MaybeRunAutoMaintenanceOptions {
+  readonly nowMs: number;
+  readonly enabled: boolean;
+  readonly minIntervalMs?: number;
+}
+
+// Runs ONE bounded maintenance pass iff enabled AND due, advancing the cursor BEFORE running so a
+// re-entrant call within the same tick cannot double-fire. Returns the result, or null when skipped.
+// Never throws: a maintenance fault must not break the caller (e.g. a chat turn); it is swallowed
+// after advancing the cursor so a persistently-failing pass cannot hot-loop.
+export function maybeRunAutoMaintenance(
+  vault: MemoryVaultStore,
+  evidenceStore: EvidenceStore | undefined,
+  state: AutoMaintenanceState,
+  options: MaybeRunAutoMaintenanceOptions,
+): MaintenanceResult | null {
+  if (!options.enabled) return null;
+  if (!isMaintenanceDue(state.lastRunAtMs, options.nowMs, options.minIntervalMs)) return null;
+  state.lastRunAtMs = options.nowMs;
+  try {
+    return runMemoryMaintenance(vault, evidenceStore, { nowMs: options.nowMs });
+  } catch {
+    return null;
+  }
 }
 
 export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {

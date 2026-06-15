@@ -26,7 +26,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { embedAndStoreMemory } from "./memory-embedding.js";
+import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import {
   isPersistableMemoryCandidate,
   memoryCapturePolicyForDeps,
@@ -111,9 +111,10 @@ function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
 }
 
 // Persists one salience candidate and returns its wire action, or null when the outcome is not a
-// candidate or no record could be built. Best-effort embed-on-capture (#204): the inserted memory
-// is embedded and the vector stored when an embedding model is configured; failure is swallowed by
-// embedAndStoreMemory so capture is never affected.
+// candidate, no record could be built, or the candidate was merged into an existing semantic
+// near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens INSIDE the novelty gate:
+// the body is embedded once, used to detect a near-duplicate, and stored only when the record is
+// actually inserted. Graceful when no embedding model is configured (plain insert, no dedup).
 async function persistCandidate(
   deps: UiHandlerDeps,
   outcome: CaptureOutcome,
@@ -130,8 +131,12 @@ async function persistCandidate(
   if (record === null) {
     return null;
   }
-  const inserted = vault.insertMemory(record);
-  await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
+  const { inserted } = await insertSalienceMemoryWithNoveltyGate(deps, vault, record);
+  if (inserted === null) {
+    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
+    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
+    return null;
+  }
   return {
     kind: "candidate",
     proposalId: String(inserted.id),

@@ -47,7 +47,7 @@ export {
 export { buildForgetOperations, selectMemoriesForForget } from "./forget.js";
 
 // ─── Retention ───────────────────────────────────────────────────────────────
-export { buildExpirationUpdate } from "./retention.js";
+export { buildExpirationUpdate, supersededValidity } from "./retention.js";
 
 // ─── Pin / unpin / archive ───────────────────────────────────────────────────
 export { buildArchiveOperation, buildPinOperation, buildUnpinOperation } from "./status-ops.js";

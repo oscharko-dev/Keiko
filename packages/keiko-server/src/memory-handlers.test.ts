@@ -347,8 +347,14 @@ describe("memory handlers", () => {
     );
 
     expect(acceptResult.status).toBe(200);
-    expect(vault.getMemory(memoryId("memory-correct-accept"))?.status).toBe("superseded");
+    const superseded = vault.getMemory(memoryId("memory-correct-accept"));
+    expect(superseded?.status).toBe("superseded");
+    // Bi-temporal-lite (#204, C1): the superseded fact's belief window is CLOSED at acceptance, so
+    // "what did we believe as of T" is answerable and it drops out of default retrieval.
+    expect(superseded?.validity.validUntil).toBeGreaterThan(superseded?.validity.validFrom ?? 0);
     expect(vault.getMemory(correction.id)?.status).toBe("accepted");
+    // The replacement's window stays OPEN (the current belief).
+    expect(vault.getMemory(correction.id)?.validity.validUntil).toBeUndefined();
     expect(vault.getMemory(correction.id)?.type).toBe("preference");
     expect(vault.getMemory(correction.id)?.provenance.sourceKind).toBe("accepted-correction");
 
@@ -706,5 +712,91 @@ describe("memory handlers", () => {
     expect(result.status).toBe(400);
     expect(vault.getMemory(memoryId("conflict-real-loser"))?.status).toBe("accepted");
     expect(vault.listOutgoingEdges(memoryId("conflict-real-loser"))).toEqual([]);
+  });
+});
+
+describe("memory handlers — outcome-driven forgetting (O-V1)", () => {
+  it("records a positive outcome for a conflict winner and a negative for the loser", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("ov1-winner", "formatter is biome"));
+    vault.insertMemory(makeMemory("ov1-loser", "formatter is prettier"));
+
+    const result = await handleResolveMemoryConflict(
+      makeCtx("/api/memory/conflicts/resolve", {
+        winner: "ov1-winner",
+        losers: ["ov1-loser"],
+        reason: "reviewed and winner selected",
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+
+    const winner = vault.getAccessStats([memoryId("ov1-winner")]).get(memoryId("ov1-winner"));
+    expect(winner).toMatchObject({ outcomeCount: 1, utilitySum: 1 });
+    const loser = vault.getAccessStats([memoryId("ov1-loser")]).get(memoryId("ov1-loser"));
+    expect(loser).toMatchObject({ outcomeCount: 1, utilitySum: 0 });
+  });
+
+  it("records a positive outcome for an accepted correction and a negative for its origin", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("ov1-origin", "Prefer yarn for installs."));
+    const proposalResult = await handleCorrectMemory(
+      makeCtx(
+        "/api/memory/ov1-origin/correct",
+        { body: "Prefer npm ci for installs." },
+        { id: "ov1-origin" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    const correction = asJson(proposalResult).correction as MemoryRecord;
+
+    const acceptResult = handleAcceptMemoryProposal(
+      makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(acceptResult.status).toBe(200);
+
+    expect(vault.getAccessStats([correction.id]).get(correction.id)).toMatchObject({
+      outcomeCount: 1,
+      utilitySum: 1,
+    });
+    expect(
+      vault.getAccessStats([memoryId("ov1-origin")]).get(memoryId("ov1-origin")),
+    ).toMatchObject({ outcomeCount: 1, utilitySum: 0 });
+  });
+
+  it("records a positive outcome for a plain accepted proposal and no negative", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("ov1-proposal", "Use tabs over spaces.", { status: "proposed" }));
+
+    const result = handleAcceptMemoryProposal(
+      makeCtx("/api/memory/proposals/ov1-proposal/accept", {}, { id: "ov1-proposal" }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    expect(
+      vault.getAccessStats([memoryId("ov1-proposal")]).get(memoryId("ov1-proposal")),
+    ).toMatchObject({ outcomeCount: 1, utilitySum: 1 });
+  });
+
+  it("records a negative outcome when a proposal is rejected", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("ov1-reject", "speculative note", { status: "proposed" }));
+
+    const result = await handleRejectMemoryProposal(
+      makeCtx(
+        "/api/memory/proposals/ov1-reject/reject",
+        { reason: "not useful" },
+        { id: "ov1-reject" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    expect(
+      vault.getAccessStats([memoryId("ov1-reject")]).get(memoryId("ov1-reject")),
+    ).toMatchObject({
+      outcomeCount: 1,
+      utilitySum: 0,
+    });
   });
 });
