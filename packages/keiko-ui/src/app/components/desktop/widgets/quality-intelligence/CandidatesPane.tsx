@@ -23,6 +23,26 @@ import {
 
 const INITIAL_VISIBLE = 25;
 
+// The persisted QI run lists candidates as [...deterministic-baseline, ...model-delta] — the
+// determinism floor leads the manifest (contractually pinned by #763). For display we surface the
+// judged model candidates first and trail the generic determinism-floor stubs, WITHOUT mutating the
+// persisted order. Baseline candidates carry the explicit provenance tag
+// `source:deterministic-baseline` (a null qualityVerdict is not a stable discriminator — it is also
+// null whenever the judge stage was skipped). Array.prototype.sort is stable in V8, so keying on a
+// 0/1 baseline flag moves baselines to the end while preserving the relative order of every other
+// candidate.
+const DETERMINISTIC_BASELINE_PROVENANCE_TAG = "source:deterministic-baseline";
+
+const isBaselineCandidate = (candidate: QualityIntelligenceUiCandidate): boolean =>
+  candidate.tags.includes(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+
+const orderForDisplay = (
+  candidates: readonly QualityIntelligenceUiCandidate[],
+): readonly QualityIntelligenceUiCandidate[] =>
+  [...candidates].sort(
+    (left, right) => (isBaselineCandidate(left) ? 1 : 0) - (isBaselineCandidate(right) ? 1 : 0),
+  );
+
 type CandidateWithQualityVerdict = QualityIntelligenceUiCandidate & {
   readonly qualityVerdict?: CandidateQualityVerdict;
 };
@@ -355,7 +375,9 @@ export function CandidatesPane({
       </div>
     );
   }
-  const shown = candidates.slice(0, visible);
+  // Render order only: judged model candidates first, deterministic-baseline stubs last. The
+  // persisted candidate order (and `candidates.length` used by the "show more" control) is untouched.
+  const shown = orderForDisplay(candidates).slice(0, visible);
   return (
     <div className="qi-cand-pane">
       {showGovernanceNote ? (

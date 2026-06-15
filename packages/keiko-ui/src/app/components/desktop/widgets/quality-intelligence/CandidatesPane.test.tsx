@@ -453,6 +453,57 @@ describe("CandidatesPane — progressive rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — deterministic-baseline render ordering
+// ---------------------------------------------------------------------------
+//
+// The persisted QI run lists candidates as [...deterministic-baseline, ...model-delta] — the
+// determinism floor leads the manifest (pinned by #763). The pane surfaces the judged model
+// candidates first and trails the generic baseline stubs (tagged `source:deterministic-baseline`)
+// WITHOUT mutating the caller's array.
+
+const BASELINE_TAG = "source:deterministic-baseline";
+
+describe("CandidatesPane — deterministic-baseline render ordering", () => {
+  it("renders baseline-tagged candidates after non-baseline candidates that precede them", () => {
+    const baseline = makeCandidate({
+      title: "Baseline stub",
+      tags: [BASELINE_TAG, "risk-class:regression"],
+    });
+    const judged = makeCandidate({ title: "Judged model candidate", tags: ["smoke"] });
+    // Persisted order puts the baseline FIRST (as the real manifest does).
+    render(<CandidatesPane candidates={[baseline, judged]} />);
+
+    const items = screen.getAllByRole("listitem");
+    const order = items.map((li) => li.textContent ?? "");
+    const judgedIndex = order.findIndex((t) => t.includes("Judged model candidate"));
+    const baselineIndex = order.findIndex((t) => t.includes("Baseline stub"));
+    expect(judgedIndex).toBeGreaterThanOrEqual(0);
+    expect(baselineIndex).toBeGreaterThanOrEqual(0);
+    expect(judgedIndex).toBeLessThan(baselineIndex);
+  });
+
+  it("preserves the relative order of two non-baseline candidates (stable sort)", () => {
+    const first = makeCandidate({ title: "First judged", tags: ["smoke"] });
+    const second = makeCandidate({ title: "Second judged", tags: ["regression"] });
+    render(<CandidatesPane candidates={[first, second]} />);
+
+    const order = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const firstIndex = order.findIndex((t) => t.includes("First judged"));
+    const secondIndex = order.findIndex((t) => t.includes("Second judged"));
+    expect(firstIndex).toBeLessThan(secondIndex);
+  });
+
+  it("does not mutate the caller's candidates array", () => {
+    const baseline = makeCandidate({ title: "Baseline stub", tags: [BASELINE_TAG] });
+    const judged = makeCandidate({ title: "Judged model candidate", tags: ["smoke"] });
+    const input = [baseline, judged];
+    const snapshotIds = input.map((c) => c.id);
+    render(<CandidatesPane candidates={input} />);
+    expect(input.map((c) => c.id)).toEqual(snapshotIds);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — weak-test flag (Epic #736 / Issue #748)
 // ---------------------------------------------------------------------------
 

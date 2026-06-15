@@ -109,6 +109,19 @@ const buildExpectedResults = (
   return Object.freeze(results);
 };
 
+/**
+ * Stable provenance discriminator carried by every deterministic-baseline candidate.
+ *
+ * The model-delta builder (`parseGeneratedCandidates`) never emits this tag, so it is a reliable
+ * "this is a generic determinism-floor stub, not a judged model candidate" marker — unlike a null
+ * `qualityVerdict`, which is also null whenever the judge stage is skipped entirely. Render-layer
+ * consumers sort baseline-tagged candidates to the end so judged candidates lead the deliverable;
+ * the persisted manifest order stays `[...baseline, ...delta]` (Issue #763 contract). The tag is
+ * additive and feeds no candidate id (`sha256(v2<atomHash><index>)`), dedup signature, or manifest
+ * hash, so it is determinism-safe.
+ */
+export const DETERMINISTIC_BASELINE_PROVENANCE_TAG = "source:deterministic-baseline";
+
 const buildTags = (
   intent: IntentSummary,
   riskClass: QualityIntelligence.QualityIntelligenceRiskClass,
@@ -121,6 +134,7 @@ const buildTags = (
     tags.add(`risk-hint:${risk}`);
   }
   tags.add(`risk-class:${riskClass}`);
+  tags.add(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
   return Object.freeze(Array.from(tags).sort(compareString));
 };
 
