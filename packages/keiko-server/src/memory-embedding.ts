@@ -22,8 +22,12 @@ import {
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryEmbeddingInput, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryEmbeddingInput,
+  MemoryEmbeddingRow,
+  MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 
@@ -171,4 +175,91 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   const cosine = dot / (Math.sqrt(normA) * Math.sqrt(normB));
   if (cosine <= 0) return 0;
   return cosine > 1 ? 1 : cosine;
+}
+
+// ─── Semantic novelty gate at capture (#204, O-F1) ──────────────────────────────
+// Lexical Jaccard dedup at capture misses semantic restatements ("I use Postgres" vs "my database is
+// PostgreSQL"). This catches them BEFORE a second copy is stored: embed the candidate once, compare
+// to the in-scope stored vectors, and if it is NEAR-IDENTICAL to an existing memory, reinforce that
+// canonical memory instead of duplicating it.
+//
+// SAFETY: the threshold is deliberately HIGH (0.95) and the gate is applied ONLY to the low-stakes
+// salience firehose — NOT to explicit user instructions. A pure cosine signal cannot tell a
+// paraphrase ("uses PostgreSQL") from a value-change ("region is eu-central-1" vs "us-east-1"), so a
+// lower threshold could merge a contradicting update. At 0.95 only near-verbatim restatements merge;
+// value-changes (differing entities/numbers) stay below it and are inserted normally, where
+// consolidation's conflict detection backstops them. Merging reinforces the canonical rather than
+// deleting, so even a false merge loses no stored fact. Graceful: with no embedder the candidate
+// embedding is null and the gate is inert (prior lexical-only behaviour, byte-for-byte).
+
+export const SEMANTIC_DEDUP_COSINE_THRESHOLD = 0.95;
+
+// Pure: the id of the nearest in-scope memory whose cosine to the candidate is at/above the
+// threshold, or null (no candidate embedding, no neighbours, or none similar enough). First-max wins
+// on ties so the result is deterministic for a fixed neighbour iteration order.
+export function findSemanticDuplicate(
+  candidate: MemoryEmbeddingInput | null,
+  neighbors: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+  threshold: number = SEMANTIC_DEDUP_COSINE_THRESHOLD,
+): MemoryId | null {
+  if (candidate === null) return null;
+  let bestId: MemoryId | null = null;
+  let bestSim = -1;
+  for (const [id, row] of neighbors) {
+    const sim = cosineSimilarity(candidate.vector, row.vector);
+    if (sim > bestSim) {
+      bestSim = sim;
+      bestId = id;
+    }
+  }
+  return bestSim >= threshold ? bestId : null;
+}
+
+// Bounds the neighbour set so the cosine sweep stays cheap on a large vault (mirrors the lexical
+// dedup corpus bound). Scope-local list preserves cross-scope isolation.
+const MAX_DEDUP_NEIGHBORS = 200;
+
+function gatherScopeEmbeddings(
+  vault: MemoryVaultStore,
+  scope: MemoryScope,
+): ReadonlyMap<MemoryId, MemoryEmbeddingRow> {
+  const ids = vault
+    .listMemoriesByScope(scope)
+    .slice(0, MAX_DEDUP_NEIGHBORS)
+    .map((record) => record.id);
+  return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
+}
+
+export interface NoveltyInsertResult {
+  // The inserted record, or null when the candidate was merged into an existing near-duplicate.
+  readonly inserted: MemoryRecord | null;
+  // The canonical memory the candidate merged into (reinforced via recordAccess), or null.
+  readonly mergedInto: MemoryId | null;
+}
+
+// Insert a freshly-built salience capture record UNLESS it is a semantic near-duplicate of an
+// existing in-scope memory, in which case reinforce the canonical (recordAccess) and skip the
+// duplicate. Embeds the body exactly ONCE (reused for both the novelty check and storage), so this
+// replaces — not adds to — the prior best-effort embed-on-capture call. Never throws past the
+// vault's own guards; a null embedding degrades to a plain insert.
+export async function insertSalienceMemoryWithNoveltyGate(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+): Promise<NoveltyInsertResult> {
+  const embedding = await embedMemoryText(deps, record.body);
+  const duplicateOf = findSemanticDuplicate(embedding, gatherScopeEmbeddings(vault, record.scope));
+  if (duplicateOf !== null) {
+    vault.recordAccess([duplicateOf], Date.now());
+    return { inserted: null, mergedInto: duplicateOf };
+  }
+  const inserted = vault.insertMemory(record);
+  if (embedding !== null) {
+    try {
+      vault.upsertEmbedding(inserted.id, embedding);
+    } catch {
+      // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
+    }
+  }
+  return { inserted, mergedInto: null };
 }

@@ -8,7 +8,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  type MemoryEmbeddingInput,
+  type MemoryEmbeddingRow,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -19,6 +24,8 @@ import {
   cosineSimilarity,
   embedAndStoreMemory,
   embedMemoryText,
+  findSemanticDuplicate,
+  insertSalienceMemoryWithNoveltyGate,
   selectMemoryEmbeddingModelId,
 } from "./memory-embedding.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -279,5 +286,123 @@ describe("cosineSimilarity (#204)", () => {
 
   it("returns 0 for a zero-magnitude vector", () => {
     expect(cosineSimilarity(Float32Array.from([0, 0]), Float32Array.from([1, 1]))).toBe(0);
+  });
+});
+
+function makeRecord(
+  body: string,
+  id = `mem-${Math.random().toString(36).slice(2, 10)}`,
+  user = "local-operator",
+): MemoryRecord {
+  const now = Date.now();
+  return {
+    id: memoryId(id),
+    schemaVersion: "1",
+    scope: { kind: "user", userId: memoryUserId(user) },
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "system-default",
+      capturedAt: now,
+      confidence: 0.6,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+describe("findSemanticDuplicate (#204, O-F1)", () => {
+  const embRow = (id: string, vector: Float32Array): MemoryEmbeddingRow => ({
+    memoryId: memoryId(id),
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    dimensions: vector.length,
+    metric: "cosine",
+    vector,
+    createdAt: 0,
+  });
+  const candidate: MemoryEmbeddingInput = {
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    metric: "cosine",
+    vector: Float32Array.from([1, 0, 0]),
+  };
+
+  it("returns null for a null candidate (no embedder)", () => {
+    expect(findSemanticDuplicate(null, new Map())).toBeNull();
+  });
+
+  it("returns null when no neighbour is similar enough", () => {
+    const neighbors = new Map([[memoryId("a"), embRow("a", Float32Array.from([0, 1, 0]))]]);
+    expect(findSemanticDuplicate(candidate, neighbors)).toBeNull();
+  });
+
+  it("returns the nearest neighbour at or above the threshold", () => {
+    const neighbors = new Map([
+      [memoryId("far"), embRow("far", Float32Array.from([0, 1, 0]))],
+      [memoryId("near"), embRow("near", Float32Array.from([1, 0, 0]))],
+    ]);
+    expect(findSemanticDuplicate(candidate, neighbors)).toBe(memoryId("near"));
+  });
+
+  it("does not merge a moderately-similar value-change below the threshold", () => {
+    // A vector that shares direction but is clearly distinct (cosine ~0.83 < 0.95).
+    const neighbors = new Map([[memoryId("v"), embRow("v", Float32Array.from([1, 0.66, 0]))]]);
+    expect(findSemanticDuplicate(candidate, neighbors)).toBeNull();
+  });
+});
+
+describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
+  it("inserts a genuinely new memory and stores its embedding", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const rec = makeRecord("the user prefers tabs over spaces");
+    const { inserted, mergedInto } = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    expect(mergedInto).toBeNull();
+    expect(inserted?.id).toBe(rec.id);
+    expect(vault.getEmbedding(rec.id)).toBeDefined();
+  });
+
+  it("merges a semantic near-duplicate into the canonical and reinforces it instead of inserting", async () => {
+    // okAdapter returns one fixed vector for every input => candidate cosine 1 to the canonical.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const canonical = makeRecord("the user prefers postgres", "id-canonical");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
+    const before = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
+
+    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
+    expect(result.inserted).toBeNull();
+    expect(result.mergedInto).toBe(canonical.id);
+    expect(vault.getMemory(dup.id)).toBeUndefined();
+    const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
+    expect(after).toBe(before + 1);
+  });
+
+  it("does NOT merge across scopes even with an identical vector (isolation)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const alice = makeRecord("shared body text", "id-alice", "alice");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, alice);
+    const bob = makeRecord("shared body text", "id-bob", "bob");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, bob);
+    expect(result.mergedInto).toBeNull();
+    expect(result.inserted?.id).toBe(bob.id);
+  });
+
+  it("inserts plainly when no embedding model is configured (graceful)", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const rec = makeRecord("anything at all");
+    const { inserted, mergedInto } = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    expect(mergedInto).toBeNull();
+    expect(inserted?.id).toBe(rec.id);
+    expect(vault.getEmbedding(rec.id)).toBeUndefined();
   });
 });
