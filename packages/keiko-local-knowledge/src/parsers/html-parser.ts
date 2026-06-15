@@ -24,7 +24,32 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
-import type { ParserAdapter, ParserOptions, ParserSelectionInput } from "./types.js";
+import type {
+  InternalParserResult,
+  ParserAdapter,
+  ParserOptions,
+  ParserSelectionInput,
+} from "./types.js";
+
+// Collapse internal whitespace runs to single spaces and trim. Applied to each block's
+// visible text so the cleaned projection reads as flowing prose (the raw HTML had source
+// indentation / newlines between inline tags).
+function collapseWhitespace(value: string): string {
+  let out = "";
+  let inWs = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    const ws = code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+    if (ws) {
+      inWs = true;
+      continue;
+    }
+    if (inWs && out.length > 0) out += " ";
+    inWs = false;
+    out += value.charAt(i);
+  }
+  return out;
+}
 
 const PARSER_ID = "html";
 const PARSER_VERSION = "1";
@@ -160,6 +185,7 @@ function pushHeading(state: HeadingState, level: number, label: string): void {
 interface Emission {
   readonly units: readonly ParsedUnit[];
   readonly diagnostics: readonly ParserDiagnostic[];
+  readonly normalizedText: string;
 }
 
 interface ScanState {
@@ -176,6 +202,12 @@ interface ScanState {
   pendingHeadingLabel: string | null;
   pendingHeadingLevel: number;
   stopped: boolean;
+  // GRD-003: build a cleaned, tag/script/style-free normalizedText projection and re-base
+  // unit offsets onto it (mirrors the xlsx parser). The raw bytes — including <script> bodies
+  // and embedded secrets — must NEVER become the persisted normalized_text / LLM excerpt.
+  blockText: string; // accumulator for the current block's visible text
+  readonly cleanedParts: string[]; // joined into the final normalizedText
+  cleanedOffset: number; // running length of cleanedParts.join("")
 }
 
 function isWhitespaceOnly(text: string, start: number, end: number): boolean {
@@ -186,34 +218,55 @@ function isWhitespaceOnly(text: string, start: number, end: number): boolean {
   return true;
 }
 
+function resetBlock(state: ScanState): void {
+  state.pendingBlockStart = null;
+  state.pendingBlockHasText = false;
+  state.blockText = "";
+}
+
 function flushBlock(state: ScanState, end: number): void {
   if (state.pendingBlockStart === null) return;
   if (end <= state.pendingBlockStart || !state.pendingBlockHasText) {
-    state.pendingBlockStart = null;
-    state.pendingBlockHasText = false;
+    resetBlock(state);
     return;
   }
   const limit = shouldStop(state.startedAt, state.options, state.units.length);
   if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
     state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
     state.stopped = true;
-    state.pendingBlockStart = null;
-    state.pendingBlockHasText = false;
+    resetBlock(state);
     return;
   }
+  // Offsets index the CLEANED projection, not the raw HTML — so citation slices and chunk
+  // spans never expose tags, <script>/<style> bodies, or embedded secrets.
+  const cleaned = collapseWhitespace(state.blockText);
+  if (cleaned.length === 0) {
+    resetBlock(state);
+    return;
+  }
+  if (state.cleanedParts.length > 0) {
+    // Single newline separator between blocks (a gap not covered by any unit range).
+    state.cleanedParts.push("\n");
+    state.cleanedOffset += 1;
+  }
+  const start = state.cleanedOffset;
+  state.cleanedParts.push(cleaned);
+  state.cleanedOffset += cleaned.length;
   state.units.push({
     kind: "html-block",
     documentId: state.input.documentId,
     headingPath: [...state.heading.stack],
-    characterStart: state.pendingBlockStart,
-    characterEnd: end,
+    characterStart: start,
+    characterEnd: state.cleanedOffset,
   });
-  state.pendingBlockStart = null;
-  state.pendingBlockHasText = false;
+  resetBlock(state);
 }
 
 function openBlock(state: ScanState, at: number, hasText: boolean): void {
-  state.pendingBlockStart ??= at;
+  if (state.pendingBlockStart === null) {
+    state.pendingBlockStart = at;
+    state.blockText = "";
+  }
   if (hasText) state.pendingBlockHasText = true;
 }
 
@@ -242,6 +295,9 @@ function appendTextRun(state: ScanState, from: number, to: number): void {
     return;
   }
   openBlock(state, from, !isWhitespaceOnly(state.text, from, to));
+  // Accumulate only inter-tag text runs — inline tag literals (<b>, <a …>) are never part of
+  // a run, so the cleaned projection is tag-free by construction.
+  state.blockText += state.text.slice(from, to);
 }
 
 function handleTag(state: ScanState, tag: Tag): number {
@@ -286,13 +342,20 @@ function emitHtml(text: string, input: ParserSelectionInput, options: ParserOpti
     pendingHeadingLabel: null,
     pendingHeadingLevel: 0,
     stopped: false,
+    blockText: "",
+    cleanedParts: [],
+    cleanedOffset: 0,
   };
   let cursor = 0;
   while (cursor < text.length && !state.stopped) {
     cursor = step(state, cursor);
   }
   flushBlock(state, text.length);
-  return { units: state.units, diagnostics: state.diagnostics };
+  return {
+    units: state.units,
+    diagnostics: state.diagnostics,
+    normalizedText: state.cleanedParts.join(""),
+  };
 }
 
 export const htmlParser: ParserAdapter = Object.freeze({
@@ -309,12 +372,18 @@ export const htmlParser: ParserAdapter = Object.freeze({
     }
     const decoded = decodeUtf8(input.bytes);
     const emission = emitHtml(decoded.text, input, options);
-    return emptyResult(
-      htmlParser.capability,
-      input.documentId,
-      options,
-      emission.diagnostics,
-      emission.units,
-    );
+    const result: InternalParserResult = {
+      ...emptyResult(
+        htmlParser.capability,
+        input.documentId,
+        options,
+        emission.diagnostics,
+        emission.units,
+      ),
+      // GRD-003: persist the cleaned, tag/script/style-free projection so extract.ts NEVER
+      // falls back to raw bytes (which carried <script> bodies + embedded secrets).
+      normalizedText: emission.normalizedText,
+    };
+    return result;
   },
 });

@@ -433,15 +433,49 @@ function handleExtractionSkipped(state: RunState, result: ExtractionResult): Ind
   };
 }
 
+// GRD-010: transient IO failure codes that must NOT destroy a previously-good index on an
+// incremental refresh. Mirrors the gate in discovery/extract.ts buildFailureResult.
+const TRANSIENT_DISCOVERY_CODES: ReadonlySet<string> = new Set(["READ_FAILED", "STAT_FAILED"]);
+
 function handleExtractionFailed(state: RunState, result: ExtractionResult): IndexingEvent {
-  state.failedDocuments += 1;
   const errMessage =
     result.outcome.kind === "failed" ? result.outcome.error.message : "extraction failed";
   const errCode = result.outcome.kind === "failed" ? result.outcome.error.code : "READ_FAILED";
   if (result.outcome.kind === "failed") {
-    clearDocumentArtifacts(state, result.outcome.document.id, { deleteChunks: true });
-    markDocumentFailed(state, result.outcome.document.id);
+    const documentId = result.outcome.document.id;
+    // GRD-010: a transient re-read failure on a document that still has a prior good index
+    // (extract.ts preserved its chunks/vectors) is reported as a non-destructive skip, NOT a
+    // failure — the retrievable content survives until a successful re-extraction.
+    if (
+      TRANSIENT_DISCOVERY_CODES.has(errCode) &&
+      countChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId) > 0
+    ) {
+      state.skippedDocuments += 1;
+      return {
+        kind: "document-skipped",
+        jobId: state.jobId,
+        capsuleId: state.capsule.id,
+        sourceId: result.sourceId,
+        documentId,
+        reason: "unchanged",
+      };
+    }
+    state.failedDocuments += 1;
+    clearDocumentArtifacts(state, documentId, { deleteChunks: true });
+    markDocumentFailed(state, documentId);
+    const error: IndexingJobError = { code: `DISCOVERY_FAILED:${errCode}`, message: errMessage };
+    state.lastError = error;
+    return {
+      kind: "document-failed",
+      jobId: state.jobId,
+      capsuleId: state.capsule.id,
+      sourceId: result.sourceId,
+      documentId,
+      relativePath: result.relativePath,
+      error,
+    };
   }
+  state.failedDocuments += 1;
   const error: IndexingJobError = { code: `DISCOVERY_FAILED:${errCode}`, message: errMessage };
   state.lastError = error;
   return {
@@ -449,7 +483,6 @@ function handleExtractionFailed(state: RunState, result: ExtractionResult): Inde
     jobId: state.jobId,
     capsuleId: state.capsule.id,
     sourceId: result.sourceId,
-    ...(result.outcome.kind === "failed" ? { documentId: result.outcome.document.id } : {}),
     relativePath: result.relativePath,
     error,
   };

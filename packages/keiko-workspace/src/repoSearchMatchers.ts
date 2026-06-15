@@ -345,7 +345,9 @@ function adjustedDefinitionIntentScore(
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const rawTokens = query.text.split(/\s+/).filter((t) => t.length > 0);
   const normalizedTokens = naturalLanguageNormalizedTokens(rawTokens);
-  const tokens = naturalLanguageContentTokens(rawTokens, query.caseSensitive);
+  // GRD-033: dedupe content tokens (as symbol/route/method tokens already are) so a repeated
+  // query word does not double-count in `hits/total`, which over-rewarded prose-heavy scopes.
+  const tokens = uniqueStrings(naturalLanguageContentTokens(rawTokens, query.caseSensitive));
   const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
   const total = tokens.length;
   return {

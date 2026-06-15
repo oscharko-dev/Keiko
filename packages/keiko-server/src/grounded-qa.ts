@@ -40,6 +40,7 @@ import {
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -407,8 +408,12 @@ function formatLineRange(citation: GroundedEvidenceCitation): string {
 }
 
 function redactedString(redactor: Redactor, value: string): string {
-  const redacted = redactor(value);
-  return typeof redacted === "string" ? redacted : value;
+  // GRD-001: strip Trojan-source / invisible format chars BEFORE redaction so a zero-width
+  // character cannot split a secret shape past the redactor, and so reordered/hidden text
+  // never reaches the prompt or the browser-rendered wire.
+  const safe = stripUnsafeFormatChars(value);
+  const redacted = redactor(safe);
+  return typeof redacted === "string" ? redacted : safe;
 }
 
 export function promptSafeExcerptText(value: string): string {
@@ -649,7 +654,8 @@ function defaultRunner(
 // ─── Citation projection ──────────────────────────────────────────────────────
 
 export function redactString(redactor: Redactor, value: string): string {
-  return redactor(value) as string;
+  // GRD-001: strip Trojan-source / invisible format chars before redaction (see redactedString).
+  return redactor(stripUnsafeFormatChars(value)) as string;
 }
 
 export function buildCitations(

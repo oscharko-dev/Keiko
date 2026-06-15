@@ -210,6 +210,26 @@ function persistFailureRow(
   }
 }
 
+// GRD-010: decide whether to persist a cascade-deleting failure row. A TRANSIENT IO failure
+// (READ_FAILED / STAT_FAILED) on an incremental refresh must NOT destroy a previously-good index
+// — persisting overwrites the document row and CASCADE-deletes its chunks+vectors. When a prior
+// NON-failed row exists, skip persistence so a momentary lock / NFS hiccup / permission flap
+// preserves retrievable content (the orchestrator then reports a non-destructive skip). Permanent
+// failures (MALFORMED_INPUT, PARSER_FAILED, OVERSIZED_FILE, …) and first-time failures still persist.
+function shouldPersistFailureRow(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  error: DiscoveryError,
+  optionPersist: boolean,
+): boolean {
+  if (!optionPersist) return false;
+  const isTransient = error.code === "READ_FAILED" || error.code === "STAT_FAILED";
+  if (!isTransient) return true;
+  const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
+  return existing === undefined || existing.status === "failed";
+}
+
 function buildFailureResult(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -238,7 +258,7 @@ function buildFailureResult(
     status: "failed",
     safeDisplayName: safeDisplay(params.file.relativePath),
   };
-  if (options.persist) {
+  if (shouldPersistFailureRow(deps, params, documentId, error, options.persist)) {
     persistFailureRow(deps, params, documentId, document, diagnostic, now);
   }
   const outcome: ExtractionOutcome = {

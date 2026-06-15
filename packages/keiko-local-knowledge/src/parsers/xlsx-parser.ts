@@ -4,6 +4,7 @@ import type { ParsedUnit, ParserDiagnostic, ParserResult } from "@oscharko-dev/k
 import yauzl from "yauzl";
 
 import {
+  decodeXmlEntities,
   diagnostic,
   emptyResult,
   objectLimitDiagnostic,
@@ -270,13 +271,10 @@ function readRelevantEntries(
   });
 }
 
+// GRD-027: delegate to the shared decoder so cell text resolves numeric character references
+// (smart quotes, accents) instead of surfacing literal `&#8217;`.
 function decodeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  return decodeXmlEntities(value);
 }
 
 function attribute(tag: string, name: string): string | undefined {

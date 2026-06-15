@@ -435,51 +435,96 @@ export interface MultiSourceAskInput {
   readonly preSkipped?: readonly { readonly label: string; readonly message: string }[];
 }
 
+// GRD-006: classify a thrown per-source retrieve error. A recoverable workspace error becomes a
+// skip (with the mapped RouteResult preserved as the all-bad fallback); anything else returns
+// undefined so the caller re-throws it to the outer handler (ClarificationNeededError, cancel, …).
+function classifyPerSourceRetrieveError(
+  error: unknown,
+  label: string,
+): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
+  const mapped = mappedWorkspaceError(error);
+  if (mapped === undefined) return undefined;
+  return {
+    skipped: {
+      label,
+      message: error instanceof Error ? error.message : "Connected source is not readable.",
+    },
+    mapped,
+  };
+}
+
+interface RetrieveAccumulator {
+  readonly retrieved: (RetrievedSource | undefined)[];
+  readonly skipped: SkippedScope[];
+  firstError: RouteResult | undefined;
+}
+
+// Retrieve one source into the shared accumulator. GRD-006: a recoverable workspace error skips
+// just that source (preserving the all-bad 400 fallback in `firstError`); any other error
+// propagates to the outer handler.
+async function retrieveOneSource(
+  ctx: MultiSourceAskInput,
+  query: RetrievalQuery,
+  perScopeBudget: ExplorationBudget,
+  labels: readonly string[],
+  acc: RetrieveAccumulator,
+  i: number,
+): Promise<void> {
+  ensureNotCancelled(ctx.signal);
+  const cs = ctx.scopes[i];
+  const label = labels[i];
+  if (cs === undefined || label === undefined) return;
+  const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
+  let out: Awaited<ReturnType<GroundedRetriever>>;
+  try {
+    out = await ctx.retriever({
+      scope,
+      query,
+      workspaceRoot: scope.workspaceRoot,
+      budget: perScopeBudget,
+    });
+  } catch (error) {
+    const classified = classifyPerSourceRetrieveError(error, label);
+    if (classified === undefined) throw error; // non-workspace error → outer handler
+    acc.skipped.push(classified.skipped);
+    acc.firstError ??= classified.mapped;
+    return;
+  }
+  if (!isValidGroundedPack(out.pack)) {
+    acc.skipped.push({ label, message: "Pack validation failed." });
+    acc.firstError ??= internalError("Grounded answer context pack failed validation.");
+    return;
+  }
+  acc.retrieved[i] = { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan };
+}
+
 async function retrieveAllSources(
   ctx: MultiSourceAskInput,
   query: RetrievalQuery,
   perScopeBudget: ExplorationBudget,
   labels: readonly string[],
 ): Promise<RetrievalOutcome | RouteResult> {
-  const retrieved: (RetrievedSource | undefined)[] = new Array<RetrievedSource | undefined>(
-    ctx.scopes.length,
-  );
-  const skipped: SkippedScope[] = [];
+  const acc: RetrieveAccumulator = {
+    retrieved: new Array<RetrievedSource | undefined>(ctx.scopes.length),
+    skipped: [],
+    firstError: undefined,
+  };
   let nextIndex = 0;
-  let firstError: RouteResult | undefined;
-
-  async function retrieveOne(i: number): Promise<void> {
-    ensureNotCancelled(ctx.signal);
-    const cs = ctx.scopes[i];
-    const label = labels[i];
-    if (cs === undefined || label === undefined) return;
-    const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
-    const out = await ctx.retriever({
-      scope,
-      query,
-      workspaceRoot: scope.workspaceRoot,
-      budget: perScopeBudget,
-    });
-    if (!isValidGroundedPack(out.pack)) {
-      skipped.push({ label, message: "Pack validation failed." });
-      firstError ??= internalError("Grounded answer context pack failed validation.");
-      return;
-    }
-    retrieved[i] = { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan };
-  }
 
   async function worker(): Promise<void> {
     for (;;) {
       const i = nextIndex;
       nextIndex += 1;
       if (i >= ctx.scopes.length) return;
-      await retrieveOne(i);
+      await retrieveOneSource(ctx, query, perScopeBudget, labels, acc, i);
     }
   }
 
   const workerCount = Math.min(MAX_RETRIEVAL_CONCURRENCY, Math.max(1, ctx.scopes.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  const sources = retrieved.filter((source): source is RetrievedSource => source !== undefined);
+  const sources = acc.retrieved.filter((source): source is RetrievedSource => source !== undefined);
+  const skipped = acc.skipped;
+  const firstError = acc.firstError;
   if (sources.length === 0 && firstError !== undefined) return firstError;
   return { retrieved: sources, skipped, firstError };
 }

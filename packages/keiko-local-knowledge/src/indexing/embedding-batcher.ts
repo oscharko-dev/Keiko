@@ -21,6 +21,7 @@ import type {
 import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
 import type {
   OpenAIEmbeddingAdapter,
+  OpenAIEmbeddingBatchOutcome,
   OpenAIEmbeddingErrorKind,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingSuccess,
@@ -170,6 +171,137 @@ async function embedChunkWithRetry(
   return outcome;
 }
 
+// ─── Array-batch embedding (#189 GRD-004) ────────────────────────────────────
+// When the adapter exposes `requestBatch`, embed many unique chunks per HTTP round-trip.
+// Items per request are bounded so a single response stays well under the gateway's 10 MB
+// JSON cap (96 × 3072 float32 ≈ 4.4 MB) and inside provider per-request token limits.
+const BATCH_ITEM_CAP = 96;
+const BATCH_CHAR_CAP = 120_000;
+
+function groupIntoBatches(
+  requests: readonly UniqueChunkRequest[],
+): readonly (readonly UniqueChunkRequest[])[] {
+  const batches: UniqueChunkRequest[][] = [];
+  let current: UniqueChunkRequest[] = [];
+  let currentChars = 0;
+  for (const request of requests) {
+    const len = request.representative.text.length;
+    if (
+      current.length > 0 &&
+      (current.length >= BATCH_ITEM_CAP || currentChars + len > BATCH_CHAR_CAP)
+    ) {
+      batches.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(request);
+    currentChars += len;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function isTransientBatchOutcome(outcome: OpenAIEmbeddingBatchOutcome): boolean {
+  return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);
+}
+
+function errorFromKind(kind: OpenAIEmbeddingErrorKind): IndexingJobError {
+  return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${kind}` };
+}
+
+async function embedArrayBatchWithRetry(
+  options: EmbedBatchOptions,
+  inputs: readonly string[],
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  const adapter = options.adapter;
+  const requestBatch = adapter.requestBatch;
+  if (requestBatch === undefined) {
+    return { ok: false, kind: "transport" };
+  }
+  const base = {
+    endpoint: adapter.endpoint,
+    apiKey: adapter.apiKey,
+    ...(adapter.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: adapter.apiKeyHeaderName }
+      : {}),
+    modelId: options.pinnedIdentity.modelId,
+    inputs,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  };
+  const retry = resolveRetry(options.retry);
+  let outcome = await requestBatch(base);
+  for (let attempt = 1; attempt <= retry.maxRetries; attempt += 1) {
+    if (!isTransientBatchOutcome(outcome) || options.signal?.aborted === true) {
+      return outcome;
+    }
+    try {
+      await retry.sleep(backoffMs(attempt, retry.baseDelayMs), options.signal);
+    } catch {
+      return outcome; // aborted mid-backoff; the abort gate converts this to CANCELLED
+    }
+    outcome = await requestBatch(base);
+  }
+  return outcome;
+}
+
+// Apply the per-vector identity gate exactly as the scalar path does. Order-independent:
+// once `state.identityFailure` is set, embedChunkBatch persists nothing, so which concurrent
+// batch first observes the drift is irrelevant to the outcome.
+function gateVectorOutcome(
+  representative: ChunkToEmbed,
+  success: OpenAIEmbeddingSuccess,
+  options: EmbedBatchOptions,
+  state: BuildOutcomesState,
+): ChunkOutcome {
+  if (state.identityFailure !== undefined) {
+    return { ok: false, chunk: representative, error: state.identityFailure };
+  }
+  const observed = identityFromAdapter(options.pinnedIdentity, success);
+  const compat = assertCompatibleEmbeddingIdentity(options.pinnedIdentity, observed);
+  if (!compat.ok) {
+    state.identityFailure = {
+      code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+      message: compat.safeMessage,
+    };
+    return { ok: false, chunk: representative, error: state.identityFailure };
+  }
+  return { ok: true, chunk: representative, success };
+}
+
+async function embedUniqueBatch(
+  batch: readonly UniqueChunkRequest[],
+  options: EmbedBatchOptions,
+  state: BuildOutcomesState,
+): Promise<readonly ChunkOutcome[]> {
+  if (state.identityFailure !== undefined) {
+    const failure = state.identityFailure;
+    return batch.map((r) => ({ ok: false as const, chunk: r.representative, error: failure }));
+  }
+  const abortError = checkAbort(options.signal);
+  if (abortError !== undefined) {
+    return batch.map((r) => ({ ok: false as const, chunk: r.representative, error: abortError }));
+  }
+  const outcome = await embedArrayBatchWithRetry(
+    options,
+    batch.map((r) => r.representative.text),
+  );
+  if (!outcome.ok) {
+    const error = errorFromKind(outcome.kind);
+    return batch.map((r) => ({ ok: false as const, chunk: r.representative, error }));
+  }
+  return batch.map((request, i) => {
+    const success = outcome.value[i];
+    if (success === undefined) {
+      return {
+        ok: false as const,
+        chunk: request.representative,
+        error: errorFromKind("invalid-response"),
+      };
+    }
+    return gateVectorOutcome(request.representative, success, options, state);
+  });
+}
+
 // ─── Identity verification ───────────────────────────────────────────────────
 function identityFromAdapter(
   pinned: EmbeddingModelIdentity,
@@ -306,9 +438,21 @@ async function buildChunkOutcomes(
 }> {
   const state: BuildOutcomesState = { identityFailure: undefined };
   const uniqueRequests = dedupeEmbeddingRequests(chunks);
-  const uniqueOutcomes = await runBounded(uniqueRequests, options.concurrency, async (request) => {
-    return buildUniqueChunkOutcome(request, options, state);
-  });
+  let uniqueOutcomes: readonly ChunkOutcome[];
+  if (typeof options.adapter.requestBatch === "function") {
+    // Array-batch path: collapse the unique requests into ceil(N / itemCap) HTTP calls,
+    // run those calls with bounded concurrency, then flatten back into request order.
+    const batches = groupIntoBatches(uniqueRequests);
+    const batchOutcomes = await runBounded(batches, options.concurrency, async (batch) =>
+      embedUniqueBatch(batch, options, state),
+    );
+    uniqueOutcomes = batchOutcomes.flat();
+  } else {
+    // Scalar fallback (adapters/stubs without `requestBatch`): one HTTP call per unique chunk.
+    uniqueOutcomes = await runBounded(uniqueRequests, options.concurrency, async (request) => {
+      return buildUniqueChunkOutcome(request, options, state);
+    });
+  }
   const outcomes = expandUniqueOutcomes(uniqueRequests, uniqueOutcomes);
   return state.identityFailure === undefined
     ? { outcomes }

