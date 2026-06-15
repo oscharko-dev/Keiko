@@ -148,7 +148,8 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   await page.goto("/");
   await expect(page.getByRole("navigation", { name: "Primary workspace navigation" })).toBeVisible();
   await expect(page.getByText("Keiko").first()).toBeVisible();
-  await expect(page.getByText(/Connected|Ready|Setup required/u).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "New", exact: true })).toBeVisible();
+  await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
 
   assertNoPageErrors();
 });
@@ -183,10 +184,12 @@ test("memory and local-knowledge navigation surfaces load without client errors 
 }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
-  await page.goto("/memoriaviva");
-  await expect(page.getByRole("heading", { name: "MemoriaViva" })).toBeVisible();
-  await page.getByRole("link", { name: "Review queue" }).click();
-  await expect(page.getByRole("heading", { name: "Review queue" })).toBeVisible();
+  await page.goto("/");
+  await page.getByRole("button", { name: "MemoriaViva" }).click();
+  const memoriaWindow = page.getByRole("region", { name: "MemoriaViva" });
+  await expect(memoriaWindow.getByRole("heading", { name: "MemoriaViva" })).toBeVisible();
+  await page.getByRole("button", { name: "Review queue" }).click();
+  await expect(memoriaWindow.getByRole("heading", { name: "Review queue" })).toBeVisible();
 
   await page.goto("/");
   await page.getByRole("button", { name: "Local Knowledge" }).click();

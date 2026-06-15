@@ -438,8 +438,6 @@ async function main() {
     ui = await startInstalledUi(installRoot, configPath, uiDbPath, evidenceDir, memoryDir);
     const homeHtml = await fetchText(`${ui.baseUrl}/`);
     assert(homeHtml.includes("Keiko"), "home page did not contain the Keiko shell marker");
-    const memoryHtml = await fetchText(`${ui.baseUrl}/memoriaviva`);
-    assert(memoryHtml.includes("MemoriaViva"), "/memoriaviva did not render the MemoriaViva route");
     await assertFreshMemoryState(ui.baseUrl);
 
     const rememberChatId = await createChat(ui.baseUrl, projectA);
@@ -616,7 +614,7 @@ async function main() {
     );
 
     console.log(
-      "installable-memory-smoke ok: tarball-installed UI/BFF served pages and exercised create, use, correct, forget, delete, scope isolation, restart persistence, and memory-off mode.",
+      "installable-memory-smoke ok: tarball-installed UI/BFF served the workspace shell and exercised create, use, correct, forget, delete, scope isolation, restart persistence, and memory-off mode.",
     );
   } finally {
     if (ui !== null) {
