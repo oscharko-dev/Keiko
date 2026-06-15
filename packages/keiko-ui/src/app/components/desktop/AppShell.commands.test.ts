@@ -75,7 +75,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const newCommands = commands.filter((c) => c.id.startsWith("new-"));
-    expect(newCommands.length).toBeGreaterThanOrEqual(8);
+    expect(newCommands.length).toBeGreaterThanOrEqual(6);
     expect(newCommands.find((c) => c.id === "new-chat")).toBeDefined();
     expect(newCommands.find((c) => c.id === "new-files")).toBeDefined();
     expect(newCommands.find((c) => c.id === "new-review")).toBeDefined();
@@ -182,15 +182,15 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       vi.fn(),
       fakeUndoStack(),
     );
-    const project = commands.find((c) => c.id === "open-project");
-    project?.run();
-    expect(onTool).toHaveBeenCalledWith("project");
+    const settings = commands.find((c) => c.id === "open-settings");
+    settings?.run();
+    expect(onTool).toHaveBeenCalledWith("settings");
   });
 
-  // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
+  // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
   // command palette (same forgotten-WindowType pattern as #756/"figma"). Pin them.
-  it("includes Open commands for settings, local knowledge, quality, relationships and keiko", () => {
+  it("includes Open commands for settings, local knowledge, quality and relationships", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -204,7 +204,102 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(ids.has("open-localKnowledge")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);
     expect(ids.has("open-relationships")).toBe(true);
-    expect(ids.has("open-keiko")).toBe(true);
+  });
+
+  it("does not expose the hidden Plugins surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-plugins")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Search surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-search")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Project surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-project")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Keiko Digital Twin surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-keiko")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Agents surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-agents")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Integrations surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-integ")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Editor surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-editor")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Browser surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-browser")).toBeUndefined();
   });
 
   // uiux-fix F008 C141 — shortcut discoverability: the undo/redo rows surface their chords.

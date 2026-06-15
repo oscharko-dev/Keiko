@@ -1,14 +1,8 @@
-// Epic #518 issue #526 — tests for the shell-level status indicators
-// surfaced by the workspace Footer.
+// Tests for the workspace Footer.
 //
-// The architecture blueprint (docs/workspace/518-architecture-blueprint.md)
-// names four shell-level status indicators that the workspace foundation
-// must surface: connected project, model availability, workflow readiness,
-// and evidence access. The Footer is the existing component that owns the
-// indicator strip.
-//
-// These tests pin the contract so future Footer edits cannot silently
-// remove an indicator.
+// The footer currently exposes only the open-window count trigger and its
+// restore/focus palette. Other shell status indicators are intentionally hidden
+// from this surface.
 
 import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
@@ -53,20 +47,20 @@ function renderFooter(
   );
 }
 
-describe("Footer — shell-level status indicators (epic #518 #526)", () => {
-  it("renders the connected-project indicator with the live workspace label", () => {
+describe("Footer — window status trigger", () => {
+  it("does not render the connected-project indicator", () => {
     renderFooter({ projectName: "Regulated Workspace" });
-    expect(screen.getByText("Regulated Workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Regulated Workspace")).not.toBeInTheDocument();
   });
 
-  it("renders the model-availability indicator with the selected model id", () => {
+  it("does not render the selected model indicator", () => {
     renderFooter({ selectedModel: "claude-sonnet-4-6" });
-    expect(screen.getByText("claude-sonnet-4-6")).toBeInTheDocument();
+    expect(screen.queryByText("claude-sonnet-4-6")).not.toBeInTheDocument();
   });
 
-  it("renders an explicit no-model-selected state when no model is configured", () => {
+  it("does not render an explicit no-model-selected state", () => {
     renderFooter();
-    expect(screen.getByText("No model selected")).toBeInTheDocument();
+    expect(screen.queryByText("No model selected")).not.toBeInTheDocument();
   });
 
   it("renders the workflow-readiness indicator showing the active window count", () => {
@@ -139,24 +133,24 @@ describe("Footer — shell-level status indicators (epic #518 #526)", () => {
     expect(onSelectWindow).toHaveBeenCalledWith("files-1");
   });
 
-  it("renders the review and evidence-access indicator", () => {
+  it("does not render the review and evidence-access indicator", () => {
     renderFooter({ evidenceStatusLabel: "Evidence ready" });
-    expect(screen.getByText("Evidence ready")).toBeInTheDocument();
+    expect(screen.queryByText("Evidence ready")).not.toBeInTheDocument();
   });
 
-  it("renders the shell trust-boundary status indicator", () => {
+  it("does not render the shell trust-boundary status indicator", () => {
     renderFooter({ shellStatusLabel: "Gateway setup required" });
-    expect(screen.getByText("Gateway setup required")).toBeInTheDocument();
+    expect(screen.queryByText("Gateway setup required")).not.toBeInTheDocument();
   });
 
-  it("renders the governance mode pill in manual mode", () => {
+  it("does not render the governance mode pill in manual mode", () => {
     renderFooter();
-    expect(screen.getByText(/You · manual/)).toBeInTheDocument();
+    expect(screen.queryByText(/You · manual/)).not.toBeInTheDocument();
   });
 
-  it("renders the governance mode pill in autonomous mode", () => {
+  it("does not render the governance mode pill in autonomous mode", () => {
     renderFooter({ mode: "autonomous" });
-    expect(screen.getByText("Keiko governing")).toBeInTheDocument();
+    expect(screen.queryByText("Keiko governing")).not.toBeInTheDocument();
   });
 
   it("uses a single semantic footer landmark", () => {
