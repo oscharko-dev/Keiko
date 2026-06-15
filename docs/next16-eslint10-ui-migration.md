@@ -1,4 +1,4 @@
-# Next 16 and ESLint 9 UI Migration Verification
+# Next 16 and ESLint 10 UI Migration Verification
 
 Status: Issue #862 migration evidence, captured on 2026-06-11.
 
@@ -6,9 +6,10 @@ Status: Issue #862 migration evidence, captured on 2026-06-11.
 
 - `packages/keiko-ui` uses `next@16.2.9` and `eslint-config-next@16.2.9`, the latest stable Next 16 line available during this run.
 - React remains on `18.3.1`; `next@16.2.9` supports React 18 and the migration did not require a React 19 upgrade.
-- The UI workspace uses `eslint@9.39.4` because it satisfies `eslint-config-next@16.2.9` while staying inside `eslint-plugin-jsx-a11y@6.10.2`'s peer range.
+- The root package and UI workspace use `eslint@10.5.0`.
 - The lint entry point is now `eslint . --max-warnings=0`; `next lint` is no longer used.
-- `packages/keiko-ui/.eslintrc.json` was replaced by `packages/keiko-ui/eslint.config.mjs`, based on `eslint-config-next/core-web-vitals` plus the strict flat `jsx-a11y` rules.
+- `packages/keiko-ui/.eslintrc.json` was replaced by `packages/keiko-ui/eslint.config.mjs`, based on the ESLint-10-compatible subset of `eslint-config-next/core-web-vitals` plus the strict flat `jsx-a11y` rules.
+- `eslint-config-next@16.2.9` still bundles React, import, JSX-a11y, and parser pieces whose published peer ranges or rule APIs are not fully ESLint-10-ready. The UI config therefore reuses Next's own `@next/next`, React Hooks, TypeScript, and JSX-a11y plugin objects, but filters out the incompatible React/import rule layer and avoids Next's Babel parser shim.
 - The flat config keeps the React Hooks rule level equivalent to the previous Next 15 lint baseline. React Hooks v7 adds compiler-oriented rules that were not part of the prior gate and surfaced existing application-code findings outside the allowed Issue #862 scope.
 
 ## Turbopack and package surface
