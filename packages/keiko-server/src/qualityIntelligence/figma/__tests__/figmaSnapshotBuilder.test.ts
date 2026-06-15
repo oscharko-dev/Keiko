@@ -847,10 +847,10 @@ describe("buildFigmaSnapshot — transient malformed /v1/images body (#750 F8)",
       }
       const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
       const map: Record<string, string> = {};
-      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      for (const id of ids) map[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
       return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
     };
-    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const renders = renderPort({ "https://s3-alpha-sig.figma.com/1:1.png": png(10) });
     const { sleep, delays } = recordingSleep();
 
     const snapshot = await buildFigmaSnapshot({
