@@ -27,6 +27,7 @@ import {
   type UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
@@ -166,7 +167,9 @@ export function parseUiArgs(args: readonly string[]): UiParseResult {
   return { port, evidenceDir: evidenceRaw, config: configRaw, uiDbPath: uiDbRaw };
 }
 
-function defaultStaticRoot(): string {
+function defaultStaticRoot(cwd: string): string {
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  if (preferredLayout !== undefined) return preferredLayout.staticRoot;
   // The root bin shim (`dist/cli/index.js`) surfaces `KEIKO_UI_STATIC_ROOT` so the
   // cli package does not have to know its own installation layout. The
   // import.meta.url fallback preserves the standalone behaviour for callers that
@@ -303,8 +306,12 @@ function alreadyFlagged(env: EnvSource, execArgv: readonly string[]): boolean {
 
 // Re-spawns the current process with --experimental-sqlite prepended, inheriting stdio. Returns
 // the exit code the child terminated with so the parent can propagate it.
-export async function reExecWithSqliteFlag(_env: EnvSource, spawnFn: SpawnFn): Promise<number> {
-  const entry = process.argv[1];
+export async function reExecWithSqliteFlag(
+  _env: EnvSource,
+  spawnFn: SpawnFn,
+  cwd: string,
+): Promise<number> {
+  const entry = resolvePreferredInstallLayout(cwd)?.binPath ?? process.argv[1];
   if (entry === undefined) return 1;
   const childArgs: string[] = [SQLITE_FLAG, ...process.execArgv, entry, ...process.argv.slice(2)];
   const child = spawnFn(process.execPath, childArgs, { stdio: "inherit" });
@@ -332,14 +339,18 @@ export async function reExecWithSqliteFlag(_env: EnvSource, spawnFn: SpawnFn): P
 // Returns undefined when no re-exec is needed; returns the child's exit code when a re-exec
 // happened. The guard never runs when an injected test factory bypasses the production loop, and
 // it never re-loops once --experimental-sqlite is already in execArgv.
-async function maybeReExecForSqlite(env: EnvSource, deps: UiCliDeps): Promise<number | undefined> {
+async function maybeReExecForSqlite(
+  env: EnvSource,
+  deps: UiCliDeps,
+  cwd: string,
+): Promise<number | undefined> {
   if (deps.createServer !== undefined) return undefined;
   const execArgv = (deps.currentExecArgv ?? ((): readonly string[] => process.execArgv))();
   if (alreadyFlagged(env, execArgv)) return undefined;
   const probe = deps.sqliteProbe ?? defaultSqliteProbe;
   if (probe()) return undefined;
   const spawnFn = deps.spawnFn ?? spawn;
-  return reExecWithSqliteFlag(env, spawnFn);
+  return reExecWithSqliteFlag(env, spawnFn, cwd);
 }
 
 function buildHandlerDepsOrReport(
@@ -438,9 +449,9 @@ export async function runUiCli(
   const effectiveEnv = loadLocalKeikoEnv(cwd, env);
   const parsed = parseUiArgsOrExit(args, io);
   if (typeof parsed === "number") return parsed;
-  const reExec = await maybeReExecForSqlite(effectiveEnv, deps);
+  const reExec = await maybeReExecForSqlite(effectiveEnv, deps, cwd);
   if (reExec !== undefined) return reExec;
-  const staticRoot = deps.staticRoot ?? defaultStaticRoot();
+  const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
   }

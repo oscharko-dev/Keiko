@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir, platform as osPlatform } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
 import type { CliIo } from "./runner.js";
@@ -21,6 +21,24 @@ interface Captured {
   readonly io: CliIo;
   readonly out: () => string;
   readonly err: () => string;
+}
+
+function withEnvVar<T>(key: string, value: string | undefined, run: () => T): T {
+  const previous = process.env[key];
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, key);
+  } else {
+    process.env[key] = value;
+  }
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, key);
+    } else {
+      process.env[key] = previous;
+    }
+  }
 }
 
 function makeIo(): Captured {
@@ -170,6 +188,39 @@ describe("runLauncherCli install — happy paths", () => {
     expect(runLauncherCli(["install"], c.io, {}, h.deps)).toBe(0);
     const content = readFileSync(h.targetPath, "utf8");
     expect(content).toContain(`Exec=${scopedExe} start --open\n`);
+  });
+
+  it("prefers the active absolute entry over an older keiko on PATH", () => {
+    const h = makeHarness();
+    const staleBinDir = join(makeRoot(), "stale-bin");
+    mkdirSync(staleBinDir, { recursive: true });
+    const staleExe = join(staleBinDir, "keiko");
+    writeFileSync(staleExe, "#!/bin/sh\nexit 0\n", "utf8");
+    const currentEntry = join(makeRoot(), "dist", "cli", "index.js");
+    mkdirSync(dirname(currentEntry), { recursive: true });
+    writeFileSync(currentEntry, "#!/usr/bin/env node\n", "utf8");
+    const c = makeIo();
+    const originalArgv = [...process.argv];
+    const pathValue = `${staleBinDir}:${process.env.PATH ?? ""}`;
+
+    process.argv.splice(0, process.argv.length, originalArgv[0] ?? "node", currentEntry);
+    try {
+      withEnvVar("KEIKO_CLI_BIN_PATH", undefined, () => {
+        withEnvVar("PATH", pathValue, () => {
+          const deps: LauncherCliDeps = {
+            homedir: () => h.home,
+            platform: () => "linux",
+            stateDir: h.stateDir,
+          };
+          expect(runLauncherCli(["install"], c.io, {}, deps)).toBe(0);
+        });
+      });
+    } finally {
+      process.argv.splice(0, process.argv.length, ...originalArgv);
+    }
+
+    const content = readFileSync(h.targetPath, "utf8");
+    expect(content).toContain(`Exec=${currentEntry} start --open\n`);
   });
 
   it("install --port 3000 bakes the port into the Exec line", () => {

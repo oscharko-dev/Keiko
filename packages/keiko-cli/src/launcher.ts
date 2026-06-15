@@ -207,11 +207,10 @@ function defaultResolveExe(env: EnvSource): string {
   }
   const entry = process.argv[1];
   if (typeof entry === "string" && isAbsolute(entry) && existsSync(entry)) {
-    // argv[1] when invoked via `node dist/cli/index.js` points at the JS entry; the
-    // generated shortcut needs the `keiko` binary on PATH, not the JS file. Prefer
-    // a `keiko` on PATH; fall back to argv[1] only when nothing is on PATH (best-effort).
-    const onPath = nodeWhich(process.env, process.platform);
-    if (onPath !== undefined) return validateExecPath(onPath);
+    // When the current invocation already has an absolute entry path, prefer that known
+    // active installation over an unrelated `keiko` found earlier on PATH. Otherwise an
+    // older global install can keep winning after an upgrade and a generated shortcut can
+    // continue launching the stale version the operator was trying to replace.
     return validateExecPath(entry);
   }
   const onPath = nodeWhich(env, process.platform);

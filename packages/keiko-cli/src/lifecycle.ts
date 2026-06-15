@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
+import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
@@ -45,9 +46,9 @@ const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter
 };
 
 const USAGE = `Usage:
-  keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH]
+  keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open]
   keiko stop [--state-dir PATH]
-  keiko restart [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH]
+  keiko restart [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open]
   keiko status [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH]
 
 Manages the local Keiko UI process. Runtime state is written to .keiko/ by default.
@@ -59,6 +60,7 @@ interface LifecycleOptions {
   readonly stateDir: string;
   readonly startTimeoutMs: number;
   readonly stopTimeoutMs: number;
+  readonly openBrowser: boolean;
 }
 
 interface RawLifecycleOptions {
@@ -67,6 +69,7 @@ interface RawLifecycleOptions {
   stateDirRaw?: string | undefined;
   startTimeoutRaw?: string | undefined;
   stopTimeoutRaw?: string | undefined;
+  openBrowser?: boolean | undefined;
 }
 
 export interface LifecycleCliDeps {
@@ -77,6 +80,7 @@ export interface LifecycleCliDeps {
   readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
   readonly killProcess?: ProcessKiller | undefined;
   readonly isPortAvailable?: PortAvailabilityFn | undefined;
+  readonly openExternal?: ((url: string) => void) | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -86,11 +90,18 @@ interface LifecycleRuntimeDeps {
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: ProcessKiller;
   readonly isPortAvailable: PortAvailabilityFn;
+  readonly openExternal: (url: string) => void;
 }
 
 interface HealthProbeResult {
   readonly reachable: boolean;
   readonly version: string | undefined;
+}
+
+function staleProcessReason(health: HealthProbeResult): string {
+  if (!health.reachable) return "health check is unreachable";
+  if (health.version === undefined) return "health check did not return the current Keiko version";
+  return `running version ${health.version} differs from installed version ${SDK_VERSION}`;
 }
 
 function readFlagValue(args: readonly string[], index: number): string | null {
@@ -133,6 +144,10 @@ function collectLifecycleOptions(args: readonly string[]): RawLifecycleOptions |
     if (arg === "--help" || arg === "-h") {
       return "help";
     }
+    if (arg === "--open") {
+      raw.openBrowser = true;
+      continue;
+    }
     if (!isLifecycleFlag(arg)) return null;
     const value = readFlagValue(args, i);
     if (value === null) return null;
@@ -169,6 +184,7 @@ function buildLifecycleOptions(
     stateDir: resolveStateDir(cwd, optionOrEnv(raw.stateDirRaw, env.KEIKO_STATE_DIR, ".keiko")),
     startTimeoutMs,
     stopTimeoutMs,
+    openBrowser: raw.openBrowser === true,
   };
 }
 
@@ -192,6 +208,10 @@ function logFile(options: LifecycleOptions): string {
 
 function healthUrl(options: LifecycleOptions): string {
   return `http://${options.host}:${String(options.port)}/api/health`;
+}
+
+function lifecycleBaseUrl(options: LifecycleOptions): string {
+  return healthUrl(options).replace("/api/health", "");
 }
 
 function healthVersion(payload: unknown): string | undefined {
@@ -298,7 +318,9 @@ function childEnv(env: EnvSource): NodeJS.ProcessEnv {
   return next;
 }
 
-function cliEntryPath(): string {
+function cliEntryPath(cwd: string): string {
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  if (preferredLayout !== undefined) return preferredLayout.binPath;
   // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
   // re-exec'd children spawned by `keiko start` invoke the published bin rather
   // than the cli package barrel (which is not executable). The
@@ -307,6 +329,47 @@ function cliEntryPath(): string {
   const fromEnv = process.env.KEIKO_CLI_BIN_PATH;
   if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
+}
+
+function defaultOpenExternal(url: string): void {
+  const opener =
+    process.platform === "darwin"
+      ? { command: "open", args: [url] }
+      : process.platform === "win32"
+        ? { command: "cmd", args: ["/c", "start", "", url] }
+        : { command: "xdg-open", args: [url] };
+  const child = spawn(opener.command, opener.args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+}
+
+function maybeOpenBrowser(
+  options: LifecycleOptions,
+  io: CliIo,
+  openExternal: (url: string) => void,
+): void {
+  if (!options.openBrowser) return;
+  const baseUrl = lifecycleBaseUrl(options);
+  try {
+    openExternal(baseUrl);
+  } catch {
+    io.err(`keiko start: failed to open ${baseUrl} in the default browser.\n`);
+  }
+}
+
+function reportHealthyStart(
+  options: LifecycleOptions,
+  io: CliIo,
+  pid: number,
+  logPath: string,
+  openExternal: (url: string) => void,
+): number {
+  io.out(`Keiko UI running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
+  io.out(`Logs: ${logPath}\n`);
+  maybeOpenBrowser(options, io, openExternal);
+  return 0;
 }
 
 function spawnUiProcess(
@@ -318,12 +381,22 @@ function spawnUiProcess(
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
   const fd = openSync(logPath, "a", 0o600);
-  const uiEnv = childEnv({ ...env, KEIKO_STATE_DIR: options.stateDir });
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  const uiEnv = childEnv({
+    ...env,
+    KEIKO_STATE_DIR: options.stateDir,
+    ...(preferredLayout === undefined
+      ? {}
+      : {
+          KEIKO_CLI_BIN_PATH: preferredLayout.binPath,
+          KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
+        }),
+  });
   try {
     return {
       child: deps.spawnFn(
         process.execPath,
-        [cliEntryPath(), "ui", "--port", String(options.port), "--host", options.host],
+        [cliEntryPath(cwd), "ui", "--port", String(options.port), "--host", options.host],
         {
           cwd,
           detached: true,
@@ -384,17 +457,10 @@ async function cmdStart(
   if (running !== undefined) {
     const health = await probeHealth(options, deps.fetchImpl);
     if (health.version === SDK_VERSION) {
-      io.out(
-        `Keiko UI already running on ${healthUrl(options).replace("/api/health", "")} (pid ${String(running)}).\n`,
-      );
+      io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`);
       return 0;
     }
-    const reason = !health.reachable
-      ? "health check is unreachable"
-      : health.version === undefined
-        ? "health check did not return the current Keiko version"
-        : `running version ${health.version} differs from installed version ${SDK_VERSION}`;
-    io.out(`Keiko UI process is stale (${reason}); restarting pid ${String(running)}.\n`);
+    io.out(`Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`);
     const stopped = await cmdStop(options, io, deps);
     if (stopped !== 0) return stopped;
   }
@@ -409,16 +475,10 @@ async function cmdStart(
   }
   child.unref();
   writeFileSync(pidFile(options), `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
-  io.out(`Starting Keiko UI on ${healthUrl(options).replace("/api/health", "")} ...\n`);
+  io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);
-  if (healthy) {
-    io.out(
-      `Keiko UI running on ${healthUrl(options).replace("/api/health", "")} (pid ${String(child.pid)}).\n`,
-    );
-    io.out(`Logs: ${logPath}\n`);
-    return 0;
-  }
+  if (healthy) return reportHealthyStart(options, io, child.pid, logPath, deps.openExternal);
 
   deps.killProcess(child.pid, "SIGTERM");
   rmSync(pidFile(options), { force: true });
@@ -471,7 +531,7 @@ function cmdStatus(
     return 0;
   }
   io.out(
-    `Keiko UI is running on ${healthUrl(options).replace("/api/health", "")} (pid ${String(pid)}).\n`,
+    `Keiko UI is running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`,
   );
   return 0;
 }
@@ -498,6 +558,7 @@ function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
     killProcess: deps.killProcess ?? process.kill.bind(process),
     isPortAvailable: deps.isPortAvailable ?? defaultIsPortAvailable,
+    openExternal: deps.openExternal ?? defaultOpenExternal,
   };
 }
 

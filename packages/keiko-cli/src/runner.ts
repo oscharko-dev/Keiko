@@ -11,6 +11,7 @@ import { runInitCli } from "./init.js";
 import { runLifecycleCli } from "./lifecycle.js";
 import { runUiCli } from "./ui.js";
 import { runLauncherCli } from "./launcher.js";
+import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 
@@ -28,6 +29,7 @@ Usage:
   keiko [--help | -h]      Print this help and exit.
   keiko [--version | -v]   Print the version and exit.
   keiko init [OPTIONS]     Add local package.json start/stop scripts.
+  keiko doctor             Diagnose stale global-vs-local launch paths.
   keiko start|stop|status|restart Manage the local Keiko UI process.
   keiko models list        List registered model capabilities.
   keiko models validate    Validate gateway configuration.
@@ -66,6 +68,7 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   evaluate: (rest, io, env) => runEvaluateCli(rest, io, env, {}),
   memory: (rest, io, env) => runMemoryCli(rest, io, env),
   init: runInitCli,
+  doctor: runDoctorCli,
   start: (rest, io, env) => runLifecycleCli("start", rest, io, env),
   stop: (rest, io, env) => runLifecycleCli("stop", rest, io, env),
   status: (rest, io, env) => runLifecycleCli("status", rest, io, env),
@@ -84,6 +87,18 @@ function dispatchCommand(
   return COMMAND_HANDLERS[name]?.(rest, io, env);
 }
 
+function handleMetaCommand(first: string | undefined, io: CliIo): number | undefined {
+  if (first === undefined || first === "--help" || first === "-h") {
+    io.out(HELP_TEXT);
+    return 0;
+  }
+  if (first === "--version" || first === "-v") {
+    io.out(`keiko ${SDK_VERSION}\n`);
+    return 0;
+  }
+  return undefined;
+}
+
 // Returns a number for synchronous commands; the async `run` command returns a Promise.
 // The process shim in index.ts awaits the union before calling process.exit.
 export function runCli(
@@ -92,13 +107,14 @@ export function runCli(
   env: EnvSource = {},
 ): number | Promise<number> {
   const first = args[0];
-  if (first === undefined || first === "--help" || first === "-h") {
-    io.out(HELP_TEXT);
-    return 0;
+  const meta = handleMetaCommand(first, io);
+  if (meta !== undefined) return meta;
+  if (first === undefined) {
+    io.err("keiko: internal error while dispatching command.\n");
+    return 2;
   }
-  if (first === "--version" || first === "-v") {
-    io.out(`keiko ${SDK_VERSION}\n`);
-    return 0;
+  if (first === "start" || first === "ui") {
+    emitDoctorWarning(io);
   }
   const result = dispatchCommand(first, args.slice(1), io, env);
   if (result !== undefined) {
