@@ -22,7 +22,13 @@ import {
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import { randomUUID } from "node:crypto";
+import type {
+  MemoryEdgeId,
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+} from "@oscharko-dev/keiko-contracts/memory";
 import type {
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
@@ -215,6 +221,77 @@ export function findSemanticDuplicate(
   return bestSim >= threshold ? bestId : null;
 }
 
+// ─── Semantic auto-linking at capture (#204, O-P4) ──────────────────────────────
+// A-MEM (2502.12110) self-organises memory by LINKING a new note to its semantic neighbours at
+// write time, so associative recall has structure to traverse immediately. Memoria Viva already
+// runs graph-proximity recall live (the ranker's `graph` subscore), but until now the only edges
+// were supersedes/correction links and the batch consolidation pass — a fresh capture had no
+// associations. This forms them deterministically from the SAME embedding used for the novelty
+// gate: a novel capture is linked to its nearest in-scope neighbours that fall in a "related" band
+// (similar enough to associate, below the dedup threshold so they are not the same fact). No model
+// call, no non-determinism — a pure cosine band over vectors already in hand.
+
+// Lower bound of the related band. Above this two memory bodies are topically associated; below it
+// the link would be noise. Conservative starting point for text-embedding-3-large; tunable per the
+// opt-in flag before it is switched on by default.
+export const RELATED_LINK_COSINE_THRESHOLD = 0.82;
+
+// At most this many associations per capture, so the graph stays sparse and traversal stays cheap.
+export const MAX_AUTO_LINKS = 3;
+
+// Pure: the in-scope neighbours whose cosine to the candidate falls in the band [lower, upper) —
+// associated but not a duplicate — ranked by similarity desc (id asc tiebreak) and capped at
+// maxLinks. Empty for a null candidate or when nothing lands in the band. Deterministic for a fixed
+// neighbour set.
+export function findRelatedNeighbors(
+  candidate: MemoryEmbeddingInput | null,
+  neighbors: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+  lower: number = RELATED_LINK_COSINE_THRESHOLD,
+  upper: number = SEMANTIC_DEDUP_COSINE_THRESHOLD,
+  maxLinks: number = MAX_AUTO_LINKS,
+): readonly MemoryId[] {
+  if (candidate === null) return [];
+  const scored: { readonly id: MemoryId; readonly similarity: number }[] = [];
+  for (const [id, row] of neighbors) {
+    const similarity = cosineSimilarity(candidate.vector, row.vector);
+    if (similarity >= lower && similarity < upper) scored.push({ id, similarity });
+  }
+  scored.sort((a, b) =>
+    a.similarity !== b.similarity ? b.similarity - a.similarity : a.id.localeCompare(b.id),
+  );
+  return scored.slice(0, maxLinks).map((n) => n.id);
+}
+
+// Opt-in (KEIKO_MEMORY_AUTO_LINK=1, default off => byte-identical: no edges, no behaviour change).
+// Best-effort: a rejected edge insert must never break the capture that already succeeded.
+function autoLinkRelatedMemories(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  fromId: MemoryId,
+  embedding: MemoryEmbeddingInput,
+  neighbors: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+): void {
+  if (deps.env.KEIKO_MEMORY_AUTO_LINK !== "1") return;
+  const relatedIds = findRelatedNeighbors(embedding, neighbors);
+  if (relatedIds.length === 0) return;
+  const nowMs = Date.now();
+  for (const toId of relatedIds) {
+    try {
+      vault.insertEdge({
+        id: randomUUID() as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: fromId,
+        toMemoryId: toId,
+        kind: "related",
+        createdAt: nowMs,
+        provenanceSummary: "semantic auto-link",
+      });
+    } catch {
+      // Validator / storage rejection — association enrichment is best-effort, never fatal.
+    }
+  }
+}
+
 // Bounds the neighbour set so the cosine sweep stays cheap on a large vault (mirrors the lexical
 // dedup corpus bound). Scope-local list preserves cross-scope isolation.
 const MAX_DEDUP_NEIGHBORS = 200;
@@ -248,7 +325,8 @@ export async function insertSalienceMemoryWithNoveltyGate(
   record: MemoryRecord,
 ): Promise<NoveltyInsertResult> {
   const embedding = await embedMemoryText(deps, record.body);
-  const duplicateOf = findSemanticDuplicate(embedding, gatherScopeEmbeddings(vault, record.scope));
+  const neighbors = gatherScopeEmbeddings(vault, record.scope);
+  const duplicateOf = findSemanticDuplicate(embedding, neighbors);
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
     return { inserted: null, mergedInto: duplicateOf };
@@ -260,6 +338,9 @@ export async function insertSalienceMemoryWithNoveltyGate(
     } catch {
       // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
     }
+    // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
+    // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
+    autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors);
   }
   return { inserted, mergedInto: null };
 }

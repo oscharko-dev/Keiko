@@ -24,8 +24,10 @@ import {
   cosineSimilarity,
   embedAndStoreMemory,
   embedMemoryText,
+  findRelatedNeighbors,
   findSemanticDuplicate,
   insertSalienceMemoryWithNoveltyGate,
+  RELATED_LINK_COSINE_THRESHOLD,
   selectMemoryEmbeddingModelId,
 } from "./memory-embedding.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -404,5 +406,104 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(mergedInto).toBeNull();
     expect(inserted?.id).toBe(rec.id);
     expect(vault.getEmbedding(rec.id)).toBeUndefined();
+  });
+});
+
+describe("findRelatedNeighbors (#204, O-P4)", () => {
+  const row = (id: string, vector: Float32Array): MemoryEmbeddingRow => ({
+    memoryId: memoryId(id),
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    dimensions: vector.length,
+    metric: "cosine",
+    vector,
+    createdAt: 0,
+  });
+  const candidate: MemoryEmbeddingInput = {
+    provider: "openai",
+    modelId: EMBEDDING_MODEL,
+    metric: "cosine",
+    vector: Float32Array.from([1, 0, 0]),
+  };
+
+  it("returns nothing for a null candidate", () => {
+    expect(findRelatedNeighbors(null, new Map())).toEqual([]);
+  });
+
+  it("includes a band neighbour but excludes below-band and duplicate neighbours", () => {
+    const neighbors = new Map([
+      [memoryId("below"), row("below", Float32Array.from([1, 1, 0]))], // cosine ~0.707 < 0.82
+      [memoryId("band"), row("band", Float32Array.from([0.9, 0.436, 0]))], // cosine ~0.9, in band
+      [memoryId("dup"), row("dup", Float32Array.from([1, 0, 0]))], // cosine 1.0 >= 0.95, a duplicate
+    ]);
+    expect(findRelatedNeighbors(candidate, neighbors)).toEqual([memoryId("band")]);
+  });
+
+  it("ranks by similarity descending and caps at maxLinks", () => {
+    const neighbors = new Map([
+      [memoryId("n1"), row("n1", Float32Array.from([0.85, 0.527, 0]))], // ~0.85
+      [memoryId("n2"), row("n2", Float32Array.from([0.93, 0.367, 0]))], // ~0.93
+      [memoryId("n3"), row("n3", Float32Array.from([0.9, 0.436, 0]))], // ~0.90
+      [memoryId("n4"), row("n4", Float32Array.from([0.88, 0.475, 0]))], // ~0.88
+    ]);
+    // top-3 by similarity desc: n2, n3, n4; n1 dropped by the cap of 3.
+    expect(findRelatedNeighbors(candidate, neighbors)).toEqual([
+      memoryId("n2"),
+      memoryId("n3"),
+      memoryId("n4"),
+    ]);
+  });
+
+  it("honours the configured lower-band threshold constant", () => {
+    expect(RELATED_LINK_COSINE_THRESHOLD).toBeGreaterThan(0.5);
+    expect(RELATED_LINK_COSINE_THRESHOLD).toBeLessThan(0.95);
+  });
+});
+
+describe("insertSalienceMemoryWithNoveltyGate auto-linking (#204, O-P4)", () => {
+  function perTextAdapter(): (r: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
+    return vi.fn((r: OpenAIEmbeddingRequest) => {
+      const text = typeof r.input === "string" ? r.input : "";
+      const vector = text.includes("alpha")
+        ? Float32Array.from([1, 0, 0])
+        : text.includes("beta")
+          ? Float32Array.from([0.9, 0.436, 0]) // cosine ~0.9 to alpha => related band
+          : Float32Array.from([0, 0, 1]);
+      return Promise.resolve({ ok: true as const, value: { vector, modelId: EMBEDDING_MODEL } });
+    });
+  }
+
+  it("links a novel capture to its in-band neighbour when KEIKO_MEMORY_AUTO_LINK=1", async () => {
+    const deps: UiHandlerDeps = {
+      ...makeDeps({ embeddingRequest: perTextAdapter() }),
+      env: { KEIKO_MEMORY_AUTO_LINK: "1" },
+    };
+    const vault = makeVault();
+    const a = await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("alpha note", "id-alpha"),
+    );
+    const b = await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("beta note", "id-beta"),
+    );
+    expect(a.inserted?.id).toBe(memoryId("id-alpha"));
+    expect(b.inserted?.id).toBe(memoryId("id-beta"));
+    const edges = vault.listOutgoingEdges(memoryId("id-beta"));
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("related");
+    expect(edges[0]?.toMemoryId).toBe(memoryId("id-alpha"));
+    // The first capture had no neighbours, so it forms no link.
+    expect(vault.listOutgoingEdges(memoryId("id-alpha"))).toEqual([]);
+  });
+
+  it("forms no links when the flag is off (default — byte-identical)", async () => {
+    const deps = makeDeps({ embeddingRequest: perTextAdapter() });
+    const vault = makeVault();
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("alpha note", "id-alpha"));
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("beta note", "id-beta"));
+    expect(vault.listOutgoingEdges(memoryId("id-beta"))).toEqual([]);
   });
 });
