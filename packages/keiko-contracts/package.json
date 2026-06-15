@@ -24,6 +24,10 @@
       "types": "./dist/connected-context.d.ts",
       "import": "./dist/connected-context.js"
     },
+    "./text-safety": {
+      "types": "./dist/text-safety.d.ts",
+      "import": "./dist/text-safety.js"
+    },
     "./verification-summary": {
       "types": "./dist/verification-summary.d.ts",
       "import": "./dist/verification-summary.js"

@@ -739,7 +739,7 @@ describe("handleGroundedAsk", () => {
     expect(JSON.stringify(result)).not.toContain(project.path);
   });
 
-  it("returns a safe error when one connected source in a multi-source ask is stale", async () => {
+  it("fails soft when one connected files-scope target is deleted but a healthy source remains (GRD-006)", async () => {
     const project = store.createProject(tmp, "demo");
     seedScopedRepo(project.path);
     writeFileSync(join(project.path, "src", "bar.ts"), "export const Bar = 1;\n", "utf8");
@@ -761,13 +761,18 @@ describe("handleGroundedAsk", () => {
           modelId: CHAT_MODEL,
         }),
       ),
-      deps(fakeModel("should not run", seenRequests)),
+      deps(fakeModel("Grounded answer from the healthy source.", seenRequests)),
     );
 
-    expect(result.status).toBe(400);
-    expect(seenRequests).toHaveLength(0);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("not accessible");
+    // GRD-006: one deleted/unreadable source must be SKIPPED, not abort the whole ask — the
+    // healthy bar.ts source still answers (model is invoked) and the skip is surfaced.
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests.length).toBeGreaterThanOrEqual(1);
+    const body = result.body as { uncertainty?: readonly { kind: string; claim: string }[] };
+    const skipMarkers = (body.uncertainty ?? []).filter((u) => u.kind === "source-skipped");
+    expect(skipMarkers.length).toBeGreaterThanOrEqual(1);
+    // Security invariants preserved: neither the missing relative path nor the absolute project
+    // path may leak into the response.
     expect(JSON.stringify(result)).not.toContain("src/foo.ts");
     expect(JSON.stringify(result)).not.toContain(project.path);
   });

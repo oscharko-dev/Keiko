@@ -298,6 +298,9 @@ export {
   resolveGroundingLimits,
 } from "./bff-wire.js";
 
+// ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
+export { stripUnsafeFormatChars } from "./text-safety.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,

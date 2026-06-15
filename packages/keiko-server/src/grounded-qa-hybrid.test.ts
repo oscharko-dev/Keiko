@@ -44,6 +44,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
 import { EmbeddingAdapterError, type ConnectorRetrieve } from "./grounded-qa-hybrid.js";
@@ -620,6 +621,49 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     // mutation: returning the same label for both → uniqueLabels.size === 1
     const uniqueLabels = new Set(kciLabels);
     expect(uniqueLabels.size).toBe(2);
+  });
+
+  it("maps a planner ClarificationNeededError to an actionable 400, not a 500 (GRD-016)", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Clarify Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("alpha-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const hybrid: HybridSeam = {
+      folderRetriever: () =>
+        Promise.reject(
+          new ClarificationNeededError({
+            reason: "no-anchors",
+            suggestedQuestions: ["What does parseConfig do?"],
+            minimumAnchorCount: 1,
+          }),
+        ),
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: throwingHybridAnswerer(),
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "tell me everything" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // GRD-016: a vague/no-anchor question is client-actionable → 400, not an opaque 500.
+    expect(result.status, JSON.stringify(result.body)).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toContain("too broad");
+    expect(body.error.message).not.toContain("clarification needed:");
   });
 
   it("returns no evidence without calling the model when connector retrieval returns zero references", async () => {

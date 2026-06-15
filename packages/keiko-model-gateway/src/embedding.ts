@@ -8,6 +8,8 @@
 
 import type { EmbeddingModelIdentity, EmbeddingVectorMetric } from "@oscharko-dev/keiko-contracts";
 import type {
+  OpenAIEmbeddingBatchOutcome,
+  OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingErrorKind,
   OpenAIEmbeddingRequest,
   OpenAIEmbeddingOutcome,
@@ -65,6 +67,12 @@ export interface OpenAIEmbeddingAdapter {
   readonly apiKeyHeaderName?: string;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly request: (input: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
+  // Optional array-batch port (#189 GRD-004). When present, the indexing batcher embeds
+  // many chunks per HTTP round-trip via this method; when absent it falls back to issuing
+  // one `request` per chunk, so existing adapters/stubs keep working unchanged.
+  readonly requestBatch?: (
+    input: OpenAIEmbeddingBatchRequest,
+  ) => Promise<OpenAIEmbeddingBatchOutcome>;
 }
 
 const PROBE_INPUT = "ping" as const;

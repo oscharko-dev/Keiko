@@ -783,6 +783,14 @@ function groundedModeValue(chat: Chat): string {
   return "none";
 }
 
+// GRD-009: the current connector (local-knowledge) scopes for a chat, normalising the legacy
+// single-scope field into the list shape. Used so connecting a connector appends rather than
+// replaces, keeping hybrid (folder + connector) grounding intact.
+function currentConnectorScopes(chat: Chat): readonly ChatLocalKnowledgeScope[] {
+  if (chat.localKnowledgeScopes !== undefined) return chat.localKnowledgeScopes;
+  return chat.localKnowledgeScope !== undefined ? [chat.localKnowledgeScope] : [];
+}
+
 function hasFolderGroundingScope(chat: Chat | undefined): boolean {
   return (
     chat !== undefined &&
@@ -950,10 +958,17 @@ function LocalKnowledgeScopeControl({
           >["capsuleSetId"],
           connectedAtMs: Date.now(),
         };
-        const response = await updateChat(chat.id, {
-          connectedScopes: null,
-          localKnowledgeScopes: [scope],
-        });
+        // GRD-009: additive + non-destructive. The server fully supports hybrid grounding
+        // (folder scopes + connectors, RRF over both, 16-each cap), so connecting a connector
+        // must NOT clear connected folders (no `connectedScopes: null`) or drop already-bound
+        // connectors. Append to the existing list (deduped); the BFF enforces the cap.
+        const current = currentConnectorScopes(chat);
+        const next = current.some(
+          (s) => s.kind === "capsule-set" && s.capsuleSetId === scope.capsuleSetId,
+        )
+          ? current
+          : [...current, scope];
+        const response = await updateChat(chat.id, { localKnowledgeScopes: next });
         onChatChanged(response.chat);
         return;
       }
@@ -966,10 +981,12 @@ function LocalKnowledgeScopeControl({
           >["capsuleId"],
           connectedAtMs: Date.now(),
         };
-        const response = await updateChat(chat.id, {
-          connectedScopes: null,
-          localKnowledgeScopes: [scope],
-        });
+        // GRD-009: additive + non-destructive (see capsule-set branch above).
+        const current = currentConnectorScopes(chat);
+        const next = current.some((s) => s.kind === "capsule" && s.capsuleId === scope.capsuleId)
+          ? current
+          : [...current, scope];
+        const response = await updateChat(chat.id, { localKnowledgeScopes: next });
         onChatChanged(response.chat);
       }
     } catch (caught) {

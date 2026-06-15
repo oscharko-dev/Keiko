@@ -822,9 +822,17 @@ export async function searchVectorsForScope(
       state,
     );
   }
-  const lexicalCandidates = state.anyDimensionCompatible
-    ? collectLexicalRecallCandidates(store, capsules, scope, profile, options.topK)
-    : [];
+  // GRD-002 / GRD-024: `minScore` is a DENSE relevance floor. Lexical recall is a recall booster
+  // whose candidates carry a lexical base score (0.68–0.88) unrelated to vector similarity, so
+  // they would bypass the floor (a ~0-cosine chunk that merely shares a query token could surface
+  // above a 0.9 floor). When a caller sets `minScore`, suppress lexical recall so only
+  // vector candidates that already passed the cosine floor (scoreCapsuleVectors) survive — and so
+  // the `below-min-score` no-evidence reason becomes reachable when none do. The default path
+  // (no `minScore`) keeps hybrid lexical recall unchanged.
+  const lexicalCandidates =
+    state.anyDimensionCompatible && options.minScore === undefined
+      ? collectLexicalRecallCandidates(store, capsules, scope, profile, options.topK)
+      : [];
   const candidates = mergeCandidates(state.candidates, lexicalCandidates);
   const selection = selectTopCandidates(state, options, profile, candidates);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };

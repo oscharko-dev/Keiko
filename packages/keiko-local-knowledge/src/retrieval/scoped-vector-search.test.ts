@@ -263,6 +263,54 @@ describe("searchVectorsForScope — minScore filtering", () => {
       expect(ref.score).toBeGreaterThanOrEqual(threshold);
     }
   });
+
+  it("suppresses lexical-only matches under a minScore floor and reports below-min-score (GRD-002/024)", async () => {
+    const { store } = getFixture();
+    const dims = DEFAULT_EMBEDDING.vectorDimensions;
+    const blob = (a: number, b: number): Uint8Array => {
+      const v = new Float32Array(dims);
+      v[0] = a;
+      v[1] = b;
+      return new Uint8Array(v.buffer.slice(0));
+    };
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      text: "treasury ".repeat(40),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Lexical recall material: the document text contains the query token.
+    store._internal.db
+      .prepare(
+        "INSERT OR REPLACE INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+      )
+      .run({ c: "cap-a", d: String(seeded.documentId), t: "treasury treasury treasury treasury" });
+    // Make every chunk vector ORTHOGONAL to the query vector (cosine ~ 0).
+    for (const ch of seeded.chunkIds) {
+      store._internal.db
+        .prepare("UPDATE vectors SET embedding = :e WHERE capsule_id = :c AND chunk_id = :id")
+        .run({ e: blob(0, 1), c: "cap-a", id: String(ch) });
+    }
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: { vector: new Float32Array(blob(1, 0).buffer), modelId: DEFAULT_EMBEDDING.modelId },
+      }),
+    });
+    const scope = { capsuleIds: ["cap-a" as KnowledgeCapsuleId] };
+
+    // With a high dense floor, the lexical-only (orthogonal-vector) chunk must NOT surface.
+    const floored = await searchVectorsForScope(store, adapter, scope, "treasury", {
+      topK: 50,
+      minScore: 0.95,
+    });
+    expect(floored.references).toHaveLength(0);
+    expect(floored.noEvidenceReason).toBe("below-min-score");
+
+    // Control: without the floor, hybrid lexical recall DOES surface it (so the suppression
+    // above is the floor's doing, not a missing fixture).
+    const unfloored = await searchVectorsForScope(store, adapter, scope, "treasury", { topK: 50 });
+    expect(unfloored.references.length).toBeGreaterThan(0);
+  });
 });
 
 describe("searchVectorsForScope — embedding dim mismatch", () => {

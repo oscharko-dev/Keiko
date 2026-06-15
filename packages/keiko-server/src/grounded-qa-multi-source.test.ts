@@ -369,6 +369,62 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(store.listMessages(chatId)).toEqual([]);
   });
 
+  it("fail-soft: one inaccessible folder is skipped, healthy sources still answer (GRD-006)", async () => {
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("api"),
+    };
+    const scopeBad: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/bad.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("gone"),
+    };
+    const scopeC: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/c.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("web"),
+    };
+    const chatId = makeChat([scopeA, scopeBad, scopeC]);
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.4, "a")],
+      ["src/c.ts", scopePack("src/c.ts", 0.8, "c")],
+    ]);
+    const answered = { count: 0 };
+    const retriever: GroundedRetriever = (input) => {
+      if (input.scope.relativePaths[0] === "src/bad.ts") {
+        return Promise.reject(
+          new RepoSearchUnsupportedFileError("src/bad.ts is not readable.", "denied"),
+        );
+      }
+      return packPerScope(byPath)(input);
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("partial answer", answered)),
+    );
+    // One bad source must NOT abort the whole ask — the two healthy folders still answer.
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).toBe("partial answer");
+    expect(answered.count).toBe(2); // answerer receives exactly the 2 healthy source packs
+    const labels = answer.citations.map((c) => c.source);
+    expect(labels).toContain("api");
+    expect(labels).toContain("web");
+    expect(labels).not.toContain("gone");
+    const skippedClaims = answer.uncertainty
+      .filter((u) => u.kind === "source-skipped")
+      .map((u) => u.claim)
+      .join(" | ");
+    expect(skippedClaims).toContain("gone");
+    expect(skippedClaims).toContain("not readable");
+  });
+
   it("merges two sources: citations carry BOTH labels, omitted/usage/budget are summed", async () => {
     const scopeA: ChatConnectedScope = {
       kind: "directory",

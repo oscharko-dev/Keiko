@@ -8,6 +8,7 @@ import {
 } from "./embedding.js";
 import {
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "./openai-embedding-adapter.js";
@@ -578,5 +579,146 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     const outcome = await promise;
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.kind).toBe("cancelled");
+  });
+});
+
+describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
+  type NarrowFetch = (url: string, init?: RequestInit) => Promise<Response>;
+  function mockFetch(
+    handler: (url: string, init: RequestInit) => Promise<Response> | Response,
+  ): typeof fetch {
+    const f: NarrowFetch = async (url, init) => handler(url, init ?? {});
+    return f as unknown as typeof fetch;
+  }
+  function arrayBody(items: { index: number; embedding: readonly number[] }[]): string {
+    return JSON.stringify({ data: items, model: "text-embedding-3-large" });
+  }
+
+  it("posts an array `input` and maps data[i].embedding back to value[i] in order", async () => {
+    let sentBody: unknown = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(
+        arrayBody([
+          { index: 0, embedding: [1, 0, 0] },
+          { index: 1, embedding: [0, 1, 0] },
+          { index: 2, embedding: [0, 0, 1] },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "text-embedding-3-large",
+      inputs: ["a", "b", "c"],
+      fetchImpl,
+    });
+    expect((sentBody as { input: unknown }).input).toEqual(["a", "b", "c"]);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.map((v) => Array.from(v.vector))).toEqual([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ]);
+    }
+  });
+
+  it("re-aligns by declared `index` even when the provider returns items out of order", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(
+          arrayBody([
+            { index: 2, embedding: [3, 3, 3] },
+            { index: 0, embedding: [1, 1, 1] },
+            { index: 1, embedding: [2, 2, 2] },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x", "y", "z"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.map((v) => v.vector[0])).toEqual([1, 2, 3]);
+    }
+  });
+
+  it("rejects a response whose data length does not match inputs (invalid-response)", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(arrayBody([{ index: 0, embedding: [1, 2, 3] }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["a", "b"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
+  });
+
+  it("rejects a duplicate / out-of-range index (invalid-response)", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(
+          arrayBody([
+            { index: 0, embedding: [1, 1] },
+            { index: 0, embedding: [2, 2] },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["a", "b"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
+  });
+
+  it("returns an empty result without issuing a request for empty inputs", async () => {
+    let called = 0;
+    const fetchImpl = mockFetch(() => {
+      called += 1;
+      return new Response("{}", { status: 200 });
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: [],
+      fetchImpl,
+    });
+    expect(called).toBe(0);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.value).toEqual([]);
+  });
+
+  it("classifies HTTP status (429 → rate-limited)", async () => {
+    const fetchImpl = mockFetch(() => new Response("", { status: 429 }));
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["a"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("rate-limited");
   });
 });

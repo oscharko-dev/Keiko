@@ -29,6 +29,7 @@ import type {
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
   CancelledError,
   GatewayError,
@@ -414,15 +415,18 @@ function buildReferenceLines(
 ): readonly string[] {
   const lines: string[] = [];
   const references = input.references.slice(0, MAX_PROMPT_REFERENCES);
+  // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
+  // hidden instructions in indexed document text never reach the model or the rendered wire.
+  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
   for (let i = 0; i < references.length; i += 1) {
     const reference = references[i];
     if (reference === undefined) continue;
-    const label = renderCitationLabel(reference.citation, redactExcerpt);
+    const label = renderCitationLabel(reference.citation, safeRedact);
     // Redact secret-shaped strings out of document excerpts before they reach the model,
     // matching the hybrid grounded-ask path (grounded-qa-hybrid.ts). Without this the
     // single-connector path would forward raw document content (e.g. an embedded API key)
     // verbatim to the configured gateway.
-    const excerpt = redactExcerpt(
+    const excerpt = safeRedact(
       readCitationExcerpt(store, reference.capsuleId, reference.citation, MAX_EXCERPT_CHARS),
     );
     lines.push(`[${String(i + 1)}] ${label}`);

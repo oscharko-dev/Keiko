@@ -673,6 +673,52 @@ describe("extractDocument — path containment", () => {
     expect(row?.message).toBe("readFileBytes failed for selected file");
   });
 
+  it("preserves a prior good index across a TRANSIENT re-read failure instead of cascade-deleting it (GRD-010)", async () => {
+    const root = "/Users/x/docs";
+    source = addSourceToCapsule(store, capsuleId, {
+      id: "src-transient" as KnowledgeSourceId,
+      displayName: "docs",
+      tags: [],
+      scope: folderScope(root),
+    });
+    const registry = createDefaultParserRegistry();
+    const file = { relativePath: "guide.txt", sizeBytes: 30 };
+
+    // 1) First extraction succeeds → a good (non-failed) document row + persisted text.
+    const okFs = memoryFs(root, [
+      { relativePath: "guide.txt", content: "the aurora threshold is 27.4" },
+    ]);
+    const first = await extractDocument(
+      { fs: okFs, store, parserRegistry: registry },
+      { capsuleId, source, file },
+    );
+    expect(first.outcome.kind).toBe("persisted");
+    expect(count("documents")).toBe(1);
+    expect(count("document_texts")).toBe(1);
+
+    // 2) Incremental refresh: the file is momentarily unreadable (lock / NFS hiccup).
+    const failFs = {
+      ...memoryFs(root, [{ relativePath: "guide.txt", content: "the aurora threshold is 27.4" }]),
+      readFileBytes: (): Promise<Uint8Array> =>
+        Promise.reject(new Error(`${root}/guide.txt is locked`)),
+    };
+    const second = await extractDocument(
+      { fs: failFs, store, parserRegistry: registry },
+      { capsuleId, source, file },
+    );
+    expect(second.outcome.kind).toBe("failed");
+    if (second.outcome.kind === "failed") expect(second.outcome.error.code).toBe("READ_FAILED");
+
+    // GRD-010: the prior good index SURVIVES — document_texts is NOT cascade-deleted and the
+    // document row is NOT overwritten to "failed". (Before the fix, document_texts → 0.)
+    expect(count("documents")).toBe(1);
+    expect(count("document_texts")).toBe(1);
+    const row = store._internal.db
+      .prepare("SELECT status FROM documents WHERE capsule_id = :c LIMIT 1")
+      .get({ c: capsuleId }) as { readonly status?: string } | undefined;
+    expect(row?.status).not.toBe("failed");
+  });
+
   it("converts a throwing parser adapter into a persisted failed extraction", async () => {
     const privateRoot = "/Users/victim/work/docs";
     source = addSourceToCapsule(store, capsuleId, {

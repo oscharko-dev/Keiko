@@ -435,14 +435,69 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await user.selectOptions(select, "capsule:cap-release");
 
     await waitFor(() => {
+      // GRD-009: connecting a connector must NOT clear connected folders (no connectedScopes
+      // key in the PATCH) and appends to the connector list — hybrid grounding is supported.
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
-        connectedScopes: null,
         localKnowledgeScopes: [
           expect.objectContaining({ kind: "capsule", capsuleId: "cap-release" }),
         ],
       });
     });
+    expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
     expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("appends a second connector and preserves connected folders + existing connector (GRD-009 hybrid)", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-a"),
+          displayName: "Alpha",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: makeCapsuleId("cap-b"),
+          displayName: "Bravo",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockResolvedValueOnce({ chat: makeChat({}) });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 1 },
+          ],
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-a"), connectedAtMs: 2 },
+          ],
+        }),
+        replaceChat,
+      }),
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+
+    await waitFor(() => {
+      const arg = updateChatMock.mock.calls[0]?.[1] as {
+        readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
+      };
+      // Connected folders preserved (not cleared) — hybrid grounding holds.
+      expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
+      // Appended, not replaced: both the pre-existing cap-a and the newly picked cap-b survive.
+      expect(arg.localKnowledgeScopes).toEqual([
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-a" }),
+        expect.objectContaining({ kind: "capsule", capsuleId: "cap-b" }),
+      ]);
+    });
   });
 
   it("switches to a capsule set and disables Files mode when no folder scope exists", async () => {
@@ -475,13 +530,14 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await user.selectOptions(screen.getByLabelText("Grounding mode"), "capsule-set:set-release");
 
     await waitFor(() => {
+      // GRD-009: non-destructive — no connectedScopes clear; appends the capsule set.
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
-        connectedScopes: null,
         localKnowledgeScopes: [
           expect.objectContaining({ kind: "capsule-set", capsuleSetId: "set-release" }),
         ],
       });
     });
+    expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
     expect(replaceChat).toHaveBeenCalledWith(updated);
   });
 

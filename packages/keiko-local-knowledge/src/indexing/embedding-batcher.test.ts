@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
@@ -513,5 +514,86 @@ describe("embedChunkBatch — transient-failure retry", () => {
     // First attempt fails transient → enters backoff → sleep aborts → loop bails.
     expect(calls).toBe(1);
     expect(result.vectors).toEqual([]);
+  });
+});
+
+// ─── #189 GRD-004: array-batch embedding port ────────────────────────────────
+function batchAdapter(identity: EmbeddingModelIdentity = DEFAULT_EMBEDDING): {
+  adapter: OpenAIEmbeddingAdapter;
+  batchCallSizes: number[];
+  scalarCalls: () => number;
+} {
+  const batchCallSizes: number[] = [];
+  let scalarCalls = 0;
+  const vec = (t: string): Float32Array => deterministicVector(t, identity.vectorDimensions);
+  const adapter: OpenAIEmbeddingAdapter = {
+    endpoint: "https://example.test/v1",
+    apiKey: ["sk-", "test"].join(""),
+    request: (req) => {
+      scalarCalls += 1;
+      return Promise.resolve({ ok: true, value: { vector: vec(req.input), modelId: identity.modelId } });
+    },
+    requestBatch: (req) => {
+      batchCallSizes.push(req.inputs.length);
+      return Promise.resolve({
+        ok: true,
+        value: req.inputs.map((t) => ({ vector: vec(t), modelId: identity.modelId })),
+      });
+    },
+  };
+  return { adapter, batchCallSizes, scalarCalls: () => scalarCalls };
+}
+
+describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
+  it("uses requestBatch (never the scalar request) and persists one vector per chunk", async () => {
+    const { store, cleanup, seeded, chunks } = buildFixture();
+    const { adapter, batchCallSizes, scalarCalls } = batchAdapter();
+    const result = await embedChunkBatch(chunks, {
+      adapter,
+      store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 4,
+      now: fixedClock(),
+      idSource: fixedIds("vec"),
+    });
+    expect(scalarCalls()).toBe(0);
+    expect(batchCallSizes.length).toBe(1);
+    expect(batchCallSizes[0]).toBe(chunks.length);
+    expect(result.vectors).toHaveLength(chunks.length);
+    expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+      chunks.length,
+    );
+    cleanup();
+  });
+
+  it("splits more chunks than the per-request item cap into ceil(N/cap) array calls", async () => {
+    const { store, cleanup } = freshStore();
+    const seeded = seedCapsuleSourceAndDocument(store);
+    const longText = "alpha beta gamma delta epsilon zeta eta theta ".repeat(4000);
+    const chunkIds = seedDocumentWithChunks(store, seeded, longText);
+    expect(chunkIds.length).toBeGreaterThan(96);
+    const chunks: ChunkToEmbed[] = chunkIds.map((id, i) => ({
+      id,
+      capsuleId: seeded.capsuleId,
+      sourceId: seeded.sourceId,
+      documentId: seeded.documentId,
+      text: `chunk-${String(i)}-distinct-payload`,
+    }));
+    const { adapter, batchCallSizes, scalarCalls } = batchAdapter();
+    const result = await embedChunkBatch(chunks, {
+      adapter,
+      store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 4,
+      now: fixedClock(),
+      idSource: fixedIds("vec"),
+    });
+    expect(scalarCalls()).toBe(0);
+    // Item cap is 96; N>96 must fan out into more than one call, never one-per-chunk.
+    expect(batchCallSizes.length).toBe(Math.ceil(chunks.length / 96));
+    expect(batchCallSizes.length).toBeLessThan(chunks.length);
+    expect(batchCallSizes.reduce((a, b) => a + b, 0)).toBe(chunks.length);
+    expect(result.vectors).toHaveLength(chunks.length);
+    cleanup();
   });
 });
