@@ -105,9 +105,12 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByTestId("conv-elig-no")).toHaveTextContent(/embedding model/i);
+      expect(screen.getByTestId("embedding-elig-ok")).toHaveTextContent(/embedding-ready/i);
     });
-    expect(screen.getByTestId("conv-elig-no")).toHaveTextContent(/not selectable/i);
+    expect(screen.getByTestId("embedding-elig-ok")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/available for embeddings/i),
+    );
   });
 
   it("renders the OCR/vision-only reason for an ocr-vision capability", async () => {
@@ -118,15 +121,16 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     });
   });
 
-  it("marks intentionally ineligible models with an ineligible status tone", async () => {
+  it("marks embedding models as available without making them conversation-eligible", async () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     const { container } = render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByTestId("conv-elig-no")).toBeInTheDocument();
+      expect(screen.getByTestId("embedding-elig-ok")).toBeInTheDocument();
     });
-    const status = container.querySelector('.ml-status[title="not selectable for conversation"]');
+    const status = container.querySelector('.ml-status[title="available for embeddings"]');
     expect(status).not.toBeNull();
-    expect(status?.className).toContain("ineligible");
+    expect(status?.className).toContain("connected");
+    expect(container.textContent ?? "").toContain("0 chat");
   });
 });
 

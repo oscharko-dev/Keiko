@@ -24,6 +24,7 @@ const EMPTY_FILTERS: MemoryFilterState = {
 export function MemoriaVivaWindow(): ReactNode {
   const [view, setView] = useState<MemoriaVivaWindowView>({ kind: "list" });
   const [filters, setFilters] = useState<MemoryFilterState>(EMPTY_FILTERS);
+  const [policyEnabled, setPolicyEnabled] = useState(true);
 
   const openList = useCallback((): void => {
     setView({ kind: "list" });
@@ -42,6 +43,8 @@ export function MemoriaVivaWindow(): ReactNode {
           onOpenDetail={openDetail}
           onOpenConsolidation={() => setView({ kind: "consolidation" })}
           onOpenReviewQueue={() => setView({ kind: "reviewQueue" })}
+          policyEnabled={policyEnabled}
+          onPolicyEnabledChange={setPolicyEnabled}
           showWorkspaceBackLink={false}
         />
       ) : view.kind === "detail" ? (

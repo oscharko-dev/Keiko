@@ -23,12 +23,13 @@ function conversationIneligibilityLabel(reason: ConversationIneligibilityReason)
   return "Not a chat model — not selectable for text conversation";
 }
 
-// uiux-fix C359/C057: short visible badge copy — the full explanation above
-// already ends with "not selectable …", so prefixing it produced the redundant
-// 71-char "Not selectable: … — not selectable for text conversation" that also
-// overflowed the settings window. The long form stays in aria-label/title.
+function embeddingAvailabilityLabel(): string {
+  return "Available for embeddings; not shown in the chat model picker";
+}
+
+// uiux-fix C359/C057: short visible badge copy — the long form stays in
+// aria-label/title so the model list does not read like a transport warning.
 function conversationIneligibilityShortLabel(reason: ConversationIneligibilityReason): string {
-  if (reason === "embedding-only") return "embedding model";
   if (reason === "ocr-vision-only") return "OCR/vision-only";
   return "not a chat model";
 }
@@ -47,6 +48,19 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
       </span>
     );
   }
+  if (reason === "embedding-only") {
+    return (
+      <span
+        className="ml-elig ml-elig-embed"
+        data-testid="embedding-elig-ok"
+        role="status"
+        aria-label={"Model eligibility: " + embeddingAvailabilityLabel()}
+        title={embeddingAvailabilityLabel()}
+      >
+        Embedding-ready
+      </span>
+    );
+  }
   return (
     <span
       className="ml-elig ml-elig-no"
@@ -61,9 +75,14 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
 }
 
 function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): ReactNode {
-  const eligible = isConversationEligibleModel(model);
-  const statusClass = eligible ? "connected" : "ineligible";
-  const statusTitle = eligible ? "conversation-eligible" : "not selectable for conversation";
+  const conversationEligible = isConversationEligibleModel(model);
+  const embeddingReady = model.kind === "embedding";
+  const statusClass = conversationEligible || embeddingReady ? "connected" : "ineligible";
+  const statusTitle = conversationEligible
+    ? "conversation-eligible"
+    : embeddingReady
+      ? "available for embeddings"
+      : "not selectable for conversation";
   return (
     <div className="ml-row">
       <span className="ml-ico">

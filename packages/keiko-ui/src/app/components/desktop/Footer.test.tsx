@@ -5,11 +5,18 @@
 // from this surface.
 
 import type { ComponentProps } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Footer } from "./Footer";
 import type { AppWindow } from "./windows/types";
+import { fetchHealth } from "@/lib/api";
+
+vi.mock("@/lib/api", () => ({
+  fetchHealth: vi.fn(),
+}));
+
+const fetchHealthMock = vi.mocked(fetchHealth);
 
 function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -28,6 +35,7 @@ function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">
 function renderFooter(
   patch: Partial<ComponentProps<typeof Footer>> = {},
 ): ReturnType<typeof render> {
+  fetchHealthMock.mockResolvedValue({ status: "ok", version: "0.2.0-test" });
   return render(
     <Footer
       winCount={0}
@@ -47,7 +55,31 @@ function renderFooter(
   );
 }
 
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("Footer — window status trigger", () => {
+  it("renders the centered product/version signature from the installed backend version", async () => {
+    fetchHealthMock.mockResolvedValueOnce({ status: "ok", version: "0.2.0-beta.5" });
+    renderFooter();
+
+    expect(screen.getByText("Keiko | version loading")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
+    });
+    expect(fetchHealthMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the footer signature present when the version request fails", async () => {
+    fetchHealthMock.mockRejectedValueOnce(new Error("offline"));
+    renderFooter();
+
+    await waitFor(() => {
+      expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
+    });
+  });
+
   it("does not render the connected-project indicator", () => {
     renderFooter({ projectName: "Regulated Workspace" });
     expect(screen.queryByText("Regulated Workspace")).not.toBeInTheDocument();

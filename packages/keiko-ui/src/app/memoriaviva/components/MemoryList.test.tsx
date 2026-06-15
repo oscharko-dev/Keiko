@@ -229,6 +229,50 @@ describe("MemoryList — populated state", () => {
     expect(screen.queryByRole("link", { name: /back to workspace/i })).not.toBeInTheDocument();
   });
 
+  it("renders a default-on policy switch in the header and toggles it", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchWith([makeRecord()])}
+        showWorkspaceBackLink={false}
+      />,
+    );
+
+    const policySwitch = await screen.findByRole("switch", {
+      name: "Enable MemoriaViva policy",
+    });
+    expect(policySwitch).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Policy on")).toBeInTheDocument();
+
+    await user.click(policySwitch);
+
+    expect(policySwitch).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Policy off")).toBeInTheDocument();
+  });
+
+  it("routes the policy switch through controlled workspace-window state", async () => {
+    const onPolicyEnabledChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchWith([makeRecord()])}
+        policyEnabled
+        onPolicyEnabledChange={onPolicyEnabledChange}
+        showWorkspaceBackLink={false}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }),
+    );
+
+    expect(onPolicyEnabledChange).toHaveBeenCalledWith(false);
+  });
+
   it("shows the consolidation entry point in the header", async () => {
     render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
     await waitFor(() => {

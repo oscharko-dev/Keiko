@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { fetchHealth } from "@/lib/api";
 import { Icons } from "./Icons";
 import type { TwinMode } from "./hooks/useTwinMode";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
@@ -36,8 +37,25 @@ export function Footer({
   statusRef,
 }: FooterProps): ReactNode {
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
+  const [installedVersion, setInstalledVersion] = useState("version loading");
   const windowLabel = `${String(winCount)} ${winCount === 1 ? "window" : "windows"}`;
   const sortedWindows = [...windows].sort((a, b) => b.z - a.z);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadInstalledVersion(): Promise<void> {
+      try {
+        const health = await fetchHealth();
+        if (!cancelled) setInstalledVersion(health.version);
+      } catch {
+        if (!cancelled) setInstalledVersion("version unavailable");
+      }
+    }
+    void loadInstalledVersion();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!windowPaletteOpen) return;
@@ -79,6 +97,9 @@ export function Footer({
       aria-live="polite"
     >
       <span className="spacer" />
+      <span className="ft-brand" aria-label={`Keiko version ${installedVersion}`}>
+        Keiko | {installedVersion}
+      </span>
       <span className="ft-window-wrap" ref={windowPaletteRef}>
         <button
           type="button"
