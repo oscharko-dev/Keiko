@@ -14,6 +14,8 @@
 // Pure: no clock (now is passed in), no IO, no randomness. Same inputs => same output, so the
 // retrieval layer stays replay-stable and the deterministic eval can pin it.
 
+import { exponentialDecay } from "./decay.js";
+
 const MS_PER_DAY = 86_400_000;
 
 // Disuse half-life. Matches the maintenance strength curve (keiko-memory-governance maintenance.ts)
@@ -35,10 +37,9 @@ export interface MemoryAccessStat {
 // Reinforcement strength in [0,1]. `undefined` stat (memory never accessed) => 0.
 export function reinforcementStrength(stat: MemoryAccessStat | undefined, nowMs: number): number {
   if (stat === undefined) return 0;
-  const ageMs = nowMs - stat.lastAccessedAt;
-  // Future-dated last-access (clock skew / source ahead of orchestrator) clamps to full recency
-  // rather than producing a >1 factor that would poison the weighted sum.
-  const accessRecency = ageMs <= 0 ? 1 : Math.exp(-(Math.LN2 * ageMs) / STRENGTH_HALF_LIFE_MS);
+  // Reuse-recency: decays since last ACCESS (future-dated clamps to full recency). Shares the kernel
+  // in decay.ts with edit-recency (recency.ts), which decays since last UPDATE at a different half-life.
+  const accessRecency = exponentialDecay(nowMs - stat.lastAccessedAt, STRENGTH_HALF_LIFE_MS);
   const count = stat.accessCount > 0 ? stat.accessCount : 0;
   const frequency = 1 - Math.exp(-count / STRENGTH_FREQUENCY_SATURATION);
   const strength = frequency * accessRecency;
