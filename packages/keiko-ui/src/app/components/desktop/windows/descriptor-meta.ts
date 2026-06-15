@@ -31,6 +31,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "durable.ui",
   },
+  memoria: {
+    lifecycle: ["live", "needs-review", "archived"],
+    trustBoundary: ["ui", "memory"],
+    authority: "user-confirm",
+    persistence: "memory-reference",
+  },
   files: {
     lifecycle: ["connecting", "connected", "degraded", "disconnected", "error"],
     trustBoundary: ["ui", "fs"],

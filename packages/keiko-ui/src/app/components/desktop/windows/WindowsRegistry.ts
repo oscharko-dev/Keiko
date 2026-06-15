@@ -4,6 +4,7 @@ import type { IconName } from "../Icons";
 export type WindowType =
   | "chat"
   | "chatHistory"
+  | "memoria"
   | "files"
   | "editor"
   | "browser"
@@ -145,6 +146,17 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 560,
     min: { w: 300, h: 320 },
     tiny: { w: 260, h: 220 },
+    tool: true,
+    singleton: true,
+  },
+  memoria: {
+    title: "MemoriaViva",
+    icon: "brain",
+    desc: "Review governed memory",
+    w: 680,
+    h: 600,
+    min: { w: 420, h: 360 },
+    tiny: { w: 300, h: 220 },
     tool: true,
     singleton: true,
   },
@@ -499,6 +511,7 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
   "chatHistory",
+  "memoria",
   "connector",
   "localKnowledge",
   "figma",

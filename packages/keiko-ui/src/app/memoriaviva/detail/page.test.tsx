@@ -1,17 +1,20 @@
-import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import MemoryDetailPage, { metadata } from "./page";
 
-vi.mock("./MemoryDetailClient", () => ({
-  MemoryDetailClient: () => <section aria-label="Memory detail client" />,
+const { redirectMock } = vi.hoisted(() => ({
+  redirectMock: vi.fn((path: string): never => {
+    throw new Error(`redirect:${path}`);
+  }),
+}));
+
+vi.mock("next/navigation", () => ({
+  redirect: redirectMock,
 }));
 
 describe("MemoryDetailPage", () => {
-  it("exposes the detail route shell and mounts the detail client", () => {
-    render(<MemoryDetailPage />);
-
-    expect(metadata.title).toBe("MemoriaViva Detail — Keiko");
-    expect(screen.getByRole("main", { name: "MemoriaViva detail" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Memory detail client" })).toBeInTheDocument();
+  it("redirects to the Workspace because MemoriaViva detail opens inside the Workspace window", () => {
+    expect(metadata.title).toBe("Keiko");
+    expect(() => MemoryDetailPage()).toThrow("redirect:/");
+    expect(redirectMock).toHaveBeenCalledWith("/");
   });
 });

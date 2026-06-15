@@ -172,6 +172,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
   // the WindowsRegistry declaration.
   "chatHistory",
+  "memoria",
   "settings",
   "automations",
   "mobile",

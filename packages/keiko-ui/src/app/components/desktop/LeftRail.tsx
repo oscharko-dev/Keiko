@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
@@ -85,17 +84,18 @@ export function LeftRail({
       </div>
       <span className="spacer" />
       <div className="rail-group">
-        {/* Issue #211 — MemoriaViva is a page route, not a window tool. */}
-        <Link
-          href="/memoriaviva"
+        <button
+          type="button"
           className="rail-btn"
-          data-active="false"
+          data-active={openTools.has("memoria") ? "true" : "false"}
           data-side="left"
           aria-label="MemoriaViva"
+          aria-pressed={openTools.has("memoria")}
           data-tip="MemoriaViva"
+          onClick={() => onTool("memoria")}
         >
           <Icons.brain size={19} />
-        </Link>
+        </button>
         {/* Epic #270 — Quality Intelligence opens as a singleton Workspace window (not a page route). */}
         <button
           type="button"
