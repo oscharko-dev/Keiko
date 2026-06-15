@@ -135,6 +135,11 @@ export interface MemoryRetrievalRequest {
   // Source-authority importance weight (#204, O-F5). Defaults to 0 (the signal is computed from
   // provenance but inert) so legacy ranking is unchanged unless the caller opts in.
   readonly importanceWeight?: number;
+  // Per-memory embedding vectors for MMR diversity re-ordering at selection time (#204, O-F3). When
+  // absent, selection stays the pure greedy-by-rank behaviour (byte-identical). mmrLambda balances
+  // relevance vs novelty (1 = pure relevance / inert, lower = more diverse); defaults to 0.7.
+  readonly embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
+  readonly mmrLambda?: number;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────

@@ -262,6 +262,7 @@ function buildRetrievalRequest(
     budgetTokens?: number;
     semanticById?: ReadonlyMap<MemoryId, number>;
     strengthById?: ReadonlyMap<MemoryId, number>;
+    embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
   } = {
     scopes,
     nowMs,
@@ -269,10 +270,12 @@ function buildRetrievalRequest(
   if (input.queryText !== undefined) req.queryText = input.queryText;
   if (input.types !== undefined) req.types = input.types;
   if (input.budgetTokens !== undefined) req.budgetTokens = input.budgetTokens;
-  // Embedding-based (#204, O-F4) and reinforcement (O-P1) signals, same as the chat path. Passed
-  // only when present so a vault with no embeddings / no access history ranks byte-identically.
+  // Embedding-cosine (#204, O-F4), reinforcement (O-P1), and MMR-diversity (O-F3) signals, same as
+  // the chat path. Passed only when present so a vault with no embeddings / no access history ranks
+  // byte-identically.
   if (signals.semanticById !== undefined) req.semanticById = signals.semanticById;
   if (signals.strengthById.size > 0) req.strengthById = signals.strengthById;
+  if (signals.embeddingById.size > 0) req.embeddingById = signals.embeddingById;
   return req;
 }
 

@@ -749,6 +749,7 @@ export async function buildMemoryResult(
       ...(budgetTokens !== undefined ? { budgetTokens } : {}),
       ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
       ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
+      ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
       nowMs,
     },
     vaultAsQueryPort(vault),

@@ -29,6 +29,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import { assembleContextBlock } from "./context.js";
+import { DEFAULT_MMR_LAMBDA, reorderByMmr } from "./diversity.js";
 import { RetrievalError } from "./errors.js";
 import { tokenize } from "./relevance.js";
 import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
@@ -320,7 +321,17 @@ export function retrieveMemoryContext(
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
   const thresholded = applyRelevanceFloor(ranked, request);
-  const assembled = assembleContextBlock(thresholded.ranked, filtered.candidates, {
+  // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
+  // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
+  const selectionOrder =
+    request.embeddingById === undefined
+      ? thresholded.ranked
+      : reorderByMmr(
+          thresholded.ranked,
+          request.embeddingById,
+          request.mmrLambda ?? DEFAULT_MMR_LAMBDA,
+        );
+  const assembled = assembleContextBlock(selectionOrder, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,
     maxIncluded: resolved.maxIncluded,
   });

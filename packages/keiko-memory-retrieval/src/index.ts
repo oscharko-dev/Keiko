@@ -59,6 +59,9 @@ export {
   type RankMemoriesQuery,
 } from "./ranking.js";
 
+// ─── Diversity (MMR) ─────────────────────────────────────────────────────────
+export { reorderByMmr, DEFAULT_MMR_LAMBDA, type MmrItem } from "./diversity.js";
+
 // ─── Context assembly ────────────────────────────────────────────────────────
 export {
   assembleContextBlock,

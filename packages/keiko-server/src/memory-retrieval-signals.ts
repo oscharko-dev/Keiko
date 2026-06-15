@@ -21,7 +21,7 @@ import {
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
   isMemorySuppressed,
 } from "@oscharko-dev/keiko-memory-retrieval";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryEmbeddingRow, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import type { UiHandlerDeps } from "./deps.js";
 import { cosineSimilarity, embedMemoryText } from "./memory-embedding.js";
@@ -57,15 +57,14 @@ function gatherCandidateIds(
 // Per-memory semantic score map for the candidate set, or undefined when no embedding model is
 // configured (query embedding null) — that undefined drives the byte-identical lexical fallback in
 // the ranker. A candidate whose stored vector is missing is omitted (semantic subscore 0 for it).
-async function buildSemanticScores(
+// Query-cosine scores for the candidate set, computed from the already-fetched embeddings. Gated by
+// the egress check (it embeds the query). Returns undefined when no model / no query embedding.
+async function semanticScoresFrom(
   deps: UiHandlerDeps,
-  vault: MemoryVaultStore,
   queryText: string,
   candidateIds: readonly MemoryId[],
+  embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
-  if (candidateIds.length === 0) return undefined;
-  const embeddings = vault.getEmbeddings(candidateIds);
-  if (embeddings.size === 0) return undefined;
   const queryEmbedding = await embedMemoryText(deps, queryText);
   if (queryEmbedding === null) return undefined;
   const scores = new Map<MemoryId, number>();
@@ -80,6 +79,10 @@ async function buildSemanticScores(
 export interface ConversationRetrievalSignals {
   readonly semanticById?: ReadonlyMap<MemoryId, number> | undefined;
   readonly strengthById: ReadonlyMap<MemoryId, number>;
+  // Raw candidate vectors for MMR diversity (#204, O-F3). Built from the SAME getEmbeddings call as
+  // semanticById (no extra IO, no egress — local vectors), so MMR works even when the query itself is
+  // not egress-safe. Empty when the vault has no embeddings.
+  readonly embeddingById: ReadonlyMap<MemoryId, Float32Array>;
 }
 
 export async function buildConversationRetrievalSignals(
@@ -91,12 +94,20 @@ export async function buildConversationRetrievalSignals(
   safeForSecondaryModel: boolean,
 ): Promise<ConversationRetrievalSignals> {
   const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
+  const candidateIds = gatherCandidateIds(vault, scopes, nowMs);
+  const embeddings =
+    candidateIds.length > 0
+      ? vault.getEmbeddings(candidateIds)
+      : new Map<MemoryId, MemoryEmbeddingRow>();
+  const embeddingById = new Map<MemoryId, Float32Array>();
+  for (const [id, row] of embeddings) embeddingById.set(id, row.vector);
   const semanticById =
-    safeForSecondaryModel && queryText !== undefined && queryText.length > 0
-      ? await buildSemanticScores(deps, vault, queryText, gatherCandidateIds(vault, scopes, nowMs))
+    safeForSecondaryModel && queryText !== undefined && queryText.length > 0 && embeddings.size > 0
+      ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings)
       : undefined;
   return {
     strengthById,
+    embeddingById,
     ...(semanticById !== undefined ? { semanticById } : {}),
   };
 }
