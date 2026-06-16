@@ -9,6 +9,7 @@ import type {
   ReactNode,
   RefObject,
 } from "react";
+import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
@@ -69,7 +70,7 @@ function isInteractive(target: EventTarget | null): boolean {
     target.closest(".window") !== null ||
     target.closest(".ws-zoom") !== null ||
     target.closest(".ws-fab") !== null ||
-    target.closest(".ws-empty-btn") !== null ||
+    target.closest(".empty-workspace-blob") !== null ||
     target.closest(".ws-outline") !== null ||
     target.closest(".conn-badge") !== null
   );
@@ -532,13 +533,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       ) : null}
       {empty ? (
         <div className="ws-empty">
-          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}
-          <img className="ws-empty-logo" src="/assets/keiko-logo.svg" alt="" />
-          <div className="ws-empty-title">Empty workspace</div>
-          <div className="ws-empty-sub">Open a window to start working</div>
-          <button type="button" className="ws-empty-btn" onClick={openPalette}>
-            <Icons.add size={15} /> New window
-          </button>
+          <EmptyWorkspaceBlob onNewWindow={openPalette} />
         </div>
       ) : null}
 

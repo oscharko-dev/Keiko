@@ -79,7 +79,7 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
 
 describe("M1 — empty startup layout", () => {
   it("renders the empty-state affordance when wins is an empty array", () => {
-    const { container } = render(
+    render(
       <Workspace
         ws={workspace({ wins: [] })}
         wsRef={createRef<HTMLDivElement>()}
@@ -87,26 +87,23 @@ describe("M1 — empty startup layout", () => {
       />,
     );
     expect(screen.getByText("Empty workspace")).toBeInTheDocument();
-    // Both the empty-state button and the FAB carry aria-label="New window".
-    // Query the empty-state-specific button via its class to avoid ambiguity.
-    expect(container.querySelector(".ws-empty-btn")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Open a new window" })).toHaveClass(
+      "empty-workspace-blob",
+    );
   });
 
-  it("calls openPalette when the empty-state New window button is clicked", async () => {
+  it("calls openPalette when the empty-state blob button is clicked", async () => {
     const openPalette = vi.fn();
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <Workspace
         ws={workspace({ wins: [] })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={openPalette}
       />,
     );
-    const emptyBtn = container.querySelector<HTMLButtonElement>(".ws-empty-btn");
-    expect(emptyBtn).not.toBeNull();
-    await user.click(emptyBtn as HTMLButtonElement);
-    // Both the empty-state button and the FAB call openPalette — at least 1 call is expected.
-    expect(openPalette).toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Open a new window" }));
+    expect(openPalette).toHaveBeenCalledTimes(1);
   });
 
   it("does not render the empty-state when wins has at least one window", () => {

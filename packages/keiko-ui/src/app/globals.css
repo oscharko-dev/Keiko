@@ -3928,38 +3928,75 @@ button {
   inset: 0;
   z-index: 3;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
   pointer-events: none;
 }
-.ws-empty-logo {
-  width: 54px;
-  height: 54px;
-  opacity: 0.5;
-  margin-bottom: 8px;
-}
-.ws-empty-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-.ws-empty-sub {
-  font-size: 13px;
-  color: var(--fg-muted);
-}
-.ws-empty-btn {
-  margin-top: 14px;
+.empty-workspace-blob {
   pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 16px;
-  border-radius: 10px;
-  background: var(--accent);
-  color: var(--ink-inverse);
-  font-size: 13px;
-  font-weight: 600;
+  appearance: none;
+  width: min(320px, calc(100% - 48px));
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 34px;
+  color: var(--bg);
+  background: transparent;
+  cursor: pointer;
+  filter: drop-shadow(0 14px 44px color-mix(in oklch, var(--accent) 20%, transparent));
+}
+.empty-workspace-blob svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.empty-workspace-blob__fill {
+  fill: var(--accent);
+  transition: fill 0.3s;
+}
+.empty-workspace-blob:hover .empty-workspace-blob__fill {
+  fill: var(--accent-bright);
+}
+.empty-workspace-blob__group {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.2s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.empty-workspace-blob:hover .empty-workspace-blob__group {
+  transform: scale(1.025);
+}
+.empty-workspace-blob:active .empty-workspace-blob__group {
+  transform: scale(0.985);
+}
+.empty-workspace-blob__group.is-pulse {
+  animation: emptyWorkspaceBlobPulse 0.55s ease;
+}
+.empty-workspace-blob:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 12px;
+}
+@keyframes emptyWorkspaceBlobPulse {
+  0% {
+    transform: scale(0.965);
+  }
+  55% {
+    transform: scale(1.03);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .empty-workspace-blob__fill,
+  .empty-workspace-blob__group {
+    transition: none;
+  }
+  .empty-workspace-blob__group.is-pulse {
+    animation: none;
+  }
 }
 
 /* ---------- PALETTE ---------- */
