@@ -374,6 +374,13 @@ describe("Issue #1169 — first-run gateway setup responsiveness", () => {
     const block = cssBlock(".gw-setup {");
     expect(block).toContain("max-height: calc(100vh - 48px)");
     expect(block).toContain("max-height: calc(100dvh - 48px)");
+    expect(block).toContain("overflow: hidden");
+  });
+
+  it(".gw-form owns the internal scroll surface so the card clips scrollbar bleed", () => {
+    const block = cssBlock(".gw-form {");
+    expect(block).toContain("flex: 1");
+    expect(block).toContain("min-height: 0");
     expect(block).toContain("overflow-y: auto");
   });
 });
