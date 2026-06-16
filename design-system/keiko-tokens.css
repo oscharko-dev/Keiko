@@ -70,7 +70,15 @@
 }
 
 /* ===== a11y base ===== */
-:focus-visible { outline: var(--focus-w, 2px) solid var(--accent-text); outline-offset: 2px; border-radius: 3px; }
+:focus-visible {
+  outline: var(--focus-w, 2px) solid transparent; /* surfaces the ring in forced-colors / Windows High Contrast */
+  outline-offset: 2px;
+  border-radius: 3px;
+  /* two-tone ring: a neutral separator hugging the control + the accent ring outside it.
+     Stays visible on ANY surface — including the green primary button, where a same-hue
+     ring would otherwise vanish (measured 1.0:1 dark / 2.46:1 light). */
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 calc(var(--focus-w, 2px) + 2px) var(--accent-text);
+}
 .skip-link {
   position: fixed; top: 10px; left: 10px; z-index: 200;
   padding: 10px 15px; background: var(--card); color: var(--fg);

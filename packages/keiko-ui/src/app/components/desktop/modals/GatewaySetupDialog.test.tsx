@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, setupGateway } from "@/lib/api";
+import type { ModelCapability } from "@/lib/types";
 import { GatewaySetupDialog } from "./GatewaySetupDialog";
 
 vi.mock("@/lib/api", () => ({
@@ -19,6 +20,8 @@ vi.mock("@/lib/api", () => ({
 describe("GatewaySetupDialog", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    delete document.documentElement.dataset.keikoModalOpenCount;
+    document.documentElement.removeAttribute("data-keiko-modal-open");
   });
 
   it("announces dialog semantics, focuses the first field, traps tab focus, and closes on Escape", async () => {
@@ -93,6 +96,18 @@ describe("GatewaySetupDialog", () => {
     }
   });
 
+  it("marks the app as modal-locked while open and clears the lock on unmount", () => {
+    const { unmount } = render(<GatewaySetupDialog />);
+
+    expect(document.documentElement).toHaveAttribute("data-keiko-modal-open", "true");
+    expect(document.documentElement.dataset.keikoModalOpenCount).toBe("1");
+
+    unmount();
+
+    expect(document.documentElement).not.toHaveAttribute("data-keiko-modal-open");
+    expect(document.documentElement.dataset.keikoModalOpenCount).toBeUndefined();
+  });
+
   // FE-05 (WCAG 4.1.2): submit button must expose aria-busy reflecting the
   // pending/saving state so AT users know a request is in flight.
   // FE-03 (WCAG 3.3.4): submit button must always have aria-describedby
@@ -119,10 +134,11 @@ describe("GatewaySetupDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     // After clicking, the submit is in flight — aria-busy must flip to true.
-    expect(screen.getByRole("button", { name: /testing connection/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /testing credentials/i })).toHaveAttribute(
       "aria-busy",
       "true",
     );
+    expect(screen.getByRole("status")).toHaveTextContent(/testing credentials/i);
   });
 
   it("restores focus to the triggering element when the dialog closes", () => {
@@ -164,16 +180,20 @@ describe("GatewaySetupDialog", () => {
       apiKey: "example-token",
       apiKeyHeaderName: "X-Litellm-Key",
       deploymentNames: [],
+      preserveExisting: false,
     });
 
     // C084: the async test result must be announced — success is a status live region.
     expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
   });
 
-  it("does not expose a Figma access token field in gateway setup", () => {
+  it("exposes an optional Figma access token field in gateway setup", () => {
     render(<GatewaySetupDialog />);
 
-    expect(screen.queryByLabelText(/figma access token/i)).toBeNull();
+    expect(screen.getByLabelText(/figma access token optional/i)).toHaveAttribute(
+      "placeholder",
+      "Paste a read-only Figma PAT when needed",
+    );
   });
 
   it("submits optional image-input model ids from the setup dialog", async () => {
@@ -201,7 +221,56 @@ describe("GatewaySetupDialog", () => {
       apiKeyHeaderName: undefined,
       deploymentNames: [],
       imageInputModelIds: ["vision-chat"],
+      preserveExisting: false,
     });
+  });
+
+  it("submits a Figma access token without requiring other fields in update mode", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="x-litellm-key"
+        storedModels={[
+          modelCapability("gpt-oss-120b"),
+          modelCapability("mistral-large-3"),
+          modelCapability("llama-4-maverick-vision"),
+          modelCapability("text-embedding-3-large", "embedding"),
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /test & save/i })).toBeDisabled();
+    expect(screen.getByLabelText(/figma access token optional/i)).toHaveFocus();
+    expect(screen.getByText("Gateway URL")).toBeInTheDocument();
+    expect(screen.getAllByText("API token").length).toBeGreaterThan(0);
+    expect(screen.getByText("••••••••••••")).toBeInTheDocument();
+    expect(screen.getByText("x-litellm-key")).toBeInTheDocument();
+    expect(screen.getByText("gpt-oss-120b")).toBeInTheDocument();
+    expect(screen.getByText("text-embedding-3-large")).toBeInTheDocument();
+    expect(screen.getByText("Replace model gateway settings")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/figma access token optional/i), "figd_update-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      apiKey: undefined,
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      figmaAccessToken: "figd_update-token",
+      preserveExisting: true,
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(/verified figma access token/i);
   });
 
   it("announces a failed test via role=alert, keeps the code as a secondary line, and refocuses Base URL (C084/C186/C191)", async () => {
@@ -225,3 +294,23 @@ describe("GatewaySetupDialog", () => {
     await waitFor(() => expect(screen.getByLabelText(/base url/i)).toHaveFocus());
   });
 });
+
+function modelCapability(id: string, kind: ModelCapability["kind"] = "chat"): ModelCapability {
+  return {
+    id,
+    kind,
+    contextWindow: kind === "embedding" ? 8_191 : 32_000,
+    maxOutputTokens: kind === "embedding" ? 0 : 4_096,
+    toolCalling: kind === "chat",
+    structuredOutput: kind === "chat",
+    streaming: kind === "chat",
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: kind === "chat",
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test",
+    preferredUseCases: ["Tests"],
+    knownLimitations: [],
+  };
+}

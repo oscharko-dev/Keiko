@@ -617,7 +617,24 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("marks the free workspace surface as actively panning while the left button is held", () => {
+  it("marks the free workspace surface as actively panning while the middle button is held", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+    expect(surface).toHaveAttribute("data-panning", "true");
+
+    fireEvent.pointerUp(window);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not start background panning from the primary mouse button", () => {
     render(
       <Workspace
         ws={workspace({})}
@@ -628,10 +645,29 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
-    expect(surface).toHaveAttribute("data-panning", "true");
 
-    fireEvent.pointerUp(window);
     expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not start background panning while a modal interaction lock is active", () => {
+    document.documentElement.setAttribute("data-keiko-modal-open", "true");
+    try {
+      render(
+        <Workspace
+          ws={workspace({})}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+      fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+
+      expect(surface).not.toHaveAttribute("data-panning");
+      expect(document.body.style.userSelect).toBe("");
+    } finally {
+      document.documentElement.removeAttribute("data-keiko-modal-open");
+    }
   });
 
   it("prevents text selection while the free workspace surface is actively panned", () => {
@@ -644,7 +680,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     );
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
-    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
     expect(document.body.style.userSelect).toBe("none");
 
     fireEvent.pointerCancel(window);

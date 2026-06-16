@@ -27,6 +27,7 @@
       <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
       <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
       <a class="nav-item on" href="components.html" aria-current="page"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
       <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
       <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
       <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
@@ -259,13 +260,36 @@
       function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
       dsSyncToggle();
       // interactivity
+      function selectTab(tab, tabs) {
+        tabs.forEach(function (t) { t.setAttribute("aria-selected", "false"); t.tabIndex = -1; });
+        tab.setAttribute("aria-selected", "true"); tab.tabIndex = 0;
+      }
       document.addEventListener("click", function (e) {
         var tg = e.target.closest(".c-toggle");
         if (tg) { tg.setAttribute("aria-checked", tg.getAttribute("aria-checked") === "true" ? "false" : "true"); return; }
         var tab = e.target.closest('[role="tab"]');
-        if (tab) { tab.parentElement.querySelectorAll('[role="tab"]').forEach(function (t) { t.setAttribute("aria-selected", "false"); }); tab.setAttribute("aria-selected", "true"); return; }
+        if (tab) { selectTab(tab, [].slice.call(tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'))); return; }
         var fld = e.target.closest(".c-tree-row.folder");
         if (fld) { fld.classList.toggle("open"); }
+      });
+      // roving-tabindex + arrow / Home / End keyboard support on every tablist
+      document.querySelectorAll('[role="tablist"]').forEach(function (tl) {
+        tl.setAttribute("aria-orientation", "horizontal");
+        var tabs = [].slice.call(tl.querySelectorAll('[role="tab"]'));
+        tabs.forEach(function (t) { t.tabIndex = t.getAttribute("aria-selected") === "true" ? 0 : -1; });
+        tl.addEventListener("keydown", function (e) {
+          var i = tabs.indexOf(document.activeElement);
+          if (i < 0) return;
+          var n = null;
+          if (e.key === "ArrowRight" || e.key === "ArrowDown") n = (i + 1) % tabs.length;
+          else if (e.key === "ArrowLeft" || e.key === "ArrowUp") n = (i - 1 + tabs.length) % tabs.length;
+          else if (e.key === "Home") n = 0;
+          else if (e.key === "End") n = tabs.length - 1;
+          if (n === null) return;
+          e.preventDefault();
+          selectTab(tabs[n], tabs);
+          tabs[n].focus();
+        });
       });
     </script>
   </body>

@@ -911,8 +911,23 @@ button {
     color-mix(in oklch, var(--accent) var(--frame-border-strength, 42%), transparent);
   background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%));
 }
+/* The credential dialog is portalled above the workspace. When it is open the
+   background stage must be fully inert, otherwise injected browser overlays or
+   hit-test edge cases can still start a workspace pan behind the modal. */
+html[data-keiko-modal-open="true"] .workspace {
+  pointer-events: none;
+  cursor: default;
+}
 .workspace[data-panning="true"] {
   cursor: grabbing;
+}
+/* When the workspace itself is being panned, every hovered child must keep the
+   same feedback instead of falling back to its own cursor token. */
+.workspace[data-panning="true"] * {
+  cursor: grabbing !important;
+}
+html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
+  cursor: default;
 }
 
 /* Liquid-Chrome-Wallpaper — bottom layer (z0), screen-fixed */
@@ -1971,8 +1986,9 @@ button {
   cursor: grab;
   user-select: none;
 }
-.win-head:active {
-  cursor: grabbing;
+.window[data-dragging="true"],
+.window[data-dragging="true"] * {
+  cursor: grabbing !important;
 }
 .win-ico {
   display: grid;
@@ -6197,11 +6213,13 @@ select.dlg-input {
   backdrop-filter: blur(12px);
 }
 .gw-setup {
-  width: min(560px, 100%);
+  width: min(760px, 100%);
+  max-height: min(940px, calc(100vh - 48px));
+  overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 28px;
+  gap: 0;
+  padding: 0;
   /* 24px is a deliberate hero exception above --radius-lg — first-run setup
      card only; everything inside follows the 9/14/18 token scale (audit C007). */
   border-radius: 24px;
@@ -6217,6 +6235,18 @@ select.dlg-input {
     animation: fadeUp 0.22s ease-out;
   }
 }
+.gw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 30px;
+}
+.gw-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 620px;
+}
 .gw-setup-badge {
   display: inline-flex;
   align-items: center;
@@ -6231,10 +6261,10 @@ select.dlg-input {
   font-weight: 650;
 }
 .gw-setup h1 {
-  margin: 2px 0 0;
-  font-size: clamp(24px, 4vw, 34px);
-  letter-spacing: -0.04em;
-  line-height: 1;
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 0;
+  line-height: 1.08;
 }
 .gw-setup p {
   margin: 0;
@@ -6242,13 +6272,54 @@ select.dlg-input {
   line-height: 1.55;
   font-size: 14px;
 }
+.gw-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--card) 78%, var(--surface));
+}
+.gw-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.gw-section h2 {
+  margin: 0 0 4px;
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+.gw-section p {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.gw-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px 16px;
+}
+.gw-span-2 {
+  grid-column: 1 / -1;
+}
 .gw-field {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
+  min-width: 0;
   color: var(--fg-muted);
   font-size: 12px;
   font-weight: 650;
+}
+.gw-field > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
 }
 .gw-input {
   width: 100%;
@@ -6268,8 +6339,73 @@ select.dlg-input {
   color: var(--fg-faint);
 }
 .gw-textarea {
-  min-height: 82px;
+  min-height: 92px;
   resize: vertical;
+}
+.gw-current {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.gw-current-row,
+.gw-current-models {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--inset);
+}
+.gw-current-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.gw-current-row span,
+.gw-current-models > span {
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.gw-current-row strong,
+.gw-current-models strong {
+  min-width: 0;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+.gw-current-models {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.gw-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.gw-model-chips strong {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+.gw-replace {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 12px;
+}
+.gw-replace > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 750;
+}
+.gw-replace[open] > summary {
+  margin-bottom: 14px;
 }
 .gw-note {
   padding: 10px 12px;
@@ -6281,7 +6417,8 @@ select.dlg-input {
   line-height: 1.45;
 }
 .gw-error,
-.gw-success {
+.gw-success,
+.gw-pending {
   padding: 11px 12px;
   border-radius: var(--radius);
   border: 1px solid var(--line-strong);
@@ -6298,11 +6435,17 @@ select.dlg-input {
   background: var(--accent-dim);
   border-color: var(--accent-line);
 }
+.gw-pending {
+  color: var(--fg);
+  background: var(--card-2);
+  border-color: var(--line-soft);
+}
 .gw-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  padding-top: 2px;
 }
 .gw-cancel {
   min-height: 44px;
@@ -6336,6 +6479,23 @@ select.dlg-input {
 .gw-submit:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .gw-setup-backdrop {
+    padding: 14px;
+  }
+  .gw-form {
+    padding: 22px;
+  }
+  .gw-grid,
+  .gw-current {
+    grid-template-columns: 1fr;
+  }
+  .gw-span-2,
+  .gw-current-models {
+    grid-column: auto;
+  }
 }
 
 /* collapsed sidebar adjust */

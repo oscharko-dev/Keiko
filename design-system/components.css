@@ -96,7 +96,7 @@
 .c-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font: 600 11px var(--font-ui); border: 1px solid var(--line-soft); color: var(--fg-muted); background: var(--inset); }
 .c-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
 .c-badge--ok { color: var(--accent-text); border-color: var(--accent-line); background: var(--accent-dim); }
-.c-badge--ok .dot { background: var(--accent); }
+.c-badge--ok .dot { background: var(--accent-text); }
 .c-badge--warn { color: var(--warn); border-color: color-mix(in oklch, var(--warn) 40%, transparent); background: color-mix(in oklch, var(--warn) 12%, transparent); }
 .c-badge--warn .dot { background: var(--warn); }
 .c-badge--info { color: var(--info); border-color: color-mix(in oklch, var(--info) 40%, transparent); background: color-mix(in oklch, var(--info) 12%, transparent); }
@@ -110,7 +110,7 @@
 .c-rail-btn { position: relative; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; color: var(--fg-dim); border: 0; background: transparent; cursor: pointer; }
 .c-rail-btn:hover { background: var(--card); color: var(--fg); }
 .c-rail-btn[aria-current="true"] { background: var(--card); color: var(--accent-text); }
-.c-rail-btn[aria-current="true"]::before { content: ""; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.c-rail-btn[aria-current="true"]::before { content: ""; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent-text); }
 .c-rail-new { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; color: var(--accent-text); border: 1px solid var(--accent-line); background: var(--accent-dim); cursor: pointer; }
 .c-rail-new:hover { background: var(--accent-glow); border-color: var(--accent); }
 .c-rail-div { width: 22px; height: 1px; background: var(--line-soft); margin: 6px 0; }
@@ -153,3 +153,52 @@
 .c-composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .c-composer-send { width: 34px; height: 34px; margin-left: auto; border-radius: 10px; display: grid; place-items: center; border: 0; cursor: pointer; color: var(--ink-inverse); background: var(--accent); }
 .c-composer-send:hover { background: var(--accent-bright); }
+
+/* ── messages & feedback ─────────────────────────────────── */
+/* severity is carried by a --sev custom prop, so one set of rules
+   styles every level. --ok uses --accent-text (not the bright fill)
+   so the green icon/border clears 3:1 in the light theme too. */
+.c-msg { --sev: var(--fg-dim); display: flex; gap: 12px; align-items: flex-start; padding: 13px 15px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--card); }
+.c-msg--danger { --sev: var(--danger); }
+.c-msg--warn   { --sev: var(--warn); }
+.c-msg--info   { --sev: var(--info); }
+.c-msg--ok     { --sev: var(--accent-text); }
+.c-msg--danger, .c-msg--warn, .c-msg--info, .c-msg--ok {
+  border-color: color-mix(in oklch, var(--sev) 40%, var(--line));
+  background: color-mix(in oklch, var(--sev) 8%, var(--card));
+}
+.c-msg-ico { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; color: var(--sev); background: color-mix(in oklch, var(--sev) 15%, transparent); }
+.c-msg-bd { flex: 1; min-width: 0; }
+.c-msg-tt { font: 600 13px var(--font-ui); color: var(--fg); }
+.c-msg-tx { font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); margin-top: 2px; }
+.c-msg-tx code { font-family: var(--font-mono); font-size: 12px; color: var(--accent-text); }
+.c-msg-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+.c-msg-close { flex: none; width: 26px; height: 26px; margin: -2px -5px 0 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--fg-faint); border-radius: 7px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.c-msg-close:hover { background: color-mix(in oklch, var(--fg) 9%, transparent); color: var(--fg); }
+
+/* full-width banner — top of a window/surface */
+.c-banner { --sev: var(--info); display: flex; align-items: center; gap: 11px; padding: 11px 15px; border: 0; border-bottom: 1px solid color-mix(in oklch, var(--sev) 42%, var(--line)); background: color-mix(in oklch, var(--sev) 10%, var(--card)); font-size: 13px; color: var(--fg); }
+.c-banner--danger { --sev: var(--danger); }
+.c-banner--warn   { --sev: var(--warn); }
+.c-banner--info   { --sev: var(--info); }
+.c-banner--ok     { --sev: var(--accent-text); }
+.c-banner .c-msg-ico { width: 20px; height: 20px; background: transparent; border-radius: 0; }
+.c-banner .gw { flex: 1; min-width: 0; }
+
+/* toast severities — tint the icon chip (default toast stays accent) */
+.c-toast--danger { --sev: var(--danger); }
+.c-toast--warn   { --sev: var(--warn); }
+.c-toast--info   { --sev: var(--info); }
+.c-toast--ok     { --sev: var(--accent-text); }
+.c-toast--danger .ic, .c-toast--warn .ic, .c-toast--info .ic, .c-toast--ok .ic {
+  background: color-mix(in oklch, var(--sev) 14%, var(--card));
+  border-color: color-mix(in oklch, var(--sev) 40%, transparent);
+  color: var(--sev);
+}
+
+/* inline form validation */
+.c-field--invalid { border-color: color-mix(in oklch, var(--danger) 60%, transparent); background: color-mix(in oklch, var(--danger) 6%, var(--inset)); }
+.c-field--invalid:focus { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 24%, transparent); }
+.c-field-error { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 12px; color: var(--danger); }
+.c-field-error .ico { flex: none; }
+.c-field-hint { margin-top: 7px; font-size: 12px; color: var(--fg-muted); }
