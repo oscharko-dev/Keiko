@@ -580,8 +580,8 @@ export function WindowFrame({
           <button
             type="button"
             className="win-traffic-btn win-traffic-maximize"
-            title={win.max ? "Restore" : "Maximize"}
-            aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
+            title={win.max ? "Restore" : "Full screen"}
+            aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();

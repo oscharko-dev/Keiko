@@ -282,6 +282,15 @@ describe("design a11y — prefers-contrast token step-up (accessibility.html §0
   });
 });
 
+describe("design a11y — skip link (WCAG 2.4.1, accessibility.html §04)", () => {
+  it("ships a .skip-link that hides off-screen and reveals on focus", () => {
+    const block = cssBlock(".skip-link {");
+    expect(block).toContain("position: fixed");
+    expect(block).toContain("transform: translateY(-180%)");
+    expect(cssBlock(".skip-link:focus {")).toContain("transform: none");
+  });
+});
+
 describe("Visual quality — workspace text rendering", () => {
   it(".ws-scene does not force transform layer promotion", () => {
     const block = cssBlock(".ws-scene");

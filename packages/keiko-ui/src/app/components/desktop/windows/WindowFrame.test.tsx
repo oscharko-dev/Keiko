@@ -105,7 +105,7 @@ describe("WindowFrame content zoom controls", () => {
 
       expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
         `Minimize ${def.title} window`,
-        `Maximize ${def.title} window`,
+        `Full screen ${def.title} window`,
         `Close ${def.title} window`,
       ]);
 

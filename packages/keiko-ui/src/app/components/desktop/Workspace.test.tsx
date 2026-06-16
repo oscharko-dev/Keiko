@@ -211,7 +211,9 @@ describe("Workspace card connections", () => {
     await user.click(outlineQueries.getByRole("button", { name: "Tile all windows" }));
     await user.click(outlineQueries.getByRole("button", { name: "Open Chat: Release review" }));
     await user.click(outlineQueries.getByRole("button", { name: "Minimize Chat: Release review" }));
-    await user.click(outlineQueries.getByRole("button", { name: "Maximize Chat: Release review" }));
+    await user.click(
+      outlineQueries.getByRole("button", { name: "Full screen Chat: Release review" }),
+    );
     await user.click(outlineQueries.getByRole("button", { name: "Close Chat: Release review" }));
     await user.click(
       outlineQueries.getByRole("button", {
@@ -275,9 +277,9 @@ describe("Workspace card connections", () => {
 
     render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
 
-    // uiux-fix F031 C297 — control labels are window-scoped now ("Maximize Files
+    // uiux-fix F031 C297 — control labels are window-scoped now ("Full screen Files
     // window"), so the files-1 target is addressable by name directly.
-    const targetMaximizeButton = screen.getByRole("button", { name: "Maximize Files window" });
+    const targetMaximizeButton = screen.getByRole("button", { name: "Full screen Files window" });
     expect(targetMaximizeButton).toBeDefined();
 
     fireEvent.pointerDown(targetMaximizeButton as HTMLElement, { button: 0 });

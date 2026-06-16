@@ -4914,6 +4914,32 @@ select.dlg-input {
   border-width: 0;
 }
 
+/* WCAG 2.4.1 bypass-blocks skip link (design/accessibility.html §04, design/keiko-tokens.css).
+   Hidden off-screen until focused, then slides in top-left as the first focusable element. */
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 10000;
+  padding: 10px 15px;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-decoration: none;
+  transform: translateY(-180%);
+  transition: transform 0.15s;
+}
+.skip-link:focus {
+  transform: none;
+}
+.skip-link:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
 /* ---------- RELATIONSHIP EDGE BADGE (Issue #540 / #541) ----------------------- */
 /* Inline chip for activity state + lifecycle — used in RelationshipListPanel and  */
 /* RelationshipInspectorPanel. CSS variables exclusively from the dark palette.    */
