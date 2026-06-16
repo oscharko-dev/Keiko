@@ -198,6 +198,16 @@ describe("WorkspaceShader", () => {
     expect(getContext).toHaveBeenCalledWith("webgl", expect.any(Object));
   });
 
+  it("does not treat malformed persisted wallpaper values as opt-in", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "1");
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
+
+    const { container } = render(<WorkspaceShader />);
+
+    expect(container.querySelector("canvas")).toBeNull();
+    expect(getContext).not.toHaveBeenCalled();
+  });
+
   it("applies the persisted workspace background brightness without starting WebGL", () => {
     window.localStorage.setItem("keiko.wallpaper.enabled", "false");
     window.localStorage.setItem("keiko.workspace.background.brightness", "42");

@@ -4,6 +4,8 @@ export const WORKSPACE_BACKGROUND_BRIGHTNESS_KEY = "keiko.workspace.background.b
 export const WORKSPACE_GRID_STRENGTH_KEY = "keiko.workspace.grid.strength";
 export const FRAME_BORDER_STRENGTH_KEY = "keiko.frame.border.strength";
 
+export const DEFAULT_WALLPAPER_ENABLED = false;
+
 export const WALLPAPER_ENABLED_EVENT = "keiko:wallpaper-enabled";
 export const WALLPAPER_OPACITY_EVENT = "keiko:wallpaper-opacity";
 export const WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT = "keiko:workspace-background-brightness";
@@ -16,7 +18,7 @@ export function clampPercent(value: number): number {
 }
 
 export function readWallpaperEnabled(): boolean {
-  if (typeof window === "undefined") return false;
+  if (typeof window === "undefined") return DEFAULT_WALLPAPER_ENABLED;
   return window.localStorage.getItem(WALLPAPER_ENABLED_KEY) === "true";
 }
 
