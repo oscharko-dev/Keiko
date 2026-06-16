@@ -89,6 +89,20 @@ describe("sw.js cache policy — static source analysis (issue #126, ADR-0024 D6
   it("keeps content-hashed static assets cache-first", () => {
     expect(SW_SOURCE).toMatch(/function\s+cacheFirst\s*\(/);
   });
+
+  it("pre-caches the self-hosted JetBrains Mono webfont for offline use", () => {
+    const match = SW_SOURCE.match(/PRECACHE_URLS\s*=\s*\[([\s\S]*?)\]/);
+    expect(match).not.toBeNull();
+    const body = match === null ? "" : (match[1] ?? "");
+    expect(body).toContain("/fonts/jetbrains-mono-latin-wght-normal.woff2");
+  });
+
+  it("allows /fonts/ to be served from the runtime cache so the mono renders offline", () => {
+    const match = SW_SOURCE.match(/CACHEABLE_PREFIXES\s*=\s*\[([\s\S]*?)\]/);
+    expect(match).not.toBeNull();
+    const body = match === null ? "" : (match[1] ?? "");
+    expect(body).toContain("/fonts/");
+  });
 });
 
 // ---------------------------------------------------------------------------

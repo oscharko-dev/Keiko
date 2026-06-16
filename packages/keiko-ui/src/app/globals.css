@@ -2,6 +2,20 @@
    KEIKO DESKTOP — design tokens & base
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
    ============================================================ */
+
+/* JetBrains Mono — self-hosted (SIL OFL 1.1, see public/fonts/OFL.txt). The variable
+   woff2 spans the 400/500/600 weights the design uses for machine text (paths, counts,
+   code, keys), so --font-mono actually renders JetBrains Mono instead of falling back to
+   the system monospace. Same-origin to satisfy CSP `font-src 'self'`; precached by sw.js
+   for offline. font-display: swap keeps text visible during the (same-origin, instant) load. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
+}
+
 :root {
   /* Tell the user agent the app paints on a dark surface by default. Without
      this hint the browser fills the empty document with its own white "blank"

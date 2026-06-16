@@ -282,6 +282,23 @@ describe("design a11y — prefers-contrast token step-up (accessibility.html §0
   });
 });
 
+describe("design foundations — JetBrains Mono webfont (foundations.html §02)", () => {
+  it("self-hosts JetBrains Mono via @font-face so --font-mono actually renders it", () => {
+    // The token referenced "JetBrains Mono" but the face was never loaded — mono text fell
+    // back to the system monospace. The @font-face makes the brand mono real and offline.
+    const idx = css.indexOf("@font-face");
+    expect(idx, "no @font-face — JetBrains Mono is referenced but never loaded").toBeGreaterThan(
+      -1,
+    );
+    const block = css.slice(idx, css.indexOf("}", idx) + 1);
+    expect(block).toContain('font-family: "JetBrains Mono"');
+    expect(block).toContain("/fonts/jetbrains-mono-latin-wght-normal.woff2");
+    expect(block).toContain('format("woff2")');
+    // --font-mono must list the loaded face first so it is actually used.
+    expect(css).toMatch(/--font-mono:\s*"JetBrains Mono"/);
+  });
+});
+
 describe("design a11y — skip link (WCAG 2.4.1, accessibility.html §04)", () => {
   it("ships a .skip-link that hides off-screen and reveals on focus", () => {
     const block = cssBlock(".skip-link {");
