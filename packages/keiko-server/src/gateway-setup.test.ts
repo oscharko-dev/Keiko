@@ -107,7 +107,7 @@ describe("handleGatewaySetup", () => {
   it("stores an optional Figma PAT submitted through browser gateway setup", async () => {
     const uiDir = await tempDir("keiko-gw-ui-figma-");
     const evidenceDir = await tempDir("keiko-gw-ev-figma-");
-    const figmaSmokeCalls: Array<{ readonly token: string; readonly egress: unknown }> = [];
+    const figmaSmokeCalls: { readonly token: string; readonly egress: unknown }[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -145,7 +145,7 @@ describe("handleGatewaySetup", () => {
     const uiDir = await tempDir("keiko-gw-ui-figma-default-smoke-");
     const evidenceDir = await tempDir("keiko-gw-ev-figma-default-smoke-");
     const originalFetch = globalThis.fetch;
-    const seen: Array<{ readonly url: string; readonly token: string | null }> = [];
+    const seen: { readonly url: string; readonly token: string | null }[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
       const href = fetchInputUrl(url);
       const headers = new Headers(init?.headers);
