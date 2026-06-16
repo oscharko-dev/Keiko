@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <title>Messages &amp; Feedback · Keiko Design System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <style>
+      .sev-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .sev-table th { text-align: left; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-faint); font-weight: 500; padding: 0 14px 12px; border-bottom: 1px solid var(--line); }
+      .sev-table td { padding: 14px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; color: var(--fg-muted); }
+      .sev-table tr:last-child td { border-bottom: 0; }
+      .sev-name { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; color: var(--fg); }
+      .sev-ic { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; }
+      .sev-ic.d { color: var(--danger); background: color-mix(in oklch, var(--danger) 12%, var(--card)); border: 1px solid color-mix(in oklch, var(--danger) 38%, transparent); }
+      .sev-ic.w { color: var(--warn); background: color-mix(in oklch, var(--warn) 12%, var(--card)); border: 1px solid color-mix(in oklch, var(--warn) 38%, transparent); }
+      .sev-ic.i { color: var(--info); background: color-mix(in oklch, var(--info) 12%, var(--card)); border: 1px solid color-mix(in oklch, var(--info) 38%, transparent); }
+      .sev-ic.o { color: var(--accent-text); background: var(--accent-dim); border: 1px solid var(--accent-line); }
+      .sev-tok { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-text); }
+      .stack14 > * + * { margin-top: 14px; }
+      .demo-win { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); overflow: hidden; box-shadow: var(--shadow-card); }
+      .demo-win .wb { padding: 14px; }
+      .vt { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .vt-col { padding: 20px 22px; }
+      .vt-tag { display: inline-flex; align-items: center; gap: 7px; font: 600 11px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 14px; }
+      .vt-do .vt-tag { color: var(--accent-text); }
+      .vt-dont .vt-tag { color: var(--danger); }
+      .vt-row { padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+      .vt-row:last-child { border-bottom: 0; }
+      .vt-ex { font-size: 13px; color: var(--fg); }
+      .vt-why { font-size: 12px; color: var(--fg-muted); margin-top: 3px; }
+      .vt-dont .vt-ex { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--danger) 60%, transparent); }
+      @media (max-width: 900px) { .vt { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" aria-label="Design system">
+      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
+      <div class="nav-label">Overview</div>
+      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
+      <div class="nav-label">Guidelines</div>
+      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
+      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
+      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item on" href="messages.html" aria-current="page"><span class="ni-dot"></span>Messages &amp; Feedback</a>
+      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
+      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
+      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
+      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
+        <span class="ti">
+          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
+          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
+        </span>
+        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
+      </button>
+      <div class="nav-foot">Keiko · v0.2.0</div>
+    </nav>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 08</div>
+        <h1>Messages &amp; feedback</h1>
+        <p class="lead">How Keiko tells you something went wrong, needs care, or simply happened. Four severities, each with its own <b style="color:var(--fg)">icon shape</b> — never colour alone — wrapped in the calm, precise voice from the content guide. Inline messages, banners, toasts and field errors all share one severity system. Toggle the theme; every level holds its contrast in both.</p>
+      </header>
+
+      <section class="sec" id="severities">
+        <div class="sec-head"><div class="num">01 — SEVERITY</div><h2>Four levels</h2><p>Pick by consequence, not by drama. The icon shape carries the meaning so the message still works in greyscale, for colour-blind users, and under glare.</p></div>
+        <div class="card" style="padding:8px 24px">
+          <table class="sev-table">
+            <thead><tr><th>Level</th><th>Token</th><th>Means</th><th>When</th></tr></thead>
+            <tbody>
+              <tr><td><span class="sev-name"><span class="sev-ic d"><span class="ico" data-licon="error" data-size="20"></span></span>Error</span></td><td class="sev-tok">--danger</td><td>Something failed or is blocked.</td><td>An action couldn't complete; data is at risk. Needs a fix or a decision.</td></tr>
+              <tr><td><span class="sev-name"><span class="sev-ic w"><span class="ico" data-licon="alert" data-size="20"></span></span>Warning</span></td><td class="sev-tok">--warn</td><td>Proceed with care.</td><td>Allowed, but with a consequence — a limit near, an irreversible step ahead.</td></tr>
+              <tr><td><span class="sev-name"><span class="sev-ic i"><span class="ico" data-licon="info" data-size="20"></span></span>Info</span></td><td class="sev-tok">--info</td><td>Worth knowing, nothing required.</td><td>Context, scope, a tip, a neutral state change.</td></tr>
+              <tr><td><span class="sev-name"><span class="sev-ic o"><span class="ico" data-licon="success" data-size="20"></span></span>Success</span></td><td class="sev-tok">--accent-text</td><td>It worked.</td><td>Confirm a completed action — quietly. Routine success often needs no message at all.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Shape, not colour</span><div>Error is an <b>X-in-circle</b>, warning a <b>triangle</b>, info an <b>i-in-circle</b>, success a <b>check</b>. Each is a Lift glyph with the one-seam signature, so severity reads without relying on red/amber/green alone — satisfying WCAG 1.4.1.</div></div>
+      </section>
+
+      <section class="sec" id="inline">
+        <div class="sec-head"><div class="num">02 — INLINE MESSAGES</div><h2>Inline messages</h2><p>The workhorse: an icon, a title, one calm line, and at most two actions. Sits in context — in a panel, under a section, inside a window. <span class="cls">.c-msg--danger / --warn / --info / --ok</span>.</p></div>
+        <div class="card demo-card">
+          <div class="stack14">
+            <div class="c-msg c-msg--danger" role="alert">
+              <span class="c-msg-ico"><span class="ico" data-licon="error" data-size="26"></span></span>
+              <div class="c-msg-bd">
+                <div class="c-msg-tt">Couldn't connect to <code>release/0.2.0</code></div>
+                <div class="c-msg-tx">The branch is private or the token expired. Reconnect to continue grounding answers in this source.</div>
+                <div class="c-msg-act"><button class="c-btn c-btn--sm c-btn--primary">Reconnect</button><button class="c-btn c-btn--sm c-btn--ghost">Use model only</button></div>
+              </div>
+              <button class="c-msg-close" aria-label="Dismiss"><span class="ico" data-licon="close" data-size="16"></span></button>
+            </div>
+            <div class="c-msg c-msg--warn">
+              <span class="c-msg-ico"><span class="ico" data-licon="alert" data-size="26"></span></span>
+              <div class="c-msg-bd">
+                <div class="c-msg-tt">Approaching the per-chat source limit</div>
+                <div class="c-msg-tx">7 of 8 sources connected. Connecting more will drop the oldest from this chat's grounding.</div>
+              </div>
+              <button class="c-msg-close" aria-label="Dismiss"><span class="ico" data-licon="close" data-size="16"></span></button>
+            </div>
+            <div class="c-msg c-msg--info">
+              <span class="c-msg-ico"><span class="ico" data-licon="info" data-size="26"></span></span>
+              <div class="c-msg-bd">
+                <div class="c-msg-tt">Answers are grounded in <code>src/</code></div>
+                <div class="c-msg-tx">This window reads from the connected folder. Replies cite the files they came from.</div>
+              </div>
+            </div>
+            <div class="c-msg c-msg--ok" role="status">
+              <span class="c-msg-ico"><span class="ico" data-licon="success" data-size="26"></span></span>
+              <div class="c-msg-bd">
+                <div class="c-msg-tt">Workspace updated</div>
+                <div class="c-msg-tx">Coder applied the design tweaks across 4 windows.</div>
+              </div>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-msg</span> + <span class="cls">.c-msg-ico / -tt / -tx / -act / -close</span> · title is <span class="cls">--fg</span>, body <span class="cls">--fg-muted</span>; only the icon &amp; border carry the severity tone.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="banners">
+        <div class="sec-head"><div class="num">03 — BANNERS</div><h2>Banners</h2><p>System-level state that affects the whole surface, pinned to the top of a window. Full-width, one line, dismissible only if non-blocking. <span class="cls">.c-banner--*</span>.</p></div>
+        <div class="card demo-card">
+          <div class="stack14">
+            <div class="demo-win">
+              <div class="c-banner c-banner--danger" role="alert">
+                <span class="c-msg-ico"><span class="ico" data-licon="error" data-size="17"></span></span>
+                <span class="gw">Connection lost — answers may be out of date.</span>
+                <button class="c-btn c-btn--sm">Retry</button>
+              </div>
+              <div class="wb"><div style="height:8px;border-radius:5px;background:var(--inset);width:80%"></div><div style="height:8px;border-radius:5px;background:var(--inset);width:55%;margin-top:9px"></div></div>
+            </div>
+            <div class="demo-win">
+              <div class="c-banner c-banner--warn">
+                <span class="c-msg-ico"><span class="ico" data-licon="alert" data-size="17"></span></span>
+                <span class="gw">Read-only — you don't have write access to this workspace.</span>
+                <button class="c-msg-close" aria-label="Dismiss"><span class="ico" data-licon="close" data-size="16"></span></button>
+              </div>
+              <div class="wb"><div style="height:8px;border-radius:5px;background:var(--inset);width:70%"></div><div style="height:8px;border-radius:5px;background:var(--inset);width:48%;margin-top:9px"></div></div>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-banner</span> attaches under the window header; blocking banners (error) keep a primary action and no dismiss.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="toasts">
+        <div class="sec-head"><div class="num">04 — TOASTS</div><h2>Toasts</h2><p>Transient confirmation for a thing that just happened and needs no decision. Auto-dismiss (≈ 5s), bottom of the surface, one at a time. Never use a toast for an error the user must act on — that's an inline message or banner.</p></div>
+        <div class="card demo-card">
+          <div class="stack14" style="max-width:440px">
+            <div class="c-toast c-toast--ok" role="status">
+              <span class="ic"><span class="ico" data-licon="success" data-size="17"></span></span>
+              <span class="tx"><span class="tt">Connected to release/0.2.0</span><span class="ts">Grounding is live for this chat.</span></span>
+              <button class="c-btn c-btn--sm c-btn--ghost">OK</button>
+            </div>
+            <div class="c-toast c-toast--info" role="status">
+              <span class="ic"><span class="ico" data-licon="info" data-size="17"></span></span>
+              <span class="tx"><span class="tt">Window minimized to the dock</span><span class="ts">Files · reachable in one click.</span></span>
+            </div>
+            <div class="c-toast c-toast--danger" role="alert">
+              <span class="ic"><span class="ico" data-licon="error" data-size="17"></span></span>
+              <span class="tx"><span class="tt">Couldn't save settings</span><span class="ts">Retrying automatically…</span></span>
+              <button class="c-btn c-btn--sm">Retry now</button>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-toast--ok / --info / --warn / --danger</span> — the chip tints to the severity; copy stays calm.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="validation">
+        <div class="sec-head"><div class="num">05 — FORM VALIDATION</div><h2>Inline field errors</h2><p>Validate on blur or submit, never on every keystroke. The error sits <em>under</em> the field it belongs to, tied with <span class="cls">aria-describedby</span>, and the field border turns danger. Keep a neutral hint in the same slot when valid.</p></div>
+        <div class="card demo-card">
+          <div class="demo-stack" style="max-width:440px">
+            <div>
+              <label class="c-label" for="v1">Workspace name</label>
+              <input id="v1" class="c-field c-field--invalid" value="my workspace!" aria-invalid="true" aria-describedby="v1e" />
+              <div class="c-field-error" id="v1e"><span class="ico" data-licon="error" data-size="15"></span>Use letters, numbers and dashes only.</div>
+            </div>
+            <div>
+              <label class="c-label" for="v2">Source path</label>
+              <input id="v2" class="c-field" value="/Users/oscharko-dev/Projects/Keiko" aria-describedby="v2h" />
+              <div class="c-field-hint" id="v2h">Absolute path to a folder, repo or file.</div>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-field--invalid</span> + <span class="cls">.c-field-error</span> · <span class="cls">.c-field-hint</span> for the resting helper. Error text is <span class="cls">--danger</span> (AA) and always carries the error glyph.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="voice">
+        <div class="sec-head"><div class="num">06 — VOICE</div><h2>Write the message</h2><p>Same rules as the content guide, sharpened for trouble: say what happened, why, and the way out — in that order. Calm even in failure. No blame, no exclamation marks, no “Oops”.</p></div>
+        <div class="vt">
+          <div class="card vt-col vt-do">
+            <div class="vt-tag"><span class="ico" data-licon="success" data-size="15"></span>Do</div>
+            <div class="vt-row"><div class="vt-ex">Couldn't connect to release/0.2.0. The token expired — reconnect to continue.</div><div class="vt-why">Fact, cause, way out. The user knows exactly what to do.</div></div>
+            <div class="vt-row"><div class="vt-ex">7 of 8 sources connected. One more drops the oldest.</div><div class="vt-why">States the consequence plainly, before it happens.</div></div>
+            <div class="vt-row"><div class="vt-ex">Retrying automatically…</div><div class="vt-why">Tells the user the system is handling it; no action demanded.</div></div>
+          </div>
+          <div class="card vt-col vt-dont">
+            <div class="vt-tag"><span class="ico" data-licon="close" data-size="15"></span>Don't</div>
+            <div class="vt-row"><div class="vt-ex">Oops! Connection failed 😬</div><div class="vt-why">Cute, vague, no cause and no next step — and emoji aren't the brand.</div></div>
+            <div class="vt-row"><div class="vt-ex">Error 500: ECONNREFUSED at socket.js:44</div><div class="vt-why">Raw, blaming, unreadable. Log the trace; tell the human the outcome.</div></div>
+            <div class="vt-row"><div class="vt-ex">You entered an invalid name!!!</div><div class="vt-why">Accusatory and shouty. Describe the rule, not the user's mistake.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="a11y">
+        <div class="sec-head"><div class="num">07 — ACCESSIBILITY</div><h2>So everyone gets the message</h2></div>
+        <div class="card" style="padding:8px 24px">
+          <table class="tbl">
+            <tbody>
+              <tr><td class="fgw">Live regions</td><td>Blocking errors use <span class="cls">role="alert"</span> (assertive); info &amp; success use <span class="cls">role="status"</span> / <span class="cls">aria-live="polite"</span> so a screen reader announces them without stealing focus.</td></tr>
+              <tr><td class="fgw">Shape + text</td><td>Severity is icon + word + tone — never colour alone (1.4.1). Each level owns a distinct glyph.</td></tr>
+              <tr><td class="fgw">Field errors</td><td><span class="cls">aria-invalid="true"</span> on the input, error text linked via <span class="cls">aria-describedby</span>; focus moves to the first invalid field on submit.</td></tr>
+              <tr><td class="fgw">Contrast</td><td>Icon &amp; border tones clear 3:1 in both themes; success uses <span class="cls">--accent-text</span> so green holds up on white. Body text is <span class="cls">--fg-muted</span> (AA+).</td></tr>
+              <tr><td class="fgw">Dismiss</td><td>Every close control has an <span class="cls">aria-label</span> and a ≥ 24px target; dismissing is never the only way to act on a blocking error.</td></tr>
+              <tr><td class="fgw">Persistence</td><td>Errors that need action don't auto-dismiss. Only confirmations time out.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    <script>
+      document.addEventListener("click", function (e) {
+        var c = e.target.closest(".c-msg-close");
+        if (c) { var host = c.closest(".c-msg, .c-banner"); if (host) host.style.display = "none"; }
+      });
+      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
+      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
+      dsSyncToggle();
+    </script>
+  </body>
+</html>

@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -191,7 +192,12 @@ interface DragSession {
   readonly W: number;
 }
 
-function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: DragSession): void {
+function attachDragListeners(
+  api: WorkspaceApi,
+  geo: DragGeometry,
+  session: DragSession,
+  onDragEnd?: (() => void) | undefined,
+): void {
   const threshold = SNAP / geo.z;
   const move = (ev: PointerEvent): void => {
     const px = geo.toWX(ev.clientX);
@@ -208,6 +214,7 @@ function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: Drag
     window.removeEventListener("pointerup", up);
     api.commitSnap(session.winId);
     document.body.style.cursor = "";
+    onDragEnd?.();
   };
   // Audit C362 — the move listeners run on window without pointer capture, so a
   // fast drag leaves the header and the cursor flickered to default/text over
@@ -274,6 +281,7 @@ export function WindowFrame({
   const def = WIN_TYPES[win.type];
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
+  const [draggingWindow, setDraggingWindow] = useState(false);
   const zoom = win.zoom ?? 1;
   const linkedRoot =
     win.type === "chat" || win.type === "agents" || win.type === "quality"
@@ -329,7 +337,10 @@ export function WindowFrame({
 
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
-      if (e.button !== 0) return;
+      // Keep window dragging aligned with the workspace pan gesture: middle
+      // mouse button moves windows, while primary clicks stay available for
+      // ordinary header interactions and control targeting.
+      if (e.button !== 1) return;
       // When this window is a valid drop target for an in-flight connect, the
       // bubbling onPointerDown on <section> below confirms the link — don't
       // also start a header-drag, which would tear the window away from the
@@ -347,7 +358,10 @@ export function WindowFrame({
       const offX = wasMax ? restoredW / 2 : geo.toWX(e.clientX) - win.x;
       const offY = wasMax ? 18 : geo.toWY(e.clientY) - win.y;
       if (wasMax) api.update(win.id, { max: false, w: restoredW, h: restoredH });
-      attachDragListeners(api, geo, { winId: win.id, offX, offY, W: restoredW });
+      setDraggingWindow(true);
+      attachDragListeners(api, geo, { winId: win.id, offX, offY, W: restoredW }, () =>
+        setDraggingWindow(false),
+      );
     },
     [api, win.id, win.x, win.y, win.w, win.h, win.max, win.prev, view, wsRef, connState],
   );
@@ -476,6 +490,7 @@ export function WindowFrame({
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
+      data-dragging={draggingWindow ? "true" : undefined}
       data-window-id={win.id}
       style={sectionStyle}
       tabIndex={-1}
@@ -574,18 +589,22 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={minimizeWithFocusRestore}
-          />
+          >
+            <Icons.minimize size={17} />
+          </button>
           <button
             type="button"
             className="win-traffic-btn win-traffic-maximize"
-            title={win.max ? "Restore" : "Maximize"}
-            aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
+            title={win.max ? "Restore" : "Full screen"}
+            aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
             }}
             onClick={() => api.maximize(win.id)}
-          />
+          >
+            {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
+          </button>
           <button
             type="button"
             className="win-traffic-btn win-traffic-close"
@@ -596,7 +615,9 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={closeWithFocusRestore}
-          />
+          >
+            <Icons.close size={17} />
+          </button>
         </div>
       </header>
       <div className="win-body" data-mode={bodyMode} style={bodyStyle}>

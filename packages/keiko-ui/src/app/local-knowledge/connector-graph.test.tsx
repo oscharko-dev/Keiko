@@ -103,23 +103,17 @@ describe("ConnectorGraph — empty state", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders pipeline node labels in source-to-consumer order", async () => {
+  it("does not render the former pipeline visualization", async () => {
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("empty-state")).toBeInTheDocument();
     });
 
-    const nodeList = screen.getByRole("list", { name: /pipeline nodes/i });
-    const items = nodeList.querySelectorAll('[role="listitem"]');
-    expect(items).toHaveLength(4);
-
-    // Labels appear in order: Files Window, Local Knowledge, Capsules, Conversation Center
-    const labels = Array.from(items).map((el) => el.textContent ?? "");
-    expect(labels[0]).toContain("Files Window");
-    expect(labels[1]).toContain("Local Knowledge");
-    expect(labels[2]).toContain("Capsules");
-    expect(labels[3]).toContain("Conversation Center");
+    expect(screen.queryByRole("list", { name: /pipeline nodes/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/connector pipeline diagram/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Files Window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Conversation Center")).not.toBeInTheDocument();
   });
 
   it("opens an in-app create dialog instead of using window.prompt", async () => {
@@ -164,7 +158,7 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.queryByTestId("empty-state")).toBeNull();
   });
 
-  it("renders capsules list region with capsule count in pipeline node sublabel", async () => {
+  it("renders capsules list region with capsule count in the status summary", async () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "A" }),
       makeCapsule({ id: makeCapsuleId("2"), displayName: "B" }),
@@ -175,9 +169,8 @@ describe("ConnectorGraph — with capsules", () => {
       expect(screen.getByText("A")).toBeInTheDocument();
     });
 
-    // The pipeline Capsules node sublabel should reflect the count
-    const nodeList = screen.getByRole("list", { name: /pipeline nodes/i });
-    expect(nodeList.textContent).toContain("2 capsules");
+    expect(screen.getByRole("region", { name: /knowledge capsules/i })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 capsules");
   });
 
   it("exports a capsule drag payload for dropping onto the workspace", async () => {

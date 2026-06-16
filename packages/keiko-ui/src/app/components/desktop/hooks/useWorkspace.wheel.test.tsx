@@ -35,6 +35,11 @@ function Harness(): ReactElement {
       </section>
       <output data-testid="files-zoom">{files?.zoom ?? "missing"}</output>
       <output data-testid="view-zoom">{ws.view.zoom}</output>
+      <output data-testid="view-x">{ws.view.x}</output>
+      <output data-testid="view-y">{ws.view.y}</output>
+      <button type="button" onClick={ws.api.fitView}>
+        Fit
+      </button>
     </main>
   );
 }
@@ -100,5 +105,66 @@ describe("useWorkspace wheel zoom routing", () => {
       expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1),
     );
     expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("fits the workspace view around visible windows", async () => {
+    window.localStorage.setItem(
+      WORKSPACE_STORAGE_KEY,
+      JSON.stringify([
+        appWindow({ id: "a", x: 0, y: 0, w: 100, h: 100 }),
+        appWindow({ id: "b", x: 200, y: 100, w: 100, h: 100 }),
+      ]),
+    );
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("missing"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+      expect(screen.getByTestId("view-x")).toHaveTextContent("350");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("300");
+    });
+  });
+
+  it("coalesces repeated free-workspace wheel pan events into one animation-frame view update", async () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 10,
+      deltaY: 20,
+    });
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 5,
+      deltaY: 15,
+    });
+
+    expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("view-x")).toHaveTextContent("0");
+
+    callbacks[0]?.(1);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-15");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-35");
+    });
   });
 });

@@ -1,7 +1,24 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  WALLPAPER_ENABLED_EVENT,
+  WALLPAPER_ENABLED_KEY,
+  WALLPAPER_OPACITY_EVENT,
+  FRAME_BORDER_STRENGTH_EVENT,
+  WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT,
+  WORKSPACE_GRID_STRENGTH_EVENT,
+  applyFrameBorderStrength,
+  applyWorkspaceBackgroundBrightness,
+  applyWorkspaceGridStrength,
+  clampPercent,
+  readFrameBorderStrength,
+  readWallpaperEnabled,
+  readWallpaperOpacity,
+  readWorkspaceBackgroundBrightness,
+  readWorkspaceGridStrength,
+} from "./workspace-appearance";
 
 const KEIKO_VERT = `
 attribute vec2 aPos;
@@ -117,23 +134,15 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
   return s;
 }
 
-function readOpacity(): number {
-  if (typeof window === "undefined") return 1;
-  const raw = window.localStorage.getItem("keiko.wallpaper.opacity");
-  if (raw === null) return 1;
-  const v = Number.parseInt(raw, 10);
-  return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) / 100 : 1;
-}
-
 function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void) | undefined {
-  canvas.style.opacity = String(readOpacity());
+  canvas.style.opacity = String(readWallpaperOpacity() / 100);
 
   const onOpacity = (e: Event): void => {
     const detail = (e as CustomEvent<number>).detail;
-    const value = typeof detail === "number" ? detail : readOpacity() * 100;
-    canvas.style.opacity = String(Math.max(0, Math.min(100, value)) / 100);
+    const value = typeof detail === "number" ? detail : readWallpaperOpacity();
+    canvas.style.opacity = String(clampPercent(value) / 100);
   };
-  window.addEventListener("keiko:wallpaper-opacity", onOpacity);
+  window.addEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
 
   let gl: WebGLRenderingContext | null = null;
   try {
@@ -149,7 +158,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   if (gl === null) {
     // No WebGL — solid --bg shows through the transparent canvas.
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
 
@@ -157,14 +166,14 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   const fs = compileShader(gl, gl.FRAGMENT_SHADER, KEIKO_FRAG);
   if (vs === null || fs === null) {
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
 
   const prog = gl.createProgram();
   if (prog === null) {
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
   gl.attachShader(prog, vs);
@@ -172,7 +181,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   gl.linkProgram(prog);
   if (!(gl.getProgramParameter(prog, gl.LINK_STATUS) as boolean)) {
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
   gl.useProgram(prog);
@@ -285,7 +294,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     running = false;
     cancelAnimationFrame(raf);
     document.removeEventListener("visibilitychange", onVis);
-    window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+    window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     host.removeEventListener("pointermove", onMove);
     host.removeEventListener("pointerdown", onDown);
     if (ro !== null) ro.disconnect();
@@ -301,8 +310,56 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
 
 export function WorkspaceShader(): ReactNode {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [enabled, setEnabled] = useState(readWallpaperEnabled);
 
   useEffect(() => {
+    applyWorkspaceBackgroundBrightness(readWorkspaceBackgroundBrightness());
+    applyWorkspaceGridStrength(readWorkspaceGridStrength());
+    applyFrameBorderStrength(readFrameBorderStrength());
+    const onBrightness = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyWorkspaceBackgroundBrightness(
+        typeof detail === "number" ? detail : readWorkspaceBackgroundBrightness(),
+      );
+    };
+    const onGridStrength = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyWorkspaceGridStrength(typeof detail === "number" ? detail : readWorkspaceGridStrength());
+    };
+    const onFrameBorderStrength = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyFrameBorderStrength(typeof detail === "number" ? detail : readFrameBorderStrength());
+    };
+    window.addEventListener(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, onBrightness);
+    window.addEventListener(WORKSPACE_GRID_STRENGTH_EVENT, onGridStrength);
+    window.addEventListener(FRAME_BORDER_STRENGTH_EVENT, onFrameBorderStrength);
+    return () => {
+      window.removeEventListener(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, onBrightness);
+      window.removeEventListener(WORKSPACE_GRID_STRENGTH_EVENT, onGridStrength);
+      window.removeEventListener(FRAME_BORDER_STRENGTH_EVENT, onFrameBorderStrength);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onEnabled = (event: Event): void => {
+      const detail = (event as CustomEvent<boolean>).detail;
+      setEnabled(typeof detail === "boolean" ? detail : readWallpaperEnabled());
+    };
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key === null || event.key === WALLPAPER_ENABLED_KEY) {
+        setEnabled(readWallpaperEnabled());
+      }
+    };
+    window.addEventListener(WALLPAPER_ENABLED_EVENT, onEnabled);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(WALLPAPER_ENABLED_EVENT, onEnabled);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
     const canvas = canvasRef.current;
     if (canvas === null) return;
     const host = canvas.parentElement;
@@ -329,7 +386,7 @@ export function WorkspaceShader(): ReactNode {
       mq.removeEventListener("change", apply);
       dispose?.();
     };
-  }, []);
+  }, [enabled]);
 
-  return <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" />;
+  return enabled ? <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" /> : null;
 }

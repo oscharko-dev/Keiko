@@ -101,6 +101,7 @@ describe("public barrel", () => {
         "isMemorySuppressedFromRetrieval",
         "planMemoryMaintenance",
         "selectMemoriesForForget",
+        "supersededValidity",
       ].sort(),
     );
   });

@@ -28,11 +28,22 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  EnvSource,
+  GatewayConfig,
+  ModelCapability,
+  ModelProviderConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
-import { currentGatewayEgressConfig } from "./deps.js";
+import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
+import {
+  classifyFigmaTransportError,
+  FigmaConnectorError,
+  type FigmaConnectorErrorCode,
+} from "./qualityIntelligence/figma/figmaConnectorErrors.js";
+import { classifyTokenFailure } from "./qualityIntelligence/figma/figmaTokenSource.js";
 
 const MAX_BODY_BYTES = 64_000;
 // Issue #144: exported so discovery-normalization tests can pin the slice cap
@@ -42,11 +53,16 @@ const MAX_DEPLOYMENT_NAMES = 100;
 const MAX_MODEL_ID_LENGTH = 160;
 const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
+const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
 const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
+const EMBEDDING_ID_PATTERN =
+  /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type FigmaCredentialTester = NonNullable<UiHandlerDeps["figmaCredentialTester"]>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
 class BodyTooLargeError extends Error {
@@ -133,8 +149,10 @@ function isAzureFoundryBaseUrl(baseUrl: string): boolean {
 interface ProviderRawOptions {
   readonly timeoutMs?: number | undefined;
   readonly maxRetries?: number | undefined;
+  readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly embeddingModelIds?: readonly string[] | undefined;
 }
 
 function providerRaw(
@@ -143,7 +161,10 @@ function providerRaw(
   apiKey: string,
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
-  const defaultCapability = createDefaultChatCapability(modelId);
+  const defaultCapability =
+    options.embeddingModelIds?.includes(modelId) === true
+      ? createDefaultEmbeddingCapabilityForSetup(modelId)
+      : createDefaultChatCapability(modelId);
   return {
     modelId,
     baseUrl,
@@ -155,8 +176,54 @@ function providerRaw(
         : defaultCapability,
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 2,
-    retryBaseDelayMs: 500,
+    retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
   };
+}
+
+function isLikelyEmbeddingModelId(modelId: string): boolean {
+  return EMBEDDING_ID_PATTERN.test(modelId);
+}
+
+function createDefaultEmbeddingCapabilityForSetup(modelId: string): ModelCapability {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8_191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured embedding endpoint",
+    preferredUseCases: ["Embeddings"],
+    knownLimitations: [
+      "Runtime-configured capability; validate against the target endpoint before production use",
+    ],
+  };
+}
+
+function mergeChatAndEmbeddingModelIds(
+  chatModelIds: readonly string[],
+  deploymentNames: readonly string[],
+): readonly string[] {
+  const merged = [...chatModelIds];
+  const seen = new Set(merged);
+  for (const modelId of deploymentNames) {
+    if (!isLikelyEmbeddingModelId(modelId) || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    merged.push(modelId);
+  }
+  return merged;
+}
+
+function embeddingModelIdsFromDeployments(deploymentNames: readonly string[]): readonly string[] {
+  return deploymentNames.filter(isLikelyEmbeddingModelId);
 }
 
 function buildRawConfig(
@@ -168,6 +235,39 @@ function buildRawConfig(
   return {
     providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+}
+
+function currentImageInputModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "chat" && capability.supportsImageInput)
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+function rawConfigFromCurrent(
+  config: GatewayConfig,
+  figmaAccessToken: string | undefined,
+): Record<string, unknown> {
+  return {
+    providers: config.providers.map((provider) => {
+      const capability = config.capabilities?.find((item) => item.id === provider.modelId);
+      return {
+        modelId: provider.modelId,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+        timeoutMs: provider.timeoutMs,
+        maxRetries: provider.maxRetries,
+        retryBaseDelayMs: provider.retryBaseDelayMs,
+        ...(capability === undefined ? {} : { capability }),
+      };
+    }),
+    circuitBreaker: config.circuitBreaker,
+    ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
+    ...(config.grounding === undefined ? {} : { grounding: config.grounding }),
+    ...(figmaAccessToken === undefined ? {} : { figma: { accessToken: figmaAccessToken } }),
   };
 }
 
@@ -495,6 +595,49 @@ async function defaultGatewaySetupTester(
   );
 }
 
+const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
+
+function figmaReason(body: unknown): string | undefined {
+  if (!isRecord(body)) return undefined;
+  const reason = body.err ?? body.message;
+  return typeof reason === "string" ? reason : undefined;
+}
+
+async function defaultFigmaCredentialTester(
+  accessToken: string,
+  egress?: GatewayEgressConfig,
+): Promise<void> {
+  try {
+    const response = await gatewayFetch(FIGMA_ME_ENDPOINT, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-Figma-Token": accessToken,
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS),
+      ...(egress !== undefined ? { egress } : {}),
+    });
+    let body: unknown;
+    try {
+      body = await readJsonCapped(response, FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES);
+    } catch {
+      throw new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE");
+    }
+    if (!response.ok) {
+      throw classifyTokenFailure(response.status, figmaReason(body));
+    }
+    if (!isRecord(body)) {
+      throw new FigmaConnectorError("FIGMA_INTERNAL");
+    }
+  } catch (error) {
+    if (error instanceof FigmaConnectorError) {
+      throw error;
+    }
+    throw new FigmaConnectorError(classifyFigmaTransportError(error));
+  }
+}
+
 function savePrivateJson(path: string, raw: Record<string, unknown>): void {
   const resolvedPath = resolve(path);
   const dir = dirname(resolvedPath);
@@ -556,11 +699,20 @@ interface SetupRequest {
   readonly apiKeyHeaderName: string;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly figmaAccessToken: string | undefined;
+  readonly verifyGateway: boolean;
+  readonly verifyFigmaCredential: boolean;
 }
 
 interface SetupModelLists {
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+}
+
+interface SetupGatewayCredentials {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
@@ -586,42 +738,153 @@ function readSetupModelLists(raw: Record<string, unknown>): SetupModelLists | Ro
   return { deploymentNames, imageInputModelIds };
 }
 
-function readSetupRequest(raw: unknown, env: EnvSource): SetupRequest | RouteResult {
-  if (!isRecord(raw)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
+function optionalSetupSecret(value: unknown, path: string): string | RouteResult | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  const baseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "";
-  const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
+  if (typeof value !== "string") {
+    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a string.`) };
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function hasNonBlankStringField(raw: Record<string, unknown>, key: string): boolean {
+  const value = raw[key];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasNonEmptyListField(raw: Record<string, unknown>, key: string): boolean {
+  const value = raw[key];
+  if (typeof value === "string") {
+    return normalizeDeploymentNames(deploymentNameValues(value) ?? []).length > 0;
+  }
+  return Array.isArray(value) && value.some((item) => typeof item === "string" && item.trim());
+}
+
+function shouldPreserveExisting(
+  raw: Record<string, unknown>,
+  current: GatewayConfig | undefined,
+): boolean {
+  return raw.preserveExisting === true && current !== undefined;
+}
+
+function firstProvider(current: GatewayConfig | undefined): ModelProviderConfig | undefined {
+  return current?.providers[0];
+}
+
+function trimmedSubmittedString(raw: Record<string, unknown>, key: string): string | undefined {
+  const value = raw[key];
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function submittedOrInheritedString(
+  raw: Record<string, unknown>,
+  key: string,
+  inherited: string | undefined,
+  preserveExisting: boolean,
+): string {
+  return trimmedSubmittedString(raw, key) ?? (preserveExisting ? (inherited ?? "") : "");
+}
+
+function setupApiKeyHeaderSource(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig | undefined,
+  preserveExisting: boolean,
+): unknown {
+  if (raw.apiKeyHeaderName !== undefined || !preserveExisting) {
+    return raw.apiKeyHeaderName;
+  }
+  return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+}
+
+function readSetupGatewayCredentials(
+  raw: Record<string, unknown>,
+  env: EnvSource,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+): SetupGatewayCredentials | RouteResult {
+  const provider = firstProvider(current);
+  const baseUrl = submittedOrInheritedString(raw, "baseUrl", provider?.baseUrl, preserveExisting);
+  const apiKey = submittedOrInheritedString(raw, "apiKey", provider?.apiKey, preserveExisting);
   if (baseUrl.length === 0 || apiKey.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "baseUrl and apiKey are required.") };
   }
-  const apiKeyHeaderName = normalizeSetupApiKeyHeaderName(raw.apiKeyHeaderName);
+  const apiKeyHeaderSource = setupApiKeyHeaderSource(raw, provider, preserveExisting);
+  const apiKeyHeaderName = normalizeSetupApiKeyHeaderName(apiKeyHeaderSource);
   if (isRouteResult(apiKeyHeaderName)) {
     return apiKeyHeaderName;
-  }
-  const modelLists = readSetupModelLists(raw);
-  if (isRouteResult(modelLists)) {
-    return modelLists;
-  }
-  if (Object.hasOwn(raw, "figmaAccessToken")) {
-    return {
-      status: 400,
-      body: errorBody(
-        "BAD_REQUEST",
-        "Figma access tokens must be configured server-side, not through gateway setup.",
-      ),
-    };
   }
   const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
+  return { baseUrl, apiKey, apiKeyHeaderName };
+}
+
+function resolveSetupModelLists(
+  modelLists: SetupModelLists,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+): SetupModelLists {
+  const existing = preserveExisting ? current : undefined;
   return {
-    baseUrl,
-    apiKey,
-    apiKeyHeaderName,
-    deploymentNames: modelLists.deploymentNames,
-    imageInputModelIds: modelLists.imageInputModelIds,
+    deploymentNames:
+      existing !== undefined && modelLists.deploymentNames.length === 0
+        ? existing.providers.map((item) => item.modelId)
+        : modelLists.deploymentNames,
+    imageInputModelIds:
+      existing !== undefined && modelLists.imageInputModelIds.length === 0
+        ? currentImageInputModelIds(existing)
+        : modelLists.imageInputModelIds,
+  };
+}
+
+function setupRequiresGatewayVerification(
+  raw: Record<string, unknown>,
+  preserveExisting: boolean,
+): boolean {
+  return (
+    !preserveExisting ||
+    hasNonBlankStringField(raw, "baseUrl") ||
+    hasNonBlankStringField(raw, "apiKey") ||
+    hasNonBlankStringField(raw, "apiKeyHeaderName") ||
+    hasNonEmptyListField(raw, "deploymentNames") ||
+    hasNonEmptyListField(raw, "imageInputModelIds")
+  );
+}
+
+function readSetupRequest(
+  raw: unknown,
+  env: EnvSource,
+  current: GatewayConfig | undefined,
+): SetupRequest | RouteResult {
+  if (!isRecord(raw)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
+  }
+  const preserveExisting = shouldPreserveExisting(raw, current);
+  const credentials = readSetupGatewayCredentials(raw, env, current, preserveExisting);
+  if (isRouteResult(credentials)) {
+    return credentials;
+  }
+  const modelLists = readSetupModelLists(raw);
+  if (isRouteResult(modelLists)) {
+    return modelLists;
+  }
+  const figmaAccessToken = optionalSetupSecret(raw.figmaAccessToken, "figmaAccessToken");
+  if (isRouteResult(figmaAccessToken)) {
+    return figmaAccessToken;
+  }
+  const resolvedModelLists = resolveSetupModelLists(modelLists, current, preserveExisting);
+  return {
+    ...credentials,
+    deploymentNames: resolvedModelLists.deploymentNames,
+    imageInputModelIds: resolvedModelLists.imageInputModelIds,
+    figmaAccessToken: figmaAccessToken ?? current?.figma?.accessToken,
+    verifyGateway: setupRequiresGatewayVerification(raw, preserveExisting),
+    verifyFigmaCredential: figmaAccessToken !== undefined,
   };
 }
 
@@ -639,6 +902,20 @@ interface VerifiedSetup {
   readonly testedModelIds: readonly string[];
 }
 
+interface SetupVerificationInput {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+  readonly deploymentNames: readonly string[];
+  readonly imageInputModelIds: readonly string[];
+  readonly tester: GatewaySetupTester;
+  readonly discovery: GatewayModelDiscovery;
+  readonly env: EnvSource;
+  readonly egress: GatewayEgressConfig | undefined;
+  readonly figmaAccessToken: string | undefined;
+  readonly current: GatewayConfig | undefined;
+}
+
 function assertImageInputModelsWereTested(
   imageInputModelIds: readonly string[],
   testedModelIds: readonly string[],
@@ -650,49 +927,78 @@ function assertImageInputModelsWereTested(
   }
 }
 
+function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig {
+  const validationRawConfig = buildRawConfig(input.baseUrl, input.apiKey, ["setup-validation"], {
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    imageInputModelIds: input.imageInputModelIds,
+  });
+  return parseGatewayConfig(withInheritedEgress(validationRawConfig, input.egress), input.env);
+}
+
+async function candidateModelIdsForSetup(
+  input: SetupVerificationInput,
+  validationConfig: GatewayConfig,
+): Promise<readonly string[]> {
+  return input.deploymentNames.length > 0
+    ? input.deploymentNames
+    : input.discovery(
+        input.baseUrl,
+        input.apiKey,
+        input.apiKeyHeaderName,
+        validationConfig.egress,
+      );
+}
+
+function finalRawConfigForSetup(
+  input: SetupVerificationInput,
+  testedModelIds: readonly string[],
+): Record<string, unknown> {
+  const embeddingModelIds = embeddingModelIdsFromDeployments(input.deploymentNames);
+  const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, input.deploymentNames);
+  const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    imageInputModelIds: input.imageInputModelIds,
+    embeddingModelIds,
+  });
+  return {
+    ...rawConfig,
+    ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
+    ...(input.figmaAccessToken === undefined
+      ? {}
+      : { figma: { accessToken: input.figmaAccessToken } }),
+  };
+}
+
 async function verifySetupCandidate(
-  baseUrl: string,
-  apiKey: string,
-  apiKeyHeaderName: string,
-  deploymentNames: readonly string[],
-  imageInputModelIds: readonly string[],
-  tester: GatewaySetupTester,
-  discovery: GatewayModelDiscovery,
-  env: EnvSource,
-  egress: GatewayEgressConfig | undefined,
+  input: SetupVerificationInput,
 ): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
-  validateBaseUrl(baseUrl, "candidate");
-  const validationRawConfig = buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
-    apiKeyHeaderName,
-    imageInputModelIds,
-  });
-  const validationConfig = parseGatewayConfig(
-    withInheritedEgress(validationRawConfig, egress),
-    env,
-  );
-  const candidateModelIds =
-    deploymentNames.length > 0
-      ? deploymentNames
-      : await discovery(baseUrl, apiKey, apiKeyHeaderName, validationConfig.egress);
+  validateBaseUrl(input.baseUrl, "candidate");
+  const validationConfig = validationConfigForSetup(input);
+  const candidateModelIds = await candidateModelIdsForSetup(input, validationConfig);
   const smokeTimeoutMs =
-    deploymentNames.length > 0 ? DEPLOYMENT_SMOKE_TIMEOUT_MS : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
-  const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds, {
-    apiKeyHeaderName,
+    input.deploymentNames.length > 0
+      ? DEPLOYMENT_SMOKE_TIMEOUT_MS
+      : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
+  const candidateRawConfig = buildRawConfig(input.baseUrl, input.apiKey, candidateModelIds, {
+    apiKeyHeaderName: input.apiKeyHeaderName,
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
-    imageInputModelIds,
+    imageInputModelIds: input.imageInputModelIds,
   });
-  const candidateConfig = parseGatewayConfig(withInheritedEgress(candidateRawConfig, egress), env);
-  const testedModelIds = await tester(candidateConfig, candidateModelIds);
-  assertImageInputModelsWereTested(imageInputModelIds, testedModelIds);
-  const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, {
-    apiKeyHeaderName,
-    imageInputModelIds,
-  });
-  const config = parseGatewayConfig(withInheritedEgress(rawConfig, egress), env);
-  return { rawConfig, config, testedModelIds };
+  const candidateConfig = parseGatewayConfig(
+    withInheritedEgress(candidateRawConfig, input.egress),
+    input.env,
+  );
+  const testedModelIds = await input.tester(candidateConfig, candidateModelIds);
+  assertImageInputModelsWereTested(input.imageInputModelIds, testedModelIds);
+  const rawConfigWithOptionalBlocks = finalRawConfigForSetup(input, testedModelIds);
+  const config = parseGatewayConfig(
+    withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),
+    input.env,
+  );
+  return { rawConfig: rawConfigWithOptionalBlocks, config, testedModelIds };
 }
 
 function setupSuccessResult(config: GatewayConfig, testedModelIds: readonly string[]): RouteResult {
@@ -718,6 +1024,53 @@ function setupFailureResult(errors: readonly string[]): RouteResult {
       `Credentials could not be verified. ${errors.join(" ")}`,
     ),
   };
+}
+
+function figmaFailureStatus(code: FigmaConnectorErrorCode): number {
+  switch (code) {
+    case "FIGMA_TOKEN_INVALID":
+    case "FIGMA_TOKEN_EXPIRED":
+    case "FIGMA_TOKEN_REVOKED":
+    case "FIGMA_INSUFFICIENT_SCOPE":
+    case "FIGMA_CONSENT_REQUIRED":
+      return 400;
+    case "FIGMA_RATE_LIMITED":
+      return 429;
+    default:
+      return 502;
+  }
+}
+
+function figmaCredentialFailureResult(error: unknown, request: SetupRequest): RouteResult {
+  if (error instanceof FigmaConnectorError) {
+    return {
+      status: figmaFailureStatus(error.code),
+      body: errorBody(error.code, error.message),
+    };
+  }
+  return {
+    status: 502,
+    body: errorBody(
+      "FIGMA_EGRESS_FAILED",
+      safeError(error, [request.figmaAccessToken, request.apiKey, request.baseUrl]),
+    ),
+  };
+}
+
+async function verifySubmittedFigmaCredential(
+  request: SetupRequest,
+  deps: UiHandlerDeps,
+): Promise<RouteResult | undefined> {
+  if (!request.verifyFigmaCredential || request.figmaAccessToken === undefined) {
+    return undefined;
+  }
+  const tester: FigmaCredentialTester = deps.figmaCredentialTester ?? defaultFigmaCredentialTester;
+  try {
+    await tester(request.figmaAccessToken, currentGatewayEgressConfig(deps));
+    return undefined;
+  } catch (error) {
+    return figmaCredentialFailureResult(error, request);
+  }
 }
 
 function deploymentNamesRequiredResult(): RouteResult {
@@ -768,25 +1121,107 @@ async function trySetupCandidate(
   gatewayConfig: RuntimeGatewayConfig,
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
+  current: GatewayConfig | undefined,
 ): Promise<RouteResult> {
-  const verified = await verifySetupCandidate(
+  const verified = await verifySetupCandidate({
     baseUrl,
-    request.apiKey,
-    request.apiKeyHeaderName,
-    request.deploymentNames,
-    request.imageInputModelIds,
+    apiKey: request.apiKey,
+    apiKeyHeaderName: request.apiKeyHeaderName,
+    deploymentNames: request.deploymentNames,
+    imageInputModelIds: request.imageInputModelIds,
     tester,
     discovery,
-    deps.env,
-    currentGatewayEgressConfig(deps),
-  );
+    env: deps.env,
+    egress: currentGatewayEgressConfig(deps),
+    figmaAccessToken: request.figmaAccessToken,
+    current,
+  });
   savePrivateJson(gatewayConfig.storagePath, verified.rawConfig);
   gatewayConfig.set(verified.config, true);
   return setupSuccessResult(verified.config, verified.testedModelIds);
 }
 
 function setupCandidateError(error: unknown, request: SetupRequest, baseUrl: string): string {
-  return safeError(error, [request.apiKey, request.baseUrl, baseUrl]);
+  return safeError(error, [request.apiKey, request.baseUrl, baseUrl, request.figmaAccessToken]);
+}
+
+function saveExistingConfigUpdate(
+  request: SetupRequest,
+  current: GatewayConfig,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+): RouteResult {
+  const rawConfig = rawConfigFromCurrent(current, request.figmaAccessToken);
+  const config = parseGatewayConfig(
+    withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),
+    deps.env,
+  );
+  savePrivateJson(gatewayConfig.storagePath, rawConfig);
+  gatewayConfig.set(config, true);
+  return setupSuccessResult(
+    config,
+    config.providers.map((provider) => provider.modelId),
+  );
+}
+
+async function verifyAndSaveExistingConfigUpdate(
+  request: SetupRequest,
+  current: GatewayConfig,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+): Promise<RouteResult> {
+  const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
+  if (figmaFailure !== undefined) {
+    return figmaFailure;
+  }
+  return saveExistingConfigUpdate(request, current, deps, gatewayConfig);
+}
+
+function shouldRequireDeploymentNames(
+  request: SetupRequest,
+  baseUrlCandidates: readonly string[],
+): boolean {
+  return (
+    request.deploymentNames.length === 0 &&
+    baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl))
+  );
+}
+
+async function verifyAndSaveGatewaySetup(
+  request: SetupRequest,
+  current: GatewayConfig | undefined,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+): Promise<RouteResult> {
+  const tester = deps.gatewaySetupTester ?? defaultGatewaySetupTester;
+  const discovery = deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery;
+  const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
+  if (figmaFailure !== undefined) {
+    return figmaFailure;
+  }
+  const baseUrlCandidates = candidateBaseUrls(request.baseUrl);
+  if (shouldRequireDeploymentNames(request, baseUrlCandidates)) {
+    return deploymentNamesRequiredResult();
+  }
+  const errors: string[] = [];
+  for (const baseUrl of baseUrlCandidates) {
+    try {
+      return await trySetupCandidate(
+        baseUrl,
+        request,
+        deps,
+        gatewayConfig,
+        tester,
+        discovery,
+        current,
+      );
+    } catch (error) {
+      errors.push(
+        `candidate ${String(errors.length + 1)}: ${setupCandidateError(error, request, baseUrl)}`,
+      );
+    }
+  }
+  return setupFailureResult(errors);
 }
 
 export async function handleGatewaySetup(
@@ -797,32 +1232,17 @@ export async function handleGatewaySetup(
     return gatewayUnavailableResult();
   }
   const { gatewayConfig } = deps;
+  const current = currentGatewayConfig(deps);
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed, deps.env);
+  const request = readSetupRequest(bodyResult.parsed, deps.env, current);
   if ("status" in request) {
     return request;
   }
-  const tester = deps.gatewaySetupTester ?? defaultGatewaySetupTester;
-  const discovery = deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery;
-  const baseUrlCandidates = candidateBaseUrls(request.baseUrl);
-  if (
-    request.deploymentNames.length === 0 &&
-    baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl))
-  ) {
-    return deploymentNamesRequiredResult();
+  if (!request.verifyGateway && current !== undefined) {
+    return verifyAndSaveExistingConfigUpdate(request, current, deps, gatewayConfig);
   }
-  const errors: string[] = [];
-  for (const baseUrl of baseUrlCandidates) {
-    try {
-      return await trySetupCandidate(baseUrl, request, deps, gatewayConfig, tester, discovery);
-    } catch (error) {
-      errors.push(
-        `candidate ${String(errors.length + 1)}: ${setupCandidateError(error, request, baseUrl)}`,
-      );
-    }
-  }
-  return setupFailureResult(errors);
+  return verifyAndSaveGatewaySetup(request, current, deps, gatewayConfig);
 }

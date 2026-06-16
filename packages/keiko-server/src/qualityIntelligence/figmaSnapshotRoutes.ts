@@ -45,7 +45,9 @@
 //   receive the result when the build settles.
 
 import { randomUUID } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
+import { join } from "node:path";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
 import {
   currentGatewayConfig,
@@ -258,6 +260,22 @@ export interface FigmaScreenSummary {
   readonly imageByteLength: number;
 }
 
+export interface FigmaSnapshotListEntry {
+  readonly runId: string;
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version: string | undefined;
+  readonly fetchedAt: string;
+  readonly screenCount: number;
+  readonly skippedCount: number;
+  readonly reductionHint: string;
+  readonly integrityHash: string;
+}
+
+export interface FigmaSnapshotListResponse {
+  readonly snapshots: readonly FigmaSnapshotListEntry[];
+}
+
 function buildReductionHint(screenCount: number, skippedCount: number): string {
   const total = screenCount + skippedCount;
   const skippedClause =
@@ -339,6 +357,20 @@ function recordToSummary(
       imageSha256: s.image.sha256,
       imageByteLength: s.image.byteLength,
     })),
+  };
+}
+
+function recordToListEntry(record: FigmaSnapshotRecord): FigmaSnapshotListEntry {
+  return {
+    runId: record.runId,
+    fileKey: record.provenance.fileKey,
+    nodeId: record.provenance.nodeId,
+    version: record.provenance.version,
+    fetchedAt: record.provenance.fetchedAt,
+    screenCount: record.screens.length,
+    skippedCount: record.skippedScreens.length,
+    reductionHint: buildReductionHint(record.screens.length, record.skippedScreens.length),
+    integrityHash: record.integrityHash,
   };
 }
 
@@ -784,6 +816,104 @@ export function handleFigmaRevokeToken(ctx: RouteContext, deps: UiHandlerDeps): 
       message: FIGMA_ROUTE_ERROR_MESSAGES.FIGMA_TOKEN_REVOKED_OK,
     },
   };
+}
+
+// ─── GET /api/figma/snapshots — list stored snapshots for dashboard/history ────────────────
+
+const DEFAULT_FIGMA_SNAPSHOT_LIST_LIMIT = 12;
+const MAX_FIGMA_SNAPSHOT_LIST_LIMIT = 50;
+const FIGMA_SNAPSHOT_RECORD_SUFFIX = ".figma-snapshot.json";
+const FIGMA_EVIDENCE_SUBDIR = "qi";
+
+function parseSnapshotListLimit(url: URL): number {
+  const raw = url.searchParams.get("limit");
+  if (raw === null || raw.length === 0) return DEFAULT_FIGMA_SNAPSHOT_LIST_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) return DEFAULT_FIGMA_SNAPSHOT_LIST_LIMIT;
+  return Math.min(parsed, MAX_FIGMA_SNAPSHOT_LIST_LIMIT);
+}
+
+function parseSnapshotListScope(
+  url: URL,
+): { readonly fileKey: string; readonly nodeId: string } | undefined {
+  const fileKey = (url.searchParams.get("fileKey") ?? "").trim();
+  const nodeId = (url.searchParams.get("nodeId") ?? "").trim();
+  return fileKey.length > 0 && nodeId.length > 0 ? { fileKey, nodeId } : undefined;
+}
+
+function loadSnapshotListEntries(
+  store: ReturnType<typeof createNodeFigmaSnapshotStore>,
+  runIds: readonly string[],
+): readonly FigmaSnapshotListEntry[] {
+  const entries: FigmaSnapshotListEntry[] = [];
+  for (const runId of runIds) {
+    let record: FigmaSnapshotRecord | undefined;
+    try {
+      record = store.loadMetadata(runId);
+    } catch {
+      continue;
+    }
+    if (record !== undefined) entries.push(recordToListEntry(record));
+  }
+  return entries;
+}
+
+function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly string[] {
+  const qiDir = join(evidenceDir, FIGMA_EVIDENCE_SUBDIR);
+  const stat = lstatSync(qiDir, { throwIfNoEntry: false });
+  if (stat?.isDirectory() !== true) return [];
+  const records: { runId: string; fetchedAt: string }[] = [];
+  for (const entry of readdirSync(qiDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(FIGMA_SNAPSHOT_RECORD_SUFFIX)) continue;
+    const runId = entry.name.slice(0, -FIGMA_SNAPSHOT_RECORD_SUFFIX.length);
+    try {
+      const parsed = JSON.parse(readFileSync(join(qiDir, entry.name), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const provenance =
+        typeof parsed.provenance === "object" && parsed.provenance !== null
+          ? (parsed.provenance as Record<string, unknown>)
+          : undefined;
+      const fetchedAt = provenance?.fetchedAt;
+      if (typeof fetchedAt === "string" && fetchedAt.length > 0) {
+        records.push({ runId, fetchedAt });
+      }
+    } catch {
+      continue;
+    }
+  }
+  records.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
+  return records.slice(0, limit).map((record) => record.runId);
+}
+
+export function handleFigmaListSnapshots(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const evidenceDir = deps.evidenceDir;
+  if (evidenceDir === undefined || evidenceDir.length === 0) {
+    return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
+  }
+
+  const limit = parseSnapshotListLimit(ctx.url);
+  const scope = parseSnapshotListScope(ctx.url);
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+
+  try {
+    if (scope !== undefined) {
+      const snapshots = store
+        .listByScope(scope.fileKey, scope.nodeId)
+        .slice(0, limit)
+        .flatMap((entry) => {
+          const record = store.loadMetadata(entry.runId);
+          return record === undefined ? [] : [recordToListEntry(record)];
+        });
+      return { status: 200, body: { snapshots } satisfies FigmaSnapshotListResponse };
+    }
+
+    const snapshots = loadSnapshotListEntries(store, listRecentSnapshotRunIds(evidenceDir, limit));
+    return { status: 200, body: { snapshots } satisfies FigmaSnapshotListResponse };
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
 }
 
 // ─── GET /api/figma/snapshots/:runId ──────────────────────────────────────────

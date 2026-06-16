@@ -52,6 +52,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
@@ -104,7 +105,7 @@ describe("WindowFrame content zoom controls", () => {
 
       expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
         `Minimize ${def.title} window`,
-        `Maximize ${def.title} window`,
+        `Full screen ${def.title} window`,
         `Close ${def.title} window`,
       ]);
 
@@ -218,7 +219,43 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).toHaveBeenCalledTimes(1);
   });
 
-  it("drags a window inside the workspace and commits the active snap preview", () => {
+  it("drags a window inside the workspace and commits the active snap preview from the middle mouse button", () => {
+    const focus = vi.fn();
+    const update = vi.fn();
+    const setSnap = vi.fn();
+    const commitSnap = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ focus, update, setSnap, commitSnap })}
+        wsRef={workspaceRef(domRect())}
+      />,
+    );
+
+    const header = container.querySelector<HTMLElement>(".win-head");
+    expect(header).not.toBeNull();
+    const section = container.querySelector<HTMLElement>(".window");
+    expect(section).not.toBeNull();
+
+    fireEvent.pointerDown(header as HTMLElement, { button: 1, clientX: 100, clientY: 90 });
+    expect(document.body.style.cursor).toBe("grabbing");
+    expect(section).toHaveAttribute("data-dragging", "true");
+
+    fireEvent.pointerMove(window, { clientX: 790, clientY: 20 });
+    fireEvent.pointerUp(window);
+
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(update).toHaveBeenLastCalledWith("agents-1", { x: 680, y: -0 });
+    expect(setSnap).toHaveBeenLastCalledWith("tr");
+    expect(commitSnap).toHaveBeenCalledWith("agents-1");
+    expect(document.body.style.cursor).toBe("");
+    expect(section).not.toHaveAttribute("data-dragging");
+  });
+
+  it("does not start a header drag from the primary mouse button", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -238,15 +275,12 @@ describe("WindowFrame content zoom controls", () => {
     expect(header).not.toBeNull();
 
     fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
-    expect(document.body.style.cursor).toBe("grabbing");
-
     fireEvent.pointerMove(window, { clientX: 790, clientY: 20 });
     fireEvent.pointerUp(window);
 
-    expect(focus).toHaveBeenCalledWith("agents-1");
-    expect(update).toHaveBeenLastCalledWith("agents-1", { x: 680, y: -0 });
-    expect(setSnap).toHaveBeenLastCalledWith("tr");
-    expect(commitSnap).toHaveBeenCalledWith("agents-1");
+    expect(update).not.toHaveBeenCalledWith("agents-1", expect.objectContaining({ x: expect.any(Number) }));
+    expect(setSnap).not.toHaveBeenCalled();
+    expect(commitSnap).not.toHaveBeenCalled();
     expect(document.body.style.cursor).toBe("");
   });
 
@@ -266,7 +300,7 @@ describe("WindowFrame content zoom controls", () => {
     const header = container.querySelector<HTMLElement>(".win-head");
     expect(header).not.toBeNull();
 
-    fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 400, clientY: 16 });
+    fireEvent.pointerDown(header as HTMLElement, { button: 1, clientX: 400, clientY: 16 });
 
     expect(update).toHaveBeenCalledWith("agents-1", { max: false, w: 520, h: 360 });
     fireEvent.pointerUp(window);

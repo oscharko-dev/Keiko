@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Foundations · Keiko Design System</title>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+      } catch (e) { document.documentElement.dataset.theme = "dark"; }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" aria-label="Design system">
+      <a class="nav-brand" href="index.html">
+        <img src="assets/keiko-logo.svg" alt="Keiko logo" />
+        <span><span class="bt">Keiko</span><span class="bs">Design System</span></span>
+      </a>
+      <div class="nav-label">Overview</div>
+      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
+      <div class="nav-label">Guidelines</div>
+      <a class="nav-item on" href="foundations.html" aria-current="page"><span class="ni-dot"></span>Foundations</a>
+      <a class="nav-item done" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
+      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
+      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
+      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
+      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
+      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
+        <span class="ti">
+          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
+          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
+        </span>
+        <span class="tspace">Theme</span>
+        <span data-theme-label>Dark</span>
+      </button>
+      <div class="nav-foot">Keiko · v0.2.0</div>
+    </nav>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 01</div>
+        <h1>Foundations</h1>
+        <p class="lead">
+          The raw material: a warm-neutral oklch palette (hue 160), one type pairing, a 2-based spacing
+          rhythm, three radii, two elevations and the dot-grid surface. Every value is a CSS variable in
+          <code style="font-family:var(--font-mono);color:var(--accent-text)">keiko-tokens.css</code> — change it once, it changes everywhere.
+        </p>
+      </header>
+
+      <!-- COLOUR -->
+      <section class="sec" id="colour">
+        <div class="sec-head">
+          <div class="num">01 — COLOUR</div>
+          <h2>Palette</h2>
+          <p>One hue (160, a warm green-grey) carries the whole neutral system in oklch, so dark and light are the same palette at different lightness. The orca green <code style="font-family:var(--font-mono);color:var(--accent-text)">#4EBA87</code> is the only chromatic accent.</p>
+        </div>
+
+        <div class="sub-head">Surfaces — back to front</div>
+        <div class="ramp" style="margin-bottom:32px">
+          <div style="background:var(--bg)"><span class="rl">--bg</span></div>
+          <div style="background:var(--surface)"><span class="rl">--surface</span></div>
+          <div style="background:var(--card)"><span class="rl">--card</span></div>
+          <div style="background:var(--card-2)"><span class="rl">--card-2</span></div>
+          <div style="background:var(--inset)"><span class="rl">--inset</span></div>
+        </div>
+
+        <div class="sub-head">Text</div>
+        <div class="sw-grid" style="margin-bottom:32px">
+          <div class="sw"><div class="chip" style="background:var(--fg)"></div><div class="meta"><div class="nm">Primary</div><div class="vr">--fg</div><div class="ok">oklch(0.97 0.003 160)</div><div class="us">Titles, key values, active labels.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--fg-muted)"></div><div class="meta"><div class="nm">Muted</div><div class="vr">--fg-muted</div><div class="ok">oklch(0.74 0.004 160)</div><div class="us">Body copy, secondary labels. AA on every surface.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--fg-dim)"></div><div class="meta"><div class="nm">Dim</div><div class="vr">--fg-dim</div><div class="ok">oklch(0.66 0.004 160)</div><div class="us">Resting icon glyphs, tertiary text.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--fg-faint)"></div><div class="meta"><div class="nm">Faint</div><div class="vr">--fg-faint</div><div class="ok">oklch(0.64 0.004 160)</div><div class="us">Captions, mono meta, section labels.</div></div></div>
+        </div>
+
+        <div class="sub-head">Brand &amp; accent</div>
+        <div class="sw-grid" style="margin-bottom:32px">
+          <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="meta"><div class="nm">Accent</div><div class="vr">--accent</div><div class="ok">#4EBA87</div><div class="us">Fills: primary buttons, active bars, dots, the FAB.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--accent-text)"></div><div class="meta"><div class="nm">Accent text</div><div class="vr">--accent-text</div><div class="ok">= accent · darkens in light</div><div class="us">Green used as text/glyph — stays ≥ 4.5:1 in both themes.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--accent-bright)"></div><div class="meta"><div class="nm">Bright</div><div class="vr">--accent-bright</div><div class="ok">oklch(0.78 0.13 160)</div><div class="us">Toggle knobs, emphatic fills.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--card)"><div style="height:100%;background:var(--accent-dim)"></div></div><div class="meta"><div class="nm">Dim (tint)</div><div class="vr">--accent-dim</div><div class="ok">accent @ 18%</div><div class="us">Selected rows, accent chips, avatar.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--card)"><div style="height:100%;border:2px solid var(--accent-line)"></div></div><div class="meta"><div class="nm">Line (tint)</div><div class="vr">--accent-line</div><div class="ok">accent @ 40%</div><div class="us">Focus-within borders, valid drop targets.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--card)"><div style="height:100%;background:var(--accent-glow)"></div></div><div class="meta"><div class="nm">Glow (tint)</div><div class="vr">--accent-glow</div><div class="ok">accent @ 26%</div><div class="us">Focus rings, selection, soft halos.</div></div></div>
+        </div>
+
+        <div class="sub-head">Status</div>
+        <div class="sw-grid" style="margin-bottom:28px">
+          <div class="sw"><div class="chip" style="background:var(--ok)"></div><div class="meta"><div class="nm">OK</div><div class="vr">--ok</div><div class="ok">#4EBA87</div><div class="us">Success, healthy, connected.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--warn)"></div><div class="meta"><div class="nm">Warn</div><div class="vr">--warn</div><div class="ok">oklch(0.78 0.13 75)</div><div class="us">Caution, pending, throttled.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="nm">Info</div><div class="vr">--info</div><div class="ok">oklch(0.74 0.1 240)</div><div class="us">Neutral severity, running, notes.</div></div></div>
+          <div class="sw"><div class="chip" style="background:var(--danger)"></div><div class="meta"><div class="nm">Danger</div><div class="vr">--danger</div><div class="ok">oklch(0.68 0.16 25)</div><div class="us">Destructive, errors, close.</div></div></div>
+        </div>
+
+        <div class="note flag">
+          <span class="tag">Note</span>
+          <div><b>Never colour alone.</b> Status is always paired with an icon, label or shape — and in light theme the chromatic tokens darken (e.g. <code>--accent-text</code> → oklch(0.48 0.13 160)) so green/red/amber text clears 4.5:1 on white. <code>--fg-dim</code> (0.66) and <code>--fg-faint</code> (0.64) sit deliberately close: both are WCAG-checked and kept monotonic, not a duplication.</div>
+        </div>
+      </section>
+
+      <!-- TYPOGRAPHY -->
+      <section class="sec" id="type">
+        <div class="sec-head">
+          <div class="num">02 — TYPOGRAPHY</div>
+          <h2>Type</h2>
+          <p>Two families only. A neutral system UI stack for everything human-facing, and JetBrains Mono for anything machine — paths, counts, code, keys.</p>
+        </div>
+
+        <div class="stack" style="margin-bottom:30px">
+          <div class="card" style="padding:22px 24px">
+            <div style="font-size:34px;font-weight:600;letter-spacing:-0.01em">Ag — the interface stack</div>
+            <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint);margin-top:12px">--font-ui &nbsp;·&nbsp; -apple-system, BlinkMacSystemFont, “Segoe UI”, “Helvetica Neue”, Helvetica, Arial, sans-serif</div>
+          </div>
+          <div class="card" style="padding:22px 24px">
+            <div style="font-family:var(--font-mono);font-size:30px;font-weight:500;letter-spacing:-0.01em">Ag — JetBrains Mono</div>
+            <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint);margin-top:12px">--font-mono &nbsp;·&nbsp; “JetBrains Mono”, ui-monospace, “SF Mono”, Menlo, Consolas, monospace</div>
+          </div>
+        </div>
+
+        <div class="card" style="padding:8px 24px">
+          <div class="type-row"><div class="type-meta"><b>Display</b>52 / 600<br />-0.02em</div><div class="type-spec" style="font-size:40px;font-weight:600;letter-spacing:-0.02em">Ex experientia disco</div></div>
+          <div class="type-row"><div class="type-meta"><b>Title</b>30 / 600</div><div class="type-spec" style="font-size:30px;font-weight:600;letter-spacing:-0.02em">Start a Keiko conversation</div></div>
+          <div class="type-row"><div class="type-meta"><b>Heading</b>17 / 600</div><div class="type-spec" style="font-size:17px;font-weight:600">Workspace wallpaper</div></div>
+          <div class="type-row"><div class="type-meta"><b>Body</b>15 / 400 / 1.5</div><div class="type-spec" style="font-size:15px;line-height:1.5">A subtle metallic flow behind the grid that reacts to your cursor and clicks.</div></div>
+          <div class="type-row"><div class="type-meta"><b>UI default</b>13 / 450</div><div class="type-spec" style="font-size:13px;font-weight:450">Models · General · Security</div></div>
+          <div class="type-row"><div class="type-meta"><b>Label</b>11 / 600<br />0.04em · upper</div><div class="type-spec" style="font-size:11px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--fg-faint)">Workspace background brightness</div></div>
+          <div class="type-row"><div class="type-meta"><b>Mono</b>11–12.5 / 400</div><div class="type-spec" style="font-family:var(--font-mono);font-size:12.5px;color:var(--fg-muted)">/Users/oscharko-dev/Projects/Keiko · 100%</div></div>
+        </div>
+      </section>
+
+      <!-- SPACING -->
+      <section class="sec" id="spacing">
+        <div class="sec-head">
+          <div class="num">03 — SPACING</div>
+          <h2>Spacing &amp; rhythm</h2>
+          <p>A 2-based scale. Tight steps (2–8) handle dense UI — icon gaps, control padding; larger steps (12–32) separate cards and sections. Lay rows out with <code style="font-family:var(--font-mono);color:var(--accent-text)">gap</code>, not margins.</p>
+        </div>
+        <div class="card" style="padding:18px 24px">
+          <div class="space-row"><span class="sl">2px</span><span class="space-bar" style="width:2px"></span><span class="su">hairline insets</span></div>
+          <div class="space-row"><span class="sl">4px</span><span class="space-bar" style="width:4px"></span><span class="su">icon-to-icon gaps in a control cluster</span></div>
+          <div class="space-row"><span class="sl">6px</span><span class="space-bar" style="width:6px"></span><span class="su">chip / small button padding</span></div>
+          <div class="space-row"><span class="sl">8px</span><span class="space-bar" style="width:8px"></span><span class="su">default gap between related elements</span></div>
+          <div class="space-row"><span class="sl">10–12px</span><span class="space-bar" style="width:12px"></span><span class="su">list-row padding, menu items</span></div>
+          <div class="space-row"><span class="sl">14px</span><span class="space-bar" style="width:14px"></span><span class="su">card inner padding, composer</span></div>
+          <div class="space-row"><span class="sl">18px</span><span class="space-bar" style="width:18px"></span><span class="su">gap between cards</span></div>
+          <div class="space-row"><span class="sl">24px</span><span class="space-bar" style="width:24px"></span><span class="su">dot-grid pitch · block spacing</span></div>
+          <div class="space-row"><span class="sl">32–48px</span><span class="space-bar" style="width:48px"></span><span class="su">section separation</span></div>
+        </div>
+      </section>
+
+      <!-- RADIUS -->
+      <section class="sec" id="radius">
+        <div class="sec-head">
+          <div class="num">04 — RADIUS</div>
+          <h2>Corner radius</h2>
+          <p>Three tokens plus a pill. Nested corners stay concentric — an inner radius equals the outer minus its padding.</p>
+        </div>
+        <div class="demo-grid">
+          <div class="card demo"><div class="box" style="border-radius:9px"></div><div class="cap"><b>--radius-sm</b>9px · chips, inputs, menu items</div></div>
+          <div class="card demo"><div class="box" style="border-radius:14px"></div><div class="cap"><b>--radius</b>14px · cards, windows, panels</div></div>
+          <div class="card demo"><div class="box" style="border-radius:18px"></div><div class="cap"><b>--radius-lg</b>18px · the composer box</div></div>
+          <div class="card demo"><div class="box" style="border-radius:999px"></div><div class="cap"><b>full</b>999px · pills, status badges, toggles</div></div>
+        </div>
+      </section>
+
+      <!-- ELEVATION -->
+      <section class="sec" id="elevation">
+        <div class="sec-head">
+          <div class="num">05 — ELEVATION</div>
+          <h2>Elevation</h2>
+          <p>Two shadows do all the lifting. Both pair a soft drop with a 1px inner highlight so raised surfaces read as physical, not blurred.</p>
+        </div>
+        <div class="shadow-grid">
+          <div class="shadow-demo" style="box-shadow:var(--shadow-card)">--shadow-card</div>
+          <div class="shadow-demo" style="box-shadow:var(--shadow-pop)">--shadow-pop</div>
+          <div class="shadow-demo" style="box-shadow:0 0 0 2px var(--accent-text), var(--shadow-pop)">focus / valid · accent ring</div>
+        </div>
+        <div class="note" style="margin-top:18px">
+          <span class="tag" style="color:var(--fg-faint)">Use</span>
+          <div><b>--shadow-card</b> for resting cards and windows; <b>--shadow-pop</b> for the top-most / focused window, menus and popovers. The accent ring marks focus and valid connection targets — never a colour change alone.</div>
+        </div>
+      </section>
+
+      <!-- SURFACE -->
+      <section class="sec" id="surface">
+        <div class="sec-head">
+          <div class="num">06 — SURFACE</div>
+          <h2>The workspace surface</h2>
+          <p>Cards float on a framed, near-black canvas over a 24px dot grid (and an optional Liquid-Chrome wallpaper). The frame is a single hairline; the grid gives depth without lines.</p>
+        </div>
+        <div class="surface-demo">
+          <div class="gd"></div>
+          <div class="win">
+            <div class="h"></div>
+            <div class="b"><i style="width:80%"></i><i style="width:60%"></i><i style="width:42%"></i></div>
+          </div>
+        </div>
+        <div class="card" style="padding:8px 24px;margin-top:18px">
+          <table class="tbl">
+            <thead><tr><th>Element</th><th>Token / value</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td class="fgw">Canvas frame</td><td class="mono">1px var(--line) · radius 12</td><td>The bordered workspace rectangle.</td></tr>
+              <tr><td class="fgw">Dot grid</td><td class="mono">radial 1px @ 24px</td><td>--line-soft dots; pans/zooms with the view.</td></tr>
+              <tr><td class="fgw">Wallpaper</td><td class="mono">Liquid Chrome (WebGL)</td><td>Optional; opacity &amp; brightness are user-tunable.</td></tr>
+              <tr><td class="fgw">Window</td><td class="mono">--card · 1px --line · radius 14</td><td>--shadow-card at rest, --shadow-pop on top.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="sec" id="tokens">
+        <div class="sec-head">
+          <div class="num">REFERENCE</div>
+          <h2>Where the tokens live</h2>
+        </div>
+        <div class="code"><pre>/* keiko-tokens.css — single source of truth, lifted from
+   packages/keiko-ui/src/app/globals.css */
+
+:root {                       /* dark (default) */
+  --bg:      oklch(0.17  0.004 160);
+  --surface: oklch(0.205 0.004 160);
+  --card:    oklch(0.235 0.004 160);
+  --fg:      oklch(0.97  0.003 160);
+  --accent:  #4eba87;
+  --radius:  14px;
+  /* …full set in the file… */
+}
+
+[data-theme="light"] { /* same hue, inverted lightness */ }</pre></div>
+      </section>
+    </main>
+
+    <script>
+      function dsSyncToggle() {
+        var l = document.documentElement.dataset.theme === "light";
+        document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; });
+      }
+      function dsToggleTheme() {
+        var h = document.documentElement;
+        var n = h.dataset.theme === "light" ? "dark" : "light";
+        h.dataset.theme = n;
+        try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {}
+        dsSyncToggle();
+      }
+      dsSyncToggle();
+    </script>
+  </body>
+</html>

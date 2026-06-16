@@ -1284,6 +1284,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
   });
 
   it("skips confirmation and clears immediately when no sources are active", async () => {
+    const user = userEvent.setup();
     const replaceChat = vi.fn();
     const confirmSpy = vi.spyOn(window, "confirm");
     const updated = makeChat();

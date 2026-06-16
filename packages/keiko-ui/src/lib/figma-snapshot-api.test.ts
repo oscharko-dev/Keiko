@@ -6,6 +6,7 @@ import { ApiError } from "./api";
 import {
   figmaSnapshotScreenImageUrl,
   generateFigmaCode,
+  listFigmaSnapshots,
   loadFigmaSnapshotSummary,
   revokeFigmaToken,
   triggerFigmaSnapshot,
@@ -233,6 +234,44 @@ describe("loadFigmaSnapshotSummary — abort signal", () => {
       code: "FIGMA_SNAPSHOT_NOT_FOUND",
       status: 404,
     });
+  });
+});
+
+describe("listFigmaSnapshots — HTTP request shape", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the recent snapshot list when no filter is supplied", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ snapshots: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listFigmaSnapshots();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/figma/snapshots");
+    expect(init.method).toBeUndefined();
+  });
+
+  it("encodes board scope and limit in the query string", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ snapshots: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listFigmaSnapshots({ fileKey: "KEY/123", nodeId: "1:2", limit: 8 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/figma/snapshots?fileKey=KEY%2F123&nodeId=1%3A2&limit=8");
+  });
+
+  it("threads the abort signal into the fetch init", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ snapshots: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const controller = new AbortController();
+    await listFigmaSnapshots({ signal: controller.signal });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
   });
 });
 

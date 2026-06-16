@@ -18,9 +18,9 @@ interface PaletteProps {
   readonly onClose: () => void;
 }
 
-// .palette-grid is a fixed two-column grid (globals.css grid-template-columns:
-// 1fr 1fr) — vertical arrow steps move by one row, i.e. two cards (audit C363).
-const GRID_COLUMNS = 2;
+// .palette-grid is a fixed three-column grid. Vertical arrow steps move by one
+// row, i.e. three cards (audit C363).
+const GRID_COLUMNS = 3;
 
 const ARROW_DELTAS: ReadonlyMap<string, number> = new Map([
   ["ArrowRight", 1],
@@ -163,7 +163,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
               </span>
               <span className="pal-name">{t.title}</span>
               <span className="pal-desc">{t.desc}</span>
-              <span className="pal-add">
+              <span className="pal-add" aria-hidden="true">
                 <Icons.plus size={15} />
               </span>
             </button>

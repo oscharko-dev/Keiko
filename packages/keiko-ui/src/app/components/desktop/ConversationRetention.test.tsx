@@ -137,6 +137,42 @@ describe("conversation retention and audit-leak regression (#154)", () => {
     expect(screen.getByRole("alert").textContent).toContain("Gateway returned 502.");
   });
 
+  it("renders broad connected-source failures as an actionable structured alert", () => {
+    const session = makeSession({
+      activeChat: makeChat(),
+      messages: [makeUserMessage("hello")],
+      error:
+        "Your question is too broad to search the connected sources. Mention a concrete file name, identifier, or exact phrase. (BAD_REQUEST)",
+    });
+    renderWindow(session);
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Narrow the connected-source question");
+    expect(alert).toHaveTextContent("Your question is too broad to search the connected sources.");
+    expect(alert).toHaveTextContent(
+      "Ask about a specific file, folder, symbol, identifier, or exact phrase.",
+    );
+    expect(alert).toHaveTextContent("BAD_REQUEST");
+  });
+
+  it("lets users dismiss the visible chat error and clears the session error", async () => {
+    const user = userEvent.setup();
+    const clearError = vi.fn();
+    const session = makeSession({
+      activeChat: makeChat(),
+      messages: [makeUserMessage("hello")],
+      error: "Gateway returned 502. (GATEWAY_UPSTREAM_FAILURE)",
+      clearError,
+    });
+    renderWindow(session);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Gateway returned 502.");
+    await user.click(screen.getByRole("button", { name: "Dismiss error" }));
+
+    expect(clearError).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Gateway returned 502.")).toBeNull();
+  });
+
   it("does not surface the raw provider base URL in the error region", () => {
     // AC #2: the provider base URL must not leak through the chat UI. The BFF strips it via
     // deps.redactionSecrets; this test pins that the UI does not somehow reconstruct it.

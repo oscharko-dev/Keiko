@@ -16,6 +16,7 @@ describe("format presenters", () => {
     expect(formatBytes(999)).toBe("999 B");
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+    expect(formatBytes(1024 * 1024 * 1024)).toBe("1.0 GB");
     expect(formatTokens(999)).toBe("999");
     expect(formatTokens(1550)).toBe("1.6k");
   });

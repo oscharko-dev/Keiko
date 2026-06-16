@@ -25,6 +25,15 @@ describe("lexicalRelevance", () => {
     expect(lexicalRelevance(undefined, record)).toBe(0);
   });
 
+  it("returns 0 for a non-empty query that tokenises to nothing", () => {
+    // Punctuation-only query is non-empty but yields no tokens — the empty-query-token guard fires.
+    expect(lexicalRelevance("!!! ,,, ...", buildRecord({ body: "alpha beta" }))).toBe(0);
+  });
+
+  it("returns 0 when the record itself has no tokens", () => {
+    expect(lexicalRelevance("alpha", buildRecord({ body: "", tags: [] }))).toBe(0);
+  });
+
   it("returns 1.0 when query tokens exactly match record tokens", () => {
     const record = buildRecord({ body: "alpha beta" });
     expect(lexicalRelevance("alpha beta", record)).toBe(1);

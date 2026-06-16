@@ -219,6 +219,7 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedFigmaSnapshotRunIds: vi.fn(() => []),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),

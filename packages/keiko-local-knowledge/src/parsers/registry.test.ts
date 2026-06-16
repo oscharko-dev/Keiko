@@ -130,11 +130,11 @@ describe("createParserRegistry", () => {
 describe("buildParserOptions", () => {
   it("applies defaults", () => {
     const options = buildParserOptions();
-    expect(options.maxBytes).toBeGreaterThan(0);
+    expect(options.maxBytes).toBe(1024 * 1024 * 1024);
     expect(options.maxUnitsPerDocument).toBeGreaterThan(0);
     expect(options.maxNestingDepth).toBeGreaterThan(0);
-    expect(options.maxObjectsPerDocument).toBeGreaterThan(0);
-    expect(options.timeoutMs).toBeGreaterThan(0);
+    expect(options.maxObjectsPerDocument).toBe(25_000_000);
+    expect(options.timeoutMs).toBe(60 * 60 * 1000);
     expect(typeof options.now()).toBe("number");
   });
 

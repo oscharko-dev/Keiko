@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyContentWheelZoom,
+  fitWorkspaceViewToWindows,
   fitWindowToViewport,
+  normalizeWheelDelta,
   nextContentZoomFromWheel,
 } from "./useWorkspace";
 import type { ViewportWorld } from "./useWorkspace.types";
@@ -97,5 +99,56 @@ describe("content wheel zoom", () => {
       max: win.max,
       zoom: 1.2,
     });
+  });
+});
+
+describe("workspace view fitting", () => {
+  it("centers a small visible window group at 100% zoom", () => {
+    const view = fitWorkspaceViewToWindows(
+      [
+        appWindow({ id: "a", x: 0, y: 0, w: 100, h: 100 }),
+        appWindow({ id: "b", x: 200, y: 100, w: 100, h: 100 }),
+      ],
+      { width: 1000, height: 800 },
+    );
+
+    expect(view).toEqual({ zoom: 1, x: 350, y: 300 });
+  });
+
+  it("zooms out and keeps large window groups inside padded workspace bounds", () => {
+    const view = fitWorkspaceViewToWindows(
+      [appWindow({ x: 0, y: 0, w: 2000, h: 1000 })],
+      { width: 1000, height: 800 },
+    );
+
+    expect(view.zoom).toBeCloseTo(0.428, 3);
+    expect(view.x).toBe(72);
+    expect(view.y).toBe(186);
+  });
+
+  it("ignores minimized windows when fitting the workspace view", () => {
+    const view = fitWorkspaceViewToWindows(
+      [
+        appWindow({ id: "visible", x: 0, y: 0, w: 100, h: 100 }),
+        appWindow({ id: "minimized", minimized: true, x: 2000, y: 2000, w: 900, h: 900 }),
+      ],
+      { width: 1000, height: 800 },
+    );
+
+    expect(view).toEqual({ zoom: 1, x: 450, y: 350 });
+  });
+
+  it("falls back to the default view when no visible windows are present", () => {
+    expect(
+      fitWorkspaceViewToWindows([appWindow({ minimized: true })], { width: 1000, height: 800 }),
+    ).toEqual({ zoom: 1, x: 0, y: 0 });
+  });
+});
+
+describe("wheel delta normalization", () => {
+  it("normalizes line-based wheel events to stable pixel deltas", () => {
+    const event = new WheelEvent("wheel", { deltaX: 2, deltaY: 3, deltaMode: 1 });
+
+    expect(normalizeWheelDelta(event)).toEqual({ x: 32, y: 48 });
   });
 });

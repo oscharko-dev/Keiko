@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { validateMemoryUpdate } from "@oscharko-dev/keiko-contracts/memory";
 
 import { GovernanceError } from "./errors.js";
-import { buildExpirationUpdate } from "./retention.js";
+import { buildExpirationUpdate, supersededValidity } from "./retention.js";
 import { ctx, FIXED_NOW_MS, makeRecord } from "./_support.js";
 
 describe("buildExpirationUpdate", () => {
@@ -37,5 +37,34 @@ describe("buildExpirationUpdate", () => {
       GovernanceError,
     );
     expect(() => buildExpirationUpdate(m, Number.NaN, ctx())).toThrow(GovernanceError);
+  });
+});
+
+describe("supersededValidity (#204, C1)", () => {
+  it("closes an open belief window at nowMs", () => {
+    const m = makeRecord({ id: "m-1", validFrom: 100 });
+    expect(supersededValidity(m, 200)).toEqual({ validFrom: 100, validUntil: 200 });
+  });
+
+  it("tightens an open-but-later window to nowMs", () => {
+    const m = makeRecord({ id: "m-1", validFrom: 100, validUntil: 500 });
+    expect(supersededValidity(m, 200)).toEqual({ validFrom: 100, validUntil: 200 });
+  });
+
+  it("returns null when nowMs is at or before validFrom (no valid interval)", () => {
+    const m = makeRecord({ id: "m-1", validFrom: 100 });
+    expect(supersededValidity(m, 100)).toBeNull();
+    expect(supersededValidity(m, 50)).toBeNull();
+  });
+
+  it("returns null when the window is already closed at or before nowMs (never extends)", () => {
+    const m = makeRecord({ id: "m-1", validFrom: 100, validUntil: 150 });
+    expect(supersededValidity(m, 200)).toBeNull();
+  });
+
+  it("returns null for a non-finite nowMs", () => {
+    const m = makeRecord({ id: "m-1", validFrom: 100 });
+    expect(supersededValidity(m, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(supersededValidity(m, Number.NaN)).toBeNull();
   });
 });

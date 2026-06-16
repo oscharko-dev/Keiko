@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { TYPE_ORDER, WIN_TYPES } from "../windows/WindowsRegistry";
 import { Palette } from "./Palette";
 
-// 10 cards in the 2-column .palette-grid — mirrors the live picker size the
-// C363 audit observed (rows: [0,1] [2,3] [4,5] [6,7] [8,9]).
+// 10 cards in the 3-column .palette-grid — mirrors the live picker size the
+// C363 audit observed (rows: [0,1,2] [3,4,5] [6,7,8] [9]).
 const ORDER = TYPE_ORDER.slice(0, 10);
 
 function renderPalette(): { onAdd: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
@@ -68,7 +68,19 @@ describe("Palette", () => {
     for (const card of list.slice(1)) expect(card).toHaveAttribute("tabindex", "-1");
   });
 
-  it("moves focus with arrow keys in the 2-column grid (C363)", () => {
+  it("renders uniform palette cards in a fixed grid", () => {
+    renderPalette();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelector(".palette-grid")).not.toBeNull();
+    for (const card of cards()) {
+      expect(card).toHaveClass("pal-card");
+      expect(card.querySelector(".pal-ico")).not.toBeNull();
+      expect(card.querySelector(".pal-name")).not.toBeNull();
+      expect(card.querySelector(".pal-desc")).not.toBeNull();
+    }
+  });
+
+  it("moves focus with arrow keys in the 3-column grid (C363)", () => {
     renderPalette();
     const list = cards();
     const first = list[0] as HTMLElement;
@@ -79,16 +91,16 @@ describe("Palette", () => {
     expect(list[1]).toHaveAttribute("tabindex", "0");
     expect(list[0]).toHaveAttribute("tabindex", "-1");
 
-    // Down: 1 -> 3 (one row = two cards)
+    // Down: 1 -> 4 (one row = three cards)
     fireEvent.keyDown(list[1] as HTMLElement, { key: "ArrowDown" });
+    expect(list[4]).toHaveFocus();
+
+    // Left: 4 -> 3
+    fireEvent.keyDown(list[4] as HTMLElement, { key: "ArrowLeft" });
     expect(list[3]).toHaveFocus();
 
-    // Left: 3 -> 2
-    fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowLeft" });
-    expect(list[2]).toHaveFocus();
-
-    // Up: 2 -> 0
-    fireEvent.keyDown(list[2] as HTMLElement, { key: "ArrowUp" });
+    // Up: 3 -> 0
+    fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowUp" });
     expect(list[0]).toHaveFocus();
   });
 
