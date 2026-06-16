@@ -409,32 +409,6 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     event.preventDefault();
   };
 
-  // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
-  // focused. Guard event.target === event.currentTarget so arrow keys inside a
-  // focused window child are not captured here (those are handled by WindowFrame).
-  const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
-    if (event.target !== event.currentTarget) return;
-    const base = 48;
-    const step = event.shiftKey ? base * 4 : base;
-    switch (event.key) {
-      case "ArrowLeft":
-        api.panBy(step, 0);
-        break;
-      case "ArrowRight":
-        api.panBy(-step, 0);
-        break;
-      case "ArrowUp":
-        api.panBy(0, step);
-        break;
-      case "ArrowDown":
-        api.panBy(0, -step);
-        break;
-      default:
-        return;
-    }
-    event.preventDefault();
-  };
-
   const bgStyle: CSSProperties = useMemo(
     () => ({
       backgroundSize: `${String(22 * view.zoom)}px ${String(22 * view.zoom)}px`,
