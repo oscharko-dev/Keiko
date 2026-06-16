@@ -44,6 +44,7 @@ import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
 type TriggerFn = Required<FigmaSnapshotWindowProps>["triggerImpl"];
 type LoadFn = Required<FigmaSnapshotWindowProps>["loadImpl"];
+type ListFn = Required<FigmaSnapshotWindowProps>["listImpl"];
 type CodegenFn = Required<FigmaSnapshotWindowProps>["codegenImpl"];
 type RevokeFn = Required<FigmaSnapshotWindowProps>["revokeImpl"];
 
@@ -91,6 +92,18 @@ const MOCK_SUMMARY_WITH_SKIPPED: FigmaSnapshotSummary = {
   reductionHint: "2 screens from 5 detected (1 render skipped)",
 };
 
+const MOCK_LIST_ENTRY = {
+  runId: MOCK_SUMMARY.runId,
+  fileKey: MOCK_SUMMARY.fileKey,
+  nodeId: MOCK_SUMMARY.nodeId,
+  version: MOCK_SUMMARY.version,
+  fetchedAt: MOCK_SUMMARY.fetchedAt,
+  screenCount: MOCK_SUMMARY.screenCount,
+  skippedCount: MOCK_SUMMARY.skippedCount,
+  reductionHint: MOCK_SUMMARY.reductionHint,
+  integrityHash: MOCK_SUMMARY.integrityHash,
+};
+
 // Resolves with `summary` (default: MOCK_SUMMARY).
 // vi.fn(impl) infers parameter types from the implementation — avoids the two-arg
 // generic form `vi.fn<Args, Return>()` which this vitest version does not support.
@@ -113,6 +126,12 @@ function rejectingApiError(code: string, message: string, status: number): Trigg
     throw new ApiError(code, message, status);
   });
   return fn as unknown as TriggerMock;
+}
+
+function resolvingList(
+  entries: readonly (typeof MOCK_LIST_ENTRY)[] = [],
+): ReturnType<typeof vi.fn> & ListFn {
+  return vi.fn(async () => entries) as ReturnType<typeof vi.fn> & ListFn;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -156,6 +175,16 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow();
       expect(screen.getByText(/access token is resolved server-side/iu)).toBeInTheDocument();
     });
+
+    it("loads recent snapshots into the dashboard on mount", async () => {
+      const listImpl = resolvingList([MOCK_LIST_ENTRY]);
+      renderWindow({ listImpl });
+
+      await waitFor(() =>
+        expect(screen.getAllByText(/2 screens from 4 detected/iu).length).toBeGreaterThan(0),
+      );
+      expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument();
+    });
   });
 
   describe("link validation", () => {
@@ -179,6 +208,46 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
       expect(screen.getByRole("button", { name: /snapshot/iu })).not.toBeDisabled();
+    });
+
+    it("requests board-specific history once a valid board link is present", async () => {
+      const listImpl = resolvingList();
+      renderWindow({ listImpl });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
+      await user.click(screen.getByRole("tab", { name: /this board/iu }));
+
+      await waitFor(() =>
+        expect(listImpl).toHaveBeenCalledWith(
+          expect.objectContaining({
+            fileKey: "AbCdEfGhIjKl",
+            nodeId: "1:2",
+            limit: 12,
+            signal: expect.any(AbortSignal),
+          }),
+        ),
+      );
+    });
+  });
+
+  describe("dashboard", () => {
+    it("loads a selected snapshot from the dashboard list", async () => {
+      const listImpl = resolvingList([MOCK_LIST_ENTRY]);
+      const loadImpl = vi.fn(async () => MOCK_SUMMARY) as unknown as LoadFn;
+      const { updateCfg } = renderWindow({ listImpl, loadImpl });
+      const user = userEvent.setup();
+
+      await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
+      const row = screen.getByText(/AbCdEfGhIjKl · 1:2/iu).closest("button");
+      expect(row).not.toBeNull();
+      await user.click(row as HTMLButtonElement);
+
+      await waitFor(() => expect(loadImpl).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.anything()));
+      await waitFor(() =>
+        expect(screen.getByRole("article", { name: /screen 1: screen 1/iu })).toBeInTheDocument(),
+      );
+      expect(updateCfg).toHaveBeenCalledWith({ snapshotRunId: MOCK_SUMMARY.runId });
     });
   });
 
@@ -419,7 +488,7 @@ describe("FigmaSnapshotWindow", () => {
       // never taken from the (here invalid) input — that path is reserved for Submit,
       // which is gated on isValidFigmaLink.
       expect(trigger.mock.calls[1]?.[0]).toBe(
-        "https://www.figma.com/design/AbCdEfGhIjKl/board?node-id=1:2",
+        "https://www.figma.com/design/AbCdEfGhIjKl/board?node-id=1%3A2&version=123456789",
       );
     });
 
@@ -624,6 +693,41 @@ describe("FigmaSnapshotWindow", () => {
       expect(screen.queryByRole("button", { name: /cancel/iu })).not.toBeInTheDocument();
     });
 
+    it("shows a background-build notice after Cancel and can reconnect to the same board", async () => {
+      let rejectFirst!: (reason: unknown) => void;
+      let resolveSecond!: (value: FigmaSnapshotSummary) => void;
+      const trigger = vi
+        .fn()
+        .mockImplementationOnce(
+          async (_link: string) =>
+            new Promise<FigmaSnapshotSummary>((_resolve, reject) => {
+              rejectFirst = reject;
+            }),
+        )
+        .mockImplementationOnce(
+          async (_link: string) =>
+            new Promise<FigmaSnapshotSummary>((resolve) => {
+              resolveSecond = resolve;
+            }),
+        );
+      renderWindow({ triggerImpl: trigger as unknown as TriggerFn });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      rejectFirst(new DOMException("Aborted", "AbortError"));
+      await user.click(screen.getByRole("button", { name: /cancel/iu }));
+
+      await waitFor(() =>
+        expect(screen.getByText(/server may still be building the snapshot/iu)).toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: /reconnect build/iu }));
+      await waitFor(() => expect(trigger).toHaveBeenCalledTimes(2));
+      expect(trigger.mock.calls[1]?.[0]).toBe(VALID_LINK);
+
+      resolveSecond(MOCK_SUMMARY);
+      await waitForDone();
+    });
+
     it("wires the abort signal into triggerImpl (signal present after successful build)", async () => {
       const trigger = resolvingTrigger();
       renderWindow({ triggerImpl: trigger });
@@ -635,6 +739,31 @@ describe("FigmaSnapshotWindow", () => {
       expect(opts?.signal).toBeInstanceOf(AbortSignal);
       // Build completed normally — signal was not aborted.
       expect(opts?.signal?.aborted).toBe(false);
+    });
+
+    it("surfaces elapsed-build messaging while waiting", async () => {
+      const trigger = makeTrigger((_link) => new Promise<FigmaSnapshotSummary>(() => {}));
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      expect(screen.getByText(/elapsed\. large boards can take several minutes/iu)).toBeInTheDocument();
+    });
+
+    it("explains that a timed-out wait may still finish in the background", async () => {
+      const trigger = makeTrigger(async (_link): Promise<FigmaSnapshotSummary> => {
+        throw new ApiError(
+          "FIGMA_BUILD_TIMEOUT",
+          "The snapshot build exceeded the configured deadline.",
+          504,
+        );
+      });
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitFor(() =>
+        expect(screen.getByText(/window stopped waiting for the snapshot result/iu)).toBeInTheDocument(),
+      );
+      expect(screen.getByRole("button", { name: /reconnect build/iu })).toBeInTheDocument();
     });
   });
 

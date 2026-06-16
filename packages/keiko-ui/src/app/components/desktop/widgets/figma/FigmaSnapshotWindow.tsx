@@ -26,6 +26,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -37,12 +38,14 @@ import { formatBytes, formatDate } from "@/lib/format";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
+  listFigmaSnapshots,
   figmaSnapshotScreenImageUrl,
   generateFigmaCode,
   revokeFigmaToken,
 } from "@/lib/figma-snapshot-api";
 import type {
   FigmaSnapshotSummary,
+  FigmaSnapshotListEntry,
   FigmaCodegenResponse,
   FigmaRevokeTokenResult,
 } from "@/lib/figma-snapshot-api";
@@ -73,6 +76,42 @@ function isValidFigmaLink(raw: string): boolean {
   }
 }
 
+interface FigmaSnapshotScope {
+  readonly fileKey: string;
+  readonly nodeId: string;
+}
+
+function parseFigmaScope(raw: string): FigmaSnapshotScope | null {
+  try {
+    const url = new URL(raw.trim());
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:") return null;
+    if (host !== "figma.com" && host !== "www.figma.com") return null;
+    const [, kind, fileKey] = url.pathname.split("/");
+    if ((kind !== "design" && kind !== "file") || fileKey === undefined || fileKey.length === 0) {
+      return null;
+    }
+    const nodeId = url.searchParams.get("node-id");
+    if (nodeId === null || nodeId.length === 0) return null;
+    return { fileKey, nodeId };
+  } catch {
+    return null;
+  }
+}
+
+function boardLinkFromSnapshot(snapshot: {
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version?: string | undefined;
+}): string {
+  const url = new URL(`https://www.figma.com/design/${snapshot.fileKey}/board`);
+  url.searchParams.set("node-id", snapshot.nodeId);
+  if (snapshot.version !== undefined && snapshot.version.length > 0) {
+    url.searchParams.set("version", snapshot.version);
+  }
+  return url.toString();
+}
+
 interface SnapshotErrorNotice {
   readonly title: string;
   readonly detail: string;
@@ -80,6 +119,13 @@ interface SnapshotErrorNotice {
   readonly remediation?: string | undefined;
   readonly assertive?: boolean | undefined;
 }
+
+interface DetachedBuild {
+  readonly link: string;
+  readonly isResnapshot: boolean;
+}
+
+type SnapshotDashboardTab = "board" | "recent";
 
 // ── Fix #8: full external-dependency error taxonomy (including new codes from the
 // parallel agent landing FIGMA_NETWORK_UNREACHABLE / FIGMA_EGRESS_TIMEOUT /
@@ -157,6 +203,16 @@ function formatSnapshotError(err: unknown): SnapshotErrorNotice {
 function formatError(err: unknown): string {
   const notice = formatSnapshotError(err);
   return notice.status === undefined ? notice.detail : `${notice.detail} (${notice.status})`;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${String(hours)}h ${String(minutes)}m ${String(seconds)}s`;
+  if (minutes > 0) return `${String(minutes)}m ${String(seconds)}s`;
+  return `${String(seconds)}s`;
 }
 
 /**
@@ -248,6 +304,8 @@ export interface FigmaSnapshotWindowProps {
   readonly triggerImpl?: typeof triggerFigmaSnapshot;
   /** Injectable for tests — defaults to the real BFF call. */
   readonly loadImpl?: typeof loadFigmaSnapshotSummary;
+  /** Injectable for tests — defaults to the real list BFF call. */
+  readonly listImpl?: typeof listFigmaSnapshots;
   /** Injectable for tests — defaults to the real design-to-code BFF call (#755). */
   readonly codegenImpl?: typeof generateFigmaCode;
   /** Injectable for tests — defaults to the real PAT revoke call (#758). */
@@ -265,17 +323,29 @@ export function FigmaSnapshotWindow({
   updateCfg,
   triggerImpl = triggerFigmaSnapshot,
   loadImpl = loadFigmaSnapshotSummary,
+  listImpl = listFigmaSnapshots,
   codegenImpl = generateFigmaCode,
   revokeImpl = revokeFigmaToken,
 }: FigmaSnapshotWindowProps): ReactNode {
   const inputId = useId();
   const statusId = useId();
   const validationId = useId();
+  const dashboardId = useId();
 
   const [boardLink, setBoardLink] = useState("");
   const [buildState, setBuildState] = useState<BuildState>("idle");
   const [summary, setSummary] = useState<FigmaSnapshotSummary | null>(null);
   const [errorNotice, setErrorNotice] = useState<SnapshotErrorNotice | null>(null);
+  const [detachedBuild, setDetachedBuild] = useState<DetachedBuild | null>(null);
+  const [buildStartedAt, setBuildStartedAt] = useState<number | null>(null);
+  const [buildElapsedMs, setBuildElapsedMs] = useState(0);
+  const [dashboardTab, setDashboardTab] = useState<SnapshotDashboardTab>("recent");
+  const [boardSnapshots, setBoardSnapshots] = useState<readonly FigmaSnapshotListEntry[]>([]);
+  const [recentSnapshots, setRecentSnapshots] = useState<readonly FigmaSnapshotListEntry[]>([]);
+  const [boardSnapshotsLoading, setBoardSnapshotsLoading] = useState(false);
+  const [recentSnapshotsLoading, setRecentSnapshotsLoading] = useState(false);
+  const [boardSnapshotsError, setBoardSnapshotsError] = useState<string | null>(null);
+  const [recentSnapshotsError, setRecentSnapshotsError] = useState<string | null>(null);
   // Explicit read-only-scope acknowledgement (#760) — recorded server-side before the first build.
   const [consentChecked, setConsentChecked] = useState(false);
   // uiux-fix F038 C210: when consent blocks a snapshot (inline pre-check OR the server's 428
@@ -287,6 +357,8 @@ export function FigmaSnapshotWindow({
   // Fix #7: AbortController for the active build/load fetch.
   const abortRef = useRef<AbortController | null>(null);
   const codeAbortRef = useRef<AbortController | null>(null);
+  const dashboardAbortRef = useRef<AbortController | null>(null);
+  const activeBuildRef = useRef<DetachedBuild | null>(null);
 
   const flagConsentRequired = useCallback((): void => {
     setConsentInvalid(true);
@@ -307,9 +379,20 @@ export function FigmaSnapshotWindow({
 
   const linkValid = isValidFigmaLink(boardLink);
   const linkError = figmaLinkValidationMessage(boardLink);
+  const currentScope = useMemo(
+    () =>
+      summary !== null
+        ? { fileKey: summary.fileKey, nodeId: summary.nodeId }
+        : parseFigmaScope(boardLink),
+    [boardLink, summary],
+  );
+  const currentScopeFileKey = currentScope?.fileKey;
+  const currentScopeNodeId = currentScope?.nodeId;
   const isBuilding = buildState === "building";
   const isLoading = buildState === "loading";
   const busy = isBuilding || isLoading;
+  const buildElapsedLabel =
+    isBuilding && buildStartedAt !== null ? formatElapsed(buildElapsedMs) : null;
 
   // uiux-fix F038 C210: move focus onto the consent checkbox once a consent-blocked error has
   // rendered. An effect (not an inline .focus() in the handler) because in the server-428 path
@@ -324,13 +407,122 @@ export function FigmaSnapshotWindow({
     if (revokeConfirming) revokeConfirmRef.current?.focus();
   }, [revokeConfirming]);
 
+  useEffect(() => {
+    if (!isBuilding || buildStartedAt === null) return;
+    setBuildElapsedMs(Date.now() - buildStartedAt);
+    const timer = window.setInterval(() => {
+      setBuildElapsedMs(Date.now() - buildStartedAt);
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isBuilding, buildStartedAt]);
+
   // Fix #7: abort in-flight fetch on unmount.
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
       codeAbortRef.current?.abort();
+      dashboardAbortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (currentScope === null && dashboardTab === "board") setDashboardTab("recent");
+  }, [currentScope, dashboardTab]);
+
+  const refreshDashboard = useCallback((): void => {
+    dashboardAbortRef.current?.abort();
+    const controller = new AbortController();
+    dashboardAbortRef.current = controller;
+
+    setRecentSnapshotsLoading(true);
+    setRecentSnapshotsError(null);
+    void listImpl({ limit: 12, signal: controller.signal })
+      .then((snapshots) => {
+        setRecentSnapshots(snapshots);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setRecentSnapshots([]);
+        setRecentSnapshotsError(formatError(err));
+      })
+      .finally(() => {
+        if (dashboardAbortRef.current === controller) setRecentSnapshotsLoading(false);
+      });
+
+    if (currentScopeFileKey === undefined || currentScopeNodeId === undefined) {
+      setBoardSnapshots([]);
+      setBoardSnapshotsError(null);
+      setBoardSnapshotsLoading(false);
+      return;
+    }
+
+    setBoardSnapshotsLoading(true);
+    setBoardSnapshotsError(null);
+    void listImpl({
+      fileKey: currentScopeFileKey,
+      nodeId: currentScopeNodeId,
+      limit: 12,
+      signal: controller.signal,
+    })
+      .then((snapshots) => {
+        setBoardSnapshots(snapshots);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setBoardSnapshots([]);
+        setBoardSnapshotsError(formatError(err));
+      })
+      .finally(() => {
+        if (dashboardAbortRef.current === controller) setBoardSnapshotsLoading(false);
+      });
+  }, [currentScopeFileKey, currentScopeNodeId, listImpl]);
+
+  useEffect(() => {
+    refreshDashboard();
+  }, [refreshDashboard, summary?.runId]);
+
+  const loadSnapshotByRunId = useCallback(
+    (runId: string): void => {
+      if (runId.length === 0 || busy) return;
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setBuildState("loading");
+      setErrorNotice(null);
+      setDetachedBuild(null);
+      setCodeState("idle");
+      setCode(null);
+      setCodeError(null);
+
+      loadImpl(runId, controller.signal)
+        .then((result) => {
+          setSummary(result);
+          setBoardLink(boardLinkFromSnapshot(result));
+          updateCfg({ snapshotRunId: result.runId });
+          setBuildState("done");
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          if (err instanceof ApiError && err.code === "FIGMA_SNAPSHOT_NOT_FOUND") {
+            if (snapshotRunId === runId) updateCfg({ snapshotRunId: undefined });
+            setErrorNotice({
+              ...formatSnapshotError(err),
+              detail:
+                snapshotRunId === runId
+                  ? `${err.message} The stored run ID has been cleared.`
+                  : err.message,
+            });
+          } else {
+            setErrorNotice(formatSnapshotError(err));
+          }
+          setBuildState("error");
+        });
+    },
+    [busy, loadImpl, snapshotRunId, updateCfg],
+  );
 
   const runBuild = useCallback(
     async (link: string, isResnapshot: boolean): Promise<void> => {
@@ -340,9 +532,13 @@ export function FigmaSnapshotWindow({
       codeAbortRef.current = null;
       const controller = new AbortController();
       abortRef.current = controller;
+      activeBuildRef.current = { link, isResnapshot };
 
       setBuildState("building");
       setErrorNotice(null);
+      setDetachedBuild(null);
+      setBuildStartedAt(Date.now());
+      setBuildElapsedMs(0);
       setCodeState("idle");
       setCode(null);
       try {
@@ -352,11 +548,18 @@ export function FigmaSnapshotWindow({
           signal: controller.signal,
         });
         setSummary(result);
+        setBoardLink(boardLinkFromSnapshot(result));
         updateCfg({ snapshotRunId: result.runId });
         setBuildState("done");
+        setBuildStartedAt(null);
+        setBuildElapsedMs(0);
+        activeBuildRef.current = null;
       } catch (err) {
-        // Ignore abort — user clicked Cancel or component unmounted.
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
+        }
+        setBuildStartedAt(null);
+        setBuildElapsedMs(0);
         // uiux-fix F038 C210: the server's 428 message names the policy but not the control —
         // extend it with an instruction that points at the checkbox, and highlight + focus it.
         if (err instanceof ApiError && err.code === "FIGMA_CONSENT_REQUIRED") {
@@ -366,10 +569,21 @@ export function FigmaSnapshotWindow({
             detail: `${notice.detail} Tick the acknowledgement checkbox below, then snapshot again.`,
           });
           flagConsentRequired();
+        } else if (err instanceof ApiError && err.code === "FIGMA_BUILD_TIMEOUT") {
+          setDetachedBuild({ link, isResnapshot });
+          setErrorNotice({
+            title: "Figma snapshot is still running",
+            detail:
+              "This window stopped waiting for the snapshot result. The server may still finish the build in the background.",
+            status: `HTTP ${err.status.toString()}`,
+            remediation:
+              "Reconnect to the same board to keep waiting, or close this window and return later.",
+          });
         } else {
           setErrorNotice(formatSnapshotError(err));
         }
         setBuildState("error");
+        activeBuildRef.current = null;
       }
     },
     [triggerImpl, updateCfg, consentChecked, flagConsentRequired],
@@ -402,21 +616,25 @@ export function FigmaSnapshotWindow({
     // Fix #2: aria-disabled guard — the button stays mounted so focus is never dropped.
     if (busy) return;
     if (summary === null) return;
-    // uiux-fix F045 C249: "Re-snapshot this board" means THIS board — always rebuild the
-    // link from the stored summary instead of trusting whatever currently sits in the
-    // input (which may be invalid or point at a different board, bypassing the
-    // isValidFigmaLink gate). New boards go through Submit, which is gated.
-    const link = `https://www.figma.com/design/${summary.fileKey}/board?node-id=${summary.nodeId}`;
-    void runBuild(link, true);
+    void runBuild(boardLinkFromSnapshot(summary), true);
   }, [busy, runBuild, summary]);
 
   // Fix #7: Cancel the in-flight build and return to idle with a status note.
   const handleCancel = useCallback((): void => {
     abortRef.current?.abort();
     abortRef.current = null;
+    setBuildStartedAt(null);
+    setBuildElapsedMs(0);
+    if (activeBuildRef.current !== null) setDetachedBuild(activeBuildRef.current);
+    activeBuildRef.current = null;
     setBuildState("idle");
     setErrorNotice(null);
   }, []);
+
+  const handleReconnect = useCallback((): void => {
+    if (busy || detachedBuild === null) return;
+    void runBuild(detachedBuild.link, detachedBuild.isResnapshot);
+  }, [busy, detachedBuild, runBuild]);
 
   const handleGenerateCode = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
@@ -454,37 +672,8 @@ export function FigmaSnapshotWindow({
   // in-memory summary is present.
   const handleLoadStored = useCallback((): void => {
     if (snapshotRunId === undefined || snapshotRunId.length === 0 || busy) return;
-    // Abort any previous in-flight request.
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    // Distinct "loading" state — this path reads the locally stored evidence record
-    // only and never contacts Figma, so it must not show the "building" copy.
-    setBuildState("loading");
-    setErrorNotice(null);
-    loadImpl(snapshotRunId, controller.signal)
-      .then((result) => {
-        setSummary(result);
-        setBuildState("done");
-      })
-      .catch((err: unknown) => {
-        // Ignore abort.
-        if (err instanceof DOMException && (err as DOMException).name === "AbortError") return;
-        // Fix #6: FIGMA_SNAPSHOT_NOT_FOUND on load — the stored runId is stale; clear it so
-        // the connected QI hub stops feeding a dead run id.
-        if (err instanceof ApiError && err.code === "FIGMA_SNAPSHOT_NOT_FOUND") {
-          updateCfg({ snapshotRunId: undefined });
-          setErrorNotice({
-            ...formatSnapshotError(err),
-            detail: `${err.message} The stored run ID has been cleared.`,
-          });
-        } else {
-          setErrorNotice(formatSnapshotError(err));
-        }
-        setBuildState("error");
-      });
-  }, [busy, loadImpl, snapshotRunId, updateCfg]);
+    loadSnapshotByRunId(snapshotRunId);
+  }, [busy, loadSnapshotByRunId, snapshotRunId]);
 
   useEffect(() => {
     setVisibleScreenCount(INITIAL_GALLERY_LIMIT);
@@ -518,6 +707,74 @@ export function FigmaSnapshotWindow({
     summary === null &&
     (buildState === "idle" || buildState === "loading" || buildState === "error");
 
+  const renderDashboardList = (
+    snapshots: readonly FigmaSnapshotListEntry[],
+    loading: boolean,
+    error: string | null,
+    emptyTitle: string,
+    emptyDetail: string,
+    showScope: boolean,
+  ): ReactNode => {
+    if (loading) {
+      return <p className="figma-snapshot-dashboard-status">Loading snapshots…</p>;
+    }
+    if (error !== null) {
+      return (
+        <p className="figma-snapshot-dashboard-status figma-snapshot-dashboard-status-error">
+          {error}
+        </p>
+      );
+    }
+    if (snapshots.length === 0) {
+      return (
+        <div className="figma-snapshot-dashboard-empty">
+          <p className="figma-snapshot-dashboard-empty-title">{emptyTitle}</p>
+          <p className="figma-snapshot-dashboard-empty-detail">{emptyDetail}</p>
+        </div>
+      );
+    }
+    return (
+      <div className="figma-snapshot-dashboard-list" role="list">
+        {snapshots.map((snapshot) => {
+          const isCurrent = summary?.runId === snapshot.runId;
+          return (
+            <button
+              key={snapshot.runId}
+              type="button"
+              className="figma-snapshot-dashboard-item"
+              onClick={() => {
+                loadSnapshotByRunId(snapshot.runId);
+              }}
+              aria-current={isCurrent ? "true" : undefined}
+              aria-busy={isLoading && snapshotRunId === snapshot.runId ? "true" : undefined}
+            >
+              <span className="figma-snapshot-dashboard-item-head">
+                <span className="figma-snapshot-dashboard-item-date">
+                  {formatDate(snapshot.fetchedAt)}
+                </span>
+                {isCurrent && (
+                  <span className="figma-snapshot-dashboard-item-badge">Current</span>
+                )}
+              </span>
+              <span className="figma-snapshot-dashboard-item-hint">{snapshot.reductionHint}</span>
+              <span className="figma-snapshot-dashboard-item-meta">
+                {snapshot.screenCount.toString()} screen{snapshot.screenCount !== 1 ? "s" : ""}
+                {snapshot.skippedCount > 0
+                  ? `, ${snapshot.skippedCount.toString()} skipped`
+                  : ", no skipped renders"}
+              </span>
+              {showScope && (
+                <span className="figma-snapshot-dashboard-item-scope">
+                  {snapshot.fileKey} · {snapshot.nodeId}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <section className="figma-snapshot-window" aria-label="Figma Snapshot">
       {/* ── Board link input ────────────────────────────────────────────── */}
@@ -538,6 +795,7 @@ export function FigmaSnapshotWindow({
               // and current feedback never contradict each other.
               if (errorNotice !== null) setErrorNotice(null);
               if (buildState === "error") setBuildState("idle");
+              if (detachedBuild !== null) setDetachedBuild(null);
               if (consentInvalid) setConsentInvalid(false);
             }}
             aria-describedby={linkError !== null ? `${validationId} ${statusId}` : statusId}
@@ -627,7 +885,9 @@ export function FigmaSnapshotWindow({
       >
         {isBuilding && (
           <p className="figma-snapshot-progress">
-            Building snapshot — fetching screens from Figma…
+            Building snapshot — fetching screens from Figma…{" "}
+            {buildElapsedLabel !== null ? `${buildElapsedLabel} elapsed.` : ""} Large boards can
+            take several minutes.
           </p>
         )}
         {isLoading && <p className="figma-snapshot-progress">Loading stored snapshot…</p>}
@@ -668,8 +928,24 @@ export function FigmaSnapshotWindow({
         </div>
       )}
 
+      {detachedBuild !== null && !busy && (
+        <div className="figma-snapshot-stored-notice">
+          <p className="figma-snapshot-stored-text">
+            This window is no longer waiting. The server may still be building the snapshot in the
+            background. You can close this window safely.
+          </p>
+          <button
+            type="button"
+            className="figma-snapshot-load-btn"
+            onClick={handleReconnect}
+          >
+            Reconnect build
+          </button>
+        </div>
+      )}
+
       {/* ── First-run guidance (nothing captured or stored yet) ───────────── */}
-      {buildState === "idle" && summary === null && !showLoadStored && (
+      {buildState === "idle" && summary === null && detachedBuild === null && !showLoadStored && (
         <div className="figma-snapshot-empty">
           <p className="figma-snapshot-empty-title">Capture screens from a Figma board</p>
           <ol className="figma-snapshot-empty-steps">
@@ -702,6 +978,93 @@ export function FigmaSnapshotWindow({
           </button>
         </div>
       )}
+
+      <section className="figma-snapshot-dashboard" aria-label="Snapshot dashboard">
+        <div className="figma-snapshot-dashboard-header">
+          <div>
+            <p className="figma-snapshot-dashboard-eyebrow">Snapshot dashboard</p>
+            <h2 className="figma-snapshot-dashboard-title">Stored snapshots</h2>
+          </div>
+          <button
+            type="button"
+            className="figma-snapshot-dashboard-refresh"
+            onClick={refreshDashboard}
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="figma-snapshot-dashboard-tabs" role="tablist" aria-label="Snapshot views">
+          <button
+            type="button"
+            className="figma-snapshot-dashboard-tab"
+            role="tab"
+            aria-selected={dashboardTab === "board"}
+            aria-controls={`${dashboardId}-board-panel`}
+            id={`${dashboardId}-board-tab`}
+            onClick={() => {
+              if (currentScope !== null) setDashboardTab("board");
+            }}
+            disabled={currentScope === null}
+          >
+            This board
+          </button>
+          <button
+            type="button"
+            className="figma-snapshot-dashboard-tab"
+            role="tab"
+            aria-selected={dashboardTab === "recent"}
+            aria-controls={`${dashboardId}-recent-panel`}
+            id={`${dashboardId}-recent-tab`}
+            onClick={() => {
+              setDashboardTab("recent");
+            }}
+          >
+            Recent
+          </button>
+        </div>
+        {dashboardTab === "board" ? (
+          <div
+            id={`${dashboardId}-board-panel`}
+            className="figma-snapshot-dashboard-panel"
+            role="tabpanel"
+            aria-labelledby={`${dashboardId}-board-tab`}
+          >
+            {currentScope === null
+              ? renderDashboardList(
+                  [],
+                  false,
+                  null,
+                  "No board selected yet",
+                  "Paste a valid Figma board link or load a stored snapshot to see this board's history.",
+                  false,
+                )
+              : renderDashboardList(
+                  boardSnapshots,
+                  boardSnapshotsLoading,
+                  boardSnapshotsError,
+                  "No snapshots stored for this board",
+                  "Take the first snapshot for this board to make it available here.",
+                  false,
+                )}
+          </div>
+        ) : (
+          <div
+            id={`${dashboardId}-recent-panel`}
+            className="figma-snapshot-dashboard-panel"
+            role="tabpanel"
+            aria-labelledby={`${dashboardId}-recent-tab`}
+          >
+            {renderDashboardList(
+              recentSnapshots,
+              recentSnapshotsLoading,
+              recentSnapshotsError,
+              "No snapshots stored yet",
+              "Stored Figma snapshots will appear here once the first board capture completes.",
+              true,
+            )}
+          </div>
+        )}
+      </section>
 
       {/* ── Snapshot summary ──────────────────────────────────────────────── */}
       {/* Fix #2: render the result section whenever summary !== null (not only when

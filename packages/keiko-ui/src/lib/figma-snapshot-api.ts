@@ -75,6 +75,25 @@ export interface FigmaSnapshotSummary {
   readonly screens: readonly FigmaScreenSummary[];
 }
 
+export interface FigmaSnapshotListEntry {
+  readonly runId: string;
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version: string | undefined;
+  readonly fetchedAt: string;
+  readonly screenCount: number;
+  readonly skippedCount: number;
+  readonly reductionHint: string;
+  readonly integrityHash: string;
+}
+
+export interface ListFigmaSnapshotsOptions {
+  readonly fileKey?: string;
+  readonly nodeId?: string;
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
+}
+
 // ─── POST /api/figma/snapshots ─────────────────────────────────────────────────
 
 /**
@@ -133,6 +152,21 @@ export async function loadFigmaSnapshotSummary(
   return fetchJson<FigmaSnapshotSummary>(`/api/figma/snapshots/${encodeURIComponent(runId)}`, {
     ...(signal !== undefined ? { signal } : {}),
   });
+}
+
+export async function listFigmaSnapshots(
+  options: ListFigmaSnapshotsOptions = {},
+): Promise<readonly FigmaSnapshotListEntry[]> {
+  const params = new URLSearchParams();
+  if (options.fileKey !== undefined) params.set("fileKey", options.fileKey);
+  if (options.nodeId !== undefined) params.set("nodeId", options.nodeId);
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const result = await fetchJson<{ snapshots: readonly FigmaSnapshotListEntry[] }>(
+    `/api/figma/snapshots${query}`,
+    { ...(options.signal !== undefined ? { signal: options.signal } : {}) },
+  );
+  return result.snapshots;
 }
 
 export function figmaSnapshotScreenImageUrl(runId: string, screenIndex: number): string {
