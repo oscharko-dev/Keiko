@@ -182,7 +182,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
         type="button"
         className="chat-msg-copy"
         aria-label={copied ? "Copied" : "Copy message"}
-        title={copied ? "Copied!" : "Copy message"}
+        title={copied ? "Copied" : "Copy message"}
         data-copied={copied ? "true" : "false"}
         onClick={handleCopy}
       >

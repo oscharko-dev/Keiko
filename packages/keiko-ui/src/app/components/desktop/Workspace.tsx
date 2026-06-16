@@ -306,7 +306,7 @@ function WorkspaceOutline({
                           Minimize {label}
                         </button>
                         <button type="button" onClick={() => api.maximize(win.id)}>
-                          {win.max ? `Restore size of ${label}` : `Maximize ${label}`}
+                          {win.max ? `Restore size of ${label}` : `Full screen ${label}`}
                         </button>
                         <button type="button" onClick={() => api.close(win.id)}>
                           Close {label}

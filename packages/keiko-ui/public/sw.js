@@ -37,9 +37,11 @@
 
 /* global self, caches, fetch */
 
-// Bumped v1 -> v2 with the network-first shell policy below: when this SW finally activates it
-// deletes the stale v1 cache (which may hold an old `/` document) in the `activate` handler.
-const CACHE_NAME = "keiko-shell-v2";
+// Bumped v1 -> v2 with the network-first shell policy below; v2 -> v3 adds the self-hosted
+// JetBrains Mono webfont to the pre-cache so the brand mono renders offline. When this SW
+// activates it deletes the stale older cache (which may hold an old `/` document) in the
+// `activate` handler.
+const CACHE_NAME = "keiko-shell-v3";
 
 // Static shell pre-cache. These are pathnames that must be available offline for the app
 // shell to boot. Everything else (e.g. `/_next/static/...` chunks) is cached on first
@@ -55,6 +57,7 @@ const PRECACHE_URLS = [
   "/icon-192-maskable.png",
   "/icon-512-maskable.png",
   "/apple-touch-icon.png",
+  "/fonts/jetbrains-mono-latin-wght-normal.woff2",
 ];
 
 // Pathname prefixes that may be served from / written to the runtime cache. Anything that
@@ -66,6 +69,7 @@ const CACHEABLE_PREFIXES = [
   "/apple-touch-icon",
   "/favicon",
   "/manifest.webmanifest",
+  "/fonts/",
 ];
 
 function isApiRequest(url) {

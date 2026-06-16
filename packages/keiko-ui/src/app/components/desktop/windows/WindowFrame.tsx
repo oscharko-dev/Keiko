@@ -574,18 +574,22 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={minimizeWithFocusRestore}
-          />
+          >
+            <Icons.minimize size={17} />
+          </button>
           <button
             type="button"
             className="win-traffic-btn win-traffic-maximize"
-            title={win.max ? "Restore" : "Maximize"}
-            aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
+            title={win.max ? "Restore" : "Full screen"}
+            aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
             }}
             onClick={() => api.maximize(win.id)}
-          />
+          >
+            {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
+          </button>
           <button
             type="button"
             className="win-traffic-btn win-traffic-close"
@@ -596,7 +600,9 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={closeWithFocusRestore}
-          />
+          >
+            <Icons.close size={17} />
+          </button>
         </div>
       </header>
       <div className="win-body" data-mode={bodyMode} style={bodyStyle}>
