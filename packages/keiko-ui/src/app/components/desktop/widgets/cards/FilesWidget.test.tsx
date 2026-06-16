@@ -531,6 +531,30 @@ describe("FilePreview", () => {
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
   });
 
+  it("explains that DOCX is not searchable in Repository Search yet", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "docs/handbook.docx",
+      name: "handbook.docx",
+      sizeBytes: 16_384,
+      modifiedAt: 1,
+      extension: "docx",
+      mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    render(<FilePreview root="/repo" path="docs/handbook.docx" onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        "DOCX is not searchable in Repository Search yet. Add it to Local Knowledge, or enable small-document repository extraction when available.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("handbook.docx").length).toBeGreaterThan(0);
+  });
+
   it("renders a generic safety alert when the BFF returns 403 DENIED", async () => {
     // The BFF message must NOT be rendered verbatim — it is replaced by a
     // generic, non-probing safety message. The matched server-side pattern is

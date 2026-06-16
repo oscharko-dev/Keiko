@@ -862,6 +862,8 @@ button {
   flex: 1;
   min-width: 0;
   cursor: grab;
+  touch-action: none;
+  user-select: none;
   /* clip, not hidden (audit C061): the +/-10000px .conn-svg makes an overflow:hidden
      container programmatically scrollable - keyboard focus on an offscreen port
      auto-scrolled the workspace and desynchronized all window geometry (drag/snap/
@@ -869,8 +871,12 @@ button {
      box is not a scroll container per spec, so focus can never scroll it. */
   overflow: clip;
   border-radius: 12px;
-  border: 1px solid var(--line);
-  background: var(--bg);
+  border: 1px solid
+    color-mix(in oklch, var(--accent) var(--frame-border-strength, 42%), transparent);
+  background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%));
+}
+.workspace[data-panning="true"] {
+  cursor: grabbing;
 }
 
 /* Liquid-Chrome-Wallpaper — bottom layer (z0), screen-fixed */
@@ -887,7 +893,11 @@ button {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background-image: radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklch, var(--accent) var(--workspace-grid-strength, 28%), transparent) 1px,
+    transparent 0
+  );
 }
 .ws-outline {
   position: absolute;
@@ -2191,9 +2201,22 @@ button {
   z-index: 20;
   width: 13px;
   height: 13px;
+  display: block;
+  inline-size: 13px;
+  block-size: 13px;
+  min-inline-size: 13px;
+  min-block-size: 13px;
+  max-inline-size: 13px;
+  max-block-size: 13px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
   border-radius: 50%;
+  -webkit-appearance: none;
+  appearance: none;
   background: var(--card);
   border: 2px solid var(--accent);
+  box-sizing: border-box;
+  line-height: 0;
   opacity: 0;
   transform: translate(-50%, -50%);
   cursor: crosshair;
@@ -2973,6 +2996,11 @@ button {
   color: var(--fg);
   font-weight: 550;
 }
+.gpref-help {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
 .gpref-val {
   font-size: 12px;
   color: var(--accent-text);
@@ -2995,6 +3023,10 @@ button {
     var(--card-2) var(--p, 100%) 100%
   );
   background-clip: content-box;
+}
+.gpref-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .gpref-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -3936,7 +3968,7 @@ button {
   right: 18px;
   bottom: 74px;
   z-index: 9600;
-  width: 384px;
+  width: min(560px, calc(100% - 36px));
   max-width: calc(100% - 36px);
   max-height: calc(100% - 88px);
   display: flex;
@@ -4007,19 +4039,22 @@ button {
   color: var(--fg);
 }
 .palette-grid {
-  padding: 10px;
+  padding: 12px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 128px;
+  gap: 10px;
   flex: 1;
   min-height: 0;
   overflow: auto;
   align-content: start;
-  align-items: start;
+  align-items: stretch;
 }
 .pal-card {
+  min-width: 0;
+  min-height: 0;
   border: 1px solid var(--line-soft);
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--card);
 }
@@ -4028,23 +4063,23 @@ button {
 }
 .pal-main {
   position: relative;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  gap: 2px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   width: 100%;
-  padding: 12px 11px;
-  text-align: left;
+  height: 100%;
+  padding: 12px;
+  text-align: center;
 }
 .pal-main:hover {
   background: var(--card-2);
 }
 .pal-ico {
-  grid-row: 1 / 3;
+  flex: none;
   align-self: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   color: var(--accent);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
@@ -4052,22 +4087,29 @@ button {
   place-items: center;
 }
 .pal-name {
+  min-width: 0;
   font-size: 13.5px;
   font-weight: 600;
   color: var(--fg);
-  align-self: end;
-  padding-right: 18px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
 }
 .pal-desc {
+  min-width: 0;
   font-size: 11.5px;
   color: var(--fg-faint);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .pal-add {
   position: absolute;
-  top: 9px;
-  right: 9px;
-  width: 20px;
-  height: 20px;
+  right: 8px;
+  bottom: 8px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border-radius: 6px;
@@ -4076,6 +4118,12 @@ button {
 .pal-card:hover .pal-add {
   color: var(--accent);
   background: var(--accent-dim);
+}
+
+@media (max-width: 620px) {
+  .palette-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ---------- NEW-WINDOW DIALOG ---------- */
@@ -4660,6 +4708,71 @@ select.dlg-input {
   color: var(--danger);
   background: color-mix(in oklch, var(--danger) 12%, transparent);
   font-size: 12.5px;
+}
+.ui-error-notice {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid color-mix(in oklch, var(--danger) 38%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 10px 11px;
+  color: var(--fg);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.ui-error-notice-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ui-error-notice-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 650;
+  color: var(--danger);
+}
+.ui-error-notice-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -5px 0 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.ui-error-notice-close:hover {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  border-color: color-mix(in oklch, var(--danger) 28%, transparent);
+}
+.ui-error-notice-close:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus) 24%, transparent);
+}
+.ui-error-notice-message,
+.ui-error-notice-remediation {
+  color: var(--fg);
+}
+.ui-error-notice-remediation {
+  color: var(--fg-muted);
+}
+.ui-error-notice-code {
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in oklch, var(--danger) 25%, transparent);
+  border-radius: 4px;
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 8%, transparent);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- COMPOSER: NO-MODEL ALERT (Issue #146) ---------- */
@@ -6652,52 +6765,6 @@ select.dlg-input {
   padding: 2px 6px;
 }
 
-/* Pipeline diagram */
-.lk-pipeline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* Pipeline node */
-.lk-node {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: var(--radius);
-  background: var(--card);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-card);
-  min-width: 110px;
-  text-align: center;
-}
-.lk-node[data-connected="true"] {
-  border-color: var(--accent-line);
-}
-.lk-node-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-}
-.lk-node-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-}
-.lk-node-sub {
-  font-size: 11px;
-  color: var(--fg-dim);
-  margin-top: 2px;
-}
-
 /* Capsule section heading — --fg-muted: --fg-faint was 2.5–2.9:1 in both
    themes, WCAG 1.4.3 fail on 12px headings (uiux-fix F005) */
 .lk-section-head {
@@ -7417,6 +7484,31 @@ select.dlg-input {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.lkd-action-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid color-mix(in oklch, var(--ok) 34%, var(--line-soft));
+  border-radius: var(--radius-sm);
+}
+
+.lkd-action-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lkd-action-progress-note {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 /* Destructive confirm button in modal — danger style.
@@ -11802,6 +11894,13 @@ ul.integ {
   gap: 8px;
   align-items: center;
 }
+.lkd-limit-note {
+  max-width: 680px;
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .lkd-index-row {
   display: flex;
   flex-direction: column;
@@ -11885,6 +11984,25 @@ ul.integ {
 }
 .lkd-picker-row input {
   flex: none;
+}
+.lkd-picker-row > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lkd-picker-row[data-disabled="true"] {
+  color: var(--fg-faint);
+  cursor: not-allowed;
+}
+.lkd-picker-meta {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.lkd-picker-row[data-disabled="true"] .lkd-picker-meta {
+  color: var(--danger);
 }
 .lkd-picker-empty {
   padding: 10px;
@@ -12116,19 +12234,11 @@ ul.integ {
   color: var(--warn);
 }
 
-/* ==== uiux-fix F032: connector-graph — retry hover, pipeline connected tick ==== */
+/* ==== uiux-fix F032: connector-graph — retry hover ==== */
 /* C056 — .lk-alert-retry was the only banner control without hover feedback
    (focus ring landed in F003); thicker underline keeps the danger palette. */
 .lk-alert-retry:hover {
   text-decoration-thickness: 2px;
-}
-/* C228 — connected pipeline nodes signalled state via border colour alone
-   (WCAG 1.4.1). The tick is the second, non-colour cue; sr-only text in the
-   node carries the state for assistive tech. */
-.lk-node-tick {
-  color: var(--accent-text);
-  font-size: 11px;
-  margin-left: 4px;
 }
 
 /* ==== uiux-fix F026: relationships list rows — real hover/focus states ==== */

@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+      } catch (e) { document.documentElement.dataset.theme = "dark"; }
+    </script>
+    <title>Keiko Icon System · Lift</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="lift-doc.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" aria-label="Design system">
+      <a class="nav-brand" href="index.html">
+        <img src="assets/keiko-logo.svg" alt="Keiko logo" />
+        <span><span class="bt">Keiko</span><span class="bs">Design System</span></span>
+      </a>
+      <div class="nav-label">Overview</div>
+      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
+      <div class="nav-label">Guidelines</div>
+      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
+      <a class="nav-item on" href="Keiko Icon System.html" aria-current="page"><span class="ni-dot"></span>Icons · Lift</a>
+      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
+      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
+      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
+      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
+        <span class="ti">
+          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
+          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
+        </span>
+        <span class="tspace">Theme</span>
+        <span data-theme-label>Dark</span>
+      </button>
+      <div class="nav-foot">Keiko · v0.2.0</div>
+    </nav>
+    <main id="main">
+      <div id="root"></div>
+    </main>
+    <script type="text/babel" src="lift-icons.jsx"></script>
+    <script type="text/babel">
+      const { LIcon, LCtl, LIFT_NAMES } = window;
+
+      /* enlarged keyline grid (24-unit) with the 20-unit clear area */
+      function GridSvg({ size = 240, children, live = true, color = "var(--fg)" }) {
+        const lines = [];
+        for (let i = 0; i <= 24; i += 2) {
+          lines.push(<line key={"v" + i} x1={i} y1="0" x2={i} y2="24" />);
+          lines.push(<line key={"h" + i} x1="0" y1={i} x2="24" y2={i} />);
+        }
+        return (
+          <svg width={size} height={size} viewBox="-0.5 -0.5 25 25" fill="none">
+            <g stroke="var(--line-soft)" strokeWidth="0.06">{lines}</g>
+            {live && (
+              <rect x="2" y="2" width="20" height="20" fill="none" stroke="var(--accent-line)" strokeWidth="0.12" strokeDasharray="0.7 0.7" rx="0.5" />
+            )}
+            <g stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{children}</g>
+          </svg>
+        );
+      }
+
+      const RING_OPEN = "M12.25 4.76 A6 6 0 1 1 8.75 4.76"; // search ring, seam at top
+      const HANDLE = "M14.7 14.7 L20 20";
+
+      function Hero() {
+        return (
+          <header className="hero">
+            <div className="hero-eyebrow">Keiko · Icon Signature</div>
+            <h1>Lift <span className="dim">— the lifted pen.</span></h1>
+            <p>
+              A monochrome stroke language with a single, unmistakable rule: every closed contour has
+              <b style={{ color: "var(--fg)" }}> exactly one fine seam</b> — as if the pen briefly lifted.
+              Calm, precise, distinct. This page is the binding spec — today and in four years.
+            </p>
+            <div className="hero-controls">
+              <div className="pill"><LCtl act="min" /> Minimize</div>
+              <div className="pill"><LCtl act="max" /> Full screen</div>
+              <div className="pill"><LCtl act="close" /> Close</div>
+            </div>
+          </header>
+        );
+      }
+
+      function Rule() {
+        const specs = [
+          ["Grid", <span>A <b>24 × 24</b> unit field. Everything visible lives in the <b>20-unit clear area</b> (2-unit margin).</span>],
+          ["Stroke", <span><b>1.6</b> units, constant. <b>Round</b> caps, <b>round</b> joins. No fills.</span>],
+          ["Colour", <span>Always <b>currentColor</b> — monochrome (grey-white). Green/red only on interaction.</span>],
+          ["The lift", <span>One closed contour = <b>one</b> seam of ≈ 2 units (≈ 34° on a ring), at the natural pen-start point.</span>],
+          ["Open glyphs", <span>Gestures such as +, ✓, send carry <b>no</b> forced seam — they belong through stroke quality.</span>],
+          ["Corner radius", <span><b>2–2.5</b> units on framed shapes.</span>],
+        ];
+        return (
+          <section id="rule">
+            <div className="sec-head">
+              <div className="sec-num">01 — GRAMMAR</div>
+              <h2>The rule</h2>
+              <p>Six sentences. Follow them and you draw a Keiko icon automatically — whoever you are, whenever it is.</p>
+            </div>
+            <div className="rule-wrap">
+              <div className="card spec-list">
+                {specs.map(([k, v]) => (
+                  <div className="spec-row" key={k}>
+                    <div className="spec-k">{k}</div>
+                    <div className="spec-v">{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="card diagram">
+                <GridSvg size={300}>
+                  <path d={RING_OPEN} />
+                  <path d={HANDLE} />
+                  <circle cx="10.5" cy="4.5" r="0.85" fill="var(--accent)" stroke="none" />
+                </GridSvg>
+              </div>
+            </div>
+          </section>
+        );
+      }
+
+      function Template() {
+        return (
+          <section id="template">
+            <div className="sec-head">
+              <div className="sec-num">02 — CONSTRUCTION</div>
+              <h2>The drawing template</h2>
+              <p>How every new icon is made — three steps, always the same.</p>
+            </div>
+            <div className="steps">
+              <div className="card step">
+                <div className="num">1</div>
+                <div className="stage">
+                  <GridSvg size={200} color="var(--fg-dim)">
+                    <circle cx="10.5" cy="10.5" r="6" />
+                    <path d={HANDLE} />
+                  </GridSvg>
+                </div>
+                <h3>Build on the grid</h3>
+                <p>Construct the geometry closed on the 24-unit grid, inside the 20-unit clear area. Still ordinary.</p>
+              </div>
+              <div className="card step">
+                <div className="num">2</div>
+                <div className="stage">
+                  <GridSvg size={200}>
+                    <path d={RING_OPEN} />
+                    <path d={HANDLE} />
+                    <circle cx="10.5" cy="4.5" r="0.85" fill="var(--accent)" stroke="none" />
+                  </GridSvg>
+                </div>
+                <h3>Lift one pen</h3>
+                <p>Open exactly one seam of ≈ 2 units — at the pen-start (top / “12 o’clock”). Never two.</p>
+              </div>
+              <div className="card step">
+                <div className="num">3</div>
+                <div className="stage">
+                  <GridSvg size={200} live={false}>
+                    <path d={RING_OPEN} />
+                    <path d={HANDLE} />
+                  </GridSvg>
+                </div>
+                <h3>Round caps, monochrome</h3>
+                <p>Stroke 1.6, round caps, currentColor. No fill, no colour. Done — and it belongs to the family.</p>
+              </div>
+            </div>
+          </section>
+        );
+      }
+
+      function ControlsSec() {
+        const rows = [
+          ["min", "Minimize", "to the footer dock"],
+          ["max", "Full screen", "maximise the window"],
+          ["restore", "Restore", "out of full screen"],
+          ["close", "Close", "remove the card"],
+        ];
+        return (
+          <section id="controls">
+            <div className="sec-head">
+              <div className="sec-num">03 — WINDOW CONTROLS</div>
+              <h2>The control glyphs</h2>
+              <p>
+                Your three “traffic lights” — now in the Lift hand instead of borrowed Apple dots. Monochrome at
+                rest; the meaning only whispers on touch: the open seam is the gesture.
+              </p>
+            </div>
+
+            <div className="card" style={{ overflow: "hidden" }}>
+              <div className="ctl-table">
+                <div className="th">Action</div>
+                <div className="th">Rest</div>
+                <div className="th">Hover</div>
+                <div className="th">Active</div>
+                {rows.map(([act, t, sub], i) => {
+                  const last = i === rows.length - 1 ? " last" : "";
+                  return (
+                    <React.Fragment key={act}>
+                      <div className={"row-h" + last}><b>{t}</b><span>{sub}</span></div>
+                      <div className={"cell" + last}><LCtl act={act} big /></div>
+                      <div className={"cell" + last}><LCtl act={act} big force="hover" /></div>
+                      <div className={"cell" + last}><LCtl act={act} big force="active" /></div>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+              <div style={{ borderTop: "1px solid var(--line-soft)", display: "flex", flexWrap: "wrap" }}>
+                <div className="ctl-note"><span className="swatch" style={{ background: "var(--fg-faint)" }} />Minimize stays neutral.</div>
+                <div className="ctl-note"><span className="swatch" style={{ background: "var(--accent)" }} />Full screen whispers green.</div>
+                <div className="ctl-note"><span className="swatch" style={{ background: "var(--danger)" }} />Close whispers red.</div>
+              </div>
+            </div>
+
+            <div className="card win-demo">
+              <div style={{ width: 460, border: "1px solid var(--line)", borderRadius: "var(--radius)", background: "var(--card)", overflow: "hidden", boxShadow: "0 8px 24px -14px rgba(0,0,0,.6)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, height: 38, padding: "0 6px 0 12px", borderBottom: "1px solid var(--line-soft)" }}>
+                  <span style={{ color: "var(--fg-dim)", display: "grid", placeItems: "center" }}><LIcon name="terminal" size={18} /></span>
+                  <span style={{ fontSize: 13.5, fontWeight: 650 }}>Chat</span>
+                  <span style={{ fontSize: 11, color: "var(--fg-muted)", background: "var(--inset)", padding: "2px 7px", borderRadius: 6 }}>Keiko</span>
+                  <span style={{ flex: 1 }} />
+                  <div className="kx-controls"><LCtl act="min" /><LCtl act="max" /><LCtl act="close" /></div>
+                </div>
+                <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 9 }}>
+                  <div style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "86%" }} />
+                  <div style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "62%" }} />
+                  <div style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "40%" }} />
+                </div>
+              </div>
+            </div>
+          </section>
+        );
+      }
+
+      function Library() {
+        const all = [...LIFT_NAMES, "min", "max", "restore", "close"];
+        return (
+          <section id="library">
+            <div className="sec-head">
+              <div className="sec-num">04 — LIBRARY</div>
+              <h2>The starter icons</h2>
+              <p>Sidebar, header, footer — all in the Lift hand. Names match your keys in <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Icons.tsx</span>, so they’re 1:1 swappable.</p>
+            </div>
+            <div className="lib">
+              {all.map((n) => (
+                <div className="lib-cell" key={n}>
+                  <LIcon name={n} size={26} />
+                  <span className="name">{n}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      }
+
+      function DoDont() {
+        const wrongRing = "M16.5 10.5 A6 6 0 0 1 10.5 16.5 M4.5 10.5 A6 6 0 0 1 10.5 4.5";
+        return (
+          <section id="guardrails">
+            <div className="sec-head">
+              <div className="sec-num">05 — GUARDRAILS</div>
+              <h2>Do &amp; don’t</h2>
+            </div>
+            <div className="dd">
+              <div className="card dd-col dd-do">
+                <div className="dd-tag"><LIcon name="check" size={15} /> Do</div>
+                <div className="dd-row"><span className="dd-ico"><LIcon name="search" size={24} /></span><p><b style={{ color: "var(--fg)" }}>One</b> seam per contour, at the top pen-start.</p></div>
+                <div className="dd-row"><span className="dd-ico"><LIcon name="terminal" size={24} /></span><p>Round caps, constant <b style={{ color: "var(--fg)" }}>1.6</b> stroke.</p></div>
+                <div className="dd-row"><span className="dd-ico"><LIcon name="settings" size={24} /></span><p>Monochrome — <b style={{ color: "var(--fg)" }}>currentColor</b>, colour only on interaction.</p></div>
+              </div>
+              <div className="card dd-col dd-dont">
+                <div className="dd-tag"><LIcon name="close" size={15} /> Don’t</div>
+                <div className="dd-row"><span className="dd-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={wrongRing} /><path d={HANDLE} /></svg></span><p>No two (or more) seams — the lift loses its calm.</p></div>
+                <div className="dd-row"><span className="dd-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="butt" strokeLinejoin="miter"><rect x="4" y="5" width="16" height="14" rx="2.5" /><path d="M8 9.6 L11 12.6 L8 15.6 M12.8 15.6 H16.4" /></svg></span><p>No flat/sharp caps and no closed frames without a seam.</p></div>
+                <div className="dd-row"><span className="dd-ico"><span style={{ color: "var(--accent)" }}><LIcon name="settings" size={24} /></span></span><p>No permanent green and no filled areas.</p></div>
+              </div>
+            </div>
+          </section>
+        );
+      }
+
+      const CODE = `// Keiko · Lift — drop-in for packages/keiko-ui/.../Icons.tsx
+// Only addition vs. today's Ico base: the seam in closed
+// contours. Stroke / caps / viewBox stay exactly the same.
+
+function Ico({ size = 24, sw = 1.6, children }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth={sw}
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+
+// search — the ONE open spot at 12 o'clock is the lift
+export const search = (
+  <Ico>
+    <path d="M12.25 4.76 A6 6 0 1 1 8.75 4.76" />  {/* ring, open at top */}
+    <path d="M14.7 14.7 L20 20" />                 {/* handle */}
+  </Ico>
+);
+
+// maximize (full screen) — square ring with a seam on top
+export const maximize = (
+  <Ico><path d="M14.5 7 H15 a2 2 0 0 1 2 2 V15 a2 2 0 0 1 -2 2
+    H9 a2 2 0 0 1 -2 -2 V9 a2 2 0 0 1 2 -2 H9.5" /></Ico>
+);`;
+
+      function Impl() {
+        return (
+          <section id="implementation">
+            <div className="sec-head">
+              <div className="sec-num">06 — IMPLEMENTATION</div>
+              <h2>How it lands in code</h2>
+              <p>The same <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Ico</span> wrapper as today — only the paths carry the seam. Every glyph above is copyable, currentColor SVG.</p>
+            </div>
+            <div className="code"><pre>{CODE}</pre></div>
+          </section>
+        );
+      }
+
+      function App() {
+        return (
+          <div className="doc">
+            <Hero />
+            <Rule />
+            <Template />
+            <ControlsSec />
+            <Library />
+            <DoDont />
+            <Impl />
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+    <script>
+      function dsSyncToggle() {
+        var l = document.documentElement.dataset.theme === "light";
+        document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; });
+      }
+      function dsToggleTheme() {
+        var h = document.documentElement;
+        var n = h.dataset.theme === "light" ? "dark" : "light";
+        h.dataset.theme = n;
+        try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {}
+        dsSyncToggle();
+      }
+      dsSyncToggle();
+    </script>
+  </body>
+</html>

@@ -21,6 +21,8 @@ interface FilePreviewProps {
 const DENIED_PREVIEW_MESSAGE =
   "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).";
 const MAX_HIGHLIGHT_BYTES = 200_000;
+const DOCX_REPOSITORY_SEARCH_UNSUPPORTED_MESSAGE =
+  "DOCX is not searchable in Repository Search yet. Add it to Local Knowledge, or enable small-document repository extraction when available.";
 
 interface PreviewError {
   readonly message: string;
@@ -70,6 +72,23 @@ function previewKindLabel(preview: FilesPreviewResponse): string {
   if (preview.kind === "text") return preview.extension ?? "text";
   if (preview.kind === "image") return preview.mime;
   return preview.extension ?? "binary";
+}
+
+function extensionForPreview(preview: FilesPreviewResponse): string {
+  const extension = preview.extension?.trim().toLowerCase();
+  if (extension !== undefined && extension.length > 0) return extension;
+  const lastDot = preview.name.lastIndexOf(".");
+  return lastDot >= 0 ? preview.name.slice(lastDot + 1).trim().toLowerCase() : "";
+}
+
+function binaryPreviewMessage(preview: Extract<FilesPreviewResponse, { readonly kind: "binary" }>): string {
+  if (preview.reason === "too_large") {
+    return `Preview disabled because this file exceeds ${formatBytes(preview.maxBytes ?? 0)}.`;
+  }
+  if (extensionForPreview(preview) === "docx") {
+    return DOCX_REPOSITORY_SEARCH_UNSUPPORTED_MESSAGE;
+  }
+  return "No safe text or image preview is available for this file type.";
 }
 
 function MetadataRow({
@@ -283,11 +302,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <div className="fpv-meta-card">
             <FileIcon name={preview.name} />
             <h3>{preview.name}</h3>
-            <p>
-              {preview.reason === "too_large"
-                ? `Preview disabled because this file exceeds ${formatBytes(preview.maxBytes ?? 0)}.`
-                : "No safe text or image preview is available for this file type."}
-            </p>
+            <p>{binaryPreviewMessage(preview)}</p>
             <div className="fpv-meta">
               <MetadataRow label="Type" value={preview.mime} />
               <MetadataRow label="Extension" value={preview.extension ?? "none"} />

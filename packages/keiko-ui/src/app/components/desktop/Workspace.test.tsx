@@ -55,6 +55,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
@@ -615,6 +616,69 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     );
     const surface = screen.getByRole("main", { name: "Workspace surface" });
     expect(surface.tabIndex).toBe(0);
+  });
+
+  it("marks the free workspace surface as actively panning while the left button is held", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).toHaveAttribute("data-panning", "true");
+
+    fireEvent.pointerUp(window);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("prevents text selection while the free workspace surface is actively panned", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent.pointerCancel(window);
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("fits the workspace to visible windows from the zoom control strip", async () => {
+    const fitView = vi.fn();
+    const user = userEvent.setup();
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    render(
+      <Workspace
+        ws={workspace({ wins, api: api({ fitView }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Fit workspace to windows" }));
+
+    expect(fitView).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables fit-to-windows when the workspace has no visible windows", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: [] })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fit workspace to windows" })).toBeDisabled();
   });
 
   it("ArrowLeft pans content right (panBy +step, 0)", () => {

@@ -9,7 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CapsuleActions } from "./capsule-actions";
 import type { CapsuleActionsProps } from "./capsule-actions";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import type { CapsuleActionResponse, CapsuleDetailResponse } from "@/lib/local-knowledge-api";
+import type {
+  CapsuleActionResponse,
+  CapsuleDetail,
+  CapsuleDetailResponse,
+} from "@/lib/local-knowledge-api";
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -45,6 +49,67 @@ function okAction(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse>
 const DEFAULT_ID = makeCapsuleId("42");
 const DEFAULT_NAME = "My Knowledge Base";
 
+function progressDetail(overrides: Partial<CapsuleDetail> = {}): CapsuleDetail {
+  return {
+    capsule: {
+      id: DEFAULT_ID,
+      displayName: DEFAULT_NAME,
+      tags: [],
+      sourceIds: ["src-1"],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      embeddingModelIdentity: {
+        provider: "openai-compatible:test",
+        modelId: "text-embedding-3-large",
+        vectorDimensions: 3072,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "indexing",
+      storageReference: "capsules/cap-42",
+      createdAt: 1,
+      updatedAt: 2,
+    },
+    health: {
+      capsuleId: DEFAULT_ID,
+      sourceIds: ["src-1"],
+      lifecycleState: "indexing",
+      storageSizeBytes: 100,
+      documentCount: 3,
+      chunkCount: 10,
+      vectorCount: 4,
+      embeddingIdentity: {
+        provider: "openai-compatible:test",
+        modelId: "text-embedding-3-large",
+        vectorDimensions: 3072,
+        vectorMetric: "cosine",
+      },
+      vectorCompatible: true,
+      failedDocuments: 0,
+      skippedDocuments: 0,
+      unsupportedDocuments: 0,
+      unsupportedGuidance: [],
+      staleReasons: [],
+    },
+    sources: [],
+    parserDiagnostics: [],
+    indexingJobs: [
+      {
+        id: "job-1",
+        capsuleId: DEFAULT_ID,
+        sourceIds: ["src-1"],
+        startedAt: Date.now() - 10_000,
+        status: "running",
+        totalDocuments: 3,
+        processedDocuments: 1,
+        failedDocuments: 0,
+        skippedDocuments: 0,
+      },
+    ],
+    ...overrides,
+  } as CapsuleDetail;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockFetchProjects.mockResolvedValue({ projects: [] });
@@ -70,6 +135,7 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
     refreshCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     repairCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     startIndexingImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
+    fetchCapsuleDetailImpl: vi.fn().mockResolvedValue(progressDetail()),
     ...overrides,
   };
 }
@@ -269,6 +335,134 @@ describe("CapsuleActions — connect source", () => {
       });
     });
   });
+
+  it("lets the user pick a single file from the folder browser and converts it to a files scope", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    mockFetchProjects.mockResolvedValue({
+      projects: [
+        {
+          path: "/home/user",
+          name: "Home",
+          available: true,
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+        },
+      ],
+    });
+    mockFetchFilesTree.mockImplementation((root: string, path = "") =>
+      Promise.resolve({
+        root,
+        path,
+        entries:
+          path.length === 0
+            ? [
+                {
+                  name: "Desktop",
+                  path: "Desktop",
+                  kind: "directory",
+                  sizeBytes: 0,
+                  modifiedAt: 1,
+                  extension: "",
+                  readable: true,
+                  symlink: false,
+                },
+              ]
+            : [
+                {
+                  name: "Inside Agentic AI.pdf",
+                  path: "Desktop/Inside Agentic AI.pdf",
+                  kind: "file",
+                  sizeBytes: 1024,
+                  modifiedAt: 1,
+                  extension: ".pdf",
+                  readable: true,
+                  symlink: false,
+                },
+              ],
+        truncated: false,
+      }),
+    );
+
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    expect(screen.getByLabelText(/connect source/i)).toHaveValue("folder");
+    await user.click(screen.getByRole("button", { name: /^browse$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
+    await user.click(within(dialog).getByRole("button", { name: "Home" }));
+    await waitFor(() => {
+      expect(within(dialog).getByRole("button", { name: /Desktop/i })).toBeInTheDocument();
+    });
+    await user.click(within(dialog).getByRole("button", { name: /Desktop/i }));
+    const fileCheckbox = await within(dialog).findByLabelText(/Inside Agentic AI.pdf/i);
+    expect(fileCheckbox).toBeEnabled();
+    await user.click(fileCheckbox);
+    await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
+
+    expect(screen.getByLabelText(/connect source/i)).toHaveValue("files");
+    expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
+      "/home/user",
+    );
+    expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue(
+      "Desktop/Inside Agentic AI.pdf",
+    );
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "files",
+        rootPath: "/home/user",
+        files: ["Desktop/Inside Agentic AI.pdf"],
+      });
+    });
+  });
+
+  it("shows local knowledge limits and blocks oversized files in the folder browser", async () => {
+    const user = userEvent.setup();
+    mockFetchProjects.mockResolvedValue({
+      projects: [
+        {
+          path: "/home/user",
+          name: "Home",
+          available: true,
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+        },
+      ],
+    });
+    mockFetchFilesTree.mockResolvedValue({
+      root: "/home/user",
+      path: "",
+      entries: [
+        {
+          name: "too-large.pdf",
+          path: "too-large.pdf",
+          kind: "file",
+          sizeBytes: 1536 * 1024 * 1024,
+          modifiedAt: 1,
+          extension: ".pdf",
+          readable: true,
+          symlink: false,
+        },
+      ],
+      truncated: false,
+    });
+
+    render(<CapsuleActions {...defaultProps()} />);
+
+    expect(screen.getByText(/Maximum single file size: 1.0 GB/i)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(/connect source/i), "files");
+    await user.click(screen.getByRole("button", { name: /^browse$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
+    await user.click(within(dialog).getByRole("button", { name: "Home" }));
+
+    const checkbox = await within(dialog).findByLabelText(/too-large.pdf/i);
+    expect(within(dialog).getByText(/1.5 GB · too large/i)).toBeInTheDocument();
+    expect(checkbox).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: /use selection/i })).toBeDisabled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -435,6 +629,46 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleActions — refresh action", () => {
+  it("keeps long-running direct indexing visibly active with live progress", async () => {
+    const user = userEvent.setup();
+    let finishIndexing: ((value: CapsuleActionResponse) => void) | undefined;
+    const startIndexingImpl = vi.fn(
+      () =>
+        new Promise<CapsuleActionResponse>((resolve) => {
+          finishIndexing = resolve;
+        }),
+    );
+    const fetchCapsuleDetailImpl = vi.fn().mockResolvedValue(progressDetail());
+    const onActionComplete = vi.fn();
+
+    render(
+      <CapsuleActions
+        {...defaultProps({
+          fetchCapsuleDetailImpl,
+          lifecycleState: "draft",
+          onActionComplete,
+          startIndexingImpl,
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /index this capsule now/i }));
+
+    expect(await screen.findByText("Indexing documents")).toBeInTheDocument();
+    expect(screen.getByText(/Still working/i)).toBeInTheDocument();
+    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText("1 / 3")).toBeInTheDocument();
+    expect(screen.getByText("4 / 10")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchCapsuleDetailImpl).toHaveBeenCalledWith(DEFAULT_ID);
+    });
+
+    finishIndexing?.({ ok: true, capsuleId: DEFAULT_ID });
+    await waitFor(() => {
+      expect(onActionComplete).toHaveBeenCalledOnce();
+    });
+  });
+
   it("calls refreshCapsuleImpl when confirmed", async () => {
     const user = userEvent.setup();
     const refreshCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
@@ -450,6 +684,44 @@ describe("CapsuleActions — refresh action", () => {
       expect(refreshCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
     expect(onActionComplete).toHaveBeenCalledOnce();
+  });
+
+  it("keeps long-running refreshes visibly active with live indexing progress", async () => {
+    const user = userEvent.setup();
+    let finishRefresh: ((value: CapsuleActionResponse) => void) | undefined;
+    const refreshCapsuleImpl = vi.fn(
+      () =>
+        new Promise<CapsuleActionResponse>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const fetchCapsuleDetailImpl = vi.fn().mockResolvedValue(progressDetail());
+    const onActionComplete = vi.fn();
+
+    render(
+      <CapsuleActions
+        {...defaultProps({ fetchCapsuleDetailImpl, onActionComplete, refreshCapsuleImpl })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /^refresh$/i }));
+
+    expect(await within(dialog).findByText("Refreshing changed files")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Still working/i)).toBeInTheDocument();
+    expect(within(dialog).getByText("running")).toBeInTheDocument();
+    expect(within(dialog).getByText("1 / 3")).toBeInTheDocument();
+    expect(within(dialog).getByText("4 / 10")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchCapsuleDetailImpl).toHaveBeenCalledWith(DEFAULT_ID);
+    });
+
+    finishRefresh?.({ ok: true, capsuleId: DEFAULT_ID });
+    await waitFor(() => {
+      expect(onActionComplete).toHaveBeenCalledOnce();
+    });
   });
 
   it("refresh confirm button is enabled without typing a name", async () => {

@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Components · Keiko Design System</title>
+    <script>
+      try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" aria-label="Design system">
+      <a class="nav-brand" href="index.html">
+        <img src="assets/keiko-logo.svg" alt="Keiko logo" />
+        <span><span class="bt">Keiko</span><span class="bs">Design System</span></span>
+      </a>
+      <div class="nav-label">Overview</div>
+      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
+      <div class="nav-label">Guidelines</div>
+      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
+      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
+      <a class="nav-item on" href="components.html" aria-current="page"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
+      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
+      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
+      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
+        <span class="ti">
+          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
+          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
+        </span>
+        <span class="tspace">Theme</span>
+        <span data-theme-label>Dark</span>
+      </button>
+      <div class="nav-foot">Keiko · v0.2.0</div>
+    </nav>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 03</div>
+        <h1>Components</h1>
+        <p class="lead">Every interface piece, live and on the real tokens. Hover and click them — states are real. Class names are the canonical reference; the spirit matches <code style="font-family:var(--font-mono);color:var(--accent-text)">globals.css</code>.</p>
+      </header>
+
+      <!-- BUTTONS -->
+      <section class="sec" id="buttons">
+        <div class="sec-head"><div class="num">01 — BUTTONS</div><h2>Buttons</h2><p>One primary action per surface (the green fill). Everything else is quieter — bordered, soft-accent, ghost or danger.</p></div>
+        <div class="card demo-card">
+          <div class="demo-label">Variants</div>
+          <div class="demo-row" style="margin-bottom:22px">
+            <button class="c-btn c-btn--primary"><span class="ico" data-licon="spark" data-size="16"></span>Primary</button>
+            <button class="c-btn">Default</button>
+            <button class="c-btn c-btn--accent">Accent soft</button>
+            <button class="c-btn c-btn--ghost">Ghost</button>
+            <button class="c-btn c-btn--danger">Delete</button>
+          </div>
+          <div class="demo-label">Sizes &amp; icon buttons</div>
+          <div class="demo-row">
+            <button class="c-btn c-btn--primary c-btn--sm">Small</button>
+            <button class="c-btn"><span class="ico" data-licon="plus" data-size="15"></span>New window</button>
+            <button class="c-iconbtn" aria-label="Search"><span class="ico" data-licon="search" data-size="18"></span></button>
+            <button class="c-iconbtn" aria-label="Settings"><span class="ico" data-licon="settings" data-size="18"></span></button>
+            <button class="c-iconbtn" aria-label="More"><span class="ico" data-licon="chevron" data-size="18"></span></button>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-btn</span> · <span class="cls">.c-btn--primary</span> / <span class="cls">--accent</span> / <span class="cls">--ghost</span> / <span class="cls">--danger</span> · <span class="cls">.c-iconbtn</span></p>
+        </div>
+      </section>
+
+      <!-- FORM -->
+      <section class="sec" id="forms">
+        <div class="sec-head"><div class="num">02 — FORM CONTROLS</div><h2>Inputs &amp; fields</h2><p>Recessed wells (<span class="cls">--inset</span>) for input; the accent ring marks focus in both themes.</p></div>
+        <div class="card demo-card">
+          <div class="demo-stack" style="max-width:440px">
+            <div>
+              <label class="c-label" for="f1">Project path</label>
+              <input id="f1" class="c-field" value="/Users/oscharko-dev/Projects/Keiko" />
+            </div>
+            <div>
+              <label class="c-label" for="f2">Search</label>
+              <div class="c-search"><span class="ico" data-licon="search" data-size="17"></span><input id="f2" placeholder="Search files…" /></div>
+            </div>
+            <div class="demo-row" style="gap:18px">
+              <div>
+                <label class="c-label" for="f3">Grounding</label>
+                <div class="c-select"><select id="f3"><option>Model only</option><option>Connected files</option><option>Workspace</option></select><span class="ico chev" data-licon="chevron" data-size="16"></span></div>
+              </div>
+            </div>
+            <div>
+              <label class="c-label" for="f4">Notes</label>
+              <textarea id="f4" class="c-field c-field--area" placeholder="Ask Keiko about your code…"></textarea>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-field</span> · <span class="cls">.c-search</span> · <span class="cls">.c-select</span> · <span class="cls">.c-label</span></p>
+        </div>
+      </section>
+
+      <!-- TOGGLES & TABS -->
+      <section class="sec" id="toggles">
+        <div class="sec-head"><div class="num">03 — TOGGLES &amp; TABS</div><h2>Switches &amp; tabs</h2><p>Binary settings use the pill switch; view-switchers use bordered tabs or a recessed segmented control.</p></div>
+        <div class="card demo-card">
+          <div class="demo-label">Switches</div>
+          <div class="demo-stack" style="margin-bottom:24px;max-width:300px">
+            <div class="c-switchrow"><button class="c-toggle" role="switch" aria-checked="true" aria-label="Liquid wallpaper"><span></span></button><span class="t">Liquid wallpaper</span></div>
+            <div class="c-switchrow"><button class="c-toggle" role="switch" aria-checked="false" aria-label="MemoriaViva"><span></span></button><span class="t">MemoriaViva</span></div>
+          </div>
+          <div class="demo-label">Tabs</div>
+          <div class="demo-row" style="margin-bottom:22px">
+            <div class="c-tabs" role="tablist">
+              <button class="c-tab" role="tab" aria-selected="false">Models</button>
+              <button class="c-tab" role="tab" aria-selected="true">General</button>
+              <button class="c-tab" role="tab" aria-selected="false">Security</button>
+            </div>
+          </div>
+          <div class="demo-label">Segmented</div>
+          <div class="c-seg" role="tablist">
+            <button role="tab" aria-selected="true">Chat</button>
+            <button role="tab" aria-selected="false">Agent</button>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-toggle</span> · <span class="cls">.c-tabs / .c-tab</span> · <span class="cls">.c-seg</span></p>
+        </div>
+      </section>
+
+      <!-- BADGES -->
+      <section class="sec" id="badges">
+        <div class="sec-head"><div class="num">04 — STATUS &amp; BADGES</div><h2>Badges, chips &amp; status</h2><p>Status always pairs a colour with a dot and a word — never colour alone.</p></div>
+        <div class="card demo-card">
+          <div class="demo-row" style="margin-bottom:20px">
+            <span class="c-badge c-badge--ok"><span class="dot"></span>Connected</span>
+            <span class="c-badge c-badge--warn"><span class="dot"></span>Pending</span>
+            <span class="c-badge c-badge--info"><span class="dot"></span>Running</span>
+            <span class="c-badge c-badge--danger"><span class="dot"></span>Failed</span>
+            <span class="c-badge"><span class="dot"></span>Idle</span>
+          </div>
+          <div class="demo-row">
+            <span class="c-chip"><span class="ico" data-licon="folder" data-size="15"></span>src/app</span>
+            <span class="c-chip"><span class="ico" data-licon="branch" data-size="15"></span>release/0.2.0</span>
+            <span class="c-pill"><span class="ico" data-licon="bolt" data-size="14"></span>gpt-oss-120b</span>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-badge--ok / --warn / --info / --danger</span> · <span class="cls">.c-chip</span> · <span class="cls">.c-pill</span></p>
+        </div>
+      </section>
+
+      <!-- CARDS & WINDOWS -->
+      <section class="sec" id="windows">
+        <div class="sec-head"><div class="num">05 — CARDS &amp; WINDOWS</div><h2>Cards &amp; windows</h2><p>The workspace card: a titled window with the Lift controls. Hover a control to see its meaning whisper.</p></div>
+        <div class="card demo-card">
+          <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+            <div style="width:420px;max-width:100%;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);overflow:hidden;box-shadow:var(--shadow-card)">
+              <div style="display:flex;align-items:center;gap:8px;height:38px;padding:0 6px 0 12px;border-bottom:1px solid var(--line-soft)">
+                <span class="ico" data-licon="terminal" data-size="18" style="color:var(--fg-dim)"></span>
+                <span style="font-size:13.5px;font-weight:650">Chat</span>
+                <span style="font-size:11px;color:var(--fg-muted);background:var(--inset);padding:2px 7px;border-radius:6px">Keiko</span>
+                <span style="flex:1"></span>
+                <div class="kx-controls">
+                  <button class="kx-ctl" data-dir="lift" data-act="min" aria-label="Minimize"><span class="kx-chip"></span><span class="ico" data-licon="min" data-size="17"></span></button>
+                  <button class="kx-ctl" data-dir="lift" data-act="max" aria-label="Full screen"><span class="kx-chip"></span><span class="ico" data-licon="max" data-size="17"></span></button>
+                  <button class="kx-ctl" data-dir="lift" data-act="close" aria-label="Close"><span class="kx-chip"></span><span class="ico" data-licon="close" data-size="17"></span></button>
+                </div>
+              </div>
+              <div style="padding:15px;display:flex;flex-direction:column;gap:9px">
+                <div style="height:8px;border-radius:5px;background:var(--inset);width:86%"></div>
+                <div style="height:8px;border-radius:5px;background:var(--inset);width:62%"></div>
+                <div style="height:8px;border-radius:5px;background:var(--inset);width:40%"></div>
+              </div>
+            </div>
+            <div class="card" style="width:230px;padding:18px">
+              <div style="font-size:14px;font-weight:600;margin-bottom:6px">Generic card</div>
+              <p style="font-size:12.5px;line-height:1.5;color:var(--fg-muted);margin:0">Raised surface, <span class="cls">--shadow-card</span> at rest, hairline border, radius 14.</p>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.window / .win-head</span> · <span class="cls">.win-traffic</span> (Lift controls) · <span class="cls">.card</span></p>
+        </div>
+      </section>
+
+      <!-- RAIL & TREE -->
+      <section class="sec" id="rail">
+        <div class="sec-head"><div class="num">06 — RAIL &amp; TREE</div><h2>Tool rail &amp; file tree</h2><p>The fixed left rail switches tools; the tree navigates files. Active state is an accent bar plus an accent-dim fill — shape and tone, not colour alone.</p></div>
+        <div class="card demo-card">
+          <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+            <div class="c-rail">
+              <button class="c-rail-new" aria-label="New"><span class="ico" data-licon="compose" data-size="20"></span></button>
+              <div class="c-rail-div"></div>
+              <button class="c-rail-btn" aria-current="true" aria-label="Files"><span class="ico" data-licon="files" data-size="20"></span></button>
+              <button class="c-rail-btn" aria-label="Search"><span class="ico" data-licon="search" data-size="20"></span></button>
+              <button class="c-rail-btn" aria-label="Layers"><span class="ico" data-licon="layers" data-size="20"></span></button>
+              <button class="c-rail-btn" aria-label="Settings"><span class="ico" data-licon="settings" data-size="20"></span></button>
+              <div style="flex:1"></div>
+              <div class="c-rail-avatar">N</div>
+            </div>
+            <div class="card" style="background:var(--surface)">
+              <div class="c-tree">
+                <button class="c-tree-row folder open"><span class="caret ico" data-licon="chevronR" data-size="14"></span><span class="ico" data-licon="folder" data-size="17"></span>src</button>
+                <button class="c-tree-row c-tree-indent" aria-current="true"><span class="ico" data-licon="files" data-size="16"></span>index.ts<span class="sz">5.4 KB</span></button>
+                <button class="c-tree-row c-tree-indent"><span class="ico" data-licon="files" data-size="16"></span>app.tsx<span class="sz">12 KB</span></button>
+                <button class="c-tree-row folder"><span class="caret ico" data-licon="chevronR" data-size="14"></span><span class="ico" data-licon="folder" data-size="17"></span>packages</button>
+                <button class="c-tree-row"><span class="ico" data-licon="files" data-size="16"></span>README.md<span class="sz">29 KB</span></button>
+              </div>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.rail / .rail-btn / .rail-new</span> · <span class="cls">.tr-row</span> (file tree)</p>
+        </div>
+      </section>
+
+      <!-- MENUS & TOASTS -->
+      <section class="sec" id="overlays">
+        <div class="sec-head"><div class="num">07 — MENUS &amp; FEEDBACK</div><h2>Menus, toasts &amp; alerts</h2><p>Floating surfaces use <span class="cls">--surface</span> with <span class="cls">--shadow-pop</span>. Feedback is concise and paired with an icon.</p></div>
+        <div class="card demo-card">
+          <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+            <div class="c-menu">
+              <div class="c-menu-head">Open in editor</div>
+              <button class="c-menu-item"><span class="ico" data-licon="terminal" data-size="17"></span>VS Code<span class="k">⌘1</span></button>
+              <button class="c-menu-item"><span class="ico" data-licon="terminal" data-size="17"></span>Terminal<span class="k">⌘2</span></button>
+              <div class="c-menu-sep"></div>
+              <button class="c-menu-item"><span class="ico" data-licon="archive" data-size="17"></span>Archive</button>
+            </div>
+            <div class="demo-stack">
+              <div class="c-toast">
+                <span class="ic"><span class="ico" data-licon="check" data-size="17"></span></span>
+                <span class="tx"><span class="tt">Design tweaks applied</span><span class="ts">Coder finished updating the workspace.</span></span>
+                <button class="c-btn c-btn--sm c-btn--ghost">OK</button>
+              </div>
+              <div class="c-alert c-alert--ok"><span class="ico" data-licon="check" data-size="17"></span>Connected to release/0.2.0.</div>
+              <div class="c-alert c-alert--danger"><span class="ico" data-licon="close" data-size="17"></span>Per-chat source limit reached.</div>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.c-menu</span> · <span class="cls">.c-toast</span> · <span class="cls">.c-alert--ok / --danger</span></p>
+        </div>
+      </section>
+
+      <!-- COMPOSER -->
+      <section class="sec" id="composer">
+        <div class="sec-head"><div class="num">08 — COMPOSER</div><h2>The composer</h2><p>The heart of the chat window — a focusable card with the send action as the only filled control.</p></div>
+        <div class="card demo-card">
+          <div class="c-composer" style="max-width:620px">
+            <textarea rows="2" placeholder="Ask Keiko about your code…"></textarea>
+            <div class="c-composer-bar">
+              <button class="c-iconbtn" aria-label="Attach"><span class="ico" data-licon="plus" data-size="18"></span></button>
+              <button class="c-pill"><span class="ico" data-licon="bolt" data-size="14"></span>gpt-oss-120b</button>
+              <button class="c-iconbtn" aria-label="Dictate"><span class="ico" data-licon="mic" data-size="18"></span></button>
+              <button class="c-composer-send" aria-label="Send"><span class="ico" data-licon="send" data-size="18"></span></button>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:18px"><span class="cls">.cmp-box / .cmp-input / .cmp-send</span></p>
+        </div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    <script>
+      // theme
+      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
+      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
+      dsSyncToggle();
+      // interactivity
+      document.addEventListener("click", function (e) {
+        var tg = e.target.closest(".c-toggle");
+        if (tg) { tg.setAttribute("aria-checked", tg.getAttribute("aria-checked") === "true" ? "false" : "true"); return; }
+        var tab = e.target.closest('[role="tab"]');
+        if (tab) { tab.parentElement.querySelectorAll('[role="tab"]').forEach(function (t) { t.setAttribute("aria-selected", "false"); }); tab.setAttribute("aria-selected", "true"); return; }
+        var fld = e.target.closest(".c-tree-row.folder");
+        if (fld) { fld.classList.toggle("open"); }
+      });
+    </script>
+  </body>
+</html>

@@ -45,6 +45,7 @@
     "test:coverage:ui": "vitest run --config packages/keiko-ui/vitest.coverage.config.ts --coverage",
     "test:coverage:quality": "npm run test:coverage:packages && npm run test:coverage:ui && npm run check:coverage && npm run check:coverage:release-targets && npm run check:coverage:branches",
     "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",
+    "test:e2e:local-knowledge": "playwright test --config playwright.local-knowledge-regression.config.ts",
     "test:release:smoke": "npm run test:e2e:smoke",
     "dev:start": "node scripts/dev-start.mjs",
     "dev:stop": "node scripts/dev-stop.mjs",

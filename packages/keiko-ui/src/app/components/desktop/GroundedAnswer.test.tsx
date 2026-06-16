@@ -143,6 +143,11 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/3 larger than 2 MB/)).toBeInTheDocument();
     expect(screen.getByText(/2 binary or an unsupported format/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Some connected files were skipped because Repository Search currently reads text/code files only.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("does not warn about coverage when omissions are only relevance or noise filtering", () => {

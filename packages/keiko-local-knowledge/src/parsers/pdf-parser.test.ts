@@ -46,7 +46,7 @@ describe("pdfParser", () => {
     );
   });
 
-  it("stops streamed text extraction at maxObjectsPerDocument", async () => {
+  it("stops streamed text extraction at maxObjectsPerDocument without cancelling pdfjs streams", async () => {
     const input = selectionFromBytes(PDF_MAGIC, {
       extension: "pdf",
       mediaType: "application/pdf",
@@ -81,6 +81,6 @@ describe("pdfParser", () => {
       code: "OBJECT_LIMIT_REACHED",
       severity: "error",
     });
-    expect(cancelled).toBe(true);
+    expect(cancelled).toBe(false);
   });
 });
