@@ -6,11 +6,12 @@ import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import { type PreferredInstallLayout, resolvePreferredInstallLayout } from "./install-layout.js";
 import {
   clearRuntimeState,
   isForeignLivePid,
   metaFilePath,
+  pidFilePath,
   readPidFile,
   writeLaunchMetadata,
   writePidFile,
@@ -302,8 +303,7 @@ function childEnv(env: EnvSource): NodeJS.ProcessEnv {
   return next;
 }
 
-function cliEntryPath(cwd: string): string {
-  const preferredLayout = resolvePreferredInstallLayout(cwd);
+function cliEntryPath(cwd: string, preferredLayout = resolvePreferredInstallLayout(cwd)): string {
   if (preferredLayout !== undefined) return preferredLayout.binPath;
   // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
   // re-exec'd children spawned by `keiko start` invoke the published bin rather
@@ -356,31 +356,43 @@ function reportHealthyStart(
   return 0;
 }
 
+interface LaunchTarget {
+  readonly binPath: string;
+  readonly layout: PreferredInstallLayout | undefined;
+}
+
+// Resolve the launch binary and layout exactly once per start so the spawned
+// command, its env, and the recorded metadata all agree on the same binary.
+function resolveLaunchTarget(cwd: string): LaunchTarget {
+  const layout = resolvePreferredInstallLayout(cwd);
+  return { binPath: cliEntryPath(cwd, layout), layout };
+}
+
 function spawnUiProcess(
   options: LifecycleOptions,
   env: EnvSource,
   deps: Pick<LifecycleRuntimeDeps, "spawnFn">,
   cwd: string,
+  target: LaunchTarget,
 ): { readonly child: ChildProcess; readonly logPath: string } {
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
   const fd = openSync(logPath, "a", 0o600);
-  const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
     KEIKO_STATE_DIR: options.stateDir,
-    ...(preferredLayout === undefined
+    ...(target.layout === undefined
       ? {}
       : {
-          KEIKO_CLI_BIN_PATH: preferredLayout.binPath,
-          KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
+          KEIKO_CLI_BIN_PATH: target.layout.binPath,
+          KEIKO_UI_STATIC_ROOT: target.layout.staticRoot,
         }),
   });
   try {
     return {
       child: deps.spawnFn(
         process.execPath,
-        [cliEntryPath(cwd), "ui", "--port", String(options.port), "--host", options.host],
+        [target.binPath, "ui", "--port", String(options.port), "--host", options.host],
         {
           cwd,
           detached: true,
@@ -431,25 +443,13 @@ async function cmdStart(
   deps: LifecycleRuntimeDeps,
   cwd: string,
 ): Promise<number> {
-  const running = runningPid(options, deps.isProcessAlive);
-  if (running !== undefined) {
-    const health = await probeHealth(options, deps.fetchImpl);
-    if (health.version === SDK_VERSION) {
-      io.out(
-        `Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`,
-      );
-      return 0;
-    }
-    io.out(
-      `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`,
-    );
-    const stopped = await cmdStop(options, io, deps);
-    if (stopped !== 0) return stopped;
-  }
+  const restart = await maybeStopStaleProcess(options, io, deps);
+  if (restart !== "proceed") return restart;
 
   if (!(await ensureStartPortAvailable(options, io, deps))) return 1;
 
-  const { child, logPath } = spawnUiProcess(options, env, deps, cwd);
+  const target = resolveLaunchTarget(cwd);
+  const { child, logPath } = spawnUiProcess(options, env, deps, cwd, target);
 
   if (child.pid === undefined) {
     io.err("keiko start: failed to spawn the UI process.\n");
@@ -457,7 +457,7 @@ async function cmdStart(
   }
   child.unref();
   writePidFile(options.stateDir, child.pid);
-  writeLaunchMetadata(options.stateDir, child.pid, cliEntryPath(cwd));
+  writeLaunchMetadata(options.stateDir, child.pid, target.binPath);
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);
@@ -467,6 +467,35 @@ async function cmdStart(
   clearRuntimeState(options.stateDir);
   io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
   return 1;
+}
+
+// Returns "proceed" to continue starting, 0 when a healthy process is already
+// running, or a non-zero exit code when a stale process could not be stopped.
+async function maybeStopStaleProcess(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: LifecycleRuntimeDeps,
+): Promise<number | "proceed"> {
+  const running = runningPid(options, deps.isProcessAlive);
+  if (running === undefined) return "proceed";
+
+  const health = await probeHealth(options, deps.fetchImpl);
+  if (health.version === SDK_VERSION) {
+    io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`);
+    return 0;
+  }
+  io.out(
+    `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`,
+  );
+  // A foreign-pid mismatch proves the live pid is no longer the process we
+  // recorded, so cmdStop would refuse it. Clearing stale state and respawning is
+  // safe here, and avoids a deadlock where neither start nor stop can proceed.
+  if (isForeignLivePid(options.stateDir, running)) {
+    clearRuntimeState(options.stateDir);
+    return "proceed";
+  }
+  const stopped = await cmdStop(options, io, deps);
+  return stopped === 0 ? "proceed" : stopped;
 }
 
 async function cmdStop(
@@ -481,7 +510,7 @@ async function cmdStop(
   }
   if (isForeignLivePid(options.stateDir, pid)) {
     io.err(
-      `keiko stop: pid ${String(pid)} is alive but its recorded launch identity could not confirm it is the Keiko UI process we started. Refusing to signal an unrelated process; remove ${metaFilePath(options.stateDir)} manually if this is stale.\n`,
+      `keiko stop: pid ${String(pid)} is alive but the recorded pid in ${metaFilePath(options.stateDir)} does not match, so it is not the Keiko UI process we started. Refusing to signal an unrelated process. If this state is stale, remove both ${pidFilePath(options.stateDir)} and ${metaFilePath(options.stateDir)} before retrying.\n`,
     );
     return 1;
   }

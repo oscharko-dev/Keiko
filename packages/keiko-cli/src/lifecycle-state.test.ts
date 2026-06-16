@@ -64,6 +64,20 @@ describe("lifecycle-state", () => {
     expect(isForeignLivePid(dir, 12345)).toBe(false);
   });
 
+  it("rejects metadata whose binPath or startedAt fields have the wrong type", () => {
+    const dir = makeStateDir();
+    writeFileSync(
+      metaFilePath(dir),
+      JSON.stringify({ pid: 999, binPath: 42, startedAt: null }),
+      "utf8",
+    );
+
+    expect(readLaunchMetadata(dir)).toBeUndefined();
+    // A pid mismatch would normally be foreign, but invalid metadata must fall
+    // through to legacy behavior rather than blocking a stop.
+    expect(isForeignLivePid(dir, 12345)).toBe(false);
+  });
+
   it("reports a foreign pid only when recorded metadata pid differs (pid reuse)", () => {
     const dir = makeStateDir();
     writeLaunchMetadata(dir, 999, "/x/index.js");
