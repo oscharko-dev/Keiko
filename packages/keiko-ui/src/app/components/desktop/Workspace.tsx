@@ -222,11 +222,12 @@ interface WorkspaceOutlineProps {
   readonly openPalette: () => void;
 }
 
-// React 18.3's DOM treats `inert` as a non-boolean attribute and drops it when
-// passed `inert={true}`, so render it as a string only while collapsed. The
-// Record<string,string> spread bypasses the boolean `inert` prop type without
-// `any`; an empty object leaves the panel fully operable when open.
-const inertWhenClosed = (open: boolean): Record<string, string> => (open ? {} : { inert: "true" });
+// @types/react 18.3 doesn't list `inert` on HTMLAttributes, so pass it via a
+// typed Record spread to satisfy strict mode without `any`. The empty-string
+// value is the canonical HTML boolean-attribute form; React 18.3 warns when
+// the boolean `inert` prop receives the string 'true' and recommends the
+// empty-string form (audit C274 / #1153).
+const inertWhenClosed = (open: boolean): Record<string, string> => (open ? {} : { inert: '' });
 
 function WorkspaceOutline({
   wins,
