@@ -1,4 +1,4 @@
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -260,6 +260,54 @@ describe("Workspace card connections", () => {
     );
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("activates clicked canvas windows and updates the outline status", async () => {
+    const user = userEvent.setup();
+
+    function ActivationHarness() {
+      const [wins, setWins] = useState<readonly AppWindow[]>([
+        appWindow({ id: "chat-1", type: "chat", z: 1 }),
+        appWindow({ id: "files-1", type: "files", x: 420, z: 2, cfg: { root: "/repo" } }),
+        appWindow({ id: "settings-1", type: "settings", x: 220, y: 220, z: 3 }),
+      ]);
+
+      return (
+        <Workspace
+          ws={workspace({
+            wins,
+            api: api({
+              focus: (id: string) =>
+                setWins((current) => {
+                  const nextZ = Math.max(...current.map((win) => win.z)) + 1;
+                  return current.map((win) => (win.id === id ? { ...win, z: nextZ } : win));
+                }),
+            }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />
+      );
+    }
+
+    const { container } = render(<ActivationHarness />);
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+
+    expect(outline).toHaveTextContent("Type: Chat. Status: background, open.");
+    expect(outline).toHaveTextContent("Type: Files. Status: background, open.");
+    expect(outline).toHaveTextContent("Type: Settings. Status: active, open.");
+
+    await user.click(
+      container.querySelector<HTMLElement>('.window[data-window-id="chat-1"] .win-body') as HTMLElement,
+    );
+    expect(outline).toHaveTextContent("Type: Chat. Status: active, open.");
+    expect(outline).toHaveTextContent("Type: Settings. Status: background, open.");
+
+    await user.click(
+      container.querySelector<HTMLElement>('.window[data-window-id="files-1"] .win-body') as HTMLElement,
+    );
+    expect(outline).toHaveTextContent("Type: Files. Status: active, open.");
+    expect(outline).toHaveTextContent("Type: Chat. Status: background, open.");
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", () => {
