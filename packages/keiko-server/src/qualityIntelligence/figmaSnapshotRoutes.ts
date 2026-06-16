@@ -858,6 +858,20 @@ function loadSnapshotListEntries(
   return entries;
 }
 
+function readSnapshotFetchedAt(qiDir: string, fileName: string): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(qiDir, fileName), "utf8")) as Record<string, unknown>;
+    const provenance =
+      typeof parsed.provenance === "object" && parsed.provenance !== null
+        ? (parsed.provenance as Record<string, unknown>)
+        : undefined;
+    const fetchedAt = provenance?.fetchedAt;
+    return typeof fetchedAt === "string" && fetchedAt.length > 0 ? fetchedAt : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly string[] {
   const qiDir = join(evidenceDir, FIGMA_EVIDENCE_SUBDIR);
   const stat = lstatSync(qiDir, { throwIfNoEntry: false });
@@ -866,22 +880,8 @@ function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly 
   for (const entry of readdirSync(qiDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(FIGMA_SNAPSHOT_RECORD_SUFFIX)) continue;
     const runId = entry.name.slice(0, -FIGMA_SNAPSHOT_RECORD_SUFFIX.length);
-    try {
-      const parsed = JSON.parse(readFileSync(join(qiDir, entry.name), "utf8")) as Record<
-        string,
-        unknown
-      >;
-      const provenance =
-        typeof parsed.provenance === "object" && parsed.provenance !== null
-          ? (parsed.provenance as Record<string, unknown>)
-          : undefined;
-      const fetchedAt = provenance?.fetchedAt;
-      if (typeof fetchedAt === "string" && fetchedAt.length > 0) {
-        records.push({ runId, fetchedAt });
-      }
-    } catch {
-      continue;
-    }
+    const fetchedAt = readSnapshotFetchedAt(qiDir, entry.name);
+    if (fetchedAt !== undefined) records.push({ runId, fetchedAt });
   }
   records.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
   return records.slice(0, limit).map((record) => record.runId);
