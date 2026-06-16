@@ -14,26 +14,28 @@ or compatibility playbook.
 
 ## Inventory
 
-| Surface                  | Resolution                                                                                                      | Owner                                                          | Notes                                                                                                                              |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Gateway config file      | `--config` → `KEIKO_CONFIG_FILE` → sibling `keiko.config.json` next to the resolved UI DB path                  | `@oscharko-dev/keiko-cli`, `@oscharko-dev/keiko-server`        | JSON config; may contain provider secrets.                                                                                         |
-| Gateway credentials      | `KEIKO_DEFAULT_*` and `KEIKO_MODEL_<ID>_*` environment variables                                                | `@oscharko-dev/keiko-security`, `@oscharko-dev/keiko-server`   | Read from local environment; not written back by Keiko.                                                                            |
-| UI database              | `--ui-db` or `KEIKO_UI_DATA_DIR/keiko-ui.db` or `~/.keiko/keiko-ui.db`                                          | `@oscharko-dev/keiko-server`                                   | Local SQLite store for UI state.                                                                                                   |
-| Evidence directory       | `--evidence-dir` or `KEIKO_EVIDENCE_DIR` or `./.keiko/evidence/`                                                | `@oscharko-dev/keiko-evidence`                                 | Redacted JSON manifests and related local evidence files.                                                                          |
-| Consumer package scripts | `keiko:start`, `keiko:stop` in the consumer `package.json`                                                      | `@oscharko-dev/keiko-cli`                                      | Written by `keiko init`.                                                                                                           |
-| Lifecycle files          | `KEIKO_STATE_DIR/ui.pid` and `KEIKO_STATE_DIR/ui.log` or default `.keiko/`                                      | `@oscharko-dev/keiko-cli`                                      | Runtime-only process state.                                                                                                        |
-| Local `.env` discovery   | Current working directory `.env` for the closed allowlist `FIGMA_ACCESS_TOKEN` only                             | `@oscharko-dev/keiko-cli`                                      | Read-only connector convenience surface; `KEIKO_*` runtime configuration must come from explicit flags or the process environment. |
-| Memory vault             | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/keiko-memory.db` → `~/.keiko/memory/keiko-memory.db` | `@oscharko-dev/keiko-memory-vault` and related memory packages | Local SQLite STRICT/WAL store; workspace-local paths are rejected.                                                                 |
+| Surface                  | Resolution                                                                                                                                                                   | Owner                                                          | Notes                                                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway config file      | `--config` → `KEIKO_CONFIG_FILE` → sibling `keiko.config.json` next to the resolved UI DB path                                                                               | `@oscharko-dev/keiko-cli`, `@oscharko-dev/keiko-server`        | JSON config; may contain provider secrets.                                                                                         |
+| Gateway credentials      | `KEIKO_DEFAULT_*` and `KEIKO_MODEL_<ID>_*` environment variables                                                                                                             | `@oscharko-dev/keiko-security`, `@oscharko-dev/keiko-server`   | Read from local environment; not written back by Keiko.                                                                            |
+| UI database              | `--ui-db` or `KEIKO_UI_DATA_DIR/keiko-ui.db` or `~/.keiko/keiko-ui.db`                                                                                                       | `@oscharko-dev/keiko-server`                                   | Local SQLite store for UI state.                                                                                                   |
+| Evidence directory       | `--evidence-dir` or `KEIKO_EVIDENCE_DIR` or `./.keiko/evidence/`                                                                                                             | `@oscharko-dev/keiko-evidence`                                 | Redacted JSON manifests and related local evidence files.                                                                          |
+| Consumer package scripts | `keiko:start`, `keiko:stop` in the consumer `package.json`                                                                                                                   | `@oscharko-dev/keiko-cli`                                      | Written by `keiko init`.                                                                                                           |
+| Lifecycle files          | `KEIKO_STATE_DIR/ui.pid`, `KEIKO_STATE_DIR/ui.meta.json`, and `KEIKO_STATE_DIR/ui.log` or default `.keiko/`                                                                  | `@oscharko-dev/keiko-cli`                                      | Runtime-only process state. `ui.meta.json` records the launched pid and binary so `keiko stop` confirms identity before signaling. |
+| CLI launch binary        | built checkout `./dist/cli/index.js` → `./node_modules/@oscharko-dev/keiko/dist/cli/index.js` → `KEIKO_CLI_BIN_PATH` → invocation entry → package-relative fallback → `PATH` | `@oscharko-dev/keiko-cli`                                      | Which Keiko binary `keiko start` launches. The current project's install wins over an unrelated global on `PATH`.                  |
+| Local `.env` discovery   | Current working directory `.env` for the closed allowlist `FIGMA_ACCESS_TOKEN` only                                                                                          | `@oscharko-dev/keiko-cli`                                      | Read-only connector convenience surface; `KEIKO_*` runtime configuration must come from explicit flags or the process environment. |
+| Memory vault             | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/keiko-memory.db` → `~/.keiko/memory/keiko-memory.db`                                                              | `@oscharko-dev/keiko-memory-vault` and related memory packages | Local SQLite STRICT/WAL store; workspace-local paths are rejected.                                                                 |
 
 ## Precedence ladders
 
-| Surface         | Precedence                                                                        |
-| --------------- | --------------------------------------------------------------------------------- |
-| Gateway config  | `--config` → `KEIKO_CONFIG_FILE` → sibling `keiko.config.json`                    |
-| UI DB           | explicit option → `KEIKO_UI_DATA_DIR/keiko-ui.db` → `~/.keiko/keiko-ui.db`        |
-| Evidence dir    | `--evidence-dir` → `KEIKO_EVIDENCE_DIR` → `./.keiko/evidence/`                    |
-| Lifecycle state | `--state-dir` → `KEIKO_STATE_DIR` → `.keiko/`                                     |
-| Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/` |
+| Surface         | Precedence                                                                                                                   |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Gateway config  | `--config` → `KEIKO_CONFIG_FILE` → sibling `keiko.config.json`                                                               |
+| UI DB           | explicit option → `KEIKO_UI_DATA_DIR/keiko-ui.db` → `~/.keiko/keiko-ui.db`                                                   |
+| Evidence dir    | `--evidence-dir` → `KEIKO_EVIDENCE_DIR` → `./.keiko/evidence/`                                                               |
+| Lifecycle state | `--state-dir` → `KEIKO_STATE_DIR` → `.keiko/`                                                                                |
+| Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/`                                            |
+| CLI launch bin  | built checkout → local `node_modules` package → `KEIKO_CLI_BIN_PATH` → invocation entry → package-relative fallback → `PATH` |
 
 ## Boundary notes
 
@@ -41,5 +43,11 @@ or compatibility playbook.
   silently re-home or re-export them.
 - Evidence is redacted before persistence and stored separately from UI durable state.
 - Memory audit events are persisted without raw memory bodies or payloads.
+- `keiko start` resolves the launch binary against the current project first, so a stale global on
+  `PATH` cannot win resolution. Removing an already-installed legacy global binary is still a
+  one-time manual step Keiko does not perform automatically.
+- `keiko stop` confirms a live pid against the identity recorded in `ui.meta.json` before signaling;
+  a pid whose recorded identity no longer matches (for example after Windows pid reuse) is left
+  untouched. Missing or malformed metadata falls back to the legacy pid-only behavior.
 - This page keeps migration-sensitive path and precedence details only where they remain part of
   the live product contract; it does not document retired compatibility or upgrade-only steps.

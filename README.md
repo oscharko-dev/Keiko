@@ -175,6 +175,31 @@ These scripts call the installed package entry by relative path, so they do not 
 global `keiko` already on `PATH`. This avoids stale-version launches when a machine still has an
 older global install on macOS or Windows.
 
+### Startup resolution policy
+
+`keiko start` resolves which Keiko binary to launch in a fixed precedence order, so the current
+project's install always wins over an unrelated global on `PATH`:
+
+1. A built monorepo checkout in the current directory (`./dist/cli/index.js`).
+2. The local project package (`./node_modules/@oscharko-dev/keiko/dist/cli/index.js`).
+3. The `KEIKO_CLI_BIN_PATH` environment override.
+4. The current invocation entry, then the package-relative fallback, and finally a `PATH` search.
+
+Prefer the project-local `npm run keiko:start` over a bare global `keiko`: the script is
+unambiguous, while a bare `keiko` depends on whatever happens to win on `PATH`. Run
+`keiko doctor` at any time to see the resolved entry and a remediation hint when a stale global is
+detected.
+
+`keiko stop` records the launched process identity next to its pid file and refuses to signal a
+pid whose recorded identity no longer matches (for example after Windows reuses the pid for an
+unrelated process), so it never terminates a process Keiko did not start.
+
+**Boundary:** this resolution policy governs which binary the project launches. It does not remove a
+legacy global binary already installed on the machine — that still needs a one-time manual cleanup
+(`npm uninstall -g @oscharko-dev/keiko`, or the equivalent Homebrew step). See the
+[stale-launch troubleshooting entry](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md#8-an-older-keiko-version-loads-or-keiko-stop-does-nothing)
+for the full remediation.
+
 ## First-run setup
 
 If no model gateway is configured, the UI asks for:

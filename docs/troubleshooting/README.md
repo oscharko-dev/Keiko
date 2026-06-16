@@ -492,6 +492,75 @@ rejected.
 
 ---
 
+### 8. An older Keiko version loads, or `keiko stop` does nothing
+
+| Field             | Value                                                                       |
+| ----------------- | --------------------------------------------------------------------------- |
+| Severity          | High                                                                        |
+| Surface           | CLI                                                                         |
+| Stable identifier | `stale launch path detected` / `recorded launch identity could not confirm` |
+
+**Symptom**
+
+One or both of:
+
+- `keiko start` launches a different version than the one installed in
+  the project (the UI reports an older version, or `keiko start` warns
+  `stale launch path detected`).
+- `keiko stop` prints `Keiko UI is not running.` while the UI is still
+  serving, or stderr reports that a pid's `recorded launch identity could
+not confirm` it is the process Keiko started. Observed most often on
+  Windows.
+
+**Root Cause**
+
+A legacy global `keiko` binary is still installed on `PATH`. Invoking a
+bare `keiko` lets whatever wins on `PATH` run instead of the project's
+install. `keiko start` resolves the launch binary against the current
+project first (built checkout, then the local `node_modules` package),
+so the project-local path is preferred — but a previously installed
+global binary can still be invoked directly by a user typing `keiko`.
+`keiko stop` records the launched pid and binary in
+`.keiko/ui.meta.json` and refuses to signal a pid whose recorded
+identity no longer matches, which on Windows can happen after the
+operating system reuses a pid for an unrelated process.
+
+**Diagnostic Steps**
+
+```bash
+# Show the resolved entry and any stale-launch diagnosis.
+keiko doctor
+
+# Inspect recorded runtime identity for the running UI.
+keiko status
+```
+
+```powershell
+# Windows: identify which global shim is on PATH.
+where.exe keiko
+```
+
+A `keiko doctor` diagnosis naming a `running` path outside the project
+confirms a stale global is being invoked. A `keiko stop` message that
+refuses to signal a pid confirms the recorded identity did not match the
+live pid.
+
+**Resolution**
+
+- Start the UI with the project-local script rather than a bare global:
+  `npm run keiko:start` (or `npx @oscharko-dev/keiko start`). This always
+  resolves the project's install. See the startup resolution policy in
+  the [README](../../README.md#startup-resolution-policy).
+- If `keiko doctor` reports a stale global, remove it once: run
+  `npm uninstall -g @oscharko-dev/keiko`, or the equivalent Homebrew
+  uninstall. Keiko does not remove an already-installed global binary
+  automatically; this one-time cleanup cannot heal itself.
+- If `keiko stop` refused to signal a pid, the recorded process already
+  exited and its pid was reused. Remove the stale `.keiko/ui.meta.json`
+  and `.keiko/ui.pid` files named in the message, then start again.
+
+---
+
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.

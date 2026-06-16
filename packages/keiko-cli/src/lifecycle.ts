@@ -1,12 +1,4 @@
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -15,6 +7,14 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  clearRuntimeState,
+  isForeignLivePid,
+  metaFilePath,
+  readPidFile,
+  writeLaunchMetadata,
+  writePidFile,
+} from "./lifecycle-state.js";
 import type { CliIo } from "./runner.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
@@ -198,10 +198,6 @@ function parseLifecycleArgs(
   return buildLifecycleOptions(raw, cwd, env);
 }
 
-function pidFile(options: LifecycleOptions): string {
-  return join(options.stateDir, "ui.pid");
-}
-
 function logFile(options: LifecycleOptions): string {
   return join(options.stateDir, "ui.log");
 }
@@ -241,13 +237,6 @@ async function probeHealth(
   } catch {
     return { reachable: false, version: undefined };
   }
-}
-
-function readPid(path: string): number | undefined {
-  if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, "utf8").trim();
-  if (!/^[1-9]\d*$/.test(raw)) return undefined;
-  return Number(raw);
 }
 
 function defaultIsProcessAlive(pid: number): boolean {
@@ -290,14 +279,9 @@ function runningPid(
   options: LifecycleOptions,
   isAlive: (pid: number) => boolean,
 ): number | undefined {
-  const path = pidFile(options);
-  const pid = readPid(path);
-  if (pid === undefined) {
-    rmSync(path, { force: true });
-    return undefined;
-  }
-  if (!isAlive(pid)) {
-    rmSync(path, { force: true });
+  const pid = readPidFile(options.stateDir);
+  if (pid === undefined || !isAlive(pid)) {
+    clearRuntimeState(options.stateDir);
     return undefined;
   }
   return pid;
@@ -472,14 +456,15 @@ async function cmdStart(
     return 1;
   }
   child.unref();
-  writeFileSync(pidFile(options), `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
+  writePidFile(options.stateDir, child.pid);
+  writeLaunchMetadata(options.stateDir, child.pid, cliEntryPath(cwd));
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);
   if (healthy) return reportHealthyStart(options, io, child.pid, logPath, deps.openExternal);
 
   deps.killProcess(child.pid, "SIGTERM");
-  rmSync(pidFile(options), { force: true });
+  clearRuntimeState(options.stateDir);
   io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
   return 1;
 }
@@ -494,12 +479,18 @@ async function cmdStop(
     io.out("Keiko UI is not running.\n");
     return 0;
   }
+  if (isForeignLivePid(options.stateDir, pid)) {
+    io.err(
+      `keiko stop: pid ${String(pid)} is alive but its recorded launch identity could not confirm it is the Keiko UI process we started. Refusing to signal an unrelated process; remove ${metaFilePath(options.stateDir)} manually if this is stale.\n`,
+    );
+    return 1;
+  }
   io.out(`Stopping Keiko UI (pid ${String(pid)}) ...\n`);
   deps.killProcess(pid, "SIGTERM");
   const deadline = Date.now() + options.stopTimeoutMs;
   while (Date.now() <= deadline) {
     if (!deps.isProcessAlive(pid)) {
-      rmSync(pidFile(options), { force: true });
+      clearRuntimeState(options.stateDir);
       io.out("Keiko UI stopped.\n");
       return 0;
     }
@@ -514,7 +505,7 @@ async function cmdStop(
     io.err(`keiko stop: failed to stop pid ${String(pid)}.\n`);
     return 1;
   }
-  rmSync(pidFile(options), { force: true });
+  clearRuntimeState(options.stateDir);
   io.out("Keiko UI stopped (forced).\n");
   return 0;
 }
