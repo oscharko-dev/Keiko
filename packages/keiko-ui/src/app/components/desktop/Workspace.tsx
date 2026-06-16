@@ -243,6 +243,13 @@ interface WorkspaceOutlineProps {
   readonly openPalette: () => void;
 }
 
+// @types/react 18.3 doesn't list `inert` on HTMLAttributes, so pass it via a
+// typed Record spread to satisfy strict mode without `any`. The empty-string
+// value is the canonical HTML boolean-attribute form; React 18.3 warns when
+// the boolean `inert` prop receives the string 'true' and recommends the
+// empty-string form (audit C274 / #1153).
+const inertWhenClosed = (open: boolean): Record<string, string> => (open ? {} : { inert: '' });
+
 function WorkspaceOutline({
   wins,
   conns,
@@ -260,10 +267,54 @@ function WorkspaceOutline({
     [conns, wins],
   );
   const hasWindows = wins !== null && wins.length > 0;
+  // #1153: reveal is state-driven, not CSS-`:focus-within`-only. A collapsed
+  // panel previously kept pointer-events:none buttons in the a11y tree, so a
+  // pointer (or AT-driven) click fell through to the canvas as a silent no-op.
+  // `pinned` is the deliberate toggle; hover and focus-within are tracked
+  // separately so the panel stays open while keyboard focus remains inside,
+  // even after the pointer leaves.
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const open = pinned || hovered || focusWithin;
 
   return (
-    <section className="ws-outline" aria-labelledby="ws-outline-title">
-      <div className="ws-outline-inner">
+    <section
+      className="ws-outline"
+      data-open={open ? "true" : "false"}
+      aria-label="Workspace outline"
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocusWithin(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocusWithin(false);
+      }}
+    >
+      <button
+        type="button"
+        className="ws-outline-toggle"
+        aria-expanded={open}
+        aria-controls="ws-outline-content"
+        // Hiding from the pinned state should collapse immediately instead of
+        // waiting for hover/focus to clear.
+        onClick={() => {
+          if (pinned) {
+            setPinned(false);
+            setHovered(false);
+            setFocusWithin(false);
+            return;
+          }
+          setPinned(true);
+        }}
+      >
+        {open ? "Hide workspace outline" : "Show workspace outline"}
+      </button>
+      <div
+        id="ws-outline-content"
+        className="ws-outline-content ws-outline-inner"
+        aria-hidden={open ? undefined : true}
+        {...inertWhenClosed(open)}
+      >
         <h2 id="ws-outline-title">Workspace outline</h2>
         <p className="ws-outline-summary">
           {wins === null

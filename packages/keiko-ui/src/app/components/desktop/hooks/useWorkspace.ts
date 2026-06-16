@@ -301,7 +301,12 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
         return;
       }
       const target = e.target;
-      if (target instanceof Element && target.closest(".window") !== null) return;
+      if (
+        target instanceof Element &&
+        (target.closest(".window") !== null || target.closest(".ws-outline") !== null)
+      ) {
+        return;
+      }
       e.preventDefault();
       const delta = normalizeWheelDelta(e);
       queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }));

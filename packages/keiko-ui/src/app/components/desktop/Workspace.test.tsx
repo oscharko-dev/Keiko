@@ -1,9 +1,10 @@
-import { createRef, useState } from "react";
+import { createRef, useRef, useState, type ReactNode } from "react";
 import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
+import { makeMutations } from "./hooks/workspaceActions";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow } from "./windows/types";
 import {
@@ -200,6 +201,10 @@ describe("Workspace card connections", () => {
     );
 
     const outline = screen.getByRole("region", { name: "Workspace outline" });
+    // #1153: the outline content is inert/aria-hidden until the panel is opened,
+    // so the inner headings and action buttons only enter the a11y tree once a
+    // user reveals it via the toggle affordance.
+    await user.click(within(outline).getByRole("button", { name: "Show workspace outline" }));
     expect(outline).toHaveTextContent("2 workspace windows, 1 relationship.");
     expect(
       screen.getByRole("heading", { name: "Chat: Release review", level: 4 }),
@@ -298,13 +303,17 @@ describe("Workspace card connections", () => {
     expect(outline).toHaveTextContent("Type: Settings. Status: active, open.");
 
     await user.click(
-      container.querySelector<HTMLElement>('.window[data-window-id="chat-1"] .win-body') as HTMLElement,
+      container.querySelector<HTMLElement>(
+        '.window[data-window-id="chat-1"] .win-body',
+      ) as HTMLElement,
     );
     expect(outline).toHaveTextContent("Type: Chat. Status: active, open.");
     expect(outline).toHaveTextContent("Type: Settings. Status: background, open.");
 
     await user.click(
-      container.querySelector<HTMLElement>('.window[data-window-id="files-1"] .win-body') as HTMLElement,
+      container.querySelector<HTMLElement>(
+        '.window[data-window-id="files-1"] .win-body',
+      ) as HTMLElement,
     );
     expect(outline).toHaveTextContent("Type: Files. Status: active, open.");
     expect(outline).toHaveTextContent("Type: Chat. Status: background, open.");
@@ -897,5 +906,207 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     // Dispatch on the child; the event bubbles but target stays the child.
     fireEvent.keyDown(windowEl as HTMLElement, { key: "ArrowLeft", bubbles: true });
     expect(panBy).not.toHaveBeenCalled();
+  });
+});
+
+// Regression for #1153. The outline panel was revealed only on :focus-within,
+// so a collapsed panel kept its action buttons in the DOM + a11y tree under
+// pointer-events:none — a pointer click fell through to the canvas and window
+// state never changed. jsdom ignores pointer-events, so the browser-level fall
+// through is covered by the Playwright @smoke test in tests/e2e. These RTL
+// tests pin the DOM contract that keeps the two in sync: collapsed = inert and
+// aria-hidden (no falsely-exposed controls), and an explicit pointer-operable
+// toggle that opens the panel and drives REAL window-state mutations.
+function RealOutlineHarness({ initial }: { readonly initial: readonly AppWindow[] }): ReactNode {
+  const [wins, setWins] = useState<AppWindow[] | null>([...initial]);
+  // Mirror useWorkspace: the z-counter starts at the highest persisted z so a
+  // restore/focus bump lands a window above all others (becomes `top`/active).
+  const zc = useRef(initial.reduce((max, win) => Math.max(max, win.z), 0));
+  const mutations = useRef(
+    makeMutations({ setWins, zc, worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }) }),
+  );
+  const workspaceApi = api(mutations.current);
+  return (
+    <Workspace
+      ws={workspace({ wins, api: workspaceApi })}
+      wsRef={createRef<HTMLDivElement>()}
+      openPalette={() => undefined}
+    />
+  );
+}
+
+describe("#1153 — pointer users can operate the workspace outline", () => {
+  function twoWindows(): AppWindow[] {
+    return [
+      appWindow({ id: "bg-1", type: "agents", z: 1 }),
+      appWindow({ id: "active-1", type: "files", x: 420, z: 5 }),
+    ];
+  }
+
+  it("collapses the outline content as inert + aria-hidden until opened", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Show workspace outline" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    const content = outline.querySelector(".ws-outline-content");
+    expect(content).not.toBeNull();
+    expect(content).toHaveAttribute("aria-hidden", "true");
+    expect(content).toHaveAttribute("inert");
+    expect(outline).toHaveAttribute("data-open", "false");
+  });
+
+  it("reveals the outline and exposes operable buttons when the toggle is pressed", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
+
+    const toggle = screen.getByRole("button", { name: "Hide workspace outline" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(outline).toHaveAttribute("data-open", "true");
+    const content = outline.querySelector(".ws-outline-content");
+    expect(content).not.toHaveAttribute("aria-hidden");
+    expect(content).not.toHaveAttribute("inert");
+  });
+
+  it("collapses immediately when Hide workspace outline is pressed", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    await user.click(screen.getByRole("button", { name: "Hide workspace outline" }));
+
+    expect(screen.getByRole("button", { name: "Show workspace outline" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(outline).toHaveAttribute("data-open", "false");
+    const content = outline.querySelector(".ws-outline-content");
+    expect(content).toHaveAttribute("aria-hidden", "true");
+    expect(content).toHaveAttribute("inert");
+  });
+
+  it("stays open when the pointer leaves but focus remains inside the outline", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    fireEvent.pointerEnter(outline);
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    const newWindowButton = within(outline).getByRole("button", { name: "New window" });
+    fireEvent.focus(newWindowButton);
+    fireEvent.pointerLeave(outline);
+
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    fireEvent.blur(newWindowButton, { relatedTarget: document.body });
+    expect(outline).toHaveAttribute("data-open", "false");
+  });
+
+  it("opens via the toggle and a per-window Close button mutates real window state", async () => {
+    const user = userEvent.setup();
+    render(<RealOutlineHarness initial={twoWindows()} />);
+
+    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
+
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(within(outline).getByRole("heading", { name: "Agents", level: 4 })).toBeInTheDocument();
+
+    await user.click(within(outline).getByRole("button", { name: "Close Agents" }));
+
+    expect(within(outline).queryByRole("heading", { name: "Agents", level: 4 })).toBeNull();
+    expect(within(outline).getByRole("heading", { name: "Files", level: 4 })).toBeInTheDocument();
+  });
+
+  it("opens via the toggle and a per-window Minimize button mutates real window state", async () => {
+    const user = userEvent.setup();
+    render(<RealOutlineHarness initial={twoWindows()} />);
+
+    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+
+    await user.click(within(outline).getByRole("button", { name: "Minimize Agents" }));
+
+    expect(within(outline).getByRole("button", { name: "Restore Agents" })).toBeInTheDocument();
+  });
+
+  it("opens via the toggle and the Open button activates the background window (real state)", async () => {
+    const user = userEvent.setup();
+    // bg-1 (agents, z low) is background; active-1 (files, z high) is active/top.
+    render(<RealOutlineHarness initial={twoWindows()} />);
+
+    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+
+    const agentsArticle = within(outline)
+      .getByRole("heading", { name: "Agents", level: 4 })
+      .closest("article") as HTMLElement;
+    const filesArticle = within(outline)
+      .getByRole("heading", { name: "Files", level: 4 })
+      .closest("article") as HTMLElement;
+    expect(agentsArticle).toHaveTextContent("Status: background, open.");
+    expect(filesArticle).toHaveTextContent("Status: active, open.");
+
+    // "Open Agents" calls api.restore(bg-1), bumping it above active-1 — the
+    // real topWindow() recompute must flip which window reads as active.
+    await user.click(within(outline).getByRole("button", { name: "Open Agents" }));
+
+    expect(agentsArticle).toHaveTextContent("Status: active, open.");
+    expect(filesArticle).toHaveTextContent("Status: background, open.");
+  });
+
+  it("keeps the keyboard :focus-within path working — focusing a control opens the panel", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(outline).toHaveAttribute("data-open", "false");
+
+    // Focusing any control inside the section fires onFocusCapture and reveals
+    // the panel — the keyboard parity path for pointer hover (#1153). fireEvent
+    // flushes the focusin synthetic event and state update inside act().
+    const toggle = screen.getByRole("button", { name: "Show workspace outline" });
+    fireEvent.focus(toggle);
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    // Blurring out of the section (relatedTarget outside) clears `transient`
+    // and collapses the panel — exercises the onBlurCapture contains() branch.
+    fireEvent.blur(toggle, { relatedTarget: document.body });
+    expect(outline).toHaveAttribute("data-open", "false");
   });
 });
