@@ -306,11 +306,12 @@ async function apiJson<T>(
   data?: unknown,
   expectedStatus?: number,
 ): Promise<T> {
-  const response = await request[method](path, {
-    headers: method === "get" ? undefined : MUTATION_HEADERS,
+  const options = {
     data,
     timeout: 30 * 60_000,
-  });
+    ...(method === "get" ? {} : { headers: MUTATION_HEADERS }),
+  };
+  const response = await request[method](path, options);
   if (expectedStatus !== undefined) {
     expect(response.status(), await response.text()).toBe(expectedStatus);
   } else {
