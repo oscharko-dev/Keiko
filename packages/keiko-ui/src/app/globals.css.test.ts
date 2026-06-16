@@ -363,6 +363,27 @@ describe("Conversation memory switch target size (WCAG 2.5.8)", () => {
   });
 });
 
+describe("Issue #1169 — first-run gateway setup responsiveness", () => {
+  it(".gw-setup-backdrop uses safe centering and vertical overflow scrolling", () => {
+    const block = cssBlock(".gw-setup-backdrop {");
+    expect(block).toContain("place-items: safe center");
+    expect(block).toContain("overflow-y: auto");
+  });
+
+  it(".gw-setup is viewport-bounded and internally scrollable", () => {
+    const block = cssBlock(".gw-setup {");
+    expect(block).toContain("max-height: calc(100vh - 48px)");
+    expect(block).toContain("max-height: calc(100dvh - 48px)");
+    expect(block).toContain("overflow: hidden");
+  });
+
+  it(".gw-form owns the internal scroll surface so the card clips scrollbar bleed", () => {
+    const block = cssBlock(".gw-form {");
+    expect(block).toContain("flex: 1");
+    expect(block).toContain("min-height: 0");
+    expect(block).toContain("overflow-y: auto");
+  });
+});
 // ─── Fix 4: dense desktop text clarity ───────────────────────────────────────
 
 describe("Fix 4 — dense desktop text clarity", () => {
