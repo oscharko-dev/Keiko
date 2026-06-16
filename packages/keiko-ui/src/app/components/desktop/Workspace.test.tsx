@@ -266,7 +266,7 @@ describe("Workspace card connections", () => {
     const user = userEvent.setup();
 
     function ActivationHarness() {
-      const [wins, setWins] = useState<readonly AppWindow[]>([
+      const [wins, setWins] = useState<AppWindow[]>([
         appWindow({ id: "chat-1", type: "chat", z: 1 }),
         appWindow({ id: "files-1", type: "files", x: 420, z: 2, cfg: { root: "/repo" } }),
         appWindow({ id: "settings-1", type: "settings", x: 220, y: 220, z: 3 }),
