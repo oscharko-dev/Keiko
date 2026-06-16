@@ -46,6 +46,7 @@ export interface WorkspaceApi {
   readonly linkedFigmaSnapshotRunIds: (id: string) => readonly string[];
   readonly currentFilesContext: () => FilesWindowContext | null;
   readonly zoomTo: (z: number) => void;
+  readonly fitView: () => void;
   readonly resetView: () => void;
   readonly panBy: (dx: number, dy: number) => void;
   readonly rect: () => DOMRect | null;

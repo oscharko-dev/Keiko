@@ -172,6 +172,7 @@ function windowIdFromWheelTarget(target: EventTarget | null): string | null {
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
+  readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
@@ -180,18 +181,96 @@ interface PanZoomResult {
   readonly viewRef: MutableRefObject<View>;
   readonly worldVP: () => ViewportWorld | null;
   readonly zoomTo: (z: number) => void;
+  readonly fitView: () => void;
   readonly resetView: () => void;
   readonly panBy: (dx: number, dy: number) => void;
   readonly rect: () => DOMRect | null;
 }
 
-function usePanZoom({ wsRef, view, setView, setWins }: UsePanZoomArgs): PanZoomResult {
+export function normalizeWheelDelta(e: WheelEvent): { readonly x: number; readonly y: number } {
+  const multiplier = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === 2 ? 800 : 1;
+  return { x: e.deltaX * multiplier, y: e.deltaY * multiplier };
+}
+
+export function fitWorkspaceViewToWindows(
+  windows: readonly AppWindow[],
+  rect: Pick<DOMRect, "width" | "height">,
+): View {
+  const visible = windows.filter((w) => w.minimized !== true);
+  if (visible.length === 0) return { zoom: 1, x: 0, y: 0 };
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const win of visible) {
+    minX = Math.min(minX, win.x);
+    minY = Math.min(minY, win.y);
+    maxX = Math.max(maxX, win.x + win.w);
+    maxY = Math.max(maxY, win.y + win.h);
+  }
+
+  const padding = 72;
+  const contentW = Math.max(1, maxX - minX);
+  const contentH = Math.max(1, maxY - minY);
+  const availableW = Math.max(1, rect.width - padding * 2);
+  const availableH = Math.max(1, rect.height - padding * 2);
+  const zoom = clampViewZoom(Math.min(1, availableW / contentW, availableH / contentH));
+  const contentCx = minX + contentW / 2;
+  const contentCy = minY + contentH / 2;
+
+  return {
+    zoom,
+    x: Math.round(rect.width / 2 - contentCx * zoom),
+    y: Math.round(rect.height / 2 - contentCy * zoom),
+  };
+}
+
+function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
+  const pendingViewRef = useRef<View | null>(null);
+  const frameRef = useRef<number | null>(null);
 
   useEffect(() => {
     persistList(VIEW_LS, view);
   }, [view]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(frameRef.current);
+      }
+    },
+    [],
+  );
+
+  const queueView = useCallback(
+    (next: View | ((current: View) => View)): void => {
+      const base = pendingViewRef.current ?? viewRef.current;
+      const resolved = typeof next === "function" ? next(base) : next;
+      viewRef.current = resolved;
+      pendingViewRef.current = resolved;
+
+      if (
+        typeof window.requestAnimationFrame !== "function" ||
+        typeof window.cancelAnimationFrame !== "function"
+      ) {
+        pendingViewRef.current = null;
+        setView(resolved);
+        return;
+      }
+
+      if (frameRef.current !== null) return;
+      frameRef.current = window.requestAnimationFrame(() => {
+        frameRef.current = null;
+        const pending = pendingViewRef.current;
+        pendingViewRef.current = null;
+        if (pending !== null) setView(pending);
+      });
+    },
+    [setView],
+  );
 
   useEffect(() => {
     const el = wsRef.current;
@@ -210,22 +289,28 @@ function usePanZoom({ wsRef, view, setView, setWins }: UsePanZoomArgs): PanZoomR
         }
         const r = el.getBoundingClientRect();
         const v = viewRef.current;
-        const z2 = clampViewZoom(v.zoom * Math.exp(-e.deltaY * 0.0015));
+        const delta = normalizeWheelDelta(e);
+        const z2 = clampViewZoom(v.zoom * Math.exp(-delta.y * 0.0015));
         const wx = (e.clientX - r.left - v.x) / v.zoom;
         const wy = (e.clientY - r.top - v.y) / v.zoom;
-        setView({ zoom: z2, x: e.clientX - r.left - wx * z2, y: e.clientY - r.top - wy * z2 });
+        queueView({
+          zoom: z2,
+          x: e.clientX - r.left - wx * z2,
+          y: e.clientY - r.top - wy * z2,
+        });
         return;
       }
       const target = e.target;
       if (target instanceof Element && target.closest(".window") !== null) return;
       e.preventDefault();
-      setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+      const delta = normalizeWheelDelta(e);
+      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onWheel);
     };
-  }, [wsRef, setView, setWins]);
+  }, [wsRef, setWins, queueView]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -249,18 +334,27 @@ function usePanZoom({ wsRef, view, setView, setWins }: UsePanZoomArgs): PanZoomR
       const wx = (cx - v.x) / v.zoom;
       const wy = (cy - v.y) / v.zoom;
       const z2 = clampViewZoom(z);
-      setView({ zoom: z2, x: cx - wx * z2, y: cy - wy * z2 });
+      queueView({ zoom: z2, x: cx - wx * z2, y: cy - wy * z2 });
     },
-    [rect, setView],
+    [rect, queueView],
   );
 
-  const resetView = useCallback((): void => setView({ zoom: 1, x: 0, y: 0 }), [setView]);
+  const fitView = useCallback(
+    (): void => {
+      const r = rect();
+      if (r === null) return;
+      queueView(fitWorkspaceViewToWindows(winsRef.current, r));
+    },
+    [rect, winsRef, queueView],
+  );
+
+  const resetView = useCallback((): void => queueView({ zoom: 1, x: 0, y: 0 }), [queueView]);
   const panBy = useCallback(
-    (dx: number, dy: number): void => setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
-    [setView],
+    (dx: number, dy: number): void => queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+    [queueView],
   );
 
-  return { viewRef, worldVP, zoomTo, resetView, panBy, rect };
+  return { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect };
 }
 
 interface UseHydrateArgs {
@@ -483,9 +577,10 @@ export function useWorkspace(
   const connectCleanupRef = useRef<(() => void) | null>(null);
   const cancelConnectRef = useRef<() => void>(() => undefined);
 
-  const { viewRef, worldVP, zoomTo, resetView, panBy, rect } = usePanZoom({
+  const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
     wsRef,
     view,
+    winsRef,
     setView,
     setWins,
   });
@@ -634,6 +729,7 @@ export function useWorkspace(
     linkedFigmaSnapshotRunIds,
     currentFilesContext,
     zoomTo,
+    fitView,
     resetView,
     panBy,
     rect,

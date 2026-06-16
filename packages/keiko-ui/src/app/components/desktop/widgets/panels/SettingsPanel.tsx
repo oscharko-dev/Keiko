@@ -7,6 +7,27 @@ import type { ConversationIneligibilityReason, ModelCapability } from "@/lib/typ
 import { explainConversationIneligibility, isConversationEligibleModel } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
+import { Toggle } from "../shared/Toggle";
+import {
+  WALLPAPER_ENABLED_EVENT,
+  WALLPAPER_ENABLED_KEY,
+  WALLPAPER_OPACITY_EVENT,
+  WALLPAPER_OPACITY_KEY,
+  FRAME_BORDER_STRENGTH_EVENT,
+  FRAME_BORDER_STRENGTH_KEY,
+  WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT,
+  WORKSPACE_BACKGROUND_BRIGHTNESS_KEY,
+  WORKSPACE_GRID_STRENGTH_EVENT,
+  WORKSPACE_GRID_STRENGTH_KEY,
+  applyFrameBorderStrength,
+  applyWorkspaceBackgroundBrightness,
+  applyWorkspaceGridStrength,
+  readFrameBorderStrength,
+  readWallpaperEnabled,
+  readWallpaperOpacity,
+  readWorkspaceBackgroundBrightness,
+  readWorkspaceGridStrength,
+} from "../../workspace-appearance";
 
 function kindLabel(kind: ModelCapability["kind"]): string {
   if (kind === "ocr-vision") return "OCR";
@@ -104,19 +125,23 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
   );
 }
 
-const WALLPAPER_OPACITY_KEY = "keiko.wallpaper.opacity";
-
-function readWallpaperOpacity(): number {
-  if (typeof window === "undefined") return 100;
-  const raw = window.localStorage.getItem(WALLPAPER_OPACITY_KEY);
-  if (raw === null) return 100;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return 100;
-  return Math.max(0, Math.min(100, parsed));
-}
-
 function GeneralPrefs(): ReactNode {
+  const [wallpaperEnabled, setWallpaperEnabled] = useState<boolean>(readWallpaperEnabled);
   const [wp, setWp] = useState<number>(readWallpaperOpacity);
+  const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
+  const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
+  const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WALLPAPER_ENABLED_KEY, wallpaperEnabled ? "true" : "false");
+    } catch {
+      /* ignore quota / private mode */
+    }
+    window.dispatchEvent(new CustomEvent(WALLPAPER_ENABLED_EVENT, { detail: wallpaperEnabled }));
+  }, [wallpaperEnabled]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -124,10 +149,53 @@ function GeneralPrefs(): ReactNode {
     } catch {
       /* ignore quota / private mode */
     }
-    window.dispatchEvent(new CustomEvent("keiko:wallpaper-opacity", { detail: wp }));
+    window.dispatchEvent(new CustomEvent(WALLPAPER_OPACITY_EVENT, { detail: wp }));
   }, [wp]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WORKSPACE_BACKGROUND_BRIGHTNESS_KEY, String(bgBrightness));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyWorkspaceBackgroundBrightness(bgBrightness);
+    window.dispatchEvent(
+      new CustomEvent(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, { detail: bgBrightness }),
+    );
+  }, [bgBrightness]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WORKSPACE_GRID_STRENGTH_KEY, String(gridStrength));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyWorkspaceGridStrength(gridStrength);
+    window.dispatchEvent(new CustomEvent(WORKSPACE_GRID_STRENGTH_EVENT, { detail: gridStrength }));
+  }, [gridStrength]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(FRAME_BORDER_STRENGTH_KEY, String(frameBorderStrength));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyFrameBorderStrength(frameBorderStrength);
+    window.dispatchEvent(
+      new CustomEvent(FRAME_BORDER_STRENGTH_EVENT, { detail: frameBorderStrength }),
+    );
+  }, [frameBorderStrength]);
+
   // CSS uses --p to fill the track; React's CSSProperties doesn't know custom props.
   const fill: CSSProperties = { ["--p"]: `${String(wp)}%` } as CSSProperties;
+  const bgFill: CSSProperties = { ["--p"]: `${String(bgBrightness)}%` } as CSSProperties;
+  const gridFill: CSSProperties = { ["--p"]: `${String(gridStrength)}%` } as CSSProperties;
+  const frameBorderFill: CSSProperties = {
+    ["--p"]: `${String(frameBorderStrength)}%`,
+  } as CSSProperties;
   return (
     <>
       <div className="set-sec-h">
@@ -135,11 +203,18 @@ function GeneralPrefs(): ReactNode {
           <div className="set-sec-t">Workspace wallpaper</div>
           <div className="set-sec-d">
             Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and
-            clicks. Set to 0% for the plain workspace background.
+            clicks. Turn it off to stop the WebGL animation completely.
           </div>
         </div>
       </div>
       <div className="gpref">
+        <div className="gpref-row">
+          <div>
+            <div className="gpref-label">Liquid wallpaper</div>
+            <div className="gpref-help">{wallpaperEnabled ? "Running" : "Stopped"}</div>
+          </div>
+          <Toggle on={wallpaperEnabled} onChange={setWallpaperEnabled} label="Liquid wallpaper" />
+        </div>
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="wp-op">
             Wallpaper opacity
@@ -154,6 +229,7 @@ function GeneralPrefs(): ReactNode {
           max={100}
           step={1}
           value={wp}
+          disabled={!wallpaperEnabled}
           onChange={(e) => setWp(Number.parseInt(e.target.value, 10))}
           style={fill}
           aria-label="Wallpaper opacity"
@@ -161,6 +237,78 @@ function GeneralPrefs(): ReactNode {
         <div className="gpref-scale">
           <span>Off</span>
           <span>Full</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="ws-bg-bright">
+            Workspace background brightness
+          </label>
+          <span className="gpref-val mono">{bgBrightness}%</span>
+        </div>
+        <input
+          id="ws-bg-bright"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={bgBrightness}
+          onChange={(e) => setBgBrightness(Number.parseInt(e.target.value, 10))}
+          style={bgFill}
+          aria-label="Workspace background brightness"
+        />
+        <div className="gpref-scale">
+          <span>Base</span>
+          <span>Lighter</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="ws-grid-strength">
+            Workspace grid strength
+          </label>
+          <span className="gpref-val mono">{gridStrength}%</span>
+        </div>
+        <input
+          id="ws-grid-strength"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={gridStrength}
+          onChange={(e) => setGridStrength(Number.parseInt(e.target.value, 10))}
+          style={gridFill}
+          aria-label="Workspace grid strength"
+        />
+        <div className="gpref-scale">
+          <span>Subtle</span>
+          <span>Strong</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="frame-border-strength">
+            Workspace border strength
+          </label>
+          <span className="gpref-val mono">{frameBorderStrength}%</span>
+        </div>
+        <input
+          id="frame-border-strength"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={frameBorderStrength}
+          onChange={(e) => setFrameBorderStrength(Number.parseInt(e.target.value, 10))}
+          style={frameBorderFill}
+          aria-label="Workspace border strength"
+        />
+        <div className="gpref-scale">
+          <span>Subtle</span>
+          <span>Strong</span>
         </div>
       </div>
     </>

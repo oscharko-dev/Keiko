@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Content &amp; Voice · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <style>
+      .vt { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .vt-col { padding: 20px 22px; }
+      .vt-tag { display: inline-flex; align-items: center; gap: 7px; font: 600 11px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 16px; }
+      .vt-do .vt-tag { color: var(--accent-text); }
+      .vt-dont .vt-tag { color: var(--danger); }
+      .vt-row { padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+      .vt-row:last-child { border-bottom: 0; }
+      .vt-ex { font-size: 13.5px; color: var(--fg); }
+      .vt-why { font-size: 12px; color: var(--fg-muted); margin-top: 3px; }
+      .vt-dont .vt-ex { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--danger) 60%, transparent); }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" aria-label="Design system">
+      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
+      <div class="nav-label">Overview</div>
+      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
+      <div class="nav-label">Guidelines</div>
+      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
+      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
+      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
+      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
+      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
+      <a class="nav-item on" href="content.html" aria-current="page"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
+        <span class="ti">
+          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
+          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
+        </span>
+        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
+      </button>
+      <div class="nav-foot">Keiko · v0.2.0</div>
+    </nav>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 07</div>
+        <h1>Content &amp; Voice</h1>
+        <p class="lead">Keiko speaks the way it looks: precise, calm and quietly confident. It explains, never shouts; it earns trust by being clear about what it knows and what it did. <span style="color:var(--fg);font-style:italic">Ex experientia disco</span> — it learns from experience, and so does its writing.</p>
+      </header>
+
+      <section class="sec" id="voice">
+        <div class="sec-head"><div class="num">01 — VOICE</div><h2>Four traits</h2></div>
+        <div class="card" style="padding:26px 28px;display:grid;grid-template-columns:repeat(2,1fr);gap:26px 36px">
+          <div><h3 style="font-size:15px;margin:0 0 7px">Precise</h3><p class="muted-cap">Say the exact thing. Name the file, the count, the action. No vague reassurance.</p></div>
+          <div><h3 style="font-size:15px;margin:0 0 7px">Calm</h3><p class="muted-cap">Steady at all times — especially in errors. No alarm, no exclamation marks.</p></div>
+          <div><h3 style="font-size:15px;margin:0 0 7px">Governed</h3><p class="muted-cap">Transparent about scope, sources and consequences. Trust over hype.</p></div>
+          <div><h3 style="font-size:15px;margin:0 0 7px">Plain</h3><p class="muted-cap">Short words, present tense, second person. Explain jargon or drop it.</p></div>
+        </div>
+      </section>
+
+      <section class="sec" id="microcopy">
+        <div class="sec-head"><div class="num">02 — MICROCOPY</div><h2>Write it like this</h2><p>The difference between calm and noisy is usually a few words.</p></div>
+        <div class="vt">
+          <div class="card vt-col vt-do">
+            <div class="vt-tag"><span class="ico" data-licon="check" data-size="15"></span>Do</div>
+            <div class="vt-row"><div class="vt-ex">New window</div><div class="vt-why">Verb + noun. The user knows exactly what happens.</div></div>
+            <div class="vt-row"><div class="vt-ex">Per-chat source limit reached.</div><div class="vt-why">States the fact plainly, in context.</div></div>
+            <div class="vt-row"><div class="vt-ex">Open a window to start working</div><div class="vt-why">Empty state points to the next step.</div></div>
+            <div class="vt-row"><div class="vt-ex">Connected · src/</div><div class="vt-why">Shows scope; the user always knows what’s in play.</div></div>
+          </div>
+          <div class="card vt-col vt-dont">
+            <div class="vt-tag"><span class="ico" data-licon="close" data-size="15"></span>Don’t</div>
+            <div class="vt-row"><div class="vt-ex">Create a brand-new window now!</div><div class="vt-why">Padding and an exclamation mark add noise, not meaning.</div></div>
+            <div class="vt-row"><div class="vt-ex">Oops! Something went wrong 😬</div><div class="vt-why">Cute, vague, unhelpful — and emoji aren’t the brand.</div></div>
+            <div class="vt-row"><div class="vt-ex">Nothing here yet…</div><div class="vt-why">Dead end with no next action.</div></div>
+            <div class="vt-row"><div class="vt-ex">Successfully connected!!!</div><div class="vt-why">Over-celebrates a routine event.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="terms">
+        <div class="sec-head"><div class="num">03 — TERMINOLOGY</div><h2>Say this, not that</h2><p>One word per concept, used consistently across UI, docs and errors.</p></div>
+        <div class="card" style="padding:8px 24px">
+          <table class="tbl">
+            <thead><tr><th>Use</th><th>Not</th><th>Note</th></tr></thead>
+            <tbody>
+              <tr><td class="fgw">Window</td><td>tab, pane</td><td>Cards on the canvas are windows.</td></tr>
+              <tr><td class="fgw">Workspace</td><td>desktop, board</td><td>The whole canvas.</td></tr>
+              <tr><td class="fgw">Grounding</td><td>context mode</td><td>What an answer is based on.</td></tr>
+              <tr><td class="fgw">Source</td><td>attachment, doc</td><td>A connected folder, repo or file.</td></tr>
+              <tr><td class="fgw">Connect</td><td>link, attach</td><td>Joining a window to a source.</td></tr>
+              <tr><td class="fgw">Full screen</td><td>maximise, expand</td><td>The green window control.</td></tr>
+              <tr><td class="fgw">MemoriaViva</td><td>memory, history</td><td>Product name — never translated.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="sec" id="mechanics">
+        <div class="sec-head"><div class="num">04 — MECHANICS</div><h2>Mechanics</h2></div>
+        <div class="card" style="padding:8px 24px">
+          <table class="tbl">
+            <tbody>
+              <tr><td class="fgw">Case</td><td>Sentence case for everything — buttons, titles, menus. Reserve ALL-CAPS for tiny tracked labels.</td></tr>
+              <tr><td class="fgw">Punctuation</td><td>No exclamation marks. Periods on full sentences; none on labels, buttons or single-line hints.</td></tr>
+              <tr><td class="fgw">Person &amp; tense</td><td>Second person, present tense: “Open a window”, not “A window will be opened”.</td></tr>
+              <tr><td class="fgw">Numbers &amp; units</td><td>Numerals for counts (3 windows); thin space before units (1 200 tokens · 100%).</td></tr>
+              <tr><td class="fgw">Emoji</td><td>Not part of the brand. Use a Lift icon instead.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    <script>
+      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
+      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
+      dsSyncToggle();
+    </script>
+  </body>
+</html>

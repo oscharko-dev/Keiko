@@ -17,7 +17,7 @@ import type {
 
 export interface ParserOptions {
   // Refuse files larger than this with an `OVERSIZED_FILE` info-severity diagnostic. Default
-  // 32 MiB applied by the registry; adapters never assume a default themselves.
+  // 1 GiB applied by the registry; adapters never assume a default themselves.
   readonly maxBytes: number;
   // Truncate the unit stream with a `UNIT_LIMIT_REACHED` diagnostic. Default 50_000.
   readonly maxUnitsPerDocument: number;
@@ -25,9 +25,9 @@ export interface ParserOptions {
   // diagnostic. Default 128.
   readonly maxNestingDepth: number;
   // Refuse structured parser object streams that exceed this count with an
-  // `OBJECT_LIMIT_REACHED` diagnostic. Default 200_000.
+  // `OBJECT_LIMIT_REACHED` diagnostic. Default 25_000_000.
   readonly maxObjectsPerDocument: number;
-  // Wall-clock deadline checked at unit emission boundaries. Default 30_000 ms.
+  // Wall-clock deadline checked at unit emission boundaries. Default 60 minutes.
   readonly timeoutMs: number;
   // Optional caller cancellation. Adapters check `signal.aborted` at the same boundaries as
   // the deadline so cancellation lands within one unit of work.
@@ -37,11 +37,11 @@ export interface ParserOptions {
   readonly now: () => number;
 }
 
-export const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
+export const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024;
 export const DEFAULT_MAX_UNITS = 50_000;
 export const DEFAULT_MAX_NESTING_DEPTH = 128;
-export const DEFAULT_MAX_OBJECTS = 200_000;
-export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_MAX_OBJECTS = 25_000_000;
+export const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 
 // ─── Input + capability ──────────────────────────────────────────────────────
 

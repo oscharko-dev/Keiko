@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Patterns · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <style>
+      .canvas-demo { position: relative; height: 280px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); overflow: hidden; }
+      .canvas-demo .gd { position: absolute; inset: 0; background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0); background-size: 24px 24px; }
+      .mini-win { position: absolute; width: 180px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); box-shadow: var(--shadow-card); overflow: hidden; }
+      .mini-win.top { box-shadow: var(--shadow-pop); border-color: var(--line-strong); }
+      .mini-win .h { height: 26px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; padding: 0 8px; gap: 6px; }
+      .mini-win .h .tt { font-size: 10.5px; color: var(--fg-muted); }
+      .mini-win .h .dots { margin-left: auto; display: flex; gap: 3px; color: var(--fg-faint); }
+      .mini-win .b { padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+      .mini-win .b i { height: 6px; border-radius: 3px; background: var(--inset); }
+      .conn { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+      .conn path { fill: none; stroke: var(--accent-text); stroke-width: 2.25; stroke-linecap: round; opacity: 0.95; }
+      .port { fill: var(--card); stroke: var(--accent-text); stroke-width: 2; }
+      @media (prefers-reduced-motion: no-preference) {
+        .conn .flow { stroke-dasharray: 10 8; animation: pflow 0.9s linear infinite; }
+        .conn .particle { animation: pmove 1.6s linear infinite; }
+      }
+      @keyframes pflow { to { stroke-dashoffset: -18; } }
+      @keyframes pmove { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+      .dock { display: inline-flex; gap: 6px; padding: 6px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-card); }
+      .dock .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: color-mix(in oklch, var(--accent) 6%, transparent); color: var(--fg-muted); font-size: 11.5px; }
+      .citation { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--accent-line); color: var(--accent-text); background: var(--card); font: 500 11px var(--font-mono); }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" aria-label="Design system">
+      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
+      <div class="nav-label">Overview</div>
+      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
+      <div class="nav-label">Guidelines</div>
+      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
+      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
+      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
+      <a class="nav-item on" href="patterns.html" aria-current="page"><span class="ni-dot"></span>Patterns</a>
+      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
+      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
+      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
+        <span class="ti">
+          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
+          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
+        </span>
+        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
+      </button>
+      <div class="nav-foot">Keiko · v0.2.0</div>
+    </nav>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 04</div>
+        <h1>Patterns</h1>
+        <p class="lead">How the pieces behave together — the spatial workspace, how cards connect and ground their answers, and what an empty surface invites you to do.</p>
+      </header>
+
+      <section class="sec" id="windows">
+        <div class="sec-head"><div class="num">01 — WINDOW MANAGEMENT</div><h2>The spatial workspace</h2><p>Cards are windows on an infinite, pannable canvas — not tabs. They stack, tile and snap. The focused window rises with <span class="cls">--shadow-pop</span> and a stronger border; the rest rest on <span class="cls">--shadow-card</span>.</p></div>
+        <div class="card" style="padding:24px">
+          <div class="canvas-demo">
+            <div class="gd"></div>
+            <div class="mini-win" style="left:30px;top:30px"><div class="h"><span class="tt">Files</span><span class="dots"><span class="ico" data-licon="min" data-size="13"></span></span></div><div class="b"><i style="width:70%"></i><i style="width:50%"></i></div></div>
+            <div class="mini-win" style="left:90px;top:90px"><div class="h"><span class="tt">Settings</span></div><div class="b"><i style="width:80%"></i><i style="width:40%"></i></div></div>
+            <div class="mini-win top" style="left:170px;top:60px"><div class="h"><span class="tt">Chat</span><span class="dots"><span class="ico" data-licon="close" data-size="13"></span></span></div><div class="b"><i style="width:85%"></i><i style="width:62%"></i><i style="width:45%"></i></div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:20px">
+            <div><div style="font-size:13px;font-weight:600;margin-bottom:5px">Stack</div><p class="muted-cap">Free placement; click brings a window to front.</p></div>
+            <div><div style="font-size:13px;font-weight:600;margin-bottom:5px">Tile &amp; snap</div><p class="muted-cap">Drag to an edge to snap into a split.</p></div>
+            <div><div style="font-size:13px;font-weight:600;margin-bottom:5px">Minimize</div><p class="muted-cap">Collapses to the footer dock, not lost.</p></div>
+            <div><div style="font-size:13px;font-weight:600;margin-bottom:5px">Full screen</div><p class="muted-cap">Maximizes within the framed canvas; radius drops to 0.</p></div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--fg-faint)">Footer dock</span><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">Minimized windows live here, reachable in one click. <span class="dock"><span class="pill"><span class="ico" data-licon="files" data-size="14"></span>Files</span><span class="pill"><span class="ico" data-licon="settings" data-size="14"></span>Settings</span></span></div></div>
+      </section>
+
+      <section class="sec" id="connections">
+        <div class="sec-head"><div class="num">02 — CONNECTIONS</div><h2>Card connections</h2><p>Windows link like a workflow graph. Ports appear on hover; click-to-connect draws an accent edge. While data flows, the edge animates — a flowing dash plus particles, denser for heavier exchange. State is shown by motion <em>and</em> a tag, never colour alone.</p></div>
+        <div class="card" style="padding:24px">
+          <div class="canvas-demo">
+            <div class="gd"></div>
+            <svg class="conn" viewBox="0 0 600 280" preserveAspectRatio="none">
+              <path class="flow" d="M210 90 C 300 90, 300 175, 390 175" />
+              <circle class="port" cx="210" cy="90" r="6" />
+              <circle class="port" cx="390" cy="175" r="6" />
+              <circle class="particle" r="4" fill="var(--accent-text)" style="offset-path:path('M210 90 C 300 90, 300 175, 390 175')"></circle>
+            </svg>
+            <div class="mini-win" style="left:30px;top:54px"><div class="h"><span class="tt">Chat</span></div><div class="b"><i style="width:80%"></i><i style="width:55%"></i></div></div>
+            <div class="mini-win" style="left:390px;top:128px"><div class="h"><span class="tt">Files · src/</span></div><div class="b"><i style="width:70%"></i><i style="width:48%"></i></div></div>
+          </div>
+          <p class="muted-cap" style="margin-top:16px"><span class="cls">.conn-path</span> (accent, 2.25) · <span class="cls">.win-port</span> (hover-revealed) · <span class="cls">.conn-particle</span> — all motion gated behind <span class="cls">prefers-reduced-motion</span>.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="grounding">
+        <div class="sec-head"><div class="num">03 — GROUNDING</div><h2>Grounded answers</h2><p>A chat connected to a source declares its scope and cites what it read. Trust is explicit: you always see <em>where</em> an answer came from.</p></div>
+        <div class="card" style="padding:24px">
+          <div style="max-width:520px;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);overflow:hidden;box-shadow:var(--shadow-card)">
+            <div style="display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-bottom:1px solid var(--line-soft)"><span class="ico" data-licon="terminal" data-size="17" style="color:var(--fg-dim)"></span><span style="font-size:13px;font-weight:650">Chat</span></div>
+            <div style="padding:14px;display:flex;flex-direction:column;gap:11px">
+              <div class="chat-ctx" style="display:inline-flex;align-self:flex-start;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;font-size:12px;color:var(--accent-text);background:var(--accent-dim);border:1px solid var(--accent-line)"><span class="ico" data-licon="folder" data-size="15"></span>Connected · src/</div>
+              <p style="font-size:13.5px;line-height:1.55;color:var(--fg);margin:0">The launcher resolves platform paths in <span class="citation">launcher-paths.ts</span> and validates state before run.</p>
+            </div>
+          </div>
+          <p class="muted-cap" style="margin-top:16px"><span class="cls">.chat-ctx</span> (scope pill) · citation chips link the claim to the file it came from.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="empty">
+        <div class="sec-head"><div class="num">04 — EMPTY STATES</div><h2>Empty states</h2><p>An empty surface is an invitation, not a dead end: one calm line and one obvious primary action.</p></div>
+        <div class="card" style="padding:24px">
+          <div style="height:240px;border-radius:12px;border:1px solid var(--line);background:var(--bg);position:relative;display:grid;place-items:center;overflow:hidden">
+            <div style="position:absolute;inset:0;background-image:radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0);background-size:24px 24px"></div>
+            <div style="position:relative;text-align:center">
+              <div style="width:34px;height:34px;margin:0 auto 14px;color:var(--accent-text)"><span class="ico" data-licon="spark" data-size="34"></span></div>
+              <div style="font-size:15px;font-weight:600">Empty workspace</div>
+              <div style="font-size:13px;color:var(--fg-muted);margin:4px 0 16px">Open a window to start working</div>
+              <button class="c-btn c-btn--primary"><span class="ico" data-licon="plus" data-size="15"></span>New window</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    <script>
+      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
+      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
+      dsSyncToggle();
+    </script>
+  </body>
+</html>

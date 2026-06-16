@@ -344,6 +344,8 @@ const COVERAGE_GAP_REASONS: ReadonlyArray<{
   { reason: "binary", label: "binary or an unsupported format" },
   { reason: "tool-unavailable", label: "unreadable" },
 ];
+const REPOSITORY_TEXT_ONLY_NOTICE =
+  "Some connected files were skipped because Repository Search currently reads text/code files only.";
 
 function CoverageNotice({
   omittedCounts,
@@ -365,6 +367,7 @@ function CoverageNotice({
       <span>
         {`This answer reflects only the searchable files in the connected scope — ${String(total)} ${fileWord} ${verb} not searched (${detail}). It does not cover the entire folder.`}
       </span>
+      {omittedCounts.binary > 0 ? <span>{REPOSITORY_TEXT_ONLY_NOTICE}</span> : null}
     </div>
   );
 }
