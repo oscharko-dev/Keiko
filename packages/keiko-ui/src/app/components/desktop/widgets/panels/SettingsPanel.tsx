@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { fetchConfig, fetchModels } from "@/lib/api";
-import type { ConversationIneligibilityReason, ModelCapability } from "@/lib/types";
+import type {
+  ConversationIneligibilityReason,
+  ModelCapability,
+  SafeGatewayConfig,
+} from "@/lib/types";
 import { explainConversationIneligibility, isConversationEligibleModel } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
@@ -339,6 +343,7 @@ function describeSettingsLoadError(error: unknown): string {
 export function SettingsPanel(): ReactNode {
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
+  const [config, setConfig] = useState<SafeGatewayConfig | null>(null);
   const [configPresent, setConfigPresent] = useState(false);
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelError, setModelError] = useState<string | undefined>();
@@ -355,6 +360,7 @@ export function SettingsPanel(): ReactNode {
       try {
         const [configPayload, modelPayload] = await Promise.all([fetchConfig(), fetchModels()]);
         if (cancelled) return;
+        setConfig(configPayload.config);
         setConfigPresent(configPayload.configPresent);
         setModels(modelPayload.models);
       } catch (error) {
@@ -489,7 +495,14 @@ export function SettingsPanel(): ReactNode {
               </div>
             )}
 
-            {setupOpen ? <GatewaySetupDialog onCancel={() => setSetupOpen(false)} /> : null}
+            {setupOpen ? (
+              <GatewaySetupDialog
+                onCancel={() => setSetupOpen(false)}
+                preserveExisting={gatewayConfigured}
+                storedApiKeyHeaderName={config?.providers[0]?.credentialHeaderName}
+                storedModels={models}
+              />
+            ) : null}
           </>
         )}
         {tab === "general" && <GeneralPrefs />}

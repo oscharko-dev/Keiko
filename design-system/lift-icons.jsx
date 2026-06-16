@@ -46,6 +46,21 @@ const spokes = (cx, cy, r0, r1, n) =>
     const [bx, by] = pt(cx, cy, r1, d);
     return `M${f(ax)} ${f(ay)} L${f(bx)} ${f(by)}`;
   }).join(" ");
+// four-point sparkle (closed, gestural — like `spark`)
+const star4 = (cx, cy, rO, rI) => {
+  const A = [-90, -45, 0, 45, 90, 135, 180, 225];
+  return "M " + A.map((a, i) => { const [x, y] = pt(cx, cy, i % 2 ? rI : rO, a); return `${f(x)} ${f(y)}`; }).join(" L ") + " Z";
+};
+// toothed cog — one Lift seam centred on the top tooth
+const gearPath = (cx, cy, rOut, rIn, teeth, half, slope, gapHalf) => {
+  const start = 270 + gapHalf, end = 270 + 360 - gapHalf;
+  let nodes = [];
+  for (let i = 0; i < teeth; i++) { const c = 270 + i * (360 / teeth); nodes.push([c - half - slope, rIn], [c - half, rOut], [c + half, rOut], [c + half + slope, rIn]); }
+  nodes = nodes.map(([a, r]) => { let x = a; while (x <= start) x += 360; while (x >= start + 360) x -= 360; return [x, r]; })
+    .filter(([a]) => a > start + 0.01 && a < end - 0.01).sort((p, q) => p[0] - q[0]);
+  const pts = [[start, rOut], ...nodes, [end, rOut]];
+  return "M " + pts.map(([a, r]) => { const [x, y] = pt(cx, cy, r, a); return `${f(x)} ${f(y)}`; }).join(" L ");
+};
 
 // ── the library — keys mirror packages/keiko-ui …/Icons.tsx where they exist ──
 const LIFT = {
@@ -143,8 +158,52 @@ const LIFT = {
   // — system —
   settings: (
     <>
-      <path d={ring(12, 12, 2.5, -90, 60)} />
-      <path d={spokes(12, 12, 4.0, 6.6, 8)} />
+      <path d={gearPath(12, 12, 8.7, 6.4, 8, 8, 7, 6.7)} />
+      <circle cx="12" cy="12" r="2.7" />
+    </>
+  ),
+  llm: (
+    <>
+      <path d={box(3.5, 4.5, 17, 12, 3.2)} />
+      <path d="M8.4 16.5 L6.3 19.8 L11.1 16.5" />
+      <path d={star4(12, 10.2, 3.1, 1.15)} />
+    </>
+  ),
+  embedding: (
+    <>
+      <path d="M4.8 19.2 L12 12" />
+      <path d="M11.2 15.0 L12 12 L9.0 12.8" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="8.3" cy="6.8" r="1.4" />
+      <circle cx="15.7" cy="7.8" r="1.4" />
+      <circle cx="16.6" cy="14.6" r="1.4" />
+    </>
+  ),
+  error: (
+    <>
+      <path d={ring(12, 12, 8.6)} />
+      <path d="M9 9 L15 15" />
+      <path d="M15 9 L9 15" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M12.85 6.2 L20 18.6 H4 L11.15 6.2" />
+      <path d="M12 9 V14" />
+      <path d="M12 16.8 h.01" />
+    </>
+  ),
+  info: (
+    <>
+      <path d={ring(12, 12, 8.6)} />
+      <path d="M12 8.2 h.01" />
+      <path d="M12 11.3 V16.3" />
+    </>
+  ),
+  success: (
+    <>
+      <path d={ring(12, 12, 8.6)} />
+      <path d="M8.1 12.2 l2.6 2.6 L16 9.2" />
     </>
   ),
   bell: (

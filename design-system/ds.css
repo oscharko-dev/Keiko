@@ -71,10 +71,10 @@ a { color: inherit; }
   bottom: 8px;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: var(--accent);
+  background: var(--accent-text);
 }
 .nav-item .ni-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); flex: none; }
-.nav-item.on .ni-dot, .nav-item.done .ni-dot { background: var(--accent); }
+.nav-item.on .ni-dot, .nav-item.done .ni-dot { background: var(--accent-text); }
 .nav-item.soon { color: var(--fg-faint); cursor: default; }
 .nav-item.soon:hover { background: transparent; color: var(--fg-faint); }
 .nav-soon {

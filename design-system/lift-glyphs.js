@@ -22,10 +22,18 @@
       " V" + f(y + h - r) + " A" + r + " " + r + " 0 0 1 " + f(x + w - r) + " " + f(y + h) + " H" + f(x + r) +
       " A" + r + " " + r + " 0 0 1 " + f(x) + " " + f(y + h - r) + " V" + f(y + r) + " A" + r + " " + r + " 0 0 1 " + f(x + r) + " " + f(y) + " Z";
   }
-  function spokes(cx, cy, r0, r1, n) {
-    var o = [];
-    for (var i = 0; i < n; i++) { var d = (i * 360) / n, a = pt(cx, cy, r0, d), b = pt(cx, cy, r1, d); o.push("M" + f(a[0]) + " " + f(a[1]) + " L" + f(b[0]) + " " + f(b[1])); }
-    return o.join(" ");
+  function star4(cx, cy, rO, rI) {
+    var A = [-90, -45, 0, 45, 90, 135, 180, 225], o = [];
+    for (var i = 0; i < 8; i++) { var p = pt(cx, cy, i % 2 ? rI : rO, A[i]); o.push(f(p[0]) + " " + f(p[1])); }
+    return "M " + o.join(" L ") + " Z";
+  }
+  function gearPath(cx, cy, rOut, rIn, teeth, half, slope, gapHalf) {
+    var start = 270 + gapHalf, end = 270 + 360 - gapHalf, nodes = [], i, c;
+    for (i = 0; i < teeth; i++) { c = 270 + i * (360 / teeth); nodes.push([c - half - slope, rIn], [c - half, rOut], [c + half, rOut], [c + half + slope, rIn]); }
+    nodes = nodes.map(function (nd) { var x = nd[0]; while (x <= start) x += 360; while (x >= start + 360) x -= 360; return [x, nd[1]]; })
+      .filter(function (nd) { return nd[0] > start + 0.01 && nd[0] < end - 0.01; }).sort(function (a, b) { return a[0] - b[0]; });
+    var pts = [[start, rOut]].concat(nodes, [[end, rOut]]);
+    return "M " + pts.map(function (nd) { var p = pt(cx, cy, nd[1], nd[0]); return f(p[0]) + " " + f(p[1]); }).join(" L ");
   }
   function P(d) { return '<path d="' + d + '"/>'; }
 
@@ -47,13 +55,19 @@
     split: P(box(3.5, 4.5, 17, 15, 2.5)) + P("M12 5 V19"),
     tile: P(box(3.5, 4.5, 7, 7, 1.5, 2.2)) + P(rct(13.5, 4.5, 7, 7, 1.5)) + P(rct(3.5, 13.5, 7, 7, 1.5)) + P(rct(13.5, 13.5, 7, 7, 1.5)),
     layers: P("M13.4 4.55 L19.6 8 L12 12.2 L4.4 8 L10.6 4.55") + P("M4.4 12 L12 16.2 L19.6 12") + P("M4.4 16 L12 20.2 L19.6 16"),
-    settings: P(ring(12, 12, 2.5, -90, 60)) + P(spokes(12, 12, 4.0, 6.6, 8)),
+    settings: P(gearPath(12, 12, 8.7, 6.4, 8, 8, 7, 6.7)) + '<circle cx="12" cy="12" r="2.7"/>',
+    llm: P(box(3.5, 4.5, 17, 12, 3.2)) + P("M8.4 16.5 L6.3 19.8 L11.1 16.5") + P(star4(12, 10.2, 3.1, 1.15)),
+    embedding: P("M4.8 19.2 L12 12") + P("M11.2 15.0 L12 12 L9.0 12.8") + '<circle cx="12" cy="12" r="1.5"/><circle cx="8.3" cy="6.8" r="1.4"/><circle cx="15.7" cy="7.8" r="1.4"/><circle cx="16.6" cy="14.6" r="1.4"/>',
     bell: P("M9.8 4.6 a5.5 5.5 0 0 1 7.7 4.4 c0 4.5 2 5.5 2 5.5 H4.5 s2 -1 2 -5.5 a5.5 5.5 0 0 1 1.1 -3.3") + P("M10 19 a2 2 0 0 0 4 0"),
     archive: P(box(3.5, 5, 17, 4, 1, 2.4)) + P("M5 9 v8 a2 2 0 0 0 2 2 h10 a2 2 0 0 0 2-2 V9") + P("M10 13 h4"),
     user: P(ring(12, 8, 3.6, -90, 44)) + P("M5.5 20 c.9 -3.7 3.4 -5.5 6.5 -5.5 s5.6 1.8 6.5 5.5"),
     sun: P(ring(12, 12, 4)) + P("M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9"),
     moon: P("M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1"),
     spark: P("M13.2 3.6 L19 10 l-5.2 1.4 L12 17 l-1.8 -5.6 L5 10 l5.2 -1.4 z"),
+    error: P(ring(12, 12, 8.6)) + P("M9 9 L15 15") + P("M15 9 L9 15"),
+    alert: P("M12.85 6.2 L20 18.6 H4 L11.15 6.2") + P("M12 9 V14") + P("M12 16.8 h.01"),
+    info: P(ring(12, 12, 8.6)) + P("M12 8.2 h.01") + P("M12 11.3 V16.3"),
+    success: P(ring(12, 12, 8.6)) + P("M8.1 12.2 l2.6 2.6 L16 9.2"),
     mic: P("M12 3.2 a3 3 0 0 1 3 3 V11 a3 3 0 0 1 -6 0 V6.2 a3 3 0 0 1 2 -2.8") + P("M5.5 11.5 a6.5 6.5 0 0 0 13 0 M12 18 v3"),
     bolt: P("M13 3 L5 13 h5 l-1 8 8 -10 h-5 z"),
     min: P("M7 14 H10.4") + P("M13.6 14 H17"),

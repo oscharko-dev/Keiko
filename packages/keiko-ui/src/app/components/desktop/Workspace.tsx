@@ -76,6 +76,11 @@ function isInteractive(target: EventTarget | null): boolean {
   );
 }
 
+function workspaceInteractionLocked(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.getAttribute("data-keiko-modal-open") === "true";
+}
+
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across
 // it — after hitting the 30% floor the ±0.2 ladder is offset (30→50→70→90→110)
 // and 100% would otherwise only be reachable via reset (audit C361).
@@ -363,12 +368,18 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   };
 
   const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0) return;
+    if (workspaceInteractionLocked()) return;
     if (isInteractive(event.target)) return;
     if (connecting !== null) {
-      api.cancelConnect();
+      if (event.button === 0) {
+        api.cancelConnect();
+      }
       return;
     }
+    // Match canvas tools like Figma/Miro: free-workspace panning starts from
+    // the middle mouse button (scroll wheel press), leaving the primary button
+    // available for ordinary selection and click interactions.
+    if (event.button !== 1) return;
     startBgPan(api.panBy, event, setPanning);
   };
 
@@ -425,6 +436,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   );
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (workspaceInteractionLocked()) return;
     if (event.button !== 0 || connecting === null || connFrom === null || visibleWins === null)
       return;
     const targetId = windowIdFromEventTarget(event.target);

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
+import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
 import {
@@ -103,9 +104,10 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("rejects Figma PATs submitted through browser gateway setup", async () => {
+  it("stores an optional Figma PAT submitted through browser gateway setup", async () => {
     const uiDir = await tempDir("keiko-gw-ui-figma-");
     const evidenceDir = await tempDir("keiko-gw-ev-figma-");
+    const figmaSmokeCalls: { readonly token: string; readonly egress: unknown }[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -114,6 +116,10 @@ describe("handleGatewaySetup", () => {
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+      figmaCredentialTester: (token, egress) => {
+        figmaSmokeCalls.push({ token, egress });
+        return Promise.resolve();
+      },
     });
 
     const result = await handleGatewaySetup(
@@ -125,14 +131,142 @@ describe("handleGatewaySetup", () => {
       deps,
     );
 
-    expect(result.status).toBe(400);
-    expect(JSON.stringify(result.body)).toContain("server-side");
-    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBeUndefined();
+    expect(result.status).toBe(200);
+    expect(figmaSmokeCalls).toEqual([{ token: "figd_setup-config-token", egress: undefined }]);
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBe("figd_setup-config-token");
     expect(JSON.stringify(result.body)).not.toContain("figd_setup-config-token");
     const savedPath = deps.gatewayConfig?.storagePath;
-    if (savedPath !== undefined && existsSync(savedPath)) {
-      expect(readFileSync(savedPath, "utf8")).not.toContain("figd_setup-config-token");
+    expect(savedPath).toBeDefined();
+    expect(readFileSync(savedPath ?? "", "utf8")).toContain("figd_setup-config-token");
+    deps.store.close();
+  });
+
+  it("smoke-tests submitted Figma PATs with the default /v1/me request before saving", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-default-smoke-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-default-smoke-");
+    const originalFetch = globalThis.fetch;
+    const seen: { readonly url: string; readonly token: string | null }[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      const headers = new Headers(init?.headers);
+      seen.push({ url: href, token: headers.get("x-figma-token") });
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: "figma-user", email: "user@example.invalid" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com",
+          apiKey: "example-secret-token",
+          figmaAccessToken: "figd_default-smoke-token",
+        }),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      expect(seen).toEqual([
+        { url: "https://api.figma.com/v1/me", token: "figd_default-smoke-token" },
+      ]);
+      expect(currentGatewayConfig(deps)?.figma?.accessToken).toBe("figd_default-smoke-token");
+      expect(JSON.stringify(result.body)).not.toContain("figd_default-smoke-token");
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
     }
+  });
+
+  it("updates only the optional Figma PAT while preserving existing gateway credentials", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-update-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-update-");
+    let smokeCalls = 0;
+    const figmaSmokeCalls: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        smokeCalls += 1;
+        return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
+      },
+      figmaCredentialTester: (token) => {
+        figmaSmokeCalls.push(token);
+        return Promise.resolve();
+      },
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, figmaAccessToken: " figd_updated-config-token " }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+    expect(figmaSmokeCalls).toEqual(["figd_updated-config-token"]);
+    const config = currentGatewayConfig(deps);
+    expect(config?.providers[0]?.baseUrl).toBe("https://llm-gateway.example.com");
+    expect(config?.providers[0]?.apiKey).toBe("example-secret-token");
+    expect(config?.figma?.accessToken).toBe("figd_updated-config-token");
+    expect(JSON.stringify(updated.body)).not.toContain("figd_updated-config-token");
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).toContain("example-secret-token");
+    expect(saved).toContain("figd_updated-config-token");
+    deps.store.close();
+  });
+
+  it("rejects an invalid Figma PAT update without overwriting the stored gateway config", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-invalid-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-invalid-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+      figmaCredentialTester: () => Promise.reject(new FigmaConnectorError("FIGMA_TOKEN_INVALID")),
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    const savedBefore = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, figmaAccessToken: "figd_invalid-config-token" }),
+      deps,
+    );
+
+    expect(updated.status).toBe(400);
+    expect(JSON.stringify(updated.body)).toContain("FIGMA_TOKEN_INVALID");
+    expect(JSON.stringify(updated.body)).not.toContain("figd_invalid-config-token");
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBeUndefined();
+    expect(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")).toBe(savedBefore);
     deps.store.close();
   });
 

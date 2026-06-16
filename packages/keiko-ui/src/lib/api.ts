@@ -143,11 +143,13 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
 }
 
 export interface GatewaySetupInput {
-  readonly baseUrl: string;
-  readonly apiKey: string;
+  readonly baseUrl?: string | undefined;
+  readonly apiKey?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly figmaAccessToken?: string | undefined;
+  readonly preserveExisting?: boolean | undefined;
 }
 
 export interface GatewaySetupResponse {

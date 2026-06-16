@@ -134,6 +134,10 @@ export interface UiHandlerDeps {
         egress?: GatewayEgressConfig,
       ) => Promise<readonly string[]>)
     | undefined;
+  // Test seam for Figma PAT setup. Production performs a bounded Figma /v1/me request.
+  readonly figmaCredentialTester?:
+    | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
+    | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:
@@ -185,6 +189,10 @@ export interface BuildHandlerDepsOptions {
         apiKeyHeaderName?: string,
         egress?: GatewayEgressConfig,
       ) => Promise<readonly string[]>)
+    | undefined;
+  // Optional Figma credential-test seam (tests); production calls Figma /v1/me.
+  readonly figmaCredentialTester?:
+    | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
     | undefined;
 }
 
@@ -660,6 +668,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewayConfig: runtimeConfig,
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
+    figmaCredentialTester: options.figmaCredentialTester,
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry(),
     ...(relationship === undefined ? {} : { relationship }),
