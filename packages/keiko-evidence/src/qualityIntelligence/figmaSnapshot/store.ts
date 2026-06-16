@@ -135,6 +135,11 @@ export interface FigmaSnapshotStore {
    * skipped silently. Used by drift work (#735) to find existing snapshots for re-comparison.
    */
   readonly listByScope: (fileKey: string, nodeId: string) => readonly FigmaSnapshotScopeEntry[];
+  /**
+   * List the most recent snapshot run ids across all scopes, sorted by `fetchedAt` descending.
+   * Reads only the record headers and skips unparseable files silently.
+   */
+  readonly listRecent: (limit?: number) => readonly string[];
 }
 
 export interface FigmaSnapshotStoreOptions {
@@ -613,6 +618,20 @@ function readFetchedAt(filePath: string): string | undefined {
   }
 }
 
+function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
+  const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
+  if (realBase === undefined) return [];
+  const boundedLimit = Number.isInteger(limit) && limit > 0 ? limit : 12;
+  const records: { runId: string; fetchedAt: string }[] = [];
+  for (const file of snapshotRecordFiles(realBase)) {
+    const fetchedAt = readFetchedAt(file.path);
+    if (fetchedAt === undefined) continue;
+    records.push({ runId: file.runId, fetchedAt });
+  }
+  records.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
+  return records.slice(0, boundedLimit).map((record) => record.runId);
+}
+
 // ─── Retention ───────────────────────────────────────────────────────────────────────────────
 
 export interface FigmaSnapshotRetentionProfile {
@@ -824,5 +843,6 @@ export function createNodeFigmaSnapshotStore(
         : containedRecordPath(runId, realBase, ctx.fs);
     },
     listByScope: (fileKey, nodeId) => listByScopeOp(ctx, fileKey, nodeId),
+    listRecent: (limit) => listRecentOp(ctx, limit),
   };
 }

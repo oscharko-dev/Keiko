@@ -9919,6 +9919,204 @@ select.dlg-input {
   outline: 2px solid var(--accent-text);
 }
 
+/* ── Snapshot dashboard ───────────────────────────────────────────────────── */
+
+.figma-snapshot-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.figma-snapshot-dashboard-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.figma-snapshot-dashboard-eyebrow {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+}
+
+.figma-snapshot-dashboard-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-refresh {
+  min-height: 24px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-refresh:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  width: fit-content;
+}
+
+.figma-snapshot-dashboard-tab {
+  min-height: 24px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-tab[aria-selected="true"] {
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.figma-snapshot-dashboard-tab:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.figma-snapshot-dashboard-tab:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.figma-snapshot-dashboard-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-dashboard-status-error {
+  color: var(--danger);
+}
+
+.figma-snapshot-dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0 2px;
+}
+
+.figma-snapshot-dashboard-empty-title,
+.figma-snapshot-dashboard-empty-detail {
+  margin: 0;
+}
+
+.figma-snapshot-dashboard-empty-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-empty-detail {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-dashboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.figma-snapshot-dashboard-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-item:hover {
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--line));
+}
+
+.figma-snapshot-dashboard-item:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-item[aria-current="true"] {
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--line));
+  background: color-mix(in oklch, var(--accent) 10%, var(--card-2));
+}
+
+.figma-snapshot-dashboard-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.figma-snapshot-dashboard-item-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-item-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 15%, transparent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.figma-snapshot-dashboard-item-hint {
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-item-meta,
+.figma-snapshot-dashboard-item-scope {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
 /* ── Snapshot result ──────────────────────────────────────────────────────── */
 
 .figma-snapshot-result {
