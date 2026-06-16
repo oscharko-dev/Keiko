@@ -175,7 +175,8 @@ test("chat window renders a bound Files grounding source and enforces the 16-sou
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Chat: E2E grounded chat" })).toBeVisible();
+  // The chat window exposes its name via the section's aria-label, not a heading.
+  await expect(page.getByRole("region", { name: "Chat — E2E grounded chat" })).toBeVisible();
   const grounding = page.getByLabel("Grounding mode");
   await expect(grounding).toBeVisible();
   await expect(grounding).toHaveValue("files");
