@@ -22,15 +22,9 @@ import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
-  MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import {
-  DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
-  DEFAULT_STALE_CONFIDENCE_THRESHOLD,
-  isMemorySuppressed,
-  retrieveMemoryContext,
-} from "@oscharko-dev/keiko-memory-retrieval";
+import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   maybeRunAutoMaintenance,

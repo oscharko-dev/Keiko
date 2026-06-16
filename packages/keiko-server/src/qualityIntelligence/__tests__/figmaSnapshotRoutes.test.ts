@@ -988,7 +988,7 @@ describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
     const result = handleFigmaListSnapshots(makeListCtx(), makeDeps(evidenceDir, {}));
 
     expect(result.status).toBe(200);
-    const body = result.body as { snapshots: Array<{ runId: string; fetchedAt: string }> };
+    const body = result.body as { snapshots: { runId: string; fetchedAt: string }[] };
     expect(body.snapshots.map((snapshot) => snapshot.runId)).toEqual([
       "fs-00000000-0000-0000-0000-000000000102",
       "fs-00000000-0000-0000-0000-000000000103",
@@ -1016,7 +1016,7 @@ describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
     );
 
     expect(result.status).toBe(200);
-    const body = result.body as { snapshots: Array<{ runId: string; fileKey: string; nodeId: string }> };
+    const body = result.body as { snapshots: { runId: string; fileKey: string; nodeId: string }[] };
     expect(body.snapshots).toHaveLength(1);
     expect(body.snapshots[0]).toMatchObject({
       runId: "fs-00000000-0000-0000-0000-000000000112",
