@@ -896,6 +896,38 @@ button {
   z-index: 9000;
   width: min(420px, calc(100% - 28px));
   max-height: calc(100% - 84px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The section itself is a passive container; only the toggle and the revealed
+     content take pointer events, so collapsed content never blocks the canvas. */
+  pointer-events: none;
+}
+/* The toggle affordance is always visible and operable so a pointer user can
+   open/pin the panel deliberately (#1153) — hover-only reveal is too fragile
+   for a tall, scrollable panel. */
+.ws-outline-toggle {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 5px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.ws-outline-toggle:hover {
+  border-color: var(--line-strong);
+}
+.ws-outline-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.ws-outline-content {
   overflow: auto;
   padding: 12px;
   border: 1px solid var(--accent-line);
@@ -907,7 +939,12 @@ button {
   opacity: 0;
   pointer-events: none;
 }
-.ws-outline:focus-within {
+/* `data-open` is the source of truth (state-driven, kept in sync with the
+   `inert`/`aria-hidden` DOM exposure). :hover/:focus-within are retained as a
+   defense-in-depth visual reveal for keyboard and pointer parity. */
+.ws-outline[data-open="true"] .ws-outline-content,
+.ws-outline:hover .ws-outline-content,
+.ws-outline:focus-within .ws-outline-content {
   transform: none;
   opacity: 1;
   pointer-events: auto;

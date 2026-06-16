@@ -222,6 +222,12 @@ interface WorkspaceOutlineProps {
   readonly openPalette: () => void;
 }
 
+// React 18.3's DOM treats `inert` as a non-boolean attribute and drops it when
+// passed `inert={true}`, so render it as a string only while collapsed. The
+// Record<string,string> spread bypasses the boolean `inert` prop type without
+// `any`; an empty object leaves the panel fully operable when open.
+const inertWhenClosed = (open: boolean): Record<string, string> => (open ? {} : { inert: "true" });
+
 function WorkspaceOutline({
   wins,
   conns,
@@ -239,10 +245,48 @@ function WorkspaceOutline({
     [conns, wins],
   );
   const hasWindows = wins !== null && wins.length > 0;
+  // #1153: reveal is state-driven, not CSS-`:focus-within`-only. A collapsed
+  // panel previously kept pointer-events:none buttons in the a11y tree, so a
+  // pointer (or AT-driven) click fell through to the canvas as a silent no-op.
+  // `pinned` is the deliberate toggle; `transient` mirrors hover/focus so the
+  // keyboard `:focus-within` path keeps working. The panel is open when either
+  // is set, and the DOM exposure (`inert`/`aria-hidden`) tracks that union so
+  // visibility and interactivity never drift apart.
+  const [pinned, setPinned] = useState(false);
+  const [transient, setTransient] = useState(false);
+  const open = pinned || transient;
 
   return (
-    <section className="ws-outline" aria-labelledby="ws-outline-title">
-      <div className="ws-outline-inner">
+    <section
+      className="ws-outline"
+      data-open={open ? "true" : "false"}
+      aria-label="Workspace outline"
+      onPointerEnter={() => setTransient(true)}
+      onPointerLeave={() => setTransient(false)}
+      onFocusCapture={() => setTransient(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setTransient(false);
+      }}
+    >
+      <button
+        type="button"
+        className="ws-outline-toggle"
+        aria-expanded={open}
+        aria-controls="ws-outline-content"
+        // onClick flips `pinned`; when open only transiently (hover/focus),
+        // pressing "Hide" sets pinned=false with no visible effect until the
+        // pointer/focus leaves and `transient` clears — acceptable (WCAG 4.1.2
+        // is satisfied because aria-expanded/label reflect the actual `open`).
+        onClick={() => setPinned((value) => !value)}
+      >
+        {open ? "Hide workspace outline" : "Show workspace outline"}
+      </button>
+      <div
+        id="ws-outline-content"
+        className="ws-outline-content ws-outline-inner"
+        aria-hidden={open ? undefined : true}
+        {...inertWhenClosed(open)}
+      >
         <h2 id="ws-outline-title">Workspace outline</h2>
         <p className="ws-outline-summary">
           {wins === null
