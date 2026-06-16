@@ -9,6 +9,7 @@ import type {
   ReactNode,
   RefObject,
 } from "react";
+import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
@@ -69,7 +70,7 @@ function isInteractive(target: EventTarget | null): boolean {
     target.closest(".window") !== null ||
     target.closest(".ws-zoom") !== null ||
     target.closest(".ws-fab") !== null ||
-    target.closest(".ws-empty-btn") !== null ||
+    target.closest(".empty-workspace-blob") !== null ||
     target.closest(".ws-outline") !== null ||
     target.closest(".conn-badge") !== null
   );
@@ -102,10 +103,18 @@ function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
 function startBgPan(
   panBy: (dx: number, dy: number) => void,
   event: ReactPointerEvent<HTMLDivElement>,
+  setPanning: (panning: boolean) => void,
 ): void {
+  event.preventDefault();
+  const target = event.currentTarget;
+  target.setPointerCapture?.(event.pointerId);
   let lastX = event.clientX;
   let lastY = event.clientY;
+  const previousCursor = document.body.style.cursor;
+  const previousUserSelect = document.body.style.userSelect;
+  setPanning(true);
   document.body.style.cursor = "grabbing";
+  document.body.style.userSelect = "none";
   const move = (moveEvent: PointerEvent): void => {
     panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
     lastX = moveEvent.clientX;
@@ -114,10 +123,17 @@ function startBgPan(
   const up = (): void => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
-    document.body.style.cursor = "";
+    window.removeEventListener("pointercancel", up);
+    setPanning(false);
+    if (target.hasPointerCapture?.(event.pointerId) === true) {
+      target.releasePointerCapture?.(event.pointerId);
+    }
+    document.body.style.cursor = previousCursor;
+    document.body.style.userSelect = previousUserSelect;
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function windowIdFromEventTarget(target: EventTarget | null): string | undefined {
@@ -329,6 +345,7 @@ function WorkspaceOutline({
 
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
+  const [panning, setPanning] = useState(false);
   const visibleWins = useMemo(
     () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
     [wins],
@@ -352,7 +369,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       api.cancelConnect();
       return;
     }
-    startBgPan(api.panBy, event);
+    startBgPan(api.panBy, event, setPanning);
   };
 
   // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
@@ -494,6 +511,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       aria-label="Workspace surface"
       tabIndex={0}
       data-connecting={connecting !== null ? "true" : undefined}
+      data-panning={panning ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
       onKeyDown={onSurfaceKeyDown}
@@ -515,13 +533,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       ) : null}
       {empty ? (
         <div className="ws-empty">
-          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}
-          <img className="ws-empty-logo" src="/assets/keiko-logo.svg" alt="" />
-          <div className="ws-empty-title">Empty workspace</div>
-          <div className="ws-empty-sub">Open a window to start working</div>
-          <button type="button" className="ws-empty-btn" onClick={openPalette}>
-            <Icons.add size={15} /> New window
-          </button>
+          <EmptyWorkspaceBlob onNewWindow={openPalette} />
         </div>
       ) : null}
 
@@ -560,6 +572,16 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
           title="Zoom out"
         >
           <Icons.zoomOut size={15} />
+        </button>
+        <button
+          type="button"
+          className="ws-zoom-btn"
+          onClick={api.fitView}
+          disabled={visibleWins === null || visibleWins.length === 0}
+          aria-label="Fit workspace to windows"
+          title="Fit workspace to windows"
+        >
+          <Icons.expand size={15} />
         </button>
         <button
           type="button"

@@ -47,6 +47,7 @@ function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),

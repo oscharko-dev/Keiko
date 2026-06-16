@@ -163,9 +163,13 @@ describe("WorkspaceShader", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     delete document.documentElement.dataset.theme;
+    document.documentElement.style.removeProperty("--workspace-bg-brightness");
+    document.documentElement.style.removeProperty("--workspace-grid-strength");
+    document.documentElement.style.removeProperty("--frame-border-strength");
   });
 
   it("does not initialize WebGL while reduced motion is enabled and reacts when it changes", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
     const media = installMatchMedia(true);
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
 
@@ -180,7 +184,57 @@ describe("WorkspaceShader", () => {
     expect(getContext).toHaveBeenCalledWith("webgl", expect.any(Object));
   });
 
+  it("defaults the liquid wallpaper off and avoids WebGL until explicitly enabled", () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
+
+    const { container } = render(<WorkspaceShader />);
+
+    expect(container.querySelector("canvas")).toBeNull();
+    expect(getContext).not.toHaveBeenCalled();
+
+    fireEvent(window, new CustomEvent("keiko:wallpaper-enabled", { detail: true }));
+
+    expect(container.querySelector("canvas")).not.toBeNull();
+    expect(getContext).toHaveBeenCalledWith("webgl", expect.any(Object));
+  });
+
+  it("applies the persisted workspace background brightness without starting WebGL", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "false");
+    window.localStorage.setItem("keiko.workspace.background.brightness", "42");
+    window.localStorage.setItem("keiko.workspace.grid.strength", "31");
+    window.localStorage.setItem("keiko.frame.border.strength", "46");
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
+
+    render(<WorkspaceShader />);
+
+    expect(document.documentElement.style.getPropertyValue("--workspace-bg-brightness")).toBe(
+      "42%",
+    );
+    expect(document.documentElement.style.getPropertyValue("--workspace-grid-strength")).toBe(
+      "31%",
+    );
+    expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("46%");
+    expect(getContext).not.toHaveBeenCalled();
+
+    fireEvent(window, new CustomEvent("keiko:workspace-background-brightness", { detail: 67 }));
+
+    expect(document.documentElement.style.getPropertyValue("--workspace-bg-brightness")).toBe(
+      "67%",
+    );
+
+    fireEvent(window, new CustomEvent("keiko:workspace-grid-strength", { detail: 82 }));
+
+    expect(document.documentElement.style.getPropertyValue("--workspace-grid-strength")).toBe(
+      "82%",
+    );
+
+    fireEvent(window, new CustomEvent("keiko:frame-border-strength", { detail: 73 }));
+
+    expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("73%");
+  });
+
   it("uses transparent fallback when WebGL is unavailable and keeps opacity reactive", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
     window.localStorage.setItem("keiko.wallpaper.opacity", "35");
     const removeEventListener = vi.spyOn(window, "removeEventListener");
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
@@ -209,6 +263,7 @@ describe("WorkspaceShader", () => {
   });
 
   it("renders one WebGL frame from pointer, ripple and theme state, then cleans up resources", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
     document.documentElement.dataset.theme = "light";
     const gl = createGl();
     const animation = stubAnimationFrame();
@@ -256,6 +311,7 @@ describe("WorkspaceShader", () => {
   });
 
   it("tears down opacity listeners when shader compilation fails", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
     const gl = createGl();
     gl.getShaderParameter.mockReturnValue(false);
     const removeEventListener = vi.spyOn(window, "removeEventListener");
