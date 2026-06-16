@@ -55,7 +55,7 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
         type="button"
         className="sm-code-copy"
         aria-label={copied ? "Copied" : "Copy code block"}
-        title={copied ? "Copied!" : "Copy code block"}
+        title={copied ? "Copied" : "Copy code block"}
         data-copied={copied ? "true" : "false"}
         onClick={handleCopy}
       >

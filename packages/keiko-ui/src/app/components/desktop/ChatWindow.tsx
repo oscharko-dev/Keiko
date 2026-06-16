@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
+import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
@@ -181,7 +182,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
         type="button"
         className="chat-msg-copy"
         aria-label={copied ? "Copied" : "Copy message"}
-        title={copied ? "Copied!" : "Copy message"}
+        title={copied ? "Copied" : "Copy message"}
         data-copied={copied ? "true" : "false"}
         onClick={handleCopy}
       >
@@ -1222,9 +1223,11 @@ function MemoryActionCard({
           </button>
         </div>
         {error !== undefined ? (
-          <div role="alert" className="cmp-err">
-            {error}
-          </div>
+          <ErrorNoticeFromError
+            error={error}
+            fallback="Unable to update memory."
+            onDismiss={() => setError(undefined)}
+          />
         ) : null}
       </article>
     );
@@ -1298,9 +1301,11 @@ function MemoryActionCard({
           )}
         </div>
         {error !== undefined ? (
-          <div role="alert" className="cmp-err">
-            {error}
-          </div>
+          <ErrorNoticeFromError
+            error={error}
+            fallback="Unable to update memory."
+            onDismiss={() => setError(undefined)}
+          />
         ) : null}
       </article>
     );
@@ -1524,9 +1529,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
             path at all: a failed send removed the optimistic message and the
             user saw nothing. Same role="alert" block as the full composer. */}
         {error !== undefined ? (
-          <div role="alert" className="cmp-err">
-            {error}
-          </div>
+          <ErrorNoticeFromError
+            error={error}
+            fallback="Could not send message."
+            onDismiss={session.clearError}
+          />
         ) : null}
       </div>
     );
@@ -1627,9 +1634,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
           >
             <ComposerCore session={session} ready={ready} placeholder={COMPOSER_PLACEHOLDER} />
             {error !== undefined ? (
-              <div role="alert" className="cmp-err">
-                {error}
-              </div>
+              <ErrorNoticeFromError
+                error={error}
+                fallback="Could not send message."
+                onDismiss={session.clearError}
+              />
             ) : null}
           </form>
         </div>
@@ -1652,9 +1661,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
               placeholder={loading ? "Connecting to your gateway…" : COMPOSER_PLACEHOLDER}
             />
             {error !== undefined ? (
-              <div role="alert" className="cmp-err">
-                {error}
-              </div>
+              <ErrorNoticeFromError
+                error={error}
+                fallback="Could not send message."
+                onDismiss={session.clearError}
+              />
             ) : null}
           </form>
         </div>
@@ -1662,9 +1673,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
 
       {visible.length === 0 && error !== undefined && activeChat === undefined ? (
         <div className="chatw-foot">
-          <div role="alert" className="cmp-err">
-            {error}
-          </div>
+          <ErrorNoticeFromError
+            error={error}
+            fallback="Could not load chat."
+            onDismiss={session.clearError}
+          />
         </div>
       ) : null}
     </div>

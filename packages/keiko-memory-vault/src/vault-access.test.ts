@@ -60,6 +60,8 @@ describe("vault access tracking through the public store", () => {
     expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toEqual({
       lastAccessedAt: 2000,
       accessCount: 2,
+      outcomeCount: 0,
+      utilitySum: 0,
     });
     v.close();
   });
@@ -74,8 +76,40 @@ describe("vault access tracking through the public store", () => {
     expect(v2.getAccessStats().get("m1" as MemoryId)).toEqual({
       lastAccessedAt: 4242,
       accessCount: 1,
+      outcomeCount: 0,
+      utilitySum: 0,
     });
     v2.close();
+  });
+
+  it("records governed outcomes without disturbing the access counter (O-V1)", () => {
+    const v = openVault(freshDir());
+    v.insertMemory(makeMemory("m1"));
+    v.recordAccess(["m1" as MemoryId], 1000);
+    // A positive then a negative outcome: count climbs to 2, summed utility to 1, and neither the
+    // recall count nor the last-access timestamp moves (outcomes are not accesses).
+    v.recordOutcome(["m1" as MemoryId], 1, 2000);
+    v.recordOutcome(["m1" as MemoryId], 0, 3000);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toEqual({
+      lastAccessedAt: 1000,
+      accessCount: 1,
+      outcomeCount: 2,
+      utilitySum: 1,
+    });
+    v.close();
+  });
+
+  it("records an outcome for a never-accessed memory as an access_count=0 row (O-V1)", () => {
+    const v = openVault(freshDir());
+    v.insertMemory(makeMemory("m1"));
+    v.recordOutcome(["m1" as MemoryId], 0, 5000);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toEqual({
+      lastAccessedAt: 5000,
+      accessCount: 0,
+      outcomeCount: 1,
+      utilitySum: 0,
+    });
+    v.close();
   });
 
   it("drops the access row when the memory is forgotten (cascade)", () => {

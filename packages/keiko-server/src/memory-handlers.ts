@@ -32,6 +32,7 @@ import {
   buildUnpinOperation,
   detectConflictPair,
   selectMemoriesForForget,
+  supersededValidity,
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
 import {
@@ -1075,9 +1076,16 @@ function persistConflictTransitions(
   reason: string,
 ): void {
   for (const transition of resolution.statusTransitions) {
+    // Bi-temporal-lite (#204, C1): a record losing a conflict and being SUPERSEDED gets its belief
+    // window closed at the transition time, same as the correction path. Other transitions (e.g.
+    // the winner re-accepted) leave validity untouched.
+    const existing =
+      transition.to === "superseded" ? vault.getMemory(transition.memoryId) : undefined;
+    const validity =
+      existing !== undefined ? supersededValidity(existing, transition.transitionedAt) : null;
     vault.updateMemory(
       transition.memoryId,
-      { status: transition.to, staleReason: reason },
+      { status: transition.to, staleReason: reason, ...(validity !== null ? { validity } : {}) },
       transition.transitionedAt,
     );
   }
@@ -1130,6 +1138,11 @@ function executeConflictResolution(
     resolution.supersessions,
     nowMs,
   );
+  // Outcome-driven forgetting (#204, O-V1): the winner proved more correct (utility 1), the losers
+  // proved wrong (utility 0). These bias the maintenance utility factor toward keeping the winner
+  // and forgetting the superseded losers.
+  vault.recordOutcome([input.winner], 1, nowMs);
+  vault.recordOutcome(input.losers, 0, nowMs);
   return {
     resolved: true,
     winner: input.winner,
@@ -1396,14 +1409,21 @@ function buildCorrectionAcceptanceUpdates(
 ): readonly MemoryBatchUpdate[] {
   return [
     { id: proposalId, patch: acceptPatch, nowMs },
-    ...origins.map(({ edge, original }) => ({
-      id: original.id,
-      patch: {
-        status: "superseded" as const,
-        staleReason: edge.provenanceSummary ?? "accepted correction",
-      },
-      nowMs,
-    })),
+    ...origins.map(({ edge, original }) => {
+      // Bi-temporal-lite (#204, C1): close the superseded fact's belief window at acceptance time so
+      // it drops out of default retrieval and "as of date T" stays answerable. Additive — only when
+      // it forms a valid, non-extending interval.
+      const validity = supersededValidity(original, nowMs);
+      return {
+        id: original.id,
+        patch: {
+          status: "superseded" as const,
+          staleReason: edge.provenanceSummary ?? "accepted correction",
+          ...(validity !== null ? { validity } : {}),
+        },
+        nowMs,
+      };
+    }),
   ];
 }
 
@@ -1451,6 +1471,14 @@ function acceptMemoryProposal(
   const [updated] = vault.updateMemories(updates);
   if (updated === undefined) {
     throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
+  }
+  // Outcome-driven forgetting (#204, O-V1): acceptance is a positive retention outcome for the
+  // proposal; any origin it supersedes proved wrong (utility 0). Both feed the maintenance utility
+  // factor so the kept memory resists disuse decay and the corrected-away origin fades sooner.
+  vault.recordOutcome([id], 1, nowMs);
+  const supersededOriginIds = origins.map((origin) => origin.original.id);
+  if (supersededOriginIds.length > 0) {
+    vault.recordOutcome(supersededOriginIds, 0, nowMs);
   }
   recordCorrectionSupersessionAudits(deps, updated, origins, nowMs);
   return { status: 200, body: { memory: redactMemory(deps, updated) } };
@@ -1515,11 +1543,15 @@ export async function handleRejectMemoryProposal(
   try {
     const existing = ensureRejectableMemory(vault.getMemory(id as MemoryId));
     if (isRouteResult(existing)) return existing;
+    const nowMs = Date.now();
     const updated = vault.updateMemory(
       id as MemoryId,
       { status: "rejected", staleReason: reason },
-      Date.now(),
+      nowMs,
     );
+    // Outcome-driven forgetting (#204, O-V1): a user rejection is a negative retention outcome
+    // (utility 0), so the rejected memory fades faster under maintenance instead of lingering.
+    vault.recordOutcome([id as MemoryId], 0, nowMs);
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {

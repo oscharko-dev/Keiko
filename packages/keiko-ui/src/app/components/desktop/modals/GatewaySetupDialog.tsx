@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, setupGateway } from "@/lib/api";
+import type { ModelCapability } from "@/lib/types";
 import { Icons } from "../Icons";
 
 // Human-readable message first; the machine code (useful for support) is kept
@@ -40,11 +41,18 @@ function isAzureFoundryUrl(value: string): boolean {
 
 export function GatewaySetupDialog({
   onCancel,
+  preserveExisting = false,
+  storedApiKeyHeaderName,
+  storedModels = [],
 }: {
   readonly onCancel?: (() => void) | undefined;
+  readonly preserveExisting?: boolean | undefined;
+  readonly storedApiKeyHeaderName?: string | undefined;
+  readonly storedModels?: readonly ModelCapability[] | undefined;
 }): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
+  const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const reloadTimerRef = useRef<number | undefined>(undefined);
   const [baseUrl, setBaseUrl] = useState("");
@@ -52,25 +60,41 @@ export function GatewaySetupDialog({
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [imageInputModelIds, setImageInputModelIds] = useState("");
+  const [figmaAccessToken, setFigmaAccessToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [errorCode, setErrorCode] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
 
   useEffect(() => {
+    const root = document.documentElement;
+    const previousCount = Number(root.dataset.keikoModalOpenCount ?? "0");
+    root.dataset.keikoModalOpenCount = String(previousCount + 1);
+    root.setAttribute("data-keiko-modal-open", "true");
     triggerRef.current = document.activeElement as HTMLElement | null;
-    baseUrlRef.current?.focus();
+    if (preserveExisting) {
+      figmaAccessTokenRef.current?.focus();
+    } else {
+      baseUrlRef.current?.focus();
+    }
     return () => {
       if (reloadTimerRef.current !== undefined) {
         window.clearTimeout(reloadTimerRef.current);
       }
+      const nextCount = Math.max(0, Number(root.dataset.keikoModalOpenCount ?? "1") - 1);
+      if (nextCount === 0) {
+        delete root.dataset.keikoModalOpenCount;
+        root.removeAttribute("data-keiko-modal-open");
+      } else {
+        root.dataset.keikoModalOpenCount = String(nextCount);
+      }
       triggerRef.current?.focus?.();
     };
-  }, []);
+  }, [preserveExisting]);
 
   const focusableInside = (root: HTMLElement): readonly HTMLElement[] => {
     const nodes = root.querySelectorAll<HTMLElement>(
-      "button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex='-1'])",
+      "button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex='-1'])",
     );
     return Array.from(nodes);
   };
@@ -108,9 +132,13 @@ export function GatewaySetupDialog({
   // (audit C186/C084).
   useEffect(() => {
     if (error !== undefined && !busy) {
-      baseUrlRef.current?.focus();
+      if (preserveExisting && baseUrl.trim() === "" && apiKey.trim() === "") {
+        figmaAccessTokenRef.current?.focus();
+      } else {
+        baseUrlRef.current?.focus();
+      }
     }
-  }, [error, busy]);
+  }, [apiKey, baseUrl, busy, error, preserveExisting]);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -133,19 +161,40 @@ export function GatewaySetupDialog({
         return;
       }
       const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
+      const submittedGatewayCredentials =
+        !preserveExisting ||
+        baseUrl.trim() !== "" ||
+        apiKey.trim() !== "" ||
+        apiKeyHeaderName.trim() !== "" ||
+        parsedDeploymentNames.length > 0 ||
+        parsedImageInputModelIds.length > 0;
+      const submittedFigmaCredential = figmaAccessToken.trim() !== "";
       const result = await setupGateway({
-        baseUrl,
-        apiKey,
+        baseUrl: baseUrl.trim() === "" ? undefined : baseUrl.trim(),
+        apiKey: apiKey.trim() === "" ? undefined : apiKey.trim(),
         apiKeyHeaderName: apiKeyHeaderName.trim() === "" ? undefined : apiKeyHeaderName.trim(),
         deploymentNames: parsedDeploymentNames,
+        preserveExisting,
         ...(parsedImageInputModelIds.length === 0
           ? {}
           : { imageInputModelIds: parsedImageInputModelIds }),
+        ...(figmaAccessToken.trim() === ""
+          ? {}
+          : { figmaAccessToken: figmaAccessToken.trim() }),
       });
       const count = result.testedModelIds.length;
-      setSuccess(
-        `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…`,
-      );
+      setBusy(false);
+      if (submittedFigmaCredential && !submittedGatewayCredentials) {
+        setSuccess("Verified Figma access token. Reloading Keiko…");
+      } else if (submittedFigmaCredential) {
+        setSuccess(
+          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"} and Figma access token. Reloading Keiko…`,
+        );
+      } else {
+        setSuccess(
+          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…`,
+        );
+      }
       reloadTimerRef.current = window.setTimeout(() => window.location.reload(), 800);
     } catch (caught) {
       const details = errorDetails(caught);
@@ -162,6 +211,112 @@ export function GatewaySetupDialog({
   // scene (which has zero intrinsic width/height) instead of the viewport.
   // Portalling to `document.body` makes the backdrop fixed to the viewport
   // regardless of where the dialog is mounted in the React tree.
+  const parsedDeploymentNames = deploymentNamesFromInput(deploymentNames);
+  const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
+  const requiresGatewayCredentials = !preserveExisting;
+  const hasGatewayCredentialInput =
+    baseUrl.trim() !== "" ||
+    apiKey.trim() !== "" ||
+    apiKeyHeaderName.trim() !== "" ||
+    parsedDeploymentNames.length > 0 ||
+    parsedImageInputModelIds.length > 0;
+  const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
+  const canSubmit =
+    !busy &&
+    success === undefined &&
+    (requiresGatewayCredentials
+      ? baseUrl.trim() !== "" && apiKey.trim() !== ""
+      : hasGatewayCredentialInput || hasFigmaCredentialInput);
+  const dialogTitle = preserveExisting
+    ? "Update Keiko credentials"
+    : "Connect Keiko to your internal LLMs";
+  const dialogDescription = preserveExisting
+    ? "Leave stored gateway fields blank to keep the current value. Keiko never returns existing secrets to the browser."
+    : "Keiko needs the internal gateway URL and API token before chat and agent workflows can run. The token is tested once and stored only on this machine.";
+  const submitRequirements = preserveExisting
+    ? "Enter at least one field to update. Blank stored gateway fields keep their current value."
+    : "Base URL and API token are required. The Figma access token is optional.";
+  const modelNames = storedModels.map((model) => model.id);
+  const visibleModelNames = modelNames.slice(0, 6);
+  const hiddenModelCount = Math.max(0, modelNames.length - visibleModelNames.length);
+  const gatewayFields = (
+    <div className="gw-grid">
+      <label className="gw-field gw-span-2">
+        <span>
+          Base URL{" "}
+          {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        </span>
+        <input
+          className="gw-input mono"
+          value={baseUrl}
+          placeholder={
+            preserveExisting
+              ? "Only enter a value to replace the stored gateway URL"
+              : "https://llm-gateway.example.com/v1"
+          }
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          ref={baseUrlRef}
+          onChange={(event) => setBaseUrl(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          API token{" "}
+          {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        </span>
+        <input
+          className="gw-input mono"
+          type="password"
+          value={apiKey}
+          placeholder={
+            preserveExisting ? "Only enter a value to replace the stored token" : "Paste your API token"
+          }
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setApiKey(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          API key header <span className="dlg-opt">optional</span>
+        </span>
+        <input
+          className="gw-input mono"
+          value={apiKeyHeaderName}
+          placeholder={preserveExisting ? "Leave blank to keep stored header" : "Authorization"}
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setApiKeyHeaderName(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>Deployment names for Azure</span>
+        <textarea
+          className="gw-input gw-textarea mono"
+          value={deploymentNames}
+          placeholder="Paste deployment names, one per line"
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setDeploymentNames(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          Image-input models <span className="dlg-opt">optional</span>
+        </span>
+        <textarea
+          className="gw-input gw-textarea mono"
+          value={imageInputModelIds}
+          placeholder="Paste image-capable model names, one per line"
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setImageInputModelIds(event.target.value)}
+        />
+      </label>
+    </div>
+  );
+
   const dialogTree = (
     <div className="gw-setup-backdrop" role="presentation">
       <div
@@ -176,84 +331,99 @@ export function GatewaySetupDialog({
         // area is clicked or all controls are disabled (audit C007/C186).
         tabIndex={-1}
       >
-        <form onSubmit={(event) => void submit(event)}>
-          <div className="gw-setup-badge">
-            <Icons.cube size={18} />
-            Model gateway setup
+        <form className="gw-form" onSubmit={(event) => void submit(event)}>
+          <div className="gw-head">
+            <div className="gw-setup-badge">
+              <Icons.cube size={18} />
+              {preserveExisting ? "Credential update" : "Model gateway setup"}
+            </div>
+            <h1 id="gw-setup-title">{dialogTitle}</h1>
+            <p id="gw-setup-desc">{dialogDescription}</p>
           </div>
-          <h1 id="gw-setup-title">Connect Keiko to your internal LLMs</h1>
-          <p id="gw-setup-desc">
-            Keiko needs the internal gateway URL and API token before chat and agent workflows can
-            run. The token is tested once and stored only on this machine.
-          </p>
-          <label className="gw-field">
-            <span>Base URL</span>
-            <input
-              className="gw-input mono"
-              value={baseUrl}
-              placeholder="https://llm-gateway.example.com/v1"
-              autoComplete="off"
-              disabled={busy || success !== undefined}
-              ref={baseUrlRef}
-              onChange={(event) => setBaseUrl(event.target.value)}
-            />
-          </label>
-          <label className="gw-field">
-            <span>API token</span>
-            <input
-              className="gw-input mono"
-              type="password"
-              value={apiKey}
-              placeholder="Paste your API token"
-              autoComplete="off"
-              disabled={busy || success !== undefined}
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-          </label>
-          <label className="gw-field">
-            <span>
-              API key header <span className="dlg-opt">optional</span>
-            </span>
-            <input
-              className="gw-input mono"
-              value={apiKeyHeaderName}
-              placeholder="Authorization"
-              autoComplete="off"
-              disabled={busy || success !== undefined}
-              onChange={(event) => setApiKeyHeaderName(event.target.value)}
-            />
-          </label>
-          <label className="gw-field">
-            <span>Deployment names for Azure</span>
-            <textarea
-              className="gw-input gw-textarea mono"
-              value={deploymentNames}
-              placeholder="Paste deployment names, one per line"
-              autoComplete="off"
-              disabled={busy || success !== undefined}
-              onChange={(event) => setDeploymentNames(event.target.value)}
-            />
-          </label>
-          <label className="gw-field">
-            <span>
-              Image-input models <span className="dlg-opt">optional</span>
-            </span>
-            <textarea
-              className="gw-input gw-textarea mono"
-              value={imageInputModelIds}
-              placeholder="Paste image-capable model names, one per line"
-              autoComplete="off"
-              disabled={busy || success !== undefined}
-              onChange={(event) => setImageInputModelIds(event.target.value)}
-            />
-          </label>
+
+          <section className="gw-section" aria-labelledby="gw-model-section-title">
+            <div className="gw-section-head">
+              <div>
+                <h2 id="gw-model-section-title">Model gateway</h2>
+                <p>
+                  {preserveExisting
+                    ? "Blank gateway fields keep the stored value."
+                    : "Base URL and API token are required."}
+                </p>
+              </div>
+            </div>
+            {preserveExisting ? (
+              <>
+                <div className="gw-current" aria-label="Stored model gateway credentials">
+                  <div className="gw-current-row">
+                    <span>Gateway URL</span>
+                    <strong>Stored</strong>
+                  </div>
+                  <div className="gw-current-row">
+                    <span>API token</span>
+                    <strong className="mono">••••••••••••</strong>
+                  </div>
+                  <div className="gw-current-row">
+                    <span>API key header</span>
+                    <strong className="mono">{storedApiKeyHeaderName ?? "authorization"}</strong>
+                  </div>
+                  <div className="gw-current-models">
+                    <span>Configured models</span>
+                    <div className="gw-model-chips">
+                      {visibleModelNames.length === 0 ? (
+                        <strong>Stored</strong>
+                      ) : (
+                        visibleModelNames.map((modelId) => (
+                          <strong key={modelId} className="mono">
+                            {modelId}
+                          </strong>
+                        ))
+                      )}
+                      {hiddenModelCount > 0 ? <strong>+{hiddenModelCount.toString()}</strong> : null}
+                    </div>
+                  </div>
+                </div>
+                <details className="gw-replace">
+                  <summary>Replace model gateway settings</summary>
+                  {gatewayFields}
+                </details>
+              </>
+            ) : (
+              gatewayFields
+            )}
+          </section>
+
+          <section className="gw-section" aria-labelledby="gw-figma-section-title">
+            <div className="gw-section-head">
+              <div>
+                <h2 id="gw-figma-section-title">Figma Snapshot</h2>
+                <p>Optional connector credential.</p>
+              </div>
+            </div>
+            <label className="gw-field">
+              <span>
+                Figma access token <span className="dlg-opt">optional</span>
+              </span>
+              <input
+                className="gw-input mono"
+                type="password"
+                value={figmaAccessToken}
+                placeholder={
+                  preserveExisting
+                    ? "Stored Figma token is kept when blank"
+                    : "Paste a read-only Figma PAT when needed"
+                }
+                autoComplete="off"
+                disabled={busy || success !== undefined}
+                ref={figmaAccessTokenRef}
+                onChange={(event) => setFigmaAccessToken(event.target.value)}
+              />
+            </label>
+          </section>
+
           <div className="gw-note">
-            Leave the header field empty unless your gateway admin gave you a custom API-key header,
-            for example X-Litellm-Key. Supported headers are Authorization, X-Litellm-Key,
-            X-Api-Key, and api-key. Leave deployment names empty only for OpenAI-compatible gateways
-            with model discovery. For Azure AI Foundry, paste deployment names exactly as shown in
-            the Deployments tab. Image-input model names must match tested gateway models exactly.
-            Testing several deployments can take up to 30 seconds.
+            Stored secrets stay local and are never returned to the browser. Supported API-key
+            headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.
           </div>
           {/* role=alert/status: the test result arrives after a long async wait
               while all controls are disabled — without a live region screen
@@ -271,10 +441,15 @@ export function GatewaySetupDialog({
               {success}
             </div>
           ) : null}
+          {busy ? (
+            <div className="gw-pending" role="status">
+              Testing credentials…
+            </div>
+          ) : null}
           {/* FE-03: visually-hidden description tells AT users what is required
               when the submit button cannot be activated (WCAG 3.3.4). */}
           <span id="gw-submit-requirements" className="visually-hidden">
-            Base URL and API token are required.
+            {submitRequirements}
           </span>
           <div className="gw-actions">
             {onCancel !== undefined ? (
@@ -290,13 +465,11 @@ export function GatewaySetupDialog({
             <button
               className="gw-submit"
               type="submit"
-              disabled={
-                busy || success !== undefined || baseUrl.trim() === "" || apiKey.trim() === ""
-              }
+              disabled={!canSubmit}
               aria-busy={busy}
               aria-describedby="gw-submit-requirements"
             >
-              {busy ? "Testing connection…" : "Test & save"}
+              {busy ? "Testing credentials…" : "Test & save"}
             </button>
           </div>
         </form>

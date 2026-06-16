@@ -15,6 +15,10 @@ const REQUIRED_PUBLIC_FILES: readonly string[] = [
   "public/apple-touch-icon.png",
   "public/favicon.svg",
   "public/favicon.ico",
+  // Self-hosted JetBrains Mono (foundations.html §02) + its SIL OFL 1.1 license must ship
+  // so the brand mono renders offline, same-origin (CSP font-src 'self').
+  "public/fonts/jetbrains-mono-latin-wght-normal.woff2",
+  "public/fonts/OFL.txt",
 ];
 
 interface PackEntry {

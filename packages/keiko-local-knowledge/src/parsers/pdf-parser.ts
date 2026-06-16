@@ -338,16 +338,6 @@ function appendPdfTextItems(
   return { state: next };
 }
 
-async function cancelTextReader(
-  reader: ReadableStreamDefaultReader<PdfTextContentChunk>,
-): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch {
-    // Stream cancellation is best-effort cleanup after parser limits have already fired.
-  }
-}
-
 async function readPageText(
   page: PdfPageLike,
   state: PageTextReadState,
@@ -359,7 +349,6 @@ async function readPageText(
     for (;;) {
       const stopped = pageTextStopDiagnostic(next);
       if (stopped !== undefined) {
-        await cancelTextReader(reader);
         return {
           text: tokens.join(" ").trim(),
           scannedObjects: next.scannedObjects,
@@ -374,7 +363,6 @@ async function readPageText(
       const appended = appendPdfTextItems(tokens, chunk.items, next);
       next = appended.state;
       if (appended.diagnostic !== undefined) {
-        await cancelTextReader(reader);
         return {
           text: tokens.join(" ").trim(),
           scannedObjects: next.scannedObjects,

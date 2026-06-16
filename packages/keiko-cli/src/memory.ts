@@ -36,7 +36,7 @@ import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
   keiko memory maintain [--memory-dir PATH] [--evidence-dir PATH]
-                                              Run a bounded consolidate + decay + forget pass.
+                                              Run a bounded consolidate + archive + forget pass.
   keiko memory stats [--memory-dir PATH]      Print memory counts by status and scope.
   keiko memory diagnostics [--memory-dir PATH] [--evidence-dir PATH] [--last N]
                                               Print redacted local diagnostics JSON.
@@ -44,8 +44,9 @@ const USAGE = `Usage:
                                               Backfill embeddings for accepted memories lacking one.
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
---memory-dir). \`maintain\` strengthens recalled memories, decays stale ones, archives faded ones,
-forgets expired/very-faint ones, and reports unresolved consolidation review items. \`diagnostics\`
+--memory-dir). \`maintain\` promotes strong proposals, archives faded memories, forgets
+expired/very-faint ones, and reports unresolved consolidation review items (memory strength itself
+is derived live at retrieval; this pass never rewrites confidence). \`diagnostics\`
 prints schema version, generated time, scope/status counts, redacted storage path, and a bounded
 audit tail without memory body or payload content. \`reembed\` computes the embedding for each
 accepted memory that has none (bounded by --limit, default 200), so pre-existing memories become
@@ -153,8 +154,6 @@ function renderMaintenanceReport(counts: ReturnType<typeof runMemoryMaintenance>
   return [
     "Memory maintenance complete.",
     `  promoted:          ${String(counts.promoted)}`,
-    `  reinforced:        ${String(counts.reinforced)}`,
-    `  decayed:           ${String(counts.decayed)}`,
     `  archived:          ${String(counts.archived)}`,
     `  forgotten:         ${String(counts.forgotten)}`,
     `  superseded:        ${String(counts.superseded)}`,

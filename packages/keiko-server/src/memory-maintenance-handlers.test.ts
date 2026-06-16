@@ -11,7 +11,14 @@ import type {
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
+import {
+  handleRunMaintenance,
+  isMaintenanceDue,
+  maybeRunAutoMaintenance,
+  runMemoryMaintenance,
+  MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS,
+  type AutoMaintenanceState,
+} from "./memory-maintenance-handlers.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 
@@ -131,18 +138,17 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
   });
 
-  it("reinforces a frequently-recalled accepted memory", () => {
+  it("does NOT mutate confidence when a memory is frequently recalled (O-V2 immutability)", () => {
     const vault = makeVault();
     insert(vault, { id: "m", status: "accepted", confidence: 0.7 });
     vault.recordAccess([mid("m")], Date.now());
     vault.recordAccess([mid("m")], Date.now());
-    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
-    expect(counts(result).reinforced).toBe(1);
-    const confidence = vault.getMemory(mid("m"))?.provenance.confidence ?? 0;
-    expect(confidence).toBeGreaterThan(0.7);
+    handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    // Reuse strengthens ranking live, NOT provenance — confidence stays exactly as captured.
+    expect(vault.getMemory(mid("m"))?.provenance.confidence).toBe(0.7);
   });
 
-  it("decays an unaccessed, aged, mid-strength memory", () => {
+  it("does NOT mutate confidence of an aged, unaccessed memory (O-V2 immutability)", () => {
     const vault = makeVault();
     insert(vault, {
       id: "m",
@@ -150,10 +156,9 @@ describe("handleRunMaintenance", () => {
       confidence: 0.7,
       createdAt: Date.now() - 60 * DAY,
     });
-    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
-    expect(counts(result).decayed).toBe(1);
-    const confidence = vault.getMemory(mid("m"))?.provenance.confidence ?? 1;
-    expect(confidence).toBeLessThan(0.7);
+    handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    // Disuse is reflected by the live strength curve, never by a rewritten (0.6^n) confidence.
+    expect(vault.getMemory(mid("m"))?.provenance.confidence).toBe(0.7);
   });
 
   it("archives a faded accepted memory", () => {
@@ -264,8 +269,9 @@ describe("handleRunMaintenance", () => {
     const c = counts(result);
     expect(c.archived).toBe(0);
     expect(c.forgotten).toBe(0);
-    expect(c.decayed).toBe(0);
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
+    // A pinned record's confidence is also never rewritten.
+    expect(vault.getMemory(mid("m"))?.provenance.confidence).toBe(0.01);
   });
 
   it("returns 500 wrapping a vault fault", () => {
@@ -278,5 +284,105 @@ describe("handleRunMaintenance", () => {
     };
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: faulty }));
     expect(result.status).toBe(500);
+  });
+});
+
+const HOUR = 3_600_000;
+const NOW = 1_600_000_000_000;
+
+describe("isMaintenanceDue (O-V4)", () => {
+  it("is due when maintenance has never run", () => {
+    expect(isMaintenanceDue(undefined, NOW)).toBe(true);
+  });
+
+  it("is NOT due before the interval elapses", () => {
+    expect(isMaintenanceDue(NOW - 5 * HOUR, NOW)).toBe(false);
+  });
+
+  it("is due once the interval has elapsed", () => {
+    expect(isMaintenanceDue(NOW - 7 * HOUR, NOW)).toBe(true);
+    expect(isMaintenanceDue(NOW - MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS, NOW)).toBe(true);
+  });
+
+  it("is disabled (never due) for a non-positive or non-finite interval", () => {
+    expect(isMaintenanceDue(undefined, NOW, 0)).toBe(false);
+    expect(isMaintenanceDue(undefined, NOW, -1)).toBe(false);
+    expect(isMaintenanceDue(undefined, NOW, Number.POSITIVE_INFINITY)).toBe(false);
+  });
+});
+
+describe("maybeRunAutoMaintenance (O-V4)", () => {
+  it("does nothing and leaves the cursor untouched when disabled", () => {
+    const vault = makeVault();
+    const state: AutoMaintenanceState = {};
+    expect(
+      maybeRunAutoMaintenance(vault, undefined, state, { nowMs: NOW, enabled: false }),
+    ).toBeNull();
+    expect(state.lastRunAtMs).toBeUndefined();
+  });
+
+  it("runs once when due, advances the cursor, then rate-limits until the interval elapses", () => {
+    const vault = makeVault();
+    // A validity-expired memory is forgotten by the pass.
+    insert(vault, { id: "m", status: "accepted", validUntil: NOW - 1, createdAt: NOW - DAY });
+    const state: AutoMaintenanceState = {};
+
+    const first = maybeRunAutoMaintenance(vault, undefined, state, { nowMs: NOW, enabled: true });
+    expect(first?.forgotten).toBe(1);
+    expect(state.lastRunAtMs).toBe(NOW);
+    expect(vault.getMemory(mid("m"))).toBeUndefined();
+
+    // Second call within the interval is a no-op.
+    expect(
+      maybeRunAutoMaintenance(vault, undefined, state, { nowMs: NOW + 1000, enabled: true }),
+    ).toBeNull();
+
+    // After the interval, it runs again.
+    expect(
+      maybeRunAutoMaintenance(vault, undefined, state, {
+        nowMs: NOW + MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS,
+        enabled: true,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("never throws and still advances the cursor when the pass faults", () => {
+    const faulty = {
+      ...makeVault(),
+      listMemories: () => {
+        throw new Error("disk gone");
+      },
+    } as MemoryVaultStore;
+    const state: AutoMaintenanceState = {};
+    expect(
+      maybeRunAutoMaintenance(faulty, undefined, state, { nowMs: NOW, enabled: true }),
+    ).toBeNull();
+    // Cursor advanced BEFORE running so a persistently-failing pass cannot hot-loop.
+    expect(state.lastRunAtMs).toBe(NOW);
+  });
+});
+
+describe("runMemoryMaintenance — injected clock (O-V4 determinism)", () => {
+  it("uses the injected nowMs (not the wall clock) for expiry decisions", () => {
+    const vault = makeVault();
+    // 'future' expires AFTER the injected now but BEFORE the real 2026 wall clock — so a real
+    // Date.now() would forget it, while the injected clock must keep it.
+    insert(vault, {
+      id: "future",
+      status: "accepted",
+      validUntil: 1_700_000_000_000,
+      createdAt: 1_500_000_000_000,
+    });
+    insert(vault, {
+      id: "expired",
+      status: "accepted",
+      validUntil: 1_500_000_000_001,
+      createdAt: 1_500_000_000_000,
+    });
+    const result = runMemoryMaintenance(vault, undefined, { nowMs: NOW });
+    expect(result.forgotten).toBe(1);
+    expect(vault.getMemory(mid("expired"))).toBeUndefined();
+    // Survives because validUntil (1.7e12) is still in the future relative to the injected now.
+    expect(vault.getMemory(mid("future"))).toBeDefined();
   });
 });

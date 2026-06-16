@@ -22,16 +22,18 @@ import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
-  MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import {
-  DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
-  DEFAULT_STALE_CONFIDENCE_THRESHOLD,
-  isMemorySuppressed,
-  retrieveMemoryContext,
-} from "@oscharko-dev/keiko-memory-retrieval";
+import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  maybeRunAutoMaintenance,
+  type AutoMaintenanceState,
+} from "./memory-maintenance-handlers.js";
+import {
+  buildConversationRetrievalSignals,
+  conversationFusionMode,
+} from "./memory-retrieval-signals.js";
 import {
   extractCandidatesFromUserText,
   memoryTextEgressRejectionReason,
@@ -69,7 +71,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { cosineSimilarity, embedAndStoreMemory, embedMemoryText } from "./memory-embedding.js";
+import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
 import {
@@ -667,63 +669,9 @@ function recordConversationMemoryRetrieval(
   recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
 }
 
-// Gathers the candidate memory ids the retrieval layer will rank for these scopes, so the caller
-// can score each against the query embedding BEFORE retrieval runs. A superset of the eventually-
-// ranked set is harmless: ids the ranker filters out simply never read their semantic score.
-function isSemanticRetrievalCandidate(record: MemoryRecord, nowMs: number): boolean {
-  if (record.status === "superseded") {
-    return false;
-  }
-  return !isMemorySuppressed(record, nowMs, DEFAULT_STALE_CONFIDENCE_THRESHOLD).suppressed;
-}
-
-function gatherCandidateIds(
-  vault: MemoryVaultStore,
-  scopes: readonly MemoryScope[],
-  nowMs: number,
-): readonly MemoryId[] {
-  const port = vaultAsQueryPort(vault);
-  const ids: MemoryId[] = [];
-  const seen = new Set<string>();
-  for (const scope of scopes) {
-    for (const record of port.listByScope(scope, {
-      includeArchived: true,
-      includeForgotten: true,
-      includeExpired: true,
-      maxResults: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
-    })) {
-      if (!isSemanticRetrievalCandidate(record, nowMs)) continue;
-      if (seen.has(record.id)) continue;
-      seen.add(record.id);
-      ids.push(record.id);
-    }
-  }
-  return ids;
-}
-
-// Builds the per-memory semantic score map for the candidate set, or undefined when no embedding
-// model is configured (query embedding null) — that undefined drives the byte-identical lexical
-// fallback in the ranker. A candidate whose stored vector is missing or dimension-mismatched is
-// simply omitted from the map (semantic subscore 0 for it).
-async function buildSemanticScores(
-  deps: UiHandlerDeps,
-  vault: MemoryVaultStore,
-  queryText: string,
-  candidateIds: readonly MemoryId[],
-): Promise<ReadonlyMap<MemoryId, number> | undefined> {
-  if (candidateIds.length === 0) return undefined;
-  const scores = new Map<MemoryId, number>();
-  const embeddings = vault.getEmbeddings(candidateIds);
-  if (embeddings.size === 0) return undefined;
-  const queryEmbedding = await embedMemoryText(deps, queryText);
-  if (queryEmbedding === null) return undefined;
-  for (const id of candidateIds) {
-    const stored = embeddings.get(id);
-    if (stored === undefined) continue;
-    scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
-  }
-  return scores;
-}
+// The candidate-id gathering, semantic scoring, and strength projection that both this chat path and
+// the BFF /api/memory/context route need now live in ONE place — memory-retrieval-signals.ts — so the
+// two surfaces cannot drift (#204, O-F4). See buildConversationRetrievalSignals.
 
 function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
@@ -749,6 +697,59 @@ function toMemoryResult(
   };
 }
 
+// Process-lifetime rate-limit cursor for autonomous maintenance (#204, O-V4). One loopback server =
+// one cursor, so the >=6h interval is honoured across chat turns. Module-scoped (not on deps) so it
+// is never shared across test fixtures; auto-maintenance is opt-in (env), so tests that do not set
+// the flag never advance it.
+const memoryMaintenanceCursor: AutoMaintenanceState = {};
+
+// Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. Opt-in
+// via env (default off so existing behaviour is unchanged); short-circuits on the cursor almost
+// every turn and never throws into the chat path.
+function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
+  maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
+    nowMs: Date.now(),
+    enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "1",
+  });
+}
+
+// Build the embedding/strength/diversity signals and run scoped retrieval — the shared pipeline the
+// BFF route also uses (#204, O-F2/O-F3/O-F4/O-P1). semanticById is gated on the secondary-model
+// egress check; all signals are passed only when present so a fresh vault ranks byte-identically, and
+// the fusion mode is env-opt-in (default weighted-sum).
+async function retrieveChatMemory(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+  content: string,
+  budgetTokens: number | undefined,
+  nowMs: number,
+): Promise<ReturnType<typeof retrieveMemoryContext>> {
+  const safeForSecondaryModel =
+    memoryTextEgressRejectionReason(content, memoryCapturePolicyForDeps(deps)) === null;
+  const signals = await buildConversationRetrievalSignals(
+    deps,
+    vault,
+    content,
+    scopes,
+    nowMs,
+    safeForSecondaryModel,
+  );
+  return retrieveMemoryContext(
+    {
+      scopes,
+      queryText: content,
+      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+      ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+      ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
+      ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+      fusion: conversationFusionMode(deps),
+      nowMs,
+    },
+    vaultAsQueryPort(vault),
+  );
+}
+
 export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -768,25 +769,13 @@ export async function buildMemoryResult(
     return emptyMemoryResult(true);
   }
   const nowMs = Date.now();
-  const safeForSecondaryModel =
-    memoryTextEgressRejectionReason(request.content, memoryCapturePolicyForDeps(deps)) === null;
-  const semanticById = safeForSecondaryModel
-    ? await buildSemanticScores(
-        deps,
-        vault,
-        request.content,
-        gatherCandidateIds(vault, scopes, nowMs),
-      )
-    : undefined;
-  const retrieval = retrieveMemoryContext(
-    {
-      scopes,
-      queryText: request.content,
-      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
-      ...(semanticById !== undefined ? { semanticById } : {}),
-      nowMs,
-    },
-    vaultAsQueryPort(vault),
+  const retrieval = await retrieveChatMemory(
+    deps,
+    vault,
+    scopes,
+    request.content,
+    budgetTokens,
+    nowMs,
   );
   // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
   // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled
@@ -795,6 +784,10 @@ export async function buildMemoryResult(
   if (includedIds.length > 0) {
     vault.recordAccess(includedIds, Date.now());
   }
+  // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
+  // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
+  // free-running background loop.
+  maybeRunChatAutoMaintenance(deps, vault);
   const result = toMemoryResult(retrieval);
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;

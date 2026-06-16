@@ -1,0 +1,81 @@
+[
+  {
+    "id": "graded-relevance-test-runner",
+    "description": "A user-scope pool about the test runner, mixed with off-topic noise, used by graded-retrieval-quality to measure recall@k / precision@k. Three records share tokens with the query (one of them pinned, one updated 30 days earlier so recency participates), two noise records share no tokens, and one record has zero lexical overlap but is surfaced only when a semantic score is supplied.",
+    "memories": [
+      {
+        "id": "grq-vitest-config",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "configure the vitest test runner via vitest configuration",
+        "tags": ["testing"],
+        "confidence": 0.9,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "grq-runner-ci",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "the test runner used in ci is vitest",
+        "tags": ["testing", "ci"],
+        "confidence": 0.85,
+        "capturedAt": 1697408000000,
+        "validFrom": 1697408000000,
+        "createdAt": 1697408000000,
+        "updatedAt": 1697408000000
+      },
+      {
+        "id": "grq-pinned-setup",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "procedural",
+        "body": "test runner setup pins the vitest configuration to workspaces",
+        "tags": ["testing"],
+        "pinned": true,
+        "confidence": 0.8,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "grq-semantic-only",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "the harness picks specs from the spec folder",
+        "tags": ["harness"],
+        "confidence": 0.85,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "grq-noise-standup",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "morning standup is at nine local time",
+        "tags": ["schedule"],
+        "confidence": 0.8,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "grq-noise-theme",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "always enable dark mode in new chats",
+        "tags": ["ui"],
+        "confidence": 0.8,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]

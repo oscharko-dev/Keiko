@@ -136,6 +136,7 @@ import {
   QI_RECHECK_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 import {
+  handleFigmaListSnapshots,
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
   handleFigmaLoadSnapshotImage,
@@ -464,6 +465,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // POST triggers a bounded snapshot-build from a board link; GET loads the stored summary.
   // Token: resolved server-side from vault, config, or FIGMA_ACCESS_TOKEN env; never in response.
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
+  { method: "GET", pattern: "/api/figma/snapshots", handler: handleFigmaListSnapshots },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
   {
     method: "GET",
