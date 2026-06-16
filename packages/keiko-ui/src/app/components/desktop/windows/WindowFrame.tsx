@@ -574,7 +574,9 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={minimizeWithFocusRestore}
-          />
+          >
+            <Icons.minimize size={17} />
+          </button>
           <button
             type="button"
             className="win-traffic-btn win-traffic-maximize"
@@ -585,7 +587,9 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={() => api.maximize(win.id)}
-          />
+          >
+            {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
+          </button>
           <button
             type="button"
             className="win-traffic-btn win-traffic-close"
@@ -596,7 +600,9 @@ export function WindowFrame({
               e.stopPropagation();
             }}
             onClick={closeWithFocusRestore}
-          />
+          >
+            <Icons.close size={17} />
+          </button>
         </div>
       </header>
       <div className="win-body" data-mode={bodyMode} style={bodyStyle}>

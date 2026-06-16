@@ -58,12 +58,12 @@ describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
     expect(css).toContain(".rail-new:focus-visible");
   });
 
-  it(".rail-btn:focus-visible sets outline: 2px solid var(--accent)", () => {
+  it(".rail-btn:focus-visible sets outline: 2px solid var(--accent-text)", () => {
     // Find the rule block after .rail-btn:focus-visible
     const selectorIdx = css.indexOf(".rail-btn:focus-visible");
     expect(selectorIdx).toBeGreaterThan(-1);
     const block = css.slice(selectorIdx, css.indexOf("}", selectorIdx) + 1);
-    expect(block).toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
     expect(block).toContain("outline-offset: 2px");
   });
 });
@@ -264,6 +264,24 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+describe("design a11y — prefers-contrast token step-up (accessibility.html §01)", () => {
+  it("steps up neutral borders + faint/dim text at the token level, not just components", () => {
+    // accessibility.html promises: "when the OS asks for more contrast, borders,
+    // faint text … step up automatically". That requires a token-level override,
+    // not only the component-scoped .rb-edge-badge block.
+    const marker = css.indexOf("Step the neutral ramp");
+    expect(marker, "token-level prefers-contrast step-up not found").toBeGreaterThan(-1);
+    const open = css.indexOf("@media (prefers-contrast: more)", marker);
+    expect(open).toBeGreaterThan(-1);
+    const block = css.slice(open, open + 900);
+    // dark: brighter borders + faint/dim text
+    expect(block).toContain("--line: oklch(0.55 0.004 160)");
+    expect(block).toContain("--fg-faint: oklch(0.74 0.004 160)");
+    // light: darker borders + faint/dim text
+    expect(block).toContain("--fg-faint: oklch(0.42 0.01 160)");
+  });
+});
+
 describe("Visual quality — workspace text rendering", () => {
   it(".ws-scene does not force transform layer promotion", () => {
     const block = cssBlock(".ws-scene");
@@ -363,22 +381,33 @@ describe("Fix 4 — dense desktop text clarity", () => {
     expect(subtitleBlock).toContain("font-weight: 500");
   });
 
-  it("keeps traffic-light window controls large enough for full-screen cards", () => {
+  it("keeps window controls large enough for full-screen cards (WCAG 2.5.8)", () => {
     const buttonBlock = cssBlock(".win-traffic-btn");
     expect(buttonBlock).toContain("width: 28px");
     expect(buttonBlock).toContain("height: 28px");
 
-    const bubbleBlock = cssBlock(".win-traffic-btn::before");
-    expect(bubbleBlock).toContain("width: 15px");
-    expect(bubbleBlock).toContain("height: 15px");
-
     const maxButtonBlock = cssBlock('.window[data-max="true"] .win-traffic-btn');
     expect(maxButtonBlock).toContain("width: 30px");
     expect(maxButtonBlock).toContain("height: 30px");
+  });
 
-    const maxBubbleBlock = cssBlock('.window[data-max="true"] .win-traffic-btn::before');
-    expect(maxBubbleBlock).toContain("width: 17px");
-    expect(maxBubbleBlock).toContain("height: 17px");
+  it("draws window controls in the Lift hand — monochrome at rest, whisper on hover", () => {
+    // Design/Keiko Icon System §03: the three controls are Lift glyphs in
+    // currentColor, not borrowed Apple dots. At rest the "ring halo" chip is
+    // hidden — no permanent colour, no fill.
+    const chipBlock = cssBlock(".win-traffic-btn::before");
+    expect(chipBlock).toContain("inset: 3px");
+    expect(chipBlock).toContain("opacity: 0");
+    expect(chipBlock).toContain("box-shadow: 0 0 0 1px var(--line-soft) inset");
+
+    // The meaning only whispers on hover: full screen tints accent, close tints
+    // danger — always paired with the glyph + the button aria-label, never colour
+    // alone.
+    expect(cssBlock(".win-traffic-maximize:hover")).toContain("color: var(--accent-text)");
+    expect(cssBlock(".win-traffic-close:hover")).toContain("color: var(--danger)");
+
+    // The old always-on Apple traffic-light dots (amber minimize fill) are gone.
+    expect(css).not.toContain("oklch(0.78 0.15 82)");
   });
 
   it("keeps file metadata readable without widened tracking", () => {
@@ -519,12 +548,12 @@ describe("uiux-fix F013 — header responsive stages and tab truncation", () => 
 describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)", () => {
   it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
     const block = cssBlock(".footer:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
   });
 
   it("adds a visible .workspace:focus-visible ring (WC-01 keyboard pan surface)", () => {
     const block = cssBlock(".workspace:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
   });
 
   it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
@@ -620,7 +649,7 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
 
   it(".figma-snapshot-cancel-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-cancel-btn:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
   });
 
   it(".figma-snapshot-revoke-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
@@ -630,7 +659,7 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
 
   it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-revoke-btn:focus-visible,");
-    expect(block).toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
   });
 
   it(".figma-snapshot-revoke-confirm-btn is covered by the shared revoke block (WCAG 2.5.8)", () => {
@@ -650,7 +679,7 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     );
     const block = css.slice(idx, css.indexOf("}", idx) + 1);
     expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
   });
 
   it(".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)", () => {
