@@ -284,6 +284,27 @@ describe("WindowFrame content zoom controls", () => {
     expect(document.body.style.cursor).toBe("");
   });
 
+  it("focuses the window when the user clicks inside the body content", () => {
+    const focus = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top={false}
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const body = container.querySelector<HTMLElement>(".win-body");
+    expect(body).not.toBeNull();
+
+    fireEvent.pointerDown(body as HTMLElement, { button: 0, clientX: 120, clientY: 120 });
+
+    expect(focus).toHaveBeenCalledWith("agents-1");
+  });
+
   it("restores maximized geometry before starting a header drag", () => {
     const update = vi.fn();
     const { container } = render(
