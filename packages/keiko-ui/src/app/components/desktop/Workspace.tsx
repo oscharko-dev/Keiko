@@ -270,24 +270,24 @@ function WorkspaceOutline({
   // #1153: reveal is state-driven, not CSS-`:focus-within`-only. A collapsed
   // panel previously kept pointer-events:none buttons in the a11y tree, so a
   // pointer (or AT-driven) click fell through to the canvas as a silent no-op.
-  // `pinned` is the deliberate toggle; `transient` mirrors hover/focus so the
-  // keyboard `:focus-within` path keeps working. The panel is open when either
-  // is set, and the DOM exposure (`inert`/`aria-hidden`) tracks that union so
-  // visibility and interactivity never drift apart.
+  // `pinned` is the deliberate toggle; hover and focus-within are tracked
+  // separately so the panel stays open while keyboard focus remains inside,
+  // even after the pointer leaves.
   const [pinned, setPinned] = useState(false);
-  const [transient, setTransient] = useState(false);
-  const open = pinned || transient;
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const open = pinned || hovered || focusWithin;
 
   return (
     <section
       className="ws-outline"
       data-open={open ? "true" : "false"}
       aria-label="Workspace outline"
-      onPointerEnter={() => setTransient(true)}
-      onPointerLeave={() => setTransient(false)}
-      onFocusCapture={() => setTransient(true)}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocusWithin(true)}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setTransient(false);
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocusWithin(false);
       }}
     >
       <button
@@ -300,7 +300,8 @@ function WorkspaceOutline({
         onClick={() => {
           if (pinned) {
             setPinned(false);
-            setTransient(false);
+            setHovered(false);
+            setFocusWithin(false);
             return;
           }
           setPinned(true);

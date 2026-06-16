@@ -1010,6 +1010,29 @@ describe("#1153 — pointer users can operate the workspace outline", () => {
     expect(content).toHaveAttribute("inert");
   });
 
+  it("stays open when the pointer leaves but focus remains inside the outline", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    fireEvent.pointerEnter(outline);
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    const newWindowButton = within(outline).getByRole("button", { name: "New window" });
+    fireEvent.focus(newWindowButton);
+    fireEvent.pointerLeave(outline);
+
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    fireEvent.blur(newWindowButton, { relatedTarget: document.body });
+    expect(outline).toHaveAttribute("data-open", "false");
+  });
+
   it("opens via the toggle and a per-window Close button mutates real window state", async () => {
     const user = userEvent.setup();
     render(<RealOutlineHarness initial={twoWindows()} />);
