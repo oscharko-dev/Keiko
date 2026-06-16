@@ -984,6 +984,32 @@ describe("#1153 — pointer users can operate the workspace outline", () => {
     expect(content).not.toHaveAttribute("inert");
   });
 
+  it("collapses immediately when Hide workspace outline is pressed", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workspace
+        ws={workspace({ wins: twoWindows() })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(outline).toHaveAttribute("data-open", "true");
+
+    await user.click(screen.getByRole("button", { name: "Hide workspace outline" }));
+
+    expect(screen.getByRole("button", { name: "Show workspace outline" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(outline).toHaveAttribute("data-open", "false");
+    const content = outline.querySelector(".ws-outline-content");
+    expect(content).toHaveAttribute("aria-hidden", "true");
+    expect(content).toHaveAttribute("inert");
+  });
+
   it("opens via the toggle and a per-window Close button mutates real window state", async () => {
     const user = userEvent.setup();
     render(<RealOutlineHarness initial={twoWindows()} />);

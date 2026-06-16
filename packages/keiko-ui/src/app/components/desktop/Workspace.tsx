@@ -295,11 +295,16 @@ function WorkspaceOutline({
         className="ws-outline-toggle"
         aria-expanded={open}
         aria-controls="ws-outline-content"
-        // onClick flips `pinned`; when open only transiently (hover/focus),
-        // pressing "Hide" sets pinned=false with no visible effect until the
-        // pointer/focus leaves and `transient` clears — acceptable (WCAG 4.1.2
-        // is satisfied because aria-expanded/label reflect the actual `open`).
-        onClick={() => setPinned((value) => !value)}
+        // Hiding from the pinned state should collapse immediately instead of
+        // waiting for hover/focus to clear.
+        onClick={() => {
+          if (pinned) {
+            setPinned(false);
+            setTransient(false);
+            return;
+          }
+          setPinned(true);
+        }}
       >
         {open ? "Hide workspace outline" : "Show workspace outline"}
       </button>

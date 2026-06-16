@@ -1001,11 +1001,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   pointer-events: none;
 }
 /* `data-open` is the source of truth (state-driven, kept in sync with the
-   `inert`/`aria-hidden` DOM exposure). :hover/:focus-within are retained as a
-   defense-in-depth visual reveal for keyboard and pointer parity. */
-.ws-outline[data-open="true"] .ws-outline-content,
-.ws-outline:hover .ws-outline-content,
-.ws-outline:focus-within .ws-outline-content {
+   `inert`/`aria-hidden` DOM exposure). Keep CSS reveal strictly aligned with
+   that state; raw :hover/:focus-within reopening caused "Hide workspace
+   outline" to appear ineffective until the pointer/focus left the region. */
+.ws-outline[data-open="true"] .ws-outline-content {
   transform: none;
   opacity: 1;
   pointer-events: auto;
