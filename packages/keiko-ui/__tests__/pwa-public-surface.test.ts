@@ -33,9 +33,11 @@ function packDryRun(): readonly string[] {
   const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: PKG_ROOT,
     encoding: "utf8",
+    shell: process.platform === "win32",
   });
   if (result.status !== 0) {
-    throw new Error(`npm pack --dry-run failed: ${result.stderr}`);
+    const details = result.stderr || result.stdout || result.error?.message;
+    throw new Error(`npm pack --dry-run failed: ${details}`);
   }
   const parsed = JSON.parse(result.stdout) as PackResult | readonly PackResult[];
   const entry = Array.isArray(parsed) ? parsed[0] : parsed;

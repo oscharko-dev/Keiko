@@ -577,9 +577,10 @@ describe("uiux-fix F013 — header responsive stages and tab truncation", () => 
   it("truncates the project-tab label instead of overflowing/wrapping (C157/C225)", () => {
     const marker = css.indexOf("uiux-fix F013: header responsive");
     expect(marker).toBeGreaterThan(-1);
-    const spanIdx = css.indexOf(".tb-tab > span {", marker);
-    expect(spanIdx).toBeGreaterThan(-1);
-    const block = css.slice(spanIdx, css.indexOf("}", spanIdx) + 1);
+    const f013Section = css.slice(marker);
+    const selectorBlock = f013Section.match(/\.tb-tab\s*>\s*span\s*\{[\s\S]*?\}/);
+    expect(selectorBlock).not.toBeNull();
+    const block = selectorBlock?.[0] ?? "";
     expect(block).toContain("text-overflow: ellipsis");
     expect(block).toContain("max-width: 220px");
   });
