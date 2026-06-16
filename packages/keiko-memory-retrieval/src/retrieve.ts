@@ -29,6 +29,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import { assembleContextBlock } from "./context.js";
+import { DEFAULT_MMR_LAMBDA, reorderByMmr } from "./diversity.js";
 import { RetrievalError } from "./errors.js";
 import { tokenize } from "./relevance.js";
 import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
@@ -79,6 +80,8 @@ function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
     correction: request.correctionBoost ?? DEFAULT_RANKING_WEIGHTS.correction,
     graph: request.graphProximityBoost ?? DEFAULT_RANKING_WEIGHTS.graph,
     semantic: request.semanticWeight ?? DEFAULT_RANKING_WEIGHTS.semantic,
+    strength: request.strengthWeight ?? DEFAULT_RANKING_WEIGHTS.strength,
+    importance: request.importanceWeight ?? DEFAULT_RANKING_WEIGHTS.importance,
   };
 }
 
@@ -310,6 +313,8 @@ export function retrieveMemoryContext(
     weights: resolved.weights,
     ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
     ...(request.semanticById === undefined ? {} : { semanticById: request.semanticById }),
+    ...(request.strengthById === undefined ? {} : { strengthById: request.strengthById }),
+    ...(request.fusion === undefined ? {} : { fusion: request.fusion }),
   };
   const ranked = rankMemories(
     filtered.candidates,
@@ -317,7 +322,17 @@ export function retrieveMemoryContext(
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
   const thresholded = applyRelevanceFloor(ranked, request);
-  const assembled = assembleContextBlock(thresholded.ranked, filtered.candidates, {
+  // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
+  // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
+  const selectionOrder =
+    request.embeddingById === undefined
+      ? thresholded.ranked
+      : reorderByMmr(
+          thresholded.ranked,
+          request.embeddingById,
+          request.mmrLambda ?? DEFAULT_MMR_LAMBDA,
+        );
+  const assembled = assembleContextBlock(selectionOrder, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,
     maxIncluded: resolved.maxIncluded,
   });

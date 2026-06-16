@@ -310,6 +310,7 @@ export interface UseChatSessionResult {
   // to gate cancellation.
   sendStatus: SendStatus;
   error: string | undefined;
+  clearError?: (() => void) | undefined;
   setDraft: (value: string) => void;
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
@@ -1623,6 +1624,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
     }));
   }, []);
+  const clearError = useCallback((): void => {
+    setError(undefined);
+  }, []);
 
   return {
     projects: state.projects,
@@ -1639,6 +1643,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     sending,
     sendStatus,
     error,
+    clearError,
     setDraft,
     setSelectedModel,
     openNewChat,

@@ -31,7 +31,14 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 // was removed without storing memory body content.
 // v5 = retrieval-path performance indexes (#210). Adds additive composite indexes matching the
 // scoped retrieval ORDER BY and per-memory edge ORDER BY shapes; no data rewrite.
-export const MEMORY_VAULT_SCHEMA_VERSION = 5;
+// v6 = outcome-driven forgetting (#204, O-V1). Adds two counters to memory_access — outcome_count
+// and utility_sum — recording governed retention OUTCOMES (a proposal accepted/rejected, a conflict
+// won/lost, an accepted correction superseding its origin). The maintenance strength model folds
+// their mean into a utility factor so proven-useful memories resist disuse-forgetting and proven-bad
+// ones fade sooner. Counters only (no content) => the table stays CLEARTEXT. Additive: the columns
+// default 0, which yields a neutral factor of 1, so the strength model is byte-identical until a
+// real outcome lands.
+export const MEMORY_VAULT_SCHEMA_VERSION = 6;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -151,11 +158,20 @@ CREATE INDEX IF NOT EXISTS idx_edges_to_created
   ON memory_edges(to_memory_id, created_at ASC);
 `;
 
+// v6 outcome counters on the existing access table (#204, O-V1). STRICT-compatible ALTERs with a
+// constant DEFAULT, so the rewrite is metadata-only and every pre-existing row reads 0/0 (neutral
+// utility factor). No content column => the table stays CLEARTEXT, like the rest of memory_access.
+const V6_SQL = `
+ALTER TABLE memory_access ADD COLUMN outcome_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE memory_access ADD COLUMN utility_sum REAL NOT NULL DEFAULT 0;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
   { version: 4, sql: V4_SQL },
   { version: 5, sql: V5_SQL },
+  { version: 6, sql: V6_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

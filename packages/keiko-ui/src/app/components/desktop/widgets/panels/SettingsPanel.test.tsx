@@ -90,6 +90,10 @@ function primeFetches(models: readonly ModelCapability[]): void {
 
 afterEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
+  document.documentElement.style.removeProperty("--workspace-bg-brightness");
+  document.documentElement.style.removeProperty("--workspace-grid-strength");
+  document.documentElement.style.removeProperty("--frame-border-strength");
 });
 
 describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () => {
@@ -235,5 +239,68 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
     await waitFor(() => {
       expect(fetchModelsMock).toHaveBeenCalled();
     });
+  });
+});
+
+describe("SettingsPanel workspace wallpaper controls", () => {
+  it("defaults the liquid wallpaper off and enables opacity only after opt-in", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    const generalTab = screen.getByRole("button", { name: "General" });
+    fireEvent.click(generalTab);
+
+    const switchControl = screen.getByRole("switch", { name: "Liquid wallpaper" });
+    expect(switchControl).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("slider", { name: "Wallpaper opacity" })).toBeDisabled();
+
+    fireEvent.click(switchControl);
+
+    expect(switchControl).toHaveAttribute("aria-checked", "true");
+    expect(window.localStorage.getItem("keiko.wallpaper.enabled")).toBe("true");
+    expect(screen.getByRole("slider", { name: "Wallpaper opacity" })).toBeEnabled();
+  });
+
+  it("persists workspace background brightness and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace background brightness" }), {
+      target: { value: "38" },
+    });
+
+    expect(window.localStorage.getItem("keiko.workspace.background.brightness")).toBe("38");
+    expect(document.documentElement.style.getPropertyValue("--workspace-bg-brightness")).toBe(
+      "38%",
+    );
+  });
+
+  it("persists workspace grid strength and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace grid strength" }), {
+      target: { value: "64" },
+    });
+
+    expect(window.localStorage.getItem("keiko.workspace.grid.strength")).toBe("64");
+    expect(document.documentElement.style.getPropertyValue("--workspace-grid-strength")).toBe(
+      "64%",
+    );
+  });
+
+  it("persists workspace border strength and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace border strength" }), {
+      target: { value: "57" },
+    });
+
+    expect(window.localStorage.getItem("keiko.frame.border.strength")).toBe("57");
+    expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("57%");
   });
 });

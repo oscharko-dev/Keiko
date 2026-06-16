@@ -29,6 +29,7 @@ import type { AddressInfo } from "node:net";
 import type { IncomingMessage, Server } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import { buildCspHeader } from "../../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
 import { createRunRegistry } from "../../runs.js";
@@ -45,6 +46,7 @@ import {
 } from "../figma/index.js";
 import type { RouteContext } from "../../routes.js";
 import {
+  handleFigmaListSnapshots,
   handleFigmaLoadSnapshot,
   handleFigmaRevokeToken,
   handleFigmaTriggerSnapshot,
@@ -776,6 +778,43 @@ function makeGetCtx(runId: string): RouteContext {
   };
 }
 
+function makeListCtx(query = ""): RouteContext {
+  const reqStream = Readable.from([]);
+  const fakeReq = Object.assign(reqStream, {
+    headers: {},
+    once: (_event: string, _listener: () => void): unknown => fakeReq,
+  }) as unknown as IncomingMessage;
+  return {
+    req: fakeReq,
+    res: {} as RouteContext["res"],
+    params: {},
+    url: new URL(`http://127.0.0.1/api/figma/snapshots${query}`),
+  };
+}
+
+function seedSnapshotRecord(
+  dir: string,
+  runId: string,
+  fetchedAt: string,
+  provenance: { readonly fileKey: string; readonly nodeId: string },
+): void {
+  const store = createNodeFigmaSnapshotStore(dir);
+  store.record({
+    runId,
+    provenance: { ...provenance, version: undefined, fetchedAt },
+    integrityHash: "placeholder",
+    screens: [
+      {
+        screenId: `${runId}-screen-1`,
+        irJson: { name: `Screen ${runId}`, root: { interactionHint: "input", children: [] } },
+        integrityHash: "placeholder",
+        image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+      },
+    ],
+    skippedScreens: [],
+  });
+}
+
 describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
   it("503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
     // Arrange: deps with no evidence dir configured.
@@ -920,6 +959,70 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
       expect(typeof screen.imageSha256).toBe("string");
       expect(typeof screen.imageByteLength).toBe("number");
     }
+  });
+});
+
+describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
+  it("503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
+    const deps: UiHandlerDeps = { ...makeDeps(""), evidenceDir: undefined };
+    const result = handleFigmaListSnapshots(makeListCtx(), deps);
+    expect(result.status).toBe(503);
+    const body = result.body as { error: { code: string } };
+    expect(body.error.code).toBe("FIGMA_NO_EVIDENCE_DIR");
+  });
+
+  it("lists recent snapshots newest first", () => {
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000101", "2026-06-01T10:00:00.000Z", {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000102", "2026-06-03T10:00:00.000Z", {
+      fileKey: "KEY999",
+      nodeId: "0:9",
+    });
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000103", "2026-06-02T10:00:00.000Z", {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+
+    const result = handleFigmaListSnapshots(makeListCtx(), makeDeps(evidenceDir, {}));
+
+    expect(result.status).toBe(200);
+    const body = result.body as { snapshots: { runId: string; fetchedAt: string }[] };
+    expect(body.snapshots.map((snapshot) => snapshot.runId)).toEqual([
+      "fs-00000000-0000-0000-0000-000000000102",
+      "fs-00000000-0000-0000-0000-000000000103",
+      "fs-00000000-0000-0000-0000-000000000101",
+    ]);
+  });
+
+  it("filters snapshots to the requested board scope and applies the limit", () => {
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000111", "2026-06-01T10:00:00.000Z", {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000112", "2026-06-02T10:00:00.000Z", {
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
+    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000113", "2026-06-03T10:00:00.000Z", {
+      fileKey: "OTHER",
+      nodeId: "0:9",
+    });
+
+    const result = handleFigmaListSnapshots(
+      makeListCtx("?fileKey=KEY123&nodeId=0%3A1&limit=1"),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { snapshots: { runId: string; fileKey: string; nodeId: string }[] };
+    expect(body.snapshots).toHaveLength(1);
+    expect(body.snapshots[0]).toMatchObject({
+      runId: "fs-00000000-0000-0000-0000-000000000112",
+      fileKey: "KEY123",
+      nodeId: "0:1",
+    });
   });
 });
 

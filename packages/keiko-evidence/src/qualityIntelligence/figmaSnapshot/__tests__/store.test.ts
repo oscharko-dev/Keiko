@@ -667,6 +667,55 @@ describe("createNodeFigmaSnapshotStore — listByScope", () => {
   });
 });
 
+describe("createNodeFigmaSnapshotStore — listRecent", () => {
+  it("returns recent run ids newest first across all scopes", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+        version: "v1",
+        fetchedAt: "2026-06-01T00:00:00.000Z",
+      },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: {
+        fileKey: "KEY999",
+        nodeId: "9:9",
+        version: "v2",
+        fetchedAt: "2026-06-10T00:00:00.000Z",
+      },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_3,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "0:2",
+        version: "v3",
+        fetchedAt: "2026-06-05T00:00:00.000Z",
+      },
+    });
+
+    expect(store.listRecent()).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
+    expect(store.listRecent(2)).toEqual([RUN_ID_2, RUN_ID_3]);
+  });
+
+  it("skips unparseable snapshot files silently", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const qiDir = join(dir, "qi");
+    writeFileSync(join(qiDir, `${RUN_ID_2}.figma-snapshot.json`), "not json", "utf8");
+
+    expect(store.listRecent()).toEqual([RUN_ID]);
+  });
+});
+
 // ─── Retention enforcement (#4) ──────────────────────────────────────────────────────────────
 
 describe("enforceFigmaSnapshotRetention", () => {

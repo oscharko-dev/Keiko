@@ -2,6 +2,20 @@
    KEIKO DESKTOP — design tokens & base
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
    ============================================================ */
+
+/* JetBrains Mono — self-hosted (SIL OFL 1.1, see public/fonts/OFL.txt). The variable
+   woff2 spans the 400/500/600 weights the design uses for machine text (paths, counts,
+   code, keys), so --font-mono actually renders JetBrains Mono instead of falling back to
+   the system monospace. Same-origin to satisfy CSP `font-src 'self'`; precached by sw.js
+   for offline. font-display: swap keeps text visible during the (same-origin, instant) load. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
+}
+
 :root {
   /* Tell the user agent the app paints on a dark surface by default. Without
      this hint the browser fills the empty document with its own white "blank"
@@ -218,6 +232,28 @@ button {
 
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
+}
+
+/* prefers-contrast: more — bright rooms, glare, low vision. Step the neutral ramp
+   up at the TOKEN level (accessibility.html §01: "when the OS asks for more
+   contrast, borders, faint text … step up automatically"), so every surface that
+   uses these tokens inherits stronger separation. Lifted from design/keiko-tokens.css;
+   limited to the tokens keiko-ui actually consumes. */
+@media (prefers-contrast: more) {
+  :root {
+    --line: oklch(0.55 0.004 160);
+    --line-soft: oklch(0.46 0.004 160);
+    --line-strong: oklch(0.64 0.005 160);
+    --fg-faint: oklch(0.74 0.004 160);
+    --fg-dim: oklch(0.8 0.004 160);
+  }
+  [data-theme="light"] {
+    --line: oklch(0.62 0.006 160);
+    --line-soft: oklch(0.72 0.005 160);
+    --line-strong: oklch(0.52 0.008 160);
+    --fg-faint: oklch(0.42 0.01 160);
+    --fg-dim: oklch(0.36 0.01 160);
+  }
 }
 [data-theme="light"] .dlg-overlay {
   background: oklch(0.3 0.01 160 / 0.34);
@@ -862,6 +898,8 @@ button {
   flex: 1;
   min-width: 0;
   cursor: grab;
+  touch-action: none;
+  user-select: none;
   /* clip, not hidden (audit C061): the +/-10000px .conn-svg makes an overflow:hidden
      container programmatically scrollable - keyboard focus on an offscreen port
      auto-scrolled the workspace and desynchronized all window geometry (drag/snap/
@@ -869,8 +907,27 @@ button {
      box is not a scroll container per spec, so focus can never scroll it. */
   overflow: clip;
   border-radius: 12px;
-  border: 1px solid var(--line);
-  background: var(--bg);
+  border: 1px solid
+    color-mix(in oklch, var(--accent) var(--frame-border-strength, 42%), transparent);
+  background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%));
+}
+/* The credential dialog is portalled above the workspace. When it is open the
+   background stage must be fully inert, otherwise injected browser overlays or
+   hit-test edge cases can still start a workspace pan behind the modal. */
+html[data-keiko-modal-open="true"] .workspace {
+  pointer-events: none;
+  cursor: default;
+}
+.workspace[data-panning="true"] {
+  cursor: grabbing;
+}
+/* When the workspace itself is being panned, every hovered child must keep the
+   same feedback instead of falling back to its own cursor token. */
+.workspace[data-panning="true"] * {
+  cursor: grabbing !important;
+}
+html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
+  cursor: default;
 }
 
 /* Liquid-Chrome-Wallpaper — bottom layer (z0), screen-fixed */
@@ -887,7 +944,112 @@ button {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background-image: radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklch, var(--accent) var(--workspace-grid-strength, 28%), transparent) 1px,
+    transparent 0
+  );
+}
+.ws-outline {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  z-index: 9000;
+  width: min(420px, calc(100% - 28px));
+  max-height: calc(100% - 84px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+  transform: translateX(calc(-100% - 18px));
+  opacity: 0;
+  pointer-events: none;
+}
+.ws-outline:focus-within {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+.ws-outline-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ws-outline h2,
+.ws-outline h3,
+.ws-outline h4,
+.ws-outline p {
+  margin: 0;
+}
+.ws-outline h2 {
+  font-size: 14px;
+  font-weight: 700;
+}
+.ws-outline h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-muted);
+}
+.ws-outline h4 {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.ws-outline p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+.ws-outline-summary {
+  color: var(--fg);
+}
+.ws-outline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ws-outline-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--card);
+}
+.ws-outline-list article {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-outline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ws-outline button {
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ws-outline button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--card-2);
+}
+.ws-outline button:disabled {
+  cursor: not-allowed;
+  color: var(--fg-dim);
+  opacity: 0.7;
 }
 .ws-outline {
   position: absolute;
@@ -1262,7 +1424,7 @@ button {
   color: var(--fg-muted);
 }
 .tr-caret-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
   /* WCAG 2.4.7 — dark separator so the accent ring keeps >=3:1 even on an accent-dim
      active-row background (accent-on-accent would otherwise be low-contrast). */
@@ -1608,7 +1770,7 @@ button {
 }
 .cmp-icon:focus-visible,
 .attach-chip-remove:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-send {
@@ -1627,7 +1789,7 @@ button {
   transform: translateY(-1px);
 }
 .cmp-send:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -1747,7 +1909,7 @@ button {
   color: var(--fg);
 }
 .source-limit-alert-dismiss:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 
@@ -1962,8 +2124,9 @@ button {
   cursor: grab;
   user-select: none;
 }
-.win-head:active {
-  cursor: grabbing;
+.window[data-dragging="true"],
+.window[data-dragging="true"] * {
+  cursor: grabbing !important;
 }
 .win-ico {
   display: grid;
@@ -2016,33 +2179,54 @@ button {
   width: 30px;
   height: 30px;
 }
+/* Lift window controls (design/Keiko Icon System.html · §03) — the three controls
+   are drawn in the Lift hand (SVG glyph in currentColor), not borrowed Apple dots.
+   Monochrome at rest; the meaning only whispers on hover: the glyph brightens, full
+   screen tints accent and close tints danger, and the lift "ring halo" chip fades in.
+   No permanent colour, no fill. */
+.win-traffic-btn {
+  color: var(--fg-faint);
+  transition: color 0.12s;
+}
+.win-traffic-btn > svg {
+  position: relative;
+  z-index: 1;
+}
 .win-traffic-btn::before {
   content: "";
-  width: 15px;
-  height: 15px;
+  position: absolute;
+  inset: 3px;
   border-radius: 50%;
-  border: 1px solid color-mix(in oklch, #000 18%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklch, #fff 34%, transparent),
-    0 0 0 1px color-mix(in oklch, #000 8%, transparent);
-}
-.window[data-max="true"] .win-traffic-btn::before {
-  width: 17px;
-  height: 17px;
-}
-.win-traffic-close::before {
-  background: var(--danger);
-}
-.win-traffic-minimize::before {
-  background: oklch(0.78 0.15 82);
-}
-.win-traffic-maximize::before {
-  background: var(--accent);
+  background: transparent;
+  box-shadow: 0 0 0 1px var(--line-soft) inset;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    box-shadow 0.12s,
+    transform 0.12s;
 }
 .win-traffic-btn:hover {
-  background: var(--card-2);
+  color: var(--fg);
+}
+.win-traffic-btn:hover::before {
+  opacity: 1;
+  box-shadow:
+    0 0 0 1px var(--line) inset,
+    0 0 0 4px var(--accent-glow);
+}
+.win-traffic-maximize:hover {
+  color: var(--accent-text);
+}
+.win-traffic-close:hover {
+  color: var(--danger);
+}
+.win-traffic-close:hover::before {
+  box-shadow:
+    0 0 0 1px var(--line) inset,
+    0 0 0 4px color-mix(in oklch, var(--danger) 26%, transparent);
 }
 .win-traffic-btn:active::before {
+  opacity: 1;
   transform: scale(0.92);
 }
 .win-zoom {
@@ -2228,9 +2412,22 @@ button {
   z-index: 20;
   width: 13px;
   height: 13px;
+  display: block;
+  inline-size: 13px;
+  block-size: 13px;
+  min-inline-size: 13px;
+  min-block-size: 13px;
+  max-inline-size: 13px;
+  max-block-size: 13px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
   border-radius: 50%;
+  -webkit-appearance: none;
+  appearance: none;
   background: var(--card);
   border: 2px solid var(--accent);
+  box-sizing: border-box;
+  line-height: 0;
   opacity: 0;
   transform: translate(-50%, -50%);
   cursor: crosshair;
@@ -2248,7 +2445,7 @@ button {
   opacity: 1;
 }
 .win-port:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 3px;
   opacity: 1;
 }
@@ -3010,6 +3207,11 @@ button {
   color: var(--fg);
   font-weight: 550;
 }
+.gpref-help {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
 .gpref-val {
   font-size: 12px;
   color: var(--accent-text);
@@ -3032,6 +3234,10 @@ button {
     var(--card-2) var(--p, 100%) 100%
   );
   background-clip: content-box;
+}
+.gpref-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .gpref-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -3933,38 +4139,75 @@ button {
   inset: 0;
   z-index: 3;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
   pointer-events: none;
 }
-.ws-empty-logo {
-  width: 54px;
-  height: 54px;
-  opacity: 0.5;
-  margin-bottom: 8px;
-}
-.ws-empty-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-.ws-empty-sub {
-  font-size: 13px;
-  color: var(--fg-muted);
-}
-.ws-empty-btn {
-  margin-top: 14px;
+.empty-workspace-blob {
   pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 16px;
-  border-radius: 10px;
-  background: var(--accent);
-  color: var(--ink-inverse);
-  font-size: 13px;
-  font-weight: 600;
+  appearance: none;
+  width: min(320px, calc(100% - 48px));
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 34px;
+  color: var(--bg);
+  background: transparent;
+  cursor: pointer;
+  filter: drop-shadow(0 14px 44px color-mix(in oklch, var(--accent) 20%, transparent));
+}
+.empty-workspace-blob svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.empty-workspace-blob__fill {
+  fill: var(--accent);
+  transition: fill 0.3s;
+}
+.empty-workspace-blob:hover .empty-workspace-blob__fill {
+  fill: var(--accent-bright);
+}
+.empty-workspace-blob__group {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.2s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.empty-workspace-blob:hover .empty-workspace-blob__group {
+  transform: scale(1.025);
+}
+.empty-workspace-blob:active .empty-workspace-blob__group {
+  transform: scale(0.985);
+}
+.empty-workspace-blob__group.is-pulse {
+  animation: emptyWorkspaceBlobPulse 0.55s ease;
+}
+.empty-workspace-blob:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 12px;
+}
+@keyframes emptyWorkspaceBlobPulse {
+  0% {
+    transform: scale(0.965);
+  }
+  55% {
+    transform: scale(1.03);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .empty-workspace-blob__fill,
+  .empty-workspace-blob__group {
+    transition: none;
+  }
+  .empty-workspace-blob__group.is-pulse {
+    animation: none;
+  }
 }
 
 /* ---------- PALETTE ---------- */
@@ -3973,7 +4216,7 @@ button {
   right: 18px;
   bottom: 74px;
   z-index: 9600;
-  width: 384px;
+  width: min(560px, calc(100% - 36px));
   max-width: calc(100% - 36px);
   max-height: calc(100% - 88px);
   display: flex;
@@ -4044,19 +4287,22 @@ button {
   color: var(--fg);
 }
 .palette-grid {
-  padding: 10px;
+  padding: 12px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 128px;
+  gap: 10px;
   flex: 1;
   min-height: 0;
   overflow: auto;
   align-content: start;
-  align-items: start;
+  align-items: stretch;
 }
 .pal-card {
+  min-width: 0;
+  min-height: 0;
   border: 1px solid var(--line-soft);
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--card);
 }
@@ -4065,23 +4311,23 @@ button {
 }
 .pal-main {
   position: relative;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  gap: 2px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   width: 100%;
-  padding: 12px 11px;
-  text-align: left;
+  height: 100%;
+  padding: 12px;
+  text-align: center;
 }
 .pal-main:hover {
   background: var(--card-2);
 }
 .pal-ico {
-  grid-row: 1 / 3;
+  flex: none;
   align-self: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   color: var(--accent);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
@@ -4089,22 +4335,29 @@ button {
   place-items: center;
 }
 .pal-name {
+  min-width: 0;
   font-size: 13.5px;
   font-weight: 600;
   color: var(--fg);
-  align-self: end;
-  padding-right: 18px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
 }
 .pal-desc {
+  min-width: 0;
   font-size: 11.5px;
   color: var(--fg-faint);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .pal-add {
   position: absolute;
-  top: 9px;
-  right: 9px;
-  width: 20px;
-  height: 20px;
+  right: 8px;
+  bottom: 8px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border-radius: 6px;
@@ -4113,6 +4366,12 @@ button {
 .pal-card:hover .pal-add {
   color: var(--accent);
   background: var(--accent-dim);
+}
+
+@media (max-width: 620px) {
+  .palette-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ---------- NEW-WINDOW DIALOG ---------- */
@@ -4272,7 +4531,7 @@ select.dlg-input {
   color: var(--fg);
 }
 .dlg-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 3px;
 }
 .dlg-primary {
@@ -4495,7 +4754,7 @@ select.dlg-input {
   line-height: 1.7;
 }
 .ed-textarea:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 .ed-code {
@@ -4698,6 +4957,71 @@ select.dlg-input {
   background: color-mix(in oklch, var(--danger) 12%, transparent);
   font-size: 12.5px;
 }
+.ui-error-notice {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid color-mix(in oklch, var(--danger) 38%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 10px 11px;
+  color: var(--fg);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.ui-error-notice-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ui-error-notice-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 650;
+  color: var(--danger);
+}
+.ui-error-notice-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -5px 0 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.ui-error-notice-close:hover {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  border-color: color-mix(in oklch, var(--danger) 28%, transparent);
+}
+.ui-error-notice-close:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus) 24%, transparent);
+}
+.ui-error-notice-message,
+.ui-error-notice-remediation {
+  color: var(--fg);
+}
+.ui-error-notice-remediation {
+  color: var(--fg-muted);
+}
+.ui-error-notice-code {
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in oklch, var(--danger) 25%, transparent);
+  border-radius: 4px;
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 8%, transparent);
+  overflow-wrap: anywhere;
+}
 
 /* ---------- COMPOSER: NO-MODEL ALERT (Issue #146) ---------- */
 /* Gives the alert a predictable id-able anchor inside the composer area.   */
@@ -4758,6 +5082,32 @@ select.dlg-input {
   border-width: 0;
 }
 
+/* WCAG 2.4.1 bypass-blocks skip link (design/accessibility.html §04, design/keiko-tokens.css).
+   Hidden off-screen until focused, then slides in top-left as the first focusable element. */
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 10000;
+  padding: 10px 15px;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-decoration: none;
+  transform: translateY(-180%);
+  transition: transform 0.15s;
+}
+.skip-link:focus {
+  transform: none;
+}
+.skip-link:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
 /* ---------- RELATIONSHIP EDGE BADGE (Issue #540 / #541) ----------------------- */
 /* Inline chip for activity state + lifecycle — used in RelationshipListPanel and  */
 /* RelationshipInspectorPanel. CSS variables exclusively from the dark palette.    */
@@ -4788,7 +5138,7 @@ select.dlg-input {
   min-width: 24px;
 }
 .rb-edge-badge-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .rb-edge-badge-label {
@@ -4903,13 +5253,13 @@ select.dlg-input {
 
 /* focus-visible ring for starter-prompt buttons (WCAG 2.4.7) */
 .suggest:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
 /* focus-visible ring for model select (WCAG 2.4.7) */
 .cmp-model-select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -5089,7 +5439,7 @@ select.dlg-input {
   color: var(--fg-faint);
 }
 .files-root-input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 .files-root-open {
@@ -5186,7 +5536,7 @@ select.dlg-input {
   min-width: 80px;
 }
 .bw-input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 .bw-input-url {
@@ -5215,7 +5565,7 @@ select.dlg-input {
   border-color: var(--accent-line);
 }
 .bw-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 .bw-btn:disabled {
@@ -5447,7 +5797,7 @@ select.dlg-input {
   background: var(--accent-dim);
 }
 .rv-evidence-link:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* evidence link — disabled look */
@@ -5511,7 +5861,7 @@ select.dlg-input {
 }
 /* focus-visible ring on file-row buttons */
 .rv-filerow:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
   border-radius: 4px;
 }
@@ -5568,7 +5918,7 @@ select.dlg-input {
   color: var(--accent-text);
 }
 .rv-truncated a:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* empty state */
@@ -5633,14 +5983,14 @@ select.dlg-input {
 }
 /* focus ring on .arun-btn globally (WCAG 2.4.7) — previously scoped to .rv-controls only */
 .arun-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* focus rings for nav rail icon buttons (WCAG 2.4.7) — .rail-avatar added (uiux-fix F014 C016) */
 .rail-btn:focus-visible,
 .rail-new:focus-visible,
 .rail-avatar:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* focus rings for header toolbar buttons (WCAG 2.4.7).
@@ -5651,7 +6001,7 @@ select.dlg-input {
 .tb-btn:focus-visible,
 .edm-trigger:focus-visible,
 .modesw-opt:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* Syntax token classes from syntaxHighlight.ts — REVIEW DIFF variant, scoped to .rv-src.
@@ -5776,7 +6126,7 @@ select.dlg-input {
   cursor: not-allowed;
 }
 .tm-action:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .tm-action[data-primary="true"] {
@@ -5821,7 +6171,7 @@ select.dlg-input {
   background: var(--card-2);
 }
 .tm-error-dismiss:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* B1 — tm-result: live region container */
@@ -6001,11 +6351,13 @@ select.dlg-input {
   backdrop-filter: blur(12px);
 }
 .gw-setup {
-  width: min(560px, 100%);
+  width: min(760px, 100%);
+  max-height: min(940px, calc(100vh - 48px));
+  overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 28px;
+  gap: 0;
+  padding: 0;
   /* 24px is a deliberate hero exception above --radius-lg — first-run setup
      card only; everything inside follows the 9/14/18 token scale (audit C007). */
   border-radius: 24px;
@@ -6021,6 +6373,18 @@ select.dlg-input {
     animation: fadeUp 0.22s ease-out;
   }
 }
+.gw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 30px;
+}
+.gw-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 620px;
+}
 .gw-setup-badge {
   display: inline-flex;
   align-items: center;
@@ -6035,10 +6399,10 @@ select.dlg-input {
   font-weight: 650;
 }
 .gw-setup h1 {
-  margin: 2px 0 0;
-  font-size: clamp(24px, 4vw, 34px);
-  letter-spacing: -0.04em;
-  line-height: 1;
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 0;
+  line-height: 1.08;
 }
 .gw-setup p {
   margin: 0;
@@ -6046,13 +6410,54 @@ select.dlg-input {
   line-height: 1.55;
   font-size: 14px;
 }
+.gw-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--card) 78%, var(--surface));
+}
+.gw-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.gw-section h2 {
+  margin: 0 0 4px;
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+.gw-section p {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.gw-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px 16px;
+}
+.gw-span-2 {
+  grid-column: 1 / -1;
+}
 .gw-field {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
+  min-width: 0;
   color: var(--fg-muted);
   font-size: 12px;
   font-weight: 650;
+}
+.gw-field > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
 }
 .gw-input {
   width: 100%;
@@ -6072,8 +6477,73 @@ select.dlg-input {
   color: var(--fg-faint);
 }
 .gw-textarea {
-  min-height: 82px;
+  min-height: 92px;
   resize: vertical;
+}
+.gw-current {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.gw-current-row,
+.gw-current-models {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--inset);
+}
+.gw-current-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.gw-current-row span,
+.gw-current-models > span {
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.gw-current-row strong,
+.gw-current-models strong {
+  min-width: 0;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+.gw-current-models {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.gw-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.gw-model-chips strong {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+.gw-replace {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 12px;
+}
+.gw-replace > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 750;
+}
+.gw-replace[open] > summary {
+  margin-bottom: 14px;
 }
 .gw-note {
   padding: 10px 12px;
@@ -6085,7 +6555,8 @@ select.dlg-input {
   line-height: 1.45;
 }
 .gw-error,
-.gw-success {
+.gw-success,
+.gw-pending {
   padding: 11px 12px;
   border-radius: var(--radius);
   border: 1px solid var(--line-strong);
@@ -6102,11 +6573,17 @@ select.dlg-input {
   background: var(--accent-dim);
   border-color: var(--accent-line);
 }
+.gw-pending {
+  color: var(--fg);
+  background: var(--card-2);
+  border-color: var(--line-soft);
+}
 .gw-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  padding-top: 2px;
 }
 .gw-cancel {
   min-height: 44px;
@@ -6140,6 +6617,23 @@ select.dlg-input {
 .gw-submit:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .gw-setup-backdrop {
+    padding: 14px;
+  }
+  .gw-form {
+    padding: 22px;
+  }
+  .gw-grid,
+  .gw-current {
+    grid-template-columns: 1fr;
+  }
+  .gw-span-2,
+  .gw-current-models {
+    grid-column: auto;
+  }
 }
 
 /* collapsed sidebar adjust */
@@ -6212,7 +6706,7 @@ select.dlg-input {
   outline-offset: 1px;
 }
 .scope-connect-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -6422,7 +6916,7 @@ select.dlg-input {
   filter: brightness(1.06);
 }
 .grounded-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 3px;
 }
 .grounded-cancel-btn:disabled {
@@ -6689,52 +7183,6 @@ select.dlg-input {
   padding: 2px 6px;
 }
 
-/* Pipeline diagram */
-.lk-pipeline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* Pipeline node */
-.lk-node {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: var(--radius);
-  background: var(--card);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-card);
-  min-width: 110px;
-  text-align: center;
-}
-.lk-node[data-connected="true"] {
-  border-color: var(--accent-line);
-}
-.lk-node-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-}
-.lk-node-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-}
-.lk-node-sub {
-  font-size: 11px;
-  color: var(--fg-dim);
-  margin-top: 2px;
-}
-
 /* Capsule section heading — --fg-muted: --fg-faint was 2.5–2.9:1 in both
    themes, WCAG 1.4.3 fail on 12px headings (uiux-fix F005) */
 .lk-section-head {
@@ -6777,7 +7225,7 @@ select.dlg-input {
   cursor: grabbing;
 }
 .lk-capsule-drag-handle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 3px;
   border-radius: var(--radius-xs);
 }
@@ -6921,7 +7369,7 @@ select.dlg-input {
   cursor: not-allowed;
 }
 .lk-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 3px;
 }
 .lk-btn-primary {
@@ -7456,6 +7904,31 @@ select.dlg-input {
   flex-shrink: 0;
 }
 
+.lkd-action-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid color-mix(in oklch, var(--ok) 34%, var(--line-soft));
+  border-radius: var(--radius-sm);
+}
+
+.lkd-action-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lkd-action-progress-note {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* Destructive confirm button in modal — danger style.
    --ink-inverse on --danger = 6.07:1 (WCAG AA). --fg is near-white = ~2.84:1 (FAIL). */
 .lkd-btn-destructive {
@@ -7551,7 +8024,7 @@ select.dlg-input {
 }
 
 .mc-chip:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -7663,7 +8136,7 @@ select.dlg-input {
 }
 
 .mc-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -7953,7 +8426,7 @@ select.dlg-input {
 .mc-dialog-textarea:focus-visible,
 .mc-dialog-input:focus-visible,
 .mc-dialog-select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 
@@ -8094,7 +8567,7 @@ select.dlg-input {
   border-color: var(--line-strong);
 }
 .sm-code-copy:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -8145,7 +8618,7 @@ select.dlg-input {
   color: var(--accent);
 }
 .sm-link:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -8273,7 +8746,7 @@ select.dlg-input {
 }
 
 .qi-run-item:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 
@@ -8738,7 +9211,7 @@ select.dlg-input {
 }
 
 .install-banner-btn-install:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
@@ -8766,7 +9239,7 @@ select.dlg-input {
 }
 
 .install-banner-btn-dismiss:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
@@ -8910,7 +9383,7 @@ select.dlg-input {
 .qi-input:focus-visible,
 .qi-textarea:focus-visible,
 .qi-select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -8942,7 +9415,7 @@ select.dlg-input {
   border-color: var(--line-strong);
 }
 .qi-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .qi-btn:disabled {
@@ -9152,7 +9625,7 @@ select.dlg-input {
 .qi-edit-input:focus-visible,
 .qi-edit-textarea:focus-visible,
 .qi-edit-select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -9442,7 +9915,7 @@ select.dlg-input {
   min-width: 0;
 }
 .figma-snapshot-input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 .figma-snapshot-input[aria-invalid="true"] {
   border-color: var(--danger);
@@ -9465,7 +9938,7 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-trigger-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 .figma-snapshot-trigger-btn:disabled {
   opacity: 0.5;
@@ -9498,7 +9971,7 @@ select.dlg-input {
   min-height: 24px; /* WCAG 2.5.8 */
 }
 .figma-snapshot-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 
 /* ── Status / progress ────────────────────────────────────────────────────── */
@@ -9581,7 +10054,205 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-load-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
+}
+
+/* ── Snapshot dashboard ───────────────────────────────────────────────────── */
+
+.figma-snapshot-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.figma-snapshot-dashboard-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.figma-snapshot-dashboard-eyebrow {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+}
+
+.figma-snapshot-dashboard-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-refresh {
+  min-height: 24px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-refresh:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  width: fit-content;
+}
+
+.figma-snapshot-dashboard-tab {
+  min-height: 24px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-tab[aria-selected="true"] {
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.figma-snapshot-dashboard-tab:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.figma-snapshot-dashboard-tab:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.figma-snapshot-dashboard-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-dashboard-status-error {
+  color: var(--danger);
+}
+
+.figma-snapshot-dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0 2px;
+}
+
+.figma-snapshot-dashboard-empty-title,
+.figma-snapshot-dashboard-empty-detail {
+  margin: 0;
+}
+
+.figma-snapshot-dashboard-empty-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-empty-detail {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-dashboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.figma-snapshot-dashboard-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-item:hover {
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--line));
+}
+
+.figma-snapshot-dashboard-item:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-item[aria-current="true"] {
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--line));
+  background: color-mix(in oklch, var(--accent) 10%, var(--card-2));
+}
+
+.figma-snapshot-dashboard-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.figma-snapshot-dashboard-item-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-item-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 15%, transparent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.figma-snapshot-dashboard-item-hint {
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-item-meta,
+.figma-snapshot-dashboard-item-scope {
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 
 /* ── Snapshot result ──────────────────────────────────────────────────────── */
@@ -9624,7 +10295,7 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-resnapshot-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 .figma-snapshot-resnapshot-btn:disabled {
   opacity: 0.5;
@@ -9678,7 +10349,7 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-codegen-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 .figma-snapshot-codegen-btn:disabled {
   opacity: 0.5;
@@ -9695,7 +10366,7 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-codegen-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 .figma-snapshot-code-result {
   display: flex;
@@ -9719,7 +10390,7 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-code-file-path:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   border-radius: 2px;
 }
 .figma-snapshot-code-file-contents {
@@ -9757,7 +10428,7 @@ select.dlg-input {
   outline-offset: 2px;
 }
 .figma-snapshot-scopes-summary:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   border-radius: 2px;
 }
 
@@ -9805,7 +10476,7 @@ select.dlg-input {
 .figma-snapshot-revoke-btn:focus-visible,
 .figma-snapshot-revoke-confirm-btn:focus-visible,
 .figma-snapshot-revoke-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 
 /* ── Screen gallery ───────────────────────────────────────────────────────── */
@@ -9830,7 +10501,7 @@ select.dlg-input {
 }
 
 .figma-snapshot-gallery-more:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
 }
 
 .figma-snapshot-screen-card {
@@ -10077,7 +10748,7 @@ select.dlg-input {
 .wf-dialog-launch:focus-visible,
 .wf-dialog-close:focus-visible,
 .wf-dialog-input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* Run summary card — chat-log card for workflow run system messages.
@@ -10238,14 +10909,14 @@ select.dlg-input {
 /* C305 — Retry/Dismiss in lk-alert banners had only the UA default ring; align
    with the accent focus-ring language used by .qi-btn and the other controls. */
 .lk-alert-retry:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 /* ==== uiux-fix F006: light focus rings, chrome focus, win-close hover, code gutters ==== */
 
-/* C009/C082 — every custom focus ring is `outline: 2px solid var(--accent)`; in the light
+/* C009/C082 — every custom focus ring is `outline: 2px solid var(--accent-text)`; in the light
    theme --accent #4eba87 is only ~2.4:1 on white/near-white surfaces (documented at the light
    token block, line ~194) — below the 3:1 of WCAG 1.4.11. --accent-text is the AA-tuned alias
    (= --accent in dark, oklch(0.5 0.13 160) ≈ 5.5:1 in light), so dark is unchanged. Blanket
@@ -10370,7 +11041,7 @@ select.dlg-input {
   z-index: 9000;
 }
 .conn-badge:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -10406,7 +11077,7 @@ select.dlg-input {
    focusable children, so it needs an explicit tab stop (axe scrollable-region-focusable).
    Ring pattern follows .rv-filerow:focus-visible. */
 .chatw-scroll:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 /* C089: the full composer auto-grows with its content (JS sets height up to 220px ≈ 8-9
@@ -10454,7 +11125,7 @@ select.dlg-input {
   border-color: var(--line-strong);
 }
 .grounded-citations-more:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C137 — a single over-long path/label chip (deep repo paths, long capsule labels)
@@ -10593,7 +11264,7 @@ select.dlg-input {
   cursor: help;
 }
 .cmp-budget-info:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-budget-info[data-tip]::after {
@@ -10643,7 +11314,7 @@ select.dlg-input {
   color: var(--fg);
 }
 .cmp-budget-clear:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-budget-clear:disabled {
@@ -10694,7 +11365,7 @@ select.dlg-input {
    inset ring so the outline survives the scroll container's overflow clipping. */
 .fpv-code:focus-visible,
 .ed-code:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 
@@ -10754,7 +11425,7 @@ select.dlg-input {
   color: var(--fg);
 }
 .dir-chip:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .dir-list {
@@ -10784,7 +11455,7 @@ select.dlg-input {
   color: var(--fg);
 }
 .dir-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 .dir-note {
@@ -10894,7 +11565,7 @@ select.dlg-input {
   font-family: var(--font-ui);
 }
 .connector-picker-select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* status/empty/error are early-return roots WITHOUT the .connector-picker
@@ -10942,7 +11613,7 @@ select.dlg-input {
   border-color: var(--accent-line);
 }
 .connector-picker-retry:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .connector-picker-selected {
@@ -10979,7 +11650,7 @@ select.dlg-input {
   text-decoration: underline;
 }
 .connector-picker-create-link:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -11048,7 +11719,7 @@ select.dlg-input {
   border-color: var(--accent-line);
 }
 .connector-node-manage:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -11177,7 +11848,7 @@ ul.integ {
 .gw-cancel:focus-visible,
 .perm-toggle:focus-visible,
 .perm-opt:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C191: machine error code as a small secondary mono line under the human
@@ -11213,7 +11884,7 @@ ul.integ {
    outline:none and had no :focus-visible rule; keyboard users could change the
    opacity without seeing focus. Same ring pattern as .arun-btn:focus-visible. */
 .gpref-slider:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 3px;
 }
 
@@ -11408,7 +12079,7 @@ ul.integ {
   border-color: var(--line);
 }
 .files-retry:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C087 — symlink badge + size column in the tree rows were unstyled UA spans. */
@@ -11436,7 +12107,7 @@ ul.integ {
 .proj-head:focus-visible,
 .edm-item:focus-visible,
 .plg-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 .fpv-back:focus-visible,
@@ -11449,7 +12120,7 @@ ul.integ {
 .palette-x:focus-visible,
 .auto-toggle:focus-visible,
 .ws-outline button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C123 — shared Toggle (role=switch): hover feedback + a ≥24px hit area around the 30×18
@@ -11649,7 +12320,7 @@ ul.integ {
   color: var(--fg);
 }
 .mc-row-detail-link:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -11839,6 +12510,13 @@ ul.integ {
   gap: 8px;
   align-items: center;
 }
+.lkd-limit-note {
+  max-width: 680px;
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .lkd-index-row {
   display: flex;
   flex-direction: column;
@@ -11917,11 +12595,30 @@ ul.integ {
   background: var(--card-2);
 }
 .lkd-picker-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 .lkd-picker-row input {
   flex: none;
+}
+.lkd-picker-row > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lkd-picker-row[data-disabled="true"] {
+  color: var(--fg-faint);
+  cursor: not-allowed;
+}
+.lkd-picker-meta {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.lkd-picker-row[data-disabled="true"] .lkd-picker-meta {
+  color: var(--danger);
 }
 .lkd-picker-empty {
   padding: 10px;
@@ -12041,7 +12738,7 @@ ul.integ {
   color: var(--fg-muted);
 }
 .rv-runid-input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 /* ==== uiux-fix F039: cmdk header entry point + boot placeholder (C223/C402) ==== */
@@ -12153,19 +12850,11 @@ ul.integ {
   color: var(--warn);
 }
 
-/* ==== uiux-fix F032: connector-graph — retry hover, pipeline connected tick ==== */
+/* ==== uiux-fix F032: connector-graph — retry hover ==== */
 /* C056 — .lk-alert-retry was the only banner control without hover feedback
    (focus ring landed in F003); thicker underline keeps the danger palette. */
 .lk-alert-retry:hover {
   text-decoration-thickness: 2px;
-}
-/* C228 — connected pipeline nodes signalled state via border colour alone
-   (WCAG 1.4.1). The tick is the second, non-colour cue; sr-only text in the
-   node carries the state for assistive tech. */
-.lk-node-tick {
-  color: var(--accent-text);
-  font-size: 11px;
-  margin-left: 4px;
 }
 
 /* ==== uiux-fix F026: relationships list rows — real hover/focus states ==== */
@@ -12196,7 +12885,7 @@ ul.integ {
   background: var(--card-2);
 }
 .rel-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 .rel-row[aria-pressed="true"] {
@@ -12291,7 +12980,7 @@ ul.integ {
   cursor: not-allowed;
 }
 .scope-grounding-select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -12306,7 +12995,7 @@ ul.integ {
    tabIndex={0} makes it keyboard-reachable (WCAG 2.1.1, axe scrollable-region-focusable)
    and this ring makes that focus visible (pattern .qi-input:focus-visible). */
 .qi-export-preview:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -12550,7 +13239,7 @@ ul.integ {
   border-color: var(--line-strong);
 }
 .chat-msg-copy:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .chat-msg-copy[data-copied="true"] {
@@ -12808,11 +13497,11 @@ ul.integ {
    tabIndex=-1); WC-01 — the workspace surface is keyboard-focusable for arrow-pan.
    Both need a visible focus indicator (WCAG 2.4.7). */
 .footer:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
 .workspace:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -3px;
 }
 

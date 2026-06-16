@@ -638,6 +638,11 @@ function AppShellInner(): ReactNode {
     <ChatSessionProvider value={session}>
       <WsContext.Provider value={wsContextValue}>
         <div className="app">
+          {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
+              users past the header/rail straight to the workspace (design/accessibility.html §04). */}
+          <a className="skip-link" href="#main">
+            Skip to content
+          </a>
           {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
           <h1 className="visually-hidden">Keiko workspace</h1>
           <Header
@@ -655,7 +660,7 @@ function AppShellInner(): ReactNode {
               theme={theme}
               onToggleTheme={toggleTheme}
             />
-            <div className="stage">
+            <div className="stage" id="main" tabIndex={-1}>
               <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}

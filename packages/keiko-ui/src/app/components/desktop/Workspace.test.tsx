@@ -56,6 +56,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
@@ -79,7 +80,7 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
 
 describe("M1 — empty startup layout", () => {
   it("renders the empty-state affordance when wins is an empty array", () => {
-    const { container } = render(
+    render(
       <Workspace
         ws={workspace({ wins: [] })}
         wsRef={createRef<HTMLDivElement>()}
@@ -87,26 +88,23 @@ describe("M1 — empty startup layout", () => {
       />,
     );
     expect(screen.getByText("Empty workspace")).toBeInTheDocument();
-    // Both the empty-state button and the FAB carry aria-label="New window".
-    // Query the empty-state-specific button via its class to avoid ambiguity.
-    expect(container.querySelector(".ws-empty-btn")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Open a new window" })).toHaveClass(
+      "empty-workspace-blob",
+    );
   });
 
-  it("calls openPalette when the empty-state New window button is clicked", async () => {
+  it("calls openPalette when the empty-state blob button is clicked", async () => {
     const openPalette = vi.fn();
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <Workspace
         ws={workspace({ wins: [] })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={openPalette}
       />,
     );
-    const emptyBtn = container.querySelector<HTMLButtonElement>(".ws-empty-btn");
-    expect(emptyBtn).not.toBeNull();
-    await user.click(emptyBtn as HTMLButtonElement);
-    // Both the empty-state button and the FAB call openPalette — at least 1 call is expected.
-    expect(openPalette).toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Open a new window" }));
+    expect(openPalette).toHaveBeenCalledTimes(1);
   });
 
   it("does not render the empty-state when wins has at least one window", () => {
@@ -218,7 +216,9 @@ describe("Workspace card connections", () => {
     await user.click(outlineQueries.getByRole("button", { name: "Tile all windows" }));
     await user.click(outlineQueries.getByRole("button", { name: "Open Chat: Release review" }));
     await user.click(outlineQueries.getByRole("button", { name: "Minimize Chat: Release review" }));
-    await user.click(outlineQueries.getByRole("button", { name: "Maximize Chat: Release review" }));
+    await user.click(
+      outlineQueries.getByRole("button", { name: "Full screen Chat: Release review" }),
+    );
     await user.click(outlineQueries.getByRole("button", { name: "Close Chat: Release review" }));
     await user.click(
       outlineQueries.getByRole("button", {
@@ -334,9 +334,9 @@ describe("Workspace card connections", () => {
 
     render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
 
-    // uiux-fix F031 C297 — control labels are window-scoped now ("Maximize Files
+    // uiux-fix F031 C297 — control labels are window-scoped now ("Full screen Files
     // window"), so the files-1 target is addressable by name directly.
-    const targetMaximizeButton = screen.getByRole("button", { name: "Maximize Files window" });
+    const targetMaximizeButton = screen.getByRole("button", { name: "Full screen Files window" });
     expect(targetMaximizeButton).toBeDefined();
 
     fireEvent.pointerDown(targetMaximizeButton as HTMLElement, { button: 0 });
@@ -672,6 +672,105 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     );
     const surface = screen.getByRole("main", { name: "Workspace surface" });
     expect(surface.tabIndex).toBe(0);
+  });
+
+  it("marks the free workspace surface as actively panning while the middle button is held", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+    expect(surface).toHaveAttribute("data-panning", "true");
+
+    fireEvent.pointerUp(window);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not start background panning from the primary mouse button", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not start background panning while a modal interaction lock is active", () => {
+    document.documentElement.setAttribute("data-keiko-modal-open", "true");
+    try {
+      render(
+        <Workspace
+          ws={workspace({})}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+      fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+
+      expect(surface).not.toHaveAttribute("data-panning");
+      expect(document.body.style.userSelect).toBe("");
+    } finally {
+      document.documentElement.removeAttribute("data-keiko-modal-open");
+    }
+  });
+
+  it("prevents text selection while the free workspace surface is actively panned", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent.pointerCancel(window);
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("fits the workspace to visible windows from the zoom control strip", async () => {
+    const fitView = vi.fn();
+    const user = userEvent.setup();
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    render(
+      <Workspace
+        ws={workspace({ wins, api: api({ fitView }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Fit workspace to windows" }));
+
+    expect(fitView).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables fit-to-windows when the workspace has no visible windows", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: [] })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fit workspace to windows" })).toBeDisabled();
   });
 
   it("ArrowLeft pans content right (panBy +step, 0)", () => {
