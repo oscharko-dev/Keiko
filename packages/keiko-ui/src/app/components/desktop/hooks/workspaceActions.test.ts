@@ -593,7 +593,10 @@ describe("connected workspace source readers", () => {
     const harness = makeConnectHarness(
       [
         win("quality", {}, "quality"),
-        { ...win("files", { resolvedRoot: "/active", activeFilePath: "notes.md" }, "files-a"), z: 9 },
+        {
+          ...win("files", { resolvedRoot: "/active", activeFilePath: "notes.md" }, "files-a"),
+          z: 9,
+        },
         { ...win("files", { resolvedRoot: "/other" }, "files-b"), z: 1 },
       ],
       [],
@@ -645,8 +648,9 @@ describe("scope normalization helpers", () => {
   });
 
   it("rejects invalid connected scopes and preserves total source-cap parity", () => {
-    expect(appendConnectedScope([], { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 }))
-      .toBeNull();
+    expect(
+      appendConnectedScope([], { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 }),
+    ).toBeNull();
     expect(isRootConnected([scope("C:/repo/")], "C:\\repo")).toBe(true);
     expect(
       totalSourceCap({
@@ -978,6 +982,241 @@ describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
       conns,
     );
     expect(linkedFigmaSnapshotRunIds("quality")).toHaveLength(MAX_SCOPES);
+  });
+});
+
+describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
+  it("returns a figma-snapshot source scoped to the selected screen ids", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figma",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-1",
+        ),
+      ],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      {
+        kind: "figma-snapshot",
+        label: "Login mask",
+        snapshotRunId: "fig-abc",
+        screenIds: ["screen-1"],
+      },
+    ]);
+  });
+
+  it("returns a JSON-labelled figma-snapshot source from a standalone Figma JSON window", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaJson",
+          {
+            snapshotRunId: "fig-abc",
+            screenId: "screen-1",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-json-1",
+        ),
+      ],
+      [conn("quality", "fig-json-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      {
+        kind: "figma-snapshot",
+        label: "JSON · Login mask",
+        snapshotRunId: "fig-abc",
+        screenIds: ["screen-1"],
+      },
+    ]);
+  });
+
+  it("keeps a whole snapshot and a scoped screen from the same run as separate sources", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-abc" }, "fig-whole"),
+        win(
+          "figma",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-scoped",
+        ),
+      ],
+      [conn("quality", "fig-whole"), conn("quality", "fig-scoped")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      { kind: "figma-snapshot", label: "fig-abc", snapshotRunId: "fig-abc" },
+      {
+        kind: "figma-snapshot",
+        label: "Login mask",
+        snapshotRunId: "fig-abc",
+        screenIds: ["screen-1"],
+      },
+    ]);
+  });
+
+  it("drops a scoped figma window whose selected-screen cfg is malformed (fail-safe — never widens to the whole board)", () => {
+    // A window opened via "Add to workspace" is SCOPED (it carries selectedScreenName and a
+    // selectedScreenIdsJson key). When that JSON is corrupt the scope cannot be resolved, so the
+    // window must contribute NOTHING rather than silently degrading to a whole-snapshot ingestion —
+    // the scoped-snapshot no-leak invariant. (Previously this fell back to the whole board, leaking
+    // every unrelated screen into the QI run.) Only a genuinely unscoped figma window ingests the
+    // full snapshot.
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figma",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: "{not-json",
+            selectedScreenName: "Ignored mask",
+          },
+          "fig-1",
+        ),
+      ],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([]);
+  });
+
+  it("still ingests the whole snapshot for an UNSCOPED figma window (no scope markers)", () => {
+    // The fail-safe above must NOT regress the legacy path: a plain figma window connected directly
+    // (no selectedScreenIdsJson, no selectedScreenName) is intentionally a whole-snapshot source.
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-abc" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      { kind: "figma-snapshot", label: "fig-abc", snapshotRunId: "fig-abc" },
+    ]);
+  });
+
+  it("drops a scoped figma window whose selectedScreenIdsJson was lost on reload (name kept, ids gone)", () => {
+    // Persistence drops an over-cap/invalid selectedScreenIdsJson but keeps selectedScreenName. On
+    // reload such a window is still a SCOPED window with an unresolvable scope → it must contribute
+    // nothing, never the whole board.
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-abc", selectedScreenName: "Login mask" }, "fig-1"),
+      ],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([]);
+  });
+
+  it("dedupes two scoped windows selecting the same screens in a different order", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figma",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-2", "screen-1"]),
+            selectedScreenName: "A",
+          },
+          "fig-1",
+        ),
+        win(
+          "figma",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-1", "screen-2"]),
+            selectedScreenName: "B",
+          },
+          "fig-2",
+        ),
+      ],
+      [conn("quality", "fig-1"), conn("quality", "fig-2")],
+    );
+    const sources = linkedFigmaSnapshotSources("quality");
+    expect(sources).toHaveLength(1);
+    // Canonical (sorted) screen ids regardless of selection order.
+    expect(sources[0]?.screenIds).toEqual(["screen-1", "screen-2"]);
+  });
+});
+
+describe("linkedImageSources — standalone image sources", () => {
+  it("returns an image source for a connected Figma Image window", () => {
+    const { linkedImageSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaImage",
+          {
+            snapshotRunId: "fig-abc",
+            screenId: "screen-1",
+            selectedScreenName: "Login mask",
+            imageSrc: "/api/figma/snapshots/fig-abc/screens/0/image",
+          },
+          "fig-image-1",
+        ),
+      ],
+      [conn("quality", "fig-image-1")],
+    );
+
+    expect(linkedImageSources("quality")).toEqual([
+      {
+        kind: "image",
+        label: "Image · Login mask",
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: "fig-abc",
+        screenId: "screen-1",
+      },
+    ]);
+  });
+
+  it("dedupes repeated image windows for the same run and screen", () => {
+    const { linkedImageSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaImage",
+          { snapshotRunId: "fig-abc", screenId: "screen-1", selectedScreenName: "A" },
+          "fig-image-1",
+        ),
+        win(
+          "figmaImage",
+          { snapshotRunId: "fig-abc", screenId: "screen-1", selectedScreenName: "B" },
+          "fig-image-2",
+        ),
+      ],
+      [conn("quality", "fig-image-1"), conn("quality", "fig-image-2")],
+    );
+
+    expect(linkedImageSources("quality")).toHaveLength(1);
+    expect(linkedImageSources("quality")[0]?.label).toBe("Image · A");
+  });
+
+  it("does not expose image windows through figma-snapshot JSON source readers", () => {
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaImage",
+          { snapshotRunId: "fig-abc", screenId: "screen-1", selectedScreenName: "Login mask" },
+          "fig-image-1",
+        ),
+      ],
+      [conn("quality", "fig-image-1")],
+    );
+
+    expect(harness.linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+    expect(harness.linkedFigmaSnapshotSources("quality")).toEqual([]);
   });
 });
 

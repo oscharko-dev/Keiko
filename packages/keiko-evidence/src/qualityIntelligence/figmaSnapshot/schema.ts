@@ -53,6 +53,16 @@ export interface FigmaSnapshotScreenRow {
   readonly integrityHash: string;
 }
 
+/** A screen whose structural Screen-IR is persisted but whose PNG render is absent. */
+export interface FigmaSnapshotStructuralScreenRow {
+  readonly screenId: string;
+  /** Why the screen has no render side-file. Mirrors the matching skippedScreens row. */
+  readonly reason: FigmaSnapshotSkipReason;
+  /** Opaque serialised Screen-IR (#752). Design content — kept, not redacted away. */
+  readonly irJson: unknown;
+  readonly integrityHash: string;
+}
+
 /**
  * A raw inter-screen transition carried for the navigation/flow graph (#811). OPTIONAL and additive:
  * a record without `links` (e.g. an older snapshot) is still valid and the navigation derivation
@@ -119,6 +129,12 @@ export interface FigmaSnapshotRecord {
   readonly provenance: FigmaSnapshotProvenanceRow;
   readonly screens: readonly FigmaSnapshotScreenRow[];
   readonly skippedScreens: readonly FigmaSnapshotSkippedScreenRow[];
+  /**
+   * Structural IR for screens without a PNG render. Optional for older snapshots. New snapshots
+   * write one row for each skipped screen whose IR was available, so downstream QI can still use
+   * the JSON even when rendering is capped or degraded.
+   */
+  readonly structuralScreens?: readonly FigmaSnapshotStructuralScreenRow[];
   /** Raw inter-screen transitions for the navigation/flow graph (#811). Optional + additive. */
   readonly links?: readonly FigmaSnapshotLinkRow[];
   /**
@@ -145,6 +161,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "provenance",
   "screens",
   "skippedScreens",
+  "structuralScreens",
   "links",
   "tokens",
   "metrics",
@@ -276,6 +293,18 @@ function validateMetrics(value: unknown): FigmaSnapshotValidationResult | undefi
   );
 }
 
+function validateScreenCollections(
+  record: Record<string, unknown>,
+): FigmaSnapshotValidationResult | undefined {
+  if (!Array.isArray(record.screens) || !Array.isArray(record.skippedScreens)) {
+    return { ok: false, reason: "screens and skippedScreens must be arrays" };
+  }
+  if (record.structuralScreens !== undefined && !Array.isArray(record.structuralScreens)) {
+    return { ok: false, reason: "structuralScreens must be an array" };
+  }
+  return undefined;
+}
+
 // Strict-schema gate for a deserialised snapshot record: schema-version literal + closed key set.
 // Structural correctness of the integrity hashes is the builder's responsibility, not this gate's.
 export function validateFigmaSnapshotRecord(value: unknown): FigmaSnapshotValidationResult {
@@ -294,9 +323,8 @@ export function validateFigmaSnapshotRecord(value: unknown): FigmaSnapshotValida
       return { ok: false, reason: `unknown record key: ${key}` };
     }
   }
-  if (!Array.isArray(record.screens) || !Array.isArray(record.skippedScreens)) {
-    return { ok: false, reason: "screens and skippedScreens must be arrays" };
-  }
+  const screenCollectionsValidation = validateScreenCollections(record);
+  if (screenCollectionsValidation !== undefined) return screenCollectionsValidation;
   const artifactHashesValidation = validateArtifactHashes(record.artifactHashes);
   if (artifactHashesValidation !== undefined) return artifactHashesValidation;
   const metricsValidation = validateMetrics(record.metrics);

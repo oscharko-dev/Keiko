@@ -18,28 +18,26 @@ interface PaletteProps {
   readonly onClose: () => void;
 }
 
-// .palette-grid is a fixed three-column grid. Vertical arrow steps move by one
-// row, i.e. three cards (audit C363).
-const GRID_COLUMNS = 3;
-
-const ARROW_DELTAS: ReadonlyMap<string, number> = new Map([
-  ["ArrowRight", 1],
-  ["ArrowLeft", -1],
-  ["ArrowDown", GRID_COLUMNS],
-  ["ArrowUp", -GRID_COLUMNS],
-]);
+function paletteGridColumns(count: number): 2 | 3 {
+  return count <= 4 ? 2 : 3;
+}
 
 /** APG-grid-style roving focus target; null when the key is not a grid key. */
-function nextCardIndex(key: string, current: number, count: number): number | null {
+function nextCardIndex(key: string, current: number, count: number, columns: 2 | 3): number | null {
   if (count === 0) return null;
   if (key === "Home") return 0;
   if (key === "End") return count - 1;
-  const delta = ARROW_DELTAS.get(key);
-  if (delta === undefined) return null;
+  let delta: number;
+  if (key === "ArrowRight") delta = 1;
+  else if (key === "ArrowLeft") delta = -1;
+  else if (key === "ArrowDown") delta = columns;
+  else if (key === "ArrowUp") delta = -columns;
+  else return null;
   return Math.max(0, Math.min(count - 1, current + delta));
 }
 
 export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNode {
+  const columns = paletteGridColumns(order.length);
   // Match design palette.jsx behaviour: focus the first card on mount and
   // allow Escape to close (the design relies on it; the prior impl had no
   // keyboard handler at all).
@@ -91,7 +89,12 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
     // close button keeps its plain Tab behaviour.
     if (!(e.target instanceof HTMLElement) || !e.target.classList.contains("pal-card")) return;
     const cards = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>(".pal-card") ?? []);
-    const next = nextCardIndex(e.key, cards.indexOf(e.target as HTMLButtonElement), cards.length);
+    const next = nextCardIndex(
+      e.key,
+      cards.indexOf(e.target as HTMLButtonElement),
+      cards.length,
+      columns,
+    );
     if (next === null) return;
     e.preventDefault();
     setActiveIdx(next);
@@ -121,6 +124,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
+      data-columns={columns}
     >
       <div className="palette-head">
         <span className="palette-badge">

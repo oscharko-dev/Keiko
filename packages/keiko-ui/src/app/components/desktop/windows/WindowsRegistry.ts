@@ -1,4 +1,8 @@
 import type { ReactNode } from "react";
+import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
+} from "@oscharko-dev/keiko-contracts";
 import type { IconName } from "../Icons";
 
 export type WindowType =
@@ -36,7 +40,11 @@ export type WindowType =
   | "relationships"
   // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
   // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.
-  | "figma";
+  | "figma"
+  // A scoped, JSON-only Figma Screen-IR source window derived from a Figma Snapshot view.
+  | "figmaJson"
+  // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
+  | "figmaImage";
 
 export interface WindowSize {
   readonly w: number;
@@ -57,6 +65,7 @@ export interface ConfigField {
 }
 
 export interface WindowRenderContext {
+  readonly windowId: string;
   readonly mini?: boolean;
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
@@ -67,6 +76,12 @@ export interface WindowRenderContext {
   readonly linkedCapsuleSetIds: readonly string[];
   /** Epic #750 #756 — snapshot run ids from connected Figma Snapshot windows. */
   readonly linkedFigmaSnapshotRunIds: readonly string[];
+  /** Figma Snapshot sources, optionally scoped to selected screen ids. */
+  readonly linkedFigmaSnapshotSources?:
+    | readonly QualityIntelligenceFigmaSnapshotSource[]
+    | undefined;
+  /** Image-only sources connected to Quality Intelligence. */
+  readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
@@ -452,6 +467,26 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     min: { w: 320, h: 360 },
     tiny: { w: 280, h: 240 },
   },
+  figmaJson: {
+    title: "Figma JSON",
+    icon: "file",
+    accent: true,
+    desc: "Inspect scoped Figma Screen-IR JSON",
+    w: 520,
+    h: 540,
+    min: { w: 340, h: 300 },
+    tiny: { w: 280, h: 220 },
+  },
+  figmaImage: {
+    title: "Figma Image",
+    icon: "file",
+    accent: true,
+    desc: "Inspect a scoped Figma screen render",
+    w: 560,
+    h: 420,
+    min: { w: 300, h: 240 },
+    tiny: { w: 240, h: 180 },
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -515,9 +550,8 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "connector",
   "localKnowledge",
   "figma",
+  "figmaJson",
   "files",
-  "terminal",
-  "review",
   "quality",
   "relationships",
   "automations",

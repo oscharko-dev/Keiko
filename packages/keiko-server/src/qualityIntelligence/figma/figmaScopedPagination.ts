@@ -65,18 +65,19 @@ export interface ScopedPaginationLimits {
 
 /**
  * Defaults balanced for Figma's cost-based rate limit on real, latency-bound boards (NOT tuned to any
- * sample board's content). `pageDepth=8` keeps each request cheap enough to avoid provoking sustained
- * 429s; a small shared pool of 3 in-flight fetches parallelises across screens without bursting the
- * limit; the per-screen budgets expand the densest branches further. On a normal board (screens
- * shallower than `pageDepth`) a single per-screen fetch captures everything and no round runs. The
- * 429 backoff (#759) absorbs occasional rate-limit responses; all of these are deployment-overridable.
+ * sample board's content). `pageDepth=8` captures typical screen bodies in one bounded request, while
+ * a small shared pool of 2 in-flight fetches avoids bursty high-cost 429s. The per-screen and
+ * per-board caps deliberately keep the worst-case live build below 100 deep scoped fetches by
+ * default, so a pasted whole-canvas Release section remains reviewable in the browser instead of
+ * turning into a minutes-long request storm. Operators can raise these budgets per deployment through
+ * KEIKO_FIGMA_* env vars when their Figma plan and proxy allow it.
  */
 export const DEFAULT_SCOPED_PAGINATION_LIMITS: ScopedPaginationLimits = {
   pageDepth: 8,
-  maxNodesPerScreen: 10_000,
-  maxFetchesPerScreen: 32,
-  maxScreensDeep: 80,
-  fetchConcurrency: 3,
+  maxNodesPerScreen: 8_000,
+  maxFetchesPerScreen: 6,
+  maxScreensDeep: 16,
+  fetchConcurrency: 2,
 };
 
 /** Hard safety ceilings: operators may tune pagination, but never past these finite bounds. */

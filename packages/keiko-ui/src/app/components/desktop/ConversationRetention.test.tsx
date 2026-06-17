@@ -137,22 +137,21 @@ describe("conversation retention and audit-leak regression (#154)", () => {
     expect(screen.getByRole("alert").textContent).toContain("Gateway returned 502.");
   });
 
-  it("renders broad connected-source failures as an actionable structured alert", () => {
+  it("renders clarification responses as an actionable structured alert", () => {
     const session = makeSession({
       activeChat: makeChat(),
       messages: [makeUserMessage("hello")],
       error:
-        "Your question is too broad to search the connected sources. Mention a concrete file name, identifier, or exact phrase. (BAD_REQUEST)",
+        "Keiko braucht mehr Kontext, um die verbundenen Quellen gezielt zu durchsuchen. (CLARIFICATION_NEEDED)",
     });
     renderWindow(session);
 
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("Narrow the connected-source question");
-    expect(alert).toHaveTextContent("Your question is too broad to search the connected sources.");
+    expect(alert).toHaveTextContent("Keiko braucht mehr Kontext");
     expect(alert).toHaveTextContent(
-      "Ask about a specific file, folder, symbol, identifier, or exact phrase.",
+      "Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase.",
     );
-    expect(alert).toHaveTextContent("BAD_REQUEST");
+    expect(alert).toHaveTextContent("CLARIFICATION_NEEDED");
   });
 
   it("lets users dismiss the visible chat error and clears the session error", async () => {

@@ -39,6 +39,12 @@ import {
   type RunState,
   type SearchTextRunner,
 } from "./repoSearchScan.js";
+import {
+  policyOmissionReason,
+  resolveSearchPolicy,
+  type SearchDiagnostics,
+  type SearchHints,
+} from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -78,6 +84,7 @@ export interface SearchResult {
   readonly filesScanned: number;
   readonly elapsedMs: number;
   readonly truncated: boolean;
+  readonly diagnostics: SearchDiagnostics | undefined;
 }
 
 export interface ReadExcerptRequest {
@@ -96,6 +103,7 @@ export interface ReadExcerptResult {
 interface FacadeDeps {
   readonly fs?: WorkspaceFs;
   readonly nowMs?: () => number;
+  readonly searchHints?: SearchHints | undefined;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -182,8 +190,10 @@ export async function searchText(
     startMs: nowMs(),
     matcher: buildMatcher(query),
     fingerprint: fingerprintFor(query),
+    policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
+    query,
   };
-  const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
+  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, runner.policy);
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
   // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
@@ -199,6 +209,7 @@ export async function searchText(
     filesScanned: state.filesScanned,
     elapsedMs: elapsed(runner),
     truncated: state.truncated,
+    diagnostics: candidateSet.diagnostics,
   };
 }
 
@@ -230,17 +241,19 @@ function findFilesSync(
   limits: SearchLimits,
   fs: WorkspaceFs,
   nowMs: () => number,
+  hints: SearchHints | undefined,
 ): SearchResult {
   const startMs = nowMs();
   // Honor the per-query cap alongside the global limit (Finding 2).
   const effectiveMaxMatches = Math.min(limits.maxMatchesReturned, query.maxResults);
   const ctx: FindFilesContext = {
     scope,
-    regex: compileGlob(query.text),
+    regex: compileGlob(query.text, query.caseSensitive),
     fingerprint: fingerprintFor(query),
     nowMs,
   };
-  const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
+  const policy = resolveSearchPolicy(scope.relativePaths.length > 0, hints);
+  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, policy);
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
   // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
@@ -255,12 +268,24 @@ function findFilesSync(
       candidates.push(buildCandidate(file.relativePath, "ignored"));
       continue;
     }
+    const omitted = policyOmissionReason(file.relativePath, policy);
+    if (omitted !== undefined) {
+      candidates.push(buildCandidate(file.relativePath, omitted));
+      continue;
+    }
     filesScanned += 1;
     if (ctx.regex.test(file.relativePath)) {
       emitFileListing(ctx, file.relativePath, atoms);
     }
   }
-  return { atoms, candidates, filesScanned, elapsedMs: nowMs() - startMs, truncated };
+  return {
+    atoms,
+    candidates,
+    filesScanned,
+    elapsedMs: nowMs() - startMs,
+    truncated,
+    diagnostics: candidateSet.diagnostics,
+  };
 }
 
 export async function findFiles(
@@ -276,7 +301,7 @@ export async function findFiles(
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
-  return await Promise.resolve(findFilesSync(scope, query, limits, fs, nowMs));
+  return await Promise.resolve(findFilesSync(scope, query, limits, fs, nowMs, deps.searchHints));
 }
 
 function buildExcerptFingerprint(request: ReadExcerptRequest): string {

@@ -1,9 +1,9 @@
 // Issue #280 (Epic #270) — RunLauncher component tests.
 //
 // Tests cover:
-//   - Initial render: source-type select, requirements textarea, policy-profile select,
+//   - Initial render: source-type picker, requirements textarea, policy-profile select,
 //     label input, and disabled Generate button when fields are empty.
-//   - Source-type switching: "workspace" swaps textarea for folder-path input.
+//   - Source-type switching: "workspace" swaps textarea for folder-path browser.
 //   - Enabling Generate: typing requirements text makes the button active.
 //   - startImpl called with correct request shape for requirements source.
 //   - startImpl called with correct request shape for workspace source.
@@ -41,6 +41,8 @@ type StartQiRunFn = (
 ) => Promise<void>;
 type FetchCapsulesFn = NonNullable<RunLauncherProps["fetchCapsulesImpl"]>;
 type FetchCapsuleSetsFn = NonNullable<RunLauncherProps["fetchCapsuleSetsImpl"]>;
+type FetchProjectsFn = NonNullable<RunLauncherProps["fetchProjectsImpl"]>;
+type FetchFilesTreeFn = NonNullable<RunLauncherProps["fetchFilesTreeImpl"]>;
 
 const DONE_FRAME: QualityIntelligenceRunStreamMessage = {
   type: "done",
@@ -139,6 +141,63 @@ function fakeFetchCapsuleSets(capsuleSets: readonly unknown[]): FetchCapsuleSets
   return vi.fn().mockResolvedValue({ capsuleSets }) as unknown as FetchCapsuleSetsFn;
 }
 
+const treeEntryBase = {
+  sizeBytes: 0,
+  modifiedAt: 1,
+  extension: null,
+  symlink: false,
+  readable: true,
+};
+
+function fakeFetchProjects(projects: readonly unknown[]): FetchProjectsFn {
+  return vi.fn().mockResolvedValue({ projects }) as unknown as FetchProjectsFn;
+}
+
+function fakeFetchFilesTree(entries: readonly unknown[]): FetchFilesTreeFn {
+  return vi.fn(async (root: string, path = "") => ({
+    root,
+    path,
+    truncated: false,
+    entries,
+  })) as unknown as FetchFilesTreeFn;
+}
+
+function sourceTypeRadio(label: string): HTMLElement {
+  const radio = screen
+    .getAllByRole("radio")
+    .find((candidate) => candidate.querySelector("span")?.textContent === label);
+  if (radio === undefined) throw new Error(`Source type radio not found: ${label}`);
+  return radio;
+}
+
+async function chooseSourceType(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+): Promise<void> {
+  await user.click(sourceTypeRadio(label));
+}
+
+function pickerProps(
+  root = "/repos/my-app",
+): Pick<RunLauncherProps, "fetchProjectsImpl" | "fetchFilesTreeImpl"> {
+  return {
+    fetchProjectsImpl: fakeFetchProjects([
+      { path: root, name: "My app", available: true, availabilityReason: null },
+    ]),
+    fetchFilesTreeImpl: fakeFetchFilesTree([
+      { ...treeEntryBase, name: "docs", path: "docs", kind: "directory" },
+      {
+        ...treeEntryBase,
+        name: "requirements.md",
+        path: "requirements.md",
+        kind: "file",
+        sizeBytes: 1200,
+        extension: "md",
+      },
+    ]),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -151,14 +210,12 @@ describe("RunLauncher — initial render", () => {
 
   it("renders the shipped source-type options", () => {
     render(<RunLauncher />);
-    const select = screen.getByRole("combobox", { name: /source type/i });
-    expect(select).toBeInTheDocument();
-    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
-    expect(options).toContain("Requirements text");
-    expect(options).toContain("Local folder");
-    expect(options).toContain("Single file");
-    expect(options).toContain("Knowledge capsule");
-    expect(options).toContain("Capsule set");
+    expect(screen.getByRole("radiogroup", { name: /source type/i })).toBeInTheDocument();
+    expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "true");
+    expect(sourceTypeRadio("Folder")).toBeInTheDocument();
+    expect(sourceTypeRadio("File")).toBeInTheDocument();
+    expect(sourceTypeRadio("Capsule")).toBeInTheDocument();
+    expect(sourceTypeRadio("Capsule set")).toBeInTheDocument();
   });
 
   it("renders a requirements textarea (default source type)", () => {
@@ -190,7 +247,7 @@ describe("RunLauncher — initial render", () => {
 });
 
 describe("RunLauncher — source-type switching", () => {
-  it("swaps the requirements textarea for a folder-path input when 'Local folder' is selected", async () => {
+  it("swaps the requirements textarea for a folder-path browser when 'Folder' is selected", async () => {
     const user = userEvent.setup();
     render(<RunLauncher />);
 
@@ -198,18 +255,18 @@ describe("RunLauncher — source-type switching", () => {
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
+    await chooseSourceType(user, "Folder");
 
     // After switch: folder input present, textarea gone.
     expect(screen.getByRole("textbox", { name: /folder path/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
   });
 
-  it("swaps the requirements textarea for a file-path input when 'Single file' is selected", async () => {
+  it("swaps the requirements textarea for a file-path browser when 'File' is selected", async () => {
     const user = userEvent.setup();
     render(<RunLauncher />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "file");
+    await chooseSourceType(user, "File");
 
     expect(screen.getByRole("textbox", { name: /file path/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
@@ -219,11 +276,8 @@ describe("RunLauncher — source-type switching", () => {
     const user = userEvent.setup();
     render(<RunLauncher />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /source type/i }),
-      "requirements",
-    );
+    await chooseSourceType(user, "Folder");
+    await chooseSourceType(user, "Requirements");
 
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
@@ -256,33 +310,39 @@ describe("RunLauncher — Generate button enable/disable", () => {
     );
   });
 
-  it("enables the Generate button once folder path is non-empty (workspace source)", async () => {
+  it("enables the Generate button once a folder has been picked (workspace source)", async () => {
     const user = userEvent.setup();
-    render(<RunLauncher />);
+    render(<RunLauncher {...pickerProps()} />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
+    await chooseSourceType(user, "Folder");
     expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
 
-    await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/code/my-project");
+    await user.click(screen.getByRole("button", { name: /browse/i }));
+    await screen.findByRole("dialog", { name: /choose folder source/i });
+    await user.click(await screen.findByRole("button", { name: "docs" }));
+    await user.click(screen.getByRole("button", { name: /use selection/i }));
     expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
       "aria-disabled",
     );
   });
 
-  it("enables the Generate button once file path is non-empty (single-file source)", async () => {
+  it("enables the Generate button once a file has been picked (single-file source)", async () => {
     const user = userEvent.setup();
-    render(<RunLauncher />);
+    render(<RunLauncher {...pickerProps()} />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "file");
+    await chooseSourceType(user, "File");
     expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
 
-    await user.type(screen.getByRole("textbox", { name: /file path/i }), "/code/spec.md");
+    await user.click(screen.getByRole("button", { name: /browse/i }));
+    await screen.findByRole("dialog", { name: /choose file source/i });
+    await user.click(await screen.findByRole("button", { name: "requirements.md" }));
+    await user.click(screen.getByRole("button", { name: /use selection/i }));
     expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
       "aria-disabled",
     );
@@ -321,11 +381,14 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
   it("calls startImpl with a workspace source when the workspace source type is selected", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);
-    render(<RunLauncher startImpl={startImpl} />);
+    render(<RunLauncher startImpl={startImpl} {...pickerProps()} />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
+    await chooseSourceType(user, "Folder");
     await user.type(screen.getByLabelText(/source label/i), "My project");
-    await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/repos/my-app");
+    await user.click(screen.getByRole("button", { name: /browse/i }));
+    await screen.findByRole("dialog", { name: /choose folder source/i });
+    await user.click(await screen.findByRole("button", { name: "docs" }));
+    await user.click(screen.getByRole("button", { name: /use selection/i }));
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -337,7 +400,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     ];
     expect(calledRequest.sources[0]).toMatchObject({
       kind: "workspace",
-      path: "/repos/my-app",
+      path: "/repos/my-app/docs",
       label: "My project",
     });
     expect(calledRequest.seed).toBeUndefined();
@@ -346,11 +409,14 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
   it("calls startImpl with a file source when the single-file source type is selected", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);
-    render(<RunLauncher startImpl={startImpl} />);
+    render(<RunLauncher startImpl={startImpl} {...pickerProps()} />);
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "file");
+    await chooseSourceType(user, "File");
     await user.type(screen.getByLabelText(/source label/i), "Fachkonzept file");
-    await user.type(screen.getByRole("textbox", { name: /file path/i }), "/repos/specs/login.md");
+    await user.click(screen.getByRole("button", { name: /browse/i }));
+    await screen.findByRole("dialog", { name: /choose file source/i });
+    await user.click(await screen.findByRole("button", { name: "requirements.md" }));
+    await user.click(screen.getByRole("button", { name: /use selection/i }));
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -362,7 +428,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     ];
     expect(calledRequest.sources[0]).toMatchObject({
       kind: "file",
-      path: "/repos/specs/login.md",
+      path: "/repos/my-app/requirements.md",
       label: "Fachkonzept file",
     });
     expect(calledRequest.seed).toBeUndefined();
@@ -387,7 +453,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "capsule");
+    await chooseSourceType(user, "Capsule");
     await screen.findByRole("option", { name: "Audit Capsule 01" });
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
@@ -423,7 +489,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "capsule-set");
+    await chooseSourceType(user, "Capsule set");
     await screen.findByRole("option", { name: "Audit Capsule Set (2 capsules)" });
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
@@ -613,18 +679,27 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
       succeededDone(acceptedRunId),
     ]);
     const onRunCompleted = vi.fn();
-    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={onRunCompleted}
+        {...pickerProps("/tmp/drift-fixture")}
+      />,
+    );
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "workspace");
+    await chooseSourceType(user, "Folder");
     await user.type(screen.getByLabelText(/source label/i), "Drift fixture");
-    await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/tmp/drift-fixture");
+    await user.click(screen.getByRole("button", { name: /browse/i }));
+    await screen.findByRole("dialog", { name: /choose folder source/i });
+    await user.click(await screen.findByRole("button", { name: "docs" }));
+    await user.click(screen.getByRole("button", { name: /use selection/i }));
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await done;
 
     await waitFor(() => {
       expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [
-        { kind: "workspace", label: "Drift fixture", path: "/tmp/drift-fixture" },
+        { kind: "workspace", label: "Drift fixture", path: "/tmp/drift-fixture/docs" },
       ]);
     });
   });
@@ -788,6 +863,36 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     expect(onRunCompleted).not.toHaveBeenCalled();
   });
 
+  it("surfaces a specific failed-run reason from the terminal frame", async () => {
+    const user = userEvent.setup();
+    const onRunCompleted = vi.fn();
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-term-reason",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      {
+        type: "done",
+        runId: "run-term-reason",
+        status: "failed",
+        totals: { candidates: 0, findings: 0, exports: 0 },
+        reasonSummary: "qi-error: UnparseableModelOutputError",
+      },
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-error")).toHaveTextContent(/geparst werden konnte/i);
+    });
+    expect(onRunCompleted).not.toHaveBeenCalled();
+  });
+
   it("does NOT open a run card or show an error when the run completes with status cancelled", async () => {
     const onRunCompleted = await runToTerminal("cancelled");
     await waitFor(() => {
@@ -795,6 +900,41 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     });
     expect(onRunCompleted).not.toHaveBeenCalled();
     expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
+  });
+
+  it("flags a degraded (baseline-fallback) succeeded run with a notice and still opens the card (QI-DEG-01)", async () => {
+    const user = userEvent.setup();
+    const onRunCompleted = vi.fn();
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-degraded",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      {
+        type: "done",
+        runId: "run-degraded",
+        status: "succeeded",
+        totals: { candidates: 2, findings: 0, exports: 0 },
+        reasonSummary: "qi-error: UnparseableModelOutputError",
+        degraded: true,
+      },
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-degraded")).toHaveTextContent(/Baseline-Testfälle/i);
+    });
+    // The reason is named, but it is a degraded notice — NOT a hard error banner.
+    expect(screen.getByTestId("qi-launch-degraded")).toHaveTextContent(/JSON parsebar/i);
+    expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
+    // The run still produced baseline test cases, so the result card opens for the run.
+    expect(onRunCompleted).toHaveBeenCalledWith("run-degraded", expect.anything());
   });
 });
 
@@ -1320,6 +1460,38 @@ describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () 
     expect(req.sources[0]).toMatchObject({ kind: "figma-snapshot", snapshotRunId: RUN_ID });
   });
 
+  it("calls startImpl with screenIds when a scoped figma screen source is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedFigmaSnapshotSources={[
+          {
+            kind: "figma-snapshot",
+            label: "Login mask",
+            snapshotRunId: RUN_ID,
+            screenIds: ["screen-login"],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toEqual({
+      kind: "figma-snapshot",
+      label: "Login mask",
+      snapshotRunId: RUN_ID,
+      screenIds: ["screen-login"],
+    });
+  });
+
   it("shows a combined count when a folder root and a figma snapshot are connected", () => {
     render(<RunLauncher connectedRoots={["/work/docs"]} connectedFigmaSnapshotRunIds={[RUN_ID]} />);
     expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (2)");
@@ -1383,5 +1555,103 @@ describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () 
   it("shows no connected-source banner when connectedFigmaSnapshotRunIds is empty", () => {
     render(<RunLauncher connectedFigmaSnapshotRunIds={[]} />);
     expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunLauncher — connected image source", () => {
+  const IMAGE_SOURCE = {
+    kind: "image",
+    label: "Image · Login mask",
+    sourceKind: "figma-snapshot-screen",
+    snapshotRunId: "fig-run-test-abc",
+    screenId: "screen-login",
+  } as const;
+
+  it("renders the connected-source banner with 'Connected image' and the image ref", () => {
+    render(<RunLauncher connectedImageSources={[IMAGE_SOURCE]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected image");
+    expect(banner).toHaveTextContent("fig-run-test-abc#screen-login");
+  });
+
+  it("calls startImpl with an image source when a standalone image is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedImageSources={[IMAGE_SOURCE]} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toEqual(IMAGE_SOURCE);
+  });
+
+  it("passes the launched image source to onRunCompleted so the run card can re-check drift", async () => {
+    const user = userEvent.setup();
+    const acceptedRunId = "run-image-123";
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: acceptedRunId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      succeededDone(acceptedRunId),
+    ]);
+    const onRunCompleted = vi.fn();
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={onRunCompleted}
+        connectedImageSources={[IMAGE_SOURCE]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [IMAGE_SOURCE]);
+    });
+  });
+
+  it("combines a folder, scoped Figma JSON, and image source in one request", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedRoots={["/work/docs"]}
+        connectedFigmaSnapshotSources={[
+          {
+            kind: "figma-snapshot",
+            label: "JSON · Login mask",
+            snapshotRunId: "fig-run-test-abc",
+            screenIds: ["screen-login"],
+          },
+        ]}
+        connectedImageSources={[IMAGE_SOURCE]}
+      />,
+    );
+
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (3)");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources.map((source) => source.kind)).toEqual([
+      "workspace",
+      "figma-snapshot",
+      "image",
+    ]);
   });
 });

@@ -8,12 +8,13 @@ import type {
   CandidateOmissionReason,
   EvidenceAtom,
   EvidenceAtomProvenanceKind,
+  RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   isValidScopePath,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { discoverFiles, readWorkspaceFile } from "./discovery.js";
+import { discoverWithStats, readWorkspaceFile } from "./discovery.js";
 import { FileTooLargeError, RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
@@ -24,6 +25,16 @@ import { collectFromEntries } from "./repoSearchEntries.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
 import type { LineMatcher } from "./repoSearchMatchers.js";
+import {
+  extraIgnoreLinesForSearch,
+  legacyDiscoveryPolicy,
+  orderCandidatesForSearch,
+  policyOmissionReason,
+  resolveSearchPolicy,
+  shouldScoreContent,
+  type SearchDiagnostics,
+  type SearchPolicy,
+} from "./repoSearchPolicy.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 
 const BINARY_PROBE_BYTES = 512;
@@ -114,28 +125,99 @@ function collectFromDirectory(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): { files: readonly DiscoveredFile[]; truncated: boolean } {
-  const files = discoverFiles(
-    scope.workspace,
-    { maxDepth: 12, maxFiles: limits.maxFilesScanned + 1, applyGitignore: false },
+  policy: SearchPolicy,
+): { files: readonly DiscoveredFile[]; truncated: boolean; ignored: number; denied: number } {
+  const extraIgnoreLines = extraIgnoreLinesForSearch(policy);
+  const workspace =
+    extraIgnoreLines.length === 0
+      ? scope.workspace
+      : { ...scope.workspace, ignoreLines: [...scope.workspace.ignoreLines, ...extraIgnoreLines] };
+  const result = discoverWithStats(
+    workspace,
+    {
+      maxDepth: 12,
+      maxFiles: limits.maxFilesScanned + 1,
+      applyGitignore: policy.applyGitignore,
+    },
     fs,
   );
+  const files = result.files;
   return {
     files: files.slice(0, limits.maxFilesScanned),
     truncated: files.length > limits.maxFilesScanned,
+    ignored: result.stats.ignored,
+    denied: result.stats.denied,
   };
 }
 
 export interface CandidateSet {
   readonly files: readonly DiscoveredFile[];
   readonly truncated: boolean;
+  readonly diagnostics: SearchDiagnostics;
+}
+
+const DEFAULT_GATHER_QUERY: RetrievalQuery = {
+  kind: "natural-language",
+  text: "generic repository search",
+  caseSensitive: false,
+  maxResults: 100,
+  emittedAtMs: 0,
+};
+
+function isRetrievalQuery(value: unknown): value is RetrievalQuery {
+  return typeof value === "object" && value !== null && "kind" in value && "text" in value;
+}
+
+interface GatherInputs {
+  readonly query: RetrievalQuery;
+  readonly limits: LimitsShape;
+  readonly fs: WorkspaceFs;
+  readonly policy: SearchPolicy;
+}
+
+function resolveGatherInputs(
+  scope: ScopeShape,
+  queryOrLimits: RetrievalQuery | LimitsShape,
+  limitsOrFs: LimitsShape | WorkspaceFs,
+  fsOrPolicy?: WorkspaceFs | SearchPolicy,
+  policy?: SearchPolicy,
+): GatherInputs {
+  if (isRetrievalQuery(queryOrLimits)) {
+    return {
+      query: queryOrLimits,
+      limits: limitsOrFs as LimitsShape,
+      fs: fsOrPolicy as WorkspaceFs,
+      policy: policy ?? resolveSearchPolicy(scope.relativePaths.length > 0, undefined),
+    };
+  }
+  return {
+    query: DEFAULT_GATHER_QUERY,
+    limits: queryOrLimits,
+    fs: limitsOrFs as WorkspaceFs,
+    policy: legacyDiscoveryPolicy(scope.relativePaths.length > 0),
+  };
 }
 
 export function gatherCandidates(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
+): CandidateSet;
+export function gatherCandidates(
+  scope: ScopeShape,
+  query: RetrievalQuery,
+  limits: LimitsShape,
+  fs: WorkspaceFs,
+  policy: SearchPolicy,
+): CandidateSet;
+export function gatherCandidates(
+  scope: ScopeShape,
+  queryOrLimits: RetrievalQuery | LimitsShape,
+  limitsOrFs: LimitsShape | WorkspaceFs,
+  fsOrPolicy?: WorkspaceFs | SearchPolicy,
+  policy?: SearchPolicy,
 ): CandidateSet {
+  const inputs = resolveGatherInputs(scope, queryOrLimits, limitsOrFs, fsOrPolicy, policy);
   // Defense in depth alongside the realpath gate: validate scope.relativePaths against the
   // contracts-layer shape rules (no absolute paths, no `..`, no drive letters, no backslashes).
   // resolveWithinWorkspace + assertContainedRealPath already provide a complete barrier; this
@@ -147,16 +229,26 @@ export function gatherCandidates(
     }
   }
   if (scope.relativePaths.length === 0) {
-    const result = collectFromDirectory(scope, limits, fs);
+    const result = collectFromDirectory(scope, inputs.limits, inputs.fs, inputs.policy);
+    const ordered = orderCandidatesForSearch(
+      result.files,
+      inputs.query,
+      inputs.policy,
+      result.ignored,
+      result.denied,
+    );
     return {
-      files: [...result.files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1)),
+      files: ordered.files,
       truncated: result.truncated,
+      diagnostics: ordered.diagnostics,
     };
   }
-  const result = collectFromEntries(scope, limits, fs);
+  const result = collectFromEntries(scope, inputs.limits, inputs.fs);
+  const ordered = orderCandidatesForSearch(result.files, inputs.query, inputs.policy, 0, 0);
   return {
-    files: [...result.files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1)),
+    files: ordered.files,
     truncated: result.truncated,
+    diagnostics: ordered.diagnostics,
   };
 }
 
@@ -180,6 +272,8 @@ export interface SearchTextRunner {
   readonly startMs: number;
   readonly matcher: LineMatcher;
   readonly fingerprint: string;
+  readonly policy: SearchPolicy;
+  readonly query: RetrievalQuery;
 }
 
 export interface RunState {
@@ -316,6 +410,11 @@ export async function scanFile(
     candidates.push(buildCandidate(file.relativePath, "ignored"));
     return;
   }
+  const omitted = policyOmissionReason(file.relativePath, runner.policy);
+  if (omitted !== undefined) {
+    candidates.push(buildCandidate(file.relativePath, omitted));
+    return;
+  }
   let isBinary: boolean;
   try {
     isBinary = await probeBinary(runner.fs, contained.path, file.sizeBytes);
@@ -333,7 +432,7 @@ export async function scanFile(
   }
   state.filesScanned += 1;
   const text = readForScan(runner, file.relativePath, candidates);
-  if (text === undefined) {
+  if (text === undefined || !shouldScoreContent(runner.query, text, runner.policy)) {
     return;
   }
   scanLines(runner, file.relativePath, text, state, atoms);

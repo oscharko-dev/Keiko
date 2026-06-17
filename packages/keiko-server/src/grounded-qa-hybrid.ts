@@ -83,10 +83,10 @@ import {
 } from "./grounded-answer.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import {
-  badRequest,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
+  clarificationRequest,
   deriveScopeIdFrom,
   ensureNotCancelled,
   internalError,
@@ -420,6 +420,8 @@ async function retrieveOneConnector(
 
 // ─── Merged prompt ────────────────────────────────────────────────────────────
 
+const HYBRID_NO_EVIDENCE_ANSWER =
+  "Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.";
 const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
@@ -868,7 +870,7 @@ function noEvidenceUncertainty(
     ? [
         {
           kind: "no-evidence",
-          claim: redactString(redactor, "No evidence found in the selected connected sources."),
+          claim: redactString(redactor, HYBRID_NO_EVIDENCE_ANSWER),
         },
       ]
     : [];
@@ -950,7 +952,7 @@ function assembleHybridNoEvidenceRoute(
 ): RouteResult {
   const content = redactString(
     ctx.deps.redactor,
-    "No evidence found in the selected connected sources.",
+    HYBRID_NO_EVIDENCE_ANSWER,
   );
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
@@ -1236,7 +1238,9 @@ function mapHybridError(error: unknown, deps: UiHandlerDeps): RouteResult {
   // GRD-016: mirror the single-source and multi-source paths — a vague/no-anchor question
   // (ClarificationNeededError) or a typed workspace read error is a client-actionable 400, not
   // an opaque 500. Without these branches a folders+connectors ask with no anchors 500s.
-  if (error instanceof ClarificationNeededError) return badRequest(clarificationUserMessage(error));
+  if (error instanceof ClarificationNeededError) {
+    return clarificationRequest(clarificationUserMessage(error));
+  }
   const workspaceResult = mappedWorkspaceError(error);
   if (workspaceResult !== undefined) return workspaceResult;
   if (error instanceof Error) {

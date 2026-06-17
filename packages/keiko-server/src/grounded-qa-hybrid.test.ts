@@ -661,8 +661,8 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     // GRD-016: a vague/no-anchor question is client-actionable → 400, not an opaque 500.
     expect(result.status, JSON.stringify(result.body)).toBe(400);
     const body = result.body as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("BAD_REQUEST");
-    expect(body.error.message).toContain("too broad");
+    expect(body.error.code).toBe("CLARIFICATION_NEEDED");
+    expect(body.error.message).toContain("mehr Kontext");
     expect(body.error.message).not.toContain("clarification needed:");
   });
 
@@ -689,7 +689,7 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    expect(answer.content).toBe("Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -798,7 +798,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    expect(answer.content).toBe("Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);

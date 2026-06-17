@@ -234,6 +234,34 @@ describe("ConnectorGraph — with capsules", () => {
     workspace.remove();
   });
 
+  it("does not start capsule drag-out from right click or macOS control click", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("drag-blocked"), displayName: "Blocked KC" });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    document.body.appendChild(workspace);
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => workspace);
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const row = await screen.findByRole("button", {
+      name: "Drag capsule Blocked KC to workspace",
+    });
+    fireEvent.pointerDown(row, { button: 2, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+    fireEvent.pointerDown(row, { button: 0, ctrlKey: true, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+
+    expect(dropListener).not.toHaveBeenCalled();
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    document.elementFromPoint = originalElementFromPoint;
+    workspace.remove();
+  });
+
   it("dispatches the same connector drop event from native dragend on the workspace", async () => {
     const capsule = makeCapsule({ id: makeCapsuleId("native"), displayName: "First KC" });
     const workspace = document.createElement("main");

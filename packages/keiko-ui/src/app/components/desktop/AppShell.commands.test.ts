@@ -76,10 +76,12 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const newCommands = commands.filter((c) => c.id.startsWith("new-"));
-    expect(newCommands.length).toBeGreaterThanOrEqual(6);
-    expect(newCommands.find((c) => c.id === "new-chat")).toBeDefined();
-    expect(newCommands.find((c) => c.id === "new-files")).toBeDefined();
-    expect(newCommands.find((c) => c.id === "new-review")).toBeDefined();
+    expect(newCommands.map((c) => c.id)).toEqual([
+      "new-chat",
+      "new-connector",
+      "new-figma",
+      "new-files",
+    ]);
     // Epic #750 #756 — the Figma Snapshot window must be launchable (it was unreachable when "figma"
     // was missing from CARD_TYPES); pin it so the surface cannot regress to dead code.
     expect(newCommands.find((c) => c.id === "new-figma")).toBeDefined();
@@ -302,6 +304,30 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     expect(commands.find((c) => c.id === "new-browser")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Terminal surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-terminal")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Review surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-review")).toBeUndefined();
   });
 
   // uiux-fix F008 C141 — shortcut discoverability: the undo/redo rows surface their chords.

@@ -8,6 +8,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRunSummary,
 } from "@oscharko-dev/keiko-contracts";
@@ -42,6 +44,12 @@ export interface QiHubPanelProps {
   readonly connectedCapsuleSetIds?: readonly string[] | undefined;
   /** Figma Snapshot run ids from connected Figma Snapshot windows (Epic #750 #756). */
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
+  /** Figma Snapshot sources from connected windows, optionally scoped to selected screen ids. */
+  readonly connectedFigmaSnapshotSources?:
+    | readonly QualityIntelligenceFigmaSnapshotSource[]
+    | undefined;
+  /** Image-only sources from connected Figma Image windows. */
+  readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
   /** Seam for tests. */
   readonly fetchRunsImpl?: typeof fetchQiRuns;
   /** Seam for tests — injects the delete API call. */
@@ -241,6 +249,8 @@ export function QiHubPanel({
   connectedCapsuleIds,
   connectedCapsuleSetIds,
   connectedFigmaSnapshotRunIds,
+  connectedFigmaSnapshotSources,
+  connectedImageSources,
   fetchRunsImpl = fetchQiRuns,
   deleteImpl = deleteQiRun,
 }: QiHubPanelProps): ReactNode {
@@ -317,6 +327,8 @@ export function QiHubPanel({
         connectedCapsuleIds={connectedCapsuleIds}
         connectedCapsuleSetIds={connectedCapsuleSetIds}
         connectedFigmaSnapshotRunIds={connectedFigmaSnapshotRunIds}
+        connectedFigmaSnapshotSources={connectedFigmaSnapshotSources}
+        connectedImageSources={connectedImageSources}
       />
       <section className="qi-hub-runs" aria-label="Quality Intelligence runs">
         <header className="qi-col-header">

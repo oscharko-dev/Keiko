@@ -49,7 +49,14 @@ function isTooBroadRepositoryQuestion(message: string, code: string | undefined)
   );
 }
 
+function isClarificationNeeded(code: string | undefined): boolean {
+  return code === "CLARIFICATION_NEEDED";
+}
+
 function titleForError(message: string, code: string | undefined): string {
+  if (isClarificationNeeded(code)) {
+    return "Keiko braucht mehr Kontext";
+  }
   if (isTooBroadRepositoryQuestion(message, code)) {
     return "Narrow the connected-source question";
   }
@@ -60,6 +67,9 @@ function titleForError(message: string, code: string | undefined): string {
 }
 
 function remediationForError(message: string, code: string | undefined): string | undefined {
+  if (isClarificationNeeded(code)) {
+    return "Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase.";
+  }
   if (isTooBroadRepositoryQuestion(message, code)) {
     return "Ask about a specific file, folder, symbol, identifier, or exact phrase. For broad questions over large project folders, narrow the Files scope first.";
   }

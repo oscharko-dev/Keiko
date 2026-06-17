@@ -143,6 +143,55 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(loaded.skippedScreens).toEqual([{ screenId: "1:3", reason: "render-url-missing" }]);
   });
 
+  it("persists and verifies structural-only screen IR without writing an image side-file", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    const result = store.record({
+      ...baseInput(),
+      structuralScreens: [
+        {
+          screenId: "1:3",
+          reason: "render-screen-cap-exceeded",
+          irJson: screenIr("1:3", "Search", "Query"),
+          integrityHash: STALE_SCREEN_HASH,
+        },
+      ],
+    });
+    const loaded = loadOrThrow(store, RUN_ID);
+
+    expect(
+      loaded.structuralScreens?.map((s) => ({ screenId: s.screenId, reason: s.reason })),
+    ).toEqual([{ screenId: "1:3", reason: "render-screen-cap-exceeded" }]);
+    expect(loaded.structuralScreens?.[0]?.irJson).toMatchObject({ id: "1:3", name: "Search" });
+    expect(loaded.structuralScreens?.[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(loaded.structuralScreens?.[0]?.integrityHash).not.toBe(STALE_SCREEN_HASH);
+    expect(readdirSync(result.sideFileDir).filter((name) => name.endsWith(".png"))).toHaveLength(2);
+  });
+
+  it("rejects tampered structural-only screen IR on load", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record({
+      ...baseInput(),
+      structuralScreens: [
+        {
+          screenId: "1:3",
+          reason: "render-screen-cap-exceeded",
+          irJson: screenIr("1:3", "Search", "Query"),
+          integrityHash: STALE_SCREEN_HASH,
+        },
+      ],
+    });
+    const raw = readSnapshotFile();
+    const structuralRows = raw.structuralScreens as Record<string, unknown>[];
+    const first = structuralRows[0];
+    if (first === undefined) throw new Error("expected a structural-only screen row");
+    first.irJson = screenIr("1:3", "Tampered", "Query");
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
   it("writes the render bytes as a side-file whose sha256 matches the bytes", () => {
     const store = createNodeFigmaSnapshotStore(dir);
 

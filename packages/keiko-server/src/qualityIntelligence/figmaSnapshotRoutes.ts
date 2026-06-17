@@ -78,6 +78,7 @@ import {
 } from "./figmaSnapshotOrchestration.js";
 import {
   createNodeFigmaSnapshotStore,
+  type FigmaSnapshotLinkRow,
   type FigmaSnapshotRecord,
 } from "@oscharko-dev/keiko-evidence";
 
@@ -224,6 +225,8 @@ export interface FigmaSnapshotSummary {
    * "3 screens from 1 section (2 skipped)".
    */
   readonly reductionHint: string;
+  /** Skipped/non-rendered screens that still carry persisted structural Screen-IR JSON. */
+  readonly structuralOnlyCount: number;
   /** Integrity hash over the snapshot content — deterministic for drift detection (#735). */
   readonly integrityHash: string;
   /**
@@ -244,6 +247,11 @@ export interface FigmaSnapshotSummary {
    * the token-free PNG side-file through /api/figma/snapshots/:runId/screens/:screenIndex/image.
    */
   readonly screens: readonly FigmaScreenSummary[];
+  /**
+   * Screen-IR summaries for detected screens that have JSON evidence but no rendered PNG side-file.
+   * These are selectable as QI sources, but the browser cannot request an image for them.
+   */
+  readonly structuralScreens: readonly FigmaStructuralScreenSummary[];
 }
 
 export interface FigmaScreenSummary {
@@ -260,6 +268,62 @@ export interface FigmaScreenSummary {
   readonly imageByteLength: number;
 }
 
+export interface FigmaStructuralScreenSummary {
+  readonly screenId: string;
+  /** Display name derived from the IR (ir.name). */
+  readonly name: string;
+  /** A brief structural description (field count, control count) for the gallery card. */
+  readonly irSummary: string;
+  /** Why no rendered PNG side-file exists for this screen. */
+  readonly reason: string;
+}
+
+interface FigmaSnapshotScreenJsonResponse {
+  readonly runId: string;
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version: string | undefined;
+  readonly fetchedAt: string;
+  readonly source: {
+    readonly kind: "figma-snapshot";
+    readonly snapshotRunId: string;
+    readonly screenIds: readonly string[];
+  };
+  readonly snapshot: {
+    readonly screenCount: number;
+    readonly skippedCount: number;
+    readonly structuralOnlyCount: number;
+    readonly integrityHash: string;
+    readonly redactionSummary: FigmaSnapshotRecord["redactionSummary"];
+    readonly metrics?: FigmaSnapshotRecord["metrics"];
+    readonly tokens?: unknown;
+  };
+  readonly screen: {
+    readonly kind: "rendered" | "structural";
+    readonly screenId: string;
+    readonly name: string;
+    readonly irSummary: string;
+    readonly integrityHash: string;
+    readonly irJson: unknown;
+    readonly image?:
+      | {
+          readonly mimeType: "image/png";
+          readonly relativePath: string;
+          readonly sha256: string;
+          readonly byteLength: number;
+        }
+      | undefined;
+    readonly structuralReason?: string | undefined;
+  };
+  readonly relatedLinks: readonly FigmaSnapshotLinkRow[];
+}
+
+type FigmaSnapshotScreenJsonSnapshot = FigmaSnapshotScreenJsonResponse["snapshot"];
+type FigmaSnapshotRenderedScreen = FigmaSnapshotRecord["screens"][number];
+type FigmaSnapshotStructuralScreen = NonNullable<
+  FigmaSnapshotRecord["structuralScreens"]
+>[number];
+
 export interface FigmaSnapshotListEntry {
   readonly runId: string;
   readonly fileKey: string;
@@ -268,6 +332,7 @@ export interface FigmaSnapshotListEntry {
   readonly fetchedAt: string;
   readonly screenCount: number;
   readonly skippedCount: number;
+  readonly structuralOnlyCount: number;
   readonly reductionHint: string;
   readonly integrityHash: string;
 }
@@ -276,13 +341,25 @@ export interface FigmaSnapshotListResponse {
   readonly snapshots: readonly FigmaSnapshotListEntry[];
 }
 
-function buildReductionHint(screenCount: number, skippedCount: number): string {
+function buildReductionHint(
+  screenCount: number,
+  skippedCount: number,
+  structuralOnlyCount = 0,
+): string {
   const total = screenCount + skippedCount;
-  const skippedClause =
-    skippedCount > 0
-      ? ` (${skippedCount.toString()} render${skippedCount !== 1 ? "s" : ""} skipped)`
+  if (skippedCount === 0) {
+    return `${screenCount.toString()} screen${screenCount !== 1 ? "s" : ""} from ${total.toString()} detected`;
+  }
+  const structuralClause =
+    structuralOnlyCount > 0
+      ? `${structuralOnlyCount.toString()} structural-only`
+      : `${skippedCount.toString()} render${skippedCount !== 1 ? "s" : ""} skipped`;
+  const missingIrCount = Math.max(0, skippedCount - structuralOnlyCount);
+  const missingClause =
+    structuralOnlyCount > 0 && missingIrCount > 0
+      ? `; ${missingIrCount.toString()} without structural IR`
       : "";
-  return `${screenCount.toString()} screen${screenCount !== 1 ? "s" : ""} from ${total.toString()} detected${skippedClause}`;
+  return `${screenCount.toString()} rendered screen${screenCount !== 1 ? "s" : ""} from ${total.toString()} detected (${structuralClause}${missingClause})`;
 }
 
 // Counts interaction-hint roles over a stored ScreenIr node tree (`{ root: { interactionHint,
@@ -333,6 +410,7 @@ function recordToSummary(
 ): FigmaSnapshotSummary {
   const screenCount = record.screens.length;
   const skippedCount = record.skippedScreens.length;
+  const structuralOnlyCount = record.structuralScreens?.length ?? 0;
   const truncatedClause =
     coverage !== undefined && (coverage.screensTruncated > 0 || coverage.capped)
       ? `; ${coverage.screensTruncated.toString()} partially captured (deep content bounded)`
@@ -345,7 +423,8 @@ function recordToSummary(
     fetchedAt: record.provenance.fetchedAt,
     screenCount,
     skippedCount,
-    reductionHint: `${buildReductionHint(screenCount, skippedCount)}${truncatedClause}`,
+    structuralOnlyCount,
+    reductionHint: `${buildReductionHint(screenCount, skippedCount, structuralOnlyCount)}${truncatedClause}`,
     integrityHash: record.integrityHash,
     ...(coverage !== undefined ? { coverage } : {}),
     ...(metrics !== undefined ? { metrics } : {}),
@@ -357,10 +436,127 @@ function recordToSummary(
       imageSha256: s.image.sha256,
       imageByteLength: s.image.byteLength,
     })),
+    structuralScreens: (record.structuralScreens ?? []).map((s) => ({
+      screenId: s.screenId,
+      name: screenNameFromIrJson(s.irJson),
+      irSummary: irSummaryFromJson(s.irJson),
+      reason: s.reason,
+    })),
   };
 }
 
+function decodeRouteParam(raw: string | undefined): string {
+  if (raw === undefined || raw.length === 0) return "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return "";
+  }
+}
+
+function collectIrIds(value: unknown, out: Set<string> = new Set<string>()): Set<string> {
+  if (typeof value !== "object" || value === null) return out;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectIrIds(entry, out);
+    return out;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.id === "string" && record.id.length > 0) out.add(record.id);
+  for (const entry of Object.values(record)) collectIrIds(entry, out);
+  return out;
+}
+
+function relatedLinksForScreen(
+  irJson: unknown,
+  links: readonly FigmaSnapshotLinkRow[] | undefined,
+): readonly FigmaSnapshotLinkRow[] {
+  if (links === undefined || links.length === 0) return [];
+  const ids = collectIrIds(irJson);
+  return links.filter((link) => ids.has(link.sourceNodeId) || ids.has(link.targetNodeId));
+}
+
+function screenJsonSnapshot(record: FigmaSnapshotRecord): FigmaSnapshotScreenJsonSnapshot {
+  return {
+    screenCount: record.screens.length,
+    skippedCount: record.skippedScreens.length,
+    structuralOnlyCount: record.structuralScreens?.length ?? 0,
+    integrityHash: record.integrityHash,
+    redactionSummary: record.redactionSummary,
+    ...(record.metrics !== undefined ? { metrics: record.metrics } : {}),
+    ...(record.tokens !== undefined ? { tokens: record.tokens } : {}),
+  };
+}
+
+function renderedScreenJsonResponse(
+  record: FigmaSnapshotRecord,
+  rendered: FigmaSnapshotRenderedScreen,
+): FigmaSnapshotScreenJsonResponse {
+  return {
+    runId: record.runId,
+    fileKey: record.provenance.fileKey,
+    nodeId: record.provenance.nodeId,
+    version: record.provenance.version,
+    fetchedAt: record.provenance.fetchedAt,
+    source: {
+      kind: "figma-snapshot",
+      snapshotRunId: record.runId,
+      screenIds: [rendered.screenId],
+    },
+    snapshot: screenJsonSnapshot(record),
+    screen: {
+      kind: "rendered",
+      screenId: rendered.screenId,
+      name: screenNameFromIrJson(rendered.irJson),
+      irSummary: irSummaryFromJson(rendered.irJson),
+      integrityHash: rendered.integrityHash,
+      irJson: rendered.irJson,
+      image: rendered.image,
+    },
+    relatedLinks: relatedLinksForScreen(rendered.irJson, record.links),
+  };
+}
+
+function structuralScreenJsonResponse(
+  record: FigmaSnapshotRecord,
+  structural: FigmaSnapshotStructuralScreen,
+): FigmaSnapshotScreenJsonResponse {
+  return {
+    runId: record.runId,
+    fileKey: record.provenance.fileKey,
+    nodeId: record.provenance.nodeId,
+    version: record.provenance.version,
+    fetchedAt: record.provenance.fetchedAt,
+    source: {
+      kind: "figma-snapshot",
+      snapshotRunId: record.runId,
+      screenIds: [structural.screenId],
+    },
+    snapshot: screenJsonSnapshot(record),
+    screen: {
+      kind: "structural",
+      screenId: structural.screenId,
+      name: screenNameFromIrJson(structural.irJson),
+      irSummary: irSummaryFromJson(structural.irJson),
+      integrityHash: structural.integrityHash,
+      irJson: structural.irJson,
+      structuralReason: structural.reason,
+    },
+    relatedLinks: relatedLinksForScreen(structural.irJson, record.links),
+  };
+}
+
+function screenJsonResponse(
+  record: FigmaSnapshotRecord,
+  screenId: string,
+): FigmaSnapshotScreenJsonResponse | undefined {
+  const rendered = record.screens.find((screen) => screen.screenId === screenId);
+  if (rendered !== undefined) return renderedScreenJsonResponse(record, rendered);
+  const structural = record.structuralScreens?.find((screen) => screen.screenId === screenId);
+  return structural === undefined ? undefined : structuralScreenJsonResponse(record, structural);
+}
+
 function recordToListEntry(record: FigmaSnapshotRecord): FigmaSnapshotListEntry {
+  const structuralOnlyCount = record.structuralScreens?.length ?? 0;
   return {
     runId: record.runId,
     fileKey: record.provenance.fileKey,
@@ -369,7 +565,12 @@ function recordToListEntry(record: FigmaSnapshotRecord): FigmaSnapshotListEntry 
     fetchedAt: record.provenance.fetchedAt,
     screenCount: record.screens.length,
     skippedCount: record.skippedScreens.length,
-    reductionHint: buildReductionHint(record.screens.length, record.skippedScreens.length),
+    structuralOnlyCount,
+    reductionHint: buildReductionHint(
+      record.screens.length,
+      record.skippedScreens.length,
+      structuralOnlyCount,
+    ),
     integrityHash: record.integrityHash,
   };
 }
@@ -587,6 +788,16 @@ function persistSnapshot(
         integrityHash: s.integrityHash,
         image: { mimeType: "image/png" as const, bytes: s.image.bytes },
       })),
+      ...(result.snapshot.structuralScreens !== undefined
+        ? {
+            structuralScreens: result.snapshot.structuralScreens.map((s) => ({
+              screenId: s.screenId,
+              reason: s.reason,
+              irJson: s.ir,
+              integrityHash: s.integrityHash,
+            })),
+          }
+        : {}),
       skippedScreens: result.snapshot.skippedScreens.map((ss) => ({
         screenId: ss.screenId,
         reason: ss.reason,
@@ -860,7 +1071,10 @@ function loadSnapshotListEntries(
 
 function readSnapshotFetchedAt(qiDir: string, fileName: string): string | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(join(qiDir, fileName), "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(readFileSync(join(qiDir, fileName), "utf8")) as Record<
+      string,
+      unknown
+    >;
     const provenance =
       typeof parsed.provenance === "object" && parsed.provenance !== null
         ? (parsed.provenance as Record<string, unknown>)
@@ -942,6 +1156,41 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
   }
 
   return { status: 200, body: recordToSummary(record, undefined, record.metrics) };
+}
+
+// ─── GET /api/figma/snapshots/:runId/screens/:screenId/json ───────────────────
+
+export function handleFigmaInspectSnapshotScreenJson(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const evidenceDir = deps.evidenceDir;
+  if (evidenceDir === undefined || evidenceDir.length === 0) {
+    return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
+  }
+
+  const runId = decodeRouteParam(ctx.params.runId);
+  const screenId = decodeRouteParam(ctx.params.screenId);
+  if (runId.length === 0 || screenId.length === 0) {
+    return { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") };
+  }
+
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  let record: FigmaSnapshotRecord | undefined;
+  try {
+    record = store.loadMetadata(runId);
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
+
+  if (record === undefined) {
+    return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
+  }
+
+  const body = screenJsonResponse(record, screenId);
+  return body === undefined
+    ? { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") }
+    : { status: 200, body };
 }
 
 // ─── GET /api/figma/snapshots/:runId/screens/:screenIndex/image ──────────────

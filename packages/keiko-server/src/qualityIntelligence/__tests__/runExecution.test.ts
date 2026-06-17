@@ -1058,7 +1058,11 @@ describe("executeQiRun — ingestion error propagation", () => {
 // ─── Unparseable model output → failed status ────────────────────────────────
 
 describe("executeQiRun — unparseable model output", () => {
-  it("returns a summary with status 'failed' when the model returns unparseable JSON", async () => {
+  it("degrades to a succeeded baseline run with a visible reason when the model returns unparseable JSON", async () => {
+    // QI-DEG-01: unparseable model output is recovered by falling back to the deterministic
+    // baseline (the product contract: deliver baseline test cases rather than hard-failing), but
+    // the degradation MUST stay visible — the run succeeds AND carries a bounded reasonSummary the
+    // BFF surfaces on the terminal `done` frame as degraded.
     const deps = buildDeps({ evidenceDir, modelPort: fakeUnparseablePort() });
     const controller = new AbortController();
     const summary = await runQi({
@@ -1070,7 +1074,8 @@ describe("executeQiRun — unparseable model output", () => {
       onEvent: vi.fn(),
       onAccepted: vi.fn(),
     });
-    expect(summary.status).toBe("failed");
+    expect(summary.status).toBe("succeeded");
+    expect(summary.reasonSummary).toBe("qi-error: UnparseableModelOutputError");
   });
 });
 
@@ -1278,7 +1283,8 @@ describe("executeQiRun — capsule resolver handle is closed in finally block", 
     };
     mockMakeCapsuleResolver.mockReturnValue(fakeResolver);
 
-    // fakeUnparseablePort() causes the workflow to reach status 'failed' rather than throwing.
+    // fakeUnparseablePort() degrades to a succeeded baseline run (not a throw), so the capsule
+    // resolver must still be closed exactly once on the non-throwing terminal path.
     await executeQiRun(
       makeInput(evidenceDir, {
         deps: buildDeps({ evidenceDir, modelPort: fakeUnparseablePort() }),

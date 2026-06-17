@@ -137,6 +137,7 @@ import {
 } from "./qualityIntelligence/index.js";
 import {
   handleFigmaListSnapshots,
+  handleFigmaInspectSnapshotScreenJson,
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
   handleFigmaLoadSnapshotImage,
@@ -467,6 +468,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
   { method: "GET", pattern: "/api/figma/snapshots", handler: handleFigmaListSnapshots },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
+  {
+    method: "GET",
+    pattern: "/api/figma/snapshots/:runId/screens/:screenId/json",
+    handler: handleFigmaInspectSnapshotScreenJson,
+  },
   {
     method: "GET",
     pattern: "/api/figma/snapshots/:runId/screens/:screenIndex/image",

@@ -921,6 +921,12 @@ html[data-keiko-modal-open="true"] .workspace {
 .workspace[data-panning="true"] {
   cursor: grabbing;
 }
+.workspace[data-hand-tool="true"] {
+  cursor: grab;
+}
+.workspace[data-hand-tool="true"] * {
+  cursor: grab !important;
+}
 /* When the workspace itself is being panned, every hovered child must keep the
    same feedback instead of falling back to its own cursor token. */
 .workspace[data-panning="true"] * {
@@ -957,38 +963,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   z-index: 9000;
   width: min(420px, calc(100% - 28px));
   max-height: calc(100% - 84px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  /* The section itself is a passive container; only the toggle and the revealed
-     content take pointer events, so collapsed content never blocks the canvas. */
-  pointer-events: none;
-}
-/* The toggle affordance is always visible and operable so a pointer user can
-   open/pin the panel deliberately (#1153) — hover-only reveal is too fragile
-   for a tall, scrollable panel. */
-.ws-outline-toggle {
-  align-self: flex-start;
-  min-height: 28px;
-  padding: 5px 12px;
-  border: 1px solid var(--accent-line);
-  border-radius: var(--radius);
-  background: color-mix(in oklch, var(--surface) 96%, transparent);
-  box-shadow: var(--shadow-pop);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  pointer-events: auto;
-}
-.ws-outline-toggle:hover {
-  border-color: var(--line-strong);
-}
-.ws-outline-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.ws-outline-content {
   overflow: auto;
   padding: 12px;
   border: 1px solid var(--accent-line);
@@ -1000,11 +974,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   opacity: 0;
   pointer-events: none;
 }
-/* `data-open` is the source of truth (state-driven, kept in sync with the
-   `inert`/`aria-hidden` DOM exposure). Keep CSS reveal strictly aligned with
-   that state; raw :hover/:focus-within reopening caused "Hide workspace
-   outline" to appear ineffective until the pointer/focus left the region. */
-.ws-outline[data-open="true"] .ws-outline-content {
+.ws-outline:focus-within {
   transform: none;
   opacity: 1;
   pointer-events: auto;
@@ -4196,6 +4166,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-content: start;
   align-items: stretch;
 }
+.palette[data-columns="2"] .palette-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .pal-card {
   min-width: 0;
   min-height: 0;
@@ -6237,7 +6210,8 @@ select.dlg-input {
   inset: 0;
   z-index: 10000;
   display: grid;
-  place-items: center;
+  place-items: safe center;
+  overflow-y: auto;
   padding: 24px;
   background:
     radial-gradient(
@@ -9232,6 +9206,18 @@ select.dlg-input {
   margin: 0;
   color: var(--fg);
 }
+/* Degraded-run notice: the run succeeded with deterministic baseline tests because model generation
+   failed. A warning (not an error) — distinct from .lk-alert so a recoverable degradation is not
+   read as a hard failure, but still clearly flagged (regulated-delivery: never hide degradation). */
+.qi-degraded-notice {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+}
 .qi-field {
   display: flex;
   flex-direction: column;
@@ -9284,6 +9270,134 @@ select.dlg-input {
   outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
+}
+.qi-select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
+    linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 52%,
+    calc(100% - 10px) 52%;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+.qi-select option {
+  background: var(--card);
+  color: var(--fg);
+}
+.qi-source-kind-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  min-width: min(100%, 440px);
+}
+.qi-source-kind-option {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.qi-source-kind-option:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--card-2);
+}
+.qi-source-kind-option:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.qi-source-kind-option[aria-checked="true"] {
+  border-color: color-mix(in oklch, var(--accent) 70%, var(--line));
+  background: color-mix(in oklab, var(--accent) 18%, var(--card));
+  color: var(--fg);
+}
+.qi-source-kind-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.qi-source-kind-option > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+.qi-source-kind-option > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+}
+.qi-path-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+.qi-path-value {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 12.5px;
+}
+.qi-path-value[data-empty="true"] {
+  color: var(--fg-muted);
+}
+.qi-browse-btn {
+  min-width: 82px;
+}
+.qi-source-picker .lkd-picker-row[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--accent) 18%, var(--card));
+  color: var(--fg);
+}
+.qi-source-picker-selection {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+@media (max-width: 900px) {
+  .qi-source-kind-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .qi-source-kind-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .qi-path-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .qi-browse-btn {
+    width: 100%;
+  }
 }
 .qi-launcher-controls {
   display: flex;
@@ -10422,6 +10536,28 @@ select.dlg-input {
   border: 1px solid var(--line);
 }
 
+.figma-snapshot-screen-preview-btn {
+  display: flex;
+  width: 72px;
+  height: 54px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: grab;
+}
+
+.figma-snapshot-screen-preview-btn:disabled,
+.figma-snapshot-screen-preview-btn[aria-disabled="true"] {
+  cursor: default;
+}
+
+.figma-snapshot-screen-preview-btn:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
 .figma-snapshot-screen-meta {
   flex: 1;
   display: flex;
@@ -10451,6 +10587,462 @@ select.dlg-input {
   font-size: 11px;
   color: var(--fg-dim);
   margin: 0;
+}
+
+.figma-snapshot-screen-actions {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.figma-snapshot-screen-source-btn {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.figma-snapshot-screen-source-btn:disabled,
+.figma-snapshot-screen-source-btn[aria-disabled="true"] {
+  cursor: default;
+  border-color: var(--line);
+  background: var(--card-2);
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-screen-source-btn:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.figma-snapshot-scope-note {
+  font-size: 0.75rem;
+  color: var(--accent-text);
+  margin: 2px 0 0;
+}
+
+.figma-view-window {
+  gap: 10px;
+  padding: 12px;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
+.figma-view-source-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.figma-view-source-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.figma-view-source-eyebrow,
+.figma-view-source-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.figma-view-source-heading {
+  margin: 2px 0 0;
+  font-size: 15px;
+  line-height: 1.25;
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.figma-view-source-badge {
+  flex: 0 0 auto;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.figma-view-json-btn,
+.figma-view-json-copy-btn {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--line));
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklch, var(--accent) 10%, var(--card));
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.figma-view-json-btn:focus-visible,
+.figma-view-json-copy-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.figma-view-json-btn:disabled,
+.figma-view-json-btn[aria-disabled="true"],
+.figma-view-json-copy-btn:disabled,
+.figma-view-json-copy-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.figma-view-source-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+
+.figma-view-source-empty-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+.figma-view-source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.figma-view-preview {
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+button.figma-view-preview {
+  appearance: none;
+}
+
+.figma-view-preview-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--card-2);
+}
+
+.figma-view-preview-drag-surface {
+  cursor: grab;
+  outline-offset: 2px;
+}
+
+.figma-view-preview-drag-surface:active {
+  cursor: grabbing;
+}
+
+.figma-view-preview-drag-surface:focus-visible {
+  outline: 2px solid var(--focus);
+}
+
+.figma-view-preview-placeholder {
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.figma-view-preview-icon {
+  width: 30px;
+  height: 30px;
+  color: var(--accent-text);
+}
+
+.figma-view-source-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.figma-view-source-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.figma-view-source-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.figma-view-source-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  margin: 2px 0 0;
+}
+
+.figma-view-source-facts div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.figma-view-source-facts dt,
+.figma-view-source-facts dd {
+  margin: 0;
+  font-size: 11px;
+}
+
+.figma-view-source-facts dt {
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.figma-view-source-facts dd {
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, monospace);
+}
+
+.figma-view-json-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--card) 88%, black);
+  padding: 10px;
+}
+
+.figma-view-json-inspector-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.figma-view-json-drag-surface {
+  min-width: 0;
+  cursor: grab;
+}
+
+.figma-view-json-drag-surface:active {
+  cursor: grabbing;
+}
+
+.figma-view-json-kicker {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.figma-view-json-title {
+  margin: 2px 0 0;
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.figma-view-json-meta,
+.figma-view-json-copy-status {
+  margin: 2px 0 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.figma-view-json-code {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklch, var(--bg) 88%, black);
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 10px;
+  white-space: pre;
+}
+
+.figma-json-window {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  color: var(--fg);
+}
+
+.figma-json-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.figma-json-eyebrow {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.figma-json-heading {
+  margin: 2px 0 0;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.figma-json-meta,
+.figma-json-status {
+  margin: 3px 0 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.figma-json-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.figma-json-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid color-mix(in oklch, var(--danger) 42%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  padding: 10px;
+}
+
+.figma-json-error p {
+  margin: 0;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.figma-json-code {
+  flex: 1 1 auto;
+  min-height: 280px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--bg) 88%, black);
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 12px;
+  white-space: pre;
+}
+
+.figma-image-window {
+  min-height: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: color-mix(in oklch, var(--bg) 90%, black);
+  overflow: hidden;
+}
+
+.figma-image-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: color-mix(in oklch, var(--bg) 92%, black);
+}
+
+.figma-image-missing {
+  margin: 16px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--danger) 42%, var(--line));
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  font-size: 12px;
+}
+
+.json-token-key {
+  color: var(--accent-text);
+}
+
+.json-token-string {
+  color: color-mix(in oklch, var(--info) 74%, var(--fg));
+}
+
+.json-token-number {
+  color: color-mix(in oklch, var(--warn) 80%, var(--fg));
+}
+
+.json-token-boolean {
+  color: color-mix(in oklch, var(--accent-bright) 82%, var(--fg));
+}
+
+.json-token-null {
+  color: var(--fg-dim);
+}
+
+.json-token-punctuation {
+  color: var(--fg-muted);
 }
 
 /* ==== uiux-fix F008: header status pill tones (C043/C118) ==== */
@@ -13086,6 +13678,13 @@ ul.integ {
   width: 12px;
   height: 12px;
   color: var(--fg-muted);
+}
+
+.figma-snapshot-screen-placeholder-label {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--fg-dim);
+  font-weight: 700;
 }
 
 /* ==== uiux-fix F049: accent primary-button hover feedback (C333) ==== */

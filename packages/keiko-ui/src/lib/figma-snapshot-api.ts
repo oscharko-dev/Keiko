@@ -13,12 +13,13 @@ import { ApiError } from "./api";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
+  const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
+      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -55,6 +56,16 @@ export interface FigmaScreenSummary {
   readonly imageByteLength: number;
 }
 
+export interface FigmaStructuralScreenSummary {
+  readonly screenId: string;
+  /** Display name derived from the IR. */
+  readonly name: string;
+  /** Brief structural description, e.g. "3 fields, 2 controls". */
+  readonly irSummary: string;
+  /** Why no rendered PNG side-file exists for this screen. */
+  readonly reason: string;
+}
+
 export interface FigmaSnapshotSummary {
   readonly runId: string;
   readonly fileKey: string;
@@ -65,14 +76,84 @@ export interface FigmaSnapshotSummary {
   readonly screenCount: number;
   /** Number of screens that could not be rendered (partial build). */
   readonly skippedCount: number;
+  /** Skipped/non-rendered screens that still carry structural Screen-IR JSON. */
+  readonly structuralOnlyCount?: number;
   /**
-   * Human-readable reduction hint, e.g. "3 screens from 5 detected (2 renders skipped)".
+   * Human-readable reduction hint, e.g. "3 rendered screens from 5 detected (2 structural-only)".
    * Shown in the window header to surface the "huge board → N screens" story.
    */
   readonly reductionHint: string;
   /** Integrity hash for drift detection. */
   readonly integrityHash: string;
   readonly screens: readonly FigmaScreenSummary[];
+  /** Non-rendered screens that still have structural Screen-IR JSON and can be scoped into QI. */
+  readonly structuralScreens?: readonly FigmaStructuralScreenSummary[];
+}
+
+export interface FigmaSnapshotListEntry {
+  readonly runId: string;
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version: string | undefined;
+  readonly fetchedAt: string;
+  readonly screenCount: number;
+  readonly skippedCount: number;
+  readonly structuralOnlyCount?: number;
+  readonly reductionHint: string;
+  readonly integrityHash: string;
+}
+
+export interface FigmaSnapshotScreenJsonResponse {
+  readonly runId: string;
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version: string | undefined;
+  readonly fetchedAt: string;
+  readonly source: {
+    readonly kind: "figma-snapshot";
+    readonly snapshotRunId: string;
+    readonly screenIds: readonly string[];
+  };
+  readonly snapshot: {
+    readonly screenCount: number;
+    readonly skippedCount: number;
+    readonly structuralOnlyCount: number;
+    readonly integrityHash: string;
+    readonly redactionSummary: {
+      readonly totalStringsScanned: number;
+      readonly stringsRedacted: number;
+      readonly patternsMatched: Readonly<Record<string, number>>;
+    };
+    readonly metrics?: unknown;
+    readonly tokens?: unknown;
+  };
+  readonly screen: {
+    readonly kind: "rendered" | "structural";
+    readonly screenId: string;
+    readonly name: string;
+    readonly irSummary: string;
+    readonly integrityHash: string;
+    readonly irJson: unknown;
+    readonly image?: {
+      readonly mimeType: "image/png";
+      readonly relativePath: string;
+      readonly sha256: string;
+      readonly byteLength: number;
+    };
+    readonly structuralReason?: string;
+  };
+  readonly relatedLinks: readonly {
+    readonly sourceNodeId: string;
+    readonly trigger: string;
+    readonly targetNodeId: string;
+  }[];
+}
+
+export interface ListFigmaSnapshotsOptions {
+  readonly fileKey?: string;
+  readonly nodeId?: string;
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
 }
 
 export interface FigmaSnapshotListEntry {
@@ -173,6 +254,21 @@ export function figmaSnapshotScreenImageUrl(runId: string, screenIndex: number):
   return `/api/figma/snapshots/${encodeURIComponent(runId)}/screens/${encodeURIComponent(
     String(screenIndex),
   )}/image`;
+}
+
+export async function loadFigmaSnapshotScreenJson(
+  runId: string,
+  screenId: string,
+  signal?: AbortSignal,
+): Promise<FigmaSnapshotScreenJsonResponse> {
+  return fetchJson<FigmaSnapshotScreenJsonResponse>(
+    `/api/figma/snapshots/${encodeURIComponent(runId)}/screens/${encodeURIComponent(
+      screenId,
+    )}/json`,
+    {
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  );
 }
 
 // ─── POST /api/figma/snapshots/:runId/code (design-to-code #755) ────────────────
