@@ -163,19 +163,67 @@ vi.mock("./cards/ConnectorPickerWidget", () => ({
 vi.mock("./figma/FigmaSnapshotWindow", () => ({
   FigmaSnapshotWindow: ({
     snapshotRunId,
+    selectedScreenIds,
+    sourceWindowId,
     updateCfg,
+    openScreenSource,
   }: {
     readonly snapshotRunId?: string;
+    readonly selectedScreenIds?: readonly string[];
+    readonly sourceWindowId?: string;
     readonly updateCfg: (patch: Record<string, string>) => void;
+    readonly openScreenSource?: (input: {
+      readonly snapshotRunId: string;
+      readonly screenId: string;
+      readonly name: string;
+    }) => void;
   }) => (
-    <button
-      type="button"
-      data-testid="figma-window"
-      onClick={() => updateCfg({ snapshotRunId: "fs-2" })}
-    >
-      {snapshotRunId ?? "new"}
-    </button>
+    <div>
+      <button
+        type="button"
+        data-testid="figma-window"
+        onClick={() => updateCfg({ snapshotRunId: "fs-2" })}
+      >
+        {`${sourceWindowId ?? ""}:${snapshotRunId ?? "new"}:${selectedScreenIds?.join(",") ?? ""}`}
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          openScreenSource?.({
+            snapshotRunId: snapshotRunId ?? "fs-1",
+            screenId: "screen-1",
+            name: "Screen 1",
+          })
+        }
+      >
+        Add screen source
+      </button>
+    </div>
   ),
+}));
+vi.mock("./figma/FigmaJsonSourceWindow", () => ({
+  FigmaJsonSourceWindow: ({
+    snapshotRunId,
+    screenId,
+    screenName,
+  }: {
+    readonly snapshotRunId?: string;
+    readonly screenId?: string;
+    readonly screenName?: string;
+  }) => (
+    <div data-testid="figma-json-window">
+      {`${snapshotRunId ?? ""}:${screenId ?? ""}:${screenName ?? ""}`}
+    </div>
+  ),
+}));
+vi.mock("./figma/FigmaImageSourceWindow", () => ({
+  FigmaImageSourceWindow: ({
+    imageSrc,
+    screenName,
+  }: {
+    readonly imageSrc?: string;
+    readonly screenName?: string;
+  }) => <div data-testid="figma-image-window">{`${imageSrc ?? ""}:${screenName ?? ""}`}</div>,
 }));
 vi.mock("./quality-intelligence/QiHubPanel", () => ({
   QiHubPanel: ({
@@ -224,6 +272,7 @@ function makeCtx(): WindowRenderContext & {
   readonly openWindow: ReturnType<typeof vi.fn>;
 } {
   return {
+    windowId: "ctx-window",
     mini: true,
     linkedRoot: "/repo",
     linkedFilePath: "src/app.ts",
@@ -231,6 +280,15 @@ function makeCtx(): WindowRenderContext & {
     linkedCapsuleIds: ["cap-1"],
     linkedCapsuleSetIds: ["set-1"],
     linkedFigmaSnapshotRunIds: ["fs-1"],
+    linkedImageSources: [
+      {
+        kind: "image",
+        label: "Image · Screen 1",
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: "fs-1",
+        screenId: "screen-1",
+      },
+    ],
     updateCfg: vi.fn<UpdateCfg>(),
     openWindow: vi.fn(() => "win-1"),
   };
@@ -310,6 +368,51 @@ describe("workspace widget renderer registry", () => {
     view.rerender(<>{WIN_TYPES.figma.render({ snapshotRunId: "fs-1" }, ctx)}</>);
     fireEvent.click(screen.getByTestId("figma-window"));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ snapshotRunId: "fs-2" });
+    fireEvent.click(screen.getByRole("button", { name: "Add screen source" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("figma", {
+      snapshotRunId: "fs-1",
+      selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+      selectedScreenName: "Screen 1",
+    });
+
+    view.rerender(
+      <>
+        {WIN_TYPES.figma.render(
+          {
+            snapshotRunId: "fs-1",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Screen 1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
+
+    view.rerender(
+      <>
+        {WIN_TYPES.figmaJson.render(
+          { snapshotRunId: "fs-1", screenId: "screen-1", selectedScreenName: "Screen 1" },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("figma-json-window")).toHaveTextContent("fs-1:screen-1:Screen 1");
+
+    view.rerender(
+      <>
+        {WIN_TYPES.figmaImage.render(
+          {
+            imageSrc: "/api/figma/snapshots/fs-1/screens/0/image",
+            selectedScreenName: "Screen 1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("figma-image-window")).toHaveTextContent(
+      "/api/figma/snapshots/fs-1/screens/0/image:Screen 1",
+    );
 
     view.rerender(<>{WIN_TYPES.chatHistory.render({}, ctx)}</>);
     fireEvent.click(screen.getByRole("button", { name: "Open history chat" }));

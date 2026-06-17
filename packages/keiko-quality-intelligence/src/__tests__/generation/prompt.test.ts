@@ -71,6 +71,57 @@ describe("QI_TEST_DESIGN_SYSTEM_PROMPT", () => {
     // "Each test case MUST reference the 1-based indexes"
     expect(prompt).toMatch(/Indexe/u);
   });
+
+  // The atomicity + verifiability directives are A/B-proven quality levers (the #736 judge's
+  // avgAtomicity rose ~30→~47 and avgVerifiability ~68→~87 on two real boards when they were added).
+  // Pin their presence so a future prompt edit cannot silently drop them and regress test quality.
+  it("instructs the model to keep each test case atomic (one goal, no bundling)", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Atomarität");
+    expect(prompt).toMatch(/GENAU EIN/u);
+    // Guards against the over-fragmentation failure mode (shallow one-element tests).
+    expect(prompt).toMatch(/zersplittere nicht/u);
+  });
+
+  it("instructs the model to keep validation tests focused and concrete", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Validierungsfälle");
+    expect(prompt).toMatch(/konkreten ungültigen Eingabewert/u);
+    expect(prompt).toMatch(/bündle keine vollständige Feldliste/u);
+  });
+
+  it("instructs the model to avoid broad screen-inventory smoke tests", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Screen-Inventar");
+    expect(prompt).toMatch(/keine breiten Smoke-Tests/u);
+    expect(prompt).toMatch(/fokussierte Interaktions-/u);
+  });
+
+  it("instructs the model to keep interaction tests to one user action", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Interaktionsfälle");
+    expect(prompt).toMatch(/genau eine Nutzeraktion/u);
+    expect(prompt).toMatch(/kein Öffnen und Schließen/u);
+  });
+
+  it("instructs the model to align focus-order steps with expected focus states", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Fokusreihenfolge");
+    expect(prompt).toMatch(/vollständige Sequenz erfassen/u);
+    expect(prompt).toMatch(/nicht mehr erwartete Fokuszustände/u);
+  });
+
+  it("instructs the model to avoid adjacent duplicate steps", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Schrittsequenzen");
+    expect(prompt).toMatch(/Wiederhole nie zwei direkt aufeinanderfolgende Schritte/u);
+  });
+
+  it("instructs the model to make every step + expected result concretely verifiable", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Prüfbarkeit");
+    expect(prompt).toMatch(/beobachtbare/u);
+  });
 });
 
 // ─── QI_TEST_DESIGN_RESPONSE_SCHEMA ───────────────────────────────────────────
@@ -354,6 +405,57 @@ describe("buildTestDesignInstruction", () => {
       maxTestCases: 5,
     });
     expect(result).toContain("standardmäßig auf Deutsch");
+  });
+
+  it("includes focused validation guidance in the trusted instruction", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 2,
+      profile: regressionDefault,
+      maxTestCases: 5,
+    });
+    expect(result).toMatch(/konkrete Regel/u);
+    expect(result).toMatch(/konkreten Eingabewert/u);
+    expect(result).toMatch(/erwartete UI-Reaktion/u);
+  });
+
+  it("includes broad screen-inventory avoidance in the trusted instruction", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 2,
+      profile: regressionDefault,
+      maxTestCases: 5,
+    });
+    expect(result).toMatch(/Screen-Inventar-Smoke-Tests/u);
+    expect(result).toMatch(/viele Texte, Felder und Buttons aufzählen/u);
+  });
+
+  it("includes focused interaction guidance in the trusted instruction", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 2,
+      profile: regressionDefault,
+      maxTestCases: 5,
+    });
+    expect(result).toMatch(/genau eine Nutzeraktion/u);
+    expect(result).toMatch(/kein Ein- und Ausklappen/u);
+  });
+
+  it("includes focus-order step/result alignment guidance in the trusted instruction", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 2,
+      profile: regressionDefault,
+      maxTestCases: 5,
+    });
+    expect(result).toMatch(/Fokusreihenfolge-Tests/u);
+    expect(result).toMatch(/Fokuszustände prüfen/u);
+  });
+
+  it("includes duplicate-step avoidance in the trusted instruction", () => {
+    const result = QualityIntelligenceGeneration.buildTestDesignInstruction({
+      evidenceCount: 2,
+      profile: regressionDefault,
+      maxTestCases: 5,
+    });
+    expect(result).toMatch(/Vermeide direkt wiederholte Schritte/u);
+    expect(result).toMatch(/neuen beobachtbaren Zustand/u);
   });
 
   it("large evidenceCount (1000) is rendered correctly in the string", () => {

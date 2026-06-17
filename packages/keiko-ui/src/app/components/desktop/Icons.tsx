@@ -17,15 +17,27 @@ interface IcoProps {
   sw?: number;
   vb?: number;
   fill?: string;
+  className?: string;
   style?: CSSProperties;
   children?: ReactNode;
   d?: string;
+  "aria-hidden"?: boolean | "true" | "false";
 }
 
-function Ico({ size = 18, sw = 1.6, vb = 24, fill, style, children, d }: IcoProps): ReactNode {
+function Ico({
+  size = 18,
+  sw = 1.6,
+  vb = 24,
+  fill,
+  className,
+  style,
+  children,
+  d,
+}: IcoProps): ReactNode {
   const useFill = fill !== undefined;
   return (
     <svg
+      className={className}
       width={size}
       height={size}
       viewBox={`0 0 ${String(vb)} ${String(vb)}`}

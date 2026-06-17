@@ -64,6 +64,7 @@ export {
 export {
   TEST_QUALITY_WEAK_THRESHOLD,
   scoreFromDimensions,
+  verdictFromDimensions,
   verdictFromScore,
 } from "./domain/testQualityRubric.js";
 

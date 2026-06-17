@@ -46,6 +46,7 @@ import {
 } from "../figma/index.js";
 import type { RouteContext } from "../../routes.js";
 import {
+  handleFigmaInspectSnapshotScreenJson,
   handleFigmaListSnapshots,
   handleFigmaLoadSnapshot,
   handleFigmaRevokeToken,
@@ -778,6 +779,24 @@ function makeGetCtx(runId: string): RouteContext {
   };
 }
 
+function makeScreenJsonCtx(runId: string, screenId: string): RouteContext {
+  const reqStream = Readable.from([]);
+  const fakeReq = Object.assign(reqStream, {
+    headers: {},
+    once: (_event: string, _listener: () => void): unknown => fakeReq,
+  }) as unknown as IncomingMessage;
+  return {
+    req: fakeReq,
+    res: {} as RouteContext["res"],
+    params: { runId: encodeURIComponent(runId), screenId: encodeURIComponent(screenId) },
+    url: new URL(
+      `http://127.0.0.1/api/figma/snapshots/${encodeURIComponent(
+        runId,
+      )}/screens/${encodeURIComponent(screenId)}/json`,
+    ),
+  };
+}
+
 function makeListCtx(query = ""): RouteContext {
   const reqStream = Readable.from([]);
   const fakeReq = Object.assign(reqStream, {
@@ -962,6 +981,84 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
   });
 });
 
+describe("GET /api/figma/snapshots/:runId/screens/:screenId/json", () => {
+  it("returns scoped Screen-IR JSON for one rendered screen", () => {
+    const runId = "fs-00000000-0000-0000-0000-000000000201";
+    const screenId = "1:109249";
+    const store = createNodeFigmaSnapshotStore(evidenceDir);
+    store.record({
+      runId,
+      provenance: {
+        fileKey: "file-key",
+        nodeId: "0:1",
+        version: undefined,
+        fetchedAt: "2026-06-17T10:00:00.000Z",
+      },
+      integrityHash: "placeholder",
+      screens: [
+        {
+          screenId,
+          irJson: {
+            id: screenId,
+            name: "Bedarfsermittlung",
+            root: {
+              id: "root-node",
+              interactionHint: "container",
+              children: [{ id: "continue-btn", interactionHint: "button", text: "Weiter" }],
+            },
+          },
+          integrityHash: "placeholder",
+          image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+        },
+        {
+          screenId: "2:2",
+          irJson: { id: "2:2", name: "Other", root: { id: "other-root", children: [] } },
+          integrityHash: "placeholder",
+          image: { mimeType: "image/png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+        },
+      ],
+      skippedScreens: [],
+      links: [{ sourceNodeId: "continue-btn", trigger: "ON_CLICK", targetNodeId: "other-root" }],
+    });
+    const deps = makeDeps(evidenceDir, {});
+    const ctx = makeScreenJsonCtx(runId, screenId);
+
+    const result = handleFigmaInspectSnapshotScreenJson(ctx, deps);
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      readonly source: { readonly screenIds: readonly string[] };
+      readonly screen: { readonly screenId: string; readonly irJson: unknown; readonly image: unknown };
+      readonly relatedLinks: readonly unknown[];
+    };
+    expect(body.source.screenIds).toEqual([screenId]);
+    expect(body.screen.screenId).toBe(screenId);
+    expect(body.screen.irJson).toMatchObject({
+      name: "Bedarfsermittlung",
+      root: { children: [{ text: "Weiter" }] },
+    });
+    expect(body.screen.image).toMatchObject({ mimeType: "image/png" });
+    expect(body.relatedLinks).toEqual([
+      { sourceNodeId: "continue-btn", trigger: "ON_CLICK", targetNodeId: "other-root" },
+    ]);
+  });
+
+  it("returns 404 when the requested screen is not in the snapshot", () => {
+    const runId = "fs-00000000-0000-0000-0000-000000000202";
+    seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {
+      fileKey: "file-key",
+      nodeId: "0:1",
+    });
+    const result = handleFigmaInspectSnapshotScreenJson(
+      makeScreenJsonCtx(runId, "missing-screen"),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(result.status).toBe(404);
+    expect((result.body as { error: { code: string } }).error.code).toBe("FIGMA_SCREEN_NOT_FOUND");
+  });
+});
+
 describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
   it("503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
     const deps: UiHandlerDeps = { ...makeDeps(""), evidenceDir: undefined };
@@ -972,18 +1069,33 @@ describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
   });
 
   it("lists recent snapshots newest first", () => {
-    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000101", "2026-06-01T10:00:00.000Z", {
-      fileKey: "KEY123",
-      nodeId: "0:1",
-    });
-    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000102", "2026-06-03T10:00:00.000Z", {
-      fileKey: "KEY999",
-      nodeId: "0:9",
-    });
-    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000103", "2026-06-02T10:00:00.000Z", {
-      fileKey: "KEY123",
-      nodeId: "0:1",
-    });
+    seedSnapshotRecord(
+      evidenceDir,
+      "fs-00000000-0000-0000-0000-000000000101",
+      "2026-06-01T10:00:00.000Z",
+      {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+      },
+    );
+    seedSnapshotRecord(
+      evidenceDir,
+      "fs-00000000-0000-0000-0000-000000000102",
+      "2026-06-03T10:00:00.000Z",
+      {
+        fileKey: "KEY999",
+        nodeId: "0:9",
+      },
+    );
+    seedSnapshotRecord(
+      evidenceDir,
+      "fs-00000000-0000-0000-0000-000000000103",
+      "2026-06-02T10:00:00.000Z",
+      {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+      },
+    );
 
     const result = handleFigmaListSnapshots(makeListCtx(), makeDeps(evidenceDir, {}));
 
@@ -997,18 +1109,33 @@ describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
   });
 
   it("filters snapshots to the requested board scope and applies the limit", () => {
-    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000111", "2026-06-01T10:00:00.000Z", {
-      fileKey: "KEY123",
-      nodeId: "0:1",
-    });
-    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000112", "2026-06-02T10:00:00.000Z", {
-      fileKey: "KEY123",
-      nodeId: "0:1",
-    });
-    seedSnapshotRecord(evidenceDir, "fs-00000000-0000-0000-0000-000000000113", "2026-06-03T10:00:00.000Z", {
-      fileKey: "OTHER",
-      nodeId: "0:9",
-    });
+    seedSnapshotRecord(
+      evidenceDir,
+      "fs-00000000-0000-0000-0000-000000000111",
+      "2026-06-01T10:00:00.000Z",
+      {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+      },
+    );
+    seedSnapshotRecord(
+      evidenceDir,
+      "fs-00000000-0000-0000-0000-000000000112",
+      "2026-06-02T10:00:00.000Z",
+      {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+      },
+    );
+    seedSnapshotRecord(
+      evidenceDir,
+      "fs-00000000-0000-0000-0000-000000000113",
+      "2026-06-03T10:00:00.000Z",
+      {
+        fileKey: "OTHER",
+        nodeId: "0:9",
+      },
+    );
 
     const result = handleFigmaListSnapshots(
       makeListCtx("?fileKey=KEY123&nodeId=0%3A1&limit=1"),
@@ -1336,8 +1463,8 @@ describe("Figma snapshot summary projection (recordToSummary helpers)", () => {
     expect(summary.reductionHint).toBe("1 screen from 1 detected");
   });
 
-  // ── reductionHint — 2 screens, 1 skipped (both plural forms + skipped clause) ──
-  it('reductionHint is "2 screens from 3 detected (1 render skipped)" for 2 screens + 1 skipped', async () => {
+  // ── reductionHint — 2 rendered screens, 1 skipped without IR ─────────────
+  it('reductionHint is "2 rendered screens from 3 detected (1 render skipped)" for legacy skipped rows without structural IR', async () => {
     const irJson = { name: "S", root: { interactionHint: null, children: [] } };
 
     const evidenceModule = await import("@oscharko-dev/keiko-evidence");
@@ -1368,13 +1495,65 @@ describe("Figma snapshot summary projection (recordToSummary helpers)", () => {
     const deps = makeDeps(evidenceDir, {});
     const result = handleFigmaLoadSnapshot(makeGetCtx(runId), deps);
 
-    // Assert: "2 screens" (plural), total=3, "1 render skipped" (singular "render").
+    // Assert: rendered-screen wording, total=3, "1 render skipped" (singular "render").
     expect(result.status).toBe(200);
     const summary = result.body as FigmaSnapshotSummary;
-    expect(summary.reductionHint).toContain("2 screens from 3 detected");
+    expect(summary.reductionHint).toContain("2 rendered screens from 3 detected");
     expect(summary.reductionHint).toContain("(1 render skipped)");
     // Ensure the entire hint is correct (not just a substring).
-    expect(summary.reductionHint).toBe("2 screens from 3 detected (1 render skipped)");
+    expect(summary.reductionHint).toBe("2 rendered screens from 3 detected (1 render skipped)");
+  });
+
+  it("reductionHint surfaces structural-only IR coverage for skipped screens with JSON evidence", async () => {
+    const irJson = { name: "S", root: { interactionHint: null, children: [] } };
+
+    const evidenceModule = await import("@oscharko-dev/keiko-evidence");
+    const store = evidenceModule.createNodeFigmaSnapshotStore(evidenceDir);
+    const runId = "fs-00000000-0000-0000-0000-000000000022";
+    store.record({
+      runId,
+      provenance: PROVENANCE,
+      integrityHash: "placeholder",
+      screens: [
+        {
+          screenId: "hint-screen-a",
+          irJson,
+          integrityHash: "placeholder",
+          image: { mimeType: "image/png", bytes: PNG_BYTES },
+        },
+        {
+          screenId: "hint-screen-b",
+          irJson,
+          integrityHash: "placeholder",
+          image: { mimeType: "image/png", bytes: PNG_BYTES },
+        },
+      ],
+      skippedScreens: [{ screenId: "skipped-1", reason: "render-screen-cap-exceeded" }],
+      structuralScreens: [
+        {
+          screenId: "skipped-1",
+          reason: "render-screen-cap-exceeded",
+          irJson,
+          integrityHash: "placeholder",
+        },
+      ],
+    });
+
+    const deps = makeDeps(evidenceDir, {});
+    const result = handleFigmaLoadSnapshot(makeGetCtx(runId), deps);
+
+    expect(result.status).toBe(200);
+    const summary = result.body as FigmaSnapshotSummary;
+    expect(summary.structuralOnlyCount).toBe(1);
+    expect(summary.structuralScreens).toEqual([
+      {
+        screenId: "skipped-1",
+        name: "S",
+        irSummary: "screen",
+        reason: "render-screen-cap-exceeded",
+      },
+    ]);
+    expect(summary.reductionHint).toBe("2 rendered screens from 3 detected (1 structural-only)");
   });
 
   // ── irSummary — singular pluralisation for exactly 1 field / 1 control / 1 text ──

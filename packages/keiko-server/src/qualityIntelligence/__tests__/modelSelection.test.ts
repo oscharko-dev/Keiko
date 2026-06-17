@@ -190,6 +190,52 @@ describe("resolveQiMultimodalSelection", () => {
     }
   });
 
+  it("falls back to a pure ocr-vision image-input model when no image chat model exists", () => {
+    const deps = depsWith(
+      configWith([
+        capability("text-chat", { supportsImageInput: false, costClass: "low" }),
+        capability("ocr-vision-low", {
+          kind: "ocr-vision",
+          supportsImageInput: true,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          workflowEligible: false,
+          costClass: "low",
+        }),
+      ]),
+    );
+    const selection = resolveQiMultimodalSelection(deps);
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("ocr-vision-low");
+      expect(selection.capability.kind).toBe("ocr-vision");
+    }
+  });
+
+  it("prefers an image-capable chat model over a cheaper pure ocr-vision model", () => {
+    const deps = depsWith(
+      configWith([
+        capability("ocr-vision-low", {
+          kind: "ocr-vision",
+          supportsImageInput: true,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          workflowEligible: false,
+          costClass: "low",
+        }),
+        capability("vision-chat-high", { supportsImageInput: true, costClass: "high" }),
+      ]),
+    );
+    const selection = resolveQiMultimodalSelection(deps);
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("vision-chat-high");
+      expect(selection.capability.kind).toBe("chat");
+    }
+  });
+
   // Capability-driven, not id-driven: a model named "…vision…" with no image-input capability
   // must NOT be selected — proves selection is by capability flag, never by id substring.
   it("does NOT select a vision-NAMED model that lacks the image-input capability", () => {

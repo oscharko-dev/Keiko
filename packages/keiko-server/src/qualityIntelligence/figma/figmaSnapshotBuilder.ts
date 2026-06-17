@@ -7,7 +7,8 @@
 //   2. downloads the PNG bytes from that ephemeral url via the injectable render port (no auth
 //      header — the url is pre-signed);
 //   3. assembles the immutable Snapshot value: per-screen IR + image + deterministic integrity
-//      hashes + provenance, with a `skippedScreens` list for any screen that failed to render.
+//      hashes + provenance, with a `skippedScreens` list plus structural-only IR rows for any
+//      screen that failed to render.
 //
 // Once this returns, the Snapshot is the communication boundary: nothing downstream contacts
 // Figma. The token flows ONLY into the images-call header; it never reaches the snapshot value,
@@ -26,7 +27,7 @@ import {
   type FigmaRetryPolicy,
   type FigmaRetrySleep,
 } from "./figmaRetry.js";
-import { hashBytes, hashScreen, hashSnapshot } from "./figmaSnapshotHash.js";
+import { hashBytes, hashScreen, hashSnapshot, hashStructuralScreen } from "./figmaSnapshotHash.js";
 import {
   DEFAULT_SCOPED_PAGINATION_LIMITS,
   SCOPED_PAGINATION_LIMIT_CEILINGS,
@@ -36,6 +37,7 @@ import type {
   FigmaSkippedScreenReason,
   FigmaSnapshot,
   FigmaSnapshotScreen,
+  FigmaSnapshotStructuralScreen,
 } from "./figmaSnapshotTypes.js";
 import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
 
@@ -182,10 +184,19 @@ const extractImageUrls = (json: unknown): Readonly<Record<string, string | null>
   return out;
 };
 
+// Figma's render endpoint can reject a subset of otherwise readable screen node ids with a client
+// status (observed on large boards where some detected screen frames cannot be rendered). That is a
+// renderability problem, not an auth/egress/build integrity problem: keep the snapshot usable by
+// returning an empty render-url map for that batch so the affected screens become structural-only.
+// Auth/scope/proxy/rate-limit/upstream failures remain hard coded errors below.
+const isRenderEndpointSoftFailure = (status: number): boolean =>
+  status === 400 || status === 404 || status === 422;
+
 // Resolve one `/v1/images` batch to its ephemeral-url map. The fetch is wrapped in the deterministic
-// 429 backoff; a non-2xx is a hard coded error (auth/scope/upstream); a 2xx with a malformed body is a
-// transient render-overload signal that is retried up to MAX_RENDER_BODY_RETRIES, then degrades to an
-// empty map so the affected screens skip (render-url-missing) instead of aborting the build (F8).
+// 429 backoff; auth/scope/upstream non-2xx responses are hard coded errors, while renderability
+// client failures degrade this batch to structural-only. A 2xx with a malformed body is a transient
+// render-overload signal that is retried up to MAX_RENDER_BODY_RETRIES, then degrades to an empty map
+// so the affected screens skip (render-url-missing) instead of aborting the build (F8).
 const resolveRenderBatch = async (
   input: BuildFigmaSnapshotInput,
   batch: readonly string[],
@@ -200,6 +211,7 @@ const resolveRenderBatch = async (
       sleep,
     );
     if (response.status < 200 || response.status >= 300) {
+      if (isRenderEndpointSoftFailure(response.status)) return {};
       throw statusToError(response.status, response.json);
     }
     const map = extractImageUrls(response.json);
@@ -234,10 +246,17 @@ const requestRenderUrls = async (
 interface ScreenOutcome {
   readonly screen?: FigmaSnapshotScreen;
   readonly skipped?: FigmaSkippedScreen;
+  readonly structuralScreen?: FigmaSnapshotStructuralScreen;
 }
 
-const skip = (screenId: string, reason: FigmaSkippedScreenReason): ScreenOutcome => ({
-  skipped: { screenId, reason },
+const structuralOnly = (ir: ScreenIr, reason: FigmaSkippedScreenReason): ScreenOutcome => ({
+  skipped: { screenId: ir.id, reason },
+  structuralScreen: {
+    screenId: ir.id,
+    ir,
+    reason,
+    integrityHash: hashStructuralScreen(ir.id, ir),
+  },
 });
 
 // Classifies a finished render download into a skip reason, or null when the bytes are usable.
@@ -274,9 +293,9 @@ const RENDER_EGRESS_ABORT_CODES: ReadonlySet<string> = new Set([
 const classifyRenderError = (screenId: string, err: unknown): ScreenOutcome => {
   if (err instanceof FigmaConnectorError) {
     if (RENDER_EGRESS_ABORT_CODES.has(err.code)) throw err;
-    return skip(screenId, `render-fetch-failed:${err.code}`);
+    return { skipped: { screenId, reason: `render-fetch-failed:${err.code}` } };
   }
-  return skip(screenId, "render-fetch-failed");
+  return { skipped: { screenId, reason: "render-fetch-failed" } };
 };
 
 // Downloads one screen's render bytes and classifies the result into a kept screen or a skip.
@@ -287,8 +306,8 @@ const resolveScreen = async (
   ir: ScreenIr,
   renderUrl: string | null,
 ): Promise<ScreenOutcome> => {
-  if (renderUrl === null) return skip(ir.id, "render-url-missing");
-  if (!isRenderUrlSafe(renderUrl)) return skip(ir.id, "render-url-blocked");
+  if (renderUrl === null) return structuralOnly(ir, "render-url-missing");
+  if (!isRenderUrlSafe(renderUrl)) return structuralOnly(ir, "render-url-blocked");
   const maxBytes = input.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
   const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
   const sleep = input.sleep ?? realFigmaRetrySleep;
@@ -300,10 +319,14 @@ const resolveScreen = async (
       sleep,
     );
   } catch (err) {
-    return classifyRenderError(ir.id, err);
+    const classified = classifyRenderError(ir.id, err);
+    if (classified.skipped !== undefined) {
+      return structuralOnly(ir, classified.skipped.reason);
+    }
+    return classified;
   }
   const reason = renderSkipReason(response, maxBytes);
-  if (reason !== null) return skip(ir.id, reason);
+  if (reason !== null) return structuralOnly(ir, reason);
   const sha256 = hashBytes(response.bytes);
   const screen: FigmaSnapshotScreen = {
     screenId: ir.id,
@@ -319,9 +342,36 @@ const resolveScreen = async (
   return { screen };
 };
 
+interface SnapshotRows {
+  readonly screens: readonly FigmaSnapshotScreen[];
+  readonly skippedScreens: readonly FigmaSkippedScreen[];
+  readonly structuralScreens: readonly FigmaSnapshotStructuralScreen[];
+}
+
+function collectSnapshotRows(
+  outcomes: readonly ScreenOutcome[],
+  cappedScreens: readonly ScreenIr[],
+): SnapshotRows {
+  const screens: FigmaSnapshotScreen[] = [];
+  const skippedScreens: FigmaSkippedScreen[] = [];
+  const structuralScreens: FigmaSnapshotStructuralScreen[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.screen !== undefined) screens.push(outcome.screen);
+    if (outcome.skipped !== undefined) skippedScreens.push(outcome.skipped);
+    if (outcome.structuralScreen !== undefined) structuralScreens.push(outcome.structuralScreen);
+  }
+  for (const ir of cappedScreens) {
+    const outcome = structuralOnly(ir, "render-screen-cap-exceeded");
+    if (outcome.skipped !== undefined) skippedScreens.push(outcome.skipped);
+    if (outcome.structuralScreen !== undefined) structuralScreens.push(outcome.structuralScreen);
+  }
+  return { screens, skippedScreens, structuralScreens };
+}
+
 /**
  * Render the screens and assemble the immutable Figma Snapshot. Render failures degrade to a
- * `skippedScreens` entry (partial render); a non-2xx `/v1/images` call is a hard coded error.
+ * `skippedScreens` entry plus structural-only IR (partial render); a non-2xx `/v1/images` call is
+ * a hard coded error.
  */
 export const buildFigmaSnapshot = async (
   input: BuildFigmaSnapshotInput,
@@ -347,25 +397,23 @@ export const buildFigmaSnapshot = async (
   const outcomes = await mapWithConcurrency(renderableScreens, concurrency, (ir) =>
     resolveScreen(input, ir, renderUrls.get(ir.id) ?? null),
   );
-
-  const screens: FigmaSnapshotScreen[] = [];
-  const skippedScreens: FigmaSkippedScreen[] = [];
-  for (const outcome of outcomes) {
-    if (outcome.screen !== undefined) screens.push(outcome.screen);
-    if (outcome.skipped !== undefined) skippedScreens.push(outcome.skipped);
-  }
-  for (const ir of cappedScreens) {
-    skippedScreens.push({ screenId: ir.id, reason: "render-screen-cap-exceeded" });
-  }
+  const { screens, skippedScreens, structuralScreens } = collectSnapshotRows(
+    outcomes,
+    cappedScreens,
+  );
 
   return {
     snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
     provenance: input.provenance,
     screens,
     skippedScreens,
+    structuralScreens,
     // Carried verbatim from the Screen-IR (#752) for the navigation/flow graph (#811). NOT folded
     // into the integrity hash below — `links` is non-identity metadata, so drift (#735) is stable.
     links: input.ir.links,
-    integrityHash: hashSnapshot(SNAPSHOT_SCHEMA_VERSION, input.provenance.version, screens),
+    integrityHash: hashSnapshot(SNAPSHOT_SCHEMA_VERSION, input.provenance.version, [
+      ...screens,
+      ...structuralScreens,
+    ]),
   };
 };

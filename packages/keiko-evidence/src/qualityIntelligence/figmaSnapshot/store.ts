@@ -62,6 +62,7 @@ import {
   type FigmaSnapshotMetrics,
   type FigmaSnapshotRecord,
   type FigmaSnapshotScreenRow,
+  type FigmaSnapshotStructuralScreenRow,
   type FigmaSnapshotSkippedScreenRow,
 } from "./schema.js";
 
@@ -78,6 +79,13 @@ export interface RecordFigmaSnapshotScreenInput {
   readonly image: { readonly mimeType: "image/png"; readonly bytes: Uint8Array };
 }
 
+export interface RecordFigmaSnapshotStructuralScreenInput {
+  readonly screenId: string;
+  readonly reason: string;
+  readonly irJson: unknown;
+  readonly integrityHash: string;
+}
+
 export interface RecordFigmaSnapshotInput {
   readonly runId: string;
   readonly provenance: {
@@ -88,6 +96,8 @@ export interface RecordFigmaSnapshotInput {
   };
   readonly integrityHash: string;
   readonly screens: readonly RecordFigmaSnapshotScreenInput[];
+  /** Structural Screen-IR for skipped/non-rendered screens. Optional for callers predating this. */
+  readonly structuralScreens?: readonly RecordFigmaSnapshotStructuralScreenInput[];
   // `reason` is typed as string (not FigmaSnapshotSkipReason) so the routes layer can pass
   // FigmaSkippedScreenReason from keiko-server without a cross-package import; the store casts
   // it to FigmaSnapshotSkipReason internally when building the persisted row.
@@ -214,6 +224,15 @@ const recomputeScreenIntegrityHash = (screen: FigmaSnapshotScreenRow): string =>
     }),
   );
 
+const recomputeStructuralScreenIntegrityHash = (screen: FigmaSnapshotStructuralScreenRow): string =>
+  sha256Hex(
+    canonical({
+      ir: hashStableIr(screen.irJson),
+      screenId: screen.screenId,
+      structuralOnly: true,
+    }),
+  );
+
 const artifactHashesFor = (record: {
   readonly links?: readonly FigmaSnapshotLinkRow[];
   readonly tokens?: unknown;
@@ -234,7 +253,7 @@ const artifactHashesFor = (record: {
 //   sha256( canonical({ screens: sorted [{integrityHash,screenId}], snapshotSchemaVersion, version }) )
 // fetchedAt and links/tokens are excluded by design (non-identity metadata).
 function recomputeSnapshotIntegrityHash(record: FigmaSnapshotRecord): string {
-  const screens = [...record.screens]
+  const screens = [...record.screens, ...(record.structuralScreens ?? [])]
     .sort((a, b) => (a.screenId < b.screenId ? -1 : a.screenId > b.screenId ? 1 : 0))
     .map((s) => ({ integrityHash: s.integrityHash, screenId: s.screenId }));
   return sha256Hex(
@@ -251,7 +270,15 @@ const rehashRecord = (record: FigmaSnapshotRecord): FigmaSnapshotRecord => {
     ...screen,
     integrityHash: recomputeScreenIntegrityHash(screen),
   }));
-  const rehashed = { ...record, screens };
+  const structuralScreens = record.structuralScreens?.map((screen) => ({
+    ...screen,
+    integrityHash: recomputeStructuralScreenIntegrityHash(screen),
+  }));
+  const rehashed = {
+    ...record,
+    screens,
+    ...(structuralScreens !== undefined ? { structuralScreens } : {}),
+  };
   return { ...rehashed, integrityHash: recomputeSnapshotIntegrityHash(rehashed) };
 };
 
@@ -465,6 +492,11 @@ function assembleRecord(
     },
     screens: screenRows,
     skippedScreens: input.skippedScreens as readonly FigmaSnapshotSkippedScreenRow[],
+    ...(input.structuralScreens !== undefined
+      ? {
+          structuralScreens: input.structuralScreens as readonly FigmaSnapshotStructuralScreenRow[],
+        }
+      : {}),
     // Omit `links`/`tokens` entirely when absent so an older snapshot stays byte-minimal and the
     // optional fields never serialise as `undefined` (exactOptionalPropertyTypes-safe).
     ...(links !== undefined ? { links } : {}),
@@ -493,6 +525,18 @@ function verifyScreenIntegrity(screen: FigmaSnapshotScreenRow, runId: string): v
   if (screen.integrityHash !== expected) {
     throw new EvidenceReadError(
       `Figma snapshot integrity check failed for run ${runId}: screen ${screen.screenId} hash mismatch`,
+    );
+  }
+}
+
+function verifyStructuralScreenIntegrity(
+  screen: FigmaSnapshotStructuralScreenRow,
+  runId: string,
+): void {
+  const expected = recomputeStructuralScreenIntegrityHash(screen);
+  if (screen.integrityHash !== expected) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: structural screen ${screen.screenId} hash mismatch`,
     );
   }
 }
@@ -547,10 +591,12 @@ function verifyPersistedScreens(ctx: StoreCtx, rec: FigmaSnapshotRecord, runId: 
     verifyScreenIntegrity(screen, runId);
     verifyScreenImageSideFile(ctx, runId, screen);
   }
+  for (const screen of rec.structuralScreens ?? []) verifyStructuralScreenIntegrity(screen, runId);
 }
 
 function verifyPersistedScreenMetadata(rec: FigmaSnapshotRecord, runId: string): void {
   for (const screen of rec.screens) verifyScreenIntegrity(screen, runId);
+  for (const screen of rec.structuralScreens ?? []) verifyStructuralScreenIntegrity(screen, runId);
 }
 
 // Parse one raw JSON string from a snapshot record file into a scope entry, or null when the

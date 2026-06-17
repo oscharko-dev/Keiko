@@ -227,6 +227,20 @@ describe("paginateScopedDocument — deep capture (#837)", () => {
 });
 
 describe("paginateScopedDocument — bounds + coverage", () => {
+  it("keeps the default live-board request fan-out browser-bounded", () => {
+    expect(DEFAULT_SCOPED_PAGINATION_LIMITS).toEqual({
+      pageDepth: 8,
+      maxNodesPerScreen: 8_000,
+      maxFetchesPerScreen: 6,
+      maxScreensDeep: 16,
+      fetchConcurrency: 2,
+    });
+    expect(
+      DEFAULT_SCOPED_PAGINATION_LIMITS.maxFetchesPerScreen *
+        DEFAULT_SCOPED_PAGINATION_LIMITS.maxScreensDeep,
+    ).toBeLessThanOrEqual(100);
+  });
+
   it("clamps operator overrides to finite safety ceilings", () => {
     expect(
       resolveScopedPaginationLimits({

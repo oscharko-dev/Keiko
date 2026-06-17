@@ -16,6 +16,7 @@ import type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
@@ -37,6 +38,7 @@ import {
   QiIngestionError,
   type QiRunAccepted,
 } from "./runExecution.js";
+import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { qiRunRegistry } from "./runRegistry.js";
 
@@ -111,7 +113,49 @@ function validateFigmaSnapshotSource(
       "A figma-snapshot source requires a non-empty snapshotRunId.",
     );
   }
-  return { kind: "figma-snapshot", label, snapshotRunId: raw.snapshotRunId };
+  // Single source of truth shared with the re-check route so run/recheck never diverge. An absent
+  // field stays a whole-snapshot source; a present field must be a non-empty, bounded, canonicalised
+  // scope — an explicit empty array is rejected here so it can never silently widen to the whole board.
+  const parsed = parseFigmaSnapshotScreenIds(raw.screenIds);
+  if (!parsed.ok) {
+    return errorResult(400, "QI_BAD_REQUEST", parsed.reason);
+  }
+  return {
+    kind: "figma-snapshot",
+    label,
+    snapshotRunId: raw.snapshotRunId,
+    ...(parsed.screenIds !== undefined ? { screenIds: parsed.screenIds } : {}),
+  };
+}
+
+function validateImageSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceImageSource | RouteResult {
+  if (raw.sourceKind !== "figma-snapshot-screen") {
+    return errorResult(
+      400,
+      "QI_BAD_REQUEST",
+      "An image source requires sourceKind figma-snapshot-screen.",
+    );
+  }
+  if (typeof raw.snapshotRunId !== "string" || raw.snapshotRunId.trim().length === 0) {
+    return errorResult(
+      400,
+      "QI_BAD_REQUEST",
+      "An image source requires a non-empty snapshotRunId.",
+    );
+  }
+  if (typeof raw.screenId !== "string" || raw.screenId.trim().length === 0) {
+    return errorResult(400, "QI_BAD_REQUEST", "An image source requires a non-empty screenId.");
+  }
+  return {
+    kind: "image",
+    label,
+    sourceKind: "figma-snapshot-screen",
+    snapshotRunId: raw.snapshotRunId,
+    screenId: raw.screenId,
+  };
 }
 
 // Connector sources (Local Knowledge capsule / capsule-set, Figma snapshot). Split out so
@@ -128,6 +172,9 @@ function validateConnectorSource(
   }
   if (raw.kind === "figma-snapshot") {
     return validateFigmaSnapshotSource(label, raw);
+  }
+  if (raw.kind === "image") {
+    return validateImageSource(label, raw);
   }
   return undefined;
 }

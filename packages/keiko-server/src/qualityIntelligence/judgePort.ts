@@ -19,8 +19,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   QualityIntelligenceHardening,
-  scoreFromDimensions,
-  verdictFromScore,
+  verdictFromDimensions,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import type {
   TestQualityDimensionName,
@@ -174,7 +173,8 @@ const SAFE_PROMPT_TOO_LARGE_VERDICT: TestQualityJudgeVerdict = Object.freeze({
       }),
     ),
   ),
-  overallRationale: "Judge-Prompt hat das Modellbudget überschritten; Bewertung fällt auf weak zurück",
+  overallRationale:
+    "Judge-Prompt hat das Modellbudget überschritten; Bewertung fällt auf weak zurück",
 });
 
 function isRubricDimensionName(value: string): value is TestQualityDimensionName {
@@ -305,7 +305,7 @@ function parseJudgeObject(obj: Record<string, unknown>): TestQualityJudgeVerdict
   if (typeof obj.overallRationale !== "string") return null;
   const overallRationale = scrubJudgeRationale(obj.overallRationale, 1000);
   if (dimensions === null || overallRationale.trim().length === 0) return null;
-  const verdict = verdictFromScore(scoreFromDimensions(dimensions));
+  const verdict = verdictFromDimensions(dimensions);
   return Object.freeze({ verdict, dimensions: Object.freeze(dimensions), overallRationale });
 }
 

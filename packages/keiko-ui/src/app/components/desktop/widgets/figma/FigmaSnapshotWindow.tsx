@@ -29,15 +29,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 import Image from "next/image";
+import { Icons } from "../../Icons";
 import { ApiError } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
+  loadFigmaSnapshotScreenJson,
   listFigmaSnapshots,
   figmaSnapshotScreenImageUrl,
   generateFigmaCode,
@@ -46,13 +52,38 @@ import {
 import type {
   FigmaSnapshotSummary,
   FigmaSnapshotListEntry,
+  FigmaSnapshotScreenJsonResponse,
   FigmaCodegenResponse,
   FigmaRevokeTokenResult,
 } from "@/lib/figma-snapshot-api";
+import {
+  FIGMA_VIEW_DRAG_TYPE,
+  FIGMA_VIEW_DROP_EVENT,
+  serializeFigmaViewDrag,
+  type FigmaViewDragPayload,
+  type FigmaViewDropDetail,
+} from "../../figma-view-drag";
+import {
+  FIGMA_JSON_DRAG_TYPE,
+  FIGMA_JSON_DROP_EVENT,
+  serializeFigmaJsonDrag,
+  type FigmaJsonDragPayload,
+  type FigmaJsonDropDetail,
+} from "../../figma-json-drag";
+import {
+  FIGMA_IMAGE_DRAG_TYPE,
+  FIGMA_IMAGE_DROP_EVENT,
+  serializeFigmaImageDrag,
+  type FigmaImageDragPayload,
+  type FigmaImageDropDetail,
+} from "../../figma-image-drag";
+import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const INITIAL_GALLERY_LIMIT = 24;
+const EMPTY_SELECTED_SCREEN_IDS: readonly string[] = [];
+const JSON_DRAG_THRESHOLD_PX = 6;
 
 /**
  * Client-side Figma URL validator. Accepts:
@@ -245,8 +276,54 @@ interface ScreenCardProps {
   readonly screenId: string;
   readonly name: string;
   readonly irSummary: string;
-  readonly imageSrc: string;
-  readonly imageByteLength: number;
+  readonly imageSrc?: string | undefined;
+  readonly imageByteLength?: number | undefined;
+  readonly structuralReason?: string | undefined;
+  readonly onAddSource?: (() => void) | undefined;
+  readonly isSourceSelected?: boolean | undefined;
+  readonly dragPayload?: FigmaViewDragPayload | undefined;
+}
+
+function isWorkspaceDropTarget(clientX: number, clientY: number): boolean {
+  const target = document.elementFromPoint(clientX, clientY);
+  if (!(target instanceof Element)) return false;
+  return target.closest("main.workspace") !== null && target.closest(".window") === null;
+}
+
+function dispatchFigmaViewDrop(
+  payload: FigmaViewDragPayload,
+  event: { readonly clientX: number; readonly clientY: number },
+): void {
+  const detail: FigmaViewDropDetail = {
+    payload,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  };
+  window.dispatchEvent(new CustomEvent(FIGMA_VIEW_DROP_EVENT, { detail }));
+}
+
+function dispatchFigmaJsonDrop(
+  payload: FigmaJsonDragPayload,
+  event: { readonly clientX: number; readonly clientY: number },
+): void {
+  const detail: FigmaJsonDropDetail = {
+    payload,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  };
+  window.dispatchEvent(new CustomEvent(FIGMA_JSON_DROP_EVENT, { detail }));
+}
+
+function dispatchFigmaImageDrop(
+  payload: FigmaImageDragPayload,
+  event: { readonly clientX: number; readonly clientY: number },
+): void {
+  const detail: FigmaImageDropDetail = {
+    payload,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  };
+  window.dispatchEvent(new CustomEvent(FIGMA_IMAGE_DROP_EVENT, { detail }));
 }
 
 function ScreenCard({
@@ -256,12 +333,29 @@ function ScreenCard({
   irSummary,
   imageSrc,
   imageByteLength,
+  structuralReason,
+  onAddSource,
+  isSourceSelected = false,
+  dragPayload,
 }: ScreenCardProps): ReactNode {
-  return (
-    <article
-      className="figma-snapshot-screen-card"
-      aria-label={`Screen ${String(index + 1)}: ${name}`}
-    >
+  const canDrag = dragPayload !== undefined && onAddSource !== undefined && !isSourceSelected;
+  const previewLabel = isSourceSelected
+    ? `${name} preview is already the active scoped source`
+    : `Drag screen ${name} to the workspace, or click to add it as a Quality Intelligence source`;
+  const onDragStart = (event: DragEvent<HTMLElement>): void => {
+    if (!canDrag) return;
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(FIGMA_VIEW_DRAG_TYPE, serializeFigmaViewDrag(dragPayload));
+    event.dataTransfer.setData("text/plain", name);
+  };
+  const onDragEnd = (event: DragEvent<HTMLElement>): void => {
+    if (!canDrag) return;
+    if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
+      dispatchFigmaViewDrop(dragPayload, event);
+    }
+  };
+  const preview =
+    imageSrc !== undefined ? (
       <Image
         className="figma-snapshot-screen-image"
         src={imageSrc}
@@ -271,6 +365,38 @@ function ScreenCard({
         height={54}
         unoptimized
       />
+    ) : (
+      <div
+        className="figma-snapshot-screen-image figma-snapshot-screen-placeholder"
+        aria-label={`Structural data only for ${name}`}
+        role="img"
+      >
+        <Icons.layers className="figma-snapshot-screen-frame-icon" aria-hidden="true" />
+        <span className="figma-snapshot-screen-placeholder-label">IR</span>
+      </div>
+    );
+  return (
+    <article
+      className="figma-snapshot-screen-card"
+      aria-label={`Screen ${String(index + 1)}: ${name}`}
+    >
+      {onAddSource !== undefined ? (
+        <button
+          type="button"
+          className="figma-snapshot-screen-preview-btn"
+          onClick={onAddSource}
+          disabled={isSourceSelected}
+          aria-disabled={isSourceSelected ? "true" : undefined}
+          aria-label={previewLabel}
+          draggable={canDrag}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        >
+          {preview}
+        </button>
+      ) : (
+        preview
+      )}
       <div className="figma-snapshot-screen-meta">
         {/* uiux-fix F045 C252: the name is ellipsised user content — title makes the
             full name reachable on hover for mouse users. */}
@@ -280,8 +406,227 @@ function ScreenCard({
         <p className="figma-snapshot-screen-summary">{irSummary}</p>
         {/* uiux-fix F045 C313: app-wide byte convention via lib/format (B/KB/MB) instead
             of an ad-hoc "KiB" — the only surface that used that spelling. */}
-        <p className="figma-snapshot-screen-size">{formatBytes(imageByteLength)}</p>
+        <p className="figma-snapshot-screen-size">
+          {imageByteLength !== undefined
+            ? formatBytes(imageByteLength)
+            : `Structural IR only${structuralReason !== undefined ? ` (${structuralReason})` : ""}`}
+        </p>
         <p className="figma-snapshot-screen-id">{screenId}</p>
+        {onAddSource !== undefined ? (
+          <div className="figma-snapshot-screen-actions">
+            <button
+              type="button"
+              className="figma-snapshot-screen-source-btn"
+              onClick={onAddSource}
+              disabled={isSourceSelected}
+              aria-disabled={isSourceSelected ? "true" : undefined}
+              aria-label={
+                isSourceSelected
+                  ? `${name} is already the active scoped source`
+                  : `Add screen ${name} to the workspace as a Quality Intelligence source`
+              }
+            >
+              {isSourceSelected ? "Source active" : "Add to workspace"}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+interface FigmaViewSourceCardProps {
+  readonly name: string;
+  readonly screenId: string;
+  readonly irSummary: string;
+  readonly imageSrc?: string | undefined;
+  readonly imageByteLength?: number | undefined;
+  readonly structuralReason?: string | undefined;
+  readonly snapshotRunId: string;
+  readonly capturedAt: string;
+  readonly imageDragPayload?: FigmaImageDragPayload | undefined;
+}
+
+function FigmaViewSourceCard({
+  name,
+  screenId,
+  irSummary,
+  imageSrc,
+  imageByteLength,
+  structuralReason,
+  snapshotRunId,
+  capturedAt,
+  imageDragPayload,
+}: FigmaViewSourceCardProps): ReactNode {
+  const imagePointerDragRef = useRef<{
+    readonly pointerId: number;
+    readonly startX: number;
+    readonly startY: number;
+  } | null>(null);
+  const suppressNextMouseDropRef = useRef(false);
+  const canDragImage = imageSrc !== undefined && imageDragPayload !== undefined;
+
+  const handleImageDragStart = (event: DragEvent<HTMLElement>): void => {
+    if (!canDragImage) return;
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData(FIGMA_IMAGE_DRAG_TYPE, serializeFigmaImageDrag(imageDragPayload));
+    event.dataTransfer.setData("text/plain", `${imageDragPayload.name}.png`);
+  };
+  const handleImageDragEnd = (event: DragEvent<HTMLElement>): void => {
+    if (!canDragImage) return;
+    if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
+      dispatchFigmaImageDrop(imageDragPayload, event);
+    }
+  };
+  const handleImageKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    if (!canDragImage) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    dispatchFigmaImageDrop(imageDragPayload, {
+      clientX: rect.right + 24,
+      clientY: rect.top + rect.height / 2,
+    });
+  };
+  const handleImagePointerDown = (event: PointerEvent<HTMLElement>): void => {
+    if (!canDragImage || event.button !== 0) return;
+    suppressNextMouseDropRef.current = false;
+    imagePointerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const handleImagePointerMove = (event: PointerEvent<HTMLElement>): void => {
+    const session = imagePointerDragRef.current;
+    if (session === null || session.pointerId !== event.pointerId) return;
+    const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
+    if (moved >= JSON_DRAG_THRESHOLD_PX) event.preventDefault();
+  };
+  const handleImagePointerUp = (event: PointerEvent<HTMLElement>): void => {
+    const session = imagePointerDragRef.current;
+    if (session === null || session.pointerId !== event.pointerId) return;
+    imagePointerDragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
+    if (moved >= JSON_DRAG_THRESHOLD_PX) suppressNextMouseDropRef.current = true;
+    if (
+      moved >= JSON_DRAG_THRESHOLD_PX &&
+      canDragImage &&
+      isWorkspaceDropTarget(event.clientX, event.clientY)
+    ) {
+      event.preventDefault();
+      dispatchFigmaImageDrop(imageDragPayload, event);
+    }
+  };
+  const handleImagePointerCancel = (event: PointerEvent<HTMLElement>): void => {
+    const session = imagePointerDragRef.current;
+    if (session === null || session.pointerId !== event.pointerId) return;
+    imagePointerDragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const handleImageMouseDown = (event: MouseEvent<HTMLElement>): void => {
+    if (!canDragImage || event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const handleMove = (moveEvent: globalThis.MouseEvent): void => {
+      const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+      if (moved >= JSON_DRAG_THRESHOLD_PX) moveEvent.preventDefault();
+    };
+    const handleUp = (upEvent: globalThis.MouseEvent): void => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+      if (suppressNextMouseDropRef.current) {
+        suppressNextMouseDropRef.current = false;
+        return;
+      }
+      const moved = Math.hypot(upEvent.clientX - startX, upEvent.clientY - startY);
+      if (
+        moved >= JSON_DRAG_THRESHOLD_PX &&
+        isWorkspaceDropTarget(upEvent.clientX, upEvent.clientY)
+      ) {
+        upEvent.preventDefault();
+        dispatchFigmaImageDrop(imageDragPayload, upEvent);
+      }
+    };
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+  };
+  const previewContent =
+    imageSrc !== undefined ? (
+      <Image
+        className="figma-view-preview-image"
+        src={imageSrc}
+        alt={`Captured preview for ${name}`}
+        loading="eager"
+        width={360}
+        height={240}
+        draggable={false}
+        unoptimized
+      />
+    ) : (
+      <div
+        className="figma-view-preview-image figma-view-preview-placeholder"
+        aria-label={`Structural data only for ${name}`}
+        role="img"
+      >
+        <Icons.layers className="figma-view-preview-icon" aria-hidden="true" />
+        <span>Structural IR</span>
+      </div>
+    );
+
+  return (
+    <article className="figma-view-source-card" aria-label={`Figma view source: ${name}`}>
+      {canDragImage ? (
+        <button
+          type="button"
+          className="figma-view-preview figma-view-preview-drag-surface"
+          draggable
+          onDragStart={handleImageDragStart}
+          onDragEnd={handleImageDragEnd}
+          onKeyDown={handleImageKeyDown}
+          onPointerDown={handleImagePointerDown}
+          onPointerMove={handleImagePointerMove}
+          onPointerUp={handleImagePointerUp}
+          onPointerCancel={handleImagePointerCancel}
+          onMouseDown={handleImageMouseDown}
+          aria-label={`Create a standalone image source for ${name}`}
+          title={`Drag image for ${name} to the workspace`}
+        >
+          {previewContent}
+        </button>
+      ) : (
+        <div className="figma-view-preview">{previewContent}</div>
+      )}
+      <div className="figma-view-source-meta">
+        <p className="figma-view-source-kicker">QI view source</p>
+        <h2 className="figma-view-source-title" title={name}>
+          {name}
+        </h2>
+        <p className="figma-view-source-summary">{irSummary}</p>
+        <dl className="figma-view-source-facts">
+          <div>
+            <dt>Screen</dt>
+            <dd>{screenId}</dd>
+          </div>
+          <div>
+            <dt>Snapshot</dt>
+            <dd>{snapshotRunId}</dd>
+          </div>
+          <div>
+            <dt>Captured</dt>
+            <dd>{capturedAt}</dd>
+          </div>
+          <div>
+            <dt>Preview</dt>
+            <dd>
+              {imageByteLength !== undefined
+                ? formatBytes(imageByteLength)
+                : `Structural IR${structuralReason !== undefined ? ` (${structuralReason})` : ""}`}
+            </dd>
+          </div>
+        </dl>
       </div>
     </article>
   );
@@ -290,11 +635,25 @@ function ScreenCard({
 // ─── Props ─────────────────────────────────────────────────────────────────────
 
 export interface FigmaSnapshotWindowProps {
+  /** Workspace window id used to migrate an existing QI edge when JSON is dragged out. */
+  readonly sourceWindowId?: string | undefined;
   /**
    * Current snapshotRunId from the window's cfg. Populated by the window itself after a
    * successful build via updateCfg; read by the QI hub via linkedFigmaSnapshotRunIds.
    */
   readonly snapshotRunId?: string | undefined;
+  /** Optional screen ids scoped into this window when it represents a single-mask QI source. */
+  readonly selectedScreenIds?: readonly string[] | undefined;
+  /** Human-readable selected screen name persisted in the workspace cfg for source labels. */
+  readonly selectedScreenName?: string | undefined;
+  /** Opens a new Figma window scoped to one screen from the loaded snapshot. */
+  readonly openScreenSource?:
+    | ((input: {
+        readonly snapshotRunId: string;
+        readonly screenId: string;
+        readonly name: string;
+      }) => void)
+    | undefined;
   /**
    * Persists a patch into the window's cfg. Used to store snapshotRunId after a
    * successful snapshot-build so the relationship edge can propagate it to QI.
@@ -306,6 +665,8 @@ export interface FigmaSnapshotWindowProps {
   readonly loadImpl?: typeof loadFigmaSnapshotSummary;
   /** Injectable for tests — defaults to the real list BFF call. */
   readonly listImpl?: typeof listFigmaSnapshots;
+  /** Injectable for tests — defaults to the real scoped screen-JSON BFF call. */
+  readonly loadScreenJsonImpl?: typeof loadFigmaSnapshotScreenJson;
   /** Injectable for tests — defaults to the real design-to-code BFF call (#755). */
   readonly codegenImpl?: typeof generateFigmaCode;
   /** Injectable for tests — defaults to the real PAT revoke call (#758). */
@@ -319,11 +680,16 @@ export interface FigmaSnapshotWindowProps {
 type BuildState = "idle" | "loading" | "building" | "done" | "error";
 
 export function FigmaSnapshotWindow({
+  sourceWindowId,
   snapshotRunId,
+  selectedScreenIds = EMPTY_SELECTED_SCREEN_IDS,
+  selectedScreenName,
+  openScreenSource,
   updateCfg,
   triggerImpl = triggerFigmaSnapshot,
   loadImpl = loadFigmaSnapshotSummary,
   listImpl = listFigmaSnapshots,
+  loadScreenJsonImpl = loadFigmaSnapshotScreenJson,
   codegenImpl = generateFigmaCode,
   revokeImpl = revokeFigmaToken,
 }: FigmaSnapshotWindowProps): ReactNode {
@@ -357,8 +723,15 @@ export function FigmaSnapshotWindow({
   // Fix #7: AbortController for the active build/load fetch.
   const abortRef = useRef<AbortController | null>(null);
   const codeAbortRef = useRef<AbortController | null>(null);
+  const screenJsonAbortRef = useRef<AbortController | null>(null);
   const dashboardAbortRef = useRef<AbortController | null>(null);
   const activeBuildRef = useRef<DetachedBuild | null>(null);
+  const jsonPointerDragRef = useRef<{
+    readonly pointerId: number;
+    readonly startX: number;
+    readonly startY: number;
+  } | null>(null);
+  const suppressNextMouseDropRef = useRef(false);
 
   const flagConsentRequired = useCallback((): void => {
     setConsentInvalid(true);
@@ -368,6 +741,12 @@ export function FigmaSnapshotWindow({
   const [codeState, setCodeState] = useState<"idle" | "generating" | "done" | "error">("idle");
   const [code, setCode] = useState<FigmaCodegenResponse | null>(null);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [screenJsonState, setScreenJsonState] = useState<"idle" | "loading" | "done" | "error">(
+    "idle",
+  );
+  const [screenJson, setScreenJson] = useState<FigmaSnapshotScreenJsonResponse | null>(null);
+  const [screenJsonError, setScreenJsonError] = useState<string | null>(null);
+  const [screenJsonCopyStatus, setScreenJsonCopyStatus] = useState<string | null>(null);
 
   // Fix #3: PAT revoke state — two-step inline confirm (mirrors ContextBudget pattern).
   const [revokeConfirming, setRevokeConfirming] = useState(false);
@@ -376,6 +755,7 @@ export function FigmaSnapshotWindow({
   const revokeConfirmRef = useRef<HTMLButtonElement | null>(null);
   const revokeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [visibleScreenCount, setVisibleScreenCount] = useState(INITIAL_GALLERY_LIMIT);
+  const selectedScreenIdKey = selectedScreenIds.join("\u0000");
 
   const linkValid = isValidFigmaLink(boardLink);
   const linkError = figmaLinkValidationMessage(boardLink);
@@ -393,6 +773,33 @@ export function FigmaSnapshotWindow({
   const busy = isBuilding || isLoading;
   const buildElapsedLabel =
     isBuilding && buildStartedAt !== null ? formatElapsed(buildElapsedMs) : null;
+  const selectedScreenIdSet = useMemo(() => new Set(selectedScreenIds), [selectedScreenIds]);
+  const isScreenScopedSource = selectedScreenIds.length > 0;
+  const isViewSourceMode =
+    isScreenScopedSource && snapshotRunId !== undefined && snapshotRunId.length > 0;
+  const displayedScreens = useMemo(() => {
+    if (summary === null) return [];
+    const renderedIds = new Set(summary.screens.map((screen) => screen.screenId));
+    const rendered = summary.screens.map((screen, imageIndex) => ({
+      kind: "rendered" as const,
+      screen,
+      imageIndex,
+    }));
+    const structural = (summary.structuralScreens ?? [])
+      .filter((screen) => !renderedIds.has(screen.screenId))
+      .map((screen) => ({ kind: "structural" as const, screen }));
+    const all = [...rendered, ...structural];
+    if (!isScreenScopedSource) return all;
+    return all.filter((entry) => selectedScreenIdSet.has(entry.screen.screenId));
+  }, [isScreenScopedSource, selectedScreenIdSet, summary]);
+  const inspectableScreenId = selectedScreenIds.length === 1 ? selectedScreenIds[0] : undefined;
+  const screenJsonText = useMemo(
+    () => (screenJson === null ? "" : JSON.stringify(screenJson, null, 2)),
+    [screenJson],
+  );
+  const screenJsonBytes = useMemo(() => jsonTextByteLength(screenJsonText), [screenJsonText]);
+  const totalScreenSummaryCount =
+    (summary?.screens.length ?? 0) + (summary?.structuralScreens?.length ?? 0);
 
   // uiux-fix F038 C210: move focus onto the consent checkbox once a consent-blocked error has
   // rendered. An effect (not an inline .focus() in the handler) because in the server-428 path
@@ -423,6 +830,7 @@ export function FigmaSnapshotWindow({
     return () => {
       abortRef.current?.abort();
       codeAbortRef.current?.abort();
+      screenJsonAbortRef.current?.abort();
       dashboardAbortRef.current?.abort();
     };
   }, []);
@@ -496,6 +904,10 @@ export function FigmaSnapshotWindow({
       setCodeState("idle");
       setCode(null);
       setCodeError(null);
+      setScreenJsonState("idle");
+      setScreenJson(null);
+      setScreenJsonError(null);
+      setScreenJsonCopyStatus(null);
 
       loadImpl(runId, controller.signal)
         .then((result) => {
@@ -524,12 +936,21 @@ export function FigmaSnapshotWindow({
     [busy, loadImpl, snapshotRunId, updateCfg],
   );
 
+  useEffect(() => {
+    if (!isViewSourceMode) return;
+    if (snapshotRunId === undefined || snapshotRunId.length === 0) return;
+    if (summary !== null || buildState !== "idle") return;
+    loadSnapshotByRunId(snapshotRunId);
+  }, [buildState, isViewSourceMode, loadSnapshotByRunId, snapshotRunId, summary]);
+
   const runBuild = useCallback(
     async (link: string, isResnapshot: boolean): Promise<void> => {
       // Abort any previous in-flight request before starting a new one.
       abortRef.current?.abort();
       codeAbortRef.current?.abort();
+      screenJsonAbortRef.current?.abort();
       codeAbortRef.current = null;
+      screenJsonAbortRef.current = null;
       const controller = new AbortController();
       abortRef.current = controller;
       activeBuildRef.current = { link, isResnapshot };
@@ -541,6 +962,10 @@ export function FigmaSnapshotWindow({
       setBuildElapsedMs(0);
       setCodeState("idle");
       setCode(null);
+      setScreenJsonState("idle");
+      setScreenJson(null);
+      setScreenJsonError(null);
+      setScreenJsonCopyStatus(null);
       try {
         const result = await triggerImpl(link, {
           acknowledgeReadOnly: consentChecked,
@@ -661,6 +1086,195 @@ export function FigmaSnapshotWindow({
       });
   }, [codegenImpl, codeState, snapshotRunId, summary]);
 
+  const handleInspectJson = useCallback((): void => {
+    const runId = summary?.runId ?? snapshotRunId;
+    if (runId === undefined || runId.length === 0 || inspectableScreenId === undefined) return;
+    if (screenJsonState === "loading") return;
+    screenJsonAbortRef.current?.abort();
+    const controller = new AbortController();
+    screenJsonAbortRef.current = controller;
+    setScreenJsonState("loading");
+    setScreenJsonError(null);
+    setScreenJsonCopyStatus(null);
+    loadScreenJsonImpl(runId, inspectableScreenId, controller.signal)
+      .then((result) => {
+        setScreenJson(result);
+        setScreenJsonState("done");
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setScreenJsonState("idle");
+          return;
+        }
+        setScreenJson(null);
+        setScreenJsonError(formatError(err));
+        setScreenJsonState("error");
+      })
+      .finally(() => {
+        if (screenJsonAbortRef.current === controller) screenJsonAbortRef.current = null;
+      });
+  }, [inspectableScreenId, loadScreenJsonImpl, screenJsonState, snapshotRunId, summary?.runId]);
+
+  const handleCopyJson = useCallback((): void => {
+    if (screenJsonText.length === 0) return;
+    if (navigator.clipboard === undefined) {
+      setScreenJsonCopyStatus("Clipboard unavailable");
+      return;
+    }
+    navigator.clipboard
+      .writeText(screenJsonText)
+      .then(() => {
+        setScreenJsonCopyStatus("Copied");
+      })
+      .catch(() => {
+        setScreenJsonCopyStatus("Copy failed");
+      });
+  }, [screenJsonText]);
+
+  const jsonDragPayload = useMemo<FigmaJsonDragPayload | null>(() => {
+    const runId = screenJson?.runId ?? summary?.runId ?? snapshotRunId;
+    const screen = screenJson?.screen.screenId ?? inspectableScreenId;
+    const name = screenJson?.screen.name ?? selectedScreenName ?? screen;
+    if (
+      runId === undefined ||
+      runId.length === 0 ||
+      screen === undefined ||
+      screen.length === 0 ||
+      name === undefined ||
+      name.length === 0
+    ) {
+      return null;
+    }
+    return {
+      snapshotRunId: runId,
+      screenId: screen,
+      name,
+      ...(sourceWindowId !== undefined ? { sourceWindowId } : {}),
+    };
+  }, [
+    inspectableScreenId,
+    screenJson?.runId,
+    screenJson?.screen.name,
+    screenJson?.screen.screenId,
+    selectedScreenName,
+    snapshotRunId,
+    sourceWindowId,
+    summary?.runId,
+  ]);
+
+  const handleJsonDragStart = useCallback(
+    (event: DragEvent<HTMLElement>): void => {
+      if (jsonDragPayload === null) return;
+      event.dataTransfer.effectAllowed = "copyMove";
+      event.dataTransfer.setData(FIGMA_JSON_DRAG_TYPE, serializeFigmaJsonDrag(jsonDragPayload));
+      event.dataTransfer.setData("text/plain", `${jsonDragPayload.name}.json`);
+    },
+    [jsonDragPayload],
+  );
+
+  const handleJsonDragEnd = useCallback(
+    (event: DragEvent<HTMLElement>): void => {
+      if (jsonDragPayload === null) return;
+      if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
+        dispatchFigmaJsonDrop(jsonDragPayload, event);
+      }
+    },
+    [jsonDragPayload],
+  );
+
+  const handleJsonDragSurfaceKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>): void => {
+      if (jsonDragPayload === null) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      dispatchFigmaJsonDrop(jsonDragPayload, {
+        clientX: rect.right + 24,
+        clientY: rect.top + rect.height / 2,
+      });
+    },
+    [jsonDragPayload],
+  );
+
+  const handleJsonPointerDown = useCallback(
+    (event: PointerEvent<HTMLElement>): void => {
+      if (jsonDragPayload === null || event.button !== 0) return;
+      suppressNextMouseDropRef.current = false;
+      jsonPointerDragRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [jsonDragPayload],
+  );
+
+  const handleJsonPointerMove = useCallback((event: PointerEvent<HTMLElement>): void => {
+    const session = jsonPointerDragRef.current;
+    if (session === null || session.pointerId !== event.pointerId) return;
+    const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
+    if (moved >= JSON_DRAG_THRESHOLD_PX) event.preventDefault();
+  }, []);
+
+  const handleJsonPointerUp = useCallback(
+    (event: PointerEvent<HTMLElement>): void => {
+      const session = jsonPointerDragRef.current;
+      if (session === null || session.pointerId !== event.pointerId) return;
+      jsonPointerDragRef.current = null;
+      event.currentTarget.releasePointerCapture(event.pointerId);
+      const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
+      if (moved >= JSON_DRAG_THRESHOLD_PX) suppressNextMouseDropRef.current = true;
+      if (
+        moved >= JSON_DRAG_THRESHOLD_PX &&
+        jsonDragPayload !== null &&
+        isWorkspaceDropTarget(event.clientX, event.clientY)
+      ) {
+        event.preventDefault();
+        dispatchFigmaJsonDrop(jsonDragPayload, event);
+      }
+    },
+    [jsonDragPayload],
+  );
+
+  const handleJsonPointerCancel = useCallback((event: PointerEvent<HTMLElement>): void => {
+    const session = jsonPointerDragRef.current;
+    if (session === null || session.pointerId !== event.pointerId) return;
+    jsonPointerDragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }, []);
+
+  const handleJsonMouseDown = useCallback(
+    (event: MouseEvent<HTMLElement>): void => {
+      if (jsonDragPayload === null || event.button !== 0) return;
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const handleMove = (moveEvent: globalThis.MouseEvent): void => {
+        const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+        if (moved >= JSON_DRAG_THRESHOLD_PX) moveEvent.preventDefault();
+      };
+      const handleUp = (upEvent: globalThis.MouseEvent): void => {
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+        if (suppressNextMouseDropRef.current) {
+          suppressNextMouseDropRef.current = false;
+          return;
+        }
+        const moved = Math.hypot(upEvent.clientX - startX, upEvent.clientY - startY);
+        if (
+          moved >= JSON_DRAG_THRESHOLD_PX &&
+          isWorkspaceDropTarget(upEvent.clientX, upEvent.clientY)
+        ) {
+          upEvent.preventDefault();
+          dispatchFigmaJsonDrop(jsonDragPayload, upEvent);
+        }
+      };
+      window.addEventListener("mousemove", handleMove);
+      window.addEventListener("mouseup", handleUp);
+    },
+    [jsonDragPayload],
+  );
+
   const handleCancelCodegen = useCallback((): void => {
     codeAbortRef.current?.abort();
     codeAbortRef.current = null;
@@ -677,7 +1291,16 @@ export function FigmaSnapshotWindow({
 
   useEffect(() => {
     setVisibleScreenCount(INITIAL_GALLERY_LIMIT);
-  }, [summary?.runId]);
+  }, [selectedScreenIdKey, summary?.runId]);
+
+  useEffect(() => {
+    screenJsonAbortRef.current?.abort();
+    screenJsonAbortRef.current = null;
+    setScreenJsonState("idle");
+    setScreenJson(null);
+    setScreenJsonError(null);
+    setScreenJsonCopyStatus(null);
+  }, [selectedScreenIdKey, snapshotRunId]);
 
   const handleRevokeConfirmed = useCallback((): void => {
     setRevokeConfirming(false);
@@ -752,9 +1375,7 @@ export function FigmaSnapshotWindow({
                 <span className="figma-snapshot-dashboard-item-date">
                   {formatDate(snapshot.fetchedAt)}
                 </span>
-                {isCurrent && (
-                  <span className="figma-snapshot-dashboard-item-badge">Current</span>
-                )}
+                {isCurrent && <span className="figma-snapshot-dashboard-item-badge">Current</span>}
               </span>
               <span className="figma-snapshot-dashboard-item-hint">{snapshot.reductionHint}</span>
               <span className="figma-snapshot-dashboard-item-meta">
@@ -774,6 +1395,160 @@ export function FigmaSnapshotWindow({
       </div>
     );
   };
+
+  if (isViewSourceMode) {
+    const sourceName = selectedScreenName ?? selectedScreenIds.join(", ");
+    const canInspectJson =
+      inspectableScreenId !== undefined &&
+      (summary?.runId ?? snapshotRunId) !== undefined &&
+      screenJsonState !== "loading";
+    return (
+      <section
+        className="figma-snapshot-window figma-view-window"
+        aria-label={`Figma view source ${sourceName}`}
+      >
+        <div className="figma-view-source-header">
+          <div>
+            <p className="figma-view-source-eyebrow">Figma view</p>
+            <h1 className="figma-view-source-heading" title={sourceName}>
+              {sourceName}
+            </h1>
+          </div>
+          <div className="figma-view-source-actions">
+            <span className="figma-view-source-badge">QI source</span>
+            <button
+              type="button"
+              className="figma-view-json-btn"
+              onClick={handleInspectJson}
+              disabled={!canInspectJson}
+              aria-disabled={!canInspectJson ? "true" : undefined}
+              aria-busy={screenJsonState === "loading" ? "true" : undefined}
+            >
+              {screenJsonState === "loading" ? "Loading JSON…" : "Inspect JSON"}
+            </button>
+          </div>
+        </div>
+
+        <div
+          id={statusId}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="figma-snapshot-status"
+        >
+          {isLoading && <p className="figma-snapshot-progress">Loading view preview…</p>}
+          {buildState === "error" && errorNotice !== null && (
+            <p className="figma-snapshot-error">{errorNotice.detail}</p>
+          )}
+          {buildState === "done" && summary !== null && (
+            <p className="sr-only">Figma view loaded — {sourceName}.</p>
+          )}
+        </div>
+
+        {summary === null ? (
+          <div className="figma-view-source-empty">
+            <p className="figma-view-source-empty-title">
+              {isLoading ? "Loading the selected view…" : "Selected view preview not loaded."}
+            </p>
+            {!isLoading && (
+              <button type="button" className="figma-snapshot-load-btn" onClick={handleLoadStored}>
+                Load view
+              </button>
+            )}
+          </div>
+        ) : displayedScreens.length > 0 ? (
+          displayedScreens.map((entry) => {
+            const imageSrc =
+              entry.kind === "rendered"
+                ? figmaSnapshotScreenImageUrl(summary.runId, entry.imageIndex)
+                : undefined;
+            const imageDragPayload: FigmaImageDragPayload | undefined =
+              imageSrc === undefined
+                ? undefined
+                : {
+                    snapshotRunId: summary.runId,
+                    screenId: entry.screen.screenId,
+                    name: entry.screen.name,
+                    imageSrc,
+                    ...(sourceWindowId !== undefined ? { sourceWindowId } : {}),
+                  };
+            return (
+              <FigmaViewSourceCard
+                key={entry.screen.screenId}
+                name={entry.screen.name}
+                screenId={entry.screen.screenId}
+                irSummary={entry.screen.irSummary}
+                imageSrc={imageSrc}
+                imageByteLength={
+                  entry.kind === "rendered" ? entry.screen.imageByteLength : undefined
+                }
+                structuralReason={entry.kind === "structural" ? entry.screen.reason : undefined}
+                snapshotRunId={summary.runId}
+                capturedAt={formatDate(summary.fetchedAt)}
+                imageDragPayload={imageDragPayload}
+              />
+            );
+          })
+        ) : (
+          <div className="lk-empty">
+            <p className="lk-empty-body">
+              The selected screen is not present in this stored snapshot.
+            </p>
+          </div>
+        )}
+
+        {screenJsonState === "error" && screenJsonError !== null ? (
+          <p className="figma-snapshot-error" role="alert">
+            {screenJsonError}
+          </p>
+        ) : null}
+
+        {screenJsonState === "done" && screenJson !== null ? (
+          <section
+            className="figma-view-json-inspector"
+            aria-label={`Scoped JSON for ${screenJson.screen.name}`}
+          >
+            <div className="figma-view-json-inspector-header">
+              <div
+                className="figma-view-json-drag-surface"
+                role="button"
+                tabIndex={jsonDragPayload !== null ? 0 : -1}
+                draggable={false}
+                onDragStart={handleJsonDragStart}
+                onDragEnd={handleJsonDragEnd}
+                onKeyDown={handleJsonDragSurfaceKeyDown}
+                onPointerDown={handleJsonPointerDown}
+                onPointerMove={handleJsonPointerMove}
+                onPointerUp={handleJsonPointerUp}
+                onPointerCancel={handleJsonPointerCancel}
+                onMouseDown={handleJsonMouseDown}
+                aria-label={`Create a standalone JSON source for ${screenJson.screen.name}`}
+                aria-disabled={jsonDragPayload === null ? "true" : undefined}
+                title={`Drag JSON for ${screenJson.screen.name} to the workspace`}
+              >
+                <p className="figma-view-json-kicker">Stored Screen-IR JSON</p>
+                <h2 className="figma-view-json-title">{screenJson.screen.screenId}</h2>
+                <p className="figma-view-json-meta">
+                  {screenJson.screen.kind} · {formatBytes(screenJsonBytes)} ·{" "}
+                  {screenJson.relatedLinks.length.toString()} related link
+                  {screenJson.relatedLinks.length !== 1 ? "s" : ""}
+                </p>
+              </div>
+              <button type="button" className="figma-view-json-copy-btn" onClick={handleCopyJson}>
+                Copy JSON
+              </button>
+            </div>
+            {screenJsonCopyStatus !== null ? (
+              <p className="figma-view-json-copy-status" role="status">
+                {screenJsonCopyStatus}
+              </p>
+            ) : null}
+            <JsonSyntaxBlock text={screenJsonText} className="figma-view-json-code" />
+          </section>
+        ) : null}
+      </section>
+    );
+  }
 
   return (
     <section className="figma-snapshot-window" aria-label="Figma Snapshot">
@@ -934,11 +1709,7 @@ export function FigmaSnapshotWindow({
             This window is no longer waiting. The server may still be building the snapshot in the
             background. You can close this window safely.
           </p>
-          <button
-            type="button"
-            className="figma-snapshot-load-btn"
-            onClick={handleReconnect}
-          >
+          <button type="button" className="figma-snapshot-load-btn" onClick={handleReconnect}>
             Reconnect build
           </button>
         </div>
@@ -1078,6 +1849,11 @@ export function FigmaSnapshotWindow({
             {/* uiux-fix F045 C250: snapshot age — the information the re-snapshot
                 decision hinges on. Same date presenter as the rest of the app. */}
             <p className="figma-snapshot-captured-at">Captured {formatDate(summary.fetchedAt)}</p>
+            {isScreenScopedSource && (
+              <p className="figma-snapshot-scope-note">
+                QI source scope: {selectedScreenName ?? selectedScreenIds.join(", ")}
+              </p>
+            )}
             {summary.skippedCount > 0 && (
               <p className="figma-snapshot-skipped-notice">
                 {String(summary.skippedCount)} screen{summary.skippedCount !== 1 ? "s" : ""} could
@@ -1210,31 +1986,66 @@ export function FigmaSnapshotWindow({
           </details>
 
           {/* Screen gallery */}
-          {summary.screens.length > 0 ? (
+          {displayedScreens.length > 0 ? (
             <>
               <section
                 className="figma-snapshot-gallery"
-                aria-label={`${String(summary.screenCount)} captured screen${summary.screenCount !== 1 ? "s" : ""}`}
+                aria-label={
+                  isScreenScopedSource
+                    ? `${String(displayedScreens.length)} selected screen${displayedScreens.length !== 1 ? "s" : ""}`
+                    : `${String(totalScreenSummaryCount)} captured and structural screen${totalScreenSummaryCount !== 1 ? "s" : ""}`
+                }
               >
-                {summary.screens.slice(0, visibleScreenCount).map((screen, i) => (
-                  <ScreenCard
-                    key={screen.screenId}
-                    index={i}
-                    screenId={screen.screenId}
-                    name={screen.name}
-                    irSummary={screen.irSummary}
-                    imageSrc={figmaSnapshotScreenImageUrl(summary.runId, i)}
-                    imageByteLength={screen.imageByteLength}
-                  />
-                ))}
+                {displayedScreens.slice(0, visibleScreenCount).map((entry, displayIndex) => {
+                  const onAddSource =
+                    openScreenSource === undefined
+                      ? undefined
+                      : () =>
+                          openScreenSource({
+                            snapshotRunId: summary.runId,
+                            screenId: entry.screen.screenId,
+                            name: entry.screen.name,
+                          });
+                  const dragPayload: FigmaViewDragPayload = {
+                    snapshotRunId: summary.runId,
+                    screenId: entry.screen.screenId,
+                    name: entry.screen.name,
+                  };
+                  return entry.kind === "rendered" ? (
+                    <ScreenCard
+                      key={entry.screen.screenId}
+                      index={displayIndex}
+                      screenId={entry.screen.screenId}
+                      name={entry.screen.name}
+                      irSummary={entry.screen.irSummary}
+                      imageSrc={figmaSnapshotScreenImageUrl(summary.runId, entry.imageIndex)}
+                      imageByteLength={entry.screen.imageByteLength}
+                      onAddSource={onAddSource}
+                      isSourceSelected={selectedScreenIdSet.has(entry.screen.screenId)}
+                      dragPayload={dragPayload}
+                    />
+                  ) : (
+                    <ScreenCard
+                      key={entry.screen.screenId}
+                      index={displayIndex}
+                      screenId={entry.screen.screenId}
+                      name={entry.screen.name}
+                      irSummary={entry.screen.irSummary}
+                      structuralReason={entry.screen.reason}
+                      onAddSource={onAddSource}
+                      isSourceSelected={selectedScreenIdSet.has(entry.screen.screenId)}
+                      dragPayload={dragPayload}
+                    />
+                  );
+                })}
               </section>
-              {visibleScreenCount < summary.screens.length ? (
+              {visibleScreenCount < displayedScreens.length ? (
                 <button
                   type="button"
                   className="figma-snapshot-gallery-more"
                   onClick={() =>
                     setVisibleScreenCount((count) =>
-                      Math.min(count + INITIAL_GALLERY_LIMIT, summary.screens.length),
+                      Math.min(count + INITIAL_GALLERY_LIMIT, displayedScreens.length),
                     )
                   }
                 >
@@ -1244,7 +2055,11 @@ export function FigmaSnapshotWindow({
             </>
           ) : (
             <div className="lk-empty">
-              <p className="lk-empty-body">No screens were captured from this board section.</p>
+              <p className="lk-empty-body">
+                {isScreenScopedSource
+                  ? "The selected screen is not present in this stored snapshot."
+                  : "No screens were captured from this board section."}
+              </p>
             </div>
           )}
         </div>

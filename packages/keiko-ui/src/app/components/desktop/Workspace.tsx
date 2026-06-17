@@ -34,6 +34,24 @@ import {
   type LocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDropDetail,
 } from "../../local-knowledge/connector-drag";
+import {
+  FIGMA_VIEW_DROP_EVENT,
+  parseFigmaViewDrag,
+  type FigmaViewDragPayload,
+  type FigmaViewDropDetail,
+} from "./figma-view-drag";
+import {
+  FIGMA_JSON_DROP_EVENT,
+  parseFigmaJsonDrag,
+  type FigmaJsonDragPayload,
+  type FigmaJsonDropDetail,
+} from "./figma-json-drag";
+import {
+  FIGMA_IMAGE_DROP_EVENT,
+  parseFigmaImageDrag,
+  type FigmaImageDragPayload,
+  type FigmaImageDropDetail,
+} from "./figma-image-drag";
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
@@ -43,20 +61,25 @@ interface WorkspaceProps {
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
+export const FIGMA_VIEW_NODE_SIZE = { w: 360, h: 360 } as const;
+export const FIGMA_JSON_NODE_SIZE = { w: 520, h: 540 } as const;
+export const FIGMA_IMAGE_NODE_SIZE = { w: 560, h: 420 } as const;
 
 export function workspaceDropPointToWindowOrigin({
   clientX,
   clientY,
   rect,
   view,
+  size = KNOWLEDGE_CONNECTOR_NODE_SIZE,
 }: {
   readonly clientX: number;
   readonly clientY: number;
   readonly rect: DOMRect;
   readonly view: UseWorkspaceResult["view"];
+  readonly size?: { readonly w: number; readonly h: number };
 }): { x: number; y: number } {
   return {
-    x: Math.round((clientX - rect.left - view.x) / view.zoom - KNOWLEDGE_CONNECTOR_NODE_SIZE.w / 2),
+    x: Math.round((clientX - rect.left - view.x) / view.zoom - size.w / 2),
     y: Math.round((clientY - rect.top - view.y) / view.zoom - 28),
   };
 }
@@ -71,6 +94,53 @@ function isLocalKnowledgeConnectorDropDetail(
   if (typeof payload !== "object" || payload === null) return false;
   const payloadRecord = payload as Record<string, unknown>;
   return payloadRecord["kind"] === "capsule" && typeof payloadRecord["id"] === "string";
+}
+
+function isFigmaViewDropDetail(detail: unknown): detail is FigmaViewDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string"
+  );
+}
+
+function isFigmaJsonDropDetail(detail: unknown): detail is FigmaJsonDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string" &&
+    (payloadRecord["sourceWindowId"] === undefined ||
+      typeof payloadRecord["sourceWindowId"] === "string")
+  );
+}
+
+function isFigmaImageDropDetail(detail: unknown): detail is FigmaImageDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string" &&
+    typeof payloadRecord["imageSrc"] === "string" &&
+    (payloadRecord["sourceWindowId"] === undefined ||
+      typeof payloadRecord["sourceWindowId"] === "string")
+  );
 }
 
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across
@@ -500,6 +570,108 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     [api, view],
   );
 
+  const addFigmaViewNode = useCallback(
+    (payload: FigmaViewDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figma", {
+        snapshotRunId: payload.snapshotRunId,
+        selectedScreenIdsJson: JSON.stringify([payload.screenId]),
+        selectedScreenName: payload.name,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_VIEW_NODE_SIZE,
+        }),
+        ...FIGMA_VIEW_NODE_SIZE,
+      });
+    },
+    [api, view],
+  );
+
+  const qualityConnectionsForSource = useCallback(
+    (
+      sourceWindowId: string,
+    ): readonly { readonly connId: string; readonly qualityId: string }[] => {
+      if (wins === null) return [];
+      const byId = new Map(wins.map((win) => [win.id, win]));
+      const result: { connId: string; qualityId: string }[] = [];
+      for (const conn of conns) {
+        const otherId =
+          conn.a === sourceWindowId ? conn.b : conn.b === sourceWindowId ? conn.a : null;
+        if (otherId === null) continue;
+        const other = byId.get(otherId);
+        if (other?.type !== "quality") continue;
+        result.push({ connId: conn.id, qualityId: other.id });
+      }
+      return result;
+    },
+    [conns, wins],
+  );
+
+  const addFigmaJsonNode = useCallback(
+    (payload: FigmaJsonDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaJson", {
+        snapshotRunId: payload.snapshotRunId,
+        screenId: payload.screenId,
+        selectedScreenIdsJson: JSON.stringify([payload.screenId]),
+        selectedScreenName: payload.name,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_JSON_NODE_SIZE,
+        }),
+        ...FIGMA_JSON_NODE_SIZE,
+      });
+      if (payload.sourceWindowId === undefined) return;
+      const migrated = qualityConnectionsForSource(payload.sourceWindowId);
+      if (migrated.length === 0) return;
+      for (const edge of migrated) api.removeConn(edge.connId);
+      window.setTimeout(() => {
+        for (const edge of migrated) api.connect(id, edge.qualityId);
+      }, 0);
+    },
+    [api, qualityConnectionsForSource, view],
+  );
+
+  const addFigmaImageNode = useCallback(
+    (payload: FigmaImageDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaImage", {
+        snapshotRunId: payload.snapshotRunId,
+        screenId: payload.screenId,
+        selectedScreenName: payload.name,
+        imageSrc: payload.imageSrc,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_IMAGE_NODE_SIZE,
+        }),
+        ...FIGMA_IMAGE_NODE_SIZE,
+      });
+      if (payload.sourceWindowId === undefined) return;
+      const migrated = qualityConnectionsForSource(payload.sourceWindowId);
+      if (migrated.length === 0) return;
+      for (const edge of migrated) api.removeConn(edge.connId);
+      window.setTimeout(() => {
+        for (const edge of migrated) api.connect(id, edge.qualityId);
+      }, 0);
+    },
+    [api, qualityConnectionsForSource, view],
+  );
+
   useEffect(() => {
     const handleConnectorDrop = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return;
@@ -523,19 +695,119 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     };
   }, [addKnowledgeConnectorNode, wsRef]);
 
+  useEffect(() => {
+    const handleFigmaViewDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaViewDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaViewNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_VIEW_DROP_EVENT, handleFigmaViewDrop);
+    return () => {
+      window.removeEventListener(FIGMA_VIEW_DROP_EVENT, handleFigmaViewDrop);
+    };
+  }, [addFigmaViewNode, wsRef]);
+
+  useEffect(() => {
+    const handleFigmaJsonDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaJsonDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaJsonNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_JSON_DROP_EVENT, handleFigmaJsonDrop);
+    return () => {
+      window.removeEventListener(FIGMA_JSON_DROP_EVENT, handleFigmaJsonDrop);
+    };
+  }, [addFigmaJsonNode, wsRef]);
+
+  useEffect(() => {
+    const handleFigmaImageDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaImageDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaImageNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
+    return () => {
+      window.removeEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
+    };
+  }, [addFigmaImageNode, wsRef]);
+
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
-    if (parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null) return;
+    if (
+      parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null &&
+      parseFigmaViewDrag(event.dataTransfer) === null &&
+      parseFigmaJsonDrag(event.dataTransfer) === null &&
+      parseFigmaImageDrag(event.dataTransfer) === null
+    ) {
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
 
   const onDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
-    const payload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
-    if (payload === null) return;
+    const connectorPayload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
+    const figmaPayload = parseFigmaViewDrag(event.dataTransfer);
+    const figmaJsonPayload = parseFigmaJsonDrag(event.dataTransfer);
+    const figmaImagePayload = parseFigmaImageDrag(event.dataTransfer);
+    if (
+      connectorPayload === null &&
+      figmaPayload === null &&
+      figmaJsonPayload === null &&
+      figmaImagePayload === null
+    ) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    addKnowledgeConnectorNode(payload, event.clientX, event.clientY, rect);
+    if (connectorPayload !== null) {
+      addKnowledgeConnectorNode(connectorPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaPayload !== null) {
+      addFigmaViewNode(figmaPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaJsonPayload !== null) {
+      addFigmaJsonNode(figmaJsonPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaImagePayload !== null) {
+      addFigmaImageNode(figmaImagePayload, event.clientX, event.clientY, rect);
+    }
   };
 
   const empty = wins !== null && wins.length === 0;

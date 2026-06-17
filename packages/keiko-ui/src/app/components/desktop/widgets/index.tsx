@@ -25,6 +25,8 @@ import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
+import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
+import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
@@ -47,6 +49,20 @@ function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
+function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly string[] {
+  const raw = str(cfg, key);
+  if (raw === undefined || raw.trim().length === 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim());
+  } catch {
+    return [];
+  }
+}
+
 // Serialise the currently-connected source set (Files folders/file, Connector capsules, Figma
 // snapshots) into a scalar cfg field so it can ride through openWindow (whose cfg values must be
 // scalars). Reuses the SAME builder the RunLauncher generates from, so a re-check reconstructs the
@@ -59,6 +75,8 @@ function connectedSourcesCfgFromCtx(ctx: WindowRenderContext): Record<string, st
     connectedCapsuleIds: ctx.linkedCapsuleIds,
     connectedCapsuleSetIds: ctx.linkedCapsuleSetIds,
     connectedFigmaSnapshotRunIds: ctx.linkedFigmaSnapshotRunIds,
+    connectedFigmaSnapshotSources: ctx.linkedFigmaSnapshotSources,
+    connectedImageSources: ctx.linkedImageSources,
   });
   return connectedRunSourcesCfgFromSources(sources);
 }
@@ -185,6 +203,8 @@ registerWindowRender("quality", (_cfg, ctx) => (
     connectedCapsuleIds={ctx.linkedCapsuleIds}
     connectedCapsuleSetIds={ctx.linkedCapsuleSetIds}
     connectedFigmaSnapshotRunIds={ctx.linkedFigmaSnapshotRunIds}
+    connectedFigmaSnapshotSources={ctx.linkedFigmaSnapshotSources}
+    connectedImageSources={ctx.linkedImageSources}
   />
 ));
 registerWindowRender("qiRun", (cfg, ctx) => {
@@ -311,14 +331,45 @@ registerWindowRender("integ", () => <IntegrationsWidget />);
 // component after a successful build so the connected QI hub can read it via linkedFigmaSnapshotRunIds.
 registerWindowRender("figma", (cfg, ctx) => {
   const snapshotRunId = str(cfg, "snapshotRunId");
+  const selectedScreenIds = stringArrayJson(cfg, "selectedScreenIdsJson");
+  const selectedScreenName = str(cfg, "selectedScreenName");
   return (
     <FigmaSnapshotWindow
+      sourceWindowId={ctx.windowId}
       snapshotRunId={snapshotRunId}
+      selectedScreenIds={selectedScreenIds}
+      selectedScreenName={selectedScreenName}
+      openScreenSource={({ snapshotRunId: runId, screenId, name }) => {
+        ctx.openWindow("figma", {
+          snapshotRunId: runId,
+          selectedScreenIdsJson: JSON.stringify([screenId]),
+          selectedScreenName: name,
+        });
+      }}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}
     />
   );
+});
+
+registerWindowRender("figmaJson", (cfg) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
+  const screenId = str(cfg, "screenId");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return (
+    <FigmaJsonSourceWindow
+      snapshotRunId={snapshotRunId}
+      screenId={screenId}
+      screenName={selectedScreenName}
+    />
+  );
+});
+
+registerWindowRender("figmaImage", (cfg) => {
+  const imageSrc = str(cfg, "imageSrc");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return <FigmaImageSourceWindow imageSrc={imageSrc} screenName={selectedScreenName} />;
 });
 
 // Epic #189 Slice 3 M2 — connector picker window. updateCfg persists selectedKind/selectedId into

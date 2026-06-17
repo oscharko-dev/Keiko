@@ -21,7 +21,7 @@
 // Security invariant under test: triggerImpl is only called with the board link,
 // never with a token. The component cannot construct or forward a PAT.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -29,9 +29,13 @@ import type {
   FigmaSnapshotSummary,
   FigmaCodegenResponse,
   FigmaRevokeTokenResult,
+  FigmaSnapshotScreenJsonResponse,
   TriggerFigmaSnapshotOptions,
 } from "@/lib/figma-snapshot-api";
 import { ApiError } from "@/lib/api";
+import { FIGMA_VIEW_DRAG_TYPE } from "../../figma-view-drag";
+import { FIGMA_JSON_DRAG_TYPE } from "../../figma-json-drag";
+import { FIGMA_IMAGE_DRAG_TYPE } from "../../figma-image-drag";
 import type { FigmaSnapshotWindowProps } from "./FigmaSnapshotWindow";
 import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
@@ -45,6 +49,7 @@ import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 type TriggerFn = Required<FigmaSnapshotWindowProps>["triggerImpl"];
 type LoadFn = Required<FigmaSnapshotWindowProps>["loadImpl"];
 type ListFn = Required<FigmaSnapshotWindowProps>["listImpl"];
+type LoadScreenJsonFn = Required<FigmaSnapshotWindowProps>["loadScreenJsonImpl"];
 type CodegenFn = Required<FigmaSnapshotWindowProps>["codegenImpl"];
 type RevokeFn = Required<FigmaSnapshotWindowProps>["revokeImpl"];
 
@@ -92,6 +97,23 @@ const MOCK_SUMMARY_WITH_SKIPPED: FigmaSnapshotSummary = {
   reductionHint: "2 screens from 5 detected (1 render skipped)",
 };
 
+const MOCK_SUMMARY_WITH_STRUCTURAL_ONLY: FigmaSnapshotSummary = {
+  ...MOCK_SUMMARY,
+  screenCount: 0,
+  skippedCount: 1,
+  structuralOnlyCount: 1,
+  reductionHint: "0 rendered screens from 1 detected (1 structural-only)",
+  screens: [],
+  structuralScreens: [
+    {
+      screenId: "structural-screen-1",
+      name: "Collapsed Cluster",
+      irSummary: "1 field, 1 control",
+      reason: "render-screen-cap-exceeded",
+    },
+  ],
+};
+
 const MOCK_LIST_ENTRY = {
   runId: MOCK_SUMMARY.runId,
   fileKey: MOCK_SUMMARY.fileKey,
@@ -102,6 +124,49 @@ const MOCK_LIST_ENTRY = {
   skippedCount: MOCK_SUMMARY.skippedCount,
   reductionHint: MOCK_SUMMARY.reductionHint,
   integrityHash: MOCK_SUMMARY.integrityHash,
+};
+
+const MOCK_SCREEN_JSON: FigmaSnapshotScreenJsonResponse = {
+  runId: MOCK_SUMMARY.runId,
+  fileKey: MOCK_SUMMARY.fileKey,
+  nodeId: MOCK_SUMMARY.nodeId,
+  version: MOCK_SUMMARY.version,
+  fetchedAt: MOCK_SUMMARY.fetchedAt,
+  source: {
+    kind: "figma-snapshot",
+    snapshotRunId: MOCK_SUMMARY.runId,
+    screenIds: ["screen-2"],
+  },
+  snapshot: {
+    screenCount: 2,
+    skippedCount: 0,
+    structuralOnlyCount: 0,
+    integrityHash: MOCK_SUMMARY.integrityHash,
+    redactionSummary: { totalStringsScanned: 4, stringsRedacted: 0, patternsMatched: {} },
+  },
+  screen: {
+    kind: "rendered",
+    screenId: "screen-2",
+    name: "Screen 2",
+    irSummary: "2 fields, 2 controls",
+    integrityHash: "screen-hash",
+    irJson: {
+      id: "screen-2",
+      name: "Screen 2",
+      root: {
+        id: "root",
+        interactionHint: "container",
+        children: [{ id: "submit", interactionHint: "button", text: "Submit" }],
+      },
+    },
+    image: {
+      mimeType: "image/png",
+      relativePath: "screens/screen-2.png",
+      sha256: "b".repeat(64),
+      byteLength: 2048,
+    },
+  },
+  relatedLinks: [{ sourceNodeId: "submit", trigger: "ON_CLICK", targetNodeId: "next-root" }],
 };
 
 // Resolves with `summary` (default: MOCK_SUMMARY).
@@ -243,7 +308,9 @@ describe("FigmaSnapshotWindow", () => {
       expect(row).not.toBeNull();
       await user.click(row as HTMLButtonElement);
 
-      await waitFor(() => expect(loadImpl).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.anything()));
+      await waitFor(() =>
+        expect(loadImpl).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.anything()),
+      );
       await waitFor(() =>
         expect(screen.getByRole("article", { name: /screen 1: screen 1/iu })).toBeInTheDocument(),
       );
@@ -352,6 +419,94 @@ describe("FigmaSnapshotWindow", () => {
         "src",
         "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
       );
+    });
+
+    it("opens a workspace source for an individual rendered screen", async () => {
+      const trigger = resolvingTrigger();
+      const openScreenSource = vi.fn();
+      renderWindow({ triggerImpl: trigger, openScreenSource });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const card = await screen.findByRole("article", { name: /screen 2: screen 2/iu });
+      await user.click(within(card).getByRole("button", { name: /add screen screen 2/iu }));
+
+      expect(openScreenSource).toHaveBeenCalledWith({
+        snapshotRunId: MOCK_SUMMARY.runId,
+        screenId: "screen-2",
+        name: "Screen 2",
+      });
+    });
+
+    it("exposes a drag payload for an individual rendered screen source", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger, openScreenSource: vi.fn() });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const card = await screen.findByRole("article", { name: /screen 2: screen 2/iu });
+      const previewButton = within(card).getByRole("button", { name: /drag screen screen 2/iu });
+      const dataTransfer = {
+        effectAllowed: "none",
+        setData: vi.fn(),
+      };
+      fireEvent.dragStart(previewButton, { dataTransfer });
+
+      expect(dataTransfer.effectAllowed).toBe("copy");
+      expect(dataTransfer.setData).toHaveBeenCalledWith(
+        FIGMA_VIEW_DRAG_TYPE,
+        JSON.stringify({
+          snapshotRunId: MOCK_SUMMARY.runId,
+          screenId: "screen-2",
+          name: "Screen 2",
+        }),
+      );
+      expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "Screen 2");
+    });
+
+    it("shows only the selected screen when the window is scoped to a single screen source", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({
+        triggerImpl: trigger,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        openScreenSource: vi.fn(),
+      });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      await waitFor(() =>
+        expect(screen.getByRole("article", { name: /screen 1: screen 2/iu })).toBeInTheDocument(),
+      );
+      expect(
+        screen.queryByRole("article", { name: /screen 1: screen 1/iu }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText(/qi source scope: screen 2/iu)).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /screen 2 is already the active scoped source/iu }),
+      ).toBeDisabled();
+    });
+
+    it("opens a workspace source for a structural-only screen without an image", async () => {
+      const trigger = resolvingTrigger(MOCK_SUMMARY_WITH_STRUCTURAL_ONLY);
+      const openScreenSource = vi.fn();
+      renderWindow({ triggerImpl: trigger, openScreenSource });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const card = await screen.findByRole("article", {
+        name: /screen 1: collapsed cluster/iu,
+      });
+      expect(within(card).getByRole("img", { name: /structural data only/iu })).toBeInTheDocument();
+      await user.click(
+        within(card).getByRole("button", { name: /add screen collapsed cluster/iu }),
+      );
+
+      expect(openScreenSource).toHaveBeenCalledWith({
+        snapshotRunId: MOCK_SUMMARY.runId,
+        screenId: "structural-screen-1",
+        name: "Collapsed Cluster",
+      });
     });
 
     it("shows skipped-count notice when skippedCount > 0", async () => {
@@ -559,6 +714,115 @@ describe("FigmaSnapshotWindow", () => {
       expect(loadSpy).toHaveBeenCalledWith("fs-stored-123", expect.any(AbortSignal));
     });
 
+    it("auto-loads a stored single-screen source as a compact Figma view card", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      renderWindow({
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+      });
+
+      await waitFor(() =>
+        expect(loadSpy).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.any(AbortSignal)),
+      );
+      expect(
+        await screen.findByRole("article", { name: /figma view source: screen 2/iu }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("img", { name: /captured preview for screen 2/iu })).toHaveAttribute(
+        "src",
+        "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
+      );
+      expect(screen.queryByLabelText(/board link/iu)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("img", { name: /captured preview for screen 1/iu }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("opens the scoped JSON inspector from a single-screen view source", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      const loadScreenJsonSpy = vi.fn(async () => MOCK_SCREEN_JSON);
+      const { container } = renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+        loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+      });
+      const user = userEvent.setup();
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      await user.click(screen.getByRole("button", { name: /inspect json/iu }));
+
+      await waitFor(() =>
+        expect(loadScreenJsonSpy).toHaveBeenCalledWith(
+          MOCK_SUMMARY.runId,
+          "screen-2",
+          expect.any(AbortSignal),
+        ),
+      );
+      expect(
+        await screen.findByRole("region", { name: /scoped json for screen 2/iu }),
+      ).toBeInTheDocument();
+      const codeBlock = container.querySelector(".figma-view-json-code");
+      expect(codeBlock).toHaveTextContent('"interactionHint": "button"');
+      expect(codeBlock).toHaveTextContent('"screenIds": [');
+      expect(container.querySelector(".json-token-key")).not.toBeNull();
+
+      const dragSurface = container.querySelector<HTMLElement>(".figma-view-json-drag-surface");
+      expect(dragSurface).not.toBeNull();
+      const dataTransfer = {
+        effectAllowed: "none",
+        setData: vi.fn(),
+      };
+      fireEvent.dragStart(dragSurface as HTMLElement, { dataTransfer });
+
+      expect(dataTransfer.effectAllowed).toBe("copyMove");
+      expect(dataTransfer.setData).toHaveBeenCalledWith(
+        FIGMA_JSON_DRAG_TYPE,
+        expect.stringContaining('"sourceWindowId":"figma-view-1"'),
+      );
+      expect(dataTransfer.setData).toHaveBeenCalledWith(
+        FIGMA_JSON_DRAG_TYPE,
+        expect.stringContaining('"screenId":"screen-2"'),
+      );
+    });
+
+    it("exposes a standalone image drag payload from the scoped view preview", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+      });
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      const imageSurface = screen.getByRole("button", {
+        name: /create a standalone image source for screen 2/iu,
+      });
+      const dataTransfer = {
+        effectAllowed: "none",
+        setData: vi.fn(),
+      };
+      fireEvent.dragStart(imageSurface, { dataTransfer });
+
+      expect(dataTransfer.effectAllowed).toBe("copyMove");
+      expect(dataTransfer.setData).toHaveBeenCalledWith(
+        FIGMA_IMAGE_DRAG_TYPE,
+        expect.stringContaining('"sourceWindowId":"figma-view-1"'),
+      );
+      expect(dataTransfer.setData).toHaveBeenCalledWith(
+        FIGMA_IMAGE_DRAG_TYPE,
+        expect.stringContaining(
+          '"imageSrc":"/api/figma/snapshots/fs-test-run-id-1234/screens/1/image"',
+        ),
+      );
+      expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "Screen 2.png");
+    });
+
     // Fix #1: Load button stays mounted after a load failure (retry affordance).
     it("keeps the Load button mounted after a load failure (fix #1)", async () => {
       const loadSpy = vi.fn(async (_runId: string): Promise<FigmaSnapshotSummary> => {
@@ -746,7 +1010,9 @@ describe("FigmaSnapshotWindow", () => {
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
-      expect(screen.getByText(/elapsed\. large boards can take several minutes/iu)).toBeInTheDocument();
+      expect(
+        screen.getByText(/elapsed\. large boards can take several minutes/iu),
+      ).toBeInTheDocument();
     });
 
     it("explains that a timed-out wait may still finish in the background", async () => {
@@ -761,7 +1027,9 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await typeAndSubmit(user);
       await waitFor(() =>
-        expect(screen.getByText(/window stopped waiting for the snapshot result/iu)).toBeInTheDocument(),
+        expect(
+          screen.getByText(/window stopped waiting for the snapshot result/iu),
+        ).toBeInTheDocument(),
       );
       expect(screen.getByRole("button", { name: /reconnect build/iu })).toBeInTheDocument();
     });

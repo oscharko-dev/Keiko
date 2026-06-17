@@ -29,13 +29,22 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
     ]);
   });
 
-  it("orders sources file → folders → capsules → capsule-sets → figma snapshots", () => {
+  it("orders sources file → folders → capsules → capsule-sets → figma snapshots → images", () => {
     const sources = buildConnectedRunSources({
       connectedFilePath: "/abs/a.md",
       connectedRoots: ["/f1", "/f2"],
       connectedCapsuleIds: ["c1"],
       connectedCapsuleSetIds: ["s1"],
       connectedFigmaSnapshotRunIds: ["fig-run-1"],
+      connectedImageSources: [
+        {
+          kind: "image",
+          label: "Image · Login",
+          sourceKind: "figma-snapshot-screen",
+          snapshotRunId: "fig-run-1",
+          screenId: "screen-login",
+        },
+      ],
     });
     expect(sources.map((s) => s.kind)).toEqual([
       "file",
@@ -44,6 +53,7 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
       "capsule",
       "capsule-set",
       "figma-snapshot",
+      "image",
     ]);
   });
 
@@ -66,6 +76,115 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
       { kind: "figma-snapshot", label: "fig-1", snapshotRunId: "fig-1" },
       { kind: "figma-snapshot", label: "fig-2", snapshotRunId: "fig-2" },
     ]);
+  });
+
+  it("preserves scoped figma screen sources and dedupes them by run id plus screen ids", () => {
+    const sources = buildConnectedRunSources({
+      connectedFigmaSnapshotSources: [
+        {
+          kind: "figma-snapshot",
+          label: "Login mask",
+          snapshotRunId: "fig-1",
+          screenIds: ["screen-login"],
+        },
+        {
+          kind: "figma-snapshot",
+          label: "Login mask duplicate",
+          snapshotRunId: "fig-1",
+          screenIds: ["screen-login"],
+        },
+        {
+          kind: "figma-snapshot",
+          label: "Whole snapshot",
+          snapshotRunId: "fig-1",
+        },
+      ],
+    });
+    expect(sources).toEqual([
+      {
+        kind: "figma-snapshot",
+        label: "Login mask",
+        snapshotRunId: "fig-1",
+        screenIds: ["screen-login"],
+      },
+      { kind: "figma-snapshot", label: "Whole snapshot", snapshotRunId: "fig-1" },
+    ]);
+  });
+
+  it("dedupes scoped figma sources whose screen ids match but were selected in a different order", () => {
+    // sourceKey is canonical (dedupe + sort), so the same scope selected in a different order is one
+    // source — not two — matching the server's canonical provenance ref.
+    const sources = buildConnectedRunSources({
+      connectedFigmaSnapshotSources: [
+        { kind: "figma-snapshot", label: "A", snapshotRunId: "fig-1", screenIds: ["s-2", "s-1"] },
+        { kind: "figma-snapshot", label: "B", snapshotRunId: "fig-1", screenIds: ["s-1", "s-2"] },
+      ],
+    });
+    expect(sources).toHaveLength(1);
+  });
+
+  it("preserves image-only sources and dedupes them by source kind, run id, and screen id", () => {
+    const sources = buildConnectedRunSources({
+      connectedImageSources: [
+        {
+          kind: "image",
+          label: "Image · Login",
+          sourceKind: "figma-snapshot-screen",
+          snapshotRunId: "fig-1",
+          screenId: "screen-login",
+        },
+        {
+          kind: "image",
+          label: "Image · Login duplicate",
+          sourceKind: "figma-snapshot-screen",
+          snapshotRunId: "fig-1",
+          screenId: "screen-login",
+        },
+        {
+          kind: "image",
+          label: "Image · Summary",
+          sourceKind: "figma-snapshot-screen",
+          snapshotRunId: "fig-1",
+          screenId: "screen-summary",
+        },
+      ],
+    });
+
+    expect(sources).toEqual([
+      {
+        kind: "image",
+        label: "Image · Login",
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: "fig-1",
+        screenId: "screen-login",
+      },
+      {
+        kind: "image",
+        label: "Image · Summary",
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: "fig-1",
+        screenId: "screen-summary",
+      },
+    ]);
+  });
+
+  it("round-trips image sources through the run-card cfg serializer", () => {
+    const sources = [
+      {
+        kind: "image",
+        label: "Image · Login",
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: "fig-1",
+        screenId: "screen-login",
+      },
+    ] as const;
+
+    expect(connectedRunSourcesFromWindowCfg(connectedRunSourcesCfgFromSources(sources))).toEqual(
+      sources,
+    );
+    expect(connectedRunSourcesCfgFromInlineSources(sources)).toEqual(
+      connectedRunSourcesCfgFromSources(sources),
+    );
   });
 
   it("a focused file SUPERSEDES its own Files-window folder root (no double-ingest), keeps other folders", () => {
@@ -255,10 +374,24 @@ describe("connected run source window cfg (#744)", () => {
     expect(connectedRunSourcesFromWindowCfg({ connectedSourcesJson: "[]" })).toEqual([]);
   });
 
+  it("rejects a persisted figma source with an empty screenIds array (degrades safely, never widens)", () => {
+    // A malformed scoped source must not parse as a valid connected source — the whole list is
+    // rejected and the card carries no figma source rather than silently widening to the whole board.
+    const json = JSON.stringify([
+      { kind: "figma-snapshot", label: "Broken", snapshotRunId: "fig-1", screenIds: [] },
+    ]);
+    expect(connectedRunSourcesFromWindowCfg({ connectedSourcesJson: json })).toEqual([]);
+  });
+
   it("parses the connectedSourcesJson field when present", () => {
     const sources = [
       { kind: "workspace" as const, label: "specs", path: "/abs/specs" },
-      { kind: "figma-snapshot" as const, label: "fig-run-1", snapshotRunId: "fig-run-1" },
+      {
+        kind: "figma-snapshot" as const,
+        label: "Login mask",
+        snapshotRunId: "fig-run-1",
+        screenIds: ["screen-login"],
+      },
     ];
     expect(
       connectedRunSourcesFromWindowCfg({ connectedSourcesJson: JSON.stringify(sources) }),
