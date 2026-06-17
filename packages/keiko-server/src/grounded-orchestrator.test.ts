@@ -40,6 +40,7 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ClarificationNeededError,
+  isSymbolDefinitionPath,
   retrieveConnectedContextPack,
   runGroundedExploration,
   type GroundedAnswerer,
@@ -475,6 +476,78 @@ describe("runGroundedExploration", () => {
     ).toBe(true);
     expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
     expect(JSON.stringify(out.pack)).not.toContain("stale-internal-value");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("prioritizes exact symbol filename matches for workspace-root code questions", async () => {
+    mkdirSync(join(ROOT, "docs/adr"), { recursive: true });
+    mkdirSync(join(ROOT, "packages/keiko-ui/src/app/components/desktop/windows"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(ROOT, "docs/adr/ADR-0026-workspace-substrate.md"),
+      "The DOM renderer uses WindowFrame.tsx.\n",
+    );
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx"),
+      "import type { ReactNode } from 'react';\n" +
+        "interface WindowFrameProps { readonly title: string; }\n" +
+        "const filler = [\n" +
+        Array.from({ length: 260 }, (_, index) => `  "line-${index.toString()}",\n`).join("") +
+        "];\n" +
+        "export function WindowFrame(props: WindowFrameProps): ReactNode {\n" +
+        "  return props.title;\n" +
+        "}\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Wo ist WindowFrame implementiert?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.plan.retrievalIntent).toBe("targeted-code-search");
+    expect(out.pack.files[0]?.scopePath).toBe(
+      "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
+    );
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) =>
+        excerpt.content.includes("export function WindowFrame"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ packageManager: "npm@10.9.8" }, null, 2),
+    );
+    writeFileSync(join(ROOT, "package-lock.json"), `${"x".repeat(100_000)}\n`);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Welcher Package Manager wird verwendet?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const lockfile = out.pack.files.find((file) => file.scopePath === "package-lock.json");
+    expect(lockfile).toBeDefined();
+    const totalLockfileBytes =
+      lockfile?.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0) ?? 0;
+    expect(totalLockfileBytes).toBeLessThanOrEqual(8192);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1189,5 +1262,23 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
       }),
     ).rejects.toBeInstanceOf(CancelledError);
     expect(answerCalls).toBe(0);
+  });
+});
+
+describe("isSymbolDefinitionPath", () => {
+  it("accepts a code definition file matching term.<ext> at any depth, case-insensitively", () => {
+    expect(isSymbolDefinitionPath("packages/core/src/PaymentService.tsx", "PaymentService")).toBe(
+      true,
+    );
+    expect(isSymbolDefinitionPath("src/windowFrame.ts", "WindowFrame")).toBe(true);
+    expect(isSymbolDefinitionPath("a/b/Foo.vue", "foo")).toBe(true);
+  });
+
+  it("rejects co-named spec/story/non-code files the broad `**/term.*` glob over-matches", () => {
+    // The single-walk regression guard: these must NOT be treated as the symbol's definition file.
+    expect(isSymbolDefinitionPath("src/PaymentService.test.tsx", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("src/PaymentService.stories.tsx", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("docs/PaymentService.md", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("src/PaymentService.d.ts", "PaymentService")).toBe(false);
   });
 });

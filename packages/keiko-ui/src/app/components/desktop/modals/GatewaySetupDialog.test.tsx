@@ -187,6 +187,34 @@ describe("GatewaySetupDialog", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
   });
 
+  it("announces deployments that could not be verified during setup", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5.4",
+      testedModelIds: ["gpt-5.4"],
+      skippedModelIds: ["Mistral-Large-3"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(
+      screen.getByLabelText(/deployment names for azure/i),
+      "Mistral-Large-3\ngpt-5.4",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      /could not verify deployment: Mistral-Large-3/i,
+    );
+  });
+
   it("exposes an optional Figma access token field in gateway setup", () => {
     render(<GatewaySetupDialog />);
 
@@ -259,7 +287,10 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByText("gpt-oss-120b")).toBeInTheDocument();
     expect(screen.getByText("text-embedding-3-large")).toBeInTheDocument();
     expect(screen.getByText("Replace model gateway settings")).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText(/figma access token optional/i), "figd_update-token");
+    await userEvent.type(
+      screen.getByLabelText(/figma access token optional/i),
+      "figd_update-token",
+    );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     expect(setupGateway).toHaveBeenCalledWith({

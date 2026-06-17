@@ -334,6 +334,16 @@ describe("createFigmaConnector — coded errors", () => {
 });
 
 describe("createFigmaConnector — depth cap", () => {
+  it("uses a shallow bounded discovery depth by default", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+    await connector.fetchScopedNodes(URL_OK);
+    expect(firstRequest(recorder).url).toContain("depth=2");
+  });
+
   it("uses a configurable depth and never an unbounded fetch", async () => {
     const recorder = recordingPort(okResponse());
     const connector = createFigmaConnector({
@@ -504,6 +514,32 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
     expect(countText(deep.nodes)).toBe(1);
     expect(deep.coverage?.screensDeepFetched).toBe(1);
     expect(deep.coverage?.screensTruncated).toBe(1);
+  });
+
+  it("does not spend the global retry budget on a fail-soft per-screen 429", async () => {
+    const requests: string[] = [];
+    const base = treePort(fullTree(["s1", "s2"]), new Map([["s1", 429]]));
+    const connector = createFigmaConnector({
+      http: (req) => {
+        const url = new URL(req.url);
+        requests.push(url.searchParams.get("ids") ?? "");
+        return base(req);
+      },
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+      retryPolicy: { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 100 },
+      sleep: () => Promise.resolve(),
+    });
+
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+    expect(requests.filter((id) => id === "s1")).toHaveLength(1);
+    expect(countText(deep.nodes)).toBe(1);
+    expect(deep.coverage).toMatchObject({
+      screenCount: 2,
+      screensDeepFetched: 1,
+      screensTruncated: 1,
+    });
   });
 
   // A hard forward-proxy failure (#802) surfaces from the transport boundary as a FigmaConnectorError

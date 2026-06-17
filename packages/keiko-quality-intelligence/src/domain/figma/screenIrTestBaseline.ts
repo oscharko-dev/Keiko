@@ -386,15 +386,21 @@ export function deriveScreenTestBaseline(
  * content-bearing atom. Vision-derived hints, when present, are appended SEPARATELY by the caller
  * (visionAugmentation.ts) and never replace these lines.
  */
+/**
+ * Stable marker line introducing the structural baseline inside a Figma screen atom's canonical text.
+ * Exported so the deterministic test-design model (`testDesignModel.ts`) can recognise a Figma screen
+ * atom and emit a clean, screen-scoped structural candidate instead of the generic prose-requirement
+ * template (which produces an atom-id/hash-laden stub for a structural baseline). Intentionally NOT
+ * re-exported from the figma barrel (`domain/figma/index.ts`), so it stays off the package surface.
+ */
+export const STRUCTURAL_BASELINE_MARKER =
+  "Structural test baseline (deterministic, derived from Screen-IR):";
+
 export function renderBaselineText(baseline: ScreenTestBaseline): string {
   const header = `Screen: ${baseline.screenName} [${baseline.screenId}]`;
   const lines = baseline.items.map((item) => {
     const nodeRef = item.sourceNodeId !== undefined ? ` [node:${item.sourceNodeId}]` : "";
     return `- (${item.category}) ${item.title}${nodeRef}`;
   });
-  return [
-    header,
-    "Structural test baseline (deterministic, derived from Screen-IR):",
-    ...lines,
-  ].join("\n");
+  return [header, STRUCTURAL_BASELINE_MARKER, ...lines].join("\n");
 }

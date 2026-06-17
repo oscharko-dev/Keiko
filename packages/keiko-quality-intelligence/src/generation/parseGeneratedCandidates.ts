@@ -190,14 +190,15 @@ interface StringListLimits {
 const toBoundedText = (value: unknown, maxChars: number): string =>
   truncateText(normaliseCandidateText(typeof value === "string" ? value : ""), maxChars);
 
+const toRawStringListSource = (value: unknown): readonly unknown[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") return value.split(/\r?\n/u);
+  return [];
+};
+
 const toStringList = (value: unknown, limits: StringListLimits): readonly string[] => {
-  const source = Array.isArray(value)
-    ? value
-    : typeof value === "string"
-      ? value.split(/\r?\n/u)
-      : [];
   const out: string[] = [];
-  for (const entry of source) {
+  for (const entry of toRawStringListSource(value)) {
     if (out.length >= limits.maxItems) break;
     if (typeof entry !== "string") continue;
     const text = toBoundedText(entry, limits.maxChars);
@@ -211,6 +212,25 @@ const textList = (value: unknown, maxItems: number): readonly string[] =>
     maxItems,
     maxChars: GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
   });
+
+const canonicalStepText = (value: string): string =>
+  normaliseCandidateText(value).toLowerCase().replace(/\s+/gu, " ").trim();
+
+const stepList = (value: unknown): readonly string[] => {
+  const out: string[] = [];
+  let previousCanonical = "";
+  for (const entry of toRawStringListSource(value)) {
+    if (typeof entry !== "string") continue;
+    const text = toBoundedText(entry, GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS);
+    if (text.length === 0) continue;
+    const canonical = canonicalStepText(text);
+    if (canonical === previousCanonical) continue;
+    out.push(text);
+    previousCanonical = canonical;
+    if (out.length >= GENERATED_CANDIDATE_STEP_MAX_ITEMS) break;
+  }
+  return out;
+};
 
 const clampPriority = (value: unknown, profile: PolicyProfile): Priority =>
   typeof value === "string" && PRIORITIES.has(value)
@@ -261,7 +281,7 @@ const buildCandidate = (
   profile: PolicyProfile,
 ): Candidate | undefined => {
   const title = toBoundedText(raw.title, GENERATED_CANDIDATE_TITLE_MAX_CHARS);
-  const steps = textList(raw.steps, GENERATED_CANDIDATE_STEP_MAX_ITEMS);
+  const steps = stepList(raw.steps);
   if (title.length === 0 || steps.length === 0) return undefined;
   const expectedResults = textList(
     raw.expectedResults,

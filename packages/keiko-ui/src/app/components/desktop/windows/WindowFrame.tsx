@@ -2,6 +2,8 @@
 
 import {
   useCallback,
+  useEffect,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -10,7 +12,17 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
+} from "@oscharko-dev/keiko-contracts";
 import { Icons, type IconName } from "../Icons";
+import {
+  acquireGrabbingBodyStyle,
+  isInteractiveControlTarget,
+  isPrimaryActivationPointer,
+  isWindowDragPointer,
+} from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
 import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
@@ -29,6 +41,7 @@ const MIN_H_FALLBACK = 150;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
 const HEADER_CONTROL_GUTTER_PX = 210;
+const AUTO_GROW_EPSILON_PX = 8;
 
 interface WindowFrameProps {
   readonly win: AppWindow;
@@ -91,6 +104,7 @@ interface BodySelection {
 }
 
 function selectBody(
+  windowId: string,
   type: WindowType,
   ew: number,
   eh: number,
@@ -101,6 +115,8 @@ function selectBody(
   linkedCapsuleIds: readonly string[],
   linkedCapsuleSetIds: readonly string[],
   linkedFigmaSnapshotRunIds: readonly string[],
+  linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
+  linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
   updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
   openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
 ): BodySelection {
@@ -110,6 +126,7 @@ function selectBody(
     return {
       mode: mini ? "mini" : "full",
       node: def.render(cfg, {
+        windowId,
         mini,
         linkedRoot,
         linkedFilePath,
@@ -117,6 +134,8 @@ function selectBody(
         linkedCapsuleIds,
         linkedCapsuleSetIds,
         linkedFigmaSnapshotRunIds,
+        linkedFigmaSnapshotSources,
+        linkedImageSources,
         updateCfg,
         openWindow,
       }),
@@ -128,16 +147,27 @@ function selectBody(
   return {
     mode: "full",
     node: def.render(cfg, {
+      windowId,
       linkedRoot,
       linkedFilePath,
       linkedRoots,
       linkedCapsuleIds,
       linkedCapsuleSetIds,
       linkedFigmaSnapshotRunIds,
+      linkedFigmaSnapshotSources,
+      linkedImageSources,
       updateCfg,
       openWindow,
     }),
   };
+}
+
+function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): boolean {
+  return (
+    type === "figma" &&
+    typeof cfg["selectedScreenIdsJson"] === "string" &&
+    cfg["selectedScreenIdsJson"].length > 0
+  );
 }
 
 interface DragGeometry {
@@ -212,16 +242,19 @@ function attachDragListeners(
   const up = (): void => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
     api.commitSnap(session.winId);
-    document.body.style.cursor = "";
+    releaseBodyStyle();
     onDragEnd?.();
   };
   // Audit C362 — the move listeners run on window without pointer capture, so a
   // fast drag leaves the header and the cursor flickered to default/text over
-  // other surfaces. Pin the grabbing cursor globally for the gesture (up() resets).
-  document.body.style.cursor = "grabbing";
+  // other surfaces. Pin the grabbing cursor globally for the gesture via the shared ref-counted
+  // helper so a concurrent pan/drag does not clobber the restore order (up() releases).
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function resizeCursor(dir: Handle): string {
@@ -236,6 +269,10 @@ interface ResizeStart {
   readonly y: number;
   readonly w: number;
   readonly h: number;
+}
+
+function sameResizeGeometry(a: ResizeStart, b: ResizeStart): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
 function applyResizeDelta(
@@ -282,6 +319,8 @@ export function WindowFrame({
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
   const [draggingWindow, setDraggingWindow] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const zoom = win.zoom ?? 1;
   const linkedRoot =
     win.type === "chat" || win.type === "agents" || win.type === "quality"
@@ -302,6 +341,9 @@ export function WindowFrame({
     win.type === "quality" ? api.linkedConnectorCapsuleSetIds(win.id) : [];
   const linkedFigmaSnapshotRunIds =
     win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
+  const linkedFigmaSnapshotSources =
+    win.type === "quality" ? api.linkedFigmaSnapshotSources?.(win.id) : undefined;
+  const linkedImageSources = win.type === "quality" ? api.linkedImageSources?.(win.id) : undefined;
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
@@ -316,6 +358,7 @@ export function WindowFrame({
     [api],
   );
   const { mode: bodyMode, node: body } = selectBody(
+    win.id,
     win.type,
     ew,
     eh,
@@ -326,6 +369,8 @@ export function WindowFrame({
     linkedCapsuleIds,
     linkedCapsuleSetIds,
     linkedFigmaSnapshotRunIds,
+    linkedFigmaSnapshotSources,
+    linkedImageSources,
     updateCfg,
     openWindow,
   );
@@ -335,19 +380,72 @@ export function WindowFrame({
     [api, win.id],
   );
 
+  useEffect(() => {
+    if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    const body = bodyRef.current;
+    if (body === null) return;
+    let frame: number | null = null;
+    const measure = (): void => {
+      frame = null;
+      const overflow = body.scrollHeight - body.clientHeight;
+      if (overflow <= AUTO_GROW_EPSILON_PX) return;
+      const nextHeight = Math.ceil(win.h + overflow);
+      if (nextHeight <= win.h + AUTO_GROW_EPSILON_PX) return;
+      api.update(win.id, { h: nextHeight });
+    };
+    const schedule = (): void => {
+      if (frame !== null) return;
+      frame =
+        typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame(measure)
+          : window.setTimeout(measure, 0);
+    };
+    schedule();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
+    observer?.observe(body);
+    const firstChild = body.firstElementChild;
+    if (firstChild !== null) observer?.observe(firstChild);
+    return () => {
+      if (frame !== null) {
+        if (typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(frame);
+        } else {
+          window.clearTimeout(frame);
+        }
+      }
+      observer?.disconnect();
+    };
+  }, [api, bodyMode, win.cfg, win.h, win.id, win.max, win.type]);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    },
+    [],
+  );
+
+  const focusWindowForTarget = useCallback(
+    (target: EventTarget | null): void => {
+      if (isInteractiveControlTarget(target)) {
+        window.setTimeout(() => api.focus(win.id), 0);
+        return;
+      }
+      api.focus(win.id);
+    },
+    [api, win.id],
+  );
+
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
-      // Keep window dragging aligned with the workspace pan gesture: middle
-      // mouse button moves windows, while primary clicks stay available for
-      // ordinary header interactions and control targeting.
-      if (e.button !== 1) return;
+      if (!isWindowDragPointer(e)) return;
       // When this window is a valid drop target for an in-flight connect, the
       // bubbling onPointerDown on <section> below confirms the link — don't
       // also start a header-drag, which would tear the window away from the
       // user's cursor mid-click.
       if (connState === "valid") return;
       e.preventDefault();
-      api.focus(win.id);
+      focusWindowForTarget(e.target);
       const el = wsRef.current;
       if (el === null) return;
       const rect = el.getBoundingClientRect();
@@ -363,33 +461,70 @@ export function WindowFrame({
         setDraggingWindow(false),
       );
     },
-    [api, win.id, win.x, win.y, win.w, win.h, win.max, win.prev, view, wsRef, connState],
+    [
+      api,
+      win.id,
+      win.x,
+      win.y,
+      win.w,
+      win.h,
+      win.max,
+      win.prev,
+      view,
+      wsRef,
+      connState,
+      focusWindowForTarget,
+    ],
   );
 
   const startResize = useCallback(
     (dir: Handle) =>
       (e: ReactPointerEvent<HTMLDivElement>): void => {
+        if (!isPrimaryActivationPointer(e)) return;
         e.preventDefault();
         e.stopPropagation();
+        resizeCleanupRef.current?.();
+        resizeCleanupRef.current = null;
         api.focus(win.id);
         const start: ResizeStart = { x: win.x, y: win.y, w: win.w, h: win.h };
+        let last = start;
         const sx = e.clientX;
         const sy = e.clientY;
         const z = view.zoom;
+        const previousCursor = document.body.style.cursor;
+        let active = true;
+        const cleanup = (): void => {
+          if (!active) return;
+          active = false;
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", end);
+          window.removeEventListener("pointercancel", end);
+          window.removeEventListener("blur", end);
+          document.body.style.cursor = previousCursor;
+          if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
+        };
+        const end = (): void => {
+          cleanup();
+        };
         const move = (ev: PointerEvent): void => {
+          if (!active) return;
+          if (ev.buttons === 0) {
+            cleanup();
+            return;
+          }
           const dx = (ev.clientX - sx) / z;
           const dy = (ev.clientY - sy) / z;
           const next = applyResizeDelta(start, dir, dx, dy, win.type);
+          if (sameResizeGeometry(last, next)) return;
+          last = next;
           api.update(win.id, { ...next, max: false });
-        };
-        const up = (): void => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-          document.body.style.cursor = "";
         };
         document.body.style.cursor = resizeCursor(dir);
         window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
+        window.addEventListener("pointerup", end);
+        window.addEventListener("pointercancel", end);
+        window.addEventListener("blur", end);
+        resizeCleanupRef.current = cleanup;
       },
     [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom],
   );
@@ -414,6 +549,7 @@ export function WindowFrame({
 
   const onPortPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>): void => {
+      if (!isPrimaryActivationPointer(e)) return;
       e.preventDefault();
       e.stopPropagation();
       startPortConnect(e.currentTarget, e);
@@ -496,7 +632,7 @@ export function WindowFrame({
       tabIndex={-1}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
-        api.focus(win.id);
+        focusWindowForTarget(e.target);
       }}
       // Audit C061 / WCAG 2.4.11 — tabbing into a lower, overlapped window must
       // raise it, or the focused control (and its focus ring) stays fully hidden
@@ -504,7 +640,7 @@ export function WindowFrame({
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
       onFocusCapture={() => {
-        if (!top) api.focus(win.id);
+        if (!top) window.setTimeout(() => api.focus(win.id), 0);
       }}
     >
       {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
@@ -620,7 +756,7 @@ export function WindowFrame({
           </button>
         </div>
       </header>
-      <div className="win-body" data-mode={bodyMode} style={bodyStyle}>
+      <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
         {body}
       </div>
       {!win.max

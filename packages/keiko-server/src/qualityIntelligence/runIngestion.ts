@@ -911,11 +911,15 @@ function visionAugmentedScreenText(
   baseline: QualityIntelligenceFigma.ScreenTestBaseline,
   ir: QualityIntelligenceFigma.ScreenIr,
   record: FigmaSnapshotRecord,
-  screen: FigmaSnapshotRecord["screens"][number],
+  screen: ParsedScreen["row"],
   vision: FigmaVisionHintProvider | undefined,
 ): FigmaScreenTexts {
   const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
-  if (vision === undefined || !screenNeedsVisionAugmentation(ir, baseline)) {
+  if (
+    vision === undefined ||
+    !isRenderedScreenRow(screen) ||
+    !screenNeedsVisionAugmentation(ir, baseline)
+  ) {
     return { text: baselineText, fingerprintText: baselineText };
   }
   const hints = vision(figmaVisionRequest(record, screen, baselineText));
@@ -928,11 +932,15 @@ async function visionAugmentedScreenTextAsync(
   baseline: QualityIntelligenceFigma.ScreenTestBaseline,
   ir: QualityIntelligenceFigma.ScreenIr,
   record: FigmaSnapshotRecord,
-  screen: FigmaSnapshotRecord["screens"][number],
+  screen: ParsedScreen["row"],
   vision: FigmaVisionHintProvider | undefined,
 ): Promise<FigmaScreenTexts> {
   const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
-  if (vision === undefined || !screenNeedsVisionAugmentation(ir, baseline)) {
+  if (
+    vision === undefined ||
+    !isRenderedScreenRow(screen) ||
+    !screenNeedsVisionAugmentation(ir, baseline)
+  ) {
     return { text: baselineText, fingerprintText: baselineText };
   }
   const hints = await vision(figmaVisionRequest(record, screen, baselineText));
@@ -940,18 +948,172 @@ async function visionAugmentedScreenTextAsync(
 }
 
 interface ParsedScreen {
-  readonly row: FigmaSnapshotRecord["screens"][number];
+  readonly row:
+    | FigmaSnapshotRecord["screens"][number]
+    | NonNullable<FigmaSnapshotRecord["structuralScreens"]>[number];
   readonly ir: QualityIntelligenceFigma.ScreenIr;
 }
 
+function isRenderedScreenRow(
+  row: ParsedScreen["row"],
+): row is FigmaSnapshotRecord["screens"][number] {
+  return "image" in row;
+}
+
 // Parse every screen's opaque irJson once; an unparseable screen is dropped (never crashes the run).
+// Rendered screens win if a corrupt record ever duplicates an id; structural-only rows then fill
+// the non-rendered/capped coverage gap for QI.
 function parseScreens(record: FigmaSnapshotRecord): readonly ParsedScreen[] {
   const parsed: ParsedScreen[] = [];
+  const seen = new Set<string>();
   for (const row of record.screens) {
     const ir = QualityIntelligenceFigma.parseScreenIr(row.irJson);
-    if (ir !== undefined) parsed.push({ row, ir });
+    if (ir !== undefined) {
+      parsed.push({ row, ir });
+      seen.add(row.screenId);
+    }
+  }
+  for (const row of record.structuralScreens ?? []) {
+    if (seen.has(row.screenId)) continue;
+    const ir = QualityIntelligenceFigma.parseScreenIr(row.irJson);
+    if (ir !== undefined) {
+      parsed.push({ row, ir });
+      seen.add(row.screenId);
+    }
   }
   return parsed;
+}
+
+function scopedParsedScreens(
+  record: FigmaSnapshotRecord,
+  screenIds: readonly string[] | undefined,
+): readonly ParsedScreen[] {
+  const parsed = parseScreens(record);
+  // Absent screenIds → whole snapshot (the contract's "absent = whole"). An explicitly EMPTY scope
+  // matches NOTHING — it must NEVER widen to the whole board. The route layer already rejects an empty
+  // array; this is the defense-in-depth invariant guaranteeing a scoped request can never silently fall
+  // back to every screen even if an internal caller passes an empty list.
+  if (screenIds === undefined) return parsed;
+  if (screenIds.length === 0) return [];
+  const wanted = new Set(screenIds);
+  return parsed.filter((screen) => wanted.has(screen.row.screenId));
+}
+
+// Canonicalise a scoped screen-id list (trim → drop empties → dedupe → sort) so the derived envelope
+// id / provenance ref is stable regardless of the order or duplicates a caller passed. The route layer
+// already canonicalises incoming requests; this keeps direct/internal callers consistent too.
+function canonicalFigmaScreenIds(screenIds: readonly string[]): readonly string[] {
+  return [...new Set(screenIds.map((id) => id.trim()).filter((id) => id.length > 0))].sort();
+}
+
+function figmaSnapshotSourceRef(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+): string {
+  if (source.screenIds === undefined) return source.snapshotRunId;
+  const canonical = canonicalFigmaScreenIds(source.screenIds);
+  return canonical.length === 0
+    ? source.snapshotRunId
+    : `${source.snapshotRunId}#${canonical.join(",")}`;
+}
+
+function imageSourceRef(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+): string {
+  return `${source.sourceKind}:${source.snapshotRunId}#${source.screenId}`;
+}
+
+function imageDescriptionBaseline(screenId: string, screenName: string): string {
+  return (
+    "No structural JSON is attached to this source. Describe the visible UI screenshot for " +
+    "test generation. Focus on user-visible purpose, controls, form fields, labels, states, " +
+    `layout groups, and likely validation affordances.\nScreen id: ${screenId}\nScreen name: ${screenName}`
+  );
+}
+
+function imageDescriptionText(
+  screenId: string,
+  screenName: string,
+  hints: readonly string[],
+): string | undefined {
+  const cleaned = hints
+    .map((hint) => redactFigmaAtomText(hint).trim())
+    .filter((hint) => hint.length > 0);
+  if (cleaned.length === 0) return undefined;
+  return [
+    `Image description for ${screenName} (${screenId})`,
+    "",
+    ...cleaned.map((hint) => `- ${hint}`),
+  ].join("\n");
+}
+
+function parsedRenderedScreenForImageSource(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+): {
+  readonly row: FigmaSnapshotRecord["screens"][number];
+  readonly ir: QualityIntelligenceFigma.ScreenIr;
+} {
+  const parsed = parseScreens(record).find((screen) => screen.row.screenId === source.screenId);
+  if (parsed === undefined || !isRenderedScreenRow(parsed.row)) {
+    throw new QiIngestionError(
+      "QI_IMAGE_UNAVAILABLE",
+      `Image "${label}" could not be found in the stored Figma snapshot.`,
+    );
+  }
+  return { row: parsed.row, ir: parsed.ir };
+}
+
+function imageDescriptionUnavailable(label: string): QiIngestionError {
+  return new QiIngestionError(
+    "QI_IMAGE_DESCRIPTION_UNAVAILABLE",
+    `Image "${label}" could not be described. Configure an image-input capable model for Quality Intelligence image sources.`,
+  );
+}
+
+function imageDescriptionDocFromHints(
+  screenId: string,
+  screenName: string,
+  hints: readonly string[],
+  byteBudget: number,
+): CorpusDoc | undefined {
+  const text = imageDescriptionText(screenId, screenName, hints);
+  if (text === undefined) return undefined;
+  const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, byteBudget);
+  const capped = truncateToUtf8Bytes(redactFigmaAtomText(text), perDocBudget);
+  if (capped.trim().length === 0) return undefined;
+  return {
+    documentId: `Image description: ${figmaDocumentId(screenId, screenName)}`,
+    text: capped,
+    fingerprintText: capped,
+  };
+}
+
+// Distinguish "the selected screens are not present in this snapshot" from "the snapshot produced no
+// usable baseline" so a scoped run surfaces a precise, user-actionable reason (audit: clear
+// screen-not-found error) in the streamed skippedSources notice. The code stays QI_SOURCE_EMPTY so the
+// N+1-resilience skip and the drift "all orphaned" allowance keep their existing control flow — only
+// the message is sharpened.
+function figmaSnapshotEmptyError(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+  label: string,
+): QiIngestionError {
+  if (source.screenIds !== undefined) {
+    const requested = canonicalFigmaScreenIds(source.screenIds);
+    const present = new Set(parseScreens(record).map((screen) => screen.row.screenId));
+    const missing = requested.filter((id) => !present.has(id));
+    if (requested.length > 0 && missing.length === requested.length) {
+      return new QiIngestionError(
+        "QI_SOURCE_EMPTY",
+        `Figma snapshot "${label}": none of the selected screens (${missing.join(", ")}) exist in this snapshot.`,
+      );
+    }
+  }
+  return new QiIngestionError(
+    "QI_SOURCE_EMPTY",
+    `Figma snapshot "${label}" produced no usable screen baseline.`,
+  );
 }
 
 // Derive the deterministic navigation/flow/coverage test items per screen from the parsed screens +
@@ -1020,7 +1182,7 @@ function consumeVisionProviderForScreen(
 }
 
 function corpusDocFromFigmaScreen(
-  row: FigmaSnapshotRecord["screens"][number],
+  row: ParsedScreen["row"],
   ir: QualityIntelligenceFigma.ScreenIr,
   augmented: FigmaScreenTexts,
   perDocBudget: number,
@@ -1061,13 +1223,14 @@ function figmaScreenDocs(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
+  screenIds?: readonly string[],
 ): readonly CorpusDoc[] {
   // Mirror processCapsuleDocs (:558-563): the per-run corpus budget is the smaller of the capsule's
   // own ceiling and this source's fair share of the global evidence byte budget (Epic #729 N+1
   // split). The per-document cap is likewise never larger than the per-run budget.
   const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
   const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
-  const parsed = parseScreens(record);
+  const parsed = scopedParsedScreens(record, screenIds);
   const navItems = navItemsByScreen(parsed, record.links ?? []);
   const a11yItems = a11yItemsByScreen(parsed);
   const docs: CorpusDoc[] = [];
@@ -1076,7 +1239,9 @@ function figmaScreenDocs(
   for (const { row, ir } of parsed) {
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
-    const visionSlot = consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline);
+    const visionSlot = isRenderedScreenRow(row)
+      ? consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline)
+      : { provider: undefined, remaining: remainingVisionScreens };
     remainingVisionScreens = visionSlot.remaining;
     const augmented = visionAugmentedScreenText(baseline, ir, record, row, visionSlot.provider);
     const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
@@ -1092,10 +1257,11 @@ async function figmaScreenDocsAsync(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
+  screenIds?: readonly string[],
 ): Promise<readonly CorpusDoc[]> {
   const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
   const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
-  const parsed = parseScreens(record);
+  const parsed = scopedParsedScreens(record, screenIds);
   const navItems = navItemsByScreen(parsed, record.links ?? []);
   const a11yItems = a11yItemsByScreen(parsed);
   const docs: CorpusDoc[] = [];
@@ -1104,7 +1270,9 @@ async function figmaScreenDocsAsync(
   for (const { row, ir } of parsed) {
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
-    const visionSlot = consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline);
+    const visionSlot = isRenderedScreenRow(row)
+      ? consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline)
+      : { provider: undefined, remaining: remainingVisionScreens };
     remainingVisionScreens = visionSlot.remaining;
     const augmented = await visionAugmentedScreenTextAsync(
       baseline,
@@ -1138,18 +1306,16 @@ function ingestFigmaSnapshot(
       `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
     );
   }
-  if (record.screens.length === 0) {
+  if (record.screens.length === 0 && (record.structuralScreens?.length ?? 0) === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
   }
-  const docs = figmaScreenDocs(record, vision, byteBudget);
+  const docs = figmaScreenDocs(record, vision, byteBudget, source.screenIds);
   if (docs.length === 0) {
-    throw new QiIngestionError(
-      "QI_SOURCE_EMPTY",
-      `Figma snapshot "${label}" produced no usable screen baseline.`,
-    );
+    throw figmaSnapshotEmptyError(record, source, label);
   }
   const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
-  const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
+  const sourceRef = figmaSnapshotSourceRef(source);
+  const envelopeId = envelopeIdFor(index, label, sourceRef);
   // A stored Figma Snapshot is figma evidence, not repository context. Use the dedicated
   // `figma-evidence` envelope kind (#278 AC2 "represented as an explicit connector-backed source"
   // + AC4 citation/audit attribution) so the persisted envelope, source-mix priority, and any
@@ -1159,11 +1325,11 @@ function ingestFigmaSnapshot(
     kind: "figma-evidence",
     displayLabel: label,
     provenance: {
-      origin: `figma-snapshot:${source.snapshotRunId}`,
+      origin: `figma-snapshot:${sourceRef}`,
       registeredAt,
       integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
     },
-    localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
+    localRef: stableLocalRef("figma-snapshot", sourceRef),
   };
   const atoms = docs.map((d) =>
     capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
@@ -1187,33 +1353,182 @@ async function ingestFigmaSnapshotAsync(
       `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
     );
   }
-  if (record.screens.length === 0) {
+  if (record.screens.length === 0 && (record.structuralScreens?.length ?? 0) === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
   }
-  const docs = await figmaScreenDocsAsync(record, vision, byteBudget);
+  const docs = await figmaScreenDocsAsync(record, vision, byteBudget, source.screenIds);
   if (docs.length === 0) {
-    throw new QiIngestionError(
-      "QI_SOURCE_EMPTY",
-      `Figma snapshot "${label}" produced no usable screen baseline.`,
-    );
+    throw figmaSnapshotEmptyError(record, source, label);
   }
   const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
-  const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
+  const sourceRef = figmaSnapshotSourceRef(source);
+  const envelopeId = envelopeIdFor(index, label, sourceRef);
   const envelope: QI.QualityIntelligenceSourceEnvelope = {
     id: envelopeId,
     kind: "figma-evidence",
     displayLabel: label,
     provenance: {
-      origin: `figma-snapshot:${source.snapshotRunId}`,
+      origin: `figma-snapshot:${sourceRef}`,
       registeredAt,
       integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
     },
-    localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
+    localRef: stableLocalRef("figma-snapshot", sourceRef),
   };
   const atoms = docs.map((d) =>
     capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
   );
   return { envelope, atoms };
+}
+
+function buildImageSourceEnvelope(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+  index: number,
+  registeredAt: string,
+  doc: CorpusDoc,
+): OneSource {
+  const sourceRef = imageSourceRef(source);
+  const envelopeId = envelopeIdFor(index, label, sourceRef);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "figma-evidence",
+    displayLabel: label,
+    provenance: {
+      origin: `image:${sourceRef}`,
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(doc.fingerprintText ?? doc.text),
+    },
+    localRef: stableLocalRef("image", sourceRef),
+  };
+  return {
+    envelope,
+    atoms: [capsuleDocAtom(doc.documentId, doc.text, envelopeId, doc.fingerprintText ?? doc.text)],
+  };
+}
+
+function imageDescriptionDoc(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): CorpusDoc | undefined {
+  if (vision === undefined) return undefined;
+  const { row, ir } = parsedRenderedScreenForImageSource(record, source, label);
+  const hints = vision(
+    figmaVisionRequest(record, row, imageDescriptionBaseline(row.screenId, ir.name)),
+  );
+  if (isPromiseLike(hints)) return undefined;
+  return imageDescriptionDocFromHints(row.screenId, ir.name, hints, byteBudget);
+}
+
+async function imageDescriptionDocAsync(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<CorpusDoc | undefined> {
+  if (vision === undefined) return undefined;
+  const { row, ir } = parsedRenderedScreenForImageSource(record, source, label);
+  const hints = await vision(
+    figmaVisionRequest(record, row, imageDescriptionBaseline(row.screenId, ir.name)),
+  );
+  return imageDescriptionDocFromHints(row.screenId, ir.name, hints, byteBudget);
+}
+
+function ingestImageSource(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_IMAGE_UNAVAILABLE",
+      `Image "${label}" could not be found or read. Build the Figma snapshot first.`,
+    );
+  }
+  const doc = imageDescriptionDoc(record, source, label, vision, byteBudget);
+  if (doc === undefined) throw imageDescriptionUnavailable(label);
+  return buildImageSourceEnvelope(source, label, index, registeredAt, doc);
+}
+
+async function ingestImageSourceAsync(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<OneSource> {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_IMAGE_UNAVAILABLE",
+      `Image "${label}" could not be found or read. Build the Figma snapshot first.`,
+    );
+  }
+  const doc = await imageDescriptionDocAsync(record, source, label, vision, byteBudget);
+  if (doc === undefined) throw imageDescriptionUnavailable(label);
+  return buildImageSourceEnvelope(source, label, index, registeredAt, doc);
+}
+
+function ingestCapsuleSource(
+  source:
+    | Extract<QualityIntelligenceInlineSource, { kind: "capsule" }>
+    | Extract<QualityIntelligenceInlineSource, { kind: "capsule-set" }>,
+  index: number,
+  registeredAt: string,
+  capsuleResolver: CapsuleResolver | undefined,
+  byteBudget: number,
+): OneSource {
+  if (capsuleResolver === undefined) {
+    throw new QiIngestionError(
+      "QI_CAPSULE_UNAVAILABLE",
+      source.kind === "capsule"
+        ? "Capsule sources are unavailable: the Local Knowledge store is not configured."
+        : "Capsule-set sources are unavailable: the Local Knowledge store is not configured.",
+    );
+  }
+  return source.kind === "capsule"
+    ? ingestCapsule(source, index, registeredAt, capsuleResolver, byteBudget)
+    : ingestCapsuleSet(source, index, registeredAt, capsuleResolver, byteBudget);
+}
+
+function ingestStoredFigmaSource(
+  source:
+    | Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>
+    | Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  index: number,
+  registeredAt: string,
+  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
+  figmaVision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): OneSource {
+  if (figmaSnapshotLoader === undefined) {
+    throw new QiIngestionError(
+      source.kind === "image" ? "QI_IMAGE_UNAVAILABLE" : "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      source.kind === "image"
+        ? "Image sources are unavailable: the evidence directory is not configured."
+        : "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+    );
+  }
+  return source.kind === "image"
+    ? ingestImageSource(source, index, registeredAt, figmaSnapshotLoader, figmaVision, byteBudget)
+    : ingestFigmaSnapshot(
+        source,
+        index,
+        registeredAt,
+        figmaSnapshotLoader,
+        figmaVision,
+        byteBudget,
+      );
 }
 
 function ingestOne(
@@ -1233,29 +1548,11 @@ function ingestOne(
     case "file":
       return ingestFile(source, index, registeredAt, byteBudget);
     case "capsule":
-      if (capsuleResolver === undefined) {
-        throw new QiIngestionError(
-          "QI_CAPSULE_UNAVAILABLE",
-          "Capsule sources are unavailable: the Local Knowledge store is not configured.",
-        );
-      }
-      return ingestCapsule(source, index, registeredAt, capsuleResolver, byteBudget);
     case "capsule-set":
-      if (capsuleResolver === undefined) {
-        throw new QiIngestionError(
-          "QI_CAPSULE_UNAVAILABLE",
-          "Capsule-set sources are unavailable: the Local Knowledge store is not configured.",
-        );
-      }
-      return ingestCapsuleSet(source, index, registeredAt, capsuleResolver, byteBudget);
+      return ingestCapsuleSource(source, index, registeredAt, capsuleResolver, byteBudget);
     case "figma-snapshot":
-      if (figmaSnapshotLoader === undefined) {
-        throw new QiIngestionError(
-          "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
-          "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
-        );
-      }
-      return ingestFigmaSnapshot(
+    case "image":
+      return ingestStoredFigmaSource(
         source,
         index,
         registeredAt,
@@ -1275,7 +1572,7 @@ async function ingestOneAsync(
   figmaVision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
 ): Promise<OneSource> {
-  if (source.kind !== "figma-snapshot") {
+  if (source.kind !== "figma-snapshot" && source.kind !== "image") {
     return ingestOne(
       source,
       index,
@@ -1288,8 +1585,20 @@ async function ingestOneAsync(
   }
   if (figmaSnapshotLoader === undefined) {
     throw new QiIngestionError(
-      "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
-      "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+      source.kind === "image" ? "QI_IMAGE_UNAVAILABLE" : "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      source.kind === "image"
+        ? "Image sources are unavailable: the evidence directory is not configured."
+        : "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+    );
+  }
+  if (source.kind === "image") {
+    return ingestImageSourceAsync(
+      source,
+      index,
+      registeredAt,
+      figmaSnapshotLoader,
+      figmaVision,
+      byteBudget,
     );
   }
   return ingestFigmaSnapshotAsync(
@@ -1319,8 +1628,10 @@ export interface IngestInlineSourcesInput {
    */
   readonly figmaSnapshotLoader?: FigmaSnapshotLoader | undefined;
   /**
-   * Optional capability-routed vision hint provider (Issue #754/#810). Absent → IR-only baseline.
-   * Hints are additive and never override the deterministic structural baseline.
+   * Optional capability-routed image-input provider (Issue #754/#810). For figma-snapshot sources
+   * hints are additive and never override the deterministic structural baseline. For pure image
+   * sources the same provider must produce the textual image description; absent/empty output makes
+   * that image source unavailable instead of pretending a text-only model saw the screenshot.
    */
   readonly figmaVision?: FigmaVisionHintProvider | undefined;
 }

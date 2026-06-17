@@ -26,14 +26,15 @@ import type {
   CapsuleDetail,
   ConnectCapsuleSourceScope,
 } from "@/lib/local-knowledge-api";
-import { fetchFilesTree, fetchProjects } from "@/lib/api";
-import type { FilesTreeEntry, ProjectWithAvailability } from "@/lib/types";
+import type { FilesTreeEntry } from "@/lib/types";
 import { formatBytes } from "@/lib/format";
 import {
   LOCAL_KNOWLEDGE_MAX_FILE_BYTES,
   LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT,
   LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS,
 } from "@/lib/local-knowledge-limits";
+import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
+import { LocalFileBrowserDialog } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
 import { Icons } from "@/app/components/desktop/Icons";
 import { formatError } from "../format-error";
 
@@ -176,295 +177,25 @@ function buildScope(
   return { kind: "files", rootPath: trimmedRoot, files };
 }
 
-function displayLocalPath(root: string, relativePath: string | null): string {
-  if (relativePath === null || relativePath.length === 0) return root;
-  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
+function pickerModeForScope(kind: ConnectCapsuleSourceScope["kind"]): "files" | "folder-or-files" {
+  return kind === "files" ? "files" : "folder-or-files";
 }
 
-function parentRelativePath(path: string | null): string | null {
-  if (path === null || path.length === 0) return null;
-  const trimmed = path.replace(/\/+$/u, "");
-  const idx = trimmed.lastIndexOf("/");
-  if (idx < 0) return null;
-  const parent = trimmed.slice(0, idx);
-  return parent.length > 0 ? parent : null;
+function pickerFileDisabledReason(entry: FilesTreeEntry): string | undefined {
+  if (isOversizedPickerFile(entry)) {
+    return `File is ${formatBytes(entry.sizeBytes)}; maximum is ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}.`;
+  }
+  if (!entry.readable) return "File is not readable.";
+  return undefined;
 }
 
-interface LocalSourcePickerDialogProps {
-  readonly scopeKind: ConnectCapsuleSourceScope["kind"];
-  readonly initialRootPath: string;
-  readonly initialFilesInput: string;
-  readonly onApply: (
-    scopeKind: ConnectCapsuleSourceScope["kind"],
-    rootPath: string,
-    filesInput?: string,
-  ) => void;
-  readonly onCancel: () => void;
-  readonly fetchProjectsImpl?: typeof fetchProjects;
-  readonly fetchFilesTreeImpl?: typeof fetchFilesTree;
-}
-
-function LocalSourcePickerDialog({
-  scopeKind,
-  initialRootPath,
-  initialFilesInput,
-  onApply,
-  onCancel,
-  fetchProjectsImpl = fetchProjects,
-  fetchFilesTreeImpl = fetchFilesTree,
-}: LocalSourcePickerDialogProps): ReactNode {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, true, onCancel);
-
-  const [projects, setProjects] = useState<readonly ProjectWithAvailability[]>([]);
-  const [activeRoot, setActiveRoot] = useState(initialRootPath.trim());
-  const [rootDraft, setRootDraft] = useState(initialRootPath.trim());
-  const [currentPath, setCurrentPath] = useState<string | null>(null);
-  const [entries, setEntries] = useState<readonly FilesTreeEntry[]>([]);
-  const [selectedFiles, setSelectedFiles] = useState<ReadonlySet<string>>(
-    () => new Set(parseFilesInput(initialFilesInput)),
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchProjectsImpl()
-      .then((payload) => {
-        if (cancelled) return;
-        const available = payload.projects.filter((project) => project.available);
-        setProjects(available);
-        if (activeRoot.length === 0 && available[0] !== undefined) {
-          setActiveRoot(available[0].path);
-          setRootDraft(available[0].path);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setProjects([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeRoot.length, fetchProjectsImpl]);
-
-  useEffect(() => {
-    if (activeRoot.length === 0) {
-      setEntries([]);
-      setError(null);
-      return undefined;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void fetchFilesTreeImpl(activeRoot, currentPath ?? "")
-      .then((payload) => {
-        if (cancelled) return;
-        setEntries(payload.entries);
-        setActiveRoot(payload.root);
-        setRootDraft(payload.root);
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) {
-          setEntries([]);
-          setError(formatError(caught));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeRoot, currentPath, fetchFilesTreeImpl]);
-
-  function openRoot(nextRoot: string): void {
-    const trimmed = nextRoot.trim();
-    if (trimmed.length === 0) return;
-    setSelectedFiles(new Set());
-    setCurrentPath(null);
-    setActiveRoot(trimmed);
-  }
-
-  function chooseProject(project: ProjectWithAvailability): void {
-    setRootDraft(project.path);
-    openRoot(project.path);
-  }
-
-  function toggleFile(path: string): void {
-    setSelectedFiles((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }
-
-  const visiblePath = displayLocalPath(activeRoot, currentPath);
-  const selectedFileLines = Array.from(selectedFiles).join("\n");
-  const appliesFileScope = selectedFiles.size > 0;
-  const canApply =
-    scopeKind === "files" || appliesFileScope
-      ? activeRoot.length > 0 && selectedFiles.size > 0
-      : activeRoot.length > 0;
-
-  return createPortal(
-    <div className="dlg-overlay in" role="presentation">
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="lkd-source-picker-title"
-        aria-describedby="lkd-source-picker-desc"
-        className="dlg lkd-source-picker"
-        tabIndex={-1}
-      >
-        <div className="dlg-head">
-          <div className="dlg-htext">
-            <div id="lkd-source-picker-title" className="dlg-title">
-              Choose local source
-            </div>
-            <div id="lkd-source-picker-desc" className="dlg-sub">
-              Select a local {scopeKind === "files" ? "file or files" : "folder"} for this capsule.
-            </div>
-            <div className="dlg-sub">{localKnowledgeLimitSummary()}</div>
-          </div>
-        </div>
-        <div className="dlg-body lkd-source-picker-body">
-          {projects.length > 0 ? (
-            <div className="lkd-picker-projects" aria-label="Registered project folders">
-              {projects.map((project) => (
-                <button
-                  key={project.path}
-                  type="button"
-                  className="lk-btn lk-btn-ghost"
-                  onClick={() => chooseProject(project)}
-                >
-                  {project.name ?? project.path}
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          <form
-            className="lkd-picker-root"
-            onSubmit={(event) => {
-              event.preventDefault();
-              openRoot(rootDraft);
-            }}
-          >
-            <label htmlFor="lkd-picker-root-input" className="dlg-label">
-              Folder root
-            </label>
-            <input
-              id="lkd-picker-root-input"
-              type="text"
-              className="dlg-input lkd-connect-input"
-              value={rootDraft}
-              placeholder="/absolute/path/to/folder"
-              onChange={(event) => setRootDraft(event.target.value)}
-            />
-            <button type="submit" className="lk-btn lk-btn-ghost">
-              Open
-            </button>
-          </form>
-
-          <div className="lkd-picker-current">
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost"
-              disabled={currentPath === null}
-              onClick={() => setCurrentPath(parentRelativePath(currentPath))}
-            >
-              Up
-            </button>
-            <span className="mono" title={visiblePath}>
-              {visiblePath || "No folder selected"}
-            </span>
-          </div>
-
-          {error !== null ? (
-            <div role="alert" className="lk-alert">
-              {error}
-            </div>
-          ) : null}
-          {loading ? (
-            <p role="status" className="lk-loading">
-              Loading folder…
-            </p>
-          ) : (
-            <ul className="lkd-picker-list" aria-label="Local source browser">
-              {entries.map((entry) => {
-                const oversized = isOversizedPickerFile(entry);
-                const fileDisabled = !entry.readable || oversized;
-                const disabledReason = oversized
-                  ? `File is ${formatBytes(entry.sizeBytes)}; maximum is ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}.`
-                  : "File is not readable.";
-                return (
-                  <li key={entry.path} className="lkd-picker-entry">
-                    {entry.kind === "directory" ? (
-                      <button
-                        type="button"
-                        className="lkd-picker-row"
-                        disabled={!entry.readable}
-                        onClick={() => {
-                          setSelectedFiles(new Set());
-                          setCurrentPath(entry.path);
-                        }}
-                      >
-                        <Icons.folder size={14} />
-                        <span>{entry.name}</span>
-                      </button>
-                    ) : (
-                      <label
-                        className="lkd-picker-row"
-                        data-disabled={String(fileDisabled)}
-                        title={fileDisabled ? disabledReason : undefined}
-                      >
-                        <input
-                          type="checkbox"
-                          disabled={fileDisabled}
-                          checked={selectedFiles.has(entry.path)}
-                          onChange={() => toggleFile(entry.path)}
-                        />
-                        <span>{entry.name}</span>
-                        <span className="lkd-picker-meta">
-                          {formatBytes(entry.sizeBytes)}
-                          {oversized ? " · too large" : ""}
-                        </span>
-                      </label>
-                    )}
-                  </li>
-                );
-              })}
-              {!loading && entries.length === 0 && activeRoot.length > 0 ? (
-                <li className="lkd-picker-empty">No entries in this folder.</li>
-              ) : null}
-            </ul>
-          )}
-        </div>
-        <div className="dlg-foot">
-          <button type="button" className="dlg-btn" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="dlg-btn primary"
-            disabled={!canApply}
-            onClick={() => {
-              if (appliesFileScope) {
-                onApply("files", activeRoot, selectedFileLines);
-                return;
-              }
-              onApply(scopeKind, visiblePath);
-            }}
-          >
-            Use selection
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+function pickerFileMeta(entry: FilesTreeEntry): ReactNode {
+  const oversized = isOversizedPickerFile(entry);
+  return (
+    <>
+      {formatBytes(entry.sizeBytes)}
+      {oversized ? " · too large" : ""}
+    </>
   );
 }
 
@@ -588,15 +319,25 @@ function ConnectSourceForm({
         </div>
       ) : null}
       {pickerOpen ? (
-        <LocalSourcePickerDialog
-          scopeKind={scopeKind}
+        <LocalFileBrowserDialog
+          mode={pickerModeForScope(scopeKind)}
+          title="Choose local source"
+          description={`Select a local ${scopeKind === "files" ? "file or files" : "folder"} for this capsule.`}
+          note={localKnowledgeLimitSummary()}
           initialRootPath={rootPath}
-          initialFilesInput={filesInput}
-          onApply={(nextScopeKind, nextRootPath, nextFilesInput) => {
-            setScopeKind(nextScopeKind);
-            setRootPath(nextRootPath);
-            if (nextFilesInput !== undefined) setFilesInput(nextFilesInput);
-            else if (nextScopeKind !== "files") setFilesInput("");
+          initialFiles={parseFilesInput(filesInput)}
+          isFileDisabled={isOversizedPickerFile}
+          fileDisabledReason={pickerFileDisabledReason}
+          fileMeta={pickerFileMeta}
+          onApply={(selection) => {
+            if (selection.files.length > 0) {
+              setScopeKind("files");
+              setRootPath(selection.rootPath);
+              setFilesInput(selection.files.join("\n"));
+            } else {
+              setRootPath(selection.folderPath);
+              if (scopeKind !== "files") setFilesInput("");
+            }
             setConnectError(null);
             setPickerOpen(false);
           }}
@@ -781,6 +522,7 @@ function ConfirmModal({
 }: ConfirmModalProps): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  useModalInteractionLock();
   useFocusTrap(dialogRef, true, onCancel);
 
   // Auto-focus the confirmation input when the modal opens. Done via ref + effect (not

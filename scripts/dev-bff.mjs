@@ -13,6 +13,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const staticRoot = join(stateDir, "static-placeholder");
 const port = Number(process.env.KEIKO_DEV_BFF_PORT ?? "1984");
+const LOCAL_DOTENV_ENV_NAME_ALLOWLIST = new Set(["FIGMA_ACCESS_TOKEN"]);
 
 function parseEnvValue(raw) {
   const value = raw.trim();
@@ -41,7 +42,7 @@ function loadLocalKeikoEnv(env) {
     const equals = line.indexOf("=");
     if (equals <= 0) continue;
     const key = line.slice(0, equals).trim();
-    if (!/^KEIKO_[A-Z0-9_]+$/.test(key)) continue;
+    if (!/^KEIKO_[A-Z0-9_]+$/.test(key) && !LOCAL_DOTENV_ENV_NAME_ALLOWLIST.has(key)) continue;
     if (merged[key] !== undefined) continue;
     merged[key] = parseEnvValue(line.slice(equals + 1));
   }

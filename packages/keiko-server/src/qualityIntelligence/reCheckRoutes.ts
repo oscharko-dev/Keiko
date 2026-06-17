@@ -58,6 +58,7 @@ import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
+import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
@@ -184,7 +185,36 @@ function validateFigmaSnapshotSource(
   if (typeof raw.snapshotRunId !== "string" || raw.snapshotRunId.trim().length === 0) {
     return undefined;
   }
-  return { kind: "figma-snapshot", label, snapshotRunId: raw.snapshotRunId };
+  // Shared with the start-run route so re-check accepts/rejects EXACTLY the same screenIds inputs:
+  // absent → whole snapshot; present → non-empty, bounded, canonicalised scope; empty array rejected.
+  const parsed = parseFigmaSnapshotScreenIds(raw.screenIds);
+  if (!parsed.ok) {
+    return undefined;
+  }
+  return {
+    kind: "figma-snapshot",
+    label,
+    snapshotRunId: raw.snapshotRunId,
+    ...(parsed.screenIds !== undefined ? { screenIds: parsed.screenIds } : {}),
+  };
+}
+
+function validateImageSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QI.QualityIntelligenceImageSource | undefined {
+  if (raw.sourceKind !== "figma-snapshot-screen") return undefined;
+  if (typeof raw.snapshotRunId !== "string" || raw.snapshotRunId.trim().length === 0) {
+    return undefined;
+  }
+  if (typeof raw.screenId !== "string" || raw.screenId.trim().length === 0) return undefined;
+  return {
+    kind: "image",
+    label,
+    sourceKind: "figma-snapshot-screen",
+    snapshotRunId: raw.snapshotRunId,
+    screenId: raw.screenId,
+  };
 }
 
 function validateConnectorSource(
@@ -199,6 +229,9 @@ function validateConnectorSource(
   }
   if (raw.kind === "figma-snapshot") {
     return validateFigmaSnapshotSource(label, raw);
+  }
+  if (raw.kind === "image") {
+    return validateImageSource(label, raw);
   }
   return undefined;
 }
@@ -382,8 +415,8 @@ function buildCoverageGapFindingRow(
       : `Atom ${String(atomStatus.atomId)} ("${excerpt}")`;
   const summaryRedacted =
     atomStatus.status === "uncovered"
-      ? `${atomLabel} has no tracing test (uncovered).`
-      : `${atomLabel} is only weakly covered (no dedicated test traces to it).`;
+      ? `${atomLabel} hat keinen zugeordneten Test (uncovered).`
+      : `${atomLabel} ist nur schwach abgedeckt (kein dedizierter Test referenziert dieses Atom).`;
   return Object.freeze({
     id: `qi-finding-${sha256Hex(payload).slice(0, 32)}`,
     kind: "coverage-gap",

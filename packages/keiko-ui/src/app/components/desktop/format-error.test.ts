@@ -40,6 +40,25 @@ describe("formatUserError", () => {
     });
   });
 
+  it("renders clarification responses as conversation guidance instead of broad request failures", () => {
+    const notice = toUserErrorNotice(
+      new ApiError(
+        "CLARIFICATION_NEEDED",
+        "Keiko braucht mehr Kontext, um die verbundenen Quellen gezielt zu durchsuchen.",
+        400,
+      ),
+      "Could not send message.",
+    );
+
+    expect(notice).toEqual({
+      title: "Keiko braucht mehr Kontext",
+      message: "Keiko braucht mehr Kontext, um die verbundenen Quellen gezielt zu durchsuchen.",
+      code: "CLARIFICATION_NEEDED",
+      remediation:
+        "Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase.",
+    });
+  });
+
   it("parses the trailing support code from formatted error strings", () => {
     expect(toUserErrorNotice("Gateway returned 502. (GATEWAY_UPSTREAM_FAILURE)", "Retry")).toEqual({
       title: "Request failed",

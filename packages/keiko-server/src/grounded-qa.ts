@@ -119,6 +119,10 @@ export function badRequest(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
 }
 
+export function clarificationRequest(message: string): RouteResult {
+  return { status: 400, body: errorBody("CLARIFICATION_NEEDED", message) };
+}
+
 function notFound(message: string): RouteResult {
   return { status: 404, body: errorBody("NOT_FOUND", message) };
 }
@@ -873,7 +877,7 @@ async function runGroundedRunner(
     return output;
   } catch (error) {
     if (error instanceof ClarificationNeededError) {
-      return badRequest(clarificationUserMessage(error));
+      return clarificationRequest(clarificationUserMessage(error));
     }
     const workspaceResult = mappedWorkspaceError(error);
     if (workspaceResult !== undefined) return workspaceResult;

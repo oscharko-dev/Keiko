@@ -38,6 +38,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
+import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
   classifyFigmaTransportError,
   FigmaConnectorError,
@@ -121,10 +122,13 @@ function candidateBaseUrls(baseUrl: string): readonly string[] {
   try {
     const url = new URL(primary);
     if (url.hostname.endsWith(".services.ai.azure.com")) {
+      const openAiV1 = `${url.origin}/openai/v1`;
       if (url.pathname === "" || url.pathname === "/") {
         candidates.push(`${url.origin}/openai/v1`);
       } else if (primary.endsWith("/openai")) {
         candidates.push(`${primary}/v1`);
+      } else if (primary !== openAiV1 && !primary.endsWith("/openai/v1")) {
+        candidates.push(openAiV1);
       }
     } else if (!primary.endsWith("/v1")) {
       candidates.push(`${primary}/v1`);
@@ -588,7 +592,10 @@ async function defaultGatewaySetupTester(
     async (modelId) => {
       await gateway.chat({
         modelId,
-        messages: [{ role: "user", content: "Reply with exactly: OK" }],
+        messages: [
+          { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+          { role: "user", content: "Reply with exactly: OK" },
+        ],
       });
     },
     SETUP_SMOKE_CONCURRENCY,
@@ -900,6 +907,7 @@ interface VerifiedSetup {
   readonly rawConfig: Record<string, unknown>;
   readonly config: GatewayConfig;
   readonly testedModelIds: readonly string[];
+  readonly skippedModelIds: readonly string[];
 }
 
 interface SetupVerificationInput {
@@ -941,12 +949,7 @@ async function candidateModelIdsForSetup(
 ): Promise<readonly string[]> {
   return input.deploymentNames.length > 0
     ? input.deploymentNames
-    : input.discovery(
-        input.baseUrl,
-        input.apiKey,
-        input.apiKeyHeaderName,
-        validationConfig.egress,
-      );
+    : input.discovery(input.baseUrl, input.apiKey, input.apiKeyHeaderName, validationConfig.egress);
 }
 
 function finalRawConfigForSetup(
@@ -969,9 +972,19 @@ function finalRawConfigForSetup(
   };
 }
 
-async function verifySetupCandidate(
-  input: SetupVerificationInput,
-): Promise<VerifiedSetup> {
+function skippedModelIdsForSetup(
+  candidateModelIds: readonly string[],
+  testedModelIds: readonly string[],
+  deploymentNames: readonly string[],
+): readonly string[] {
+  const acceptedModelIds = new Set([
+    ...testedModelIds,
+    ...embeddingModelIdsFromDeployments(deploymentNames),
+  ]);
+  return candidateModelIds.filter((modelId) => !acceptedModelIds.has(modelId));
+}
+
+async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate");
@@ -984,7 +997,10 @@ async function verifySetupCandidate(
   const candidateRawConfig = buildRawConfig(input.baseUrl, input.apiKey, candidateModelIds, {
     apiKeyHeaderName: input.apiKeyHeaderName,
     timeoutMs: smokeTimeoutMs,
-    maxRetries: 0,
+    // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
+    // content-filter — does not permanently exclude an otherwise-working model from the setup and
+    // brand it to the user as incompatible. Still bounded so setup latency stays predictable.
+    maxRetries: 1,
     imageInputModelIds: input.imageInputModelIds,
   });
   const candidateConfig = parseGatewayConfig(
@@ -998,10 +1014,23 @@ async function verifySetupCandidate(
     withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),
     input.env,
   );
-  return { rawConfig: rawConfigWithOptionalBlocks, config, testedModelIds };
+  return {
+    rawConfig: rawConfigWithOptionalBlocks,
+    config,
+    testedModelIds,
+    skippedModelIds: skippedModelIdsForSetup(
+      candidateModelIds,
+      testedModelIds,
+      input.deploymentNames,
+    ),
+  };
 }
 
-function setupSuccessResult(config: GatewayConfig, testedModelIds: readonly string[]): RouteResult {
+function setupSuccessResult(
+  config: GatewayConfig,
+  testedModelIds: readonly string[],
+  skippedModelIds: readonly string[],
+): RouteResult {
   const testedModelId = testedModelIds[0] ?? "unknown";
   return {
     status: 200,
@@ -1009,6 +1038,7 @@ function setupSuccessResult(config: GatewayConfig, testedModelIds: readonly stri
       ok: true,
       testedModelId,
       testedModelIds,
+      skippedModelIds,
       providerCount: config.providers.length,
       models: listConfiguredCapabilities(config),
       config: toSafeObject(config),
@@ -1138,7 +1168,7 @@ async function trySetupCandidate(
   });
   savePrivateJson(gatewayConfig.storagePath, verified.rawConfig);
   gatewayConfig.set(verified.config, true);
-  return setupSuccessResult(verified.config, verified.testedModelIds);
+  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
 }
 
 function setupCandidateError(error: unknown, request: SetupRequest, baseUrl: string): string {
@@ -1161,6 +1191,7 @@ function saveExistingConfigUpdate(
   return setupSuccessResult(
     config,
     config.providers.map((provider) => provider.modelId),
+    [],
   );
 }
 

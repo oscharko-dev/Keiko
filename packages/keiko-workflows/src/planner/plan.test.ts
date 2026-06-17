@@ -133,10 +133,50 @@ describe("createExplorationPlan", () => {
       relativePaths: [],
       explicitConnection: true,
     });
-    const q = happyQuery({ text: "explain the architecture" });
+    const q = happyQuery({ text: "tell me everything" });
     const p = plan({ scope, query: q });
     expect(p.state).toBe("clarification-needed");
     expect(p.clarification?.reason).toBe("too-generic");
+  });
+
+  it("explicitConnection: workspace-root allows project metadata lookups", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "Welche Type-Script Version wird in der App verwendet?" });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("ready");
+    expect(p.retrievalIntent).toBe("project-metadata");
+    expect(p.clarification).toBeUndefined();
+  });
+
+  it("explicitConnection: workspace-root allows repository overview lookups", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "Erkläre grob die Architektur dieses Repositories." });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("ready");
+    expect(p.retrievalIntent).toBe("repository-overview");
+    expect(p.clarification).toBeUndefined();
+  });
+
+  it("explicitConnection: workspace-root allows unquoted symbol lookups", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "Wo ist WindowFrame implementiert?" });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("ready");
+    expect(p.retrievalIntent).toBe("targeted-code-search");
+    expect(p.anchors.some((anchor) => anchor.term === "windowframe")).toBe(true);
+    expect(p.clarification).toBeUndefined();
   });
 
   it("explicitConnection still requires at least one anchor (no-anchors holds)", () => {

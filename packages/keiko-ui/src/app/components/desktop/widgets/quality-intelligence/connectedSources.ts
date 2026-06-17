@@ -15,18 +15,20 @@ import type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceFileSource,
+  QualityIntelligenceImageSource,
   QualityIntelligenceInlineSource,
   QualityIntelligenceWorkspaceSource,
 } from "@oscharko-dev/keiko-contracts";
 import { MAX_SCOPES } from "../../hooks/workspaceActions";
 
-/** One connected (non-manual) run source — folder, single file, capsule, capsule-set, or figma snapshot. */
+/** One connected non-manual run source. */
 export type ConnectedRunSource =
   | QualityIntelligenceFileSource
   | QualityIntelligenceWorkspaceSource
   | QualityIntelligenceCapsuleSource
   | QualityIntelligenceCapsuleSetSource
-  | QualityIntelligenceFigmaSnapshotSource;
+  | QualityIntelligenceFigmaSnapshotSource
+  | QualityIntelligenceImageSource;
 
 export interface ConnectedSourceProps {
   /** Folder root of the FIRST connected Files window (Epic #270 Slice 1). */
@@ -41,6 +43,15 @@ export interface ConnectedSourceProps {
   readonly connectedCapsuleSetIds?: readonly string[] | undefined;
   /** Figma Snapshot run ids from connected Figma Snapshot windows (Epic #750 #756). */
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
+  /**
+   * Scoped Figma Snapshot sources from connected Figma windows. When present, this supersedes the
+   * run-id-only list and can carry one or more selected screen ids.
+   */
+  readonly connectedFigmaSnapshotSources?:
+    | readonly QualityIntelligenceFigmaSnapshotSource[]
+    | undefined;
+  /** Image-only sources from connected Figma Image windows. */
+  readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
 }
 
 const CONNECTED_SOURCES_CFG_KEY = "connectedSourcesJson";
@@ -58,6 +69,23 @@ function hasStringField(record: Record<string, unknown>, key: string): boolean {
   return typeof record[key] === "string";
 }
 
+// A scoped figma-snapshot source's screenIds, when present, must be a NON-EMPTY array of non-empty
+// strings. An absent field is a whole-snapshot source; a present-but-empty (or blank-element) array is
+// rejected so a malformed persisted source degrades to "drop this source" rather than silently being
+// read as a whole-snapshot scope (the scoped-snapshot no-leak invariant, mirrored server-side).
+function hasOptionalNonEmptyStringArrayField(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  const value = record[key];
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length > 0 &&
+      value.every((item) => typeof item === "string" && item.trim().length > 0))
+  );
+}
+
 function isConnectedRunSource(value: unknown): value is ConnectedRunSource {
   if (!isRecord(value) || !hasStringField(value, "label")) return false;
   switch (value.kind) {
@@ -69,7 +97,16 @@ function isConnectedRunSource(value: unknown): value is ConnectedRunSource {
     case "capsule-set":
       return hasStringField(value, "capsuleSetId");
     case "figma-snapshot":
-      return hasStringField(value, "snapshotRunId");
+      return (
+        hasStringField(value, "snapshotRunId") &&
+        hasOptionalNonEmptyStringArrayField(value, "screenIds")
+      );
+    case "image":
+      return (
+        value["sourceKind"] === "figma-snapshot-screen" &&
+        hasStringField(value, "snapshotRunId") &&
+        hasStringField(value, "screenId")
+      );
     default:
       return false;
   }
@@ -183,8 +220,24 @@ function sourceKey(source: ConnectedRunSource): string {
       return `capsule:${source.capsuleId}`;
     case "capsule-set":
       return `capsule-set:${source.capsuleSetId}`;
-    case "figma-snapshot":
-      return `figma-snapshot:${source.snapshotRunId}`;
+    case "figma-snapshot": {
+      const ids = source.screenIds;
+      // Canonical scope token (dedupe + sort) so two scoped sources selecting the same screens in a
+      // different order collapse to one in the dedupe below, matching the server's canonical ref.
+      const scope =
+        ids === undefined || ids.length === 0
+          ? "*"
+          : [
+              ...new Set(
+                ids.map((screenId) => screenId.trim()).filter((screenId) => screenId.length > 0),
+              ),
+            ]
+              .sort()
+              .join(",");
+      return `figma-snapshot:${source.snapshotRunId}:${scope}`;
+    }
+    case "image":
+      return `image:${source.sourceKind}:${source.snapshotRunId}:${source.screenId}`;
   }
 }
 
@@ -195,7 +248,8 @@ function sourceKey(source: ConnectedRunSource): string {
  * capsule, and capsule-set is still included. A lone focused file therefore stays a one-element file
  * request (Epic #709 unchanged); a file + other folder + capsule becomes a three-element request.
  *
- * Precedence when the global cap is hit: file → folders → capsules → capsule-sets → figma snapshots.
+ * Precedence when the global cap is hit: file → folders → capsules → capsule-sets → figma snapshots
+ * → image descriptions.
  * The combined list is capped ONCE across all kinds, mirroring the server's single 16-source cap.
  */
 export function buildConnectedRunSources(
@@ -238,8 +292,19 @@ export function buildConnectedRunSources(
   for (const id of props.connectedCapsuleSetIds ?? []) {
     ordered.push({ kind: "capsule-set", label: id, capsuleSetId: id });
   }
-  for (const id of props.connectedFigmaSnapshotRunIds ?? []) {
-    ordered.push({ kind: "figma-snapshot", label: id, snapshotRunId: id });
+  const figmaSources =
+    props.connectedFigmaSnapshotSources !== undefined
+      ? props.connectedFigmaSnapshotSources
+      : (props.connectedFigmaSnapshotRunIds ?? []).map((id) => ({
+          kind: "figma-snapshot" as const,
+          label: id,
+          snapshotRunId: id,
+        }));
+  for (const source of figmaSources) {
+    ordered.push(source);
+  }
+  for (const source of props.connectedImageSources ?? []) {
+    ordered.push(source);
   }
 
   const seen = new Set<string>();

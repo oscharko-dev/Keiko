@@ -81,6 +81,123 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it("preserves scoped Figma snapshot references without persisting raw snapshot payloads", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "figma-1",
+        type: "figma",
+        cfg: {
+          snapshotRunId: "fs-abc-123",
+          selectedScreenIdsJson: JSON.stringify(["3:1466"]),
+          selectedScreenName: "Bedarfsermittlung",
+          irJson: '{"must":"not persist"}',
+          imageBytes: "iVBORw0KGgo=",
+        },
+      }),
+    ]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.cfg).toEqual({
+      snapshotRunId: "fs-abc-123",
+      selectedScreenIdsJson: JSON.stringify(["3:1466"]),
+      selectedScreenName: "Bedarfsermittlung",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("must");
+    expect(JSON.stringify(persisted)).not.toContain("iVBORw0KGgo");
+  });
+
+  it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "figma-json-1",
+        type: "figmaJson",
+        cfg: {
+          snapshotRunId: "fs-abc-123",
+          screenId: "3:1466",
+          selectedScreenIdsJson: JSON.stringify(["3:1466"]),
+          selectedScreenName: "Bedarfsermittlung",
+          irJson: '{"must":"not persist"}',
+          rawJson: '{"must":"not persist"}',
+        },
+      }),
+    ]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.cfg).toEqual({
+      snapshotRunId: "fs-abc-123",
+      screenId: "3:1466",
+      selectedScreenIdsJson: JSON.stringify(["3:1466"]),
+      selectedScreenName: "Bedarfsermittlung",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("must");
+  });
+
+  it("preserves standalone Figma image references without persisting raw image data or external URLs", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "figma-image-1",
+        type: "figmaImage",
+        cfg: {
+          snapshotRunId: "fs-abc-123",
+          screenId: "3:1466",
+          selectedScreenName: "Bedarfsermittlung",
+          imageSrc: "/api/figma/snapshots/fs-abc-123/screens/0/image",
+          rawPngBase64: "iVBORw0KGgo=",
+          externalImage: "https://example.invalid/screen.png",
+        },
+      }),
+    ]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.cfg).toEqual({
+      snapshotRunId: "fs-abc-123",
+      screenId: "3:1466",
+      selectedScreenName: "Bedarfsermittlung",
+      imageSrc: "/api/figma/snapshots/fs-abc-123/screens/0/image",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("iVBORw0KGgo");
+    expect(JSON.stringify(persisted)).not.toContain("example.invalid");
+  });
+
+  it("drops unsafe Figma image preview routes before browser-local persistence", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "figma-image-1",
+        type: "figmaImage",
+        cfg: {
+          snapshotRunId: "fs-abc-123",
+          screenId: "3:1466",
+          selectedScreenName: "Bedarfsermittlung",
+          imageSrc: "https://example.invalid/screen.png",
+        },
+      }),
+    ]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.cfg).toEqual({
+      snapshotRunId: "fs-abc-123",
+      screenId: "3:1466",
+      selectedScreenName: "Bedarfsermittlung",
+    });
+  });
+
+  it("drops malformed scoped Figma references before browser-local persistence", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "figma-1",
+        type: "figma",
+        cfg: {
+          snapshotRunId: "fs-abc-123",
+          selectedScreenIdsJson: JSON.stringify(["screen 1"]),
+          selectedScreenName: `token=${"t".repeat(20)}`,
+        },
+      }),
+    ]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-abc-123" });
+  });
+
   it("preserves minimized window state in the browser-local snapshot", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "files-1", type: "files", cfg: { root: "/repo" }, minimized: true }),

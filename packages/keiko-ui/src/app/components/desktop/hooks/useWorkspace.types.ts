@@ -3,6 +3,10 @@ import type { SnapZone } from "../windows/connectionUtils";
 import type { WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { ChatConnectedScope } from "@/lib/types";
+import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
+} from "@oscharko-dev/keiko-contracts";
 
 export interface ViewportWorld {
   readonly x: number;
@@ -44,6 +48,14 @@ export interface WorkspaceApi {
   readonly linkedConnectorCapsuleSetIds: (id: string) => readonly string[];
   /** Epic #750 #756 — snapshot run ids from connected Figma Snapshot windows. */
   readonly linkedFigmaSnapshotRunIds: (id: string) => readonly string[];
+  /** Figma Snapshot sources, optionally scoped to selected screen ids. */
+  readonly linkedFigmaSnapshotSources?:
+    | ((id: string) => readonly QualityIntelligenceFigmaSnapshotSource[])
+    | undefined;
+  /** Image-only sources from connected Figma Image windows. */
+  readonly linkedImageSources?:
+    | ((id: string) => readonly QualityIntelligenceImageSource[])
+    | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
   readonly zoomTo: (z: number) => void;
   readonly fitView: () => void;

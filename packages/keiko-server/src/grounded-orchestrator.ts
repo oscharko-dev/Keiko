@@ -27,6 +27,7 @@ import {
   applyUsage,
   assembleContextPack,
   canContinue,
+  classifyRetrievalIntent,
   complete,
   contextPackIndexKey,
   planAndGovern,
@@ -36,6 +37,7 @@ import {
   type ExplorationPlan,
   type GovernorState,
   type MicroIndex,
+  type RetrievalIntent,
   type RetrievalRing,
   type SearchAnchor,
 } from "@oscharko-dev/keiko-workflows";
@@ -44,6 +46,7 @@ import {
   FileTooLargeError,
   RepoSearchUnsupportedFileError,
   detectWorkspaceAt,
+  findFiles,
   gitHistoryAdapter,
   importGraphAdapter,
   readExcerpt,
@@ -53,6 +56,7 @@ import {
   type SearchScope,
   type StructuralAdapterRegistry,
   testSourcePairingAdapter,
+  type WorkspaceDirEntry,
   type WorkspaceFs,
   type WorkspaceInfo,
   containedRealPathInfo,
@@ -126,17 +130,17 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
   const { reason, suggestedQuestions } = error.clarification;
   const intro =
     reason === "scope-empty"
-      ? "The connected source contains nothing searchable."
+      ? "Die verbundene Quelle enthält nichts Durchsuchbares."
       : reason === "scope-invalid"
-        ? "The connected source could not be searched."
-        : "Your question is too broad to search the connected sources.";
+        ? "Die verbundene Quelle konnte nicht durchsucht werden."
+        : "Keiko braucht mehr Kontext, um die verbundenen Quellen gezielt zu durchsuchen.";
   const anchorHint =
     reason === "no-anchors" || reason === "too-generic"
-      ? " Mention a concrete file name, identifier, or exact phrase so Keiko knows where to look."
+      ? " Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase."
       : "";
   const examples = suggestedQuestions.slice(0, 2);
   const exampleText =
-    examples.length > 0 ? ` For example: ${examples.map((q) => `"${q}"`).join(" or ")}` : "";
+    examples.length > 0 ? ` Zum Beispiel: ${examples.map((q) => `"${q}"`).join(" oder ")}` : "";
   return `${intro}${anchorHint}${exampleText}`;
 }
 
@@ -146,6 +150,7 @@ interface SearchInputs {
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
+  readonly retrievalIntent: RetrievalIntent;
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
@@ -395,6 +400,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
       fs: inputs.fs,
       nowMs: inputs.nowMs,
+      searchHints: { retrievalIntent: inputs.retrievalIntent },
     });
     // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
     // It does NOT consume the excerpt budget. Charging result.filesScanned against filesReadMax
@@ -551,13 +557,24 @@ const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
 const PROJECT_METADATA_QUERY_TERMS = [
   "abhängigkeit",
   "abhängigkeiten",
+  "abhaengigkeit",
+  "abhaengigkeiten",
   "build",
   "cypress",
   "dependenc",
+  "dependencies",
+  "devdependencies",
   "framework",
+  "java-script",
+  "javascript",
   "jest",
+  "node",
+  "node.js",
   "npm",
   "package",
+  "package.json",
+  "package-manager",
+  "paketmanager",
   "playwright",
   "pnpm",
   "react",
@@ -566,15 +583,25 @@ const PROJECT_METADATA_QUERY_TERMS = [
   "tech-stack",
   "techstack",
   "test",
+  "test-runner",
   "testing",
   "testumgebung",
+  "type script",
+  "type-script",
   "typescript",
+  "version",
+  "versionen",
   "vite",
   "vitest",
   "yarn",
 ] as const;
 const PROJECT_METADATA_FILENAMES = [
   "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
   "vitest.config.ts",
   "vitest.config.mts",
   "vitest.config.js",
@@ -601,6 +628,42 @@ const PROJECT_METADATA_FILENAMES = [
   "postcss.config.js",
   "postcss.config.mjs",
 ] as const;
+const REPOSITORY_OVERVIEW_FILENAMES = [
+  "README.md",
+  "readme.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CONTRIBUTING.md",
+  "docs/README.md",
+  "docs/architecture.md",
+  "docs/ARCHITECTURE.md",
+  "docs/adr/README.md",
+] as const;
+const WORKSPACE_PACKAGE_DIRS = ["packages", "apps", "services", "libs"] as const;
+const MAX_WORKSPACE_MANIFESTS = 24;
+const SYMBOL_FILE_EXTENSIONS = [
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mts",
+  "cts",
+  "mjs",
+  "cjs",
+  "vue",
+] as const;
+const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
+const SYMBOL_FILE_SEARCH_LIMITS = {
+  maxFilesScanned: 10_000,
+  maxMatchesReturned: 32,
+  maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+  elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
+} as const;
+const SYMBOL_LINE_SCAN_BYTES_MAX = 2_097_152;
+// Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
+// on a large customer repo can never trigger an unbounded number of full-file reads even if many
+// files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
+const MAX_SYMBOL_LINE_READS = 64;
 const LOCKFILE_NAMES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -666,9 +729,28 @@ function selectedFileQueryFingerprint(query: RetrievalQuery): string {
     .slice(0, 16);
 }
 
-function wantsProjectMetadata(queryText: string): boolean {
-  const lowered = queryText.toLowerCase();
-  return PROJECT_METADATA_QUERY_TERMS.some((term) => lowered.includes(term));
+function normalizedQueryText(queryText: string): string {
+  return queryText.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+function retrievalIntentFor(input: OrchestratorInput): RetrievalIntent {
+  return classifyRetrievalIntent(input.query.text, input.scope).intent;
+}
+
+function wantsProjectMetadata(input: OrchestratorInput): boolean {
+  const intent = retrievalIntentFor(input);
+  if (intent === "project-metadata" || intent === "repository-overview") {
+    return true;
+  }
+  const lowered = input.query.text.toLowerCase();
+  const normalized = normalizedQueryText(input.query.text);
+  return PROJECT_METADATA_QUERY_TERMS.some(
+    (term) => lowered.includes(term) || normalized.includes(term),
+  );
+}
+
+function wantsRepositoryOverview(input: OrchestratorInput): boolean {
+  return retrievalIntentFor(input) === "repository-overview";
 }
 
 function metadataRootsForScope(scope: SelectedScope): readonly string[] {
@@ -683,6 +765,121 @@ function metadataRootsForScope(scope: SelectedScope): readonly string[] {
     roots.add(scope.kind === "files" ? dirname(entry) : entry);
   }
   return [...roots].sort();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readWorkspacePatterns(searchScope: SearchScope, fs: WorkspaceFs): readonly string[] {
+  if (!fileExistsInSearchScope(searchScope, fs, "package.json")) {
+    return [];
+  }
+  try {
+    const abs = resolveWithinWorkspace(searchScope.workspace.root, "package.json");
+    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
+    const parsed: unknown = JSON.parse(fs.readFileUtf8(contained.path));
+    if (!isRecord(parsed)) {
+      return [];
+    }
+    const workspaces = parsed.workspaces;
+    if (Array.isArray(workspaces)) {
+      return workspaces.filter((entry): entry is string => typeof entry === "string");
+    }
+    if (isRecord(workspaces) && Array.isArray(workspaces.packages)) {
+      return workspaces.packages.filter((entry): entry is string => typeof entry === "string");
+    }
+  } catch {
+    return [];
+  }
+  return [];
+}
+
+function normalizeWorkspacePattern(pattern: string): string | undefined {
+  let normalized = pattern.trim().replace(/\\/gu, "/");
+  while (normalized.startsWith("./")) {
+    normalized = normalized.slice(2);
+  }
+  normalized = normalized.replace(/\/+$/u, "");
+  if (normalized.length === 0 || normalized.startsWith("../") || normalized.includes("/../")) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function safeReadDir(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+): readonly WorkspaceDirEntry[] {
+  if (!isValidScopePath(scopePath, { mustBeRelative: true })) {
+    return [];
+  }
+  try {
+    const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
+    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
+    if (!fs.stat(contained.path).isDirectory) {
+      return [];
+    }
+    return fs.readDir(contained.path);
+  } catch {
+    return [];
+  }
+}
+
+function expandWorkspacePattern(
+  pattern: string,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+): readonly string[] {
+  const normalized = normalizeWorkspacePattern(pattern);
+  if (normalized === undefined) {
+    return [];
+  }
+  if (!normalized.includes("*")) {
+    const scopePath = normalized.endsWith("/package.json")
+      ? normalized
+      : joinScopePath(normalized, "package.json");
+    return fileExistsInSearchScope(searchScope, fs, scopePath) ? [scopePath] : [];
+  }
+  if (!normalized.endsWith("/*") || normalized.slice(0, -2).includes("*")) {
+    return [];
+  }
+  const base = normalized.slice(0, -2);
+  return safeReadDir(searchScope, fs, base)
+    .filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
+    .map((entry) => joinScopePath(joinScopePath(base, entry.name), "package.json"))
+    .filter((scopePath) => fileExistsInSearchScope(searchScope, fs, scopePath))
+    .sort();
+}
+
+function workspacePackageManifestPaths(
+  input: OrchestratorInput,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+): readonly string[] {
+  if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) {
+    return [];
+  }
+  const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs));
+  for (const dir of WORKSPACE_PACKAGE_DIRS) {
+    patterns.add(`${dir}/*`);
+  }
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const pattern of [...patterns].sort()) {
+    for (const scopePath of expandWorkspacePattern(pattern, searchScope, fs)) {
+      if (seen.has(scopePath)) {
+        continue;
+      }
+      seen.add(scopePath);
+      paths.push(scopePath);
+      if (paths.length >= MAX_WORKSPACE_MANIFESTS) {
+        return paths;
+      }
+    }
+  }
+  return paths;
 }
 
 function metadataAtom(
@@ -713,6 +910,247 @@ function metadataAtom(
     emittedAtMs: nowMs(),
     ledgerRef: undefined,
   };
+}
+
+function overviewAtom(
+  scope: SelectedScope,
+  scopePath: string,
+  queryFingerprint: string,
+  nowMs: () => number,
+): EvidenceAtom {
+  return {
+    schemaVersion: scope.schemaVersion,
+    stableId: evidenceAtomStableId({
+      scopeId: scope.scopeId,
+      scopePath,
+      lineRange: undefined,
+      provenanceKind: "file-listing",
+      provenanceTool: "repo.repositoryOverview",
+      queryFingerprint,
+    }),
+    scopePath,
+    lineRange: undefined,
+    score: 1,
+    provenance: {
+      kind: "file-listing",
+      tool: "repo.repositoryOverview",
+      queryFingerprint,
+    },
+    redactionState: "redacted",
+    emittedAtMs: nowMs(),
+    ledgerRef: undefined,
+  };
+}
+
+function symbolFileQuery(input: OrchestratorInput, pattern: string): RetrievalQuery {
+  return {
+    kind: "file-pattern",
+    text: pattern,
+    caseSensitive: false,
+    maxResults: 32,
+    emittedAtMs: input.query.emittedAtMs,
+  };
+}
+
+function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
+  if (
+    plan.retrievalIntent !== "targeted-code-search" &&
+    plan.retrievalIntent !== "diagnostic-search"
+  ) {
+    return [];
+  }
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  for (const anchor of plan.anchors) {
+    if (anchor.kind !== "identifier" || anchor.weight < 0.85) {
+      continue;
+    }
+    if (!/^[a-z_$][a-z0-9_$-]+$/u.test(anchor.term) || anchor.term.includes(".")) {
+      continue;
+    }
+    if (!seen.has(anchor.term)) {
+      seen.add(anchor.term);
+      terms.push(anchor.term);
+    }
+    if (terms.length >= 3) {
+      break;
+    }
+  }
+  return terms;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function lineDefinesSymbol(line: string, term: string): boolean {
+  const escaped = escapeRegex(term);
+  const patterns = [
+    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, "iu"),
+    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, "iu"),
+    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, "iu"),
+  ];
+  return patterns.some((pattern) => pattern.test(line));
+}
+
+function firstLineIndex(lines: readonly string[], predicate: (line: string) => boolean): number {
+  return lines.findIndex(predicate);
+}
+
+function firstSymbolLine(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+  term: string,
+): number | undefined {
+  try {
+    const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
+    const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
+    const stat = fs.stat(contained.path);
+    if (!stat.isFile || stat.size > SYMBOL_LINE_SCAN_BYTES_MAX) {
+      return undefined;
+    }
+    const loweredTerm = term.toLowerCase();
+    const lines = fs.readFileUtf8(contained.path).split("\n");
+    const definitionIndex = firstLineIndex(lines, (line) => lineDefinesSymbol(line, term));
+    const index =
+      definitionIndex >= 0
+        ? definitionIndex
+        : firstLineIndex(lines, (line) => line.toLowerCase().includes(loweredTerm));
+    return index < 0 ? undefined : index + 1;
+  } catch {
+    return undefined;
+  }
+}
+
+function symbolLineAtom(
+  scope: SelectedScope,
+  scopePath: string,
+  lineNumber: number,
+  queryFingerprint: string,
+  nowMs: () => number,
+): EvidenceAtom {
+  const lineRange = { startLine: lineNumber, endLine: lineNumber };
+  return {
+    schemaVersion: scope.schemaVersion,
+    stableId: evidenceAtomStableId({
+      scopeId: scope.scopeId,
+      scopePath,
+      lineRange,
+      provenanceKind: "lexical-search",
+      provenanceTool: "repo.symbolFileDiscovery",
+      queryFingerprint,
+    }),
+    scopePath,
+    lineRange,
+    score: 1,
+    provenance: {
+      kind: "lexical-search",
+      tool: "repo.symbolFileDiscovery",
+      queryFingerprint,
+    },
+    redactionState: "redacted",
+    emittedAtMs: nowMs(),
+    ledgerRef: undefined,
+  };
+}
+
+function scopePathExtension(scopePath: string): string {
+  const name = scopePath.slice(scopePath.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot < 0 ? "" : name.slice(dot + 1).toLowerCase();
+}
+
+// True when `scopePath` is a `<term>.<code-extension>` definition file. The single-walk symbol glob
+// `**/term.*` also matches multi-dot names like `term.test.tsx` (which the prior per-extension globs
+// did not), so this restores the exact contract: keep only paths ending in `term.<ext>` for a code
+// extension — the implementation file, not its co-named spec/story. Exported for direct testing.
+export function isSymbolDefinitionPath(scopePath: string, term: string): boolean {
+  const extension = scopePathExtension(scopePath);
+  return (
+    SYMBOL_FILE_EXTENSION_SET.has(extension) &&
+    scopePath.toLowerCase().endsWith(`${term.toLowerCase()}.${extension}`)
+  );
+}
+
+interface SymbolReadBudget {
+  remaining: number;
+}
+
+// Walk the tree ONCE for `**/term.*`, keep only `term.<code-ext>` definition files, and (within the
+// shared read budget) attach the definition/first-mention line. The single walk replaces the prior
+// per-extension globs (up to 27 redundant full-tree walks per question, ~4.7s on a 3.5k-file repo).
+async function symbolAtomsForTerm(
+  term: string,
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  budget: SymbolReadBudget,
+): Promise<readonly EvidenceAtom[]> {
+  const result = await findFiles(
+    searchScope,
+    symbolFileQuery(input, `**/${term}.*`),
+    SYMBOL_FILE_SEARCH_LIMITS,
+    {
+      fs,
+      nowMs,
+      searchHints: { retrievalIntent: plan.retrievalIntent },
+    },
+  );
+  const atoms: EvidenceAtom[] = [];
+  for (const atom of result.atoms) {
+    if (!isSymbolDefinitionPath(atom.scopePath, term)) {
+      continue;
+    }
+    atoms.push(atom);
+    if (budget.remaining <= 0) {
+      continue;
+    }
+    budget.remaining -= 1;
+    const lineNumber = firstSymbolLine(searchScope, fs, atom.scopePath, term);
+    if (lineNumber !== undefined) {
+      const fp = atom.provenance.queryFingerprint;
+      atoms.push(symbolLineAtom(input.scope, atom.scopePath, lineNumber, fp, nowMs));
+    }
+  }
+  return atoms;
+}
+
+async function symbolFileAtoms(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+): Promise<readonly EvidenceAtom[]> {
+  const terms = symbolFileAnchorTerms(plan);
+  if (terms.length === 0) {
+    return [];
+  }
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  const budget: SymbolReadBudget = { remaining: MAX_SYMBOL_LINE_READS };
+  for (const term of terms) {
+    throwIfCancelled(signal);
+    for (const atom of await symbolAtomsForTerm(
+      term,
+      input,
+      plan,
+      searchScope,
+      fs,
+      nowMs,
+      budget,
+    )) {
+      if (!seen.has(atom.stableId)) {
+        seen.add(atom.stableId);
+        atoms.push(atom);
+      }
+    }
+  }
+  return atoms;
 }
 
 function selectedFileAtom(
@@ -793,7 +1231,7 @@ function projectMetadataAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
 ): readonly EvidenceAtom[] {
-  if (!wantsProjectMetadata(input.query.text)) {
+  if (!wantsProjectMetadata(input)) {
     return [];
   }
   const atoms: EvidenceAtom[] = [];
@@ -811,20 +1249,60 @@ function projectMetadataAtoms(
       }
     }
   }
+  for (const scopePath of workspacePackageManifestPaths(input, searchScope, fs)) {
+    if (seen.has(scopePath) || !isValidScopePath(scopePath, { mustBeRelative: true })) {
+      continue;
+    }
+    seen.add(scopePath);
+    atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+  }
   return atoms;
 }
 
-function withProjectMetadataAtoms(
-  rings: RingRunSummary,
+function repositoryOverviewAtoms(
   input: OrchestratorInput,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
-): RingRunSummary {
-  const metadataAtoms = projectMetadataAtoms(input, searchScope, fs, nowMs);
-  return metadataAtoms.length === 0
+): readonly EvidenceAtom[] {
+  if (!wantsRepositoryOverview(input)) {
+    return [];
+  }
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  const queryFingerprint = projectMetadataQueryFingerprint(input.query);
+  for (const root of metadataRootsForScope(input.scope)) {
+    for (const filename of REPOSITORY_OVERVIEW_FILENAMES) {
+      const scopePath = joinScopePath(root, filename);
+      if (seen.has(scopePath) || !isValidScopePath(scopePath, { mustBeRelative: true })) {
+        continue;
+      }
+      seen.add(scopePath);
+      if (fileExistsInSearchScope(searchScope, fs, scopePath)) {
+        atoms.push(overviewAtom(input.scope, scopePath, queryFingerprint, nowMs));
+      }
+    }
+  }
+  return atoms;
+}
+
+async function withDeterministicContextAtoms(
+  rings: RingRunSummary,
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+): Promise<RingRunSummary> {
+  const deterministicAtoms = [
+    ...(await symbolFileAtoms(input, plan, searchScope, fs, nowMs, signal)),
+    ...projectMetadataAtoms(input, searchScope, fs, nowMs),
+    ...repositoryOverviewAtoms(input, searchScope, fs, nowMs),
+  ];
+  return deterministicAtoms.length === 0
     ? rings
-    : { ...rings, atoms: [...rings.atoms, ...metadataAtoms] };
+    : { ...rings, atoms: [...rings.atoms, ...deterministicAtoms] };
 }
 
 function withExplicitScopeAtoms(
@@ -1364,7 +1842,7 @@ async function assemblePackFromReads({
   return assemble.pack;
 }
 
-async function assembleGroundedPack({
+async function augmentRingsWithDeterministicAtoms({
   input,
   deps,
   plan,
@@ -1372,9 +1850,24 @@ async function assembleGroundedPack({
   searchScope,
   fs,
   nowMs,
-}: AssembleGroundedPackInputs): Promise<ConnectedContextPack> {
+}: AssembleGroundedPackInputs): Promise<RingRunSummary> {
   const scopedRings = withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs);
-  const augmentedRings = withProjectMetadataAtoms(scopedRings, input, searchScope, fs, nowMs);
+  return withDeterministicContextAtoms(
+    scopedRings,
+    input,
+    plan,
+    searchScope,
+    fs,
+    nowMs,
+    deps.signal,
+  );
+}
+
+async function assembleGroundedPack(
+  args: AssembleGroundedPackInputs,
+): Promise<ConnectedContextPack> {
+  const { input, deps, plan, searchScope, fs, nowMs } = args;
+  const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
   const cacheIdentity =
     deps.microIndex === undefined
@@ -1453,7 +1946,15 @@ export async function retrieveConnectedContextPack(
   const searchScope = buildSearchScope(input.scope, workspace);
   const rings = await runAllRings(
     plan.rings,
-    { searchScope, query: input.query, anchors: plan.anchors, fs, nowMs, signal: deps.signal },
+    {
+      searchScope,
+      query: input.query,
+      anchors: plan.anchors,
+      retrievalIntent: plan.retrievalIntent,
+      fs,
+      nowMs,
+      signal: deps.signal,
+    },
     governor,
   );
   throwIfCancelled(deps.signal);
