@@ -17,6 +17,7 @@ import {
   designTestCaseCandidates,
   scoreFromDimensions,
   TEST_QUALITY_WEAK_THRESHOLD,
+  verdictFromDimensions,
   validateCandidates,
   QualityIntelligenceGeneration,
   type AtomCoverageStatus,
@@ -627,12 +628,10 @@ function cloneDimensions(
   return Object.freeze(dimensions.map((dimension) => Object.freeze({ ...dimension })));
 }
 
-function qualityVerdictFromJudge(
-  verdict: QI.TestQualityJudgeVerdict,
-  score: number,
-): CandidateQualityVerdict {
+function qualityVerdictFromJudge(verdict: QI.TestQualityJudgeVerdict): CandidateQualityVerdict {
+  const score = scoreFromDimensions(verdict.dimensions);
   return Object.freeze({
-    verdict: verdict.verdict,
+    verdict: verdictFromDimensions(verdict.dimensions),
     score,
     dimensions: cloneDimensions(verdict.dimensions),
     overallRationale: verdict.overallRationale,
@@ -685,8 +684,10 @@ async function judgeOneCandidate(
     return buildSyntheticWeakJudgeOutcome(ctx, candidate, ordinal, JUDGE_ERROR_RATIONALE);
   }
   const score = scoreFromDimensions(verdict.dimensions);
-  const qualityVerdict = qualityVerdictFromJudge(verdict, score);
-  if (verdict.verdict === "strong") return { strong: true, finding: null, qualityVerdict };
+  const qualityVerdict = qualityVerdictFromJudge(verdict);
+  if (qualityVerdict.verdict === "strong") {
+    return { strong: true, finding: null, qualityVerdict };
+  }
   return {
     strong: false,
     finding: buildTestQualityFinding(

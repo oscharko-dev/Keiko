@@ -15,6 +15,8 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
   QualityIntelligenceInlineSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
@@ -217,6 +219,15 @@ export interface RunLauncherProps {
    * and injects the IR into the QI generation context.
    */
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
+  /**
+   * Figma Snapshot sources from connected Figma windows. When present, it supersedes the run-id-only
+   * list so selected screen ids can scope large boards to one or two masks.
+   */
+  readonly connectedFigmaSnapshotSources?:
+    | readonly QualityIntelligenceFigmaSnapshotSource[]
+    | undefined;
+  /** Image-only sources from connected Figma Image windows. */
+  readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
 }
 
 // Human-readable kind name for a connected source, used in the accessible connected-source list.
@@ -231,7 +242,9 @@ function sourceKindLabel(source: ConnectedRunSource): string {
     case "capsule-set":
       return "Capsule set";
     case "figma-snapshot":
-      return "Figma snapshot";
+      return source.label.startsWith("JSON ·") ? "Figma JSON" : "Figma snapshot";
+    case "image":
+      return "Image";
   }
 }
 
@@ -246,7 +259,11 @@ function sourceValue(source: ConnectedRunSource): string {
     case "capsule-set":
       return source.capsuleSetId;
     case "figma-snapshot":
-      return source.snapshotRunId;
+      return source.screenIds !== undefined && source.screenIds.length > 0
+        ? `${source.snapshotRunId}#${source.screenIds.join(",")}`
+        : source.snapshotRunId;
+    case "image":
+      return `${source.snapshotRunId}#${source.screenId}`;
   }
 }
 
@@ -274,6 +291,8 @@ export function RunLauncher({
   connectedCapsuleIds,
   connectedCapsuleSetIds,
   connectedFigmaSnapshotRunIds,
+  connectedFigmaSnapshotSources,
+  connectedImageSources,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<ManualSourceKind>("requirements");
@@ -311,6 +330,8 @@ export function RunLauncher({
     connectedCapsuleIds,
     connectedCapsuleSetIds,
     connectedFigmaSnapshotRunIds,
+    connectedFigmaSnapshotSources,
+    connectedImageSources,
   });
   const hasConnected = connectedSources.length > 0;
   const selectedCapsule = capsules.find((c) => c.id === capsuleId);

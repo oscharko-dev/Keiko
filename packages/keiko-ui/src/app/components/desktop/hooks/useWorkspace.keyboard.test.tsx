@@ -32,6 +32,20 @@ function filesWindow(patch: Partial<AppWindow> = {}): AppWindow {
   });
 }
 
+function figmaImageWindow(patch: Partial<AppWindow> = {}): AppWindow {
+  return appWindow({
+    id: "figma-image-1",
+    type: "figmaImage",
+    cfg: {
+      snapshotRunId: "snapshot-1",
+      screenId: "1:42",
+      selectedScreenName: "Payment view",
+      imageSrc: "/api/figma/snapshots/snapshot-1/screens/0/image",
+    },
+    ...patch,
+  });
+}
+
 function persistWorkspace(wins: readonly AppWindow[], conns: readonly Connection[] = []): void {
   window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(wins));
   window.localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(conns));
@@ -87,6 +101,9 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <output data-testid="wins">{JSON.stringify(workspace.wins ?? [])}</output>
       <output data-testid="conns">{JSON.stringify(workspace.conns)}</output>
       <output data-testid="connecting">{JSON.stringify(workspace.connecting)}</output>
+      <output data-testid="image-sources">
+        {JSON.stringify(workspace.api.linkedImageSources?.("quality") ?? null)}
+      </output>
     </main>
   );
 }
@@ -220,6 +237,20 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
         boundRelativePath: "src",
       });
     });
+  });
+
+  it("exposes linked Figma image sources through the returned Workspace API", async () => {
+    persistWorkspace(
+      [appWindow({ id: "quality", type: "quality" }), figmaImageWindow()],
+      [{ id: "quality~figma-image-1", a: "quality", b: "figma-image-1" }],
+    );
+    render(<Harness />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("image-sources")).toHaveTextContent("Payment view"),
+    );
+    expect(screen.getByTestId("image-sources")).toHaveTextContent('"kind":"image"');
+    expect(screen.getByTestId("image-sources")).toHaveTextContent('"screenId":"1:42"');
   });
 
   it("draws valid manual edges only once", async () => {

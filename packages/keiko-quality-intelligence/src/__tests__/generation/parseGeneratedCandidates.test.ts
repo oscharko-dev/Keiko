@@ -324,6 +324,33 @@ describe("parseGeneratedCandidates — field mapping", () => {
     expect(result.candidates[0]?.steps).toEqual(["Step 1", "Step 2", "Step 3"]);
   });
 
+  it("removes adjacent canonical duplicate steps before persistence", () => {
+    const raw = wrapInTestCases([
+      validItem({
+        steps: [
+          "Betätige die Tab-Taste erneut.",
+          "  Betätige   die Tab-Taste erneut.  ",
+          "Prüfe, dass der Fokus auf dem Feld Betrag liegt.",
+        ],
+      }),
+    ]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.steps).toEqual([
+      "Betätige die Tab-Taste erneut.",
+      "Prüfe, dass der Fokus auf dem Feld Betrag liegt.",
+    ]);
+  });
+
+  it("does not let adjacent duplicate steps consume the step cap before later unique steps", () => {
+    const repeated = Array.from({ length: GENERATED_CANDIDATE_STEP_MAX_ITEMS + 3 }, () => "Tab");
+    const raw = wrapInTestCases([
+      validItem({ steps: [...repeated, "Assert focused amount field"] }),
+    ]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.candidates[0]?.steps).toEqual(["Tab", "Assert focused amount field"]);
+  });
+
   it("coerces tags: filters out non-string entries", () => {
     const raw = wrapInTestCases([validItem({ tags: ["smoke", 42, null, "regression"] })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());

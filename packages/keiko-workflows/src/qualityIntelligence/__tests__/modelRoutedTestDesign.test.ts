@@ -601,6 +601,17 @@ const DISTINCT_WEAK_RATIONALE_VERDICT = {
   overallRationale: "weak because it misses the originating AC and remains timing-sensitive",
 };
 
+const WEAK_DIMENSION_STRONG_AVERAGE_VERDICT = {
+  verdict: "strong" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 90, rationale: "clear" },
+    { name: "atomicity" as const, score: 28, rationale: "bundles independent checks" },
+    { name: "determinism" as const, score: 90, rationale: "deterministic" },
+    { name: "ac-fidelity" as const, score: 90, rationale: "matches" },
+  ],
+  overallRationale: "average is high but one mandatory dimension is weak",
+};
+
 function makeDepsWithJudge(
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
   judgeImpl: QualityIntelligenceJudgePort["judge"],
@@ -715,6 +726,52 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     // Only the weak candidate is flagged.
     expect(qualityFindings.length).toBe(1);
+  });
+
+  it("normalizes a strong judge verdict to weak when a mandatory dimension is below threshold", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-dimension-gate"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) =>
+        Promise.resolve(WEAK_DIMENSION_STRONG_AVERAGE_VERDICT),
+      ),
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+    const manifest = store.load(String(input.plan.id));
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(2);
+    const persistedModelCandidate = recorded.find((candidate) =>
+      candidate.title.includes("Test atom 1 behavior"),
+    ) as
+      | (QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+          readonly qualityVerdict?: { readonly verdict: "weak" | "strong"; readonly score: number };
+        })
+      | undefined;
+    expect(persistedModelCandidate?.qualityVerdict).toEqual(
+      expect.objectContaining({ verdict: "weak", score: 74.5 }),
+    );
   });
 
   it("passes candidate preconditions into the judge prompt", async () => {

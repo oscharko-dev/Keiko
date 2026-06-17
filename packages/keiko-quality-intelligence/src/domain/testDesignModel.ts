@@ -16,6 +16,7 @@ import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { isKnownPriority, normaliseCandidateText } from "./assertions.js";
+import { STRUCTURAL_BASELINE_MARKER } from "./figma/screenIrTestBaseline.js";
 import type { IntentSummary } from "./intentDerivation.js";
 import type { PolicyProfile } from "./policyProfile.js";
 import { regressionDefault } from "./policyProfile.js";
@@ -118,7 +119,9 @@ const buildSteps = (
     steps.push(`Bereite das Szenario vor, das hier beschrieben ist: ${requirement}`);
   }
   steps.push("Führe die fachliche Aktion, Validierungsregel oder Entscheidungsstrecke aus.");
-  steps.push(`Dokumentiere Ergebnis, persistierten Zustand, Meldungen und Audit-Evidenz für Atom ${atom.id}.`);
+  steps.push(
+    `Dokumentiere Ergebnis, persistierten Zustand, Meldungen und Audit-Evidenz für Atom ${atom.id}.`,
+  );
   return Object.freeze(steps);
 };
 
@@ -138,7 +141,9 @@ const buildExpectedResults = (
   } else {
     results.push("Der Ablauf wird ohne Fehler abgeschlossen.");
   }
-  results.push("Widersprüchliche Ergebnisse, fehlende Validierung und stiller Datenverlust sind nicht akzeptabel.");
+  results.push(
+    "Widersprüchliche Ergebnisse, fehlende Validierung und stiller Datenverlust sind nicht akzeptabel.",
+  );
   results.push(`Evidenz-Atom ${atom.canonicalHashSha256Hex.slice(0, 12)} bleibt kanonisch.`);
   return Object.freeze(results);
 };
@@ -228,6 +233,71 @@ function atomTextFor(
     : conciseText(atomTextById.get(String(atom.id)) ?? "", 320);
 }
 
+// ─── Figma screen-baseline candidate (clean structural floor) ────────────────────────────────────
+//
+// A Figma screen atom's canonical text is a Screen-IR STRUCTURAL BASELINE (render / field / control /
+// navigation / a11y items), NOT a prose requirement. Run through the generic requirement template
+// above, it degenerates into an atom-id/hash-laden stub ("#001 Prüfe <baseline dump> … Öffne den
+// <name-suffix>-Ablauf … für Atom <id> … Evidenz-Atom <hash> bleibt kanonisch"). Detect it by its
+// stable marker and emit a clean, screen-scoped structural floor test instead. Marker-gated, so every
+// NON-figma source kind's deterministic candidate stays byte-identical (no cross-source regression);
+// the model path (parseGeneratedCandidates) is unaffected and still produces the per-element tests.
+
+const FIGMA_SCREEN_HEADER = /^Screen:\s+(.+?)\s+\[[^\]]+\]$/u;
+
+function figmaScreenNameFromAtomText(rawText: string | undefined): string | undefined {
+  if (rawText?.includes(STRUCTURAL_BASELINE_MARKER) !== true) return undefined;
+  for (const line of rawText.split("\n")) {
+    const match = FIGMA_SCREEN_HEADER.exec(line.trim());
+    const name = match?.[1]?.trim();
+    if (name !== undefined && name.length > 0) return name;
+  }
+  return undefined;
+}
+
+interface CandidateBody {
+  readonly title: string;
+  readonly preconditions: readonly string[];
+  readonly steps: readonly string[];
+  readonly expectedResults: readonly string[];
+}
+
+function figmaBaselineCandidateBody(index: number, screenName: string): CandidateBody {
+  const indexLabel = `#${String(index + 1).padStart(3, "0")}`;
+  const subject = conciseText(screenName, 90) ?? screenName;
+  return {
+    title: `${indexLabel} Strukturelle Baseline-Prüfung: ${subject}`,
+    preconditions: [`Die Anwendung ist gestartet.`, `Der Screen "${subject}" ist geöffnet.`],
+    steps: [
+      `Prüfe, dass der Screen "${subject}" ohne Darstellungsfehler vollständig rendert.`,
+      "Prüfe die im Screen-IR-Baseline erfassten strukturellen Prüfpunkte: vorhandene Felder und " +
+        "Eingaben, Bedienelemente und ihre Aktionen, Navigationsziele sowie Accessibility-Kriterien " +
+        "(Kontrast, Fokusreihenfolge, Zielgröße).",
+      "Halte jede Abweichung je strukturellem Prüfpunkt einzeln fest.",
+    ],
+    expectedResults: [
+      `Der Screen "${subject}" rendert korrekt und vollständig.`,
+      "Die strukturellen Prüfpunkte (Felder, Bedienelemente, Navigation, Accessibility) des " +
+        "Screen-IR-Baselines sind erfüllt.",
+      "Es treten keine fehlenden Elemente, Renderfehler oder verletzten Accessibility-Kriterien auf.",
+    ],
+  };
+}
+
+function genericCandidateBody(
+  atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
+  intent: IntentSummary,
+  index: number,
+  atomText: string | undefined,
+): CandidateBody {
+  return {
+    title: buildTitle(atom, intent, index, atomText),
+    preconditions: buildPreconditions(intent, atomText),
+    steps: buildSteps(atom, intent, atomText),
+    expectedResults: buildExpectedResults(atom, intent, atomText),
+  };
+}
+
 /**
  * Produce deterministic draft candidates from the intent summary + atoms.
  * Returns the empty array when the atom list is empty. Atoms are first
@@ -259,15 +329,22 @@ export const designTestCaseCandidates = (
     const id = QualityIntelligence.asQualityIntelligenceTestCaseId(idString);
     const riskClass = deriveRiskClass(atom, profile);
     const atomText = atomTextFor(atom, atomTextById);
-    const title = normaliseCandidateText(buildTitle(atom, intent, index, atomText));
+    // A Figma screen atom carries a structural baseline, not a prose requirement — give it a clean
+    // screen-scoped structural candidate. Detection reads the FULL canonical text (not the truncated
+    // `atomText`) so the marker + screen-name header survive the per-title length cap.
+    const figmaScreenName = figmaScreenNameFromAtomText(atomTextById?.get(String(atom.id)));
+    const body =
+      figmaScreenName !== undefined
+        ? figmaBaselineCandidateBody(index, figmaScreenName)
+        : genericCandidateBody(atom, intent, index, atomText);
     const candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate = {
       id,
       runId,
       derivedFromAtomIds: Object.freeze([atom.id]),
-      title,
-      preconditions: sanitiseFragmentList(buildPreconditions(intent, atomText)),
-      steps: sanitiseFragmentList(buildSteps(atom, intent, atomText)),
-      expectedResults: sanitiseFragmentList(buildExpectedResults(atom, intent, atomText)),
+      title: normaliseCandidateText(body.title),
+      preconditions: sanitiseFragmentList(body.preconditions),
+      steps: sanitiseFragmentList(body.steps),
+      expectedResults: sanitiseFragmentList(body.expectedResults),
       priority,
       riskClass,
       tags: canonicaliseCandidateTags(buildTags(intent, riskClass)),

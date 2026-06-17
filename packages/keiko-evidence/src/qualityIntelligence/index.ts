@@ -99,6 +99,7 @@ export type {
   FigmaSnapshotScreenRow,
   FigmaSnapshotSkipReason,
   FigmaSnapshotSkippedScreenRow,
+  FigmaSnapshotStructuralScreenRow,
   FigmaSnapshotValidationResult,
 } from "./figmaSnapshot/schema.js";
 export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
@@ -109,6 +110,7 @@ export type {
   RecordFigmaSnapshotInput,
   RecordFigmaSnapshotResult,
   RecordFigmaSnapshotScreenInput,
+  RecordFigmaSnapshotStructuralScreenInput,
 } from "./figmaSnapshot/store.js";
 
 // ─── Retention, deletion, recovery (M3) ────────────────────────────────────────────

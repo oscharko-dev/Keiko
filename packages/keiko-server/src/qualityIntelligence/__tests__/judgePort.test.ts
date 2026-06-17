@@ -140,6 +140,16 @@ const WEAK_VERDICT_JSON = JSON.stringify({
   overallRationale: "weak test",
 });
 
+const WEAK_DIMENSION_STRONG_AVERAGE_JSON = JSON.stringify({
+  dimensions: [
+    { name: "verifiability", score: 90, rationale: "clear expected outcome" },
+    { name: "atomicity", score: 28, rationale: "bundles many independent checks" },
+    { name: "determinism", score: 90, rationale: "stable steps" },
+    { name: "ac-fidelity", score: 90, rationale: "matches AC" },
+  ],
+  overallRationale: "average is high but one mandatory dimension is weak",
+});
+
 // ─── Capability gate ─────────────────────────────────────────────────────────
 
 describe("createQiJudgePort — capability gate", () => {
@@ -497,6 +507,12 @@ describe("parseJudgeVerdict", () => {
       VALID_VERDICT_JSON;
     const verdict = parseJudgeVerdict(noisy);
     expect(verdict.verdict).toBe("strong");
+    expect(verdict.dimensions).toHaveLength(4);
+  });
+
+  it("marks a verdict weak when one mandatory dimension is below threshold despite a strong average", () => {
+    const verdict = parseJudgeVerdict(WEAK_DIMENSION_STRONG_AVERAGE_JSON);
+    expect(verdict.verdict).toBe("weak");
     expect(verdict.dimensions).toHaveLength(4);
   });
 

@@ -375,6 +375,44 @@ describe("handleQiReCheck — malformed body", () => {
   });
 });
 
+// ─── re-check: figma-snapshot screenIds parity (Issue #754 no-leak) ─────────────
+//
+// The re-check route shares the start-run route's figma-snapshot screenIds validator, so it must
+// reject the SAME malformed scopes (empty array, over-cap) the start-run route does. Were they to
+// diverge, a scoped figma run that generated correctly could re-check against the WHOLE board —
+// reintroducing the scope leak on the drift path. A malformed source surfaces as parse-level
+// QI_BAD_SOURCE (400) here, before the manifest is even loaded.
+describe("handleQiReCheck — figma-snapshot screenIds parity (Issue #754)", () => {
+  it("rejects a figma-snapshot source with an empty screenIds array", async () => {
+    const body = {
+      sources: [{ kind: "figma-snapshot", label: "Scope", snapshotRunId: "snap-1", screenIds: [] }],
+    };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_SOURCE");
+  });
+
+  it("rejects a figma-snapshot source whose screenIds exceed the count cap", async () => {
+    const body = {
+      sources: [
+        {
+          kind: "figma-snapshot",
+          label: "Scope",
+          snapshotRunId: "snap-1",
+          screenIds: Array.from({ length: 201 }, (_v, i) => `s-${String(i)}`),
+        },
+      ],
+    };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_SOURCE");
+  });
+});
+
 // ─── re-check / regenerate-stale: capsule connector source parse (Epic #710) ────
 //
 // The re-check route carries its OWN copy of validateCapsuleSource / validateCapsuleSetSource

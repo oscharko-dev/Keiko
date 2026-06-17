@@ -7,6 +7,21 @@ import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow } from "./windows/types";
 import {
+  FIGMA_VIEW_DRAG_TYPE,
+  FIGMA_VIEW_DROP_EVENT,
+  serializeFigmaViewDrag,
+} from "./figma-view-drag";
+import {
+  FIGMA_JSON_DRAG_TYPE,
+  FIGMA_JSON_DROP_EVENT,
+  serializeFigmaJsonDrag,
+} from "./figma-json-drag";
+import {
+  FIGMA_IMAGE_DRAG_TYPE,
+  FIGMA_IMAGE_DROP_EVENT,
+  serializeFigmaImageDrag,
+} from "./figma-image-drag";
+import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
   LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
   serializeLocalKnowledgeConnectorDrag,
@@ -464,6 +479,395 @@ describe("Workspace card connections", () => {
       selectedState: "ready",
     });
     expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
+  });
+
+  it("creates a scoped Figma view card when a snapshot thumbnail is dropped", () => {
+    const add = vi.fn(() => "figma-view-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const dataTransfer = {
+      types: [FIGMA_VIEW_DRAG_TYPE],
+      getData: vi.fn((type: string) =>
+        type === FIGMA_VIEW_DRAG_TYPE
+          ? serializeFigmaViewDrag({
+              snapshotRunId: "fs-123",
+              screenId: "1:102746",
+              name: "Kontokorrentkredit hinzufügen",
+            })
+          : "",
+      ),
+      dropEffect: "none",
+    };
+
+    const dropEvent = createEvent.drop(surface, { dataTransfer });
+    Object.defineProperties(dropEvent, {
+      clientX: { value: 450 },
+      clientY: { value: 260 },
+    });
+    fireEvent(surface, dropEvent);
+
+    expect(add).toHaveBeenCalledWith("figma", {
+      snapshotRunId: "fs-123",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
+  });
+
+  it("creates the same scoped Figma view card from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-view-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_VIEW_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figma", {
+      snapshotRunId: "fs-123",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
+  });
+
+  it("creates a scoped Figma JSON source window and migrates an existing QI edge", () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "figma-json-1");
+      const update = vi.fn();
+      const removeConn = vi.fn();
+      const connect = vi.fn();
+      const workspaceApi = api({ add, update, removeConn, connect });
+      const wins = [
+        appWindow({
+          id: "quality",
+          type: "quality",
+          z: 2,
+        }),
+        appWindow({
+          id: "figma-view-1",
+          type: "figma",
+          x: 420,
+          z: 1,
+          cfg: {
+            snapshotRunId: "fs-123",
+            selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+            selectedScreenName: "Kontokorrentkredit hinzufügen",
+          },
+        }),
+      ];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            conns: [{ id: "quality~figma-view-1", a: "quality", b: "figma-view-1" }],
+            view: { x: 20, y: 30, zoom: 2 },
+            api: workspaceApi,
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const dataTransfer = {
+        types: [FIGMA_JSON_DRAG_TYPE],
+        getData: vi.fn((type: string) =>
+          type === FIGMA_JSON_DRAG_TYPE
+            ? serializeFigmaJsonDrag({
+                snapshotRunId: "fs-123",
+                screenId: "1:102746",
+                name: "Kontokorrentkredit hinzufügen",
+                sourceWindowId: "figma-view-1",
+              })
+            : "",
+        ),
+        dropEffect: "none",
+      };
+
+      const dropEvent = createEvent.drop(surface, { dataTransfer });
+      Object.defineProperties(dropEvent, {
+        clientX: { value: 450 },
+        clientY: { value: 260 },
+      });
+      fireEvent(surface, dropEvent);
+
+      expect(add).toHaveBeenCalledWith("figmaJson", {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+        selectedScreenName: "Kontokorrentkredit hinzufügen",
+      });
+      expect(update).toHaveBeenCalledWith("figma-json-1", {
+        x: -50,
+        y: 81,
+        w: 520,
+        h: 540,
+      });
+      expect(removeConn).toHaveBeenCalledWith("quality~figma-view-1");
+
+      vi.runOnlyPendingTimers();
+
+      expect(connect).toHaveBeenCalledWith("figma-json-1", "quality");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates the same scoped Figma JSON source from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-json-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_JSON_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaJson", {
+      snapshotRunId: "fs-123",
+      screenId: "1:102746",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-json-1", { x: -50, y: 81, w: 520, h: 540 });
+  });
+
+  it("creates a standalone Figma image source and migrates a QI edge from the source view", () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "figma-image-1");
+      const update = vi.fn();
+      const removeConn = vi.fn();
+      const connect = vi.fn();
+      const workspaceApi = api({ add, update, removeConn, connect });
+      const wins = [
+        appWindow({ id: "quality", type: "quality", z: 2 }),
+        appWindow({ id: "figma-view-1", type: "figma", x: 420, z: 1 }),
+      ];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            conns: [{ id: "quality~figma-view-1", a: "quality", b: "figma-view-1" }],
+            view: { x: 20, y: 30, zoom: 2 },
+            api: workspaceApi,
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const payload = {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        name: "Kontokorrentkredit hinzufügen",
+        imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+        sourceWindowId: "figma-view-1",
+      };
+      const dataTransfer = {
+        types: [FIGMA_IMAGE_DRAG_TYPE],
+        getData: vi.fn((type: string) =>
+          type === FIGMA_IMAGE_DRAG_TYPE ? serializeFigmaImageDrag(payload) : "",
+        ),
+        dropEffect: "none",
+      };
+
+      const dropEvent = createEvent.drop(surface, { dataTransfer });
+      Object.defineProperties(dropEvent, {
+        clientX: { value: 450 },
+        clientY: { value: 260 },
+      });
+      fireEvent(surface, dropEvent);
+
+      expect(add).toHaveBeenCalledWith("figmaImage", {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        selectedScreenName: "Kontokorrentkredit hinzufügen",
+        imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+      });
+      expect(update).toHaveBeenCalledWith("figma-image-1", {
+        x: -70,
+        y: 81,
+        w: 560,
+        h: 420,
+      });
+      expect(removeConn).toHaveBeenCalledWith("quality~figma-view-1");
+
+      vi.runOnlyPendingTimers();
+
+      expect(connect).toHaveBeenCalledWith("figma-image-1", "quality");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates the same standalone Figma image source from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-image-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_IMAGE_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+            imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaImage", {
+      snapshotRunId: "fs-123",
+      screenId: "1:102746",
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+      imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+    });
+    expect(update).toHaveBeenCalledWith("figma-image-1", { x: -70, y: 81, w: 560, h: 420 });
   });
 
   it("maps a workspace drop point through pan and zoom into connector window origin", () => {

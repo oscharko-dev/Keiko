@@ -9,6 +9,8 @@ type JsonScalar = string | number | boolean;
 
 const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
 const MAX_REFERENCE_VALUE_LENGTH = 256;
+const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
+const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -44,6 +46,9 @@ const ENV_CREDENTIAL_FILENAMES = [
 const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>> = {
   chat: ["chatId"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
+  figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
+  figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
+  figmaImage: ["snapshotRunId", "screenId", "selectedScreenName", "imageSrc"],
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -144,11 +149,71 @@ function isSafeOpaqueReference(value: string): boolean {
   return true;
 }
 
+function isSafeFigmaScreenId(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH) return false;
+  if (value.trim() !== value || isSecretShapedString(value)) return false;
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    const isDigit = code >= 48 && code <= 57;
+    const isUpper = code >= 65 && code <= 90;
+    const isLower = code >= 97 && code <= 122;
+    const isPunct = code === 46 || code === 58 || code === 95 || code === 45;
+    if (!isDigit && !isUpper && !isLower && !isPunct) return false;
+  }
+  return true;
+}
+
+function sanitizeFigmaSelectedScreenIdsJson(value: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.length > MAX_FIGMA_SELECTED_SCREEN_IDS
+  ) {
+    return undefined;
+  }
+  const screenIds: string[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "string") return undefined;
+    const screenId = item.trim();
+    if (!isSafeFigmaScreenId(screenId)) return undefined;
+    screenIds.push(screenId);
+  }
+  return JSON.stringify(screenIds);
+}
+
+function isSafeFigmaImageSrc(value: string): boolean {
+  return /^\/api\/figma\/snapshots\/[^/?#]+\/screens\/\d+\/image$/u.test(value);
+}
+
+function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | undefined {
+  if (typeof value !== "string") return undefined;
+  if (key === "snapshotRunId") return isSafeOpaqueReference(value) ? value : undefined;
+  if (key === "screenId") return isSafeFigmaScreenId(value) ? value : undefined;
+  if (key === "imageSrc") return isSafeFigmaImageSrc(value) ? value : undefined;
+  if (key === "selectedScreenIdsJson") return sanitizeFigmaSelectedScreenIdsJson(value);
+  if (key === "selectedScreenName") {
+    if (value.length > MAX_FIGMA_SCREEN_NAME_LENGTH || isSecretShapedString(value)) {
+      return undefined;
+    }
+    return value;
+  }
+  return undefined;
+}
+
 function sanitizeConfigValue(
   type: WindowType,
   key: string,
   value: unknown,
 ): JsonScalar | undefined {
+  if (type === "figma" || type === "figmaJson" || type === "figmaImage") {
+    return sanitizeFigmaConfigValue(key, value);
+  }
   if (!isJsonScalar(value) || isCredentialKey(key)) return undefined;
   if (typeof value !== "string") return value;
   const persistence = WIN_META[type].persistence;

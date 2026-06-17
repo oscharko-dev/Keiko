@@ -33,6 +33,15 @@ export interface FigmaSnapshotScreen {
   readonly integrityHash: string;
 }
 
+/** One screen whose structural IR is captured but no PNG side-file exists. */
+export interface FigmaSnapshotStructuralScreen {
+  readonly screenId: string;
+  readonly ir: ScreenIr;
+  readonly reason: FigmaSkippedScreenReason;
+  /** sha256 over the canonical {screenId, ir, structuralOnly:true} body. */
+  readonly integrityHash: string;
+}
+
 /** Why a detected screen produced no render and was excluded from `screens` (partial-render).
  * The `render-fetch-failed` member also appears as `render-fetch-failed:<CODE>` when the fetch
  * threw a FigmaConnectorError — the code suffix lets metrics distinguish an egress
@@ -63,6 +72,12 @@ export interface FigmaSnapshot {
   readonly provenance: FigmaProvenance;
   readonly screens: readonly FigmaSnapshotScreen[];
   readonly skippedScreens: readonly FigmaSkippedScreen[];
+  /**
+   * Structural IR for screens that did not produce a PNG render. This keeps QI/code consumers from
+   * losing JSON evidence when render fan-out is capped or a single render fetch degrades. Optional
+   * for older snapshots/builders; new builds emit it for every skipped screen that has IR.
+   */
+  readonly structuralScreens?: readonly FigmaSnapshotStructuralScreen[];
   /**
    * Raw inter-screen transitions carried from the Screen-IR (#752) for the navigation/flow graph
    * (#811). OPTIONAL and additive — a constructor that omits it (e.g. an older builder or a test

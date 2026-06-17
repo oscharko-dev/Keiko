@@ -1479,6 +1479,38 @@ describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () 
     expect(req.sources[0]).toMatchObject({ kind: "figma-snapshot", snapshotRunId: RUN_ID });
   });
 
+  it("calls startImpl with screenIds when a scoped figma screen source is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedFigmaSnapshotSources={[
+          {
+            kind: "figma-snapshot",
+            label: "Login mask",
+            snapshotRunId: RUN_ID,
+            screenIds: ["screen-login"],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toEqual({
+      kind: "figma-snapshot",
+      label: "Login mask",
+      snapshotRunId: RUN_ID,
+      screenIds: ["screen-login"],
+    });
+  });
+
   it("shows a combined count when a folder root and a figma snapshot are connected", () => {
     render(<RunLauncher connectedRoots={["/work/docs"]} connectedFigmaSnapshotRunIds={[RUN_ID]} />);
     expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (2)");
@@ -1542,5 +1574,103 @@ describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () 
   it("shows no connected-source banner when connectedFigmaSnapshotRunIds is empty", () => {
     render(<RunLauncher connectedFigmaSnapshotRunIds={[]} />);
     expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunLauncher — connected image source", () => {
+  const IMAGE_SOURCE = {
+    kind: "image",
+    label: "Image · Login mask",
+    sourceKind: "figma-snapshot-screen",
+    snapshotRunId: "fig-run-test-abc",
+    screenId: "screen-login",
+  } as const;
+
+  it("renders the connected-source banner with 'Connected image' and the image ref", () => {
+    render(<RunLauncher connectedImageSources={[IMAGE_SOURCE]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected image");
+    expect(banner).toHaveTextContent("fig-run-test-abc#screen-login");
+  });
+
+  it("calls startImpl with an image source when a standalone image is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedImageSources={[IMAGE_SOURCE]} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toEqual(IMAGE_SOURCE);
+  });
+
+  it("passes the launched image source to onRunCompleted so the run card can re-check drift", async () => {
+    const user = userEvent.setup();
+    const acceptedRunId = "run-image-123";
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: acceptedRunId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      succeededDone(acceptedRunId),
+    ]);
+    const onRunCompleted = vi.fn();
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={onRunCompleted}
+        connectedImageSources={[IMAGE_SOURCE]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId, [IMAGE_SOURCE]);
+    });
+  });
+
+  it("combines a folder, scoped Figma JSON, and image source in one request", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedRoots={["/work/docs"]}
+        connectedFigmaSnapshotSources={[
+          {
+            kind: "figma-snapshot",
+            label: "JSON · Login mask",
+            snapshotRunId: "fig-run-test-abc",
+            screenIds: ["screen-login"],
+          },
+        ]}
+        connectedImageSources={[IMAGE_SOURCE]}
+      />,
+    );
+
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (3)");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources.map((source) => source.kind)).toEqual([
+      "workspace",
+      "figma-snapshot",
+      "image",
+    ]);
   });
 });

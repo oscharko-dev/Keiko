@@ -359,7 +359,7 @@ describe("WindowFrame content zoom controls", () => {
     fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
     expect(document.body.style.cursor).toBe("nwse-resize");
 
-    fireEvent.pointerMove(window, { clientX: 160, clientY: 140 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 160, clientY: 140 });
     fireEvent.pointerUp(window);
 
     expect(focus).toHaveBeenCalledWith("agents-1");
@@ -370,6 +370,55 @@ describe("WindowFrame content zoom controls", () => {
       h: 340,
       max: false,
     });
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("ignores duplicate resize pointer moves with unchanged geometry", () => {
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ update })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const handle = container.querySelector<HTMLElement>(".wz-se");
+    expect(handle).not.toBeNull();
+
+    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+    fireEvent.pointerUp(window);
+
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up a stale resize session when moves arrive after button release", () => {
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ update })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const handle = container.querySelector<HTMLElement>(".wz-se");
+    expect(handle).not.toBeNull();
+
+    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+    fireEvent.pointerMove(window, { buttons: 0, clientX: 180, clientY: 150 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 220, clientY: 180 });
+
+    expect(update).toHaveBeenCalledTimes(1);
     expect(document.body.style.cursor).toBe("");
   });
 
@@ -422,7 +471,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(handle).not.toBeNull();
 
     fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(window, { clientX: 260, clientY: 250 });
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 260, clientY: 250 });
     fireEvent.pointerUp(window);
 
     expect(update).toHaveBeenLastCalledWith("agents-1", {

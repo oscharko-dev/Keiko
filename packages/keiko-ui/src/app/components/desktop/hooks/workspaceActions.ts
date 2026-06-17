@@ -6,7 +6,12 @@ import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
-import type { KnowledgeCapsuleId, CapsuleSetId } from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
+} from "@oscharko-dev/keiko-contracts";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 
 function addPosition(
@@ -34,7 +39,21 @@ type Mutations = Pick<
 
 function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
   return (id, patch) =>
-    setWins((ws) => (ws === null ? ws : ws.map((w) => (w.id === id ? { ...w, ...patch } : w))));
+    setWins((ws) => {
+      if (ws === null) return ws;
+      let changed = false;
+      const next = ws.map((w) => {
+        if (w.id !== id) return w;
+        for (const [key, value] of Object.entries(patch)) {
+          if (w[key as keyof AppWindow] !== value) {
+            changed = true;
+            return { ...w, ...patch };
+          }
+        }
+        return w;
+      });
+      return changed ? next : ws;
+    });
 }
 
 function makeFocus(setWins: MutateArgs["setWins"], zc: MutateArgs["zc"]): WorkspaceApi["focus"] {
@@ -121,6 +140,14 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
   const { setWins, zc, worldVP } = args;
   return (type, cfg) => {
     const t = WIN_TYPES[type];
+    const isFigmaView =
+      type === "figma" &&
+      typeof cfg?.["selectedScreenIdsJson"] === "string" &&
+      cfg["selectedScreenIdsJson"].length > 0;
+    const defaultW = isFigmaView ? 360 : t.w;
+    const defaultH = isFigmaView ? 360 : t.h;
+    const defaultMinW = isFigmaView ? Math.max(t.min.w, 300) : t.min.w;
+    const defaultMinH = isFigmaView ? Math.max(t.min.h, 260) : t.min.h;
     let createdId: string | null = null;
     setWins((ws) => {
       const vp = worldVP();
@@ -166,12 +193,23 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
           );
         }
       }
-      const { x, y } = addPosition(vp, t.w, t.h, list.length, 40);
+      const { x, y } = addPosition(vp, defaultW, defaultH, list.length, 40);
       const id = t.singleton === true ? type : `${type}-${Date.now().toString(36)}`;
       createdId = id;
       return [
         ...list,
-        { id, type, x, y, w: t.w, h: t.h, z: ++zc.current, cfg: cfg ?? {}, max: false, zoom: 1 },
+        {
+          id,
+          type,
+          x,
+          y,
+          w: Math.max(defaultW, defaultMinW),
+          h: Math.max(defaultH, defaultMinH),
+          z: ++zc.current,
+          cfg: cfg ?? {},
+          max: false,
+          zoom: 1,
+        },
       ];
     });
     return createdId;
@@ -410,21 +448,29 @@ function chatWindowIdInPair(a: AppWindow | undefined, b: AppWindow | undefined):
   return null;
 }
 
-type ConnectApi = Pick<
-  WorkspaceApi,
-  | "startConnect"
-  | "confirmConnect"
-  | "cancelConnect"
-  | "removeConn"
-  | "connect"
-  | "linkedFilesRoot"
-  | "linkedFilesContext"
-  | "linkedAllFilesRoots"
-  | "linkedConnectorCapsuleIds"
-  | "linkedConnectorCapsuleSetIds"
-  | "linkedFigmaSnapshotRunIds"
-  | "currentFilesContext"
->;
+type ConnectApi = Omit<
+  Pick<
+    WorkspaceApi,
+    | "startConnect"
+    | "confirmConnect"
+    | "cancelConnect"
+    | "removeConn"
+    | "connect"
+    | "linkedFilesRoot"
+    | "linkedFilesContext"
+    | "linkedAllFilesRoots"
+    | "linkedConnectorCapsuleIds"
+    | "linkedConnectorCapsuleSetIds"
+    | "linkedFigmaSnapshotRunIds"
+    | "linkedFigmaSnapshotSources"
+    | "linkedImageSources"
+    | "currentFilesContext"
+  >,
+  "linkedFigmaSnapshotSources" | "linkedImageSources"
+> & {
+  readonly linkedFigmaSnapshotSources: NonNullable<WorkspaceApi["linkedFigmaSnapshotSources"]>;
+  readonly linkedImageSources: NonNullable<WorkspaceApi["linkedImageSources"]>;
+};
 
 // Click-to-Connect flow (replaces the old pointerdown→drag→pointerup gesture):
 //   1. startConnect(from): rubber-band Bezier follows the cursor live
@@ -730,7 +776,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
-      if (w === undefined || w.type !== "figma") continue;
+      if (w === undefined || (w.type !== "figma" && w.type !== "figmaJson")) continue;
       const runId = w.cfg["snapshotRunId"];
       if (typeof runId !== "string" || runId.trim().length === 0) continue;
       if (seen.has(runId)) continue;
@@ -738,6 +784,108 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       ids.push(runId);
     }
     return ids;
+  };
+
+  const parseSelectedScreenIds = (raw: unknown): readonly string[] => {
+    if (typeof raw !== "string" || raw.trim().length === 0) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      // Trim → drop empties → dedupe → sort so the scope is canonical: two windows that selected the
+      // same screens in a different order (or with duplicates) dedupe to one source, and the server
+      // envelope id derived from the scope is stable.
+      const cleaned = parsed
+        .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+        .map((value) => value.trim());
+      return [...new Set(cleaned)].sort();
+    } catch {
+      return [];
+    }
+  };
+
+  const selectedScreenIdsForFigmaWindow = (w: AppWindow): readonly string[] => {
+    const parsed = parseSelectedScreenIds(w.cfg["selectedScreenIdsJson"]);
+    if (parsed.length > 0) return parsed;
+    const screenId = w.cfg["screenId"];
+    return typeof screenId === "string" && screenId.trim().length > 0 ? [screenId.trim()] : [];
+  };
+
+  const linkedFigmaSnapshotSources: NonNullable<WorkspaceApi["linkedFigmaSnapshotSources"]> = (
+    id,
+  ) => {
+    const seen = new Set<string>();
+    const sources: QualityIntelligenceFigmaSnapshotSource[] = [];
+    for (const c of connsRef.current) {
+      if (sources.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined || (w.type !== "figma" && w.type !== "figmaJson")) continue;
+      const runId = w.cfg["snapshotRunId"];
+      if (typeof runId !== "string" || runId.trim().length === 0) continue;
+      const rawScreenIdsJson = w.cfg["selectedScreenIdsJson"];
+      const screenName = w.cfg["selectedScreenName"];
+      const screenIds = selectedScreenIdsForFigmaWindow(w);
+      // A figma window opened via "Add to workspace" is SCOPED — it carries selectedScreenIdsJson
+      // and/or selectedScreenName. If such a window's scope cannot be resolved (missing, corrupt, or
+      // over-cap persisted JSON the persistence layer dropped on reload), it must contribute NOTHING —
+      // never silently widen to the whole board. Only a genuinely unscoped figma window (no scope
+      // marker at all) ingests the full snapshot. This is the UI half of the no-leak guarantee; the
+      // server enforces the same invariant on the wire.
+      const isScopedWindow =
+        w.type === "figmaJson" ||
+        rawScreenIdsJson !== undefined ||
+        (typeof screenName === "string" && screenName.trim().length > 0);
+      if (isScopedWindow && screenIds.length === 0) continue;
+      const key = `${runId}:${screenIds.join(",") || "*"}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const label =
+        screenIds.length > 0 && typeof screenName === "string" && screenName.trim().length > 0
+          ? w.type === "figmaJson"
+            ? `JSON · ${screenName}`
+            : screenName
+          : runId;
+      sources.push({
+        kind: "figma-snapshot",
+        label,
+        snapshotRunId: runId,
+        ...(screenIds.length > 0 ? { screenIds } : {}),
+      });
+    }
+    return sources;
+  };
+
+  const linkedImageSources: NonNullable<WorkspaceApi["linkedImageSources"]> = (id) => {
+    const seen = new Set<string>();
+    const sources: QualityIntelligenceImageSource[] = [];
+    for (const c of connsRef.current) {
+      if (sources.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined || w.type !== "figmaImage") continue;
+      const runId = w.cfg["snapshotRunId"];
+      const screenId = w.cfg["screenId"];
+      if (typeof runId !== "string" || runId.trim().length === 0) continue;
+      if (typeof screenId !== "string" || screenId.trim().length === 0) continue;
+      const key = `${runId}:${screenId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const screenName = w.cfg["selectedScreenName"];
+      const label =
+        typeof screenName === "string" && screenName.trim().length > 0
+          ? `Image · ${screenName}`
+          : `Image · ${screenId}`;
+      sources.push({
+        kind: "image",
+        label,
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: runId,
+        screenId,
+      });
+    }
+    return sources;
   };
 
   return {
@@ -752,6 +900,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedConnectorCapsuleIds,
     linkedConnectorCapsuleSetIds,
     linkedFigmaSnapshotRunIds,
+    linkedFigmaSnapshotSources,
+    linkedImageSources,
     currentFilesContext,
   };
 }

@@ -189,6 +189,18 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  figmaJson: {
+    lifecycle: ["idle", "results", "error"],
+    trustBoundary: ["ui", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
+  figmaImage: {
+    lifecycle: ["idle", "results", "error"],
+    trustBoundary: ["ui", "evidence", "model"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────
