@@ -126,7 +126,7 @@ function buildRunInput(): RunInput {
         kind: "coverage-gap",
         severity: "high",
         // summaryRedacted names the uncovered atom — SURFACE 1 assertion checks this string
-        summaryRedacted: `Atom ${UNCOVERED_ATOM_ID} has no tracing test (uncovered).`,
+        summaryRedacted: `Atom ${UNCOVERED_ATOM_ID} hat keinen zugeordneten Test (uncovered).`,
       },
     ],
     exports: [],

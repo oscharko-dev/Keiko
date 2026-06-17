@@ -180,6 +180,17 @@ function CitationReference({
 // an explicit disclosure so the actually-cited sources stay findable.
 const CITATION_DISPLAY_CAP = 8;
 
+function uniqueByStableId<T extends { readonly stableId: string }>(items: readonly T[]): readonly T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.stableId)) continue;
+    seen.add(item.stableId);
+    unique.push(item);
+  }
+  return unique;
+}
+
 function CitationDisclosureButton({
   total,
   expanded,
@@ -211,7 +222,7 @@ function CitationList({
   if (citations.length === 0) return null;
   // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
   // must never hide a stronger source behind a weaker one.
-  const sorted = [...citations].sort((a, b) => b.score - a.score);
+  const sorted = uniqueByStableId([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
   // which is invalid (only listitem children allowed). Lift the label OUT of the list and
@@ -250,7 +261,7 @@ function LocalKnowledgeCitationList({
       : `${citation.marker} ${citation.source} · ${citation.label}`;
   }
   // uiux-fix F012 C091 — same cap + disclosure as CitationList above.
-  const sorted = [...citations].sort((a, b) => b.score - a.score);
+  const sorted = uniqueByStableId([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   return (
     <div className="grounded-citations-wrap">

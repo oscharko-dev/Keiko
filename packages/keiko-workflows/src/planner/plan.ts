@@ -16,6 +16,11 @@ import {
 import type { SearchLimits } from "@oscharko-dev/keiko-workspace";
 
 import { extractAnchors, type SearchAnchor, type SearchAnchorKind } from "./anchors.js";
+import {
+  classifyRetrievalIntent,
+  type RetrievalIntent,
+  type RetrievalIntentClassification,
+} from "./intent.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -52,6 +57,7 @@ export interface ExplorationPlan {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
   readonly planId: string;
   readonly state: ExplorationPlanState;
+  readonly retrievalIntent: RetrievalIntent;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
@@ -219,9 +225,20 @@ interface ClarificationDecision {
   readonly clarification: ClarificationPrompt | undefined;
 }
 
+function explicitConnectionIsReady(scope: SelectedScope, intent: RetrievalIntent): boolean {
+  if (scope.explicitConnection !== true) {
+    return false;
+  }
+  if (scope.kind !== "workspace-root") {
+    return true;
+  }
+  return intent === "project-metadata" || intent === "repository-overview";
+}
+
 function decideClarification(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
+  intent: RetrievalIntent,
 ): ClarificationDecision {
   if (anchors.length === 0) {
     return {
@@ -233,7 +250,7 @@ function decideClarification(
   // pill), they have already narrowed the search to a bounded area. The "too-generic" and
   // "scope-empty" gates exist to stop vague questions burning budget over the broad workspace;
   // keep those gates for workspace-root connections even when they were explicitly selected.
-  if (scope.explicitConnection === true && scope.kind !== "workspace-root") {
+  if (explicitConnectionIsReady(scope, intent)) {
     return { state: "ready", clarification: undefined };
   }
   // Threshold is <= literal weight so a prompt yielding only `literal` anchors (weight 0.5,
@@ -259,6 +276,7 @@ interface PlanSeed {
   readonly scopeId: string;
   readonly queryKind: string;
   readonly queryText: string;
+  readonly retrievalIntent: RetrievalIntent;
   readonly anchorTerms: readonly string[];
   readonly ringKinds: readonly string[];
 }
@@ -269,6 +287,7 @@ function canonicalize(seed: PlanSeed): string {
     seed.scopeId,
     seed.queryKind,
     seed.queryText,
+    seed.retrievalIntent,
     [...seed.anchorTerms].sort(),
     [...seed.ringKinds].sort(),
   ]);
@@ -295,12 +314,17 @@ function resolveInputs(input: CreatePlanInput, deps: CreatePlanDeps | undefined)
   };
 }
 
-function buildScopeInvalidPlan(input: CreatePlanInput, resolved: ResolvedInputs): ExplorationPlan {
+function buildScopeInvalidPlan(
+  input: CreatePlanInput,
+  resolved: ResolvedInputs,
+  classification: RetrievalIntentClassification,
+): ExplorationPlan {
   const clarification = buildClarification("scope-invalid", SCOPE_INVALID_QUESTIONS, 0);
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
     queryText: input.query.text,
+    retrievalIntent: classification.intent,
     anchorTerms: [],
     ringKinds: [],
   };
@@ -308,6 +332,7 @@ function buildScopeInvalidPlan(input: CreatePlanInput, resolved: ResolvedInputs)
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),
     state: "scope-invalid",
+    retrievalIntent: classification.intent,
     scope: input.scope,
     query: input.query,
     anchors: [],
@@ -323,15 +348,16 @@ export function createExplorationPlan(
   deps?: CreatePlanDeps,
 ): ExplorationPlan {
   const resolved = resolveInputs(input, deps);
+  const classification = classifyRetrievalIntent(input.query.text, input.scope);
   const scopeResult = validateSelectedScope(input.scope);
   if (!scopeResult.ok) {
-    return buildScopeInvalidPlan(input, resolved);
+    return buildScopeInvalidPlan(input, resolved, classification);
   }
   const extraction = extractAnchors({
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
-  const decision = decideClarification(extraction.anchors, input.scope);
+  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
   const rings =
     decision.state === "ready"
       ? composeRings(extraction.anchors, input.scope, resolved.budget)
@@ -340,6 +366,7 @@ export function createExplorationPlan(
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
     queryText: input.query.text,
+    retrievalIntent: classification.intent,
     anchorTerms: extraction.anchors.map((a) => a.term),
     ringKinds: rings.map((r) => r.kind),
   };
@@ -347,6 +374,7 @@ export function createExplorationPlan(
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),
     state: decision.state,
+    retrievalIntent: classification.intent,
     scope: input.scope,
     query: input.query,
     anchors: extraction.anchors,

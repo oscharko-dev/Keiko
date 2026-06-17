@@ -11,6 +11,12 @@ import {
   type RefObject,
 } from "react";
 import { Icons, type IconName } from "../Icons";
+import {
+  acquireGrabbingBodyStyle,
+  isInteractiveControlTarget,
+  isPrimaryActivationPointer,
+  isWindowDragPointer,
+} from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
 import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
@@ -212,16 +218,19 @@ function attachDragListeners(
   const up = (): void => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
     api.commitSnap(session.winId);
-    document.body.style.cursor = "";
+    releaseBodyStyle();
     onDragEnd?.();
   };
   // Audit C362 — the move listeners run on window without pointer capture, so a
   // fast drag leaves the header and the cursor flickered to default/text over
-  // other surfaces. Pin the grabbing cursor globally for the gesture (up() resets).
-  document.body.style.cursor = "grabbing";
+  // other surfaces. Pin the grabbing cursor globally for the gesture via the shared ref-counted
+  // helper so a concurrent pan/drag does not clobber the restore order (up() releases).
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function resizeCursor(dir: Handle): string {
@@ -335,19 +344,27 @@ export function WindowFrame({
     [api, win.id],
   );
 
+  const focusWindowForTarget = useCallback(
+    (target: EventTarget | null): void => {
+      if (isInteractiveControlTarget(target)) {
+        window.setTimeout(() => api.focus(win.id), 0);
+        return;
+      }
+      api.focus(win.id);
+    },
+    [api, win.id],
+  );
+
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
-      // Keep window dragging aligned with the workspace pan gesture: middle
-      // mouse button moves windows, while primary clicks stay available for
-      // ordinary header interactions and control targeting.
-      if (e.button !== 1) return;
+      if (!isWindowDragPointer(e)) return;
       // When this window is a valid drop target for an in-flight connect, the
       // bubbling onPointerDown on <section> below confirms the link — don't
       // also start a header-drag, which would tear the window away from the
       // user's cursor mid-click.
       if (connState === "valid") return;
       e.preventDefault();
-      api.focus(win.id);
+      focusWindowForTarget(e.target);
       const el = wsRef.current;
       if (el === null) return;
       const rect = el.getBoundingClientRect();
@@ -363,12 +380,26 @@ export function WindowFrame({
         setDraggingWindow(false),
       );
     },
-    [api, win.id, win.x, win.y, win.w, win.h, win.max, win.prev, view, wsRef, connState],
+    [
+      api,
+      win.id,
+      win.x,
+      win.y,
+      win.w,
+      win.h,
+      win.max,
+      win.prev,
+      view,
+      wsRef,
+      connState,
+      focusWindowForTarget,
+    ],
   );
 
   const startResize = useCallback(
     (dir: Handle) =>
       (e: ReactPointerEvent<HTMLDivElement>): void => {
+        if (!isPrimaryActivationPointer(e)) return;
         e.preventDefault();
         e.stopPropagation();
         api.focus(win.id);
@@ -414,6 +445,7 @@ export function WindowFrame({
 
   const onPortPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>): void => {
+      if (!isPrimaryActivationPointer(e)) return;
       e.preventDefault();
       e.stopPropagation();
       startPortConnect(e.currentTarget, e);
@@ -496,7 +528,7 @@ export function WindowFrame({
       tabIndex={-1}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
-        api.focus(win.id);
+        focusWindowForTarget(e.target);
       }}
       // Audit C061 / WCAG 2.4.11 — tabbing into a lower, overlapped window must
       // raise it, or the focused control (and its focus ring) stays fully hidden
@@ -504,7 +536,7 @@ export function WindowFrame({
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
       onFocusCapture={() => {
-        if (!top) api.focus(win.id);
+        if (!top) window.setTimeout(() => api.focus(win.id), 0);
       }}
     >
       {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}

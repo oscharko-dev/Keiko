@@ -51,6 +51,12 @@ interface ValidationSplit {
 }
 
 const AUTO_DUPLICATE_CLUSTER_MIN = 3;
+const AUTO_DUPLICATE_BASENAME_EXEMPTIONS: ReadonlySet<string> = new Set([
+  "agents.md",
+  "package.json",
+  "readme.md",
+  "tsconfig.json",
+]);
 
 function resolveHints(hints: RankingHints | undefined): Required<RankingHints> {
   return {
@@ -126,6 +132,9 @@ function deriveDuplicateHints(
       continue;
     }
     const key = basename(scopePath).toLowerCase();
+    if (AUTO_DUPLICATE_BASENAME_EXEMPTIONS.has(key)) {
+      continue;
+    }
     const existing = clusters.get(key);
     if (existing === undefined) {
       clusters.set(key, [entry]);

@@ -1,16 +1,19 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TYPE_ORDER, WIN_TYPES } from "../windows/WindowsRegistry";
+import { TYPE_ORDER, WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { Palette } from "./Palette";
 
 // 10 cards in the 3-column .palette-grid — mirrors the live picker size the
 // C363 audit observed (rows: [0,1,2] [3,4,5] [6,7,8] [9]).
 const ORDER = TYPE_ORDER.slice(0, 10);
+const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "figma", "files"];
 
-function renderPalette(): { onAdd: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
+function renderPalette(
+  order: readonly WindowType[] = ORDER,
+): { onAdd: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
   const onAdd = vi.fn();
   const onClose = vi.fn();
-  render(<Palette types={WIN_TYPES} order={ORDER} onAdd={onAdd} onClose={onClose} />);
+  render(<Palette types={WIN_TYPES} order={order} onAdd={onAdd} onClose={onClose} />);
   return { onAdd, onClose };
 }
 
@@ -18,6 +21,10 @@ function cards(): HTMLElement[] {
   return screen
     .getAllByRole("button")
     .filter((b) => b.classList.contains("pal-card")) as HTMLElement[];
+}
+
+function cardNames(): string[] {
+  return cards().map((card) => card.querySelector(".pal-name")?.textContent ?? "");
 }
 
 describe("Palette", () => {
@@ -51,6 +58,34 @@ describe("Palette", () => {
 
   it("does not expose the hidden Browser surface in the default window order", () => {
     expect(TYPE_ORDER).not.toContain("browser");
+  });
+
+  it("does not expose the hidden Terminal surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("terminal");
+  });
+
+  it("does not expose the hidden Review surface in the default window order", () => {
+    expect(TYPE_ORDER).not.toContain("review");
+  });
+
+  it("does not render the Terminal card in the default picker", () => {
+    renderPalette(PICKER_ORDER);
+
+    expect(screen.queryByRole("button", { name: /terminal/iu })).toBeNull();
+  });
+
+  it("does not render the Review card in the default picker", () => {
+    renderPalette(PICKER_ORDER);
+
+    expect(cardNames()).not.toContain("Review");
+  });
+
+  it("lays out the four visible picker cards as a two-column grid", () => {
+    renderPalette(PICKER_ORDER);
+    const dialog = screen.getByRole("dialog");
+
+    expect(dialog).toHaveAttribute("data-columns", "2");
+    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Figma Snapshot", "Files"]);
   });
 
   it("focuses the first card on mount and closes on Escape", () => {
@@ -101,6 +136,24 @@ describe("Palette", () => {
 
     // Up: 3 -> 0
     fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowUp" });
+    expect(list[0]).toHaveFocus();
+  });
+
+  it("moves focus with arrow keys in the two-column picker grid", () => {
+    renderPalette(PICKER_ORDER);
+    const list = cards();
+    const first = list[0] as HTMLElement;
+
+    fireEvent.keyDown(first, { key: "ArrowRight" });
+    expect(list[1]).toHaveFocus();
+
+    fireEvent.keyDown(list[1] as HTMLElement, { key: "ArrowDown" });
+    expect(list[3]).toHaveFocus();
+
+    fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowLeft" });
+    expect(list[2]).toHaveFocus();
+
+    fireEvent.keyDown(list[2] as HTMLElement, { key: "ArrowUp" });
     expect(list[0]).toHaveFocus();
   });
 

@@ -39,6 +39,14 @@ function isAzureFoundryUrl(value: string): boolean {
   }
 }
 
+function skippedModelSummary(skippedModelIds: readonly string[]): string {
+  if (skippedModelIds.length === 0) return "";
+  // "Could not verify", not "incompatible": a deployment can also be skipped for a transient reason
+  // (rate-limit, timeout, content-filter), so the wording must not over-claim a permanent capability
+  // verdict the smoke cannot prove.
+  return ` Could not verify deployment${skippedModelIds.length === 1 ? "" : "s"}: ${skippedModelIds.join(", ")}.`;
+}
+
 export function GatewaySetupDialog({
   onCancel,
   preserveExisting = false,
@@ -178,24 +186,26 @@ export function GatewaySetupDialog({
         ...(parsedImageInputModelIds.length === 0
           ? {}
           : { imageInputModelIds: parsedImageInputModelIds }),
-        ...(figmaAccessToken.trim() === ""
-          ? {}
-          : { figmaAccessToken: figmaAccessToken.trim() }),
+        ...(figmaAccessToken.trim() === "" ? {} : { figmaAccessToken: figmaAccessToken.trim() }),
       });
       const count = result.testedModelIds.length;
+      const skippedSummary = skippedModelSummary(result.skippedModelIds ?? []);
       setBusy(false);
       if (submittedFigmaCredential && !submittedGatewayCredentials) {
         setSuccess("Verified Figma access token. Reloading Keiko…");
       } else if (submittedFigmaCredential) {
         setSuccess(
-          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"} and Figma access token. Reloading Keiko…`,
+          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"} and Figma access token. Reloading Keiko…${skippedSummary}`,
         );
       } else {
         setSuccess(
-          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…`,
+          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…${skippedSummary}`,
         );
       }
-      reloadTimerRef.current = window.setTimeout(() => window.location.reload(), 800);
+      reloadTimerRef.current = window.setTimeout(
+        () => window.location.reload(),
+        (result.skippedModelIds ?? []).length === 0 ? 800 : 1800,
+      );
     } catch (caught) {
       const details = errorDetails(caught);
       setError(details.message);
@@ -243,8 +253,7 @@ export function GatewaySetupDialog({
     <div className="gw-grid">
       <label className="gw-field gw-span-2">
         <span>
-          Base URL{" "}
-          {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+          Base URL {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
         </span>
         <input
           className="gw-input mono"
@@ -262,15 +271,16 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          API token{" "}
-          {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+          API token {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
         </span>
         <input
           className="gw-input mono"
           type="password"
           value={apiKey}
           placeholder={
-            preserveExisting ? "Only enter a value to replace the stored token" : "Paste your API token"
+            preserveExisting
+              ? "Only enter a value to replace the stored token"
+              : "Paste your API token"
           }
           autoComplete="off"
           disabled={busy || success !== undefined}
@@ -379,7 +389,9 @@ export function GatewaySetupDialog({
                           </strong>
                         ))
                       )}
-                      {hiddenModelCount > 0 ? <strong>+{hiddenModelCount.toString()}</strong> : null}
+                      {hiddenModelCount > 0 ? (
+                        <strong>+{hiddenModelCount.toString()}</strong>
+                      ) : null}
                     </div>
                   </div>
                 </div>

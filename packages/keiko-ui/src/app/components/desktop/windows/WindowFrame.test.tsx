@@ -219,7 +219,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).toHaveBeenCalledTimes(1);
   });
 
-  it("drags a window inside the workspace and commits the active snap preview from the middle mouse button", () => {
+  it("drags a window inside the workspace and commits the active snap preview from the primary button", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -240,8 +240,9 @@ describe("WindowFrame content zoom controls", () => {
     const section = container.querySelector<HTMLElement>(".window");
     expect(section).not.toBeNull();
 
-    fireEvent.pointerDown(header as HTMLElement, { button: 1, clientX: 100, clientY: 90 });
+    fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
     expect(document.body.style.cursor).toBe("grabbing");
+    expect(document.body.style.userSelect).toBe("none");
     expect(section).toHaveAttribute("data-dragging", "true");
 
     fireEvent.pointerMove(window, { clientX: 790, clientY: 20 });
@@ -252,10 +253,11 @@ describe("WindowFrame content zoom controls", () => {
     expect(setSnap).toHaveBeenLastCalledWith("tr");
     expect(commitSnap).toHaveBeenCalledWith("agents-1");
     expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
     expect(section).not.toHaveAttribute("data-dragging");
   });
 
-  it("does not start a header drag from the primary mouse button", () => {
+  it("keeps middle-button header dragging available for mouse users", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -274,13 +276,44 @@ describe("WindowFrame content zoom controls", () => {
     const header = container.querySelector<HTMLElement>(".win-head");
     expect(header).not.toBeNull();
 
-    fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+    fireEvent.pointerDown(header as HTMLElement, { button: 1, clientX: 100, clientY: 90 });
     fireEvent.pointerMove(window, { clientX: 790, clientY: 20 });
     fireEvent.pointerUp(window);
 
-    expect(update).not.toHaveBeenCalledWith("agents-1", expect.objectContaining({ x: expect.any(Number) }));
-    expect(setSnap).not.toHaveBeenCalled();
-    expect(commitSnap).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(update).toHaveBeenLastCalledWith("agents-1", { x: 680, y: -0 });
+    expect(setSnap).toHaveBeenLastCalledWith("tr");
+    expect(commitSnap).toHaveBeenCalledWith("agents-1");
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("does not start header dragging from right click or macOS control click", () => {
+    const focus = vi.fn();
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ focus, update })}
+        wsRef={workspaceRef(domRect())}
+      />,
+    );
+
+    const header = container.querySelector<HTMLElement>(".win-head");
+    expect(header).not.toBeNull();
+
+    fireEvent.pointerDown(header as HTMLElement, { button: 2, clientX: 100, clientY: 90 });
+    fireEvent.pointerDown(header as HTMLElement, {
+      button: 0,
+      ctrlKey: true,
+      clientX: 100,
+      clientY: 90,
+    });
+
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(update).not.toHaveBeenCalled();
     expect(document.body.style.cursor).toBe("");
   });
 
@@ -337,6 +370,38 @@ describe("WindowFrame content zoom controls", () => {
       h: 340,
       max: false,
     });
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("does not resize from right click or macOS control click on a resize handle", () => {
+    const focus = vi.fn();
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ focus, update })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const handle = container.querySelector<HTMLElement>(".wz-se");
+    expect(handle).not.toBeNull();
+
+    fireEvent.pointerDown(handle as HTMLElement, { button: 2, clientX: 100, clientY: 100 });
+    fireEvent.pointerDown(handle as HTMLElement, {
+      button: 0,
+      ctrlKey: true,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(window, { clientX: 160, clientY: 140 });
+    fireEvent.pointerUp(window);
+
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(update).not.toHaveBeenCalled();
     expect(document.body.style.cursor).toBe("");
   });
 

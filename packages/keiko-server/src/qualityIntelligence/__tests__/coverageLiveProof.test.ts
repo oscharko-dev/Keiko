@@ -1,7 +1,6 @@
 // Coverage Intelligence live-proof — Epic #734 Definition of Done (D4, with D1/D2/D3 end-to-end).
 //
-// The Epic DoD demands LIVE PROOF: "a run with a deliberately uncovered requirement shows the gap
-// as a finding AND in the matrix — consistently across surfaces." Prior tests pin this only
+// The Epic DoD demands LIVE PROOF for the write->read projection. Prior tests pin this only
 // PIECEWISE, on either side of the persistence boundary:
 //   - modelRoutedTestDesign.test.ts drives a REAL run, but persists to an IN-MEMORY local store
 //     that shares no state with the on-disk store the server read routes consume.
@@ -14,11 +13,12 @@
 // route handlers. No hand-built manifest.
 //
 // Surfaces asserted from ONE real run:
-//   SURFACE 1 — persisted manifest: coverage-gap finding + coverageMatrix row (keiko-evidence)
+//   SURFACE 1 — persisted manifest: coverageMatrix row (keiko-evidence)
 //   SURFACE 2 — run card: handleGetQiRun -> coverageByAtom + coveragePercentage (D1)
 //   SURFACE 3 — traceability CSV export: handleQiTraceabilityExport (D3)
 //   SURFACE 4 — traceability Markdown export: handleQiTraceabilityExport (D3, not covered by #741)
-// Both the uncovered (high-severity) and weakly-covered (low-severity) gap classes are proven (D2).
+// Real runs persist the deterministic baseline alongside any model delta. These live proofs verify
+// that partial or broad model output is projected consistently after the baseline completes coverage.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -252,24 +252,24 @@ interface ExportBody {
 describe("Epic #734 — Coverage Intelligence live proof (real run -> real routes)", () => {
   // One real executeQiRun per scenario (beforeAll), then each surface is asserted in its own test so
   // the persisted manifest is read back EXCLUSIVELY through the real route handlers.
-  describe("a deliberately uncovered requirement", () => {
-    const runId = "run-liveproof-uncovered";
+  describe("a partial model output completed by the deterministic baseline", () => {
+    const runId = "run-liveproof-baseline-completed";
     let evidenceDir: string;
     let readDeps: UiHandlerDeps;
     let manifest: LoadedManifest;
-    let coveredAtomId: string;
-    let uncoveredAtomId: string;
+    let firstAtomId: string;
+    let secondAtomId: string;
 
     beforeAll(async () => {
       evidenceDir = mkdtempSync(join(tmpdir(), "keiko-734-liveproof-unc-"));
-      // Two requirements; the model covers ONLY the first (focused, derived from index 1), leaving
-      // the second deliberately uncovered.
+      // Two requirements; the model covers only the first. The persisted deterministic baseline
+      // completes the second requirement without dropping or limiting the source requirements.
       await runWithRequirements({
         evidenceDir,
         runId,
         requirements: [
           "REQ-COVERED-001: The system must require multi-factor verification before audit login access is granted.",
-          "REQ-UNCOVERED-002: The system must present a confirmation screen before audit funds are transferred.",
+          "REQ-BASELINE-002: The system must present a confirmation screen before audit funds are transferred.",
         ],
         modelOutput: JSON.stringify({
           testCases: [testCase("Verify MFA gate before audit login", [1])],
@@ -277,13 +277,13 @@ describe("Epic #734 — Coverage Intelligence live proof (real run -> real route
       });
       manifest = defined(loadQualityIntelligenceRun(runId, { evidenceDir }), "manifest");
       const matrix = manifest.coverageMatrix ?? [];
-      coveredAtomId = defined(
-        matrix.find((r) => r.status === "covered"),
-        "covered matrix row",
+      firstAtomId = defined(
+        matrix.find((r) => (r.requirementExcerptRedacted ?? "").includes("REQ-COVERED-001")),
+        "first matrix row",
       ).atomId;
-      uncoveredAtomId = defined(
-        matrix.find((r) => r.status === "uncovered"),
-        "uncovered matrix row",
+      secondAtomId = defined(
+        matrix.find((r) => (r.requirementExcerptRedacted ?? "").includes("REQ-BASELINE-002")),
+        "second matrix row",
       ).atomId;
       readDeps = buildDeps(evidenceDir, fakeChatPort(""));
     });
@@ -292,72 +292,60 @@ describe("Epic #734 — Coverage Intelligence live proof (real run -> real route
       rmSync(evidenceDir, { recursive: true, force: true });
     });
 
-    it("SURFACE 1 — manifest: a high-severity gap names the uncovered requirement and the matrix has covered + uncovered (no weakly)", () => {
+    it("SURFACE 1 — manifest: baseline-completed requirements are covered with no gap finding", () => {
       const matrix = manifest.coverageMatrix ?? [];
       expect(matrix).toHaveLength(2);
       expect(matrix.some((r) => r.status === "weakly-covered")).toBe(false);
-      const covered = defined(
-        matrix.find((r) => r.atomId === coveredAtomId),
-        "covered row",
+      expect(matrix.every((r) => r.status === "covered")).toBe(true);
+      const first = defined(
+        matrix.find((r) => r.atomId === firstAtomId),
+        "first row",
       );
-      const uncovered = defined(
-        matrix.find((r) => r.atomId === uncoveredAtomId),
-        "uncovered row",
+      const second = defined(
+        matrix.find((r) => r.atomId === secondAtomId),
+        "second row",
       );
-      expect(covered.requirementExcerptRedacted).toContain("REQ-COVERED-001");
-      expect(uncovered.requirementExcerptRedacted).toContain("REQ-UNCOVERED-002");
+      expect(first.requirementExcerptRedacted).toContain("REQ-COVERED-001");
+      expect(second.requirementExcerptRedacted).toContain("REQ-BASELINE-002");
 
       const gapFindings = manifest.findings.filter((f) => f.kind === "coverage-gap");
-      const highGap = defined(
-        gapFindings.find((f) => f.severity === "high"),
-        "high-severity gap finding",
-      );
-      expect(highGap.summaryRedacted).toContain("REQ-UNCOVERED-002");
-      expect(highGap.summaryRedacted).toMatch(UNCOVERED_TOKEN);
-      // A covered atom produces no gap finding, so there is no low-severity (weakly) gap here.
-      expect(gapFindings.some((f) => f.severity === "low")).toBe(false);
+      expect(gapFindings).toHaveLength(0);
     });
 
-    it("SURFACE 2 — run card: handleGetQiRun reports uncovered/covered and 50% (D1)", () => {
+    it("SURFACE 2 — run card: handleGetQiRun reports both requirements covered and 100% (D1)", () => {
       const result = asResult(handleGetQiRun(runCtx(runId), readDeps));
       expect(result.status).toBe(200);
       const body = result.body as RunBody;
       expect(
         defined(
-          body.coverageByAtom.find((r) => r.atomId === uncoveredAtomId),
-          "card uncovered row",
-        ).status,
-      ).toBe("uncovered");
-      expect(
-        defined(
-          body.coverageByAtom.find((r) => r.atomId === coveredAtomId),
-          "card covered row",
+          body.coverageByAtom.find((r) => r.atomId === secondAtomId),
+          "card second row",
         ).status,
       ).toBe("covered");
-      // Exactly one of two atoms is covered -> 50%.
-      expect(body.coveragePercentage).toBe(50);
+      expect(
+        defined(
+          body.coverageByAtom.find((r) => r.atomId === firstAtomId),
+          "card first row",
+        ).status,
+      ).toBe("covered");
+      expect(body.coveragePercentage).toBe(100);
     });
 
-    it("SURFACE 3 — traceability CSV export shows the uncovered row (D3)", async () => {
+    it("SURFACE 3 — traceability CSV export shows the baseline-completed row as covered (D3)", async () => {
       const result = await handleQiTraceabilityExport(traceCtx(runId, makeReq(null)), readDeps);
       expect(result.status).toBe(200);
       const body = result.body as ExportBody;
       expect(body.format).toBe("csv");
       const rows = csvRequirementRows(body.body);
-      const uncoveredRow = defined(
-        rows.find((row) => row.includes(uncoveredAtomId)),
-        "CSV uncovered row",
+      const baselineRow = defined(
+        rows.find((row) => row.includes(secondAtomId)),
+        "CSV baseline-completed row",
       );
-      expect(uncoveredRow).toMatch(UNCOVERED_TOKEN);
-      expect(uncoveredRow).not.toMatch(COVERED_TOKEN);
-      const coveredRow = defined(
-        rows.find((row) => row.includes(coveredAtomId)),
-        "CSV covered row",
-      );
-      expect(coveredRow).toMatch(COVERED_TOKEN);
+      expect(baselineRow).toMatch(COVERED_TOKEN);
+      expect(baselineRow).not.toMatch(UNCOVERED_TOKEN);
     });
 
-    it("SURFACE 4 — traceability Markdown export shows the uncovered row (D3, not covered by #741)", async () => {
+    it("SURFACE 4 — traceability Markdown export shows the baseline-completed row as covered (D3)", async () => {
       const result = await handleQiTraceabilityExport(
         traceCtx(runId, makeReq({ format: "markdown" })),
         readDeps,
@@ -366,25 +354,25 @@ describe("Epic #734 — Coverage Intelligence live proof (real run -> real route
       const body = result.body as ExportBody;
       expect(body.format).toBe("markdown");
       const mdRow = defined(
-        body.body.split("\n").find((line) => line.includes(uncoveredAtomId)),
-        "Markdown uncovered row",
+        body.body.split("\n").find((line) => line.includes(secondAtomId)),
+        "Markdown baseline-completed row",
       );
-      expect(mdRow).toMatch(UNCOVERED_TOKEN);
-      expect(mdRow).not.toMatch(COVERED_TOKEN);
+      expect(mdRow).toMatch(COVERED_TOKEN);
+      expect(mdRow).not.toMatch(UNCOVERED_TOKEN);
     });
   });
 
-  describe("a weakly-covered requirement", () => {
-    const runId = "run-liveproof-weakly";
+  describe("a broad model output completed by focused baseline cases", () => {
+    const runId = "run-liveproof-broad-baseline";
     let evidenceDir: string;
     let readDeps: UiHandlerDeps;
     let manifest: LoadedManifest;
-    let weaklyAtomId: string;
+    let baselineAtomId: string;
 
     beforeAll(async () => {
       evidenceDir = mkdtempSync(join(tmpdir(), "keiko-734-liveproof-weak-"));
-      // Four requirements covered ONLY by a single broad test case (derived from 4 atoms >
-      // FOCUS_COVERED_MAX) are weakly-covered; the fifth is uncovered. No focused candidate -> 0%.
+      // The model returns one broad test case. The baseline adds focused tests for every
+      // requirement, so the live route surfaces must report complete coverage.
       await runWithRequirements({
         evidenceDir,
         runId,
@@ -401,13 +389,11 @@ describe("Epic #734 — Coverage Intelligence live proof (real run -> real route
       });
       manifest = defined(loadQualityIntelligenceRun(runId, { evidenceDir }), "manifest");
       const matrix = manifest.coverageMatrix ?? [];
-      weaklyAtomId = defined(
+      baselineAtomId = defined(
         matrix.find(
-          (r) =>
-            r.status === "weakly-covered" &&
-            (r.requirementExcerptRedacted ?? "").includes("REQ-WEAK-002"),
+          (r) => (r.requirementExcerptRedacted ?? "").includes("REQ-WEAK-002"),
         ),
-        "weakly-covered matrix row",
+        "baseline matrix row",
       ).atomId;
       readDeps = buildDeps(evidenceDir, fakeChatPort(""));
     });
@@ -416,49 +402,39 @@ describe("Epic #734 — Coverage Intelligence live proof (real run -> real route
       rmSync(evidenceDir, { recursive: true, force: true });
     });
 
-    it("SURFACE 1 — manifest: 4 weakly + 1 uncovered, and a low-severity gap names the weakly requirement (D2)", () => {
+    it("SURFACE 1 — manifest: focused baseline cases upgrade broad model output to complete coverage", () => {
       const matrix = manifest.coverageMatrix ?? [];
       expect(matrix).toHaveLength(5);
-      expect(matrix.filter((r) => r.status === "weakly-covered")).toHaveLength(4);
-      expect(matrix.filter((r) => r.status === "uncovered")).toHaveLength(1);
-      expect(matrix.some((r) => r.status === "covered")).toBe(false);
+      expect(matrix.every((r) => r.status === "covered")).toBe(true);
 
       const gapFindings = manifest.findings.filter((f) => f.kind === "coverage-gap");
-      const lowGap = defined(
-        gapFindings.find((f) => f.severity === "low" && f.summaryRedacted.includes("REQ-WEAK-002")),
-        "low-severity weakly gap finding",
-      );
-      // The finding summary phrases the status in prose ("is only weakly covered"); the enum form
-      // "weakly-covered" is asserted on the status-column surfaces (run card + CSV) below.
-      expect(lowGap.summaryRedacted).toContain("weakly covered");
-      // The uncovered fifth requirement is still a high gap.
-      expect(gapFindings.some((f) => f.severity === "high")).toBe(true);
+      expect(gapFindings).toHaveLength(0);
     });
 
-    it("SURFACE 2 — run card: the weakly atom is weakly-covered and does not count toward % (D1/D2)", () => {
+    it("SURFACE 2 — run card: the baseline-covered atom counts toward 100% (D1/D2)", () => {
       const result = asResult(handleGetQiRun(runCtx(runId), readDeps));
       expect(result.status).toBe(200);
       const body = result.body as RunBody;
       expect(
         defined(
-          body.coverageByAtom.find((r) => r.atomId === weaklyAtomId),
-          "card weakly row",
+          body.coverageByAtom.find((r) => r.atomId === baselineAtomId),
+          "card baseline row",
         ).status,
-      ).toBe("weakly-covered");
-      // Weakly-covered does not count toward the covered percentage.
-      expect(body.coveragePercentage).toBe(0);
+      ).toBe("covered");
+      expect(body.coveragePercentage).toBe(100);
     });
 
-    it("SURFACE 3 — traceability CSV export shows the weakly-covered row (D3)", async () => {
+    it("SURFACE 3 — traceability CSV export shows the baseline-covered row (D3)", async () => {
       const result = await handleQiTraceabilityExport(traceCtx(runId, makeReq(null)), readDeps);
       expect(result.status).toBe(200);
       const body = result.body as ExportBody;
       const rows = csvRequirementRows(body.body);
-      const weaklyRow = defined(
-        rows.find((row) => row.includes(weaklyAtomId)),
-        "CSV weakly row",
+      const baselineRow = defined(
+        rows.find((row) => row.includes(baselineAtomId)),
+        "CSV baseline row",
       );
-      expect(weaklyRow).toMatch(WEAKLY_TOKEN);
+      expect(baselineRow).toMatch(COVERED_TOKEN);
+      expect(baselineRow).not.toMatch(WEAKLY_TOKEN);
     });
   });
 });

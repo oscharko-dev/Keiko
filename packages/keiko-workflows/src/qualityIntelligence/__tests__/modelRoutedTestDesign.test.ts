@@ -128,6 +128,9 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
       makeDepsWithCandidateCap(store, 2),
     );
     expect(summary.status).toBe("succeeded");
+    // A non-degraded (model-backed) run carries no degradation reason — the wire `done` frame must
+    // not flag it as degraded.
+    expect(summary.reasonSummary).toBeUndefined();
 
     const manifest = store.load(String(PLAN.id));
     expect(manifest).toBeDefined();
@@ -230,6 +233,41 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(manifest?.totals.candidates).toBe(4);
   });
 
+  it("bounds the model-delta request below the persisted run candidate limit", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    let requestedMaxCandidates = 0;
+    let requestedInstruction = "";
+    const ingestedAtoms = Array.from({ length: 9 }, (_, index) =>
+      makeIngestedAtom(`atom-${String(index + 1)}`, `Requirement atom ${String(index + 1)}`),
+    );
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, {
+      ...makeDeps(store),
+      generate: {
+        generate: (args) => {
+          requestedMaxCandidates = args.maxCandidates;
+          requestedInstruction = args.instruction;
+          return Promise.resolve({
+            rawText: MODEL_OUTPUT_COVERING_TWO,
+            modelCallCount: 1,
+            modelId: "test-model",
+          });
+        },
+      },
+    });
+
+    expect(summary.status).toBe("succeeded");
+    expect(requestedMaxCandidates).toBe(16);
+    expect(requestedInstruction).toContain("Entwirf bis zu 16 Testfälle");
+    expect(store.load(String(PLAN.id))?.totals.candidates).toBeGreaterThan(0);
+  });
+
   // Issue #763 (Epic #761) AC2: a numeric applied seed (and its modelParameters) must thread from
   // the generation result through persistRun into the manifest. The test above only exercises the
   // `seedUsed ?? null` fallback (no seed), leaving the positive-integer branch and the
@@ -327,9 +365,12 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
       ["atom-2"],
     ]);
     expect(recorded.map((candidate) => candidate.title)).toEqual([
-      "#001 audit / determinism — requirement",
-      "#002 audit / determinism — requirement",
+      "#001 Prüfe REQ-DETERMINISM-001: A payment approval screen must require a second approver.",
+      "#002 Prüfe REQ-DETERMINISM-002: The approval screen must reject same-user approval.",
     ]);
+    expect(recorded[0]?.preconditions).toContain(
+      "Quellanforderung: REQ-DETERMINISM-001: A payment approval screen must require a second approver.",
+    );
 
     const manifest = store.load(String(plan.id));
     expect(manifest?.modelId).toBeUndefined();
@@ -432,10 +473,12 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(matrix.every((row) => row.status === "covered")).toBe(true);
   });
 
-  it("emits exactly one LOW-severity gap finding for a weakly-covered atom", async () => {
-    // #763 persists the deterministic baseline as part of the output, but model-run coverage still
-    // reviews the model delta so broad semantic output remains visible as weak coverage.
+  it("computes coverage from the persisted candidate set, not only the model delta", async () => {
+    // The user receives baseline + model-delta candidates. Coverage must assess that same
+    // persisted set; otherwise the manifest can report gaps for atoms that are actually covered by
+    // delivered baseline candidates.
     const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
     const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
       ...PLAN,
       id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-cov-test-003"),
@@ -469,7 +512,11 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
       sink: { emit: () => undefined },
       evidenceStore: store,
-      candidatesSink: { record: () => undefined },
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
       generate: {
         generate: () =>
           Promise.resolve({
@@ -488,21 +535,19 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     if (manifest === undefined) throw new Error("manifest not found");
 
     expect(manifest.totals.candidates).toBe(5);
+    expect(recorded).toHaveLength(5);
 
-    // Weakly-covered atoms must emit gap findings.
-    const weaklyGaps = manifest.findings.filter((f) => f.kind === "coverage-gap");
-    expect(weaklyGaps).not.toHaveLength(0);
-
-    const atom4Gap = weaklyGaps.find((f) => f.summaryRedacted.includes("atom-4"));
-    expect(atom4Gap).toBeDefined();
-    if (atom4Gap === undefined) throw new Error("atom-4 gap finding not found");
-    expect(atom4Gap.severity).toBe("low");
-    expect(atom4Gap.summaryRedacted).toContain("weakly covered");
+    const gapFindings = manifest.findings.filter((f) => f.kind === "coverage-gap");
+    expect(gapFindings).toHaveLength(0);
 
     const matrix = manifest.coverageMatrix ?? [];
+    expect(matrix).toHaveLength(4);
+    expect(matrix.every((row) => row.status === "covered")).toBe(true);
     const atom4Row = matrix.find((row) => row.atomId === "atom-4");
     expect(atom4Row).toBeDefined();
-    expect(atom4Row?.status).toBe("weakly-covered");
+    expect(atom4Row?.coveringCandidateIds.some((id) => recorded.some((c) => c.id === id))).toBe(
+      true,
+    );
   });
 });
 
@@ -714,10 +759,10 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     await runQualityIntelligenceModelRoutedTestDesign(input, deps);
 
     const modelCall = judgeCalls.find((call) =>
-      call.candidateText.includes("Title: Approve refund as an admin"),
+      call.candidateText.includes("Titel: Approve refund as an admin"),
     );
     expect(modelCall?.candidateText).toContain(
-      "Preconditions: User has admin role; Refund request is pending",
+      "Vorbedingungen: User has admin role; Refund request is pending",
     );
   });
 
@@ -833,16 +878,16 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
 
     expect(judgeCalls).toHaveLength(2);
     const firstJudgeCall = judgeCalls.find((call) =>
-      call.candidateText.includes("Title: Test atom 1 behavior"),
+      call.candidateText.includes("Titel: Test atom 1 behavior"),
     );
     const secondJudgeCall = judgeCalls.find((call) =>
-      call.candidateText.includes("Title: Test atom 2 behavior"),
+      call.candidateText.includes("Titel: Test atom 2 behavior"),
     );
-    expect(firstJudgeCall?.candidateText).toContain("Title: Test atom 1 behavior");
+    expect(firstJudgeCall?.candidateText).toContain("Titel: Test atom 1 behavior");
     expect(firstJudgeCall?.sourceContext).toEqual([
       { atomId: "atom-1", text: "AC-1: Clicking Help opens the help center." },
     ]);
-    expect(secondJudgeCall?.candidateText).toContain("Title: Test atom 2 behavior");
+    expect(secondJudgeCall?.candidateText).toContain("Titel: Test atom 2 behavior");
     expect(secondJudgeCall?.sourceContext).toEqual([
       { atomId: "atom-2", text: "AC-2: The Help center focuses the search field." },
     ]);
@@ -872,10 +917,10 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const manifest = store.load(String(input.plan.id));
     const qualityFinding = manifest?.findings.find((finding) => finding.kind === "test-quality");
     expect(qualityFinding?.summaryRedacted).toContain(
-      "AC fidelity: Misses the stated acceptance criteria.",
+      "AC-Treue: Misses the stated acceptance criteria.",
     );
     expect(qualityFinding?.summaryRedacted).toContain(
-      "Determinism: Relies on timing-sensitive behavior.",
+      "Determinismus: Relies on timing-sensitive behavior.",
     );
     expect(qualityFinding?.summaryRedacted).not.toContain("Test quality score");
   });
@@ -1051,7 +1096,9 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(summary.qualityScore).toBe(50);
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(1);
-    expect(qualityFindings[0]?.summaryRedacted).toContain("could not evaluate this candidate");
+    expect(qualityFindings[0]?.summaryRedacted).toContain(
+      "konnte diesen Kandidaten nicht bewerten",
+    );
     expect(qualityFindings[0]?.summaryRedacted).not.toContain("HTTP 429");
     // Both model-delta judge dispatches are still counted for an honest audit trail.
     expect(summary.modelGatewayCallCount).toBe(3);
@@ -1083,7 +1130,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(2);
     expect(qualityFindings.map((f) => f.summaryRedacted)).toEqual(
-      expect.arrayContaining([expect.stringContaining("could not evaluate this candidate")]),
+      expect.arrayContaining([expect.stringContaining("konnte diesen Kandidaten nicht bewerten")]),
     );
     expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("gateway 503");
   });
@@ -1121,7 +1168,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const manifest = store.load(String(input.plan.id));
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(1);
-    expect(qualityFindings[0]?.summaryRedacted).toContain("budget exhausted");
+    expect(qualityFindings[0]?.summaryRedacted).toContain("Budget war vor der Bewertung");
   });
 
   it("classifies a run cancelled when the judge is aborted mid-stage (not failed)", async () => {
@@ -1213,7 +1260,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
       (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
     );
     expect(gap?.summaryRedacted).toBe(
-      'Atom atom-3 ("Reject a checkout when the cart is empty.") has no tracing test (uncovered).',
+      'Atom atom-3 ("Reject a checkout when the cart is empty.") hat keinen zugeordneten Test (uncovered).',
     );
   });
 
@@ -1257,7 +1304,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
     const gap = (manifest?.findings ?? []).find(
       (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
     );
-    expect(gap?.summaryRedacted).toBe("Atom atom-3 has no tracing test (uncovered).");
+    expect(gap?.summaryRedacted).toBe("Atom atom-3 hat keinen zugeordneten Test (uncovered).");
   });
 });
 
@@ -1274,8 +1321,9 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
 // guards the opposite direction — the deterministic (model-free) port must NOT be over-counted.
 
 describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-call audit (#273)", () => {
-  it("counts a REJECTED generation dispatch as one gateway call in the summary AND the failed manifest", async () => {
+  it("falls back to deterministic candidates and counts a rejected generation dispatch", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
       makeIngestedAtom("atom-2", "Requirement 2"),
@@ -1292,7 +1340,11 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
     const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
       sink: { emit: () => undefined },
       evidenceStore: store,
-      candidatesSink: { record: () => undefined },
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
       // The gateway dispatch rejects (Azure 503): one call was attempted, none succeeded.
       generate: { generate: () => Promise.reject(new Error("HTTP 503 Service Unavailable")) },
       clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
@@ -1300,15 +1352,25 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
 
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
 
-    // The run fails (no candidates parsed) but the audit trail must show the attempted dispatch.
-    expect(summary.status).toBe("failed");
+    // The model delta failed, but valid evidence still produces deterministic baseline candidates.
+    expect(summary.status).toBe("succeeded");
+    // QI-DEG-01: the degradation must be visible on the SUMMARY (which the BFF surfaces on the wire
+    // `done` frame as degraded+reasonSummary), not buried only in the offline manifest. Without this a
+    // provider failure looks like a fully successful model-backed run.
+    expect(summary.reasonSummary).toBe("qi-run-error");
     expect(summary.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
-    // The persisted "failed" manifest must carry the same honest call count (not 0).
+    expect(recorded).toHaveLength(2);
+    for (const candidate of recorded) {
+      expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+    // The persisted manifest must carry the same honest call count (not 0) and fallback reason.
     const manifest = store.load(String(input.plan.id));
-    expect(manifest?.status).toBe("failed");
+    expect(manifest?.status).toBe("succeeded");
+    expect(manifest?.totals.candidates).toBe(2);
     expect(manifest?.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
+    expect(manifest?.modelParameters).toEqual({ generationFallbackReason: "qi-run-error" });
     // The raw provider message must never leak into the persisted/summary reason.
-    expect(summary.reasonSummary).not.toContain("503");
+    expect(JSON.stringify(manifest)).not.toContain("503");
   });
 
   it("does NOT over-count the deterministic model-free baseline (modelCallCount 0 → 0 dispatches)", async () => {

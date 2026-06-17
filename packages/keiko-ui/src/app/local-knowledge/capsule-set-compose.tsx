@@ -9,6 +9,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CAPSULE_SET_MAX_MEMBERS, type KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import { createCapsuleSet, type CapsuleListEntry } from "@/lib/local-knowledge-api";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { formatError } from "./format-error";
@@ -147,6 +148,7 @@ export function CapsuleSetComposeDialog({
   const [selected, setSelected] = useState<ReadonlySet<KnowledgeCapsuleId>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useModalInteractionLock();
   useComposeFocusTrap(dialogRef, busy, onCancel);
 
   function toggle(id: KnowledgeCapsuleId): void {

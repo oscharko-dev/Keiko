@@ -617,24 +617,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("marks the free workspace surface as actively panning while the middle button is held", () => {
-    render(
-      <Workspace
-        ws={workspace({})}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-    const surface = screen.getByRole("main", { name: "Workspace surface" });
-
-    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
-    expect(surface).toHaveAttribute("data-panning", "true");
-
-    fireEvent.pointerUp(window);
-    expect(surface).not.toHaveAttribute("data-panning");
-  });
-
-  it("does not start background panning from the primary mouse button", () => {
+  it("marks the free workspace surface as actively panning while the primary button is held", () => {
     render(
       <Workspace
         ws={workspace({})}
@@ -645,8 +628,120 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).toHaveAttribute("data-panning", "true");
 
+    fireEvent.pointerUp(window);
     expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("keeps middle-button workspace panning available for mouse users", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+
+    expect(surface).toHaveAttribute("data-panning", "true");
+
+    fireEvent.pointerUp(window);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not let Space plus primary drag over a window steal window interactions", () => {
+    const focus = vi.fn();
+    const panBy = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const workspaceApi = api({ focus, panBy });
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(surface).toHaveAttribute("data-hand-tool", "true");
+
+    fireEvent.pointerDown(windowEl as HTMLElement, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+    fireEvent.keyUp(window, { key: " ", code: "Space" });
+
+    expect(panBy).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(surface).not.toHaveAttribute("data-panning");
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("pans the free board with Space plus primary drag", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(surface).toHaveAttribute("data-hand-tool", "true");
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+    fireEvent.keyUp(window, { key: " ", code: "Space" });
+
+    expect(panBy).toHaveBeenCalledWith(30, 15);
+    expect(surface).not.toHaveAttribute("data-panning");
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("does not pan the board from right click or macOS control click", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 2, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+
+    fireEvent.pointerDown(surface, { button: 0, ctrlKey: true, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not arm the Space hand tool from an interactive control", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const button = document.querySelector<HTMLElement>(".ws-fab");
+    if (button === null) throw new Error("missing workspace FAB");
+    const event = createEvent.keyDown(button, { key: " ", code: "Space" });
+
+    fireEvent(button, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(surface).not.toHaveAttribute("data-hand-tool");
   });
 
   it("does not start background panning while a modal interaction lock is active", () => {
