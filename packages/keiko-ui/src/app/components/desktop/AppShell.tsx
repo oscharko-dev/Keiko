@@ -51,6 +51,16 @@ import type { AppWindow } from "./windows/types";
 import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
 
+const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
+
+function clearAppBootRecoveryReloadMarker(): void {
+  try {
+    window.sessionStorage.removeItem(APP_BOOT_RECOVERY_RELOAD_KEY);
+  } catch {
+    // Session storage can be blocked; successful mount should still proceed.
+  }
+}
+
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
   let best: AppWindow | null = null;
@@ -721,6 +731,7 @@ export function AppShell(): ReactNode {
   // swaps in the live shell after mount — eliminating every hydration mismatch at once.
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
+    clearAppBootRecoveryReloadMarker();
     setMounted(true);
   }, []);
   // Register the PWA service worker exactly once per client mount (issue #126, ADR-0024 D6).

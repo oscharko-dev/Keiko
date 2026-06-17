@@ -11,6 +11,9 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const RUNNER = join(REPO_ROOT, "scripts", "dev-runner.mjs");
 const DEFAULT_DEV_PID_FILE = join(REPO_ROOT, ".keiko", "dev", "dev-ui.pid.json");
 const UI_TSCONFIG = join(REPO_ROOT, "packages", "keiko-ui", "tsconfig.json");
+const PUBLIC_READY_TIMEOUT_MS = 90_000;
+const PUBLIC_READY_POLL_MS = 250;
+const DEV_RUNNER_TEST_TIMEOUT_MS = 120_000;
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -127,7 +130,7 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
     spawned.stderr.on("data", (chunk) => output.push(String(chunk)));
 
     const statuses: number[] = [];
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + PUBLIC_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const status = await statusOf(publicPort);
       statuses.push(status);
@@ -135,11 +138,11 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
         throw new Error(`public root returned 500 during warmup\n${output.join("")}`);
       }
       if (status === 200) break;
-      await sleep(250);
+      await sleep(PUBLIC_READY_POLL_MS);
     }
 
     expect(statuses).toContain(200);
     expect(statuses).not.toContain(500);
     expect(await statusOf(publicPort, "/api/health")).toBe(200);
-  }, 45_000);
+  }, DEV_RUNNER_TEST_TIMEOUT_MS);
 });

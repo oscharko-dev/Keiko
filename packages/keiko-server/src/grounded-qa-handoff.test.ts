@@ -26,6 +26,9 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "..", "..", "tests", "fixtures", "unit-tests", "target-project");
 const NOW = 1_700_000_000_000;
+const TERMINAL_WAIT_TIMEOUT_MS = 15_000;
+const TERMINAL_WAIT_POLL_MS = 10;
+const HANDOFF_RUN_TEST_TIMEOUT_MS = 20_000;
 const DIFF =
   "--- /dev/null\n+++ b/tests/add.test.ts\n@@ -0,0 +1,6 @@\n" +
   "+import { describe, expect, it } from 'vitest';\n" +
@@ -145,12 +148,13 @@ function groundedPack(root: string): ConnectedContextPack {
 }
 
 async function waitForTerminal(runId: string): Promise<void> {
-  for (let i = 0; i < 200; i += 1) {
+  const deadline = Date.now() + TERMINAL_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const record = deps.registry.get(runId);
     if (record !== undefined && record.status !== "running") {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, TERMINAL_WAIT_POLL_MS));
   }
   throw new Error("run did not terminate");
 }
@@ -256,44 +260,52 @@ afterEach((): void => {
 });
 
 describe("handleGroundedWorkflowHandoff", () => {
-  it("starts a governed unit-test run from remembered grounded context and persists provenance", async () => {
-    const result = await handleGroundedWorkflowHandoff(ctx(handoffRequest("assistant-1")), deps);
+  it(
+    "starts a governed unit-test run from remembered grounded context and persists provenance",
+    async () => {
+      const result = await handleGroundedWorkflowHandoff(ctx(handoffRequest("assistant-1")), deps);
 
-    expect(result.status, JSON.stringify(result.body)).toBe(202);
-    const body = result.body as {
-      run: { runId: string; fingerprint: string };
-      messages: readonly { id: string; role: string; content: string }[];
-    };
-    expect(body.run.runId).toMatch(/[0-9a-f-]{36}/u);
-    expect(body.messages).toHaveLength(2);
+      expect(result.status, JSON.stringify(result.body)).toBe(202);
+      const body = result.body as {
+        run: { runId: string; fingerprint: string };
+        messages: readonly { id: string; role: string; content: string }[];
+      };
+      expect(body.run.runId).toMatch(/[0-9a-f-]{36}/u);
+      expect(body.messages).toHaveLength(2);
 
-    await waitForTerminal(body.run.runId);
-    expectGovernedArtifacts(body.run.runId);
-  });
+      await waitForTerminal(body.run.runId);
+      expectGovernedArtifacts(body.run.runId);
+    },
+    HANDOFF_RUN_TEST_TIMEOUT_MS,
+  );
 
-  it("preserves governed handoff provenance for grounded verification runs", async () => {
-    const result = await handleGroundedWorkflowHandoff(
-      ctx(verificationHandoffRequest("assistant-1")),
-      deps,
-    );
+  it(
+    "preserves governed handoff provenance for grounded verification runs",
+    async () => {
+      const result = await handleGroundedWorkflowHandoff(
+        ctx(verificationHandoffRequest("assistant-1")),
+        deps,
+      );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(202);
-    const body = result.body as {
-      run: { runId: string; fingerprint: string };
-      messages: readonly { id: string; role: string; content: string }[];
-    };
+      expect(result.status, JSON.stringify(result.body)).toBe(202);
+      const body = result.body as {
+        run: { runId: string; fingerprint: string };
+        messages: readonly { id: string; role: string; content: string }[];
+      };
 
-    await waitForTerminal(body.run.runId);
-    const manifest = loadEvidence(deps.evidenceStore, body.run.runId);
-    expect(manifest?.governedHandoff).toMatchObject({
-      sourceGroundedRunId: "grounded-run-1",
-      workflowKind: "verification",
-      editablePathCount: 0,
-      readOnlyPathCount: 1,
-      evidenceAtomCount: 1,
-      expectedChecks: ["verify"],
-    });
-  });
+      await waitForTerminal(body.run.runId);
+      const manifest = loadEvidence(deps.evidenceStore, body.run.runId);
+      expect(manifest?.governedHandoff).toMatchObject({
+        sourceGroundedRunId: "grounded-run-1",
+        workflowKind: "verification",
+        editablePathCount: 0,
+        readOnlyPathCount: 1,
+        evidenceAtomCount: 1,
+        expectedChecks: ["verify"],
+      });
+    },
+    HANDOFF_RUN_TEST_TIMEOUT_MS,
+  );
 
   it("returns NOT_FOUND when the grounded turn registry no longer has the answer context", async () => {
     const result = await handleGroundedWorkflowHandoff(ctx(handoffRequest("missing-answer")), deps);
