@@ -434,7 +434,7 @@ describe("searchText (memFs)", () => {
     expect(r.atoms.every((a) => !a.scopePath.startsWith(".claude/"))).toBe(true);
   });
 
-  it("includes safe hidden and gitignored files in text search", async () => {
+  it("omits safe gitignored files from workspace-root text search", async () => {
     const { scope, fs } = memScope(
       { "src/a.ts": "match\n", "generated/b.ts": "match\n", ".hidden.ts": "match\n" },
       {
@@ -454,7 +454,9 @@ describe("searchText (memFs)", () => {
       fs,
       nowMs: FIXED_NOW,
     });
-    expect(r.atoms.map((a) => a.scopePath)).toEqual([".hidden.ts", "generated/b.ts", "src/a.ts"]);
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+    expect(r.diagnostics?.policyMode).toBe("workspace-root-default");
+    expect(r.diagnostics?.ignoredByDiscovery).toBe(2);
   });
 
   it("respects maxMatchesReturned with truncated=true", async () => {
@@ -516,11 +518,12 @@ describe("searchText (memFs)", () => {
     const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 10 };
     const r = await searchText(scope, nlq("match"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms.map((a) => a.scopePath)).toEqual([
+      "packages/a/src/ok.ts",
       "packages/a/generated/0.ts",
       "packages/a/generated/1.ts",
       "packages/a/generated/2.ts",
-      "packages/a/src/ok.ts",
     ]);
+    expect(r.diagnostics?.policyMode).toBe("explicit-scope");
     expect(r.truncated).toBe(false);
   });
 
@@ -626,6 +629,76 @@ describe("searchText (memFs)", () => {
     });
     expect(r.atoms[0]?.provenance.queryFingerprint).toMatch(/^[0-9a-f]{16}$/);
   });
+
+  it("prioritizes canonical manifests for project metadata questions", async () => {
+    const { scope, fs } = memScope({
+      "src/noise.ts": "// TypeScript helper mention\n",
+      "package.json": '{\n  "devDependencies": { "typescript": "^6.0.3" }\n}\n',
+      "packages/keiko-ui/package.json": '{\n  "devDependencies": { "typescript": "5.7.3" }\n}\n',
+    });
+    const r = await searchText(scope, nlq("Welche Type-Script Version verwendet die App?"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: "project-metadata" },
+    });
+    expect(r.atoms[0]?.scopePath).toBe("package.json");
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(
+      expect.arrayContaining(["package.json", "packages/keiko-ui/package.json"]),
+    );
+    expect(r.diagnostics?.intent).toBe("project-metadata");
+  });
+
+  it("prioritizes symbol implementation files over docs for targeted questions", async () => {
+    const { scope, fs } = memScope({
+      "docs/window-frame.md": "WindowFrame is documented here.\n",
+      "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx":
+        "export function WindowFrame(): JSX.Element { return <section />; }\n",
+      "packages/keiko-ui/src/app/components/desktop/AppShell.tsx":
+        "import { WindowFrame } from './windows/WindowFrame.js';\n",
+    });
+    const r = await searchText(scope, nlq("Wo ist WindowFrame implementiert?"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: "targeted-code-search" },
+    });
+    expect(r.atoms[0]?.scopePath).toBe(
+      "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
+    );
+  });
+
+  it("omits low-value workspace-root files before they consume match budget", async () => {
+    const { scope, fs } = memScope({
+      "dist/needle.ts": "needle\n",
+      "generated/needle.ts": "needle\n",
+      "src/needle.ts": "needle\n",
+    });
+    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: "targeted-code-search" },
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/needle.ts"]);
+    expect(r.candidates.filter((c) => c.omitted === "generated")).toHaveLength(0);
+    expect(r.diagnostics?.ignoredByDiscovery).toBeGreaterThan(0);
+    expect(r.atoms.some((a) => a.scopePath === "dist/needle.ts")).toBe(false);
+  });
+
+  it("finds relevant source when a 10k generated tree would otherwise exhaust discovery", async () => {
+    const files: Record<string, string> = { "src/target.ts": "needle\n" };
+    for (let i = 0; i < 10_000; i += 1) {
+      files[`generated/f${i.toString().padStart(5, "0")}.ts`] = "needle\n";
+    }
+    const { scope, fs } = memScope(files);
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+    const r = await searchText(scope, nlq("needle"), limits, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: "targeted-code-search" },
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/target.ts"]);
+    expect(r.diagnostics?.ignoredByDiscovery).toBeGreaterThan(0);
+    expect(r.truncated).toBe(false);
+  });
 });
 
 describe("findFiles (memFs)", () => {
@@ -663,6 +736,19 @@ describe("findFiles (memFs)", () => {
       nowMs: FIXED_NOW,
     });
     expect(r.atoms.map((a) => a.scopePath).sort()).toEqual(["a.ts", "src/a.ts", "src/deep/a.ts"]);
+  });
+
+  it("matches file patterns case-insensitively when requested", async () => {
+    const { scope, fs } = memScope({
+      "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx": "x",
+    });
+    const r = await findFiles(scope, fpq("**/windowframe.tsx"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual([
+      "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
+    ]);
   });
 
   it("returns nothing when no files match", async () => {
@@ -723,11 +809,12 @@ describe("findFiles (memFs)", () => {
     const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 10 };
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms.map((a) => a.scopePath)).toEqual([
+      "packages/a/src/ok.ts",
       "packages/a/generated/0.ts",
       "packages/a/generated/1.ts",
       "packages/a/generated/2.ts",
-      "packages/a/src/ok.ts",
     ]);
+    expect(r.diagnostics?.policyMode).toBe("explicit-scope");
     expect(r.truncated).toBe(false);
   });
 

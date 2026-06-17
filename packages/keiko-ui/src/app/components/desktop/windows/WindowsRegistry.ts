@@ -516,8 +516,6 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "localKnowledge",
   "figma",
   "files",
-  "terminal",
-  "review",
   "quality",
   "relationships",
   "automations",

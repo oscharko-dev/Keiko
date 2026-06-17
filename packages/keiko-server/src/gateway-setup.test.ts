@@ -660,6 +660,97 @@ describe("handleGatewaySetup", () => {
     }
   });
 
+  it("normalizes Foundry project URLs and stores only Keiko-compatible chat deployments", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-azure-project-url-");
+    const evidenceDir = await tempDir("keiko-gw-ev-azure-project-url-");
+    const originalFetch = globalThis.fetch;
+    const seen: {
+      readonly url: string;
+      readonly model: string | undefined;
+      readonly firstRole: string | undefined;
+    }[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      expect(href).not.toContain("api/projects/proj-oscharko-dev");
+      if (init?.body !== undefined && typeof init.body !== "string") {
+        throw new Error("expected JSON string request body");
+      }
+      const body = JSON.parse(init?.body ?? "{}") as {
+        readonly model?: string;
+        readonly messages?: readonly { readonly role?: string }[];
+      };
+      seen.push({ url: href, model: body.model, firstRole: body.messages?.[0]?.role });
+      if (body.model === "Mistral-Large-3" || body.model === "text-embedding-3-large") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "not Keiko conversation compatible" } }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 32, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://workspace.example.services.ai.azure.com/api/projects/proj-oscharko-dev",
+          apiKey: "example-secret-token",
+          deploymentNames: ["Mistral-Large-3", "gpt-5.4", "text-embedding-3-large"],
+          imageInputModelIds: ["gpt-5.4"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seen.map((call) => call.model)).toEqual([
+        "Mistral-Large-3",
+        "gpt-5.4",
+        "text-embedding-3-large",
+      ]);
+      expect(seen.every((call) => call.firstRole === "system")).toBe(true);
+      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
+        "gpt-5.4",
+      ]);
+      expect((result.body as { skippedModelIds?: readonly string[] }).skippedModelIds).toEqual([
+        "Mistral-Large-3",
+      ]);
+      const config = currentGatewayConfig(deps);
+      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+        "gpt-5.4",
+        "text-embedding-3-large",
+      ]);
+      expect(config?.providers.every((provider) => provider.baseUrl.endsWith("/openai/v1"))).toBe(
+        true,
+      );
+      const gptCapability = config?.capabilities?.find((capability) => capability.id === "gpt-5.4");
+      expect(gptCapability?.kind).toBe("chat");
+      expect(gptCapability?.supportsImageInput).toBe(true);
+      expect(selectEmbeddingModelId(config)).toBe("text-embedding-3-large");
+      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+      expect(saved).not.toContain("Mistral-Large-3");
+      expect(saved).toContain("gpt-5.4");
+      expect(saved).toContain("text-embedding-3-large");
+      expect(saved).toContain('"kind": "embedding"');
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
   it("uses LiteLLM model info to filter non-chat models before smoke testing", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-");
     const evidenceDir = await tempDir("keiko-gw-ev-litellm-");

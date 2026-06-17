@@ -5,7 +5,14 @@
 // completion notify the panel to refresh + select the new run. Accessible: labelled inputs,
 // aria-live progress region, focus-visible controls, 24×24 min targets.
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceInlineSource,
@@ -13,6 +20,12 @@ import type {
   QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { fetchFilesTree, fetchProjects } from "@/lib/api";
+import {
+  dirname,
+  displayLocalPath,
+  LocalFileBrowserDialog,
+} from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
 import { startQiRun } from "@/lib/quality-intelligence-api";
 import {
   fetchCapsules,
@@ -33,6 +46,16 @@ const PROFILES: ReadonlyArray<{ id: string; label: string }> = [
 type ManualSourceKind = "requirements" | "workspace" | "file" | "capsule" | "capsule-set";
 type FetchCapsulesFn = typeof fetchCapsules;
 type FetchCapsuleSetsFn = typeof fetchCapsuleSets;
+type FetchProjectsFn = typeof fetchProjects;
+type FetchFilesTreeFn = typeof fetchFilesTree;
+
+const SOURCE_KIND_OPTIONS: ReadonlyArray<{ id: ManualSourceKind; label: string; hint: string }> = [
+  { id: "requirements", label: "Requirements", hint: "Paste text" },
+  { id: "workspace", label: "Folder", hint: "Browse local" },
+  { id: "file", label: "File", hint: "Browse local" },
+  { id: "capsule", label: "Capsule", hint: "Local Knowledge" },
+  { id: "capsule-set", label: "Capsule set", hint: "Local Knowledge" },
+];
 
 interface Progress {
   readonly phase: string;
@@ -58,7 +81,61 @@ const INITIAL_PROGRESS: Progress = {
 
 // Shown when a run finishes with a server-reported "failed" status (a `done` frame, distinct from a
 // thrown `error` frame). Without this the launcher would clear the spinner and surface nothing.
-const QI_RUN_FAILED_MESSAGE = "The run did not complete successfully. Adjust the source and retry.";
+const QI_RUN_FAILED_MESSAGE =
+  "Der Lauf wurde nicht erfolgreich abgeschlossen. Passe die Quelle an und versuche es erneut.";
+
+// Shown on a SUCCEEDED-but-degraded run: model generation failed, so Keiko delivered deterministic
+// baseline test cases from the evidence. The user must be told the output is not model-backed so a
+// degraded run is never mistaken for an authoritative model result (regulated-delivery audit).
+function degradedMessageFromReason(reasonSummary: string | null | undefined): string {
+  const base =
+    "Die Modellgenerierung ist fehlgeschlagen — Keiko hat deterministische Baseline-Testfälle aus der " +
+    "Evidenz erstellt. Diese sind nicht modellgestützt; prüfe das Modell-Gateway und starte den Lauf für " +
+    "modellgestützte Testfälle erneut.";
+  if (reasonSummary === undefined || reasonSummary === null || reasonSummary.trim().length === 0) {
+    return base;
+  }
+  if (reasonSummary === "qi-error: UnparseableModelOutputError") {
+    return `${base} (Modellausgabe nicht als JSON parsebar)`;
+  }
+  if (reasonSummary === "qi-error: QI_PROMPT_TOO_LARGE") {
+    return `${base} (Quellkontext für das Modell zu groß)`;
+  }
+  const detail = reasonSummary.startsWith("qi-error: ")
+    ? reasonSummary.slice("qi-error: ".length)
+    : reasonSummary.startsWith("qi-safe-error: ")
+      ? reasonSummary.slice("qi-safe-error: ".length)
+      : reasonSummary;
+  return `${base} (${detail})`;
+}
+
+function failureMessageFromReason(reasonSummary: string | null | undefined): string {
+  if (reasonSummary === undefined || reasonSummary === null || reasonSummary.trim().length === 0) {
+    return QI_RUN_FAILED_MESSAGE;
+  }
+  if (reasonSummary === "qi-run-error") {
+    return (
+      "Die Modellgenerierung ist fehlgeschlagen, bevor nutzbare Testfälle zurückgegeben wurden. " +
+      "Versuche es mit einer kleineren Quelle oder prüfe das ausgewählte Modell-Gateway."
+    );
+  }
+  if (reasonSummary === "qi-error: UnparseableModelOutputError") {
+    return (
+      "Das Modell hat eine Ausgabe geliefert, die nicht zu Testfällen geparst werden konnte. " +
+      "Versuche es erneut oder nutze ein Modell mit strukturierter JSON-Ausgabe."
+    );
+  }
+  if (reasonSummary === "qi-error: QI_PROMPT_TOO_LARGE") {
+    return "Der zusammengestellte Quellkontext ist für das Modell zu groß. Reduziere die Quelle und versuche es erneut.";
+  }
+  if (reasonSummary.startsWith("qi-error: ")) {
+    return `${QI_RUN_FAILED_MESSAGE} (${reasonSummary.slice("qi-error: ".length)})`;
+  }
+  if (reasonSummary.startsWith("qi-safe-error: ")) {
+    return `${QI_RUN_FAILED_MESSAGE} (${reasonSummary.slice("qi-safe-error: ".length)})`;
+  }
+  return `${QI_RUN_FAILED_MESSAGE} (${reasonSummary})`;
+}
 
 // Screen-reader announcement for the always-mounted progress live region (a11y M-01). The visible
 // spinner+text stays conditional, but the announcement region is mounted from first render and only
@@ -90,7 +167,7 @@ function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage
   if (msg.type === "event") {
     const candidates = msg.kind === "candidate:proposed" ? prev.candidates + 1 : prev.candidates;
     const findings = msg.kind === "finding:recorded" ? prev.findings + 1 : prev.findings;
-    const stageName = msg.kind === "stage:started" ? (msg.stageName ?? null) : prev.stageName;
+    const stageName = msg.stageName ?? prev.stageName;
     return { ...prev, phase: msg.kind, stageName, candidates, findings };
   }
   return prev;
@@ -103,6 +180,8 @@ export interface RunLauncherProps {
   readonly startImpl?: typeof startQiRun;
   readonly fetchCapsulesImpl?: FetchCapsulesFn;
   readonly fetchCapsuleSetsImpl?: FetchCapsuleSetsFn;
+  readonly fetchProjectsImpl?: FetchProjectsFn;
+  readonly fetchFilesTreeImpl?: FetchFilesTreeFn;
   /**
    * Folder bound via a Workspace relationship edge to a Files window (Epic #270 Slice 1). When
    * present it is the default "Generate" source — so a knowledge worker connects a Fachkonzept
@@ -187,6 +266,8 @@ export function RunLauncher({
   startImpl = startQiRun,
   fetchCapsulesImpl = fetchCapsules,
   fetchCapsuleSetsImpl = fetchCapsuleSets,
+  fetchProjectsImpl = fetchProjects,
+  fetchFilesTreeImpl = fetchFilesTree,
   connectedRoot = null,
   connectedFilePath = null,
   connectedRoots,
@@ -200,6 +281,7 @@ export function RunLauncher({
   const [path, setPath] = useState("");
   const [capsuleId, setCapsuleId] = useState("");
   const [capsuleSetId, setCapsuleSetId] = useState("");
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [connectorLoading, setConnectorLoading] = useState(false);
@@ -209,8 +291,10 @@ export function RunLauncher({
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
   const [error, setError] = useState<string | null>(null);
+  const [degradedNotice, setDegradedNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const completedRunIdRef = useRef<string | null>(null);
+  const failureReasonRef = useRef<string | null>(null);
   // Synchronous double-submit guard: handleStart's `running` check reads a React state closure, so
   // two clicks dispatched before React commits setRunning(true) both see running===false and both
   // launch a run (doubling model-gateway cost). A ref closes that window before any state update.
@@ -263,17 +347,74 @@ export function RunLauncher({
   const generateHintId = useId();
   const seedErrorId = useId();
   const labelHintId = useId();
+  const sourceTypeLabelId = useId();
+  const sourcePathLabelId = useId();
   const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
+  const pickerMode = sourceKind === "workspace" || sourceKind === "file" ? sourceKind : null;
+
+  const chooseSourceKind = useCallback((next: ManualSourceKind): void => {
+    setSourceKind(next);
+    setSourcePickerOpen(false);
+    setError(null);
+    setConnectorError(null);
+  }, []);
+
+  // APG radiogroup keyboard model (WCAG 2.1.1): arrow keys move the selection and roving focus
+  // across the source-type radios — the native <select> this replaced had this for free.
+  // The handler lives on each radio (which is a natively focusable <button>), not on the group
+  // container — an interactive container would need its own tab stop, which the APG roving-tabindex
+  // model deliberately avoids. The focused radio receives the arrow key and we move to its sibling.
+  const onSourceKindKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+      if (running) return;
+      const delta =
+        event.key === "ArrowRight" || event.key === "ArrowDown"
+          ? 1
+          : event.key === "ArrowLeft" || event.key === "ArrowUp"
+            ? -1
+            : 0;
+      if (delta === 0) return;
+      event.preventDefault();
+      const count = SOURCE_KIND_OPTIONS.length;
+      const currentIndex = Math.max(
+        0,
+        SOURCE_KIND_OPTIONS.findIndex((option) => option.id === sourceKind),
+      );
+      const nextIndex = (currentIndex + delta + count) % count;
+      const next = SOURCE_KIND_OPTIONS[nextIndex];
+      if (next === undefined) return;
+      chooseSourceKind(next.id);
+      event.currentTarget.parentElement
+        ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+        [nextIndex]?.focus();
+    },
+    [chooseSourceKind, running, sourceKind],
+  );
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
+    if (
+      msg.type === "event" &&
+      (msg.kind === "stage:failed" || msg.kind === "run:failed") &&
+      typeof msg.reasonSummary === "string"
+    ) {
+      failureReasonRef.current = msg.reasonSummary;
+    }
     // Open the result card ONLY for a run that actually succeeded. The server always emits a
     // terminal `done` frame with the final status on the non-throwing path (runRoutes.ts
     // streamRunExecution); a thrown failure emits an `error` frame and no `done`. The old code
     // captured the runId on `accepted`, so EVERY run that started opened a result card — a failed
     // run then showed an error banner AND a spurious card for a run that produced nothing.
     if (msg.type === "done") {
-      if (msg.status === "succeeded") completedRunIdRef.current = msg.runId;
-      else if (msg.status === "failed") setError(QI_RUN_FAILED_MESSAGE);
+      if (msg.status === "succeeded") {
+        completedRunIdRef.current = msg.runId;
+        // The run produced (baseline) test cases, so the result card still opens — but a degraded run
+        // must be flagged so the user knows the model never ran (not a silent green success).
+        if (msg.degraded === true) {
+          setDegradedNotice(degradedMessageFromReason(msg.reasonSummary ?? null));
+        }
+      } else if (msg.status === "failed") {
+        setError(failureMessageFromReason(msg.reasonSummary ?? failureReasonRef.current));
+      }
       // "cancelled" is a user action — no error, no card.
     }
     if (msg.type === "error") setError(formatCodedError(msg.code, msg.message));
@@ -372,8 +513,10 @@ export function RunLauncher({
     isStartingRef.current = true;
     setRunning(true);
     setError(null);
+    setDegradedNotice(null);
     setProgress(INITIAL_PROGRESS);
     completedRunIdRef.current = null;
+    failureReasonRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
     // Precedence: manual input overrides everything; otherwise ALL connected sources go together
@@ -434,19 +577,35 @@ export function RunLauncher({
     if (sourceKind === "workspace" || sourceKind === "file") {
       const isFile = sourceKind === "file";
       return (
-        <label className="qi-field">
-          <span className="qi-field-label">{isFile ? "File path" : "Folder path"}</span>
-          <input
-            type="text"
-            className="qi-input"
-            value={path}
-            placeholder={isFile ? "/absolute/path/to/requirements.md" : "/absolute/path/to/folder"}
-            disabled={running}
-            onChange={(e) => {
-              setPath(e.target.value);
-            }}
-          />
-        </label>
+        <div className="qi-field">
+          <span className="qi-field-label" id={sourcePathLabelId}>
+            {isFile ? "File path" : "Folder path"}
+          </span>
+          <div className="qi-path-picker">
+            <div
+              className="qi-path-value qi-monospace"
+              role="textbox"
+              aria-readonly="true"
+              aria-labelledby={sourcePathLabelId}
+              title={path}
+              data-empty={path.trim().length === 0 ? "true" : undefined}
+            >
+              {path.trim().length > 0
+                ? path
+                : isFile
+                  ? "Choose a local file…"
+                  : "Choose a local folder…"}
+            </div>
+            <button
+              type="button"
+              className="qi-btn qi-btn-secondary qi-browse-btn"
+              disabled={running}
+              onClick={() => setSourcePickerOpen(true)}
+            >
+              Browse
+            </button>
+          </div>
+        </div>
       );
     }
     const isCapsule = sourceKind === "capsule";
@@ -563,33 +722,34 @@ export function RunLauncher({
               </span>
             ) : null}
           </label>
-          <label className="qi-field qi-field-kind">
-            <span className="qi-field-label">Source type</span>
-            <select
-              className="qi-select"
-              value={sourceKind}
-              disabled={running}
-              onChange={(e) => {
-                const next = e.target.value;
-                setSourceKind(
-                  next === "workspace" ||
-                    next === "file" ||
-                    next === "capsule" ||
-                    next === "capsule-set"
-                    ? next
-                    : "requirements",
-                );
-                setError(null);
-                setConnectorError(null);
-              }}
+          <div className="qi-field qi-field-kind">
+            <span className="qi-field-label" id={sourceTypeLabelId}>
+              Source type
+            </span>
+            <div
+              className="qi-source-kind-grid"
+              role="radiogroup"
+              aria-labelledby={sourceTypeLabelId}
+              aria-disabled={running || undefined}
             >
-              <option value="requirements">Requirements text</option>
-              <option value="workspace">Local folder</option>
-              <option value="file">Single file</option>
-              <option value="capsule">Knowledge capsule</option>
-              <option value="capsule-set">Capsule set</option>
-            </select>
-          </label>
+              {SOURCE_KIND_OPTIONS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="qi-source-kind-option"
+                  role="radio"
+                  aria-checked={sourceKind === option.id}
+                  tabIndex={sourceKind === option.id ? 0 : -1}
+                  disabled={running}
+                  onClick={() => chooseSourceKind(option.id)}
+                  onKeyDown={onSourceKindKeyDown}
+                >
+                  <span>{option.label}</span>
+                  <span>{option.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         {renderSourceInput()}
         {connectorError !== null ? (
@@ -698,12 +858,37 @@ export function RunLauncher({
             {skippedNotice !== null ? <p className="qi-coverage-line">{skippedNotice}</p> : null}
           </div>
         ) : null}
+        {degradedNotice !== null ? (
+          <p className="qi-degraded-notice" role="status" data-testid="qi-launch-degraded">
+            {degradedNotice}
+          </p>
+        ) : null}
         {error !== null ? (
           <p className="lk-alert" role="alert" data-testid="qi-launch-error">
             {error}
           </p>
         ) : null}
       </div>
+      {sourcePickerOpen && pickerMode !== null ? (
+        <LocalFileBrowserDialog
+          mode={pickerMode === "file" ? "file" : "folder"}
+          title={`Choose ${pickerMode === "file" ? "file" : "folder"} source`}
+          description="Browse a registered local project or enter an absolute folder root."
+          initialRootPath={pickerMode === "file" ? dirname(path) : path}
+          fetchProjectsImpl={fetchProjectsImpl}
+          fetchFilesTreeImpl={fetchFilesTreeImpl}
+          onCancel={() => setSourcePickerOpen(false)}
+          onApply={(selection) => {
+            const nextPath =
+              pickerMode === "file"
+                ? displayLocalPath(selection.rootPath, selection.files[0] ?? null)
+                : selection.folderPath;
+            setPath(nextPath);
+            setSourcePickerOpen(false);
+            setError(null);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

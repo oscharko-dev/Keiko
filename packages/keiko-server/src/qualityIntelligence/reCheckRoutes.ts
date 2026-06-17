@@ -382,8 +382,8 @@ function buildCoverageGapFindingRow(
       : `Atom ${String(atomStatus.atomId)} ("${excerpt}")`;
   const summaryRedacted =
     atomStatus.status === "uncovered"
-      ? `${atomLabel} has no tracing test (uncovered).`
-      : `${atomLabel} is only weakly covered (no dedicated test traces to it).`;
+      ? `${atomLabel} hat keinen zugeordneten Test (uncovered).`
+      : `${atomLabel} ist nur schwach abgedeckt (kein dedizierter Test referenziert dieses Atom).`;
   return Object.freeze({
     id: `qi-finding-${sha256Hex(payload).slice(0, 32)}`,
     kind: "coverage-gap",

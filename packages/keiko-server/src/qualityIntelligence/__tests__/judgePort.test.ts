@@ -127,7 +127,7 @@ const VALID_VERDICT_JSON = JSON.stringify({
     { name: "determinism", score: 90, rationale: "no randomness" },
     { name: "ac-fidelity", score: 75, rationale: "matches AC" },
   ],
-  overallRationale: "good test",
+  overallRationale: "guter Test",
 });
 
 const WEAK_VERDICT_JSON = JSON.stringify({
@@ -273,6 +273,12 @@ describe("buildJudgePrompt", () => {
     expect(userMessage?.content).toContain("<qi-candidate>");
     expect(userMessage?.content).toContain("Title: Help center opens");
   });
+
+  it("asks for German rationales by default", () => {
+    const prompt = buildJudgePrompt("Title: Help center opens", []);
+    const systemMessage = prompt[0];
+    expect(systemMessage?.content).toContain("standardmäßig auf Deutsch");
+  });
 });
 
 // ─── buildJudgePrompt — prompt-injection flagging (Issue #284 AC1) ────────────
@@ -324,7 +330,7 @@ describe("parseJudgeVerdict", () => {
   it("returns safe default verdict for unparseable input", () => {
     const verdict = parseJudgeVerdict("not valid json at all");
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default for empty string", () => {
@@ -353,7 +359,7 @@ describe("parseJudgeVerdict", () => {
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when a score is below the rubric range", () => {
@@ -368,7 +374,7 @@ describe("parseJudgeVerdict", () => {
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when a score is fractional", () => {
@@ -383,7 +389,7 @@ describe("parseJudgeVerdict", () => {
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when a score is not finite JSON number syntax", () => {
@@ -396,7 +402,7 @@ describe("parseJudgeVerdict", () => {
       '],"overallRationale":"test"}';
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when dimensions array is empty", () => {
@@ -412,7 +418,7 @@ describe("parseJudgeVerdict", () => {
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when a rubric dimension is duplicated", () => {
@@ -427,7 +433,7 @@ describe("parseJudgeVerdict", () => {
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when overallRationale is missing", () => {
@@ -441,7 +447,7 @@ describe("parseJudgeVerdict", () => {
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when the top-level verdict carries unknown properties", () => {
@@ -452,12 +458,12 @@ describe("parseJudgeVerdict", () => {
         { name: "determinism", score: 90, rationale: "no randomness" },
         { name: "ac-fidelity", score: 75, rationale: "matches AC" },
       ],
-      overallRationale: "good test",
+      overallRationale: "guter Test",
       scratchpad: "not part of the contract",
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns safe default when a dimension carries unknown properties", () => {
@@ -473,11 +479,11 @@ describe("parseJudgeVerdict", () => {
         { name: "determinism", score: 90, rationale: "no randomness" },
         { name: "ac-fidelity", score: 75, rationale: "matches AC" },
       ],
-      overallRationale: "good test",
+      overallRationale: "guter Test",
     });
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   // Reasoning-model robustness (Epic #736): a reasoning model emits thinking prose, fenced blocks,
@@ -516,7 +522,7 @@ describe("parseJudgeVerdict", () => {
     const verdict = parseJudgeVerdict(noisy);
     expect(verdict.verdict).toBe("strong");
     expect(verdict.dimensions).toHaveLength(4);
-    expect(verdict.overallRationale).toBe("good test");
+    expect(verdict.overallRationale).toBe("guter Test");
   });
 
   it("returns safe default when two valid judge-shaped objects are present", () => {
@@ -524,7 +530,7 @@ describe("parseJudgeVerdict", () => {
       "First verdict:\n" + VALID_VERDICT_JSON + "\nSecond verdict:\n" + WEAK_VERDICT_JSON;
     const verdict = parseJudgeVerdict(noisy);
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("does not mis-slice when rationale strings contain braces", () => {
@@ -623,7 +629,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
       sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
     });
     expect(verdict.verdict).toBe("weak");
-    expect(verdict.overallRationale).toContain("could not be parsed");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
   it("returns a weak verdict without a gateway call when the judge prompt is too large", async () => {
@@ -636,7 +642,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
     expect(calls).toHaveLength(0);
     expect(verdict.verdict).toBe("weak");
     expect(verdict.gatewayCallCount).toBe(0);
-    expect(verdict.overallRationale).toContain("model budget");
+    expect(verdict.overallRationale).toContain("Modellbudget");
   });
 
   it("propagates AbortError when the model call is cancelled", async () => {

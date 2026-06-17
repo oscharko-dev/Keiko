@@ -13,12 +13,13 @@ import { ApiError } from "./api";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
+  const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
+      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
       ...(init?.headers ?? {}),
     },
   });

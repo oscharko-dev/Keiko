@@ -67,6 +67,43 @@ describe("extractAnchors", () => {
     expect(ident?.kind).toBe("identifier");
   });
 
+  it("classifies unquoted PascalCase symbols as identifiers", () => {
+    const result = run("Wo ist WindowFrame implementiert?");
+    const ident = result.anchors.find((a) => a.term === "windowframe");
+    expect(ident).toEqual({ term: "windowframe", weight: 0.85, kind: "identifier" });
+  });
+
+  it("does not mistake all-caps acronyms or SHOUTING words for camel identifiers", () => {
+    const result = run("WHY IS IT BROKEN");
+    const camel = result.anchors.filter((a) => a.kind === "identifier" && a.weight === 0.85);
+    expect(camel).toEqual([]);
+  });
+
+  it("still extracts a camel identifier embedded among acronyms", () => {
+    const result = run("does XMLHttpRequest leak HTTP headers?");
+    const camelTerms = result.anchors
+      .filter((a) => a.kind === "identifier" && a.weight === 0.85)
+      .map((a) => a.term);
+    // The camel identifier survives; the bare acronym is not promoted to a 0.85 identifier
+    // (so it never seeds symbol-file retrieval), even though it may remain a low-weight literal.
+    expect(camelTerms).toContain("xmlhttprequest");
+    expect(camelTerms).not.toContain("http");
+  });
+
+  it.each([
+    ["Welche Type-Script Version wird in der App verwendet?", "typescript"],
+    ["Welche Type Script Version wird in der App verwendet?", "typescript"],
+    ["Which TypeScript version does the app use?", "typescript"],
+    ["Which package.json declares the UI test runner?", "package.json"],
+    ["Which Node.js version does this project expect?", "node"],
+  ])("normalizes technical metadata terms in %s", (text, term) => {
+    const result = run(text);
+    const anchor = result.anchors.find((a) => a.term === term);
+    expect(anchor).toBeDefined();
+    expect(anchor?.kind).toBe("identifier");
+    expect(anchor?.weight).toBeGreaterThan(0.5);
+  });
+
   it("is deterministic across repeated calls", () => {
     const text = "look at `Planner` in src/p/q.ts and the ExplorationBudget value";
     const first = run(text);

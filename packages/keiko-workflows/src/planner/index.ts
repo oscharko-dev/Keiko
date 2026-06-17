@@ -10,6 +10,9 @@ export type {
 } from "./anchors.js";
 export { extractAnchors } from "./anchors.js";
 
+export type { RetrievalIntent, RetrievalIntentClassification } from "./intent.js";
+export { classifyRetrievalIntent } from "./intent.js";
+
 export type {
   ClarificationPrompt,
   ClarificationReason,

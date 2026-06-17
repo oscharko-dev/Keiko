@@ -11,6 +11,15 @@ import type {
 } from "react";
 import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
+import {
+  acquireGrabbingBodyStyle,
+  isCanvasPanPointer,
+  isHandToolKeyIgnoredTarget,
+  isInteractiveSurfaceTarget,
+  isPrimaryActivationPointer,
+  isTextEntryTarget,
+  workspaceInteractionLocked,
+} from "./interactionGuards";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
@@ -64,23 +73,6 @@ function isLocalKnowledgeConnectorDropDetail(
   return payloadRecord["kind"] === "capsule" && typeof payloadRecord["id"] === "string";
 }
 
-function isInteractive(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  return (
-    target.closest(".window") !== null ||
-    target.closest(".ws-zoom") !== null ||
-    target.closest(".ws-fab") !== null ||
-    target.closest(".empty-workspace-blob") !== null ||
-    target.closest(".ws-outline") !== null ||
-    target.closest(".conn-badge") !== null
-  );
-}
-
-function workspaceInteractionLocked(): boolean {
-  if (typeof document === "undefined") return false;
-  return document.documentElement.getAttribute("data-keiko-modal-open") === "true";
-}
-
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across
 // it — after hitting the 30% floor the ±0.2 ladder is offset (30→50→70→90→110)
 // and 100% would otherwise only be reachable via reset (audit C361).
@@ -115,11 +107,8 @@ function startBgPan(
   target.setPointerCapture?.(event.pointerId);
   let lastX = event.clientX;
   let lastY = event.clientY;
-  const previousCursor = document.body.style.cursor;
-  const previousUserSelect = document.body.style.userSelect;
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
   setPanning(true);
-  document.body.style.cursor = "grabbing";
-  document.body.style.userSelect = "none";
   const move = (moveEvent: PointerEvent): void => {
     panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
     lastX = moveEvent.clientX;
@@ -133,8 +122,7 @@ function startBgPan(
     if (target.hasPointerCapture?.(event.pointerId) === true) {
       target.releasePointerCapture?.(event.pointerId);
     }
-    document.body.style.cursor = previousCursor;
-    document.body.style.userSelect = previousUserSelect;
+    releaseBodyStyle();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
@@ -351,6 +339,8 @@ function WorkspaceOutline({
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
+  const [handTool, setHandTool] = useState(false);
+  const handToolRef = useRef(false);
   const visibleWins = useMemo(
     () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
     [wins],
@@ -369,19 +359,43 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
   const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
-    if (isInteractive(event.target)) return;
+    if (isInteractiveSurfaceTarget(event.target)) return;
     if (connecting !== null) {
-      if (event.button === 0) {
+      if (isPrimaryActivationPointer(event)) {
         api.cancelConnect();
       }
       return;
     }
-    // Match canvas tools like Figma/Miro: free-workspace panning starts from
-    // the middle mouse button (scroll wheel press), leaving the primary button
-    // available for ordinary selection and click interactions.
-    if (event.button !== 1) return;
+    if (!isCanvasPanPointer(event)) return;
     startBgPan(api.panBy, event, setPanning);
   };
+
+  useEffect(() => {
+    const setHandToolActive = (active: boolean): void => {
+      handToolRef.current = active;
+      setHandTool(active);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== "Space" || isHandToolKeyIgnoredTarget(event.target)) return;
+      event.preventDefault();
+      if (!handToolRef.current) setHandToolActive(true);
+    };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.code !== "Space") return;
+      setHandToolActive(false);
+    };
+    const onBlur = (): void => {
+      setHandToolActive(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
   // focused. Guard event.target === event.currentTarget so arrow keys inside a
@@ -437,6 +451,17 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
+    if (
+      handToolRef.current &&
+      isPrimaryActivationPointer(event) &&
+      connecting === null &&
+      !isTextEntryTarget(event.target) &&
+      !isInteractiveSurfaceTarget(event.target)
+    ) {
+      startBgPan(api.panBy, event, setPanning);
+      event.stopPropagation();
+      return;
+    }
     if (event.button !== 0 || connecting === null || connFrom === null || visibleWins === null)
       return;
     const targetId = windowIdFromEventTarget(event.target);
@@ -524,6 +549,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       tabIndex={0}
       data-connecting={connecting !== null ? "true" : undefined}
       data-panning={panning ? "true" : undefined}
+      data-hand-tool={handTool ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
       onKeyDown={onSurfaceKeyDown}

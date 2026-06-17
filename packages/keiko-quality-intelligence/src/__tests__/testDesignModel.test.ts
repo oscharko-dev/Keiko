@@ -188,6 +188,39 @@ describe("designTestCaseCandidates", () => {
     expect([...first.tags]).toEqual([...first.tags].sort());
     expect(new Set(first.tags).size).toBe(first.tags.length);
   });
+
+  it("uses supplied atom canonical text to produce source-specific baseline candidates", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, regressionDefault);
+    const atomTextById = new Map(
+      fixture.atoms.map((atom, index) => [
+        String(atom.id),
+        `REQ-AUTH-${String(index + 1).padStart(3, "0")}: Lock the account after five failed login attempts.`,
+      ]),
+    );
+
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+      atomTextById,
+    });
+
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const candidate of candidates) {
+      const atomId = String(candidate.derivedFromAtomIds[0]);
+      const sourceRequirement = atomTextById.get(atomId);
+      expect(sourceRequirement).toBeDefined();
+      if (sourceRequirement === undefined) throw new Error("missing source requirement");
+      expect(candidate.title).toContain(sourceRequirement);
+      expect(candidate.title).toMatch(/^#\d{3} Prüfe /u);
+      expect(candidate.preconditions).toContain(`Quellanforderung: ${sourceRequirement}`);
+      expect(candidate.steps.join("\n")).toContain(sourceRequirement);
+      expect(candidate.expectedResults.join("\n")).toContain(sourceRequirement);
+      expect(candidate.expectedResults.join("\n")).toContain("Das beobachtete Verhalten erfüllt");
+      expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+  });
 });
 
 // Epic #711 / Issue #724 residual: the deterministic-baseline candidate builder is the

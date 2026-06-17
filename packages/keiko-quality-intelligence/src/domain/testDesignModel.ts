@@ -24,6 +24,12 @@ export interface DesignTestCaseCandidatesInput {
   readonly runId: QualityIntelligence.QualityIntelligenceRunId;
   readonly intent: IntentSummary;
   readonly atoms: readonly QualityIntelligence.QualityIntelligenceEvidenceAtom[];
+  /**
+   * Optional canonical source text by atom id. Evidence atoms intentionally carry only hashes in the
+   * public contract, but live ingestion has the canonical text available server-side. Supplying it
+   * lets the deterministic baseline produce usable, source-specific tests instead of atom-id stubs.
+   */
+  readonly atomTextById?: ReadonlyMap<string, string>;
   readonly profile?: PolicyProfile;
 }
 
@@ -65,47 +71,75 @@ const buildTitle = (
   atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
   intent: IntentSummary,
   index: number,
+  atomText: string | undefined,
 ): string => {
-  const themes = intent.themes.slice(0, 2).join(" / ");
   const indexLabel = `#${String(index + 1).padStart(3, "0")}`;
+  const sourceSubject = atomText === undefined ? undefined : conciseText(atomText, 90);
+  if (sourceSubject !== undefined) {
+    return `${indexLabel} Prüfe ${sourceSubject}`;
+  }
+  const themes = intent.themes.slice(0, 2).join(" / ");
   const subject = themes.length > 0 ? themes : atom.kind;
   return `${indexLabel} ${subject} — ${atom.kind}`;
 };
 
-const buildPreconditions = (intent: IntentSummary): readonly string[] => {
-  if (intent.requirementCandidates.length === 0) {
-    return Object.freeze([] as readonly string[]);
+const buildPreconditions = (
+  intent: IntentSummary,
+  atomText: string | undefined,
+): readonly string[] => {
+  const preconditions: string[] = [];
+  if (atomText !== undefined) {
+    const sourceRequirement = conciseText(atomText, 220);
+    if (sourceRequirement !== undefined) {
+      preconditions.push(`Quellanforderung: ${sourceRequirement}`);
+    }
   }
-  return Object.freeze(intent.requirementCandidates.slice(0, 3));
+  if (intent.requirementCandidates.length === 0) {
+    return Object.freeze(preconditions);
+  }
+  preconditions.push(...intent.requirementCandidates.slice(0, atomText === undefined ? 3 : 2));
+  return Object.freeze(preconditions);
 };
 
 const buildSteps = (
   atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
   intent: IntentSummary,
+  atomText: string | undefined,
 ): readonly string[] => {
   const steps: string[] = [];
   const theme = intent.themes[0];
+  const requirement = atomText === undefined ? undefined : conciseText(atomText, 180);
   if (theme !== undefined) {
-    steps.push(`Open the ${theme} flow.`);
+    steps.push(`Öffne den ${theme}-Ablauf oder Servicepfad zu dieser Anforderung.`);
   } else {
-    steps.push("Open the target flow.");
+    steps.push("Öffne den Zielablauf oder Servicepfad zu dieser Anforderung.");
   }
-  steps.push(`Reference atom ${atom.id} (kind: ${atom.kind}).`);
-  steps.push("Apply the deterministic checks listed in the expected results.");
+  if (requirement !== undefined) {
+    steps.push(`Bereite das Szenario vor, das hier beschrieben ist: ${requirement}`);
+  }
+  steps.push("Führe die fachliche Aktion, Validierungsregel oder Entscheidungsstrecke aus.");
+  steps.push(`Dokumentiere Ergebnis, persistierten Zustand, Meldungen und Audit-Evidenz für Atom ${atom.id}.`);
   return Object.freeze(steps);
 };
 
 const buildExpectedResults = (
   atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
   intent: IntentSummary,
+  atomText: string | undefined,
 ): readonly string[] => {
   const results: string[] = [];
-  if (intent.requirementCandidates.length > 0) {
-    results.push(`The flow satisfies: ${intent.requirementCandidates[0] ?? ""}`);
+  if (atomText !== undefined) {
+    const expectedRequirement = conciseText(atomText, 220);
+    if (expectedRequirement !== undefined) {
+      results.push(`Das beobachtete Verhalten erfüllt: ${expectedRequirement}`);
+    }
+  } else if (intent.requirementCandidates.length > 0) {
+    results.push(`Der Ablauf erfüllt: ${intent.requirementCandidates[0] ?? ""}`);
   } else {
-    results.push("The flow completes without an error.");
+    results.push("Der Ablauf wird ohne Fehler abgeschlossen.");
   }
-  results.push(`Evidence atom ${atom.canonicalHashSha256Hex.slice(0, 12)} remains canonical.`);
+  results.push("Widersprüchliche Ergebnisse, fehlende Validierung und stiller Datenverlust sind nicht akzeptabel.");
+  results.push(`Evidenz-Atom ${atom.canonicalHashSha256Hex.slice(0, 12)} bleibt kanonisch.`);
   return Object.freeze(results);
 };
 
@@ -176,6 +210,24 @@ const canonicaliseCandidateTags = (values: readonly string[]): readonly string[]
   return Object.freeze(Array.from(seen).sort(compareString));
 };
 
+const COLLAPSED_WHITESPACE = /\s+/gu;
+
+function conciseText(value: string, maxLength: number): string | undefined {
+  const cleaned = normaliseCandidateText(value).replace(COLLAPSED_WHITESPACE, " ").trim();
+  if (cleaned.length === 0) return undefined;
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function atomTextFor(
+  atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
+  atomTextById: ReadonlyMap<string, string> | undefined,
+): string | undefined {
+  return atomTextById === undefined
+    ? undefined
+    : conciseText(atomTextById.get(String(atom.id)) ?? "", 320);
+}
+
 /**
  * Produce deterministic draft candidates from the intent summary + atoms.
  * Returns the empty array when the atom list is empty. Atoms are first
@@ -188,7 +240,7 @@ const canonicaliseCandidateTags = (values: readonly string[]): readonly string[]
 export const designTestCaseCandidates = (
   input: DesignTestCaseCandidatesInput,
 ): readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[] => {
-  const { runId, intent, atoms } = input;
+  const { runId, intent, atoms, atomTextById } = input;
   const profile = input.profile ?? regressionDefault;
   if (atoms.length === 0) {
     return Object.freeze([] as readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[]);
@@ -206,15 +258,16 @@ export const designTestCaseCandidates = (
     const idString = deriveCandidateIdString(atom, index);
     const id = QualityIntelligence.asQualityIntelligenceTestCaseId(idString);
     const riskClass = deriveRiskClass(atom, profile);
-    const title = normaliseCandidateText(buildTitle(atom, intent, index));
+    const atomText = atomTextFor(atom, atomTextById);
+    const title = normaliseCandidateText(buildTitle(atom, intent, index, atomText));
     const candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate = {
       id,
       runId,
       derivedFromAtomIds: Object.freeze([atom.id]),
       title,
-      preconditions: sanitiseFragmentList(buildPreconditions(intent)),
-      steps: sanitiseFragmentList(buildSteps(atom, intent)),
-      expectedResults: sanitiseFragmentList(buildExpectedResults(atom, intent)),
+      preconditions: sanitiseFragmentList(buildPreconditions(intent, atomText)),
+      steps: sanitiseFragmentList(buildSteps(atom, intent, atomText)),
+      expectedResults: sanitiseFragmentList(buildExpectedResults(atom, intent, atomText)),
       priority,
       riskClass,
       tags: canonicaliseCandidateTags(buildTags(intent, riskClass)),

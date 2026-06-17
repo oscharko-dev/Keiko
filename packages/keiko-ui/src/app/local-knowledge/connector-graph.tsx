@@ -22,6 +22,8 @@ import {
   type ReactNode,
 } from "react";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
+import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import type { CapsuleListEntry, ConnectorGraphProps, RowActionKind } from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
@@ -105,6 +107,7 @@ function CreateCapsuleDialog({
   const triggerRef = useRef<HTMLElement | null>(null);
   const [name, setName] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
+  useModalInteractionLock();
 
   useEffect(() => {
     triggerRef.current = document.activeElement as HTMLElement | null;
@@ -257,6 +260,7 @@ function DisconnectConfirmDialog({
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  useModalInteractionLock();
 
   // Focus the first control on open; restore the opener on close (WCAG 2.4.3).
   useEffect(() => {
@@ -602,16 +606,16 @@ function CapsuleRow({
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
     if (isRowActionDragTarget(event.target)) return;
-    event.stopPropagation();
-    if (event.button !== 0) return;
+    if (!isPrimaryActivationPointer(event)) return;
     event.preventDefault();
+    event.stopPropagation();
     startDragOut(event.clientX, event.clientY);
   };
   const onMouseDown = (event: ReactMouseEvent<HTMLElement>): void => {
     if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
-    event.stopPropagation();
-    if (event.button !== 0) return;
+    if (!isPrimaryActivationPointer(event)) return;
     event.preventDefault();
+    event.stopPropagation();
     startDragOut(event.clientX, event.clientY);
   };
 

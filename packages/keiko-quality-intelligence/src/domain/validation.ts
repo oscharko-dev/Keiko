@@ -7,7 +7,8 @@
 //
 // v1 covers four deterministic checks per candidate:
 //   1. schema-completeness — title/steps/expectedResults must be non-empty.
-//   2. step-acyclicity     — no canonical-line repeats in the step sequence.
+//   2. consecutive-step-repeat — an adjacent step must not canonically repeat the one before it
+//      (a context-changing step between two identical actions is allowed by design).
 //   3. expected-presence    — at least one expected result must be present.
 //   4. trivial-contradiction — a precondition and an expected result share the
 //      same negation-stripped core but have opposite negation parity (XOR):
@@ -114,28 +115,28 @@ const checkExpectedResultsPresence = (
   return [];
 };
 
-const checkStepAcyclicity = (
+const checkConsecutiveStepRepeat = (
   runId: QualityIntelligence.QualityIntelligenceRunId,
   candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
 ): readonly QualityIntelligence.QualityIntelligenceValidationFinding[] => {
-  const seen = new Set<string>();
+  let previousCanonical = "";
   for (const step of candidate.steps) {
     const canonical = canonicaliseLine(step);
     if (canonical.length === 0) {
       continue;
     }
-    if (seen.has(canonical)) {
+    if (canonical === previousCanonical) {
       return [
         buildLogicDefect(
           runId,
           candidate,
           3,
           "medium",
-          "Candidate step sequence contains a canonical-line repeat.",
+          "Candidate step sequence contains a consecutive canonical-line repeat.",
         ),
       ];
     }
-    seen.add(canonical);
+    previousCanonical = canonical;
   }
   return [];
 };
@@ -197,7 +198,7 @@ export const validateCandidates = (
     for (const finding of checkExpectedResultsPresence(runId, candidate)) {
       out.push(finding);
     }
-    for (const finding of checkStepAcyclicity(runId, candidate)) {
+    for (const finding of checkConsecutiveStepRepeat(runId, candidate)) {
       out.push(finding);
     }
     for (const finding of checkTrivialContradictions(runId, candidate)) {

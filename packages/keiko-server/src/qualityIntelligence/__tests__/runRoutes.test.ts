@@ -18,7 +18,7 @@ import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import type { Redactor, UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createInMemoryUiStore, createRunRegistry, STREAMING } from "../../index.js";
 import type { RouteContext, RouteResult } from "../../routes.js";
-import { handleStartQiRun, toStreamEvent } from "../runRoutes.js";
+import { doneFrameForSummary, handleStartQiRun, toStreamEvent } from "../runRoutes.js";
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -653,6 +653,64 @@ describe("toStreamEvent — reasonSummary redaction backstop (#279 AC3)", () => 
     const message = toStreamEvent(event, buildRedactor({})) as { reasonSummary?: string };
 
     expect(message.reasonSummary).toBe("qi-run-error");
+  });
+});
+
+describe("doneFrameForSummary — degraded vs failed reasonSummary surfacing (QI-DEG-01)", () => {
+  const deps = { redactor: buildRedactor({}) } as unknown as UiHandlerDeps;
+  const totals = { candidates: 3, findings: 1 } as unknown as Parameters<
+    typeof doneFrameForSummary
+  >[3];
+  const summaryWith = (
+    status: "succeeded" | "failed",
+    reasonSummary: string | undefined,
+  ): Parameters<typeof doneFrameForSummary>[2] =>
+    ({ status, reasonSummary }) as unknown as Parameters<typeof doneFrameForSummary>[2];
+
+  it("flags a succeeded run that carries a reason as degraded and surfaces the reason", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-1",
+      summaryWith("succeeded", "qi-run-error"),
+      totals,
+    ) as {
+      status: string;
+      reasonSummary?: string;
+      degraded?: boolean;
+    };
+    expect(frame.status).toBe("succeeded");
+    expect(frame.reasonSummary).toBe("qi-run-error");
+    expect(frame.degraded).toBe(true);
+  });
+
+  it("surfaces a failed run's reason but does NOT mark it degraded", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-2",
+      summaryWith("failed", "qi-run-error"),
+      totals,
+    ) as {
+      status: string;
+      reasonSummary?: string;
+      degraded?: boolean;
+    };
+    expect(frame.status).toBe("failed");
+    expect(frame.reasonSummary).toBe("qi-run-error");
+    expect(frame.degraded).toBeUndefined();
+  });
+
+  it("emits neither field for a clean succeeded run", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-3",
+      summaryWith("succeeded", undefined),
+      totals,
+    ) as {
+      reasonSummary?: string;
+      degraded?: boolean;
+    };
+    expect(frame.reasonSummary).toBeUndefined();
+    expect(frame.degraded).toBeUndefined();
   });
 });
 

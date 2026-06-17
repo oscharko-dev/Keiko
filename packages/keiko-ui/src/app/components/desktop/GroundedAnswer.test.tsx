@@ -498,6 +498,21 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/src\/hi-0\.ts/)).toBeInTheDocument();
   });
 
+  it("deduplicates folder citations by stable id before rendering", () => {
+    const citations = [
+      citation({ stableId: "dup", scopePath: "src/weak.ts", score: 0.1 }),
+      citation({ stableId: "dup", scopePath: "src/strong.ts", score: 0.9 }),
+      citation({ stableId: "unique", scopePath: "src/unique.ts", score: 0.5 }),
+    ];
+
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
+    expect(screen.getByText(/src\/strong\.ts/)).toBeInTheDocument();
+    expect(screen.getByText(/src\/unique\.ts/)).toBeInTheDocument();
+    expect(screen.queryByText(/src\/weak\.ts/)).not.toBeInTheDocument();
+  });
+
   it("renders no disclosure button when the citation list is within the cap", () => {
     const citations = Array.from({ length: 8 }, (_, i) =>
       citation({ stableId: `atom-${String(i)}`, scopePath: `src/f-${String(i)}.ts` }),
@@ -541,6 +556,57 @@ describe("GroundedAnswer", () => {
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "Show all 10 sources" }));
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(10);
+  });
+
+  it("deduplicates knowledge citations by stable id before rendering", () => {
+    const a: GroundedAnswerType = {
+      groundingKind: "local-knowledge",
+      userMessageId: "lk-u",
+      assistantMessageId: "lk-a",
+      content: "Answer [1].",
+      citations: [
+        knowledgeCitation({
+          stableId: "dup",
+          marker: "[1]",
+          label: "weak.md",
+          score: 0.1,
+        }),
+        knowledgeCitation({
+          stableId: "dup",
+          marker: "[2]",
+          label: "strong.md",
+          score: 0.9,
+        }),
+        knowledgeCitation({
+          stableId: "unique",
+          marker: "[3]",
+          label: "unique.md",
+          score: 0.5,
+        }),
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 5,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-1",
+        scopeLabel: "Caps",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: 3,
+        referenceBudget: 10,
+        referencesUsed: 3,
+      },
+    };
+
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
+    expect(screen.getByText(/\[2\] strong\.md/)).toBeInTheDocument();
+    expect(screen.getByText(/\[3\] unique\.md/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[1\] weak\.md/)).not.toBeInTheDocument();
   });
 
   it("never renders answer.content into the panel — neither as text nor as markup", () => {

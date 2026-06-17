@@ -267,7 +267,14 @@ describe("quality intelligence JSON BFF helpers", () => {
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/quality-intelligence/runs/run%201",
-      expect.objectContaining({ method: "DELETE" }),
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/quality-intelligence/runs/run%201/cancel",

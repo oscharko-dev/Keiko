@@ -31,7 +31,12 @@ import {
   type RouteDefinition,
 } from "../routes.js";
 import type { Redactor, UiHandlerDeps } from "../deps.js";
-import { executeQiRun, QiGenerationError, QiIngestionError } from "./runExecution.js";
+import {
+  executeQiRun,
+  QiGenerationError,
+  QiIngestionError,
+  type QiRunAccepted,
+} from "./runExecution.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { qiRunRegistry } from "./runRegistry.js";
 
@@ -290,6 +295,8 @@ function classifyStartError(error: unknown): { readonly code: string; readonly m
 }
 
 type WriteFn = (message: QualityIntelligenceRunStreamMessage) => void;
+type QiExecutionSummary = Awaited<ReturnType<typeof executeQiRun>>;
+type StreamTotals = Extract<QualityIntelligenceRunStreamMessage, { type: "done" }>["totals"];
 
 // Project the internal QiSkippedSource[] (which also carries a free-text `message`) to exactly the
 // wire contract QualityIntelligenceSkippedSource[] ({label, kind, code}). Streaming `message`
@@ -299,6 +306,44 @@ function toWireSkippedSources(
   skipped: readonly QiSkippedSource[],
 ): readonly QualityIntelligenceSkippedSource[] {
   return skipped.map((s) => ({ label: s.label, kind: s.kind, code: s.code }));
+}
+
+function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
+  write({
+    type: "accepted",
+    runId: accepted.runId,
+    requestedAt: accepted.requestedAt,
+    sourceCount: accepted.sourceCount,
+    atomCount: accepted.atomCount,
+    ...(accepted.droppedSourceCount > 0 ? { droppedSourceCount: accepted.droppedSourceCount } : {}),
+    ...(accepted.skippedSources.length > 0
+      ? { skippedSources: toWireSkippedSources(accepted.skippedSources) }
+      : {}),
+  });
+}
+
+export function doneFrameForSummary(
+  deps: UiHandlerDeps,
+  runId: string,
+  summary: QiExecutionSummary,
+  totals: StreamTotals,
+): QualityIntelligenceRunStreamMessage {
+  // Surface the bounded reasonSummary for BOTH a terminal failed run and a succeeded-but-degraded run
+  // (model/parser fell back to the deterministic baseline). The reason is already safeReasonSummary-
+  // bounded server-side; re-redact defensively before it reaches the wire.
+  const reasonSummary =
+    summary.reasonSummary !== undefined
+      ? applyRedactor(deps.redactor, summary.reasonSummary)
+      : undefined;
+  const degraded = summary.status === "succeeded" && reasonSummary !== undefined ? true : undefined;
+  return {
+    type: "done",
+    runId,
+    status: summary.status,
+    totals,
+    ...(reasonSummary !== undefined ? { reasonSummary } : {}),
+    ...(degraded !== undefined ? { degraded } : {}),
+  };
 }
 
 async function streamRunExecution(
@@ -319,19 +364,7 @@ async function streamRunExecution(
       registeredAt,
       signal,
       onAccepted: (accepted) => {
-        write({
-          type: "accepted",
-          runId: accepted.runId,
-          requestedAt: accepted.requestedAt,
-          sourceCount: accepted.sourceCount,
-          atomCount: accepted.atomCount,
-          ...(accepted.droppedSourceCount > 0
-            ? { droppedSourceCount: accepted.droppedSourceCount }
-            : {}),
-          ...(accepted.skippedSources.length > 0
-            ? { skippedSources: toWireSkippedSources(accepted.skippedSources) }
-            : {}),
-        });
+        writeAcceptedFrame(write, accepted);
       },
       onEvent: (event) => {
         if (event.payload.kind === "candidate:proposed") totals.candidates += 1;
@@ -341,7 +374,7 @@ async function streamRunExecution(
       },
     });
     terminal = summary.status;
-    write({ type: "done", runId, status: summary.status, totals });
+    write(doneFrameForSummary(deps, runId, summary, totals));
   } catch (error) {
     const { code, message } = classifyStartError(error);
     write({ type: "error", code, message });

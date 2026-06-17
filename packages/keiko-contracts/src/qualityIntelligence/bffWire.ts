@@ -394,6 +394,21 @@ export interface QualityIntelligenceRunStreamDone {
   readonly runId: string;
   readonly status: "succeeded" | "failed" | "cancelled";
   readonly totals: QualityIntelligenceUiRunTotals;
+  /**
+   * Redaction-safe reason for terminal failed runs AND for succeeded-but-degraded runs (see
+   * `degraded`). This mirrors the bounded reasonSummary emitted by stage/run failure events so
+   * clients that only inspect the terminal frame can still present an actionable message without
+   * exposing provider details.
+   */
+  readonly reasonSummary?: string;
+  /**
+   * True when the run completed (status "succeeded") but model generation/judging fell back to the
+   * deterministic baseline because the provider or parser failed. The run still produced usable
+   * baseline test cases, but the model output is absent — clients MUST surface this so a degraded
+   * run is never presented as an authoritative model-backed result (regulated-delivery audit). The
+   * redacted cause is carried in `reasonSummary`. Additive on the wire.
+   */
+  readonly degraded?: boolean;
 }
 
 export interface QualityIntelligenceRunStreamError {

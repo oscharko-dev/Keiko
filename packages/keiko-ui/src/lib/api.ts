@@ -63,12 +63,13 @@ export class ApiError extends Error {
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
+  const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
+      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -156,6 +157,7 @@ export interface GatewaySetupResponse {
   readonly ok: true;
   readonly testedModelId: string;
   readonly testedModelIds: readonly string[];
+  readonly skippedModelIds?: readonly string[] | undefined;
   readonly providerCount: number;
   readonly models: ModelCapability[];
   readonly config: SafeGatewayConfig;
