@@ -411,12 +411,10 @@ describe("readJsonCapped", () => {
   });
 
   it("falls back to response.json() when body is null", async () => {
-    // Simulate an environment where Response.body is null by constructing a minimal
-    // duck-typed Response object whose body property is explicitly null.
-    const inner = new Response(JSON.stringify({ fallback: true }), { status: 200 });
-    const nullBody = Object.create(inner, {
-      body: { get: (): null => null },
-    }) as Response;
+    // Simulate an environment where Response.body is null while preserving the native
+    // Response private slots that response.json() requires.
+    const nullBody = new Response(JSON.stringify({ fallback: true }), { status: 200 });
+    Object.defineProperty(nullBody, "body", { get: (): null => null });
     const result = await readJsonCapped(nullBody);
     expect(result).toEqual({ fallback: true });
   });
