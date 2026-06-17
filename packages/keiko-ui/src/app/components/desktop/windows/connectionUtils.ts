@@ -29,11 +29,17 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   // window, adopting its selected capsule / capsule-set as the Generate source.
   // Epic #750 #756 — QI also binds to a Figma Snapshot window: the stored snapshot run becomes the
   // figma-snapshot source for the next Generate run.
-  quality: ["files", "connector", "figma"],
+  quality: ["files", "connector", "figma", "figmaJson", "figmaImage"],
   // Epic #750 #756 — a Figma Snapshot window can only bind to the QI hub. The window itself holds
   // no PAT; it stores the snapshotRunId in cfg after a successful server-side build, and the QI hub
   // reads that id via the relationship edge.
   figma: ["quality"],
+  // A Figma JSON window is a scoped Screen-IR evidence handle. It is connectable to QI like the
+  // source view, but contributes only the persisted JSON scope.
+  figmaJson: ["quality"],
+  // A Figma Image window is an image-only evidence handle. QI turns it into a textual image
+  // description through an image-input capable model before test generation.
+  figmaImage: ["quality"],
 };
 
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
@@ -89,8 +95,16 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
   // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
   if (pair.includes("connector")) return "uses knowledge";
+  if (pair.includes("figmaJson")) return "uses JSON";
+  if (pair.includes("figmaImage")) return "uses image";
   // Epic #750 #756 — a Figma edge means the QI hub will generate from the captured snapshot.
-  if (pair.includes("figma")) return "uses snapshot";
+  if (pair.includes("figma")) {
+    const figmaSide = a.type === "figma" ? a : b.type === "figma" ? b : null;
+    const selectedScreenName = figmaSide?.cfg?.["selectedScreenName"];
+    return typeof selectedScreenName === "string" && selectedScreenName.trim().length > 0
+      ? "uses view"
+      : "uses snapshot";
+  }
   if (pair.includes("keiko")) return "governed by";
   if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
   if (pair.includes("terminal")) return "runs in";
@@ -254,6 +268,10 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
       const title = cfgString("title");
       return title !== null && title !== "New chat" ? title : null;
     }
+    case "figma":
+      return cfgString("selectedScreenName") ?? cfgString("snapshotRunId");
+    case "figmaJson":
+      return cfgString("selectedScreenName") ?? cfgString("screenId") ?? cfgString("snapshotRunId");
     default:
       return null;
   }

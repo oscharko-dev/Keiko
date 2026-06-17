@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   scoreFromDimensions,
+  verdictFromDimensions,
   verdictFromScore,
   TEST_QUALITY_WEAK_THRESHOLD,
 } from "../domain/testQualityRubric.js";
@@ -75,5 +76,32 @@ describe("verdictFromScore", () => {
 
   it("returns 'weak' for score 1 below threshold", () => {
     expect(verdictFromScore(TEST_QUALITY_WEAK_THRESHOLD - 1)).toBe("weak");
+  });
+});
+
+describe("verdictFromDimensions", () => {
+  it("returns strong only when every dimension and the aggregate meet the threshold", () => {
+    const dims = [
+      makeDim("verifiability", 70),
+      makeDim("atomicity", 60),
+      makeDim("determinism", 80),
+      makeDim("ac-fidelity", 90),
+    ];
+    expect(verdictFromDimensions(dims)).toBe("strong");
+  });
+
+  it("returns weak when the aggregate is strong but one mandatory dimension is weak", () => {
+    const dims = [
+      makeDim("verifiability", 90),
+      makeDim("atomicity", 28),
+      makeDim("determinism", 90),
+      makeDim("ac-fidelity", 90),
+    ];
+    expect(scoreFromDimensions(dims)).toBeGreaterThan(TEST_QUALITY_WEAK_THRESHOLD);
+    expect(verdictFromDimensions(dims)).toBe("weak");
+  });
+
+  it("returns weak for empty dimensions", () => {
+    expect(verdictFromDimensions([])).toBe("weak");
   });
 });

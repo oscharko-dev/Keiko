@@ -35,9 +35,14 @@ import {
 } from "./figmaScopedPagination.js";
 
 const FIGMA_API_ORIGIN = "https://api.figma.com";
-const DEFAULT_DEPTH = 4;
+const DEFAULT_DEPTH = 2;
 const DEFAULT_MAX_NODE_COUNT = 5000;
 const EPOCH = "1970-01-01T00:00:00.000Z";
+const DEEP_FETCH_FAIL_SOFT_RETRY_POLICY: FigmaRetryPolicy = {
+  maxRetries: 0,
+  baseDelayMs: 500,
+  maxDelayMs: 500,
+};
 
 export interface FigmaConnectorConfig {
   /**
@@ -215,11 +220,12 @@ const fetchDocumentAt = async (
   nodeId: string,
   fetchDepth: number,
   version: string | undefined,
+  retryPolicy: FigmaRetryPolicy = rt.retryPolicy,
 ): Promise<RawFigmaNode> => {
   const requestUrl = buildScopedUrl(fileKey, nodeId, fetchDepth, version);
   const response = await fetchWithBackoff(
     () => rt.deps.http({ url: requestUrl, headers: { "X-Figma-Token": token } }),
-    rt.retryPolicy,
+    retryPolicy,
     rt.sleep,
   );
   if (response.status < 200 || response.status >= 300) {
@@ -289,6 +295,7 @@ const makeDeepFetcher = (
         nodeId,
         rt.paginationLimits.pageDepth,
         version,
+        DEEP_FETCH_FAIL_SOFT_RETRY_POLICY,
       );
     } catch (err) {
       if (err instanceof FigmaConnectorError && DEEP_FETCH_ABORT_CODES.has(err.code)) throw err;

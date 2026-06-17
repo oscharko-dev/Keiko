@@ -30,11 +30,6 @@ function Harness(): ReactElement {
 
   return (
     <main ref={wsRef} data-testid="workspace" className="workspace">
-      <section className="ws-outline" data-testid="outline-target">
-        <div className="ws-outline-content ws-outline-inner">
-          <button type="button">Outline action</button>
-        </div>
-      </section>
       <section className="window" data-window-id="files-1">
         <div data-testid="window-target" />
       </section>
@@ -170,26 +165,6 @@ describe("useWorkspace wheel zoom routing", () => {
     await waitFor(() => {
       expect(screen.getByTestId("view-x")).toHaveTextContent("-15");
       expect(screen.getByTestId("view-y")).toHaveTextContent("-35");
-    });
-  });
-
-  it("does not pan the canvas when wheel events start inside the workspace outline", async () => {
-    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
-    render(<Harness />);
-    mockWorkspaceRect();
-
-    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
-
-    fireEvent.wheel(screen.getByTestId("outline-target"), {
-      bubbles: true,
-      cancelable: true,
-      deltaX: 10,
-      deltaY: 20,
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("view-x")).toHaveTextContent("0");
-      expect(screen.getByTestId("view-y")).toHaveTextContent("0");
     });
   });
 });

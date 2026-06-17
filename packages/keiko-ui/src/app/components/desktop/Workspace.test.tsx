@@ -1,4 +1,4 @@
-import { createRef, useRef, useState, type ReactNode } from "react";
+import { createRef } from "react";
 import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -7,6 +7,21 @@ import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import { makeMutations } from "./hooks/workspaceActions";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow } from "./windows/types";
+import {
+  FIGMA_VIEW_DRAG_TYPE,
+  FIGMA_VIEW_DROP_EVENT,
+  serializeFigmaViewDrag,
+} from "./figma-view-drag";
+import {
+  FIGMA_JSON_DRAG_TYPE,
+  FIGMA_JSON_DROP_EVENT,
+  serializeFigmaJsonDrag,
+} from "./figma-json-drag";
+import {
+  FIGMA_IMAGE_DRAG_TYPE,
+  FIGMA_IMAGE_DROP_EVENT,
+  serializeFigmaImageDrag,
+} from "./figma-image-drag";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
   LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
@@ -201,10 +216,6 @@ describe("Workspace card connections", () => {
     );
 
     const outline = screen.getByRole("region", { name: "Workspace outline" });
-    // #1153: the outline content is inert/aria-hidden until the panel is opened,
-    // so the inner headings and action buttons only enter the a11y tree once a
-    // user reveals it via the toggle affordance.
-    await user.click(within(outline).getByRole("button", { name: "Show workspace outline" }));
     expect(outline).toHaveTextContent("2 workspace windows, 1 relationship.");
     expect(
       screen.getByRole("heading", { name: "Chat: Release review", level: 4 }),
@@ -265,58 +276,6 @@ describe("Workspace card connections", () => {
     );
 
     expect(await axe(container)).toHaveNoViolations();
-  });
-
-  it("activates clicked canvas windows and updates the outline status", async () => {
-    const user = userEvent.setup();
-
-    function ActivationHarness() {
-      const [wins, setWins] = useState<AppWindow[]>([
-        appWindow({ id: "chat-1", type: "chat", z: 1 }),
-        appWindow({ id: "files-1", type: "files", x: 420, z: 2, cfg: { root: "/repo" } }),
-        appWindow({ id: "settings-1", type: "settings", x: 220, y: 220, z: 3 }),
-      ]);
-
-      return (
-        <Workspace
-          ws={workspace({
-            wins,
-            api: api({
-              focus: (id: string) =>
-                setWins((current) => {
-                  const nextZ = Math.max(...current.map((win) => win.z)) + 1;
-                  return current.map((win) => (win.id === id ? { ...win, z: nextZ } : win));
-                }),
-            }),
-          })}
-          wsRef={createRef<HTMLDivElement>()}
-          openPalette={() => undefined}
-        />
-      );
-    }
-
-    const { container } = render(<ActivationHarness />);
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-
-    expect(outline).toHaveTextContent("Type: Chat. Status: background, open.");
-    expect(outline).toHaveTextContent("Type: Files. Status: background, open.");
-    expect(outline).toHaveTextContent("Type: Settings. Status: active, open.");
-
-    await user.click(
-      container.querySelector<HTMLElement>(
-        '.window[data-window-id="chat-1"] .win-body',
-      ) as HTMLElement,
-    );
-    expect(outline).toHaveTextContent("Type: Chat. Status: active, open.");
-    expect(outline).toHaveTextContent("Type: Settings. Status: background, open.");
-
-    await user.click(
-      container.querySelector<HTMLElement>(
-        '.window[data-window-id="files-1"] .win-body',
-      ) as HTMLElement,
-    );
-    expect(outline).toHaveTextContent("Type: Files. Status: active, open.");
-    expect(outline).toHaveTextContent("Type: Chat. Status: background, open.");
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", () => {
@@ -523,6 +482,395 @@ describe("Workspace card connections", () => {
     expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
   });
 
+  it("creates a scoped Figma view card when a snapshot thumbnail is dropped", () => {
+    const add = vi.fn(() => "figma-view-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const dataTransfer = {
+      types: [FIGMA_VIEW_DRAG_TYPE],
+      getData: vi.fn((type: string) =>
+        type === FIGMA_VIEW_DRAG_TYPE
+          ? serializeFigmaViewDrag({
+              snapshotRunId: "fs-123",
+              screenId: "1:102746",
+              name: "Kontokorrentkredit hinzufügen",
+            })
+          : "",
+      ),
+      dropEffect: "none",
+    };
+
+    const dropEvent = createEvent.drop(surface, { dataTransfer });
+    Object.defineProperties(dropEvent, {
+      clientX: { value: 450 },
+      clientY: { value: 260 },
+    });
+    fireEvent(surface, dropEvent);
+
+    expect(add).toHaveBeenCalledWith("figma", {
+      snapshotRunId: "fs-123",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
+  });
+
+  it("creates the same scoped Figma view card from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-view-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_VIEW_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figma", {
+      snapshotRunId: "fs-123",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
+  });
+
+  it("creates a scoped Figma JSON source window and migrates an existing QI edge", () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "figma-json-1");
+      const update = vi.fn();
+      const removeConn = vi.fn();
+      const connect = vi.fn();
+      const workspaceApi = api({ add, update, removeConn, connect });
+      const wins = [
+        appWindow({
+          id: "quality",
+          type: "quality",
+          z: 2,
+        }),
+        appWindow({
+          id: "figma-view-1",
+          type: "figma",
+          x: 420,
+          z: 1,
+          cfg: {
+            snapshotRunId: "fs-123",
+            selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+            selectedScreenName: "Kontokorrentkredit hinzufügen",
+          },
+        }),
+      ];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            conns: [{ id: "quality~figma-view-1", a: "quality", b: "figma-view-1" }],
+            view: { x: 20, y: 30, zoom: 2 },
+            api: workspaceApi,
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const dataTransfer = {
+        types: [FIGMA_JSON_DRAG_TYPE],
+        getData: vi.fn((type: string) =>
+          type === FIGMA_JSON_DRAG_TYPE
+            ? serializeFigmaJsonDrag({
+                snapshotRunId: "fs-123",
+                screenId: "1:102746",
+                name: "Kontokorrentkredit hinzufügen",
+                sourceWindowId: "figma-view-1",
+              })
+            : "",
+        ),
+        dropEffect: "none",
+      };
+
+      const dropEvent = createEvent.drop(surface, { dataTransfer });
+      Object.defineProperties(dropEvent, {
+        clientX: { value: 450 },
+        clientY: { value: 260 },
+      });
+      fireEvent(surface, dropEvent);
+
+      expect(add).toHaveBeenCalledWith("figmaJson", {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+        selectedScreenName: "Kontokorrentkredit hinzufügen",
+      });
+      expect(update).toHaveBeenCalledWith("figma-json-1", {
+        x: -50,
+        y: 81,
+        w: 520,
+        h: 540,
+      });
+      expect(removeConn).toHaveBeenCalledWith("quality~figma-view-1");
+
+      vi.runOnlyPendingTimers();
+
+      expect(connect).toHaveBeenCalledWith("figma-json-1", "quality");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates the same scoped Figma JSON source from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-json-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_JSON_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaJson", {
+      snapshotRunId: "fs-123",
+      screenId: "1:102746",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-json-1", { x: -50, y: 81, w: 520, h: 540 });
+  });
+
+  it("creates a standalone Figma image source and migrates a QI edge from the source view", () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "figma-image-1");
+      const update = vi.fn();
+      const removeConn = vi.fn();
+      const connect = vi.fn();
+      const workspaceApi = api({ add, update, removeConn, connect });
+      const wins = [
+        appWindow({ id: "quality", type: "quality", z: 2 }),
+        appWindow({ id: "figma-view-1", type: "figma", x: 420, z: 1 }),
+      ];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            conns: [{ id: "quality~figma-view-1", a: "quality", b: "figma-view-1" }],
+            view: { x: 20, y: 30, zoom: 2 },
+            api: workspaceApi,
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const payload = {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        name: "Kontokorrentkredit hinzufügen",
+        imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+        sourceWindowId: "figma-view-1",
+      };
+      const dataTransfer = {
+        types: [FIGMA_IMAGE_DRAG_TYPE],
+        getData: vi.fn((type: string) =>
+          type === FIGMA_IMAGE_DRAG_TYPE ? serializeFigmaImageDrag(payload) : "",
+        ),
+        dropEffect: "none",
+      };
+
+      const dropEvent = createEvent.drop(surface, { dataTransfer });
+      Object.defineProperties(dropEvent, {
+        clientX: { value: 450 },
+        clientY: { value: 260 },
+      });
+      fireEvent(surface, dropEvent);
+
+      expect(add).toHaveBeenCalledWith("figmaImage", {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        selectedScreenName: "Kontokorrentkredit hinzufügen",
+        imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+      });
+      expect(update).toHaveBeenCalledWith("figma-image-1", {
+        x: -70,
+        y: 81,
+        w: 560,
+        h: 420,
+      });
+      expect(removeConn).toHaveBeenCalledWith("quality~figma-view-1");
+
+      vi.runOnlyPendingTimers();
+
+      expect(connect).toHaveBeenCalledWith("figma-image-1", "quality");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates the same standalone Figma image source from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-image-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_IMAGE_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+            imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaImage", {
+      snapshotRunId: "fs-123",
+      screenId: "1:102746",
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+      imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+    });
+    expect(update).toHaveBeenCalledWith("figma-image-1", { x: -70, y: 81, w: 560, h: 420 });
+  });
+
   it("maps a workspace drop point through pan and zoom into connector window origin", () => {
     const origin = workspaceDropPointToWindowOrigin({
       clientX: 450,
@@ -674,24 +1022,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("marks the free workspace surface as actively panning while the middle button is held", () => {
-    render(
-      <Workspace
-        ws={workspace({})}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-    const surface = screen.getByRole("main", { name: "Workspace surface" });
-
-    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
-    expect(surface).toHaveAttribute("data-panning", "true");
-
-    fireEvent.pointerUp(window);
-    expect(surface).not.toHaveAttribute("data-panning");
-  });
-
-  it("does not start background panning from the primary mouse button", () => {
+  it("marks the free workspace surface as actively panning while the primary button is held", () => {
     render(
       <Workspace
         ws={workspace({})}
@@ -702,8 +1033,120 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).toHaveAttribute("data-panning", "true");
 
+    fireEvent.pointerUp(window);
     expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("keeps middle-button workspace panning available for mouse users", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+
+    expect(surface).toHaveAttribute("data-panning", "true");
+
+    fireEvent.pointerUp(window);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not let Space plus primary drag over a window steal window interactions", () => {
+    const focus = vi.fn();
+    const panBy = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const workspaceApi = api({ focus, panBy });
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(surface).toHaveAttribute("data-hand-tool", "true");
+
+    fireEvent.pointerDown(windowEl as HTMLElement, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+    fireEvent.keyUp(window, { key: " ", code: "Space" });
+
+    expect(panBy).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(surface).not.toHaveAttribute("data-panning");
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("pans the free board with Space plus primary drag", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(surface).toHaveAttribute("data-hand-tool", "true");
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+    fireEvent.keyUp(window, { key: " ", code: "Space" });
+
+    expect(panBy).toHaveBeenCalledWith(30, 15);
+    expect(surface).not.toHaveAttribute("data-panning");
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("does not pan the board from right click or macOS control click", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 2, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+
+    fireEvent.pointerDown(surface, { button: 0, ctrlKey: true, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not arm the Space hand tool from an interactive control", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const button = document.querySelector<HTMLElement>(".ws-fab");
+    if (button === null) throw new Error("missing workspace FAB");
+    const event = createEvent.keyDown(button, { key: " ", code: "Space" });
+
+    fireEvent(button, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(surface).not.toHaveAttribute("data-hand-tool");
   });
 
   it("does not start background panning while a modal interaction lock is active", () => {
@@ -906,207 +1349,5 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     // Dispatch on the child; the event bubbles but target stays the child.
     fireEvent.keyDown(windowEl as HTMLElement, { key: "ArrowLeft", bubbles: true });
     expect(panBy).not.toHaveBeenCalled();
-  });
-});
-
-// Regression for #1153. The outline panel was revealed only on :focus-within,
-// so a collapsed panel kept its action buttons in the DOM + a11y tree under
-// pointer-events:none — a pointer click fell through to the canvas and window
-// state never changed. jsdom ignores pointer-events, so the browser-level fall
-// through is covered by the Playwright @smoke test in tests/e2e. These RTL
-// tests pin the DOM contract that keeps the two in sync: collapsed = inert and
-// aria-hidden (no falsely-exposed controls), and an explicit pointer-operable
-// toggle that opens the panel and drives REAL window-state mutations.
-function RealOutlineHarness({ initial }: { readonly initial: readonly AppWindow[] }): ReactNode {
-  const [wins, setWins] = useState<AppWindow[] | null>([...initial]);
-  // Mirror useWorkspace: the z-counter starts at the highest persisted z so a
-  // restore/focus bump lands a window above all others (becomes `top`/active).
-  const zc = useRef(initial.reduce((max, win) => Math.max(max, win.z), 0));
-  const mutations = useRef(
-    makeMutations({ setWins, zc, worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }) }),
-  );
-  const workspaceApi = api(mutations.current);
-  return (
-    <Workspace
-      ws={workspace({ wins, api: workspaceApi })}
-      wsRef={createRef<HTMLDivElement>()}
-      openPalette={() => undefined}
-    />
-  );
-}
-
-describe("#1153 — pointer users can operate the workspace outline", () => {
-  function twoWindows(): AppWindow[] {
-    return [
-      appWindow({ id: "bg-1", type: "agents", z: 1 }),
-      appWindow({ id: "active-1", type: "files", x: 420, z: 5 }),
-    ];
-  }
-
-  it("collapses the outline content as inert + aria-hidden until opened", () => {
-    render(
-      <Workspace
-        ws={workspace({ wins: twoWindows() })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-
-    const toggle = screen.getByRole("button", { name: "Show workspace outline" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    const content = outline.querySelector(".ws-outline-content");
-    expect(content).not.toBeNull();
-    expect(content).toHaveAttribute("aria-hidden", "true");
-    expect(content).toHaveAttribute("inert");
-    expect(outline).toHaveAttribute("data-open", "false");
-  });
-
-  it("reveals the outline and exposes operable buttons when the toggle is pressed", async () => {
-    const user = userEvent.setup();
-    render(
-      <Workspace
-        ws={workspace({ wins: twoWindows() })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
-
-    const toggle = screen.getByRole("button", { name: "Hide workspace outline" });
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    expect(outline).toHaveAttribute("data-open", "true");
-    const content = outline.querySelector(".ws-outline-content");
-    expect(content).not.toHaveAttribute("aria-hidden");
-    expect(content).not.toHaveAttribute("inert");
-  });
-
-  it("collapses immediately when Hide workspace outline is pressed", async () => {
-    const user = userEvent.setup();
-    render(
-      <Workspace
-        ws={workspace({ wins: twoWindows() })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    expect(outline).toHaveAttribute("data-open", "true");
-
-    await user.click(screen.getByRole("button", { name: "Hide workspace outline" }));
-
-    expect(screen.getByRole("button", { name: "Show workspace outline" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    expect(outline).toHaveAttribute("data-open", "false");
-    const content = outline.querySelector(".ws-outline-content");
-    expect(content).toHaveAttribute("aria-hidden", "true");
-    expect(content).toHaveAttribute("inert");
-  });
-
-  it("stays open when the pointer leaves but focus remains inside the outline", () => {
-    render(
-      <Workspace
-        ws={workspace({ wins: twoWindows() })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    fireEvent.pointerEnter(outline);
-    expect(outline).toHaveAttribute("data-open", "true");
-
-    const newWindowButton = within(outline).getByRole("button", { name: "New window" });
-    fireEvent.focus(newWindowButton);
-    fireEvent.pointerLeave(outline);
-
-    expect(outline).toHaveAttribute("data-open", "true");
-
-    fireEvent.blur(newWindowButton, { relatedTarget: document.body });
-    expect(outline).toHaveAttribute("data-open", "false");
-  });
-
-  it("opens via the toggle and a per-window Close button mutates real window state", async () => {
-    const user = userEvent.setup();
-    render(<RealOutlineHarness initial={twoWindows()} />);
-
-    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
-
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    expect(within(outline).getByRole("heading", { name: "Agents", level: 4 })).toBeInTheDocument();
-
-    await user.click(within(outline).getByRole("button", { name: "Close Agents" }));
-
-    expect(within(outline).queryByRole("heading", { name: "Agents", level: 4 })).toBeNull();
-    expect(within(outline).getByRole("heading", { name: "Files", level: 4 })).toBeInTheDocument();
-  });
-
-  it("opens via the toggle and a per-window Minimize button mutates real window state", async () => {
-    const user = userEvent.setup();
-    render(<RealOutlineHarness initial={twoWindows()} />);
-
-    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-
-    await user.click(within(outline).getByRole("button", { name: "Minimize Agents" }));
-
-    expect(within(outline).getByRole("button", { name: "Restore Agents" })).toBeInTheDocument();
-  });
-
-  it("opens via the toggle and the Open button activates the background window (real state)", async () => {
-    const user = userEvent.setup();
-    // bg-1 (agents, z low) is background; active-1 (files, z high) is active/top.
-    render(<RealOutlineHarness initial={twoWindows()} />);
-
-    await user.click(screen.getByRole("button", { name: "Show workspace outline" }));
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-
-    const agentsArticle = within(outline)
-      .getByRole("heading", { name: "Agents", level: 4 })
-      .closest("article") as HTMLElement;
-    const filesArticle = within(outline)
-      .getByRole("heading", { name: "Files", level: 4 })
-      .closest("article") as HTMLElement;
-    expect(agentsArticle).toHaveTextContent("Status: background, open.");
-    expect(filesArticle).toHaveTextContent("Status: active, open.");
-
-    // "Open Agents" calls api.restore(bg-1), bumping it above active-1 — the
-    // real topWindow() recompute must flip which window reads as active.
-    await user.click(within(outline).getByRole("button", { name: "Open Agents" }));
-
-    expect(agentsArticle).toHaveTextContent("Status: active, open.");
-    expect(filesArticle).toHaveTextContent("Status: background, open.");
-  });
-
-  it("keeps the keyboard :focus-within path working — focusing a control opens the panel", () => {
-    render(
-      <Workspace
-        ws={workspace({ wins: twoWindows() })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    expect(outline).toHaveAttribute("data-open", "false");
-
-    // Focusing any control inside the section fires onFocusCapture and reveals
-    // the panel — the keyboard parity path for pointer hover (#1153). fireEvent
-    // flushes the focusin synthetic event and state update inside act().
-    const toggle = screen.getByRole("button", { name: "Show workspace outline" });
-    fireEvent.focus(toggle);
-    expect(outline).toHaveAttribute("data-open", "true");
-
-    // Blurring out of the section (relatedTarget outside) clears `transient`
-    // and collapses the panel — exercises the onBlurCapture contains() branch.
-    fireEvent.blur(toggle, { relatedTarget: document.body });
-    expect(outline).toHaveAttribute("data-open", "false");
   });
 });

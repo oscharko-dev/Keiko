@@ -17,6 +17,7 @@ import {
   designTestCaseCandidates,
   scoreFromDimensions,
   TEST_QUALITY_WEAK_THRESHOLD,
+  verdictFromDimensions,
   validateCandidates,
   QualityIntelligenceGeneration,
   type AtomCoverageStatus,
@@ -36,6 +37,7 @@ import {
   finaliseFailureOrCancellation,
   makeContext,
   persistRun,
+  safeReasonSummary,
   StageCancelledError,
   toCoverageMatrixRows,
   truncateCandidates,
@@ -256,8 +258,8 @@ function buildCoverageGapFinding(
       : `Atom ${String(atomStatus.atomId)} ("${excerpt}")`;
   const summary =
     atomStatus.status === "uncovered"
-      ? `${atomLabel} has no tracing test (uncovered).`
-      : `${atomLabel} is only weakly covered (no dedicated test traces to it).`;
+      ? `${atomLabel} hat keinen zugeordneten Test (uncovered).`
+      : `${atomLabel} ist nur schwach abgedeckt (kein dedizierter Test referenziert dieses Atom).`;
   return Object.freeze({
     kind: "coverage-gap",
     id: QI.asQualityIntelligenceValidationFindingId(idStr),
@@ -272,19 +274,42 @@ function buildCoverageGapFinding(
 interface GenerationOutput {
   readonly candidates: readonly Candidate[];
   readonly reviewCandidates: readonly Candidate[];
+  readonly skipJudge?: boolean;
+  /**
+   * Redaction-safe reason set ONLY when generation fell back to the deterministic baseline because
+   * the model/parser failed. Surfaced to the user as a degraded-run marker so a baseline-only run is
+   * never presented as authoritative model output.
+   */
+  readonly fallbackReason?: string;
   readonly modelId?: string | undefined;
   readonly seedUsed?: number | null;
   readonly modelParameters: Record<string, unknown> | undefined;
+}
+
+const MODEL_DELTA_CANDIDATE_CEILING = 16;
+const MODEL_DELTA_CANDIDATE_FLOOR = 3;
+
+function modelDeltaCandidateLimit(evidenceCount: number, runLimit: number): number {
+  const boundedRunLimit = Math.max(1, Math.trunc(runLimit));
+  const evidenceAwareLimit = Math.max(
+    MODEL_DELTA_CANDIDATE_FLOOR,
+    Math.max(1, Math.trunc(evidenceCount)) * 2,
+  );
+  return Math.max(1, Math.min(boundedRunLimit, MODEL_DELTA_CANDIDATE_CEILING, evidenceAwareLimit));
 }
 
 function deterministicBaselineCandidates(
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
 ): readonly Candidate[] {
+  const atomTextById = new Map(
+    input.ingestedAtoms.map((entry) => [String(entry.atom.id), entry.canonicalText]),
+  );
   const candidates = designTestCaseCandidates({
     runId: input.plan.id,
     intent: deriveIntent(input.envelopes, ctx.profile),
     atoms: input.ingestedAtoms.map((entry) => entry.atom),
+    atomTextById,
     profile: ctx.profile,
   });
   return truncateCandidates(deduplicateCandidates(candidates), ctx.limits.maxCandidatesPerRun);
@@ -352,11 +377,12 @@ function modelGenerationOutput(
   result: QualityIntelligenceGenerationPortResult,
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
-  maxCandidates: number,
+  runCandidateLimit: number,
+  modelDeltaLimit: number,
 ): GenerationOutput {
   const baseline = deterministicBaselineCandidates(ctx, input);
-  const delta = parseModelCandidates(result, ctx, input, maxCandidates);
-  const candidates = appendModelDelta(baseline, delta, maxCandidates);
+  const delta = parseModelCandidates(result, ctx, input, modelDeltaLimit);
+  const candidates = appendModelDelta(baseline, delta, runCandidateLimit);
   return {
     candidates,
     reviewCandidates: selectReviewCandidates(candidates, baseline, delta),
@@ -368,6 +394,31 @@ function modelGenerationOutput(
         : {}),
     modelParameters: result.modelParameters,
   };
+}
+
+function baselineFallbackGenerationOutput(
+  ctx: RunContext,
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+  reasonSummary: string,
+): GenerationOutput {
+  const candidates = deterministicBaselineCandidates(ctx, input);
+  return {
+    candidates,
+    reviewCandidates: candidates,
+    skipJudge: true,
+    fallbackReason: reasonSummary,
+    modelParameters: { generationFallbackReason: reasonSummary },
+  };
+}
+
+function hasQiCode(error: unknown, code: string): boolean {
+  if (!(error instanceof Error)) return false;
+  const coded = error as Error & { readonly code?: unknown };
+  return typeof coded.code === "string" && coded.code === code;
+}
+
+function shouldCountRejectedGenerationDispatch(error: unknown): boolean {
+  return !hasQiCode(error, "QI_PROMPT_TOO_LARGE");
 }
 
 async function generateCandidates(
@@ -383,11 +434,12 @@ async function generateCandidates(
     kind: a.atom.kind,
     text: a.canonicalText,
   }));
-  const maxCandidates = ctx.limits.maxCandidatesPerRun;
+  const runCandidateLimit = ctx.limits.maxCandidatesPerRun;
+  const modelDeltaLimit = modelDeltaCandidateLimit(evidence.length, runCandidateLimit);
   const instruction = QualityIntelligenceGeneration.buildTestDesignInstruction({
     evidenceCount: evidence.length,
     profile: ctx.profile,
-    maxTestCases: maxCandidates,
+    maxTestCases: modelDeltaLimit,
   });
   // Count the generation gateway dispatch as an ATTEMPT, mirroring the judge contract
   // (judgeOneCandidate counts before its await). The generation port makes at most one gateway
@@ -396,37 +448,42 @@ async function generateCandidates(
   // under-reported a failed run's audit trail as 0 gateway calls (#273 audit; #843 undercount class).
   // The deterministic baseline port never rejects and reports modelCallCount 0, so it is unaffected.
   let result: QualityIntelligenceGenerationPortResult;
+  let countedGatewayDispatch = false;
   try {
     result = await deps.generate.generate({
       systemPrompt: QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT,
       instruction,
       evidence,
-      maxCandidates,
+      maxCandidates: modelDeltaLimit,
       signal: ctx.signal,
     });
+    ctx.modelGatewayCallCount += result.modelCallCount;
+    countedGatewayDispatch = result.modelCallCount > 0;
+    if (result.modelId === undefined && result.modelCallCount === 0) {
+      const candidates = deterministicBaselineCandidates(ctx, input);
+      return {
+        candidates,
+        reviewCandidates: candidates,
+        ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
+        modelParameters: result.modelParameters,
+      };
+    }
+    return modelGenerationOutput(result, ctx, input, runCandidateLimit, modelDeltaLimit);
   } catch (error) {
-    ctx.modelGatewayCallCount += 1;
-    throw error;
+    if (isCancellationError(ctx, error)) throw new StageCancelledError();
+    if (!countedGatewayDispatch && shouldCountRejectedGenerationDispatch(error)) {
+      ctx.modelGatewayCallCount += 1;
+    }
+    return baselineFallbackGenerationOutput(ctx, input, safeReasonSummary(error));
   }
-  ctx.modelGatewayCallCount += result.modelCallCount;
-  if (result.modelId === undefined && result.modelCallCount === 0) {
-    const candidates = deterministicBaselineCandidates(ctx, input);
-    return {
-      candidates,
-      reviewCandidates: candidates,
-      ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
-      modelParameters: result.modelParameters,
-    };
-  }
-  return modelGenerationOutput(result, ctx, input, maxCandidates);
 }
 
 function candidateSummaryText(candidate: Candidate): string {
   const parts = [
-    `Title: ${candidate.title}`,
-    `Preconditions: ${candidate.preconditions.join("; ")}`,
-    `Steps: ${candidate.steps.join("; ")}`,
-    `Expected: ${candidate.expectedResults.join("; ")}`,
+    `Titel: ${candidate.title}`,
+    `Vorbedingungen: ${candidate.preconditions.join("; ")}`,
+    `Schritte: ${candidate.steps.join("; ")}`,
+    `Erwartetes Ergebnis: ${candidate.expectedResults.join("; ")}`,
   ];
   return parts.join("\n");
 }
@@ -437,10 +494,10 @@ const FINDING_KIND_TRUNCATION_PRIORITY: Readonly<Record<string, number>> = {
 };
 
 const JUDGE_DIMENSION_LABEL: Readonly<Record<QI.TestQualityDimensionName, string>> = {
-  verifiability: "Verifiability",
-  atomicity: "Atomicity",
-  determinism: "Determinism",
-  "ac-fidelity": "AC fidelity",
+  verifiability: "Prüfbarkeit",
+  atomicity: "Atomarität",
+  determinism: "Determinismus",
+  "ac-fidelity": "AC-Treue",
 };
 
 function sourceContextForCandidate(
@@ -548,9 +605,9 @@ interface JudgeCounts {
 }
 
 const JUDGE_ERROR_RATIONALE =
-  "Quality judge could not evaluate this candidate; treating it as weak for audit.";
+  "Der Quality-Judge konnte diesen Kandidaten nicht bewerten; er wird für das Audit als schwach behandelt.";
 const JUDGE_BUDGET_RATIONALE =
-  "Quality judge budget exhausted before this candidate could be evaluated; treating it as weak for audit.";
+  "Das Quality-Judge-Budget war vor der Bewertung dieses Kandidaten ausgeschöpft; er wird für das Audit als schwach behandelt.";
 
 function buildSyntheticWeakJudgeOutcome(
   ctx: RunContext,
@@ -571,12 +628,10 @@ function cloneDimensions(
   return Object.freeze(dimensions.map((dimension) => Object.freeze({ ...dimension })));
 }
 
-function qualityVerdictFromJudge(
-  verdict: QI.TestQualityJudgeVerdict,
-  score: number,
-): CandidateQualityVerdict {
+function qualityVerdictFromJudge(verdict: QI.TestQualityJudgeVerdict): CandidateQualityVerdict {
+  const score = scoreFromDimensions(verdict.dimensions);
   return Object.freeze({
-    verdict: verdict.verdict,
+    verdict: verdictFromDimensions(verdict.dimensions),
     score,
     dimensions: cloneDimensions(verdict.dimensions),
     overallRationale: verdict.overallRationale,
@@ -629,8 +684,10 @@ async function judgeOneCandidate(
     return buildSyntheticWeakJudgeOutcome(ctx, candidate, ordinal, JUDGE_ERROR_RATIONALE);
   }
   const score = scoreFromDimensions(verdict.dimensions);
-  const qualityVerdict = qualityVerdictFromJudge(verdict, score);
-  if (verdict.verdict === "strong") return { strong: true, finding: null, qualityVerdict };
+  const qualityVerdict = qualityVerdictFromJudge(verdict);
+  if (qualityVerdict.verdict === "strong") {
+    return { strong: true, finding: null, qualityVerdict };
+  }
   return {
     strong: false,
     finding: buildTestQualityFinding(
@@ -817,10 +874,19 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     );
     const candidates = generation.candidates;
     const reviewCandidates = generation.reviewCandidates;
+    // A provider/parser failure is caught inside generateCandidates and degrades to the deterministic
+    // baseline (skipJudge), keeping the run alive. That degradation MUST stay visible: the redacted
+    // reason is threaded into the terminal summary (and surfaced on the wire `done` frame as
+    // `degraded` + `reasonSummary`) so the run is never presented as an authoritative model-backed
+    // result (regulated-delivery audit, QI-DEG-01).
+    const degradedReason =
+      generation.skipJudge === true
+        ? (generation.fallbackReason ?? "qi-generation-fallback")
+        : undefined;
     emitCandidateProposed(ctx, candidates);
     const judge = deps.judge;
     const judgeResult = await withStage(ctx, "judge", async () => {
-      if (judge === undefined) return EMPTY_JUDGE_RESULT;
+      if (judge === undefined || generation.skipJudge === true) return EMPTY_JUDGE_RESULT;
       try {
         return await runJudgeStage(ctx, reviewCandidates, input.ingestedAtoms, judge);
       } catch (error) {
@@ -832,9 +898,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
     const coverageMap = await withStage(ctx, "coverage", async () =>
-      Promise.resolve(
-        buildCoverageMap({ runId: input.plan.id, atoms, candidates: reviewCandidates }),
-      ),
+      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates })),
     );
     const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
     const excerptByAtomId = excerptsByAtomId(input.ingestedAtoms);
@@ -849,7 +913,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       }
     }
     const rawFindings = await withStage(ctx, "validate", async () =>
-      Promise.resolve(validateCandidates(input.plan.id, reviewCandidates)),
+      Promise.resolve(validateCandidates(input.plan.id, candidates)),
     );
     // Order by severity (critical -> low) BEFORE truncation so that, if the run hits the
     // per-run findings cap, the most severe findings — uncovered-requirement gaps included —
@@ -912,6 +976,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       modelGatewayCallCount: ctx.modelGatewayCallCount,
       evidence,
       qualityScore: judgeResult.qualityScore,
+      ...(degradedReason !== undefined ? { reasonSummary: degradedReason } : {}),
     });
   } catch (caught: unknown) {
     return finaliseFailureOrCancellation(ctx, caught, {

@@ -56,10 +56,10 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import {
-  badRequest,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
+  clarificationRequest,
   deriveScopeIdFrom,
   ensureNotCancelled,
   evidenceLines,
@@ -692,7 +692,9 @@ function isRouteResult(value: RetrievalOutcome | RouteResult): value is RouteRes
 }
 
 function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {
-  if (error instanceof ClarificationNeededError) return badRequest(clarificationUserMessage(error));
+  if (error instanceof ClarificationNeededError) {
+    return clarificationRequest(clarificationUserMessage(error));
+  }
   const workspaceResult = mappedWorkspaceError(error);
   if (workspaceResult !== undefined) return workspaceResult;
   const gatewayResult = mappedGatewayError(error, deps);

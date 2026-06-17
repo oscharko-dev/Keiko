@@ -188,6 +188,93 @@ describe("designTestCaseCandidates", () => {
     expect([...first.tags]).toEqual([...first.tags].sort());
     expect(new Set(first.tags).size).toBe(first.tags.length);
   });
+
+  it("uses supplied atom canonical text to produce source-specific baseline candidates", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, regressionDefault);
+    const atomTextById = new Map(
+      fixture.atoms.map((atom, index) => [
+        String(atom.id),
+        `REQ-AUTH-${String(index + 1).padStart(3, "0")}: Lock the account after five failed login attempts.`,
+      ]),
+    );
+
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: fixture.atoms,
+      atomTextById,
+    });
+
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const candidate of candidates) {
+      const atomId = String(candidate.derivedFromAtomIds[0]);
+      const sourceRequirement = atomTextById.get(atomId);
+      expect(sourceRequirement).toBeDefined();
+      if (sourceRequirement === undefined) throw new Error("missing source requirement");
+      expect(candidate.title).toContain(sourceRequirement);
+      expect(candidate.title).toMatch(/^#\d{3} Prüfe /u);
+      expect(candidate.preconditions).toContain(`Quellanforderung: ${sourceRequirement}`);
+      expect(candidate.steps.join("\n")).toContain(sourceRequirement);
+      expect(candidate.expectedResults.join("\n")).toContain(sourceRequirement);
+      expect(candidate.expectedResults.join("\n")).toContain("Das beobachtete Verhalten erfüllt");
+      expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+  });
+
+  it("emits a CLEAN structural candidate for a Figma screen baseline atom (no atom-id/hash stub)", () => {
+    // A Figma screen atom's canonical text is a Screen-IR structural baseline, not a prose
+    // requirement. The generic template degenerates it into a "#001 Prüfe <dump> … Öffne den
+    // <suffix>-Ablauf … für Atom <id> … Evidenz-Atom <hash> bleibt kanonisch" stub; the figma path
+    // must instead emit a clean, screen-scoped structural test. This case RED-fails the pre-fix code.
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, regressionDefault);
+    const screenName = "Vorhaben + Angebote (Aktionen erforderlich) ID-001.2_v2";
+    const baselineText = [
+      `1:121867 (${screenName})`,
+      `Screen: ${screenName} [1:121867]`,
+      "Structural test baseline (deterministic, derived from Screen-IR):",
+      "- (screen-render) Screen renders without layout errors",
+      "- (control-action) Primary button triggers its action",
+      "- (a11y) Text contrast meets WCAG AA",
+    ].join("\n");
+    const firstAtom = fixture.atoms[0];
+    if (firstAtom === undefined) throw new Error("fixture exposes no atoms");
+    const atomTextById = new Map([[String(firstAtom.id), baselineText]]);
+
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: [firstAtom],
+      atomTextById,
+    });
+    const candidate = candidates[0];
+    if (candidate === undefined) throw new Error("no candidate produced");
+
+    // Clean, screen-scoped structural candidate — names the screen, no generic prose-requirement stub.
+    expect(candidate.title).toMatch(/^#\d{3} Strukturelle Baseline-Prüfung: /u);
+    expect(candidate.title).toContain(screenName);
+    expect(candidate.preconditions).toContain(`Der Screen "${screenName}" ist geöffnet.`);
+
+    const allText = [
+      candidate.title,
+      ...candidate.preconditions,
+      ...candidate.steps,
+      ...candidate.expectedResults,
+    ].join("\n");
+    // None of the pre-fix machine-internal noise may leak into the user-facing test case.
+    expect(allText).not.toContain("Quellanforderung:");
+    expect(allText).not.toContain("bleibt kanonisch");
+    expect(allText).not.toContain("Servicepfad");
+    expect(allText).not.toContain("Structural test baseline (deterministic");
+    expect(allText).not.toContain(String(firstAtom.id));
+    expect(allText).not.toContain(firstAtom.canonicalHashSha256Hex.slice(0, 12));
+
+    // Still a tagged deterministic-baseline candidate with usable steps + expectations.
+    expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    expect(candidate.steps.length).toBeGreaterThan(0);
+    expect(candidate.expectedResults.length).toBeGreaterThan(0);
+  });
 });
 
 // Epic #711 / Issue #724 residual: the deterministic-baseline candidate builder is the

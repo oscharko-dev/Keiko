@@ -94,6 +94,24 @@ describe("validateCandidates", () => {
     expect(repeatDefect).toBeDefined();
   });
 
+  it("does not flag a repeated action after a context-changing step", () => {
+    const findings = validateCandidates(RUN_ID, [
+      baseCandidate({
+        steps: [
+          "Enter amount 500 EUR",
+          "Submit",
+          "Reset the form for a second boundary check",
+          "Enter amount 80,000 EUR",
+          "Submit",
+        ],
+      }),
+    ]);
+    const repeatDefect = findings.find(
+      (f) => f.kind === "logic-defect" && f.summary.includes("repeat"),
+    );
+    expect(repeatDefect).toBeUndefined();
+  });
+
   // ─── Contradiction XOR parity — true-positive (strengthen existing test) ──
 
   it("emits a MEDIUM semantic-defect on a trivial precondition-vs-result contradiction", () => {

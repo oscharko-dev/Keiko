@@ -137,19 +137,25 @@ export type QiStrictCapabilitySelection =
     };
 
 /**
- * Resolve the image-input (multimodal) model for a vision-augmented stage (Issue #810).
+ * Resolve the image-input model for a vision-augmented stage (Issue #810).
  *
- * Selection is capability-driven: the cheapest configured chat model that advertises
- * supportsImageInput is chosen by capability. When no configured model offers
- * image input, this returns a TYPED "unavailable" so the caller degrades gracefully to the
- * deterministic IR-only baseline — never a silent text-model substitution that would pretend
- * to have seen the image. No model id is hard-coded.
+ * Selection is capability-driven: prefer the cheapest configured chat model that advertises
+ * supportsImageInput, then fall back to the cheapest configured pure `ocr-vision` model with the
+ * same image-input capability. When no configured model offers image input, this returns a TYPED
+ * "unavailable" so callers degrade honestly — never a silent text-model substitution that would
+ * pretend to have seen the image. No model id is hard-coded and model ids are never parsed by name.
  */
 export function resolveQiMultimodalSelection(deps: UiHandlerDeps): QiMultimodalSelection {
-  const selected = selectCapabilityByGatewayQuery(deps, {
+  const selectedChat = selectCapabilityByGatewayQuery(deps, {
     kind: "chat",
     supportsImageInput: true,
   });
+  const selected =
+    selectedChat ??
+    selectCapabilityByGatewayQuery(deps, {
+      kind: "ocr-vision",
+      supportsImageInput: true,
+    });
   if (selected === undefined) {
     return { kind: "unavailable" };
   }

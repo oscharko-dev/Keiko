@@ -61,10 +61,11 @@ export interface CapsuleActionResponse {
 
 function buildHeaders(method: string, body: BodyInit | null | undefined): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined && body !== null) {
+  const isStateChanging = method !== "GET" && method !== "HEAD";
+  if (isStateChanging || (body !== undefined && body !== null)) {
     headers["Content-Type"] = "application/json";
   }
-  if (method !== "GET" && method !== "HEAD") {
+  if (isStateChanging) {
     headers["X-Keiko-CSRF"] = "1";
   }
   return headers;

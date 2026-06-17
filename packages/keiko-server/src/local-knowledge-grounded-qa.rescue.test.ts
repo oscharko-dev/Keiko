@@ -29,6 +29,7 @@ import {
   createEmbeddingAdapter,
   enforcedNoEvidenceReason,
   handleLocalKnowledgeGroundedAsk,
+  LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   renderCitationLabel,
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -174,6 +175,17 @@ describe("local-knowledge citation rescue (#189)", () => {
     expect(
       enforcedNoEvidenceReason(
         result({
+          answer: LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
+          references: [ref(1)],
+        }),
+      ),
+    ).toBe("no-evidence");
+  });
+
+  it("still recognizes the legacy English no-evidence sentence", () => {
+    expect(
+      enforcedNoEvidenceReason(
+        result({
           answer: "No evidence found in the selected knowledge scope.",
           references: [ref(1)],
         }),
@@ -235,7 +247,7 @@ describe("redactText fallback — non-string redactor output strips unsafe chars
       call: () =>
         Promise.resolve({
           modelId: "chat-model",
-          content: "No evidence found in the selected knowledge scope.",
+          content: LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
           finishReason: "stop" as const,
           toolCalls: [],
           structuredOutput: null,

@@ -163,8 +163,6 @@ const CARD_TYPES: readonly WindowType[] = [
   // TYPE_ORDER) so it is launchable like every other card.
   "figma",
   "files",
-  "terminal",
-  "review",
 ];
 const TOOL_TYPES: readonly WindowType[] = [
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows

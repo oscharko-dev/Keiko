@@ -344,14 +344,11 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
     [rect, queueView],
   );
 
-  const fitView = useCallback(
-    (): void => {
-      const r = rect();
-      if (r === null) return;
-      queueView(fitWorkspaceViewToWindows(winsRef.current, r));
-    },
-    [rect, winsRef, queueView],
-  );
+  const fitView = useCallback((): void => {
+    const r = rect();
+    if (r === null) return;
+    queueView(fitWorkspaceViewToWindows(winsRef.current, r));
+  }, [rect, winsRef, queueView]);
 
   const resetView = useCallback((): void => queueView({ zoom: 1, x: 0, y: 0 }), [queueView]);
   const panBy = useCallback(
@@ -625,6 +622,8 @@ export function useWorkspace(
     linkedConnectorCapsuleIds,
     linkedConnectorCapsuleSetIds,
     linkedFigmaSnapshotRunIds,
+    linkedFigmaSnapshotSources,
+    linkedImageSources,
     currentFilesContext,
   } = makeConnectActions({
     wsRef,
@@ -732,6 +731,8 @@ export function useWorkspace(
     linkedConnectorCapsuleIds,
     linkedConnectorCapsuleSetIds,
     linkedFigmaSnapshotRunIds,
+    linkedFigmaSnapshotSources,
+    linkedImageSources,
     currentFilesContext,
     zoomTo,
     fitView,

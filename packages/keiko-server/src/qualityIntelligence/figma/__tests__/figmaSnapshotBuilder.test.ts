@@ -211,7 +211,7 @@ describe("buildFigmaSnapshot", () => {
     expect(snapshot.integrityHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("maps a non-2xx /v1/images response to a coded connector error", async () => {
+  it("maps a hard non-2xx /v1/images response to a coded connector error", async () => {
     const screens = [screen("1:1", "Home")];
     const images: FigmaHttpPort = () => Promise.resolve({ status: 500, json: {}, headers: {} });
     const renders = renderPort({});
@@ -220,6 +220,31 @@ describe("buildFigmaSnapshot", () => {
       buildFigmaSnapshot(baseInput(screens, images, renders.port)),
     ).rejects.toBeInstanceOf(FigmaConnectorError);
   });
+
+  it.each([400, 404, 422] as const)(
+    "degrades render endpoint %s responses to structural-only screens",
+    async (status) => {
+      const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
+      const images: FigmaHttpPort = () =>
+        Promise.resolve({ status, json: { err: "Cannot render requested nodes" }, headers: {} });
+      const renders = renderPort({});
+
+      const snapshot = await buildFigmaSnapshot(baseInput(screens, images, renders.port));
+
+      expect(snapshot.screens).toHaveLength(0);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:1", reason: "render-url-missing" },
+        { screenId: "1:2", reason: "render-url-missing" },
+      ]);
+      expect(
+        snapshot.structuralScreens?.map((s) => ({ screenId: s.screenId, reason: s.reason })),
+      ).toEqual([
+        { screenId: "1:1", reason: "render-url-missing" },
+        { screenId: "1:2", reason: "render-url-missing" },
+      ]);
+      expect(renders.requests).toHaveLength(0);
+    },
+  );
 
   it.each([
     { status: 401, json: { err: "Invalid token" }, code: "FIGMA_TOKEN_INVALID" },
@@ -492,6 +517,11 @@ describe("buildFigmaSnapshot — render URL safety (#750 SSRF)", () => {
     expect(snapshot.skippedScreens).toEqual([
       { screenId: "1:3", reason: "render-screen-cap-exceeded" },
     ]);
+    expect(
+      snapshot.structuralScreens?.map((s) => ({ screenId: s.screenId, reason: s.reason })),
+    ).toEqual([{ screenId: "1:3", reason: "render-screen-cap-exceeded" }]);
+    expect(snapshot.structuralScreens?.[0]?.ir.name).toBe("C");
+    expect(snapshot.structuralScreens?.[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/u);
     const requestedIds = images.requests.flatMap((r) =>
       (new URL(r.url).searchParams.get("ids") ?? "").split(","),
     );
@@ -782,6 +812,9 @@ describe("buildFigmaSnapshot — resilience (#759)", () => {
     expect(snapshot.skippedScreens).toEqual([
       { screenId: "1:2", reason: "render-fetch-failed:FIGMA_RATE_LIMITED" },
     ]);
+    expect(
+      snapshot.structuralScreens?.map((s) => ({ screenId: s.screenId, reason: s.reason })),
+    ).toEqual([{ screenId: "1:2", reason: "render-fetch-failed:FIGMA_RATE_LIMITED" }]);
   });
 
   it("never runs more than `downloadConcurrency` byte downloads at once", async () => {
@@ -965,6 +998,12 @@ describe("buildFigmaSnapshot — transient malformed /v1/images body (#750 F8)",
     expect(delays).toEqual([100, 200, 400]);
     expect(snapshot.screens).toHaveLength(0);
     expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:1", reason: "render-url-missing" },
+      { screenId: "1:2", reason: "render-url-missing" },
+    ]);
+    expect(
+      snapshot.structuralScreens?.map((s) => ({ screenId: s.screenId, reason: s.reason })),
+    ).toEqual([
       { screenId: "1:1", reason: "render-url-missing" },
       { screenId: "1:2", reason: "render-url-missing" },
     ]);

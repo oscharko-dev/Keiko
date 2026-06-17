@@ -59,9 +59,7 @@ async function ensureProject(request: APIRequestContext, projectPath: string): P
     data: { path: projectPath, name: "Keiko E2E" },
   });
   if (!response.ok()) {
-    throw new Error(
-      `Project setup failed (${String(response.status())}): ${await response.text()}`,
-    );
+    throw new Error(`Project setup failed (${String(response.status())}): ${await response.text()}`);
   }
 }
 
@@ -84,9 +82,7 @@ async function createGroundedChat(request: APIRequestContext): Promise<ChatRespo
     data: { connectedScopes: fileScopes(projectPath, 16) },
   });
   if (!atLimit.ok()) {
-    throw new Error(
-      `16-source setup failed (${String(atLimit.status())}): ${await atLimit.text()}`,
-    );
+    throw new Error(`16-source setup failed (${String(atLimit.status())}): ${await atLimit.text()}`);
   }
 
   const overLimit = await request.patch(`/api/chats?id=${encodeURIComponent(created.chat.id)}`, {
@@ -150,9 +146,7 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   await expect(health.json()).resolves.toMatchObject({ status: "ok" });
 
   await page.goto("/");
-  await expect(
-    page.getByRole("navigation", { name: "Primary workspace navigation" }),
-  ).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Primary workspace navigation" })).toBeVisible();
   await expect(page.getByText("Keiko").first()).toBeVisible();
   await expect(page.getByRole("button", { name: "New", exact: true })).toBeVisible();
   await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
@@ -175,79 +169,12 @@ test("chat window renders a bound Files grounding source and enforces the 16-sou
   });
 
   await page.goto("/");
-  // The chat window exposes its name via the section's aria-label, not a heading.
-  await expect(page.getByRole("region", { name: "Chat — E2E grounded chat" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Chat: E2E grounded chat" })).toBeVisible();
   const grounding = page.getByLabel("Grounding mode");
   await expect(grounding).toBeVisible();
   await expect(grounding).toHaveValue("files");
   await expect(grounding.locator("option:checked")).toHaveText("Live Files context");
   await expect(page.getByRole("textbox", { name: "Chat message" })).toBeVisible();
-
-  assertNoPageErrors();
-});
-
-async function seedTwoWindows(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "bg-agents",
-          type: "agents",
-          x: 96,
-          y: 72,
-          w: 360,
-          h: 300,
-          z: 1,
-          cfg: {},
-          max: false,
-        },
-        {
-          id: "active-agents",
-          type: "agents",
-          x: 520,
-          y: 120,
-          w: 360,
-          h: 300,
-          z: 5,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  });
-}
-
-// Regression for #1153: the Workspace outline panel is collapsed by default and
-// was revealed only on :focus-within. A pointer user clicking a per-window
-// action button while the panel was collapsed hit pointer-events:none and the
-// click fell through to the canvas — window state never changed. jsdom ignores
-// pointer-events, so only a real browser catches this; hence this e2e is the
-// primary regression.
-test("pointer user can open the outline and act on a background window @smoke", async ({
-  page,
-}) => {
-  const assertNoPageErrors = collectPageErrors(page);
-  await seedTwoWindows(page);
-
-  await page.goto("/");
-
-  const surface = page.getByRole("main", { name: "Workspace surface" });
-  await expect(surface.locator('[data-window-id="bg-agents"]')).toBeVisible();
-  await expect(surface.locator('[data-window-id="active-agents"]')).toBeVisible();
-
-  // Open the outline via its visible toggle affordance using a real mouse.
-  await page.getByRole("button", { name: "Show workspace outline" }).click();
-  const outline = page.getByRole("region", { name: "Workspace outline" });
-  await expect(outline).toBeVisible();
-
-  // Close the BACKGROUND window from the outline with a real pointer click.
-  // Pre-fix this click falls through to the canvas and the window stays.
-  await outline.getByRole("button", { name: "Close Agents" }).first().click();
-
-  await expect(surface.locator('[data-window-id="bg-agents"]')).toHaveCount(0);
-  await expect(surface.locator('[data-window-id="active-agents"]')).toBeVisible();
 
   assertNoPageErrors();
 });

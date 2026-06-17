@@ -87,6 +87,14 @@ export type {
   ReadExcerptResult,
 } from "./repoSearch.js";
 export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
+export type {
+  CandidateBucket,
+  SearchDiagnostics,
+  SearchHints,
+  SearchIntent,
+  SearchPolicy,
+  SearchPolicyMode,
+} from "./repoSearchPolicy.js";
 export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
 export { evidenceAtomStableId, connectedContextPackStableId } from "./stableId.js";

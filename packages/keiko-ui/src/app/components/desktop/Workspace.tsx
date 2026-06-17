@@ -11,6 +11,15 @@ import type {
 } from "react";
 import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
+import {
+  acquireGrabbingBodyStyle,
+  isCanvasPanPointer,
+  isHandToolKeyIgnoredTarget,
+  isInteractiveSurfaceTarget,
+  isPrimaryActivationPointer,
+  isTextEntryTarget,
+  workspaceInteractionLocked,
+} from "./interactionGuards";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
@@ -25,6 +34,24 @@ import {
   type LocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDropDetail,
 } from "../../local-knowledge/connector-drag";
+import {
+  FIGMA_VIEW_DROP_EVENT,
+  parseFigmaViewDrag,
+  type FigmaViewDragPayload,
+  type FigmaViewDropDetail,
+} from "./figma-view-drag";
+import {
+  FIGMA_JSON_DROP_EVENT,
+  parseFigmaJsonDrag,
+  type FigmaJsonDragPayload,
+  type FigmaJsonDropDetail,
+} from "./figma-json-drag";
+import {
+  FIGMA_IMAGE_DROP_EVENT,
+  parseFigmaImageDrag,
+  type FigmaImageDragPayload,
+  type FigmaImageDropDetail,
+} from "./figma-image-drag";
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
@@ -34,20 +61,25 @@ interface WorkspaceProps {
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
+export const FIGMA_VIEW_NODE_SIZE = { w: 360, h: 360 } as const;
+export const FIGMA_JSON_NODE_SIZE = { w: 520, h: 540 } as const;
+export const FIGMA_IMAGE_NODE_SIZE = { w: 560, h: 420 } as const;
 
 export function workspaceDropPointToWindowOrigin({
   clientX,
   clientY,
   rect,
   view,
+  size = KNOWLEDGE_CONNECTOR_NODE_SIZE,
 }: {
   readonly clientX: number;
   readonly clientY: number;
   readonly rect: DOMRect;
   readonly view: UseWorkspaceResult["view"];
+  readonly size?: { readonly w: number; readonly h: number };
 }): { x: number; y: number } {
   return {
-    x: Math.round((clientX - rect.left - view.x) / view.zoom - KNOWLEDGE_CONNECTOR_NODE_SIZE.w / 2),
+    x: Math.round((clientX - rect.left - view.x) / view.zoom - size.w / 2),
     y: Math.round((clientY - rect.top - view.y) / view.zoom - 28),
   };
 }
@@ -64,21 +96,51 @@ function isLocalKnowledgeConnectorDropDetail(
   return payloadRecord["kind"] === "capsule" && typeof payloadRecord["id"] === "string";
 }
 
-function isInteractive(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
+function isFigmaViewDropDetail(detail: unknown): detail is FigmaViewDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
   return (
-    target.closest(".window") !== null ||
-    target.closest(".ws-zoom") !== null ||
-    target.closest(".ws-fab") !== null ||
-    target.closest(".empty-workspace-blob") !== null ||
-    target.closest(".ws-outline") !== null ||
-    target.closest(".conn-badge") !== null
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string"
   );
 }
 
-function workspaceInteractionLocked(): boolean {
-  if (typeof document === "undefined") return false;
-  return document.documentElement.getAttribute("data-keiko-modal-open") === "true";
+function isFigmaJsonDropDetail(detail: unknown): detail is FigmaJsonDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string" &&
+    (payloadRecord["sourceWindowId"] === undefined ||
+      typeof payloadRecord["sourceWindowId"] === "string")
+  );
+}
+
+function isFigmaImageDropDetail(detail: unknown): detail is FigmaImageDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string" &&
+    typeof payloadRecord["imageSrc"] === "string" &&
+    (payloadRecord["sourceWindowId"] === undefined ||
+      typeof payloadRecord["sourceWindowId"] === "string")
+  );
 }
 
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across
@@ -115,11 +177,8 @@ function startBgPan(
   target.setPointerCapture?.(event.pointerId);
   let lastX = event.clientX;
   let lastY = event.clientY;
-  const previousCursor = document.body.style.cursor;
-  const previousUserSelect = document.body.style.userSelect;
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
   setPanning(true);
-  document.body.style.cursor = "grabbing";
-  document.body.style.userSelect = "none";
   const move = (moveEvent: PointerEvent): void => {
     panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
     lastX = moveEvent.clientX;
@@ -133,8 +192,7 @@ function startBgPan(
     if (target.hasPointerCapture?.(event.pointerId) === true) {
       target.releasePointerCapture?.(event.pointerId);
     }
-    document.body.style.cursor = previousCursor;
-    document.body.style.userSelect = previousUserSelect;
+    releaseBodyStyle();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
@@ -243,13 +301,6 @@ interface WorkspaceOutlineProps {
   readonly openPalette: () => void;
 }
 
-// @types/react 18.3 doesn't list `inert` on HTMLAttributes, so pass it via a
-// typed Record spread to satisfy strict mode without `any`. The empty-string
-// value is the canonical HTML boolean-attribute form; React 18.3 warns when
-// the boolean `inert` prop receives the string 'true' and recommends the
-// empty-string form (audit C274 / #1153).
-const inertWhenClosed = (open: boolean): Record<string, string> => (open ? {} : { inert: '' });
-
 function WorkspaceOutline({
   wins,
   conns,
@@ -267,54 +318,10 @@ function WorkspaceOutline({
     [conns, wins],
   );
   const hasWindows = wins !== null && wins.length > 0;
-  // #1153: reveal is state-driven, not CSS-`:focus-within`-only. A collapsed
-  // panel previously kept pointer-events:none buttons in the a11y tree, so a
-  // pointer (or AT-driven) click fell through to the canvas as a silent no-op.
-  // `pinned` is the deliberate toggle; hover and focus-within are tracked
-  // separately so the panel stays open while keyboard focus remains inside,
-  // even after the pointer leaves.
-  const [pinned, setPinned] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  const [focusWithin, setFocusWithin] = useState(false);
-  const open = pinned || hovered || focusWithin;
 
   return (
-    <section
-      className="ws-outline"
-      data-open={open ? "true" : "false"}
-      aria-label="Workspace outline"
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      onFocusCapture={() => setFocusWithin(true)}
-      onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setFocusWithin(false);
-      }}
-    >
-      <button
-        type="button"
-        className="ws-outline-toggle"
-        aria-expanded={open}
-        aria-controls="ws-outline-content"
-        // Hiding from the pinned state should collapse immediately instead of
-        // waiting for hover/focus to clear.
-        onClick={() => {
-          if (pinned) {
-            setPinned(false);
-            setHovered(false);
-            setFocusWithin(false);
-            return;
-          }
-          setPinned(true);
-        }}
-      >
-        {open ? "Hide workspace outline" : "Show workspace outline"}
-      </button>
-      <div
-        id="ws-outline-content"
-        className="ws-outline-content ws-outline-inner"
-        aria-hidden={open ? undefined : true}
-        {...inertWhenClosed(open)}
-      >
+    <section className="ws-outline" aria-labelledby="ws-outline-title">
+      <div className="ws-outline-inner">
         <h2 id="ws-outline-title">Workspace outline</h2>
         <p className="ws-outline-summary">
           {wins === null
@@ -402,6 +409,8 @@ function WorkspaceOutline({
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
+  const [handTool, setHandTool] = useState(false);
+  const handToolRef = useRef(false);
   const visibleWins = useMemo(
     () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
     [wins],
@@ -420,19 +429,43 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
   const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
-    if (isInteractive(event.target)) return;
+    if (isInteractiveSurfaceTarget(event.target)) return;
     if (connecting !== null) {
-      if (event.button === 0) {
+      if (isPrimaryActivationPointer(event)) {
         api.cancelConnect();
       }
       return;
     }
-    // Match canvas tools like Figma/Miro: free-workspace panning starts from
-    // the middle mouse button (scroll wheel press), leaving the primary button
-    // available for ordinary selection and click interactions.
-    if (event.button !== 1) return;
+    if (!isCanvasPanPointer(event)) return;
     startBgPan(api.panBy, event, setPanning);
   };
+
+  useEffect(() => {
+    const setHandToolActive = (active: boolean): void => {
+      handToolRef.current = active;
+      setHandTool(active);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== "Space" || isHandToolKeyIgnoredTarget(event.target)) return;
+      event.preventDefault();
+      if (!handToolRef.current) setHandToolActive(true);
+    };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.code !== "Space") return;
+      setHandToolActive(false);
+    };
+    const onBlur = (): void => {
+      setHandToolActive(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
   // focused. Guard event.target === event.currentTarget so arrow keys inside a
@@ -488,6 +521,17 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
+    if (
+      handToolRef.current &&
+      isPrimaryActivationPointer(event) &&
+      connecting === null &&
+      !isTextEntryTarget(event.target) &&
+      !isInteractiveSurfaceTarget(event.target)
+    ) {
+      startBgPan(api.panBy, event, setPanning);
+      event.stopPropagation();
+      return;
+    }
     if (event.button !== 0 || connecting === null || connFrom === null || visibleWins === null)
       return;
     const targetId = windowIdFromEventTarget(event.target);
@@ -526,6 +570,108 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     [api, view],
   );
 
+  const addFigmaViewNode = useCallback(
+    (payload: FigmaViewDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figma", {
+        snapshotRunId: payload.snapshotRunId,
+        selectedScreenIdsJson: JSON.stringify([payload.screenId]),
+        selectedScreenName: payload.name,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_VIEW_NODE_SIZE,
+        }),
+        ...FIGMA_VIEW_NODE_SIZE,
+      });
+    },
+    [api, view],
+  );
+
+  const qualityConnectionsForSource = useCallback(
+    (
+      sourceWindowId: string,
+    ): readonly { readonly connId: string; readonly qualityId: string }[] => {
+      if (wins === null) return [];
+      const byId = new Map(wins.map((win) => [win.id, win]));
+      const result: { connId: string; qualityId: string }[] = [];
+      for (const conn of conns) {
+        const otherId =
+          conn.a === sourceWindowId ? conn.b : conn.b === sourceWindowId ? conn.a : null;
+        if (otherId === null) continue;
+        const other = byId.get(otherId);
+        if (other?.type !== "quality") continue;
+        result.push({ connId: conn.id, qualityId: other.id });
+      }
+      return result;
+    },
+    [conns, wins],
+  );
+
+  const addFigmaJsonNode = useCallback(
+    (payload: FigmaJsonDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaJson", {
+        snapshotRunId: payload.snapshotRunId,
+        screenId: payload.screenId,
+        selectedScreenIdsJson: JSON.stringify([payload.screenId]),
+        selectedScreenName: payload.name,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_JSON_NODE_SIZE,
+        }),
+        ...FIGMA_JSON_NODE_SIZE,
+      });
+      if (payload.sourceWindowId === undefined) return;
+      const migrated = qualityConnectionsForSource(payload.sourceWindowId);
+      if (migrated.length === 0) return;
+      for (const edge of migrated) api.removeConn(edge.connId);
+      window.setTimeout(() => {
+        for (const edge of migrated) api.connect(id, edge.qualityId);
+      }, 0);
+    },
+    [api, qualityConnectionsForSource, view],
+  );
+
+  const addFigmaImageNode = useCallback(
+    (payload: FigmaImageDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaImage", {
+        snapshotRunId: payload.snapshotRunId,
+        screenId: payload.screenId,
+        selectedScreenName: payload.name,
+        imageSrc: payload.imageSrc,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_IMAGE_NODE_SIZE,
+        }),
+        ...FIGMA_IMAGE_NODE_SIZE,
+      });
+      if (payload.sourceWindowId === undefined) return;
+      const migrated = qualityConnectionsForSource(payload.sourceWindowId);
+      if (migrated.length === 0) return;
+      for (const edge of migrated) api.removeConn(edge.connId);
+      window.setTimeout(() => {
+        for (const edge of migrated) api.connect(id, edge.qualityId);
+      }, 0);
+    },
+    [api, qualityConnectionsForSource, view],
+  );
+
   useEffect(() => {
     const handleConnectorDrop = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return;
@@ -549,19 +695,119 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     };
   }, [addKnowledgeConnectorNode, wsRef]);
 
+  useEffect(() => {
+    const handleFigmaViewDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaViewDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaViewNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_VIEW_DROP_EVENT, handleFigmaViewDrop);
+    return () => {
+      window.removeEventListener(FIGMA_VIEW_DROP_EVENT, handleFigmaViewDrop);
+    };
+  }, [addFigmaViewNode, wsRef]);
+
+  useEffect(() => {
+    const handleFigmaJsonDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaJsonDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaJsonNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_JSON_DROP_EVENT, handleFigmaJsonDrop);
+    return () => {
+      window.removeEventListener(FIGMA_JSON_DROP_EVENT, handleFigmaJsonDrop);
+    };
+  }, [addFigmaJsonNode, wsRef]);
+
+  useEffect(() => {
+    const handleFigmaImageDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaImageDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaImageNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
+    return () => {
+      window.removeEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
+    };
+  }, [addFigmaImageNode, wsRef]);
+
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
-    if (parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null) return;
+    if (
+      parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null &&
+      parseFigmaViewDrag(event.dataTransfer) === null &&
+      parseFigmaJsonDrag(event.dataTransfer) === null &&
+      parseFigmaImageDrag(event.dataTransfer) === null
+    ) {
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
 
   const onDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
-    const payload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
-    if (payload === null) return;
+    const connectorPayload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
+    const figmaPayload = parseFigmaViewDrag(event.dataTransfer);
+    const figmaJsonPayload = parseFigmaJsonDrag(event.dataTransfer);
+    const figmaImagePayload = parseFigmaImageDrag(event.dataTransfer);
+    if (
+      connectorPayload === null &&
+      figmaPayload === null &&
+      figmaJsonPayload === null &&
+      figmaImagePayload === null
+    ) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    addKnowledgeConnectorNode(payload, event.clientX, event.clientY, rect);
+    if (connectorPayload !== null) {
+      addKnowledgeConnectorNode(connectorPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaPayload !== null) {
+      addFigmaViewNode(figmaPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaJsonPayload !== null) {
+      addFigmaJsonNode(figmaJsonPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaImagePayload !== null) {
+      addFigmaImageNode(figmaImagePayload, event.clientX, event.clientY, rect);
+    }
   };
 
   const empty = wins !== null && wins.length === 0;
@@ -575,6 +821,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       tabIndex={0}
       data-connecting={connecting !== null ? "true" : undefined}
       data-panning={panning ? "true" : undefined}
+      data-hand-tool={handTool ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
       onKeyDown={onSurfaceKeyDown}
