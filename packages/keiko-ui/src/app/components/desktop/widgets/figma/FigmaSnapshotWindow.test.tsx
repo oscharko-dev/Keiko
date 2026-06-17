@@ -21,7 +21,7 @@
 // Security invariant under test: triggerImpl is only called with the board link,
 // never with a token. The component cannot construct or forward a PAT.
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -33,9 +33,9 @@ import type {
   TriggerFigmaSnapshotOptions,
 } from "@/lib/figma-snapshot-api";
 import { ApiError } from "@/lib/api";
-import { FIGMA_VIEW_DRAG_TYPE } from "../../figma-view-drag";
-import { FIGMA_JSON_DRAG_TYPE } from "../../figma-json-drag";
-import { FIGMA_IMAGE_DRAG_TYPE } from "../../figma-image-drag";
+import { FIGMA_VIEW_DRAG_TYPE, FIGMA_VIEW_DROP_EVENT } from "../../figma-view-drag";
+import { FIGMA_JSON_DRAG_TYPE, FIGMA_JSON_DROP_EVENT } from "../../figma-json-drag";
+import { FIGMA_IMAGE_DRAG_TYPE, FIGMA_IMAGE_DROP_EVENT } from "../../figma-image-drag";
 import type { FigmaSnapshotWindowProps } from "./FigmaSnapshotWindow";
 import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
@@ -219,6 +219,21 @@ async function typeAndSubmit(user: ReturnType<typeof userEvent.setup>) {
 // Wait until the done state (reduction hint visible).
 async function waitForDone() {
   await waitFor(() => expect(screen.getByText("2 screens from 4 detected")).toBeInTheDocument());
+}
+
+function mockRect(patch: Partial<DOMRect> = {}): DOMRect {
+  return {
+    x: 10,
+    y: 20,
+    left: 10,
+    top: 20,
+    right: 110,
+    bottom: 100,
+    width: 100,
+    height: 80,
+    toJSON: () => ({}),
+    ...patch,
+  };
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -462,6 +477,44 @@ describe("FigmaSnapshotWindow", () => {
         }),
       );
       expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "Screen 2");
+    });
+
+    it("dispatches a workspace drop event when a rendered screen drag ends on the workspace", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger, openScreenSource: vi.fn() });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const workspace = document.createElement("main");
+      workspace.className = "workspace";
+      document.body.appendChild(workspace);
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn(() => workspace);
+      const onDrop = vi.fn();
+      window.addEventListener(FIGMA_VIEW_DROP_EVENT, onDrop as EventListener);
+      try {
+        const card = await screen.findByRole("article", { name: /screen 2: screen 2/iu });
+        const previewButton = within(card).getByRole("button", { name: /drag screen screen 2/iu });
+        const dragEnd = createEvent.dragEnd(previewButton);
+        Object.defineProperty(dragEnd, "clientX", { value: 240 });
+        Object.defineProperty(dragEnd, "clientY", { value: 180 });
+        fireEvent(previewButton, dragEnd);
+
+        expect(onDrop).toHaveBeenCalledTimes(1);
+        expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+          payload: {
+            snapshotRunId: MOCK_SUMMARY.runId,
+            screenId: "screen-2",
+            name: "Screen 2",
+          },
+          clientX: 240,
+          clientY: 180,
+        });
+      } finally {
+        window.removeEventListener(FIGMA_VIEW_DROP_EVENT, onDrop as EventListener);
+        document.elementFromPoint = originalElementFromPoint;
+        workspace.remove();
+      }
     });
 
     it("shows only the selected screen when the window is scoped to a single screen source", async () => {
@@ -821,6 +874,225 @@ describe("FigmaSnapshotWindow", () => {
         ),
       );
       expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "Screen 2.png");
+    });
+
+    it("dispatches a standalone image drop from the scoped view preview via keyboard", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+      });
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      const imageSurface = screen.getByRole("button", {
+        name: /create a standalone image source for screen 2/iu,
+      });
+      Object.defineProperty(imageSurface, "getBoundingClientRect", {
+        configurable: true,
+        value: () => mockRect({ right: 300, top: 40, height: 60 }),
+      });
+      const onDrop = vi.fn();
+      window.addEventListener(FIGMA_IMAGE_DROP_EVENT, onDrop as EventListener);
+      try {
+        fireEvent.keyDown(imageSurface, { key: "Enter" });
+
+        expect(onDrop).toHaveBeenCalledTimes(1);
+        expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+          payload: {
+            snapshotRunId: MOCK_SUMMARY.runId,
+            screenId: "screen-2",
+            name: "Screen 2",
+            imageSrc: "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
+            sourceWindowId: "figma-view-1",
+          },
+          clientX: 324,
+          clientY: 70,
+        });
+      } finally {
+        window.removeEventListener(FIGMA_IMAGE_DROP_EVENT, onDrop as EventListener);
+      }
+    });
+
+    it("dispatches a standalone image drop from the scoped view preview via mouse drag fallback", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+      });
+
+      const workspace = document.createElement("main");
+      workspace.className = "workspace";
+      document.body.appendChild(workspace);
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn(() => workspace);
+      const onDrop = vi.fn();
+      window.addEventListener(FIGMA_IMAGE_DROP_EVENT, onDrop as EventListener);
+      try {
+        await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+        const imageSurface = screen.getByRole("button", {
+          name: /create a standalone image source for screen 2/iu,
+        });
+        fireEvent.mouseDown(imageSurface, { button: 0, clientX: 10, clientY: 10 });
+        fireEvent.mouseMove(window, { clientX: 24, clientY: 10 });
+        fireEvent.mouseUp(window, { clientX: 80, clientY: 90 });
+
+        expect(onDrop).toHaveBeenCalledTimes(1);
+        expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toMatchObject({
+          payload: {
+            snapshotRunId: MOCK_SUMMARY.runId,
+            screenId: "screen-2",
+            name: "Screen 2",
+            sourceWindowId: "figma-view-1",
+          },
+          clientX: 80,
+          clientY: 90,
+        });
+      } finally {
+        window.removeEventListener(FIGMA_IMAGE_DROP_EVENT, onDrop as EventListener);
+        document.elementFromPoint = originalElementFromPoint;
+        workspace.remove();
+      }
+    });
+
+    it("dispatches a standalone JSON drop from the scoped inspector via keyboard", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      const loadScreenJsonSpy = vi.fn(async () => MOCK_SCREEN_JSON);
+      const { container } = renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+        loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+      });
+      const user = userEvent.setup();
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      await user.click(screen.getByRole("button", { name: /inspect json/iu }));
+      await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+      const dragSurface = container.querySelector<HTMLElement>(".figma-view-json-drag-surface");
+      expect(dragSurface).not.toBeNull();
+      Object.defineProperty(dragSurface as HTMLElement, "getBoundingClientRect", {
+        configurable: true,
+        value: () => mockRect({ right: 420, top: 12, height: 44 }),
+      });
+      const onDrop = vi.fn();
+      window.addEventListener(FIGMA_JSON_DROP_EVENT, onDrop as EventListener);
+      try {
+        fireEvent.keyDown(dragSurface as HTMLElement, { key: " " });
+
+        expect(onDrop).toHaveBeenCalledTimes(1);
+        expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+          payload: {
+            snapshotRunId: MOCK_SUMMARY.runId,
+            screenId: "screen-2",
+            name: "Screen 2",
+            sourceWindowId: "figma-view-1",
+          },
+          clientX: 444,
+          clientY: 34,
+        });
+      } finally {
+        window.removeEventListener(FIGMA_JSON_DROP_EVENT, onDrop as EventListener);
+      }
+    });
+
+    it("copies scoped JSON from the inspector when clipboard access is available", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      const loadScreenJsonSpy = vi.fn(async () => MOCK_SCREEN_JSON);
+      renderWindow({
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+        loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+      });
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const writeText = vi.fn(async (_text: string) => undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+        fireEvent.click(screen.getByRole("button", { name: /inspect json/iu }));
+        await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+        fireEvent.click(screen.getByRole("button", { name: /copy json/iu }));
+
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+        expect(writeText.mock.calls[0]?.[0]).toContain('"screenId": "screen-2"');
+        expect(await screen.findByText("Copied")).toBeInTheDocument();
+      } finally {
+        if (clipboardDescriptor !== undefined) {
+          Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+        } else {
+          Reflect.deleteProperty(navigator, "clipboard");
+        }
+      }
+    });
+
+    it("shows scoped JSON copy failure states for unavailable or rejected clipboard access", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      const loadScreenJsonSpy = vi.fn(async () => MOCK_SCREEN_JSON);
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: undefined,
+      });
+      try {
+        renderWindow({
+          snapshotRunId: MOCK_SUMMARY.runId,
+          selectedScreenIds: ["screen-2"],
+          selectedScreenName: "Screen 2",
+          loadImpl: loadSpy as unknown as LoadFn,
+          loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+        });
+        await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+        fireEvent.click(screen.getByRole("button", { name: /inspect json/iu }));
+        await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+        fireEvent.click(screen.getByRole("button", { name: /copy json/iu }));
+        expect(await screen.findByText("Clipboard unavailable")).toBeInTheDocument();
+      } finally {
+        if (clipboardDescriptor !== undefined) {
+          Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+        } else {
+          Reflect.deleteProperty(navigator, "clipboard");
+        }
+      }
+
+      const rejectedClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: vi.fn(async () => Promise.reject(new Error("blocked"))) },
+      });
+      try {
+        renderWindow({
+          snapshotRunId: MOCK_SUMMARY.runId,
+          selectedScreenIds: ["screen-2"],
+          selectedScreenName: "Screen 2",
+          loadImpl: loadSpy as unknown as LoadFn,
+          loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+        });
+        await screen.findAllByRole("article", { name: /figma view source: screen 2/iu });
+        const inspectButtons = screen.getAllByRole("button", { name: /inspect json/iu });
+        fireEvent.click(inspectButtons[inspectButtons.length - 1] as HTMLButtonElement);
+        await screen.findAllByRole("region", { name: /scoped json for screen 2/iu });
+        const copyButtons = screen.getAllByRole("button", { name: /copy json/iu });
+        fireEvent.click(copyButtons[copyButtons.length - 1] as HTMLButtonElement);
+        expect(await screen.findByText("Copy failed")).toBeInTheDocument();
+      } finally {
+        if (rejectedClipboardDescriptor !== undefined) {
+          Object.defineProperty(navigator, "clipboard", rejectedClipboardDescriptor);
+        } else {
+          Reflect.deleteProperty(navigator, "clipboard");
+        }
+      }
     });
 
     // Fix #1: Load button stays mounted after a load failure (retry affordance).
