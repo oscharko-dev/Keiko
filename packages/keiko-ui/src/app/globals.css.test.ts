@@ -748,3 +748,69 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(detail).toContain("color: var(--fg)");
   });
 });
+
+// ─── Issue #1193 — editor theme tokens surfaced into the runtime (Addendum 3) ────
+
+describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the runtime", () => {
+  it("surfaces the full 12-type syntax palette as --ed-syn-* custom properties", () => {
+    for (const token of [
+      "--ed-syn-comment",
+      "--ed-syn-string",
+      "--ed-syn-number",
+      "--ed-syn-constant",
+      "--ed-syn-keyword",
+      "--ed-syn-type",
+      "--ed-syn-function",
+      "--ed-syn-property",
+      "--ed-syn-variable",
+      "--ed-syn-operator",
+      "--ed-syn-punct",
+      "--ed-syn-regexp",
+    ]) {
+      expect(css, `${token} must be surfaced into globals.css`).toContain(`${token}:`);
+    }
+  });
+
+  it("surfaces the editor chrome / diff / ghost-text tokens the Monaco theme maps", () => {
+    for (const token of [
+      "--ed-bg:",
+      "--ed-fg:",
+      "--ed-line-active:",
+      "--ed-selection:",
+      "--ed-find-match:",
+      "--ed-diff-ins-line:",
+      "--ed-diff-rem-line:",
+      "--ed-ghost:",
+      "--ed-minimap-bg:",
+    ]) {
+      expect(css).toContain(token);
+    }
+  });
+
+  it("extends the base palette rather than forking it (diagnostics reuse status tokens)", () => {
+    expect(css).toContain("--ed-error: var(--danger)");
+    expect(css).toContain("--ed-warn: var(--warn)");
+    expect(css).toContain("--ed-info: var(--info)");
+    expect(css).toContain("--ed-ghost: var(--fg-dim)");
+  });
+
+  it("surfaces the finalized #1212 tokens (#1232): two-tone focus ring + changed-diff state", () => {
+    expect(css).toContain("--ed-focus: var(--accent-text)");
+    expect(css).toContain("--ed-focus-inner: var(--ed-bg)");
+    expect(css).toContain("--ed-diff-chg-line:");
+    expect(css).toContain("--ed-diff-chg-text:");
+    expect(css).toContain("--ed-diff-chg-gutter: var(--info)");
+  });
+
+  it("provides dark (default), light, and high-contrast editor surfaces from the token source", () => {
+    // dark default + light + high-contrast each set --ed-fg to a distinct value from the #1212 source.
+    expect(css).toContain("--ed-fg: #c5cdd9"); // dark default (:root)
+    expect(css).toContain("--ed-fg: #2b3440"); // [data-theme="light"]
+    expect(css).toContain("--ed-fg: #ffffff"); // prefers-contrast dark
+    expect(css).toContain("--ed-fg: #000000"); // prefers-contrast light
+  });
+
+  it("does not lift the demo-only [data-hc] selectors (keiko-ui drives HC via prefers-contrast)", () => {
+    expect(css).not.toContain('[data-hc="more"]');
+  });
+});

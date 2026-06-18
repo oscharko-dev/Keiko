@@ -97,3 +97,56 @@ export {
 
 // ─── Runtime: command catalogue and availability ─────────────────────────────────
 export { EDITOR_COMMANDS, isCommandAvailable, availableCommands } from "./commands.js";
+
+// ─── Runtime: Monaco language inference (#1193) ───
+export {
+  MONACO_LANGUAGE_IDS,
+  inferMonacoLanguageId,
+  isMonacoLanguageId,
+} from "./monaco/language-inference.js";
+export type { MonacoLanguageId } from "./monaco/language-inference.js";
+
+// ─── Runtime: Monaco theme registration (#1193) ───
+export {
+  EDITOR_THEME_NAME,
+  EDITOR_THEME_VARIANTS,
+  buildKeikoEditorMonacoTheme,
+  registerKeikoEditorTheme,
+} from "./monaco/theme.js";
+export type {
+  EditorThemeVariant,
+  MonacoThemeRegistrar,
+  ResolvedEditorThemeTokens,
+} from "./monaco/theme.js";
+export {
+  createDomEditorTokenResolverDeps,
+  resolveEditorThemeTokens,
+} from "./monaco/theme-resolver.js";
+export type { EditorTokenResolverDeps } from "./monaco/theme-resolver.js";
+
+// ─── Runtime: Monaco worker strategy (#1193) ───
+export { createMonacoEnvironment, installMonacoEnvironment } from "./monaco/workers.js";
+export type {
+  MonacoEnvironmentLike,
+  MonacoGlobalScope,
+  MonacoWorkerEntry,
+  MonacoWorkerFactories,
+  MonacoWorkerFactory,
+} from "./monaco/workers.js";
+export { defaultMonacoWorkerFactories } from "./monaco/worker-entries.js";
+
+// ─── Runtime: Monaco loader (no-CDN) and capability detection (#1193) ───
+export {
+  configureMonacoLoader,
+  describeEditorRuntimeError,
+  detectEditorRuntimeSupport,
+  editorRuntimeLoadFailure,
+  probeEditorRuntime,
+} from "./monaco/runtime.js";
+export type {
+  EditorRuntimeGlobalScope,
+  EditorRuntimeProbe,
+  EditorRuntimeStatus,
+  EditorRuntimeUnsupportedReason,
+  MonacoLoaderLike,
+} from "./monaco/runtime.js";

@@ -255,6 +255,154 @@ button {
     --fg-dim: oklch(0.36 0.01 160);
   }
 }
+
+/* ============================================================
+   Editor theme tokens (#1212) — consumed by the Keiko Editor Monaco runtime (#1193).
+   Lifted from design/keiko-editor-tokens.css; EXTENDS the base palette (does not fork it):
+   editor chrome reuses --bg/--fg/--danger/--warn/--info, and only the syntax palette plus the
+   editor-specific chrome/diff/ghost-text are net-new. Surfaced here so the --ed-* / --ed-syn-*
+   custom properties resolve at runtime when the editor mounts (host integration, #1194); the
+   Monaco theme reads them via getComputedStyle and embeds no colour literals. Dark is the default;
+   the light and high-contrast variants follow the source. The demo-only [data-hc] selectors are
+   intentionally not lifted — keiko-ui drives high contrast through prefers-contrast only.
+   ============================================================ */
+:root {
+  /* editor surface (reuses the inset tone as the code well) */
+  --ed-bg: oklch(0.16 0.004 160);
+  --ed-bg-gutter: oklch(0.16 0.004 160);
+  --ed-fg: #c5cdd9;
+  /* syntax palette — TS/JS first, semantic types reused by all languages */
+  --ed-syn-comment: #7d8ba5;
+  --ed-syn-string: #c3e88d;
+  --ed-syn-number: #f78c6c;
+  --ed-syn-constant: #f78c6c;
+  --ed-syn-keyword: #c792ea;
+  --ed-syn-type: #ffcb6b;
+  --ed-syn-function: #82aaff;
+  --ed-syn-property: #80cbc4;
+  --ed-syn-variable: #c5cdd9;
+  --ed-syn-operator: #89ddff;
+  --ed-syn-punct: #89ddff;
+  --ed-syn-regexp: #e9a3a3;
+  /* editor chrome */
+  --ed-gutter-fg: color-mix(in oklch, var(--fg) 38%, transparent);
+  --ed-gutter-fg-active: var(--fg-muted);
+  --ed-line-active: color-mix(in oklch, var(--fg) 5%, transparent);
+  --ed-cursor: var(--fg);
+  --ed-selection: color-mix(in oklch, var(--accent) 26%, transparent);
+  --ed-selection-blur: color-mix(in oklch, var(--fg) 13%, transparent);
+  --ed-find-match: color-mix(in oklch, var(--warn) 34%, transparent);
+  --ed-find-match-active: color-mix(in oklch, var(--warn) 60%, transparent);
+  --ed-bracket-match: var(--accent-line);
+  --ed-indent-guide: var(--line-soft);
+  --ed-indent-guide-active: var(--line-strong);
+  --ed-whitespace: color-mix(in oklch, var(--fg) 22%, transparent);
+  /* focus ring / keyboard-visible chrome — two-tone ring (#1212 final, #1232) */
+  --ed-focus: var(--accent-text);
+  --ed-focus-inner: var(--ed-bg);
+  /* diff (patch-review surface) */
+  --ed-diff-ins-line: color-mix(in oklch, oklch(0.72 0.16 150) 15%, transparent);
+  --ed-diff-ins-text: color-mix(in oklch, oklch(0.72 0.16 150) 30%, transparent);
+  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 15%, transparent);
+  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 30%, transparent);
+  --ed-diff-ins-gutter: oklch(0.72 0.13 150);
+  --ed-diff-rem-gutter: var(--danger);
+  /* changed / word-diff middle state — info hue, distinct from ins/rem (#1232) */
+  --ed-diff-chg-line: color-mix(in oklch, var(--info) 13%, transparent);
+  --ed-diff-chg-text: color-mix(in oklch, var(--info) 26%, transparent);
+  --ed-diff-chg-gutter: var(--info);
+  /* diagnostics (map straight onto the status palette) */
+  --ed-error: var(--danger);
+  --ed-warn: var(--warn);
+  --ed-info: var(--info);
+  --ed-hint: var(--fg-faint);
+  --ed-error-bg: color-mix(in oklch, var(--danger) 12%, transparent);
+  --ed-warn-bg: color-mix(in oklch, var(--warn) 12%, transparent);
+  /* inline ghost text / AI suggestion + suggest widget */
+  --ed-ghost: var(--fg-dim);
+  --ed-suggest-bg: var(--card);
+  --ed-suggest-sel: var(--accent-dim);
+  --ed-suggest-match: var(--accent-text);
+  /* editor card: tabs, status bar, minimap */
+  --ed-tab-bg: var(--surface);
+  --ed-tab-active-bg: var(--ed-bg);
+  --ed-tab-active-fg: var(--fg);
+  --ed-tab-inactive-fg: var(--fg-faint);
+  --ed-tab-accent: var(--accent);
+  --ed-statusbar-bg: var(--surface);
+  --ed-statusbar-fg: var(--fg-muted);
+  --ed-statusbar-accent: var(--accent-text);
+  --ed-minimap-bg: var(--ed-bg);
+  --ed-minimap-slider: color-mix(in oklch, var(--fg) 10%, transparent);
+}
+[data-theme="light"] {
+  --ed-bg: oklch(0.985 0.003 160);
+  --ed-bg-gutter: oklch(0.985 0.003 160);
+  --ed-fg: #2b3440;
+  --ed-syn-comment: #5a6675;
+  --ed-syn-string: #2c7430;
+  --ed-syn-number: #a8480a;
+  --ed-syn-constant: #a8480a;
+  --ed-syn-keyword: #8b2bb8;
+  --ed-syn-type: #856000;
+  --ed-syn-function: #235fc0;
+  --ed-syn-property: #0e6b66;
+  --ed-syn-variable: #2b3440;
+  --ed-syn-operator: #0f7491;
+  --ed-syn-punct: #0f7491;
+  --ed-syn-regexp: #a33b3b;
+  --ed-diff-ins-line: color-mix(in oklch, oklch(0.6 0.15 150) 14%, transparent);
+  --ed-diff-ins-text: color-mix(in oklch, oklch(0.6 0.15 150) 26%, transparent);
+  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 12%, transparent);
+  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 24%, transparent);
+  --ed-diff-ins-gutter: oklch(0.5 0.13 150);
+  --ed-diff-rem-gutter: var(--danger);
+  --ed-whitespace: color-mix(in oklch, var(--fg) 28%, transparent);
+  --ed-minimap-slider: color-mix(in oklch, var(--fg) 12%, transparent);
+  /* darkened so ghost text clears the 4.5:1 floor on the near-white well (#1232) */
+  --ed-ghost: oklch(0.55 0.02 160);
+}
+@media (prefers-contrast: more) {
+  :root {
+    --ed-bg: oklch(0.07 0.004 160);
+    --ed-bg-gutter: oklch(0.07 0.004 160);
+    --ed-fg: #ffffff;
+    --ed-syn-comment: #9bb0c9;
+    --ed-syn-string: #b6f08a;
+    --ed-syn-number: #ffb38a;
+    --ed-syn-constant: #ffb38a;
+    --ed-syn-keyword: #d8b6ff;
+    --ed-syn-type: #ffd479;
+    --ed-syn-function: #9fc1ff;
+    --ed-syn-property: #8fe0d8;
+    --ed-syn-variable: #e8edf3;
+    --ed-syn-operator: #a6e9ff;
+    --ed-syn-punct: #a6e9ff;
+    --ed-syn-regexp: #f3b0b0;
+    --ed-line-active: color-mix(in oklch, var(--fg) 10%, transparent);
+    --ed-indent-guide: var(--line);
+    --ed-whitespace: color-mix(in oklch, var(--fg) 34%, transparent);
+    --ed-ghost: oklch(0.74 0.004 160);
+  }
+  [data-theme="light"] {
+    --ed-bg: oklch(1 0 0);
+    --ed-bg-gutter: oklch(1 0 0);
+    --ed-fg: #000000;
+    --ed-syn-comment: #46525f;
+    --ed-syn-string: #1a5d1d;
+    --ed-syn-number: #8a3600;
+    --ed-syn-constant: #8a3600;
+    --ed-syn-keyword: #6f1b96;
+    --ed-syn-type: #5f4200;
+    --ed-syn-function: #143f8f;
+    --ed-syn-property: #0a5c57;
+    --ed-syn-variable: #000000;
+    --ed-syn-operator: #0a5e75;
+    --ed-syn-punct: #0a5e75;
+    --ed-syn-regexp: #8a2020;
+    --ed-ghost: oklch(0.42 0.01 160);
+  }
+}
 [data-theme="light"] .dlg-overlay {
   background: oklch(0.3 0.01 160 / 0.34);
 }
