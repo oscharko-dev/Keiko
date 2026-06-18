@@ -19,19 +19,25 @@ backend/workflow responsibilities reached only through host-injected ports. The 
 outside `keiko-ui` and must not import `keiko-ui` internals (ADR-0019 browser-tier direction rule 8;
 ADR-0042 D1/D2).
 
-### v1 status (Issue #1191)
+### Current status (#1191-#1196)
 
-This release ships only a **minimal typed public API** so the package can be developed, built,
-linted, tested, and governance-checked independently of `keiko-ui`:
+The package now ships the browser-tier editor surface and is mounted by `keiko-ui` in the Workspace
+card/window model (#1196). The public surface includes:
 
 - `KEIKO_EDITOR_PACKAGE` — the package's stable identity.
 - `EditorLanguageId`, `SUPPORTED_EDITOR_LANGUAGES`, `isSupportedEditorLanguage` — the supported
   language contract, aligned with the workspace `WorkspaceLanguage` contract.
 - `EditorBuffer`, `EditorHostPort` — the typed host-integration seam the host implements and injects.
+- `KeikoCodeEditor` — the controlled Monaco-backed editor component used by the Workspace editor
+  card.
+- `KeikoDiffEditor`, `buildPatchPreview` — the generated-change review surface and its pure render
+  model adapter.
 
-**Out of scope for v1** (tracked under the epic): UI card integration in `keiko-ui` (#1194/#1196)
-and server completion/diagnostics endpoints (#1197/#1198). `keiko-ui` does not yet depend on this
-package; the editor tokens it consumes are surfaced as CSS only (see below).
+**Still out of scope** (tracked under the epic): server completion/diagnostics/test-generation
+endpoints and any model-producing editor feature (#1197/#1198 and follow-ups). `keiko-ui` depends on
+this package only for browser-tier editor rendering and host-injected intent callbacks; workspace
+authority, file I/O, model access, patch application, evidence, and verification remain outside this
+package.
 
 ## Monaco runtime and worker strategy (Issue #1193)
 
@@ -48,7 +54,7 @@ constructor module (`src/monaco/worker-entries.ts`).
 | Theme registration            | `registerKeikoEditorTheme(monaco.editor, variant, tokens)`, `buildKeikoEditorMonacoTheme`, `resolveEditorThemeTokens`, `createDomEditorTokenResolverDeps`, `EDITOR_THEME_NAME` | Maps the #1212 `--ed-*` design tokens to Monaco `rules`/`colors`; dark/light/high-contrast; no colour literals.           |
 | Capability detection / errors | `detectEditorRuntimeSupport(probe)`, `probeEditorRuntime(self)`, `describeEditorRuntimeError`, `editorRuntimeLoadFailure`                                                      | Controlled, actionable error states for unsupported workers / failed load; never a silent CDN fallback.                   |
 
-**Host wiring recipe** (executed by the client-only mount in #1194, before the first editor render):
+**Host wiring recipe** (executed by the client-only mount in #1196, before the first editor render):
 
 ```ts
 import { loader } from "@monaco-editor/react";
@@ -64,6 +70,36 @@ import {
 
 installMonacoEnvironment(self, createMonacoEnvironment(defaultMonacoWorkerFactories));
 configureMonacoLoader(loader, monaco);
+monaco.typescript.typescriptDefaults.setModeConfiguration({
+  completionItems: false,
+  hovers: false,
+  documentSymbols: false,
+  definitions: false,
+  references: false,
+  documentHighlights: false,
+  rename: false,
+  diagnostics: false,
+  documentRangeFormattingEdits: false,
+  signatureHelp: false,
+  onTypeFormattingEdits: false,
+  codeActions: false,
+  inlayHints: false,
+});
+monaco.typescript.javascriptDefaults.setModeConfiguration({
+  completionItems: false,
+  hovers: false,
+  documentSymbols: false,
+  definitions: false,
+  references: false,
+  documentHighlights: false,
+  rename: false,
+  diagnostics: false,
+  documentRangeFormattingEdits: false,
+  signatureHelp: false,
+  onTypeFormattingEdits: false,
+  codeActions: false,
+  inlayHints: false,
+});
 // One-shot resolve: reads the --ed-* tokens from the DOM and cleans up its probe. Re-call on theme
 // or contrast switch. (For an advanced/long-lived path, use createDomEditorTokenResolverDeps +
 // resolveEditorThemeTokens and call deps.dispose() when done.)
@@ -149,7 +185,7 @@ Notes:
   closed.** `monaco-editor@0.55.1` declares `dompurify@3.2.7` as an npm dependency, which carries a set
   of **moderate** DOMPurify advisories (`npm audit` reports several distinct XSS / mutation-XSS /
   prototype-pollution items affecting `<= 3.4.10`), all rated moderate (0 high/critical). #1193 deferred
-  any change because the editor was not yet mounted and the only `npm audit fix` was a semver-major
+  any change before the host runtime path existed because the only `npm audit fix` was a semver-major
   downgrade. #1196 mounts the editor in `keiko-ui`, so the chain
   `keiko-ui → keiko-editor → monaco-editor → dompurify` now enters keiko-ui's audit closure and the
   `ui` CI job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` gate fails. The
@@ -164,15 +200,18 @@ Notes:
     hints, other `IMarkdownString` sinks). The mounted editor disables every one of those surfaces in
     `buildEditorOptions` (`hover`, `suggest`, `parameterHints`, `inlineSuggest`, `codeLens`,
     `lightbulb`, `inlayHints`, and `links` are all off, and #1196 wires no completion/diagnostics
-    provider), so no Monaco Markdown sanitiser executes. Runtime exposure is therefore nil — the same
-    closed-sink basis #1193 relied on, now enforced by the editor's construction options.
+    provider). The #1196 host bootstrap also disables Monaco's built-in TypeScript/JavaScript
+    `modeConfiguration` providers for completion, hover, diagnostics, formatting, symbols, code
+    actions, rename, references, and inlay hints, so Monaco cannot re-enable productive local
+    language-service flows behind the host's back. Runtime exposure is therefore nil — the same
+    closed-sink basis #1193 relied on, now enforced by construction options and runtime defaults.
   - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
     that vendors DOMPurify `>= 3.3.2`; as of #1196 no such release exists (the latest `0.56.0-dev`
     builds still vendor and pin `3.2.7`), so the patched override is the interim control. Revisit when a
     hover / completion-with-docs / parameter-hint / Markdown surface is wired (#1199/#1200) or a newer
     Monaco ships.
-- `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers; the editor is
-  not yet mounted by `keiko-ui` (host integration is #1194/#1196).
+- `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers and mounted by
+  `keiko-ui` through the #1196 client-only Workspace editor surface.
 
 ## Governance
 

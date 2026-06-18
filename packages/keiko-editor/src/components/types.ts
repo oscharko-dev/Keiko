@@ -62,6 +62,8 @@ export interface KeikoCodeEditorProps {
   readonly modifiedAt?: number | undefined;
   readonly maxSizeBytes?: number | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
+  /** Accessible name for the editor control; hosts may include workspace/root context. */
+  readonly ariaLabel?: string | undefined;
   readonly autoFocus?: boolean | undefined;
   readonly onContentChange: (next: EditorContentDelta, origin: EditorChangeOrigin) => void;
   readonly onSaveRequested: (request: EditorSaveRequest) => void;

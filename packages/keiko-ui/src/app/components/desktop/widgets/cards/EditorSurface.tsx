@@ -40,6 +40,7 @@ export interface EditorSurfaceProps {
   readonly modifiedAt?: number | undefined;
   readonly maxSizeBytes?: number | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
+  readonly ariaLabel?: string | undefined;
   readonly onContentChange: (next: EditorContentDelta, origin: EditorChangeOrigin) => void;
   readonly onSaveRequested: (request: EditorSaveRequest) => void;
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
@@ -65,6 +66,7 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
       modifiedAt={props.modifiedAt}
       maxSizeBytes={props.maxSizeBytes}
       themeVariant={props.themeVariant}
+      ariaLabel={props.ariaLabel}
       onContentChange={props.onContentChange}
       onSaveRequested={props.onSaveRequested}
       onSelectionChange={props.onSelectionChange}

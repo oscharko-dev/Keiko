@@ -71,8 +71,9 @@ describe("EditorWidget — load", () => {
     expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
     expect(surface.props?.buffer.content.relativePath).toBe("src/app.ts");
     expect(surface.props?.fileModel.identity.language).toBe("typescript");
+    expect(surface.props?.ariaLabel).toBe("Editor: src/app.ts in /repo");
     expect(surface.props?.modifiedAt).toBe(1);
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("surfaces a load failure in the card", async () => {
@@ -123,9 +124,29 @@ describe("EditorWidget — edit and save", () => {
     expect(surface.props?.fileModel.dirty).toBe(false);
   });
 
-  it("saves the latest text on an editor Cmd/Ctrl+S save request", async () => {
+  it("ignores an editor Cmd/Ctrl+S save request when the buffer is clean", async () => {
+    await renderLoaded();
+    act(() => {
+      surface.props?.onSaveRequested({
+        identity: { uri: "/repo/src/app.ts", language: "typescript", version: 1 },
+        expectedSavedVersion: 0,
+        content: {
+          relativePath: "src/app.ts",
+          text: "const value = 1;\n",
+          sizeBytes: 16,
+          truncated: false,
+        },
+      });
+    });
+    expect(saveFilesContent).not.toHaveBeenCalled();
+  });
+
+  it("saves the latest text on an editor Cmd/Ctrl+S save request after an edit", async () => {
     await renderLoaded();
     vi.mocked(saveFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 2 }));
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 9;\n", sizeBytes: 17 }, "human");
+    });
     act(() => {
       surface.props?.onSaveRequested({
         identity: { uri: "/repo/src/app.ts", language: "typescript", version: 1 },
@@ -191,6 +212,30 @@ describe("EditorWidget — conflict and error", () => {
     expect(surface.props?.saveError).toBe("Disk full.");
     expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
   });
+
+  it("keeps reload failure recoverable after an editor surface has already mounted", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const reload = await screen.findByRole("button", { name: "Reload" });
+
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+      new ApiError("READ_FAILED", "The file could not be loaded.", 500),
+    );
+    await userEvent.click(reload);
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.queryByTestId("editor-surface")).toBeNull();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 5 }));
+    await userEvent.click(retry);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.modifiedAt).toBe(5);
+  });
 });
 
 describe("EditorWidget — concurrent save safety", () => {
@@ -215,6 +260,11 @@ describe("EditorWidget — concurrent save safety", () => {
       surface.props?.onSaveRequested(saveRequest);
     });
     expect(saveFilesContent).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Saving…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Saving…" })).not.toBeDisabled();
     await act(async () => {
       resolveSave(fileResponse({ content: "v2\n", modifiedAt: 2 }));
     });

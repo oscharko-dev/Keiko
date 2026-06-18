@@ -77,6 +77,10 @@ function documentUri(root: string, file: string): string {
   return `${root.replace(/[/\\]+$/, "")}/${file}`;
 }
 
+function editorAriaLabel(root: string, file: string): string {
+  return `Editor: ${file} in ${root}`;
+}
+
 export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
 
@@ -102,6 +106,8 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   contentRef.current = content;
 
   const dirty = fileModel !== null && isDocumentDirty(fileModel);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
   // Follow the live app appearance (light/dark/high-contrast). Keyed onto the surface below so a
   // theme switch remounts it, which re-runs the editor's on-mount theme registration against the
   // now-current design tokens — the editor registers only its mount-time variant.
@@ -160,6 +166,17 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   const persist = useCallback(
     async (text: string): Promise<void> => {
       if (!hasTarget || savingRef.current) return;
+      const textChangedBeforeReactCommitted = text !== contentRef.current;
+      if (!dirtyRef.current && !textChangedBeforeReactCommitted) return;
+      if (textChangedBeforeReactCommitted) {
+        contentRef.current = text;
+        setContent(text);
+        setFileModel((model) =>
+          model === null
+            ? model
+            : editorFileModelReducer(model, { type: "edited", origin: "human" }),
+        );
+      }
       savingRef.current = true;
       setSaveStatus((status) => saveStatusReducer(status, { type: "request" }));
       setSaveError(undefined);
@@ -232,6 +249,7 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   }, []);
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
+  const saveUnavailable = !canSave;
 
   const buffer: EditorBuffer | null =
     fileModel === null
@@ -268,14 +286,25 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
           <button
             type="button"
             className="ed-save"
-            onClick={() => void persist(content)}
-            disabled={!canSave}
+            onClick={() => {
+              if (canSave) void persist(content);
+            }}
+            aria-disabled={saveUnavailable}
           >
             {saveStatus === "saving" ? "Saving…" : "Save"}
           </button>
         ) : null}
       </div>
-      {hasTarget && buffer !== null && fileModel !== null ? (
+      {hasTarget && loadState.status === "error" ? (
+        <div className="ed-host">
+          <div className="ed-host-loading" role="alert">
+            <span>{`Editor failed to load: ${loadState.message}`}</span>
+            <button type="button" className="ed-reload" onClick={reload}>
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : hasTarget && buffer !== null && fileModel !== null ? (
         <div className="ed-host">
           <EditorSurface
             key={themeVariant}
@@ -287,6 +316,9 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
             modifiedAt={modifiedAt ?? undefined}
             maxSizeBytes={maxBytes ?? undefined}
             themeVariant={themeVariant}
+            ariaLabel={
+              root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
+            }
             onContentChange={onContentChange}
             onSaveRequested={onSaveRequested}
             onRuntimeError={onRuntimeError}
@@ -294,20 +326,9 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
         </div>
       ) : hasTarget ? (
         <div className="ed-host">
-          {loadState.status === "error" ? (
-            // Error is announced assertively (role="alert"), distinct from the polite loading region,
-            // and is recoverable: Retry re-runs the load (the file may now be readable).
-            <div className="ed-host-loading" role="alert">
-              <span>{`Editor failed to load: ${loadState.message}`}</span>
-              <button type="button" className="ed-reload" onClick={reload}>
-                Retry
-              </button>
-            </div>
-          ) : (
-            <div className="ed-host-loading" role="status">
-              Loading file…
-            </div>
-          )}
+          <div className="ed-host-loading" role="status">
+            Loading file…
+          </div>
         </div>
       ) : (
         <div className="ed-empty" role="note">

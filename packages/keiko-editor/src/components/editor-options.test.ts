@@ -89,6 +89,16 @@ describe("buildEditorOptions", () => {
     expect(options.ariaLabel).toBe("Editor: src/app.ts");
   });
 
+  it("uses a host-provided accessible aria label when supplied", () => {
+    expect(
+      buildEditorOptions({
+        readOnly: false,
+        ariaPath: "src/app.ts",
+        ariaLabel: "Editor: src/app.ts in /repo",
+      }).ariaLabel,
+    ).toBe("Editor: src/app.ts in /repo");
+  });
+
   it("sets accessibility support to auto", () => {
     expect(options.accessibilitySupport).toBe("auto");
   });

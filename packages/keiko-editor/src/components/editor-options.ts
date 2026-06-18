@@ -14,6 +14,8 @@ export interface BuildEditorOptionsArgs {
   readonly readOnly: boolean;
   /** Path shown in the accessible editor label, e.g. the buffer's `relativePath`. */
   readonly ariaPath: string;
+  /** Optional host-provided accessible name when the path alone is ambiguous. */
+  readonly ariaLabel?: string | undefined;
 }
 
 /** Stable monospace stack: a dense tool surface needs a predictable, ligature-free code font. */
@@ -98,7 +100,7 @@ export function buildEditorOptions(
     minimap: { enabled: false },
     readOnly: args.readOnly,
     domReadOnly: false,
-    ariaLabel: `Editor: ${args.ariaPath}`,
+    ariaLabel: args.ariaLabel ?? `Editor: ${args.ariaPath}`,
     accessibilitySupport: "auto",
     renderWhitespace: "selection",
     scrollBeyondLastLine: false,

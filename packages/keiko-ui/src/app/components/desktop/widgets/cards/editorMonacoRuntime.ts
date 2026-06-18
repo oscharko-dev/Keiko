@@ -30,6 +30,31 @@ import {
 
 let runtimeConfigured = false;
 
+const GOVERNED_LANGUAGE_SERVICE_MODE = {
+  completionItems: false,
+  hovers: false,
+  documentSymbols: false,
+  definitions: false,
+  references: false,
+  documentHighlights: false,
+  rename: false,
+  diagnostics: false,
+  documentRangeFormattingEdits: false,
+  signatureHelp: false,
+  onTypeFormattingEdits: false,
+  codeActions: false,
+  inlayHints: false,
+} satisfies monaco.typescript.ModeConfiguration;
+
+function disableBuiltInLanguageServices(monacoNamespace: typeof monaco): void {
+  monacoNamespace.typescript.typescriptDefaults.setModeConfiguration(
+    GOVERNED_LANGUAGE_SERVICE_MODE,
+  );
+  monacoNamespace.typescript.javascriptDefaults.setModeConfiguration(
+    GOVERNED_LANGUAGE_SERVICE_MODE,
+  );
+}
+
 /**
  * Ensure the local, no-CDN Monaco runtime is installed and report whether the browser can run it.
  *
@@ -51,6 +76,7 @@ export function ensureMonacoRuntime(): EditorRuntimeStatus {
       createMonacoEnvironment(defaultMonacoWorkerFactories),
     );
     configureMonacoLoader(loader, monaco);
+    disableBuiltInLanguageServices(monaco);
     runtimeConfigured = true;
   }
   return status;
