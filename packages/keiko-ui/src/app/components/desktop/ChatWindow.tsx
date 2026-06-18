@@ -346,7 +346,7 @@ function ComposerBar({
           data-tip={controlsNarrow ? compactModelTip : undefined}
         >
           <KeikoSelect
-            className="cmp-model-select"
+            triggerClassName="cmp-model-select"
             value={selectValue}
             ariaLabel="Models"
             ariaDescribedBy={selectDescribedBy}
@@ -1052,7 +1052,7 @@ function LocalKnowledgeScopeControl({
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">Grounding</span>
       <KeikoSelect
-        className="scope-grounding-select"
+        triggerClassName="scope-grounding-select"
         value={value}
         disabled={busy}
         ariaLabel="Grounding mode"

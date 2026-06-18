@@ -924,7 +924,7 @@ export function Workspace({
         top={top}
         api={api}
         openPalette={openPalette}
-        renderOutlineToggle={renderOutlineToggle}
+        {...(renderOutlineToggle !== undefined ? { renderOutlineToggle } : {})}
         {...(outlineOpen !== undefined ? { outlineOpen } : {})}
         {...(onToggleOutline !== undefined ? { onToggleOutline } : {})}
       />
