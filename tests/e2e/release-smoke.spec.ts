@@ -148,7 +148,7 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   await page.goto("/");
   await expect(page.getByRole("navigation", { name: "Primary workspace navigation" })).toBeVisible();
   await expect(page.getByText("Keiko").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "New", exact: true })).toBeVisible();
+  await expect(page.locator(".header .hd-tool-cta")).toBeVisible();
   await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
 
   assertNoPageErrors();
