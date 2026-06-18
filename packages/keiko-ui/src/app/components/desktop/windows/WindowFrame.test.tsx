@@ -219,7 +219,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).toHaveBeenCalledTimes(1);
   });
 
-  it("drags a window inside the workspace and commits the active snap preview from the primary button", () => {
+  it("drags a window inside the workspace and commits the active snap preview from the middle button", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -240,7 +240,7 @@ describe("WindowFrame content zoom controls", () => {
     const section = container.querySelector<HTMLElement>(".window");
     expect(section).not.toBeNull();
 
-    fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+    fireEvent.pointerDown(header as HTMLElement, { button: 1, clientX: 100, clientY: 90 });
     expect(document.body.style.cursor).toBe("grabbing");
     expect(document.body.style.userSelect).toBe("none");
     expect(section).toHaveAttribute("data-dragging", "true");
