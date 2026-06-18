@@ -189,6 +189,19 @@ describe("Fix 2 — reduced-motion wrapping (WCAG 2.3.3)", () => {
   });
 });
 
+describe("Gateway setup constrained-height scrolling", () => {
+  it("keeps the fixed backdrop and rounded frame from becoming scroll containers", () => {
+    expect(cssBlock(".gw-setup-backdrop")).toContain("overflow: hidden");
+    expect(cssBlock(".gw-setup")).toContain("overflow: hidden");
+  });
+
+  it("uses the form as the internal scroll region", () => {
+    const block = cssBlock(".gw-form");
+    expect(block).toContain("min-height: 0");
+    expect(block).toContain("overflow-y: auto");
+  });
+});
+
 // ─── Fix 3: WCAG 1.4.3 — light-theme text contrast ───────────────────────────
 
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
