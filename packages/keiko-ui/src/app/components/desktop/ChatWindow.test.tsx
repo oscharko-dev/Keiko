@@ -785,7 +785,7 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Model");
+    const select = screen.getByLabelText("Models");
     const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
     expect(options).toContain("test-chat-1");
     expect(options).toContain("test-chat-2");
@@ -804,7 +804,7 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Model");
+    const select = screen.getByLabelText("Models");
     const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
     expect(options).not.toContain("test-embedding-1");
     expect(options).toContain("test-chat-1");
@@ -1166,8 +1166,7 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
     expect(screen.queryByText(/example-workspace/i)).toBeNull();
   });
 
-  it("shows the real project name in the empty-state sub-heading when a project is active", () => {
-    // EmptyComposerState renders "Working in <name>…" when an activeChat exists.
+  it("does not show project subtext in the empty state when a project is active", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -1181,8 +1180,8 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
         },
       }),
     );
-    // The empty-state sub renders "Working in myproject. What would you like to explore?"
-    expect(screen.getByText(/Working in myproject/)).toBeInTheDocument();
+    expect(screen.getByText(/how can i help you today\\?/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Working in myproject/)).toBeNull();
   });
 });
 

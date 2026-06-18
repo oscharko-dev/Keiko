@@ -59,6 +59,8 @@ interface WorkspaceProps {
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
   readonly outlineOpen?: boolean;
+  readonly onToggleOutline?: () => void;
+  readonly renderOutlineToggle?: boolean;
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
@@ -300,6 +302,9 @@ interface WorkspaceOutlineProps {
   readonly top: AppWindow | null;
   readonly api: UseWorkspaceResult["api"];
   readonly openPalette: () => void;
+  readonly outlineOpen?: boolean;
+  readonly onToggleOutline?: () => void;
+  readonly renderOutlineToggle?: boolean;
 }
 
 function WorkspaceOutline({
@@ -308,6 +313,9 @@ function WorkspaceOutline({
   top,
   api,
   openPalette,
+  outlineOpen,
+  onToggleOutline,
+  renderOutlineToggle = true,
 }: WorkspaceOutlineProps): ReactNode {
   const relationships = useMemo(
     () =>
@@ -319,15 +327,78 @@ function WorkspaceOutline({
     [conns, wins],
   );
   const hasWindows = wins !== null && wins.length > 0;
+  // #1153: reveal is state-driven, not CSS-`:focus-within`-only. A collapsed
+  // panel previously kept pointer-events:none buttons in the a11y tree, so a
+  // pointer (or AT-driven) click fell through to the canvas as a silent no-op.
+  // `pinned` is the deliberate toggle; hover and focus-within are tracked
+  // separately so the panel stays open while keyboard focus remains inside,
+  // even after the pointer leaves.
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const controlled = outlineOpen !== undefined && onToggleOutline !== undefined;
+  const open = controlled ? outlineOpen : pinned || hovered || focusWithin;
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const syncContentInert = useCallback(
+    (node: HTMLDivElement | null): void => {
+      contentRef.current = node;
+      node?.toggleAttribute("inert", !open);
+    },
+    [open],
+  );
+
+  useEffect(() => {
+    contentRef.current?.toggleAttribute("inert", !open);
+  }, [open]);
 
   return (
     <section
-      id="workspace-outline"
       className="ws-outline"
-      aria-labelledby="ws-outline-title"
+      data-open={open ? "true" : "false"}
+      aria-label="Workspace outline"
       onPointerDown={(event) => event.stopPropagation()}
+      onPointerEnter={controlled ? undefined : () => setHovered(true)}
+      onPointerLeave={controlled ? undefined : () => setHovered(false)}
+      onFocusCapture={controlled ? undefined : () => setFocusWithin(true)}
+      onBlurCapture={
+        controlled
+          ? undefined
+          : (event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setFocusWithin(false);
+            }
+      }
     >
-      <div className="ws-outline-inner">
+      {renderOutlineToggle ? (
+        <button
+          type="button"
+          className="ws-outline-toggle"
+          aria-expanded={open}
+          aria-controls="ws-outline-content"
+          // Hiding from the pinned state should collapse immediately instead of
+          // waiting for hover/focus to clear.
+          onClick={() => {
+            if (controlled) {
+              onToggleOutline();
+              return;
+            }
+            if (pinned) {
+              setPinned(false);
+              setHovered(false);
+              setFocusWithin(false);
+              return;
+            }
+            setPinned(true);
+          }}
+        >
+          {open ? "Hide workspace outline" : "Show workspace outline"}
+        </button>
+      ) : null}
+      <div
+        ref={syncContentInert}
+        id="ws-outline-content"
+        className="ws-outline-content ws-outline-inner"
+        aria-hidden={open ? undefined : true}
+      >
         <h2 id="ws-outline-title">Workspace outline</h2>
         <p className="ws-outline-summary">
           {wins === null
@@ -418,6 +489,8 @@ export function Workspace({
   openPalette,
   palette,
   outlineOpen,
+  onToggleOutline,
+  renderOutlineToggle,
 }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
@@ -845,15 +918,16 @@ export function Workspace({
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      {outlineOpen === true ? (
-        <WorkspaceOutline
-          wins={wins}
-          conns={conns}
-          top={top}
-          api={api}
-          openPalette={openPalette}
-        />
-      ) : null}
+      <WorkspaceOutline
+        wins={wins}
+        conns={conns}
+        top={top}
+        api={api}
+        openPalette={openPalette}
+        renderOutlineToggle={renderOutlineToggle}
+        {...(outlineOpen !== undefined ? { outlineOpen } : {})}
+        {...(onToggleOutline !== undefined ? { onToggleOutline } : {})}
+      />
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect

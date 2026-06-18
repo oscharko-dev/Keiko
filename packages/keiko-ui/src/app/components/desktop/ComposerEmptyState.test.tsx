@@ -5,7 +5,7 @@
 // invariant that rule pollutes capsule-actions.test.tsx. All session deps are
 // injected via the ChatSessionProvider prop (prop-injection pattern).
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -159,7 +159,7 @@ describe("AC #2 — disabled controls aria-describedby", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Model");
+    const select = screen.getByLabelText("Models");
     expect(select).not.toHaveAttribute("disabled");
     expect(select).toHaveAttribute("aria-disabled", "true");
     const describedById = select.getAttribute("aria-describedby");
@@ -330,10 +330,10 @@ describe("Deliverable — empty state (no messages, active chat set)", () => {
         models: [chatModelCapability("example-chat-model")],
       }),
     );
-    expect(screen.getByText(/start a keiko conversation/i)).toBeInTheDocument();
+    expect(screen.getByText(/how can i help you today\\?/i)).toBeInTheDocument();
   });
 
-  it("shows 2 or 3 starter prompt buttons", () => {
+  it("does not render starter prompt buttons", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -341,15 +341,14 @@ describe("Deliverable — empty state (no messages, active chat set)", () => {
         models: [chatModelCapability("example-chat-model")],
       }),
     );
-    // Starter prompts are rendered as buttons inside the chatw-empty-prompts list.
-    const promptsList = document.querySelector(".chatw-empty-prompts");
-    expect(promptsList).not.toBeNull();
-    const promptBtns = within(promptsList as HTMLElement).getAllByRole("button");
-    expect(promptBtns.length).toBeGreaterThanOrEqual(2);
-    expect(promptBtns.length).toBeLessThanOrEqual(3);
+    expect(document.querySelector(".chatw-empty-prompts")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Starter prompts" })).toBeNull();
+    expect(screen.queryByText(/explain the architecture/i)).toBeNull();
+    expect(screen.queryByText(/find a bug/i)).toBeNull();
+    expect(screen.queryByText(/write tests/i)).toBeNull();
   });
 
-  it("includes the project name in prompts when activeProject is set", () => {
+  it("omits empty-state subtext even when project context exists", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -358,36 +357,12 @@ describe("Deliverable — empty state (no messages, active chat set)", () => {
         models: [chatModelCapability("example-chat-model")],
       }),
     );
-    const promptsList = document.querySelector(".chatw-empty-prompts");
-    expect(promptsList).not.toBeNull();
-    const btns = within(promptsList as HTMLElement).getAllByRole("button");
-    const texts = btns.map((b) => b.textContent ?? "");
-    expect(texts.some((t) => t.includes("my-project"))).toBe(true);
+    expect(screen.queryByText(/working in my-project/i)).toBeNull();
+    expect(document.querySelector(".chatw-empty-sub")).toBeNull();
+    expect(document.querySelector(".chatw-empty-prompts")).toBeNull();
   });
 
-  it("clicking a starter prompt calls setDraft with the prompt text", async () => {
-    const setDraft = vi.fn();
-    const user = userEvent.setup();
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        messages: [],
-        models: [chatModelCapability("example-chat-model")],
-        setDraft,
-      }),
-    );
-    const promptsList = document.querySelector(".chatw-empty-prompts");
-    expect(promptsList).not.toBeNull();
-    const firstPrompt = within(promptsList as HTMLElement).getAllByRole("button")[0];
-    expect(firstPrompt).toBeDefined();
-    await user.click(firstPrompt!);
-    expect(setDraft).toHaveBeenCalledOnce();
-    const calledWith: unknown = setDraft.mock.calls[0]?.[0];
-    expect(typeof calledWith).toBe("string");
-    expect((calledWith as string).length).toBeGreaterThan(0);
-  });
-
-  it("does not render starter prompts when noEligibleModels is true", () => {
+  it("does not render starter prompt containers when noEligibleModels is true", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -396,8 +371,7 @@ describe("Deliverable — empty state (no messages, active chat set)", () => {
         selectedModel: undefined,
       }),
     );
-    const promptsList = document.querySelector(".chatw-empty-prompts");
-    expect(promptsList).toBeNull();
+    expect(document.querySelector(".chatw-empty-prompts")).toBeNull();
   });
 });
 
@@ -494,7 +468,7 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
     expect(sendBtn.classList.contains("cmp-send")).toBe(true);
   });
 
-  it("starter prompt buttons have focusable class with suggest (enabling :focus-visible ring)", () => {
+  it("omits starter prompt buttons from the empty state", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -502,12 +476,8 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
         models: [chatModelCapability("example-chat-model")],
       }),
     );
-    const promptsList = document.querySelector(".chatw-empty-prompts");
-    expect(promptsList).not.toBeNull();
-    const btns = within(promptsList as HTMLElement).getAllByRole("button");
-    btns.forEach((btn) => {
-      expect(btn.classList.contains("suggest")).toBe(true);
-    });
+    expect(document.querySelector(".chatw-empty-prompts")).toBeNull();
+    expect(document.querySelector(".suggest")).toBeNull();
   });
 
   it("NoModelAlert is role=alert and its id is stable", () => {

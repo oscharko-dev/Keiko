@@ -138,7 +138,10 @@ describe("ConnectorPickerWidget", () => {
     await waitFor(() => {
       expect(screen.queryByRole("status", { name: /loading/i })).toBeNull();
     });
-    expect(screen.getByText(/No ready connectors/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No ready connectors/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /Create a connector/i })).toHaveClass(
+      "lk-btn-primary",
+    );
     await user.click(screen.getByRole("button", { name: /Create a connector/i }));
     expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryConsolidation } from "./MemoryConsolidation";
@@ -125,6 +125,22 @@ describe("MemoryConsolidation", () => {
     );
 
     expect(screen.getByText("No consolidation job started yet.")).toBeInTheDocument();
+  });
+
+  it("steps numeric settings on wheel hover without focusing first", () => {
+    render(
+      <MemoryConsolidation startJobImpl={vi.fn()} fetchJobImpl={vi.fn()} cancelJobImpl={vi.fn()} />,
+    );
+
+    const maxAgeInput = screen.getByRole("spinbutton", { name: /max age \(days\)/i });
+    expect(maxAgeInput).not.toHaveFocus();
+
+    fireEvent.wheel(maxAgeInput, { deltaY: -100 });
+    expect(maxAgeInput).toHaveValue(91);
+    expect(maxAgeInput).not.toHaveFocus();
+
+    fireEvent.wheel(maxAgeInput, { deltaY: 100 });
+    expect(maxAgeInput).toHaveValue(90);
   });
 
   it("starts a job with explicit settings and renders polled results", async () => {

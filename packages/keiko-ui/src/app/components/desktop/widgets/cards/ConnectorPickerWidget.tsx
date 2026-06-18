@@ -99,8 +99,11 @@ function EmptyState({
 }): ReactNode {
   return (
     <div className="connector-picker-empty">
-      <p>No ready connectors found.</p>
-      <button type="button" className="connector-picker-create-link" onClick={onManageConnectors}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary connector-picker-create-link"
+        onClick={onManageConnectors}
+      >
         Create a connector
       </button>
     </div>

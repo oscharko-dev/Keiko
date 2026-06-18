@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type WheelEvent,
 } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -35,6 +36,7 @@ import {
   type CapsuleListEntry,
   type CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
+import { Icons } from "@/app/components/desktop/Icons";
 import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
@@ -58,6 +60,19 @@ const SOURCE_KIND_OPTIONS: ReadonlyArray<{ id: ManualSourceKind; label: string; 
   { id: "capsule", label: "Capsule", hint: "Local Knowledge" },
   { id: "capsule-set", label: "Capsule set", hint: "Local Knowledge" },
 ];
+
+function SourceKindIcon({ kind }: { readonly kind: ManualSourceKind }): ReactNode {
+  if (kind === "requirements") return <Icons.review size={15} />;
+  if (kind === "workspace") return <Icons.folder size={15} />;
+  if (kind === "file") return <Icons.file size={15} />;
+  if (kind === "capsule-set") return <Icons.layers size={15} />;
+
+  return (
+    <svg aria-hidden="true" className="qi-source-kind-icon-svg" viewBox="0 0 24 24">
+      <path d="M12 3.8 19 7.7v8.6L12 20.2 5 16.3V7.7z" />
+    </svg>
+  );
+}
 
 interface Progress {
   readonly phase: string;
@@ -361,6 +376,15 @@ export function RunLauncher({
         : Number.NaN;
   const seedValid =
     parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  const handleSeedWheel = (event: WheelEvent<HTMLInputElement>): void => {
+    if (running || event.deltaY === 0) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    const current = Number.parseInt(seed.trim(), 10);
+    const base = Number.isFinite(current) ? current : 0;
+    setSeed(String(Math.max(0, base + direction)));
+    setError(null);
+  };
   // Generate stays focusable when blocked (aria-disabled, not native disabled) so keyboard and
   // screen-reader users can reach it and hear WHY it is inactive via aria-describedby — the same
   // governance pattern as GovernedActionButton in CandidatesPane (Epic #712).
@@ -759,14 +783,18 @@ export function RunLauncher({
                   type="button"
                   className="qi-source-kind-option"
                   role="radio"
+                  aria-label={option.label}
+                  data-tip={option.label}
                   aria-checked={sourceKind === option.id}
                   tabIndex={sourceKind === option.id ? 0 : -1}
                   disabled={running}
                   onClick={() => chooseSourceKind(option.id)}
                   onKeyDown={onSourceKindKeyDown}
                 >
-                  <span>{option.label}</span>
-                  <span>{option.hint}</span>
+                  <span className="qi-source-kind-label">{option.label}</span>
+                  <span className="qi-source-kind-icon" aria-hidden="true">
+                    <SourceKindIcon kind={option.id} />
+                  </span>
                 </button>
               ))}
             </div>
@@ -798,21 +826,25 @@ export function RunLauncher({
           </label>
           <label className="qi-field qi-field-inline">
             <span className="qi-field-label">Seed (optional)</span>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              className="qi-input"
-              value={seed}
-              placeholder="e.g. 42"
-              disabled={running}
-              aria-invalid={seedValid ? undefined : true}
-              aria-describedby={seedValid ? undefined : seedErrorId}
-              onChange={(e) => {
-                setSeed(e.target.value);
-                setError(null);
-              }}
-            />
+            <span className="number-control qi-number-control">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                className="qi-input number-control-input"
+                value={seed}
+                placeholder="e.g. 42"
+                disabled={running}
+                aria-invalid={seedValid ? undefined : true}
+                aria-describedby={seedValid ? undefined : seedErrorId}
+                onChange={(e) => {
+                  setSeed(e.target.value);
+                  setError(null);
+                }}
+                onWheel={handleSeedWheel}
+              />
+              <span className="number-control-stepper" aria-hidden="true" />
+            </span>
             {!seedValid ? (
               <span className="qi-field-error" id={seedErrorId}>
                 Seed must be a non-negative integer.

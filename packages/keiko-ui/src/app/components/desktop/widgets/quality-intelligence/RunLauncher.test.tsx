@@ -16,7 +16,7 @@
 // Design note: startImpl is typed as the real function but replaced with a
 // controllable fake in every test. We never hit the network.
 
-import { render, screen, waitFor, act, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
@@ -235,6 +235,13 @@ describe("RunLauncher — initial render", () => {
     expect(sourceTypeRadio("File")).toBeInTheDocument();
     expect(sourceTypeRadio("Capsule")).toBeInTheDocument();
     expect(sourceTypeRadio("Capsule set")).toBeInTheDocument();
+  });
+
+  it("exposes source-type labels as icon tooltips for compact state", () => {
+    render(<RunLauncher />);
+    for (const label of ["Requirements", "Folder", "File", "Capsule", "Capsule set"]) {
+      expect(sourceTypeRadio(label)).toHaveAttribute("data-tip", label);
+    }
   });
 
   it("renders a requirements textarea (default source type)", () => {
@@ -473,7 +480,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     );
 
     await chooseSourceType(user, "Capsule");
-    await screen.findByRole("option", { name: "Audit Capsule 01" });
+    await screen.findByText("Audit Capsule 01");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -509,7 +516,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     );
 
     await chooseSourceType(user, "Capsule set");
-    await screen.findByRole("option", { name: "Audit Capsule Set (2 capsules)" });
+    await screen.findByText("Audit Capsule Set (2 capsules)");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -575,6 +582,20 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       Parameters<StartQiRunFn>[0],
     ];
     expect(calledRequest.seed).toBe(17);
+  });
+
+  it("steps the seed on wheel hover without focusing first", () => {
+    render(<RunLauncher startImpl={vi.fn()} />);
+
+    const seedInput = screen.getByRole("spinbutton", { name: /seed \(optional\)/i });
+    expect(seedInput).not.toHaveFocus();
+
+    fireEvent.wheel(seedInput, { deltaY: -100 });
+    expect(seedInput).toHaveValue(1);
+    expect(seedInput).not.toHaveFocus();
+
+    fireEvent.wheel(seedInput, { deltaY: 100 });
+    expect(seedInput).toHaveValue(0);
   });
 });
 

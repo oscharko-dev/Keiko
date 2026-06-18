@@ -59,8 +59,10 @@ describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
   });
 
   it(".rail-btn:focus-visible sets outline: 2px solid var(--accent-text)", () => {
-    // Find the rule block after .rail-btn:focus-visible
-    const selectorIdx = css.indexOf(".rail-btn:focus-visible");
+    // Find the actual focus-ring rule, not earlier :has(...) occurrences.
+    const selectorIdx = css.indexOf(
+      ".rail-btn:focus-visible,\n.rail-new:focus-visible,\n.rail-avatar:focus-visible",
+    );
     expect(selectorIdx).toBeGreaterThan(-1);
     const block = css.slice(selectorIdx, css.indexOf("}", selectorIdx) + 1);
     expect(block).toContain("outline: 2px solid var(--accent-text)");
@@ -397,6 +399,50 @@ describe("Issue #1227 — first-run gateway setup responsiveness", () => {
   });
 });
 
+describe("Quality Intelligence source-type picker", () => {
+  it("renders the source-type choices as a segmented grid instead of plain inline text", () => {
+    const gridBlock = cssBlock(".qi-source-kind-grid {");
+    expect(gridBlock).toContain("display: grid");
+    expect(gridBlock).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
+    expect(gridBlock).toContain("background: var(--card)");
+
+    const optionBlock = cssBlock(".qi-source-kind-option {");
+    expect(optionBlock).toContain("display: flex");
+    expect(optionBlock).not.toContain("flex-direction: column");
+    expect(optionBlock).toContain("height: 25px");
+    expect(optionBlock).toContain("align-items: center");
+    expect(optionBlock).toContain("line-height: 1");
+  });
+
+  it("prevents source-type labels from overflowing compact buttons", () => {
+    const spanBlock = cssBlock(".qi-source-kind-label {");
+    expect(spanBlock).toContain("overflow: hidden");
+    expect(spanBlock).toContain("text-overflow: ellipsis");
+    expect(spanBlock).toContain("white-space: nowrap");
+    expect(css).not.toContain(".qi-source-kind-option span:last-child");
+
+    const iconBlock = cssBlock(".qi-source-kind-icon {");
+    expect(iconBlock).toContain("display: none");
+    expect(css).toContain("@container (max-width: 620px)");
+
+    const selectedBlock = cssBlock('.qi-source-kind-option[aria-checked="true"] {');
+    expect(selectedBlock).toContain("border-color: var(--accent-line)");
+  });
+
+  it("shows source-type tooltips only in the compact icon state", () => {
+    const compactStart = css.indexOf("@container (max-width: 620px)");
+    expect(compactStart).toBeGreaterThan(-1);
+    const tooltipIdx = css.indexOf(".qi-source-kind-option[data-tip]::after");
+    expect(tooltipIdx).toBeGreaterThan(compactStart);
+    expect(css.slice(compactStart, tooltipIdx)).toContain(".qi-source-kind-label");
+    expect(cssBlock(".qi-source-kind-option[data-tip]::after")).toContain(
+      "content: attr(data-tip)",
+    );
+    expect(css).toContain(".qi-source-kind-option[data-tip]:hover::after");
+    expect(css).toContain(".qi-source-kind-option[data-tip]:focus-visible::after");
+  });
+});
+
 // ─── Fix 4: dense desktop text clarity ───────────────────────────────────────
 
 describe("Fix 4 — dense desktop text clarity", () => {
@@ -536,7 +582,7 @@ describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility",
     expect(css).toContain(".cmp-budget-clear:focus-visible");
     expect(css).toContain(".cmp-budget-clear:disabled");
     // The flex row is what un-merges the inline text run ("tokensLowiClear history").
-    const rowIdx = css.indexOf(".cmp-budget-row");
+    const rowIdx = css.lastIndexOf(".cmp-budget-row");
     const rowBlock = css.slice(rowIdx, css.indexOf("}", rowIdx) + 1);
     expect(rowBlock).toContain("display: flex");
     expect(rowBlock).toContain("gap: 8px");
@@ -619,6 +665,144 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
   it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
     const block = cssBlock(".tr-caret-btn:focus-visible");
     expect(block).toContain("box-shadow: 0 0 0 1px var(--bg)");
+  });
+});
+
+describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
+  it("keeps model dropdown seams direction-aware when opening up or down", () => {
+    expect(cssBlock(".cmp-model-select.ksel-trigger-open-down")).toContain(
+      "border-bottom-left-radius: 0",
+    );
+    expect(cssBlock(".cmp-model-select.ksel-trigger-open-up")).toContain(
+      "border-top-left-radius: 0",
+    );
+    expect(cssBlock(".cmp-model-menu.ksel-menu-open-down")).toContain("border-top: none");
+    expect(cssBlock(".cmp-model-menu.ksel-menu-open-up")).toContain("border-bottom: none");
+    expect(css).not.toContain(".cmp-model-select.ksel-trigger-open {\n");
+  });
+
+  it("keeps chat composer ring keyboard-only", () => {
+    const keyboardBlock = cssBlock(
+      ':root[data-input-modality="keyboard"] .cmp-box:has(.cmp-input:focus)',
+    );
+    expect(keyboardBlock).toContain("border-color: var(--accent-line)");
+    expect(keyboardBlock).toContain("0 0 0 3px var(--accent-glow)");
+
+    const pointerBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .cmp-box:has(.cmp-input:focus)',
+    );
+    expect(pointerBlock).toContain("border-color: var(--line)");
+    expect(pointerBlock).toContain("box-shadow: var(--shadow-card)");
+  });
+
+  it("keeps workflow dialog inputs pointer-neutral while preserving keyboard focus", () => {
+    const keyboardBlock = cssBlock(':root[data-input-modality="keyboard"] .wf-dialog-input:focus');
+    expect(keyboardBlock).toContain("border-color: var(--accent-line)");
+
+    const pointerBlock = cssBlock(':root[data-input-modality="pointer"] .wf-dialog-input:focus');
+    expect(pointerBlock).toContain("outline: none !important");
+    expect(pointerBlock).toContain("border-color: var(--line) !important");
+  });
+
+  it("keeps chat history rename mouse focus neutral while preserving keyboard focus", () => {
+    const keyboardInputBlock = cssBlock(
+      ':root[data-input-modality="keyboard"] .chat-history-open:focus-visible,\n:root[data-input-modality="keyboard"] .chat-history-title-input:focus-visible',
+    );
+    expect(keyboardInputBlock).toContain("outline: 2px solid var(--accent-line)");
+
+    const pointerInputBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .chat-history-open:focus,\n:root[data-input-modality="pointer"] .chat-history-title-input:focus',
+    );
+    expect(pointerInputBlock).toContain("outline: none !important");
+    expect(pointerInputBlock).toContain("box-shadow: none !important");
+
+    const pointerRowBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .chat-history-row:focus-within',
+    );
+    expect(pointerRowBlock).toContain("border-color: var(--line-soft)");
+    expect(pointerRowBlock).toContain("var(--card) 88%");
+    expect(cssBlock(".chat-history-title-input", { fromLast: true })).toContain(
+      "border: 1px solid var(--line)",
+    );
+  });
+
+  it("keeps chat model and grounding selects pointer-neutral", () => {
+    expect(cssBlock(':root[data-input-modality="pointer"] .cmp-model-select:focus')).toContain(
+      "outline: none",
+    );
+    const groundingBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .scope-grounding-select:focus',
+    );
+    expect(groundingBlock).toContain("box-shadow: none !important");
+    expect(groundingBlock).toContain("border-color: var(--line-soft) !important");
+  });
+
+  it("keeps QI field focus rings keyboard-only", () => {
+    const block = cssBlock(
+      ':root[data-input-modality="keyboard"] .qi-input:focus-visible,\n:root[data-input-modality="keyboard"] .qi-textarea:focus-visible,\n:root[data-input-modality="keyboard"] .qi-select:focus-visible',
+    );
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("border-color: var(--accent)");
+  });
+
+  it("suppresses pointer focus rings on QI text fields", () => {
+    const block = cssBlock(
+      ':root[data-input-modality="pointer"] .qi-input:focus,\n:root[data-input-modality="pointer"] .qi-textarea:focus,\n:root[data-input-modality="pointer"] .qi-select:focus',
+    );
+    expect(block).toContain("outline: none !important");
+    expect(block).toContain("border-color: var(--line) !important");
+    expect(block).toContain("box-shadow: none !important");
+  });
+
+  it("suppresses pointer focus rings on dialog and gateway inputs", () => {
+    expect(cssBlock(':root[data-input-modality="pointer"] .dlg-input:focus')).toContain(
+      "box-shadow: none !important",
+    );
+    expect(cssBlock(':root[data-input-modality="pointer"] .gw-input:focus')).toContain(
+      "box-shadow: none !important",
+    );
+  });
+
+  it("suppresses pointer focus rings on memory and template manager fields", () => {
+    const memoryBlock = cssBlock(':root[data-input-modality="pointer"] .mem-add input:focus');
+    expect(memoryBlock).toContain("border-color: var(--line-soft) !important");
+    expect(memoryBlock).toContain("box-shadow: none !important");
+
+    const templateBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .tm-field input:focus,\n:root[data-input-modality="pointer"] .tm-field select:focus',
+    );
+    expect(templateBlock).toContain("border-color: var(--line-strong) !important");
+    expect(templateBlock).toContain("box-shadow: none !important");
+  });
+
+  it("renders connector create actions as buttons, not text links", () => {
+    const block = cssBlock(".connector-picker-create-link");
+    expect(block).toContain("height: 36px");
+    expect(block).toContain("padding: 0 18px");
+    expect(block).toContain("border-radius: 10px");
+    expect(block).toContain("font-weight: 650");
+  });
+
+  it("makes MemoriaViva responsive to its window width, not only viewport width", () => {
+    expect(cssBlock(".memoria-window")).toContain("container-type: inline-size");
+    expect(css).toContain("@container (max-width: 430px)");
+    expect(css).toContain(".memoria-window .lk-header");
+    expect(css).toContain("grid-template-columns: 1fr");
+    expect(css).toContain("@container (max-width: 360px)");
+  });
+
+  it("keeps modal dialog fields keyboard-only and pointer-neutral", () => {
+    const keyboardBlock = cssBlock(
+      ':root[data-input-modality="keyboard"] .mc-dialog-textarea:focus,\n:root[data-input-modality="keyboard"] .mc-dialog-input:focus,\n:root[data-input-modality="keyboard"] .mc-dialog-select:focus',
+    );
+    expect(keyboardBlock).toContain("border-color: var(--accent)");
+    expect(keyboardBlock).toContain("box-shadow: 0 0 0 2px var(--accent-glow)");
+
+    const pointerBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .mc-dialog-textarea:focus,\n:root[data-input-modality="pointer"] .mc-dialog-input:focus,\n:root[data-input-modality="pointer"] .mc-dialog-select:focus',
+    );
+    expect(pointerBlock).toContain("outline: none !important");
+    expect(pointerBlock).toContain("box-shadow: none !important");
   });
 });
 
