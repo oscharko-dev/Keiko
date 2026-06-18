@@ -14,7 +14,12 @@ async function collectHtmlFiles(staticRoot: string): Promise<readonly string[]> 
   let entries: { isDirectory: () => boolean; name: string }[];
   try {
     const raw = await readdir(staticRoot, { withFileTypes: true });
-    entries = raw.map((entry) => ({ isDirectory: () => entry.isDirectory(), name: entry.name }));
+    entries = raw.map(
+      (entry: { isDirectory: () => boolean; name: string }): { isDirectory: () => boolean; name: string } => ({
+        isDirectory: () => entry.isDirectory(),
+        name: entry.name,
+      }),
+    );
   } catch {
     return [];
   }

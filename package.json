@@ -75,6 +75,7 @@
     "test:mutation:security": "npx --yes @stryker-mutator/core@9 @stryker-mutator/vitest-runner@9 stryker run stryker.security.conf.json"
   },
   "overrides": {
+    "undici": "7.28.0",
     "postcss": "8.5.15",
     "sharp": "npm:empty-npm-package@1.0.0"
   },
