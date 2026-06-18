@@ -152,3 +152,17 @@ export type {
   EditorRuntimeUnsupportedReason,
   MonacoLoaderLike,
 } from "./monaco/runtime.js";
+
+// ─── Runtime: KeikoCodeEditor React component (#1194) ───
+export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";
+export type {
+  KeikoCodeEditorProps,
+  EditorSaveStatus,
+  KeikoEditorLoadState,
+  EditorContentDelta,
+} from "./components/types.js";
+// The controlled component renders the host-owned save lifecycle; these pure helpers let a host
+// (e.g. keiko-ui in #1196) drive `saveStatus` and detect optimistic-concurrency conflicts
+// consistently with what the component expects, without re-implementing the FSM.
+export { saveStatusReducer, detectSaveConflict } from "./components/save-state.js";
+export type { EditorSaveAction } from "./components/save-state.js";

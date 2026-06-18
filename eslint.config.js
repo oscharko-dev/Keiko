@@ -36,10 +36,31 @@ export default tseslint.config(
       "no-console": "warn",
     },
   },
+  // The keiko-editor package's build tsconfig (tsconfig.json) excludes test files and the jsdom
+  // setup so they never reach dist. Point the typed-lint parser at the package's lint-only project
+  // (tsconfig.eslint.json) for those files so the React component suites and the setup are still
+  // fully type-checked under strict-type-checked.
+  {
+    files: [
+      "packages/keiko-editor/src/**/*.{ts,tsx}",
+      "packages/keiko-editor/vitest.config.ts",
+      "packages/keiko-editor/vitest.setup.ts",
+    ],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ["packages/keiko-editor/tsconfig.eslint.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
   // Test files are exempt from max-lines-per-function: describe() blocks legitimately group many
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
-  { files: ["**/*.test.ts", "**/*.test.mjs"], rules: { "max-lines-per-function": "off" } },
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    rules: { "max-lines-per-function": "off" },
+  },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
   {
     files: ["**/*.cjs"],

@@ -79,6 +79,11 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "editorRuntimeLoadFailure",
       "isMonacoLoaderConfigured",
       "probeEditorRuntime",
+      // KeikoCodeEditor React component (#1194).
+      "KeikoCodeEditor",
+      // Save-lifecycle helpers a host uses to drive `saveStatus` (#1194).
+      "saveStatusReducer",
+      "detectSaveConflict",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

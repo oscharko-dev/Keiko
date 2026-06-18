@@ -4,8 +4,22 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "jsx": "react-jsx",
     "outDir": "dist"
   },
-  "include": ["src", "tests", "*.config.ts", "packages/*/src/**/*.ts", "packages/*/*.config.ts"],
-  "exclude": ["tests/architecture/fixtures/**", "packages/*/dist/**", "packages/keiko-ui/**"]
+  "include": [
+    "src",
+    "tests",
+    "*.config.ts",
+    "packages/*/src/**/*.ts",
+    "packages/keiko-editor/src/**/*.tsx",
+    "packages/*/*.config.ts"
+  ],
+  "exclude": [
+    "tests/architecture/fixtures/**",
+    "packages/*/dist/**",
+    "packages/keiko-ui/**",
+    "packages/keiko-editor/src/**/*.test.tsx",
+    "packages/keiko-editor/src/components/test-harness.tsx"
+  ]
 }
