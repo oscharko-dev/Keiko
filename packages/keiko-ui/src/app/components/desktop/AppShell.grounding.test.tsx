@@ -42,6 +42,10 @@ const mocks = vi.hoisted(() => ({
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
+    workspaceProps: undefined as { readonly outlineOpen?: boolean } | undefined,
+    rightRailProps: undefined as
+      | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
+      | undefined,
   },
   fetchConfig: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
@@ -139,11 +143,21 @@ vi.mock("./LeftRail", () => ({
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: () => <aside data-testid="right-rail" />,
+  RightRail: (props: { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }) => {
+    mocks.state.rightRailProps = props;
+    return (
+      <button type="button" data-testid="right-rail" onClick={props.onToggleOutline}>
+        {props.outlineOpen === true ? "Outline open" : "Outline closed"}
+      </button>
+    );
+  },
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: () => <main data-testid="workspace" />,
+  Workspace: (props: { readonly outlineOpen?: boolean }) => {
+    mocks.state.workspaceProps = props;
+    return <main data-testid="workspace" data-outline-open={props.outlineOpen === true} />;
+  },
 }));
 
 vi.mock("./modals/CommandPalette", () => ({
@@ -284,6 +298,8 @@ describe("AppShell grounding connections", () => {
       win("chat", { chatId: "chat-1" }, "chat-window"),
     ]);
     mocks.state.workspaceOptions = undefined;
+    mocks.state.workspaceProps = undefined;
+    mocks.state.rightRailProps = undefined;
   });
 
   it("persists a new Files source and records the governed reads-context relationship", async () => {
@@ -362,5 +378,27 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("keeps the workspace outline closed by default", async () => {
+    await renderMounted();
+
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");
+    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline closed");
+    expect(mocks.state.workspaceProps?.outlineOpen).toBe(false);
+    expect(mocks.state.rightRailProps?.outlineOpen).toBe(false);
+  });
+
+  it("opens the workspace outline when the right rail toggles it", async () => {
+    await renderMounted();
+
+    await act(async () => {
+      screen.getByTestId("right-rail").click();
+    });
+
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
+    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
+    expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
+    expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
   });
 });
