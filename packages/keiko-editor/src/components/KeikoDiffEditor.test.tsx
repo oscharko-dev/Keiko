@@ -221,6 +221,23 @@ describe("KeikoDiffEditor — non-diffable, empty, and truncated states", () => 
     expect(screen.queryByTestId("mock-diff")).not.toBeInTheDocument();
   });
 
+  it("preserves deleted-file state when the original content is unavailable", () => {
+    const model = buildPatchPreview({
+      patch: {
+        patchId: "p",
+        status: "previewed",
+        provenance: { origin: "applied-patch" },
+        changes: [{ uri: "keiko://doc/gone.ts", isNewFile: false, isDeletion: true, edits: [] }],
+      },
+    });
+    render(<KeikoDiffEditor {...baseDiffProps({ model })} />);
+    expect(screen.getByRole("button", { name: /keiko:\/\/doc\/gone\.ts deleted/ })).toBeInTheDocument();
+    expect(screen.getByTestId("keiko-diff-unavailable")).toHaveTextContent(
+      /deleted-file preview cannot be rendered/i,
+    );
+    expect(screen.queryByTestId("mock-diff")).not.toBeInTheDocument();
+  });
+
   it("reports an empty patch as no changes", () => {
     const model = buildPatchPreview({
       patch: {
@@ -336,17 +353,24 @@ describe("KeikoDiffEditor — runtime and load state", () => {
     render(<KeikoDiffEditor {...baseDiffProps({ loadState: { status: "loading" } })} />);
     expect(screen.getByTestId("keiko-diff-pane-loading")).toBeInTheDocument();
     expect(screen.queryByTestId("mock-diff")).not.toBeInTheDocument();
+    expect(screen.getByTestId("keiko-diff-next")).toBeDisabled();
+    expect(screen.getByTestId("keiko-diff-prev")).toBeDisabled();
   });
 
   it("surfaces a load failure as an assertive alert and renders no diff", () => {
     render(
       <KeikoDiffEditor
-        {...baseDiffProps({ loadState: { status: "error", message: "worker boot failed" } })}
+        {...baseDiffProps({ loadState: { status: "error", message: "worker boot failed token=secret" } })}
       />,
     );
     const summary = screen.getByTestId("keiko-diff-summary");
     expect(summary).toHaveAttribute("role", "alert");
-    expect(summary).toHaveTextContent("worker boot failed");
+    expect(summary).toHaveTextContent(
+      "Diff failed to load. Review actions that require the diff editor are unavailable.",
+    );
+    expect(summary).not.toHaveTextContent("secret");
     expect(screen.getByTestId("keiko-diff-load-error")).toBeInTheDocument();
+    expect(screen.getByTestId("keiko-diff-next")).toBeDisabled();
+    expect(screen.getByTestId("keiko-diff-prev")).toBeDisabled();
   });
 });

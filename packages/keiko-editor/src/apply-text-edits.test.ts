@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyTextEditsToText,
+  applyTextEditsToTextWithinLimit,
   isOverlappingPatchEditError,
   OverlappingPatchEditError,
 } from "./apply-text-edits.js";
@@ -104,5 +105,25 @@ describe("applyTextEditsToText", () => {
   it("exposes a type guard for the overlap error", () => {
     expect(isOverlappingPatchEditError(new OverlappingPatchEditError("x"))).toBe(true);
     expect(isOverlappingPatchEditError(new Error("x"))).toBe(false);
+  });
+
+  it("can build a byte-bounded preview without splitting a Unicode code point", () => {
+    const result = applyTextEditsToTextWithinLimit("", [edit(0, 0, 0, 0, "a中b")], 4);
+    expect(result).toEqual({ text: "a中", truncated: true });
+    expect(new TextEncoder().encode(result.text).length).toBeLessThanOrEqual(4);
+  });
+
+  it("reports no truncation when the bounded preview fits exactly", () => {
+    expect(applyTextEditsToTextWithinLimit("ab", [edit(0, 2, 0, 2, "c")], 3)).toEqual({
+      text: "abc",
+      truncated: false,
+    });
+  });
+
+  it("still validates overlaps after the preview byte limit has been reached", () => {
+    const edits = [edit(0, 0, 0, 3, "X"), edit(0, 2, 0, 5, "Y")];
+    expect(() => applyTextEditsToTextWithinLimit("abcdef", edits, 1)).toThrow(
+      OverlappingPatchEditError,
+    );
   });
 });
