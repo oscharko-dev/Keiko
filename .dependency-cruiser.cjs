@@ -688,10 +688,11 @@ module.exports = {
         "package must not value-import Node-only domain packages, mirroring ADR-0019 direction " +
         "rule 8 for keiko-ui. Type-only imports of shared keiko-contracts wire shapes are allowed " +
         "(dependencyTypesNot: type-only). The editor owns UI rendering and the typed " +
-        "host-integration ports only; repository search, retrieval, model routing, the Model " +
-        "Gateway, patch application, verification, and evidence persistence are reached exclusively " +
-        "through host-injected callbacks, never by value-importing the Node-side domain. The " +
-        "forbidden set is the same Node-domain leaves direction rule 8 pins. Also fires on " +
+        "host-integration ports only; repository search, retrieval, memory engines, model routing, " +
+        "the Model Gateway, patch application, verification, evidence persistence, and keiko-ui " +
+        "internals are reached exclusively through host-injected callbacks or browser-safe " +
+        "contracts, never by value-importing the Node-side domain. The forbidden set enumerates " +
+        "the existing packages ADR-0042 keeps outside the editor browser tier. Also fires on " +
         "tests/architecture/fixtures/editor-browser/ so the gate is proven live by " +
         "scripts/arch-check-negative.mjs.",
       severity: "error",
@@ -701,8 +702,9 @@ module.exports = {
       },
       to: {
         path:
-          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server|quality-intelligence|local-knowledge)/|" +
-          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server|quality-intelligence|local-knowledge)|" +
+          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)/|" +
+          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
+          "@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|verification|evaluations))",
         dependencyTypesNot: ["type-only"],
       },
