@@ -580,6 +580,23 @@ describe("desktop files browser", () => {
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
+  it("keeps denied-path precedence before malformed baseVersion validation at the route", async () => {
+    await writeFile(join(root, ".env.local"), "API_KEY=value\n");
+
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: ".env.local",
+        content: "API_KEY=changed\n",
+        baseVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: "not-a-valid-hash" },
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+  });
+
   it("threads a valid stale baseVersion through the route to STALE_SESSION", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
     await writeFile(join(root, "src", "app.ts"), 'const value = "moved";\n', "utf8");
@@ -596,6 +613,33 @@ describe("desktop files browser", () => {
 
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ error: { code: "STALE_SESSION" } });
+  });
+
+  it("never echoes file content, secrets, or roots in the route STALE_SESSION response", async () => {
+    await writeFile(
+      join(root, "secret.ts"),
+      'const token = "sk-do-not-leak-1234567890";\n',
+      "utf8",
+    );
+    const initial = await readFilesContent(store, root, "secret.ts");
+    await writeFile(join(root, "secret.ts"), 'const token = "sk-rotated-0987654321";\n', "utf8");
+
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "secret.ts",
+        content: 'const token = "sk-newvalue";\n',
+        baseVersion: initial.session.version,
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "STALE_SESSION" } });
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).not.toContain("sk-");
+    expect(serialized).not.toContain("token");
+    expect(serialized).not.toContain(root);
   });
 
   it("refuses to preview .env.local (matches the .env.* deny pattern)", async () => {

@@ -32,6 +32,7 @@ import type { Project, UiStore } from "./store/index.js";
 const MAX_DIRECTORY_ENTRIES = 1_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
+const STABLE_CONTENT_READ_ATTEMPTS = 3;
 type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
@@ -738,6 +739,34 @@ function editorSession(version: EditorDocumentVersion): EditorDocumentSession {
   return { schemaVersion: EDITOR_SESSION_SCHEMA_VERSION, version };
 }
 
+function statsMatch(left: Stats, right: Stats): boolean {
+  return left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+
+async function readStableEditableContent(
+  target: ResolvedTarget,
+): Promise<{ readonly content: string; readonly stats: Stats }> {
+  let before = target.stats;
+  for (let attempt = 0; attempt < STABLE_CONTENT_READ_ATTEMPTS; attempt += 1) {
+    if (before.size > MAX_TEXT_PREVIEW_BYTES) {
+      throw new FilesError(
+        413,
+        "FILE_TOO_LARGE",
+        `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
+      );
+    }
+    const content = await readFile(target.path, "utf8");
+    const after = await stat(target.path);
+    if (statsMatch(before, after)) return { content, stats: after };
+    before = after;
+  }
+  throw new FilesError(
+    409,
+    "STALE_SESSION",
+    "This file changed while it was being opened. Reload it before editing.",
+  );
+}
+
 // Issue #1197: version-aware optimistic concurrency. Rejects a save when the on-disk document no
 // longer matches the revision the editor opened. Size/mtime are compared first so the content is
 // only re-read (bounded by the editable size limit) when those cheap signals match.
@@ -784,23 +813,15 @@ async function assertNoWriteConflict(
   }
 }
 
-async function editableTextContent(
-  target: ResolvedTarget,
-  base: FilesPreviewBase,
-): Promise<FilesContentResponse> {
-  if (target.stats.size > MAX_TEXT_PREVIEW_BYTES) {
-    throw new FilesError(
-      413,
-      "FILE_TOO_LARGE",
-      `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
-    );
-  }
-  const content = await readFile(target.path, "utf8");
+async function editableTextContent(target: ResolvedTarget): Promise<FilesContentResponse> {
+  const snapshot = await readStableEditableContent(target);
+  const stableTarget = { ...target, stats: snapshot.stats };
+  const base = basePreview(stableTarget);
   return {
     ...base,
-    content,
+    content: snapshot.content,
     maxBytes: MAX_TEXT_PREVIEW_BYTES,
-    session: editorSession(documentVersion(content, target.stats)),
+    session: editorSession(documentVersion(snapshot.content, snapshot.stats)),
   };
 }
 
@@ -819,7 +840,41 @@ export async function readFilesContent(
   if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
-  return editableTextContent(target, base);
+  return editableTextContent(target);
+}
+
+async function writeResolvedFilesContent(args: {
+  readonly target: ResolvedTarget;
+  readonly content: string;
+  readonly expectedModifiedAt?: number | undefined;
+  readonly baseVersion?: EditorDocumentVersion | undefined;
+}): Promise<FilesContentResponse> {
+  if (!args.target.stats.isFile()) {
+    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
+  }
+  const base = basePreview(args.target);
+  const prefix = await readPrefix(args.target.path, Math.min(args.target.stats.size, 4096));
+  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+    throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
+  }
+  await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
+  if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
+    throw new FilesError(
+      413,
+      "FILE_TOO_LARGE",
+      `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
+    );
+  }
+  await writeFile(args.target.path, args.content, "utf8");
+  const updatedStats = await stat(args.target.path);
+  return {
+    ...base,
+    sizeBytes: updatedStats.size,
+    modifiedAt: updatedStats.mtimeMs,
+    content: args.content,
+    maxBytes: MAX_TEXT_PREVIEW_BYTES,
+    session: editorSession(documentVersion(args.content, updatedStats)),
+  };
 }
 
 export async function writeFilesContent(args: {
@@ -837,32 +892,12 @@ export async function writeFilesContent(args: {
     args.pathInput,
     args.redactor ?? staticFilesMetadataRedactor,
   );
-  if (!target.stats.isFile()) {
-    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
-  }
-  const base = basePreview(target);
-  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
-  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
-    throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
-  }
-  await assertNoWriteConflict(target, args.baseVersion, args.expectedModifiedAt);
-  if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
-    throw new FilesError(
-      413,
-      "FILE_TOO_LARGE",
-      `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
-    );
-  }
-  await writeFile(target.path, args.content, "utf8");
-  const updatedStats = await stat(target.path);
-  return {
-    ...base,
-    sizeBytes: updatedStats.size,
-    modifiedAt: updatedStats.mtimeMs,
+  return writeResolvedFilesContent({
+    target,
     content: args.content,
-    maxBytes: MAX_TEXT_PREVIEW_BYTES,
-    session: editorSession(documentVersion(args.content, updatedStats)),
-  };
+    expectedModifiedAt: args.expectedModifiedAt,
+    baseVersion: args.baseVersion,
+  });
 }
 
 export async function readFilesPreview(
@@ -967,6 +1002,12 @@ async function writeFilesContentRoute(
     const message = "root, path, and content are required for a file save request.";
     return { status: 400, body: errorBody("BAD_REQUEST", message) };
   }
+  const target = await resolveInsideRoot(
+    deps.store,
+    fields.rootInput,
+    fields.pathInput,
+    deps.redactor,
+  );
   let baseVersion: EditorDocumentVersion | undefined;
   if (body.baseVersion !== undefined) {
     const parsed = parseEditorDocumentVersion(body.baseVersion);
@@ -977,15 +1018,12 @@ async function writeFilesContentRoute(
   }
   return {
     status: 200,
-    body: await writeFilesContent({
-      store: deps.store,
-      rootInput: fields.rootInput,
-      pathInput: fields.pathInput,
+    body: await writeResolvedFilesContent({
+      target,
       content: fields.content,
       expectedModifiedAt:
         typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
       baseVersion,
-      redactor: deps.redactor,
     }),
   };
 }
