@@ -211,3 +211,134 @@ describe("KeikoSelect menu geometry", () => {
     vi.useRealTimers();
   });
 });
+
+describe("KeikoSelect interactions", () => {
+  const sections = [
+    {
+      label: "Strategy",
+      options: [
+        { value: "model", label: "Model only" },
+        { value: "files", label: "Live Files context" },
+        { value: "disabled", label: "Disabled option", disabled: true },
+      ],
+    },
+  ];
+
+  it("commits the active option with keyboard navigation and returns focus to the trigger", async () => {
+    const onValueChange = vi.fn();
+    render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        menuTitle="Strategy"
+        onValueChange={onValueChange}
+        sections={sections}
+        value="model"
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    await screen.findByRole("option", { name: "Model only" });
+
+    fireEvent.keyDown(screen.getByRole("option", { name: "Model only" }), { key: "ArrowDown" });
+    const filesOption = screen.getByRole("option", { name: "Live Files context" });
+    expect(filesOption).toHaveFocus();
+
+    fireEvent.keyDown(filesOption, { key: "Enter" });
+    expect(onValueChange).toHaveBeenCalledWith("files");
+    expect(screen.queryByRole("option", { name: "Live Files context" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("supports typeahead, Home, End, Tab, and Escape without entering disabled options", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        menuTitle="Strategy"
+        onValueChange={vi.fn()}
+        sections={sections}
+        value="model"
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    await user.click(trigger);
+
+    fireEvent.keyDown(window, { key: "l" });
+    expect(screen.getByRole("option", { name: "Live Files context" })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole("option", { name: "Live Files context" }), { key: "End" });
+    expect(screen.getByRole("option", { name: "Live Files context" })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole("option", { name: "Live Files context" }), { key: "Home" });
+    expect(screen.getByRole("option", { name: "Model only" })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole("option", { name: "Model only" }), { key: "Tab" });
+    expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+
+    await user.click(trigger);
+    fireEvent.keyDown(screen.getByRole("option", { name: "Model only" }), { key: "Escape" });
+    expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("ignores disabled triggers and disabled option commits", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    const { rerender } = render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        disabled
+        onValueChange={onValueChange}
+        sections={sections}
+        value="model"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Strategy" }));
+    expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+
+    rerender(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        onValueChange={onValueChange}
+        sections={sections}
+        value="disabled"
+      />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    await user.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: "Disabled option" }));
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("option", { name: "Disabled option" })).toBeVisible();
+  });
+
+  it("closes on outside pointer and window blur while keeping optional chrome removable", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">Outside</button>
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuCountLabel="2 choices"
+          onValueChange={vi.fn()}
+          sections={sections}
+          showMenuHeader={false}
+          value="model"
+        />
+      </div>,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    await user.click(trigger);
+    expect(screen.queryByText("2 choices")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Outside" }));
+    expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+
+    await user.click(trigger);
+    fireEvent.blur(window);
+    expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+  });
+});
