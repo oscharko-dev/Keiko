@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -17,6 +18,8 @@ import {
   type EditorThemeVariant,
   type ResolvedEditorThemeTokens,
 } from "./theme.js";
+
+const require = createRequire(import.meta.url);
 
 /** Build a fixture where every token has a unique, deterministic hex so mapping is verifiable. */
 function fakeResolvedTokens(): Record<string, string> {
@@ -96,6 +99,35 @@ describe("theme token contract", () => {
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-ins-gutter"]).toBeUndefined();
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-rem-gutter"]).toBeUndefined();
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-chg-gutter"]).toBeUndefined();
+  });
+
+  it("maps only Monaco 0.55 registered colour ids", () => {
+    const monacoRoot = dirname(require.resolve("monaco-editor/package.json"));
+    const registered = new Set<string>();
+    const scan = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          scan(path);
+          continue;
+        }
+        if (!entry.name.endsWith(".js")) {
+          continue;
+        }
+        const source = readFileSync(path, "utf8");
+        for (const match of source.matchAll(/registerColor\(\s*["']([^"']+)["']/g)) {
+          const id = match[1];
+          if (id !== undefined) {
+            registered.add(id);
+          }
+        }
+      }
+    };
+    scan(resolve(monacoRoot, "esm/vs"));
+
+    for (const colorId of Object.values(CHROME_TOKEN_COLOR_IDS).flat()) {
+      expect(registered.has(colorId), `${colorId} must be registered by monaco-editor`).toBe(true);
+    }
   });
 
   it("never emits a colour id that monaco-editor 0.55.1 standalone does not register", () => {

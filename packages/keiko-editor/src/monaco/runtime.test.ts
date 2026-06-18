@@ -68,10 +68,25 @@ describe("detectEditorRuntimeSupport", () => {
 });
 
 describe("probeEditorRuntime", () => {
+  class WorkerStub {
+    public readonly kind = "worker";
+  }
+
   it("detects present capabilities from the injected scope", () => {
-    expect(probeEditorRuntime({ Worker: {}, URL })).toEqual({
+    expect(probeEditorRuntime({ Worker: WorkerStub, URL })).toEqual({
       hasWorker: true,
       hasUrl: true,
+    });
+  });
+
+  it("rejects non-constructor runtime globals", () => {
+    expect(probeEditorRuntime({ Worker: {}, URL })).toEqual({
+      hasWorker: false,
+      hasUrl: true,
+    });
+    expect(probeEditorRuntime({ Worker: () => undefined, URL: {} })).toEqual({
+      hasWorker: false,
+      hasUrl: false,
     });
   });
 

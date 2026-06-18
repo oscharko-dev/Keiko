@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EDITOR_THEME_TOKEN_NAMES } from "./theme.js";
 import {
+  createDomEditorTokenResolverDeps,
   hexFromColorString,
   resolveEditorThemeTokens,
   resolveEditorThemeTokensFromDom,
@@ -29,6 +30,12 @@ describe("hexFromColorString", () => {
     expect(hexFromColorString("rgb(255 128 0 / 0.5)")).toBe("#ff800080");
   });
 
+  it("converts browser-normalised oklch() colours to hex", () => {
+    expect(hexFromColorString("oklch(0.16 0.004 160)")).toBe("#0c0e0d");
+    expect(hexFromColorString("oklch(0.627966 0.257704 29.2346 / 0.5)")).toBe("#ff000080");
+    expect(hexFromColorString("oklch(98.5% 0.003 160)")).toBe("#f8fbf9");
+  });
+
   it("converts percentage channels", () => {
     expect(hexFromColorString("rgb(100% 50% 0%)")).toBe("#ff8000");
   });
@@ -38,7 +45,6 @@ describe("hexFromColorString", () => {
   });
 
   it("throws on colour forms it cannot convert (post-canvas these never occur)", () => {
-    expect(() => hexFromColorString("oklch(0.5 0.1 160)")).toThrow(/cannot convert/);
     expect(() => hexFromColorString("rebeccapurple")).toThrow(/cannot convert/);
     expect(() => hexFromColorString("#12")).toThrow(/unparseable hex/);
   });
@@ -84,8 +90,8 @@ describe("resolveEditorThemeTokens", () => {
   });
 });
 
-describe("resolveEditorThemeTokensFromDom (browser one-shot)", () => {
-  function fakeView(resolvedColor: string): {
+describe("DOM editor token resolver", () => {
+  function fakeView(options: { computedProbeColor: string; rootTokenValue?: string }): {
     view: Window;
     root: HTMLElement;
     events: { appended: number; removed: number };
@@ -100,12 +106,17 @@ describe("resolveEditorThemeTokensFromDom (browser one-shot)", () => {
     let fill = "";
     const context = {
       set fillStyle(value: string) {
-        // Mimic canvas: parseable colours overwrite; an unparseable value is rejected (keeps prior).
-        fill = value.startsWith("#")
-          ? value
-          : value.startsWith("rgb")
-            ? hexFromColorString(value)
-            : fill;
+        if (value.startsWith("#")) {
+          fill = value;
+          return;
+        }
+        if (value.startsWith("rgb")) {
+          fill = hexFromColorString(value);
+          return;
+        }
+        if (value.startsWith("oklch")) {
+          fill = value;
+        }
       },
       get fillStyle(): string {
         return fill;
@@ -117,7 +128,14 @@ describe("resolveEditorThemeTokensFromDom (browser one-shot)", () => {
     };
     const view = {
       document,
-      getComputedStyle: (): { color: string } => ({ color: resolvedColor }),
+      getComputedStyle(target: unknown): unknown {
+        if (target === root) {
+          return {
+            getPropertyValue: (): string => options.rootTokenValue ?? options.computedProbeColor,
+          };
+        }
+        return { color: options.computedProbeColor };
+      },
     };
     const root = {
       appendChild: (): void => {
@@ -131,8 +149,35 @@ describe("resolveEditorThemeTokensFromDom (browser one-shot)", () => {
     };
   }
 
+  it("checks custom-property presence on the root before reading inherited probe colour", () => {
+    const { root, view } = fakeView({
+      computedProbeColor: "rgb(10, 20, 30)",
+      rootTokenValue: "",
+    });
+    const deps = createDomEditorTokenResolverDeps(root, view);
+    expect(deps.readResolvedColor("--ed-bg")).toBe("");
+    deps.dispose();
+  });
+
+  it("normalises browser-computed oklch colours", () => {
+    const { root, view } = fakeView({
+      computedProbeColor: "oklch(0.16 0.004 160)",
+    });
+    const deps = createDomEditorTokenResolverDeps(root, view);
+    expect(deps.readResolvedColor("--ed-bg")).toBe("oklch(0.16 0.004 160)");
+    expect(deps.toHex("oklch(0.16 0.004 160)")).toBe("#0c0e0d");
+    deps.dispose();
+  });
+
+  it("fails closed when the canvas rejects a colour assignment", () => {
+    const { root, view } = fakeView({ computedProbeColor: "not-a-colour" });
+    const deps = createDomEditorTokenResolverDeps(root, view);
+    expect(() => deps.toHex("not-a-colour")).toThrow(/could not parse/);
+    deps.dispose();
+  });
+
   it("resolves all tokens and removes its probe (no DOM leak)", () => {
-    const { view, root, events } = fakeView("rgb(16, 32, 48)");
+    const { view, root, events } = fakeView({ computedProbeColor: "rgb(16, 32, 48)" });
     const resolved = resolveEditorThemeTokensFromDom(root, view);
     expect(Object.keys(resolved).sort()).toEqual([...EDITOR_THEME_TOKEN_NAMES].sort());
     expect(events.appended).toBe(1);
@@ -140,7 +185,7 @@ describe("resolveEditorThemeTokensFromDom (browser one-shot)", () => {
   });
 
   it("disposes the probe even when the browser rejects a colour (two-sentinel guard)", () => {
-    const { view, root, events } = fakeView("not-a-parseable-colour");
+    const { view, root, events } = fakeView({ computedProbeColor: "not-a-parseable-colour" });
     expect(() => resolveEditorThemeTokensFromDom(root, view)).toThrow(/could not parse/);
     expect(events.removed).toBe(1);
   });
