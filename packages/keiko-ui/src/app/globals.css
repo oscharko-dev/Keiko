@@ -2040,6 +2040,16 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     0 0 0 3px var(--accent-glow),
     var(--shadow-card);
 }
+:root[data-input-modality="keyboard"] .cmp-box:has(.cmp-input:focus) {
+  border-color: var(--accent-line);
+  box-shadow:
+    0 0 0 3px var(--accent-glow),
+    var(--shadow-card);
+}
+:root[data-input-modality="pointer"] .cmp-box:has(.cmp-input:focus) {
+  border-color: var(--line);
+  box-shadow: var(--shadow-card);
+}
 .cmp-input {
   width: 100%;
   border: none;
@@ -5043,6 +5053,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
+:root[data-input-modality="pointer"] .dlg-input:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
 .dlg-input::placeholder {
   color: var(--fg-faint);
 }
@@ -5879,6 +5893,10 @@ select.dlg-input {
 /* focus-visible ring for model select (WCAG 2.4.7) */
 .cmp-model-select:focus-visible {
   outline: none;
+}
+:root[data-input-modality="pointer"] .cmp-model-select:focus {
+  outline: none;
+  box-shadow: none !important;
 }
 
 /* ---------- RIGHT RAIL ---------- */
@@ -7101,6 +7119,10 @@ select.dlg-input {
 .gw-input:focus {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 3px var(--accent-glow);
+}
+:root[data-input-modality="pointer"] .gw-input:focus {
+  outline: none !important;
+  box-shadow: none !important;
 }
 .gw-input::placeholder {
   color: var(--fg-faint);
@@ -9117,6 +9139,12 @@ select.dlg-input {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
+:root[data-input-modality="pointer"] .mc-dialog-textarea:focus,
+:root[data-input-modality="pointer"] .mc-dialog-input:focus,
+:root[data-input-modality="pointer"] .mc-dialog-select:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
 
 .mc-dialog-textarea:focus-visible,
 .mc-dialog-input:focus-visible,
@@ -10187,6 +10215,20 @@ select.dlg-input {
   outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
+}
+:root[data-input-modality="keyboard"] .qi-input:focus-visible,
+:root[data-input-modality="keyboard"] .qi-textarea:focus-visible,
+:root[data-input-modality="keyboard"] .qi-select:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+:root[data-input-modality="pointer"] .qi-input:focus,
+:root[data-input-modality="pointer"] .qi-textarea:focus,
+:root[data-input-modality="pointer"] .qi-select:focus {
+  outline: none !important;
+  border-color: var(--line) !important;
+  box-shadow: none !important;
 }
 .qi-select {
   appearance: none;
@@ -14480,6 +14522,11 @@ ul.integ {
   outline: 2px solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
+}
+:root[data-input-modality="pointer"] .scope-grounding-select:focus {
+  outline: none !important;
+  border-color: var(--line-soft) !important;
+  box-shadow: none !important;
 }
 .scope-grounding-select option {
   /* explicit pair — Chromium dark option popups honor option CSS (cf. .cmp-model-select option) */
