@@ -52,6 +52,9 @@ const mocks = vi.hoisted(() => ({
   updateChatLocalKnowledgeScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
   registerSw: vi.fn(),
+  useKeyboardShortcuts: vi.fn(),
+  undo: vi.fn(),
+  redo: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -89,7 +92,7 @@ vi.mock("./hooks/useChatSession", () => ({
 }));
 
 vi.mock("./hooks/useKeyboardShortcuts", () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: mocks.useKeyboardShortcuts,
 }));
 
 vi.mock("./hooks/useUndoStack", () => ({
@@ -99,8 +102,8 @@ vi.mock("./hooks/useUndoStack", () => ({
     undoLabel: null,
     redoLabel: null,
     push: vi.fn(),
-    undo: vi.fn(),
-    redo: vi.fn(),
+    undo: mocks.undo,
+    redo: mocks.redo,
     clear: vi.fn(),
   }),
 }));
@@ -129,8 +132,16 @@ vi.mock("./Header", () => ({
 }));
 
 vi.mock("./Footer", () => ({
-  Footer: ({ winCount }: { readonly winCount: number }) => (
-    <footer data-testid="footer">{winCount}</footer>
+  Footer: ({
+    winCount,
+    statusRef,
+  }: {
+    readonly winCount: number;
+    readonly statusRef?: (node: HTMLElement | null) => void;
+  }) => (
+    <footer ref={statusRef} data-testid="footer" tabIndex={-1}>
+      {winCount}
+    </footer>
   ),
 }));
 
@@ -355,6 +366,37 @@ describe("AppShell grounding connections", () => {
     );
   });
 
+  it("lets the user dismiss the inline source-limit notice", async () => {
+    const connectedScopes = Array.from({ length: 8 }, (_unused, index) =>
+      fileScope(`/repo-${String(index)}`, index),
+    );
+    const localKnowledgeScopes = Array.from({ length: 8 }, (_unused, index) =>
+      capsuleScope(`cap-${String(index)}`),
+    );
+    const cappedChat = chat({ connectedScopes, localKnowledgeScopes });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [cappedChat],
+      activeChat: cappedChat,
+    };
+    await renderMounted();
+
+    await act(async () => {
+      await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-17"));
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("already has 16 of 16 connected sources");
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Dismiss source connection notice" }).click();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
   it("removes connector scopes through the plural local-knowledge patch", async () => {
     const scopeA = capsuleScope("cap-a");
     const scopeB = capsuleScope("cap-b");
@@ -400,5 +442,41 @@ describe("AppShell grounding connections", () => {
     expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
     expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
     expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
+  });
+
+  it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {
+    await renderMounted();
+
+    const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
+      | { readonly dispatch?: (commandId: string) => void }
+      | undefined;
+    expect(keyboardProps?.dispatch).toBeTypeOf("function");
+
+    const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+    keyboardProps?.dispatch?.("undo");
+    keyboardProps?.dispatch?.("redo");
+    keyboardProps?.dispatch?.("focus-status");
+
+    expect(mocks.undo).toHaveBeenCalledTimes(1);
+    expect(mocks.redo).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalled();
+    statusSpy.mockRestore();
+  });
+
+  it("toggles the command palette from the Cmd/Ctrl+K shell shortcut", async () => {
+    await renderMounted();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+    });
+    expect(screen.getByTestId("command-palette")).toBeInTheDocument();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("command-palette")).toBeNull();
+    });
   });
 });
