@@ -22,6 +22,8 @@ export interface EditorTokenResolverDeps {
   readResolvedColor(cssVariableName: string): string;
   /** Normalise a concrete CSS colour string to `#rrggbb` / `#rrggbbaa`. */
   toHex(cssColor: string): string;
+  /** Release any resources the deps hold (e.g. a DOM probe element). Safe to call more than once. */
+  dispose(): void;
 }
 
 function toByte(value: number): string {
@@ -234,6 +236,7 @@ function hexFromOklchColor(color: string): string | undefined {
  * Handles `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `oklch()`, and `rgb()/rgba()` in both legacy
  * comma and modern space/slash syntax. Any unsupported form throws (actionable) so a bad token
  * surfaces loudly rather than producing an un-themed editor.
+ * @internal Not part of the package public API (used by the DOM normaliser + tests).
  */
 export function hexFromColorString(cssColor: string): string {
   const color = cssColor.trim().toLowerCase();
@@ -293,10 +296,30 @@ export function createDomEditorTokenResolverDeps(
   rootElement.appendChild(probe);
 
   const canvas = view.document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (context === null) {
+  const maybeContext = canvas.getContext("2d");
+  if (maybeContext === null) {
     probe.remove();
     throw new Error("Keiko editor theme: a 2D canvas context is required to normalise colours.");
+  }
+  const context = maybeContext;
+
+  function normaliseToHex(cssColor: string): string {
+    // Canvas validates browser-supported CSS colours. Chromium may preserve modern computed forms
+    // like oklch(), so hexFromColorString performs the final conversion for supported outputs.
+    // The input is a host-authored --ed-* custom-property value (not user/network input), so this is
+    // a normalisation step, not an injection sink. Two distinct reset sentinels detect a rejected
+    // (unparseable) assignment: a valid colour overwrites both identically, a rejected one leaves the
+    // two resets in place, so we fail loudly instead of silently returning a black fallback.
+    context.fillStyle = "#000000";
+    context.fillStyle = cssColor;
+    const fromBlack = context.fillStyle;
+    context.fillStyle = "#ffffff";
+    context.fillStyle = cssColor;
+    const fromWhite = context.fillStyle;
+    if (fromBlack !== fromWhite) {
+      throw new Error(`Keiko editor theme: the browser could not parse colour "${cssColor}".`);
+    }
+    return hexFromColorString(fromBlack);
   }
 
   return {
@@ -308,17 +331,29 @@ export function createDomEditorTokenResolverDeps(
       probe.style.color = `var(${cssVariableName})`;
       return view.getComputedStyle(probe).color;
     },
-    toHex(cssColor: string): string {
-      const sentinel = "#010203";
-      context.fillStyle = sentinel;
-      context.fillStyle = cssColor;
-      if (context.fillStyle === sentinel && hexFromColorString(cssColor) !== sentinel) {
-        throw new Error(
-          `Keiko editor theme: cannot normalise colour "${cssColor}". ` +
-            "The browser rejected it while resolving editor theme tokens.",
-        );
-      }
-      return hexFromColorString(context.fillStyle);
+    toHex: normaliseToHex,
+    dispose(): void {
+      probe.remove();
     },
   };
+}
+
+/**
+ * One-shot browser helper: resolve all editor theme tokens from the live DOM and clean up.
+ *
+ * Creates the probe deps, resolves the {@link ResolvedEditorThemeTokens}, and disposes the probe —
+ * leaving no element behind even when re-called on theme/contrast switches. This is the recommended
+ * host entry point; use {@link createDomEditorTokenResolverDeps} + {@link resolveEditorThemeTokens}
+ * directly only when the deps must outlive a single resolution. Browser-only.
+ */
+export function resolveEditorThemeTokensFromDom(
+  rootElement: HTMLElement,
+  view: Window = window,
+): ResolvedEditorThemeTokens {
+  const deps = createDomEditorTokenResolverDeps(rootElement, view);
+  try {
+    return resolveEditorThemeTokens(deps);
+  } finally {
+    deps.dispose();
+  }
 }

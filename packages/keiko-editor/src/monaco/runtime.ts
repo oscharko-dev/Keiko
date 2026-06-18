@@ -17,12 +17,24 @@ export interface MonacoLoaderLike {
   config(options: { monaco: unknown }): void;
 }
 
+let monacoLoaderConfigured = false;
+
 /**
  * Point `@monaco-editor/react`'s loader at the locally-installed `monaco-editor` instance so its
  * default CDN loader is never used. Call once, before the first editor mount.
  */
 export function configureMonacoLoader(loader: MonacoLoaderLike, monacoInstance: unknown): void {
   loader.config({ monaco: monacoInstance });
+  monacoLoaderConfigured = true;
+}
+
+/**
+ * Whether {@link configureMonacoLoader} has run in this runtime. The host should assert this before
+ * mounting the editor: mounting `@monaco-editor/react` without it would let the loader fall back to
+ * its default CDN — the no-CDN invariant (ADR-0042 D3) depends on the loader being configured first.
+ */
+export function isMonacoLoaderConfigured(): boolean {
+  return monacoLoaderConfigured;
 }
 
 /** Reasons the Keiko Editor runtime cannot start; each maps to an actionable user-facing message. */

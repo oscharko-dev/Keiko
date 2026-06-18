@@ -10,6 +10,7 @@ import {
   describeEditorRuntimeError,
   detectEditorRuntimeSupport,
   editorRuntimeLoadFailure,
+  isMonacoLoaderConfigured,
   probeEditorRuntime,
   type MonacoLoaderLike,
 } from "./runtime.js";
@@ -17,7 +18,9 @@ import {
 const monacoDir = dirname(fileURLToPath(import.meta.url));
 
 describe("configureMonacoLoader", () => {
-  it("configures the loader with the local monaco instance (no CDN loader)", () => {
+  it("configures the loader with the local monaco instance and records that it ran (no CDN loader)", () => {
+    // Module-level flag starts false; this is the first test in the file to call configureMonacoLoader.
+    expect(isMonacoLoaderConfigured()).toBe(false);
     const received: { monaco: unknown }[] = [];
     const loader: MonacoLoaderLike = {
       config: (options) => received.push(options),
@@ -26,6 +29,8 @@ describe("configureMonacoLoader", () => {
     configureMonacoLoader(loader, monacoInstance);
     expect(received).toHaveLength(1);
     expect(received[0]?.monaco).toBe(monacoInstance);
+    // The host can now assert this before mounting the editor, guarding the no-CDN invariant.
+    expect(isMonacoLoaderConfigured()).toBe(true);
   });
 });
 

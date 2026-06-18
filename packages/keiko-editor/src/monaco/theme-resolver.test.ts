@@ -5,6 +5,7 @@ import {
   createDomEditorTokenResolverDeps,
   hexFromColorString,
   resolveEditorThemeTokens,
+  resolveEditorThemeTokensFromDom,
   type EditorTokenResolverDeps,
 } from "./theme-resolver.js";
 
@@ -54,6 +55,7 @@ describe("resolveEditorThemeTokens", () => {
     return {
       readResolvedColor: () => color,
       toHex: hexFromColorString,
+      dispose: () => undefined,
     };
   }
 
@@ -73,6 +75,7 @@ describe("resolveEditorThemeTokens", () => {
         return "#000000";
       },
       toHex: hexFromColorString,
+      dispose: () => undefined,
     });
     expect(seen).toEqual([...EDITOR_THEME_TOKEN_NAMES]);
   });
@@ -81,95 +84,109 @@ describe("resolveEditorThemeTokens", () => {
     const deps: EditorTokenResolverDeps = {
       readResolvedColor: (name) => (name === "--ed-bg" ? "" : "#000000"),
       toHex: hexFromColorString,
+      dispose: () => undefined,
     };
     expect(() => resolveEditorThemeTokens(deps)).toThrow(/--ed-bg/);
   });
 });
 
-describe("createDomEditorTokenResolverDeps", () => {
-  function createFakeView(options: {
-    rootTokenValue: string;
-    computedProbeColor: string;
-    acceptedColors?: ReadonlySet<string>;
-  }): {
-    root: HTMLElement;
+describe("DOM editor token resolver", () => {
+  function fakeView(options: { computedProbeColor: string; rootTokenValue?: string }): {
     view: Window;
+    root: HTMLElement;
+    events: { appended: number; removed: number };
   } {
-    let fillStyle = "#000000";
-    const acceptedColors =
-      options.acceptedColors ?? new Set([options.computedProbeColor, "#010203"]);
+    const events = { appended: 0, removed: 0 };
     const probe = {
-      remove(): undefined {
-        return undefined;
-      },
-      style: {
-        color: "",
-        pointerEvents: "",
-        position: "",
-        visibility: "",
+      style: {} as Record<string, string>,
+      remove: (): void => {
+        events.removed += 1;
       },
     };
-    const root = {
-      appendChild(): undefined {
-        return undefined;
+    let fill = "";
+    const context = {
+      set fillStyle(value: string) {
+        if (value.startsWith("#")) {
+          fill = value;
+          return;
+        }
+        if (value.startsWith("rgb")) {
+          fill = hexFromColorString(value);
+          return;
+        }
+        if (value.startsWith("oklch")) {
+          fill = value;
+        }
       },
+      get fillStyle(): string {
+        return fill;
+      },
+    };
+    const document = {
+      createElement: (tag: string): unknown =>
+        tag === "canvas" ? { getContext: (): unknown => context } : probe,
     };
     const view = {
-      document: {
-        createElement(tagName: string): unknown {
-          if (tagName === "canvas") {
-            return {
-              getContext: () => ({
-                get fillStyle(): string {
-                  return fillStyle;
-                },
-                set fillStyle(value: string) {
-                  if (acceptedColors.has(value)) {
-                    fillStyle = value;
-                  }
-                },
-              }),
-            };
-          }
-          return probe;
-        },
-      },
+      document,
       getComputedStyle(target: unknown): unknown {
         if (target === root) {
-          return { getPropertyValue: () => options.rootTokenValue };
+          return {
+            getPropertyValue: (): string => options.rootTokenValue ?? options.computedProbeColor,
+          };
         }
         return { color: options.computedProbeColor };
       },
     };
-    return { root: root as unknown as HTMLElement, view: view as unknown as Window };
+    const root = {
+      appendChild: (): void => {
+        events.appended += 1;
+      },
+    };
+    return {
+      view: view as unknown as Window,
+      root: root as unknown as HTMLElement,
+      events,
+    };
   }
 
   it("checks custom-property presence on the root before reading inherited probe colour", () => {
-    const { root, view } = createFakeView({
+    const { root, view } = fakeView({
       computedProbeColor: "rgb(10, 20, 30)",
       rootTokenValue: "",
     });
     const deps = createDomEditorTokenResolverDeps(root, view);
     expect(deps.readResolvedColor("--ed-bg")).toBe("");
+    deps.dispose();
   });
 
   it("normalises browser-computed oklch colours", () => {
-    const { root, view } = createFakeView({
+    const { root, view } = fakeView({
       computedProbeColor: "oklch(0.16 0.004 160)",
-      rootTokenValue: "oklch(0.16 0.004 160)",
     });
     const deps = createDomEditorTokenResolverDeps(root, view);
     expect(deps.readResolvedColor("--ed-bg")).toBe("oklch(0.16 0.004 160)");
     expect(deps.toHex("oklch(0.16 0.004 160)")).toBe("#0c0e0d");
+    deps.dispose();
   });
 
   it("fails closed when the canvas rejects a colour assignment", () => {
-    const { root, view } = createFakeView({
-      acceptedColors: new Set(["#010203"]),
-      computedProbeColor: "not-a-colour",
-      rootTokenValue: "not-a-colour",
-    });
+    const { root, view } = fakeView({ computedProbeColor: "not-a-colour" });
     const deps = createDomEditorTokenResolverDeps(root, view);
-    expect(() => deps.toHex("not-a-colour")).toThrow(/cannot convert/);
+    expect(() => deps.toHex("not-a-colour")).toThrow(/could not parse/);
+    deps.dispose();
+  });
+
+  it("resolves all tokens and removes its probe (no DOM leak)", () => {
+    const { view, root, events } = fakeView({ computedProbeColor: "rgb(16, 32, 48)" });
+    const resolved = resolveEditorThemeTokensFromDom(root, view);
+    expect(Object.keys(resolved).sort()).toEqual([...EDITOR_THEME_TOKEN_NAMES].sort());
+    expect(events.appended).toBe(1);
+    expect(events.removed).toBe(1);
+  });
+
+  it("disposes the probe even when the browser rejects a colour (two-sentinel guard)", () => {
+    const { view, root, events } = fakeView({ computedProbeColor: "not-a-parseable-colour" });
+    expect(() => resolveEditorThemeTokensFromDom(root, view)).toThrow(/could not parse/);
+    expect(events.removed).toBe(1);
   });
 });

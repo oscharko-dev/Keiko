@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHROME_TOKEN_COLOR_IDS,
+  EDITOR_THEME_DEAD_COLOR_IDS,
   EDITOR_THEME_NAME,
   EDITOR_THEME_TOKEN_NAMES,
   EDITOR_THEME_VARIANTS,
@@ -84,20 +85,20 @@ describe("theme token contract", () => {
     expect(CHROME_TOKEN_COLOR_IDS["--ed-warn"]).toEqual(["editorWarning.foreground"]);
     expect(CHROME_TOKEN_COLOR_IDS["--ed-info"]).toEqual(["editorInfo.foreground"]);
     expect(CHROME_TOKEN_COLOR_IDS["--ed-ghost"]).toEqual(["editorGhostText.foreground"]);
-    // Finalized #1212 tokens (#1232): focus ring maps to several ids.
+    // Finalized #1212 token (#1232): the focus ring maps to several registered Monaco ids.
     expect(CHROME_TOKEN_COLOR_IDS["--ed-focus"]).toEqual([
       "focusBorder",
       "editorWidget.border",
       "editor.findMatchBorder",
     ]);
-    expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-ins-gutter"]).toEqual([
-      "diffEditorGutter.insertedLineBackground",
-      "diffEditorOverview.insertedForeground",
-    ]);
-    expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-rem-gutter"]).toEqual([
-      "diffEditorGutter.removedLineBackground",
-      "diffEditorOverview.removedForeground",
-    ]);
+  });
+
+  it("does not map the diff-gutter tokens to Monaco theme colours (handled by decorations in #1195)", () => {
+    // Their natural targets are VS Code SCM colours monaco-editor 0.55.1 standalone never registers,
+    // so a theme mapping would be an inert no-op. They stay surfaced in globals.css for the diff editor.
+    expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-ins-gutter"]).toBeUndefined();
+    expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-rem-gutter"]).toBeUndefined();
+    expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-chg-gutter"]).toBeUndefined();
   });
 
   it("maps only Monaco 0.55 registered colour ids", () => {
@@ -126,6 +127,16 @@ describe("theme token contract", () => {
 
     for (const colorId of Object.values(CHROME_TOKEN_COLOR_IDS).flat()) {
       expect(registered.has(colorId), `${colorId} must be registered by monaco-editor`).toBe(true);
+    }
+  });
+
+  it("never emits a colour id that monaco-editor 0.55.1 standalone does not register", () => {
+    const tokens = fakeResolvedTokens();
+    for (const variant of EDITOR_THEME_VARIANTS) {
+      const theme = buildKeikoEditorMonacoTheme(variant, tokens);
+      for (const deadId of EDITOR_THEME_DEAD_COLOR_IDS) {
+        expect(theme.colors[deadId], `${deadId} must not be in the built theme`).toBeUndefined();
+      }
     }
   });
 });

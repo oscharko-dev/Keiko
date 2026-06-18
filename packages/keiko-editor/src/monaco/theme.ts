@@ -32,7 +32,10 @@ export const EDITOR_THEME_NAME: Readonly<Record<EditorThemeVariant, string>> = {
   "high-contrast": "keiko-editor-high-contrast",
 };
 
-/** Monaco built-in base theme each variant inherits before applying Keiko colours. */
+/**
+ * Monaco built-in base theme each variant inherits before applying Keiko colours.
+ * @internal Not part of the package public API (consumed by the builder + tests).
+ */
 export const MONACO_BASE_THEME: Readonly<Record<EditorThemeVariant, monaco.editor.BuiltinTheme>> = {
   dark: "vs-dark",
   light: "vs",
@@ -101,14 +104,13 @@ export const CHROME_TOKEN_COLOR_IDS: Readonly<Record<string, readonly string[]>>
   "--ed-diff-ins-text": ["diffEditor.insertedTextBackground"],
   "--ed-diff-rem-line": ["diffEditor.removedLineBackground"],
   "--ed-diff-rem-text": ["diffEditor.removedTextBackground"],
-  "--ed-diff-ins-gutter": [
-    "diffEditorGutter.insertedLineBackground",
-    "diffEditorOverview.insertedForeground",
-  ],
-  "--ed-diff-rem-gutter": [
-    "diffEditorGutter.removedLineBackground",
-    "diffEditorOverview.removedForeground",
-  ],
+  // NOTE: the diff-gutter tokens (--ed-diff-ins-gutter / -rem-gutter / -chg-gutter) are deliberately
+  // NOT mapped here. Their natural Monaco targets (editorGutter.added/deleted/modifiedBackground,
+  // editorOverviewRuler.modifiedForeground — the §06 design target for --ed-diff-chg-gutter) are VS
+  // Code workbench SCM colours that monaco-editor 0.55.1 standalone does not register, so a theme
+  // mapping would be stored but never painted (a silent no-op). The diff editor (#1195) renders gutter
+  // indicators with decorations driven by these tokens directly, not via the Monaco theme. The tokens
+  // remain surfaced in the keiko-ui runtime (globals.css) for that consumer; see EDITOR_THEME_DEAD_COLOR_IDS.
   "--ed-error": ["editorError.foreground"],
   "--ed-warn": ["editorWarning.foreground"],
   "--ed-info": ["editorInfo.foreground"],
@@ -128,6 +130,19 @@ export const CHROME_TOKEN_COLOR_IDS: Readonly<Record<string, readonly string[]>>
 export const EDITOR_THEME_TOKEN_NAMES: readonly string[] = [
   ...Object.keys(SYNTAX_TOKEN_SCOPES),
   ...Object.keys(CHROME_TOKEN_COLOR_IDS),
+];
+
+/**
+ * Monaco colour ids the editor must NOT emit: VS Code workbench SCM gutter/overview-ruler colours
+ * that monaco-editor 0.55.1 standalone does not register, so a theme mapping would be an inert
+ * no-op. Pinned by a test so a future mapping cannot silently re-introduce them.
+ * @internal
+ */
+export const EDITOR_THEME_DEAD_COLOR_IDS: readonly string[] = [
+  "editorGutter.addedBackground",
+  "editorGutter.deletedBackground",
+  "editorGutter.modifiedBackground",
+  "editorOverviewRuler.modifiedForeground",
 ];
 
 /**

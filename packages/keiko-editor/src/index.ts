@@ -121,6 +121,7 @@ export type {
 export {
   createDomEditorTokenResolverDeps,
   resolveEditorThemeTokens,
+  resolveEditorThemeTokensFromDom,
 } from "./monaco/theme-resolver.js";
 export type { EditorTokenResolverDeps } from "./monaco/theme-resolver.js";
 
@@ -141,6 +142,7 @@ export {
   describeEditorRuntimeError,
   detectEditorRuntimeSupport,
   editorRuntimeLoadFailure,
+  isMonacoLoaderConfigured,
   probeEditorRuntime,
 } from "./monaco/runtime.js";
 export type {
