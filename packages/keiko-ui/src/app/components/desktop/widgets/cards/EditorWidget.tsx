@@ -36,6 +36,7 @@ import {
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
 import { ApiError, fetchFilesContent, saveFilesContent } from "../../../../../lib/api";
+import type { EditorDocumentVersion } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -87,6 +88,7 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
   const [modifiedAt, setModifiedAt] = useState<number | null>(null);
+  const [version, setVersion] = useState<EditorDocumentVersion | null>(null);
   const [maxBytes, setMaxBytes] = useState<number | null>(null);
   const [loadState, setLoadState] = useState<KeikoEditorLoadState>(
     hasTarget ? { status: "loading" } : { status: "ready" },
@@ -95,9 +97,10 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
 
   // Refs the imperative save path reads so a Cmd/Ctrl+S immediately after an edit always persists
-  // the latest values, independent of React state-batching timing.
-  const modifiedAtRef = useRef<number | null>(null);
-  modifiedAtRef.current = modifiedAt;
+  // the latest values, independent of React state-batching timing. The version-aware
+  // optimistic-concurrency token (Issue #1197) is the token the save sends to the BFF.
+  const versionRef = useRef<EditorDocumentVersion | null>(null);
+  versionRef.current = version;
   const savingRef = useRef(false);
   savingRef.current = saveStatus === "saving";
   // The editor stays editable during a save; this ref lets the success handler tell whether the
@@ -119,6 +122,7 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
         setContent("");
         setFileModel(null);
         setModifiedAt(null);
+        setVersion(null);
         setMaxBytes(null);
         setLoadState({ status: "ready" });
         setSaveStatus("idle");
@@ -139,6 +143,7 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
           setContent(response.content);
           setFileModel(createFileModel(identity));
           setModifiedAt(response.modifiedAt);
+          setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
           setLoadState({ status: "ready" });
         })
@@ -185,11 +190,13 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
           root,
           path: file,
           content: text,
-          expectedModifiedAt: modifiedAtRef.current ?? undefined,
+          // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
+          baseVersion: versionRef.current ?? undefined,
         });
         // The persisted file moved on disk regardless of any concurrent edits — always adopt the new
         // concurrency token so the next save validates against it.
         setModifiedAt(response.modifiedAt);
+        setVersion(response.session.version);
         setMaxBytes(response.maxBytes);
         if (contentRef.current === text) {
           // No edits arrived during the save: adopt the persisted echo and mark the buffer clean.

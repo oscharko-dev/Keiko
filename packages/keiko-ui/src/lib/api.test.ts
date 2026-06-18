@@ -108,6 +108,10 @@ describe("files API helpers", () => {
           symlink: false,
           content: "const x = 1;\n",
           maxBytes: 1_000_000,
+          session: {
+            schemaVersion: "1",
+            version: { sizeBytes: 10, modifiedAt: 1, contentHash: "a".repeat(64) },
+          },
         }),
       )
       .mockResolvedValueOnce(
@@ -122,6 +126,10 @@ describe("files API helpers", () => {
           symlink: false,
           content: "const x = 2;\n",
           maxBytes: 1_000_000,
+          session: {
+            schemaVersion: "1",
+            version: { sizeBytes: 10, modifiedAt: 2, contentHash: "b".repeat(64) },
+          },
         }),
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -180,6 +188,50 @@ describe("files API helpers", () => {
           path: "src/app.ts",
           content: "const x = 2;\n",
           expectedModifiedAt: 1,
+        }),
+      }),
+    );
+  });
+
+  it("serializes the version-aware baseVersion token on save (Issue #1197)", async () => {
+    const baseVersion = { sizeBytes: 12, modifiedAt: 7, contentHash: "a".repeat(64) };
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        root: "/repo",
+        path: "src/app.ts",
+        name: "app.ts",
+        sizeBytes: 13,
+        modifiedAt: 9,
+        extension: "ts",
+        mime: "text/plain",
+        symlink: false,
+        content: "const x = 3;\n",
+        maxBytes: 1_000_000,
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 13, modifiedAt: 9, contentHash: "b".repeat(64) },
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved = await saveFilesContent({
+      root: "/repo",
+      path: "src/app.ts",
+      content: "const x = 3;\n",
+      baseVersion,
+    });
+
+    expect(saved.session.version.contentHash).toBe("b".repeat(64));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/content",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          root: "/repo",
+          path: "src/app.ts",
+          content: "const x = 3;\n",
+          baseVersion,
         }),
       }),
     );

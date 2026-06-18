@@ -27,6 +27,7 @@ import type {
   FilesContentResponse,
   FilesPreviewResponse,
   FilesTreeResponse,
+  EditorDocumentVersion,
   GroundingLimits,
   MessageResponse,
   MessagesResponse,
@@ -828,6 +829,8 @@ export async function saveFilesContent(input: {
   readonly path: string;
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
+  // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {
     method: "PATCH",
