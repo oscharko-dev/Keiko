@@ -24,6 +24,20 @@ function postContext(body: unknown): RouteContext {
   return rawPostContext(JSON.stringify(body));
 }
 
+function postContextWithResponseClose(body: unknown, writableEnded: boolean): RouteContext {
+  const ctx = postContext(body);
+  const res = {
+    writableEnded,
+    on(event: string, listener: () => void) {
+      if (event === "close") {
+        listener();
+      }
+      return res;
+    },
+  } as unknown as ServerResponse;
+  return { ...ctx, res };
+}
+
 let root: string;
 let store: UiStore;
 
@@ -87,6 +101,38 @@ describe("POST /api/editor/language", () => {
     expect(result.status).toBe(200);
     const body = result.body as { result: { items: { label: string }[] } };
     expect(body.result.items.map((item) => item.label)).toContain("alpha");
+  });
+
+  it("cancels analysis when the response closes before finishing", async () => {
+    const result = await handleEditorLanguage(
+      postContextWithResponseClose(
+        {
+          operation: "diagnostics",
+          root,
+          document: { path: "src/a.ts", languageId: "typescript", text: "const x = 1;\n" },
+        },
+        false,
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "CANCELLED" } });
+  });
+
+  it("does not cancel analysis for a response close after completion", async () => {
+    const result = await handleEditorLanguage(
+      postContextWithResponseClose(
+        {
+          operation: "diagnostics",
+          root,
+          document: { path: "src/a.ts", languageId: "typescript", text: "const x = 1;\n" },
+        },
+        true,
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ operation: "diagnostics" });
   });
 
   it("rejects a malformed request with 400 INVALID_REQUEST", async () => {

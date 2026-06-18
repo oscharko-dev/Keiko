@@ -32,6 +32,7 @@ describe("language-service schema, operations, and error codes", () => {
     expect(LANGUAGE_SERVICE_ERROR_CODES).toEqual([
       "INVALID_REQUEST",
       "UNSUPPORTED_LANGUAGE",
+      "UNSUPPORTED_OPERATION",
       "DOCUMENT_TOO_LARGE",
       "DENIED",
       "CANCELLED",
@@ -50,6 +51,9 @@ describe("language-service schema, operations, and error codes", () => {
       maxDetailChars: 1_024,
       maxDocumentationChars: 4_096,
       maxMessageChars: 2_048,
+      maxWorkspaceReadBytes: 4_000_000,
+      maxWorkspaceReadFileBytes: 1_000_000,
+      maxWorkspaceReadFiles: 256,
       deadlineMs: 2_000,
     });
   });

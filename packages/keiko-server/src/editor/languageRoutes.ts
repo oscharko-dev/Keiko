@@ -27,6 +27,7 @@ const MAX_LANGUAGE_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes
 const STATUS_BY_CODE: Readonly<Record<LanguageServiceErrorCode, number>> = {
   INVALID_REQUEST: 400,
   UNSUPPORTED_LANGUAGE: 422,
+  UNSUPPORTED_OPERATION: 422,
   DOCUMENT_TOO_LARGE: 413,
   DENIED: 403,
   TIMED_OUT: 503,
@@ -62,6 +63,13 @@ function clientAbortSignal(ctx: RouteContext): AbortSignal {
   ctx.req.on("close", () => {
     controller.abort();
   });
+  if (typeof ctx.res.on === "function") {
+    ctx.res.on("close", () => {
+      if (!ctx.res.writableEnded) {
+        controller.abort();
+      }
+    });
+  }
   return controller.signal;
 }
 

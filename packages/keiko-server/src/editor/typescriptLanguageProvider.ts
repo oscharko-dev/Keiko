@@ -111,6 +111,7 @@ function withService<T>(ctx: LanguageProviderContext, run: (service: ts.Language
     overlayText: ctx.overlayText,
     languageId: ctx.languageId,
     cancellation: ctx.cancellation.hostToken(),
+    limits: ctx.limits,
   };
   const host = createContainedLanguageServiceHost(hostOptions);
   const service = ts.createLanguageService(host, ts.createDocumentRegistry());

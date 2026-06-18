@@ -39,6 +39,7 @@ export const LANGUAGE_SERVICE_OPERATIONS: readonly LanguageServiceOperation[] = 
 export type LanguageServiceErrorCode =
   | "INVALID_REQUEST"
   | "UNSUPPORTED_LANGUAGE"
+  | "UNSUPPORTED_OPERATION"
   | "DOCUMENT_TOO_LARGE"
   | "DENIED"
   | "CANCELLED"
@@ -47,6 +48,7 @@ export type LanguageServiceErrorCode =
 export const LANGUAGE_SERVICE_ERROR_CODES: readonly LanguageServiceErrorCode[] = [
   "INVALID_REQUEST",
   "UNSUPPORTED_LANGUAGE",
+  "UNSUPPORTED_OPERATION",
   "DOCUMENT_TOO_LARGE",
   "DENIED",
   "CANCELLED",
@@ -197,6 +199,13 @@ export interface LanguageServiceLimits {
   readonly maxDetailChars: number;
   readonly maxDocumentationChars: number;
   readonly maxMessageChars: number;
+  // Total workspace file bytes read while resolving imports/config for one operation. The in-memory
+  // overlay and the TypeScript compiler's own lib directory are excluded from this workspace budget.
+  readonly maxWorkspaceReadBytes: number;
+  // Maximum bytes read from any single workspace file while resolving imports/config.
+  readonly maxWorkspaceReadFileBytes: number;
+  // Total workspace files read while resolving imports/config for one operation.
+  readonly maxWorkspaceReadFiles: number;
   readonly deadlineMs: number;
 }
 
@@ -210,6 +219,9 @@ export const DEFAULT_LANGUAGE_SERVICE_LIMITS: LanguageServiceLimits = {
   maxDetailChars: 1_024,
   maxDocumentationChars: 4_096,
   maxMessageChars: 2_048,
+  maxWorkspaceReadBytes: 4_000_000,
+  maxWorkspaceReadFileBytes: 1_000_000,
+  maxWorkspaceReadFiles: 256,
   deadlineMs: 2_000,
 } as const;
 

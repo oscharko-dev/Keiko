@@ -113,6 +113,9 @@ export function runLanguageOperation(
   if (provider === undefined) {
     return errorOutcome("UNSUPPORTED_LANGUAGE", "No deterministic provider serves this language.");
   }
+  if (!provider.descriptor.operations.includes(request.operation)) {
+    return errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.");
+  }
   const cancellation = createDeadlineCancellation({
     signal: options.signal,
     deadlineMs: limits.deadlineMs,
