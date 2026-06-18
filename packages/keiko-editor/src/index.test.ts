@@ -38,11 +38,25 @@ describe("@oscharko-dev/keiko-editor public API", () => {
     ]);
   });
 
-  it("exposes only the intentionally minimal v1 runtime surface", () => {
+  it("exposes exactly the intended runtime export surface (#1191 + #1192)", () => {
     expect(Object.keys(editor).sort()).toEqual([
+      "EDITOR_COMMANDS",
       "KEIKO_EDITOR_PACKAGE",
       "SUPPORTED_EDITOR_LANGUAGES",
+      "availableCommands",
+      "comparePositions",
+      "completionRequestSupersedes",
+      "createFileModel",
+      "editorFileModelReducer",
+      "isCommandAvailable",
+      "isDocumentDirty",
+      "isEmptyRange",
+      "isResponseCurrent",
       "isSupportedEditorLanguage",
+      "mapPositionAfterEdit",
+      "mapRangeAfterEdit",
+      "rangeContainsPosition",
+      "shouldDiscardResponse",
     ]);
   });
 });
