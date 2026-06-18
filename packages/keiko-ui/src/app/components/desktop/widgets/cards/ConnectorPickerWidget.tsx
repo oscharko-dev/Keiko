@@ -21,7 +21,7 @@ import {
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { Icons } from "../../Icons";
-import { KeikoSelect } from "../../KeikoSelect";
+import KeikoSelect from "../../KeikoSelect";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

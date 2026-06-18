@@ -16,7 +16,7 @@ import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
-import { KeikoSelect } from "./KeikoSelect";
+import KeikoSelect from "./KeikoSelect";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   AttachButton,

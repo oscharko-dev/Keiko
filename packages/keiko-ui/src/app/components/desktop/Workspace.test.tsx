@@ -1,9 +1,10 @@
-import { createRef } from "react";
+import { createRef, useRef, useState } from "react";
 import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
+import { makeMutations } from "./hooks/workspaceActions";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow } from "./windows/types";
 import {
@@ -180,7 +181,7 @@ describe("Workspace card connections", () => {
     ).toBeNull();
   });
 
-  it("does not expose the workspace outline until the shell-controlled rail opens it", () => {
+  it("keeps the workspace outline content inert until the shell-controlled rail opens it", () => {
     const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
     render(
       <Workspace
@@ -190,7 +191,11 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    expect(screen.queryByRole("region", { name: "Workspace outline" })).not.toBeInTheDocument();
+    const outline = screen.getByRole("region", { name: "Workspace outline" });
+    expect(outline).toHaveAttribute("data-open", "false");
+    const content = outline.querySelector(".ws-outline-content");
+    expect(content).toHaveAttribute("aria-hidden", "true");
+    expect(content).toHaveAttribute("inert");
   });
 
   it("exposes a semantic workspace outline with window actions and textual relationships", async () => {
@@ -1056,7 +1061,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("marks the free workspace surface as actively panning while the primary button is held", () => {
+  it("does not pan the free workspace surface on primary-button clicks", () => {
     render(
       <Workspace
         ws={workspace({})}
@@ -1067,7 +1072,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
-    expect(surface).toHaveAttribute("data-panning", "true");
+    expect(surface).not.toHaveAttribute("data-panning");
 
     fireEvent.pointerUp(window);
     expect(surface).not.toHaveAttribute("data-panning");

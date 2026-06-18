@@ -26,7 +26,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icons } from "./Icons";
-import { KeikoSelect } from "./KeikoSelect";
+import KeikoSelect from "./KeikoSelect";
 import { CHAT_WORKFLOW_CATALOG, findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {

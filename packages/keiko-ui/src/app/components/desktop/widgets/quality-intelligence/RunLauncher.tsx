@@ -37,7 +37,7 @@ import {
   type CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
 import { Icons } from "@/app/components/desktop/Icons";
-import { KeikoSelect } from "../../KeikoSelect";
+import KeikoSelect from "../../KeikoSelect";
 import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";

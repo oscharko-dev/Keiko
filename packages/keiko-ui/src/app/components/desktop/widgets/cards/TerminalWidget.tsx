@@ -29,7 +29,7 @@ import type {
   TerminalExecutionResult,
   TerminalPolicySummary,
 } from "../../../../../lib/types";
-import { KeikoSelect } from "../../KeikoSelect";
+import KeikoSelect from "../../KeikoSelect";
 
 interface TerminalWidgetProps {
   readonly projectPath?: string;

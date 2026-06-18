@@ -23,7 +23,7 @@ import {
   type WIN_TYPES as WinTypes,
   type WindowType,
 } from "../windows/WindowsRegistry";
-import { KeikoSelect } from "../KeikoSelect";
+import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 

@@ -26,7 +26,6 @@ import {
   UI_HOST,
   UiStoreError,
   extractInlineScriptHashes,
-  type CspSource,
   type UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -72,7 +71,7 @@ interface RawUiOptions {
 export interface UiCliDeps {
   readonly createServer?: (deps: {
     staticRoot: string;
-    csp: CspSource;
+    csp: string;
     port: number;
     handlerDeps: UiHandlerDeps;
   }) => Server | Promise<Server>;
@@ -477,7 +476,7 @@ async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<vo
 
 async function startUiServer(
   staticRoot: string,
-  csp: CspSource,
+  csp: string,
   parsed: UiCliArgs,
   handlerDeps: UiHandlerDeps,
   io: CliIo,
@@ -567,7 +566,7 @@ export async function runUiCli(
   const launchProjectResult = registerLaunchProjectOrReport(cwd, handlerDeps, io);
   if (launchProjectResult !== null) return launchProjectResult;
   try {
-    await startUiServer(staticRoot, cspRuntime.csp, parsed, handlerDeps, io, deps);
+    await startUiServer(staticRoot, cspRuntime.csp(), parsed, handlerDeps, io, deps);
     return 0;
   } finally {
     cspRuntime.dispose();

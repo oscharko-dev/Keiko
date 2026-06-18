@@ -33,7 +33,7 @@ import {
 } from "../../../relationships/api";
 import type { ApiRelationship } from "../../../relationships/api";
 import { Icons } from "../Icons";
-import { KeikoSelect } from "../KeikoSelect";
+import KeikoSelect from "../KeikoSelect";
 
 // ─── Per-denial-code UI messages (verbatim from denial-reasons.md) ─────────────
 // These are displayed only when the server returns a denial — never invented by the UI.

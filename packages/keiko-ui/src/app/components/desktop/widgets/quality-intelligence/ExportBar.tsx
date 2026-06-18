@@ -14,7 +14,7 @@ import {
   exportQiRunTraceability,
   type QiTraceabilityFormat,
 } from "@/lib/quality-intelligence-api";
-import { KeikoSelect } from "../../KeikoSelect";
+import KeikoSelect from "../../KeikoSelect";
 import { formatError } from "./qiShared";
 
 // Traceability adapters are served by a dedicated, matrix-driven route (Epic #734, Issue #740);

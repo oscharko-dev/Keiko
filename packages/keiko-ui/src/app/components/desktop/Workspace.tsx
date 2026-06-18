@@ -336,7 +336,7 @@ function WorkspaceOutline({
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
-  const controlled = outlineOpen !== undefined && onToggleOutline !== undefined;
+  const controlled = outlineOpen !== undefined;
   const open = controlled ? outlineOpen : pinned || hovered || focusWithin;
   const contentRef = useRef<HTMLDivElement | null>(null);
   const syncContentInert = useCallback(
@@ -378,7 +378,7 @@ function WorkspaceOutline({
           // waiting for hover/focus to clear.
           onClick={() => {
             if (controlled) {
-              onToggleOutline();
+              onToggleOutline?.();
               return;
             }
             if (pinned) {
