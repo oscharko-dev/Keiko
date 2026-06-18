@@ -38,8 +38,10 @@ describe("@oscharko-dev/keiko-editor public API", () => {
     ]);
   });
 
-  it("exposes exactly the intended runtime export surface (#1191 + #1192)", () => {
-    expect(Object.keys(editor).sort()).toEqual([
+  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193)", () => {
+    const expected = [
+      // Package identity, language + workspace contract, geometry, file model, completion,
+      // commands (#1191 + #1192).
       "EDITOR_COMMANDS",
       "KEIKO_EDITOR_PACKAGE",
       "SUPPORTED_EDITOR_LANGUAGES",
@@ -57,7 +59,26 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "mapRangeAfterEdit",
       "rangeContainsPosition",
       "shouldDiscardResponse",
-    ]);
+      // Monaco runtime: language inference, theme, workers, loader/capability (#1193).
+      "MONACO_LANGUAGE_IDS",
+      "inferMonacoLanguageId",
+      "isMonacoLanguageId",
+      "EDITOR_THEME_NAME",
+      "EDITOR_THEME_VARIANTS",
+      "buildKeikoEditorMonacoTheme",
+      "registerKeikoEditorTheme",
+      "createDomEditorTokenResolverDeps",
+      "resolveEditorThemeTokens",
+      "createMonacoEnvironment",
+      "installMonacoEnvironment",
+      "defaultMonacoWorkerFactories",
+      "configureMonacoLoader",
+      "describeEditorRuntimeError",
+      "detectEditorRuntimeSupport",
+      "editorRuntimeLoadFailure",
+      "probeEditorRuntime",
+    ];
+    expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });
 });
 
