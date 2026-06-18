@@ -53,6 +53,11 @@ import type {
 
 interface ChatWindowProps {
   readonly mini?: boolean;
+  readonly minimalChat?: boolean;
+  readonly compact?: boolean;
+  readonly controlsNarrow?: boolean;
+  readonly barCompact?: boolean;
+  readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
 }
 
@@ -74,10 +79,9 @@ const LOADING_STATUS_ID = "cmp-loading-status";
 // and "…" depending on whether the chat already had messages.
 const COMPOSER_PLACEHOLDER = "Ask Keiko about your code…";
 
-// uiux-fix F042 (C308/C322) — shared send tooltip: the mini composer said "Send",
-// the full composer "Send message", and the Enter-to-send / Shift+Enter-for-newline
-// behaviour was discoverable nowhere.
-const SEND_TITLE = "Send message — Enter to send, Shift+Enter for a new line";
+// uiux-fix F042 (C308/C322) — keep the visible send tooltip short and
+// consistent; the keyboard hint remains in accessible descriptions.
+const SEND_TOOLTIP = "Send message";
 
 // Workspace-aware starter prompts for the empty state.
 function starterPrompts(activeProject: ProjectWithAvailability | undefined): readonly string[] {
@@ -180,9 +184,9 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
     <>
       <button
         type="button"
-        className="chat-msg-copy"
+        className="chat-msg-copy ui-tip"
         aria-label={copied ? "Copied" : "Copy message"}
-        title={copied ? "Copied" : "Copy message"}
+        data-tip={copied ? "Copied" : "Copy message"}
         data-copied={copied ? "true" : "false"}
         onClick={handleCopy}
       >
@@ -267,6 +271,10 @@ interface ComposerBarProps {
   readonly ready: boolean;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly compact?: boolean;
+  readonly controlsNarrow?: boolean;
+  readonly barCompact?: boolean;
+  readonly workflowCompact?: boolean;
   // Issue #151 — when true, the budget for the next send exceeds the model's
   // window and the send button must be focusable but inert.
   readonly budgetExceeded: boolean;
@@ -277,6 +285,10 @@ function ComposerBar({
   ready,
   selectedModelCapability,
   onAttachFiles,
+  compact = false,
+  controlsNarrow = false,
+  barCompact = false,
+  workflowCompact = false,
   budgetExceeded,
 }: ComposerBarProps): ReactNode {
   const {
@@ -319,66 +331,72 @@ function ComposerBar({
     ? "No conversation-eligible model is configured — connect a gateway in Settings"
     : "Model";
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
+  const compactModelTip = loading
+    ? "Loading models…"
+    : noEligibleModels
+      ? "No conversation-eligible model"
+      : "Change model";
 
   return (
-    <div className="cmp-bar">
-      {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
-          uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
-          sr-only hint does not suggest a model switch that cannot succeed. */}
-      <AttachButton
-        model={selectedModelCapability}
-        onFiles={onAttachFiles}
-        anyModelSupportsAttachments={models.some(
-          (m) => m.supportsImageInput || m.supportsDocumentInput,
-        )}
-      />
-      <span className="spacer" />
-      {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
-      <label className="cmp-model mono" title={selectTitle}>
-        <Icons.cube size={13} style={{ color: "var(--accent)" }} />
-        <select
-          className="cmp-model-select"
-          value={selectValue}
-          aria-label="Model"
-          aria-disabled={noEligibleModels || loading ? "true" : undefined}
-          aria-describedby={selectDescribedBy}
-          title={selectTitle}
-          disabled={loading}
-          onChange={(event) => {
-            if (noEligibleModels || loading) return;
-            setSelectedModel(event.target.value);
-          }}
-        >
-          {loading ? (
-            <option value="" disabled>
-              Loading models…
-            </option>
-          ) : noEligibleModels ? (
-            <option value="">No conversation-eligible model</option>
-          ) : (
-            modelList(models).map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.id}
-              </option>
-            ))
+    <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
+      <div className="cmp-bar-main">
+        {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
+            uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
+            sr-only hint does not suggest a model switch that cannot succeed. */}
+        <AttachButton
+          model={selectedModelCapability}
+          onFiles={onAttachFiles}
+          anyModelSupportsAttachments={models.some(
+            (m) => m.supportsImageInput || m.supportsDocumentInput,
           )}
-        </select>
-        <Icons.chevron size={12} />
-      </label>
-      {/* Issue #153: explicit Launch-workflow affordance. Hidden when no
-          workflow-eligible model is selected (AC#2). Opens the picker dialog
-          only on explicit user click (AC#1). */}
-      <LaunchWorkflowButton
-        selectedModel={selectedModelCapability}
-        launch={launchWorkflowFromConversation}
-      />
-      {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
-          When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
-      {VOICE_SUPPORTED ? (
-        <button type="button" className="cmp-icon" aria-label="Voice" title="Voice">
-          <Icons.mic size={16} />
-        </button>
-      ) : null}
+        />
+        <LaunchWorkflowButton
+          selectedModel={selectedModelCapability}
+          compact={workflowCompact}
+          launch={launchWorkflowFromConversation}
+        />
+        {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
+        <label
+          className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
+          data-tip={controlsNarrow ? compactModelTip : undefined}
+        >
+          <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
+          <select
+            className="cmp-model-select"
+            value={selectValue}
+            aria-label="Model"
+            aria-disabled={noEligibleModels || loading ? "true" : undefined}
+            aria-describedby={selectDescribedBy}
+            disabled={loading}
+            onChange={(event) => {
+              if (noEligibleModels || loading) return;
+              setSelectedModel(event.target.value);
+            }}
+          >
+            {loading ? (
+              <option value="" disabled>
+                Loading models…
+              </option>
+            ) : noEligibleModels ? (
+              <option value="">No conversation-eligible model</option>
+            ) : (
+              modelList(models).map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.id}
+                </option>
+              ))
+            )}
+          </select>
+          {controlsNarrow ? null : <Icons.chevron size={12} />}
+        </label>
+        {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
+            When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
+        {VOICE_SUPPORTED ? (
+          <button type="button" className="cmp-icon ui-tip" aria-label="Voice" data-tip="Voice">
+            <Icons.mic size={16} />
+          </button>
+        ) : null}
+      </div>
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
         <span id={SEND_HINT_ID} className="sr-only">
@@ -392,10 +410,10 @@ function ComposerBar({
       {sending ? (
         <button
           type="button"
-          className="cmp-send cmp-send-cancel"
+          className="cmp-send cmp-send-cancel cmp-tip-end"
           data-on
           aria-label="Cancel response"
-          title="Cancel response"
+          data-tip="Cancel response"
           onClick={cancelSend}
         >
           <Icons.close size={16} />
@@ -403,21 +421,19 @@ function ComposerBar({
       ) : (
         <button
           type={sendBlocked ? "button" : "submit"}
-          className="cmp-send"
+          className="cmp-send cmp-tip-end"
           data-on={!sendBlocked}
+          data-tip={
+            noEligibleModels
+              ? "No model available"
+              : budgetExceeded
+                ? "Context too large"
+                : loading
+                  ? "Connecting to gateway"
+                  : SEND_TOOLTIP
+          }
           aria-disabled={sendBlocked}
           aria-describedby={sendDescribedBy}
-          title={
-            noEligibleModels
-              ? "No conversation-eligible model is configured — connect a gateway in Settings"
-              : budgetExceeded
-                ? "Context exceeds the model's window — clear history or pick a larger-context model"
-                : loading
-                  ? "Connecting to your gateway"
-                  : draftEmpty
-                    ? "Type a message to send"
-                    : SEND_TITLE
-          }
           aria-label="Send message"
         >
           <Icons.arrowUp size={16} />
@@ -502,9 +518,23 @@ interface ComposerCoreProps {
   readonly session: ChatSessionApi;
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly minimal?: boolean;
+  readonly compact?: boolean;
+  readonly controlsNarrow?: boolean;
+  readonly barCompact?: boolean;
+  readonly workflowCompact?: boolean;
 }
 
-function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): ReactNode {
+function ComposerCore({
+  session,
+  ready,
+  placeholder,
+  minimal = false,
+  compact = false,
+  controlsNarrow = false,
+  barCompact = false,
+  workflowCompact = false,
+}: ComposerCoreProps): ReactNode {
   const {
     draft,
     loading,
@@ -570,7 +600,7 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
   );
 
   return (
-    <div className="cmp-box">
+    <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
       {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
       <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
       {/* Chip strip below the textarea, above the composer bar (AC #3) */}
@@ -596,16 +626,23 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
           composer focus. Hidden when there is nothing to announce. */}
       <SendLifecycleStatus status={sendStatus} />
       {/* Issue #151 — context-pressure indicator + clear-history affordance */}
-      <BudgetIndicator
-        budget={budget}
-        onClearHistory={clearHistory}
-        disabled={sending || loading}
-      />
+      {minimal ? null : (
+        <BudgetIndicator
+          budget={budget}
+          onClearHistory={clearHistory}
+          disabled={sending || loading}
+          compact={compact}
+        />
+      )}
       <ComposerBar
         session={session}
         ready={ready}
         selectedModelCapability={selectedModelCapability}
         onAttachFiles={handleFiles}
+        compact={compact}
+        controlsNarrow={controlsNarrow}
+        barCompact={barCompact}
+        workflowCompact={workflowCompact}
         budgetExceeded={budgetExceeded}
       />
     </div>
@@ -618,11 +655,28 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
 interface EmptyComposerStateProps {
   readonly session: ChatSessionApi;
   readonly noEligibleModels: boolean;
+  readonly minimal?: boolean;
 }
 
-function EmptyComposerState({ session, noEligibleModels }: EmptyComposerStateProps): ReactNode {
+function EmptyComposerState({
+  session,
+  noEligibleModels,
+  minimal = false,
+}: EmptyComposerStateProps): ReactNode {
   const { activeProject, setDraft } = session;
   const prompts = starterPrompts(activeProject);
+  if (minimal) {
+    return (
+      <div className="chatw-empty chatw-empty-minimal" role="note" aria-label="Conversation ready">
+        <h2 className="chatw-empty-headline">Start a Keiko conversation</h2>
+        <p className="chatw-empty-sub">
+          {activeProject !== undefined
+            ? `Working in ${activeProject.name}. What would you like to explore?`
+            : "Type a message to start."}
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="chatw-empty">
       <h2 className="chatw-empty-headline">Start a Keiko conversation</h2>
@@ -745,10 +799,10 @@ function MiniChat({
         {sending ? (
           <button
             type="button"
-            className="cmp-send cmp-send-float cmp-send-cancel"
+            className="cmp-send cmp-send-float cmp-send-cancel cmp-tip-end"
             data-on
             aria-label="Cancel response"
-            title="Cancel response"
+            data-tip="Cancel response"
             onClick={cancelSend}
           >
             <Icons.close size={16} />
@@ -756,11 +810,11 @@ function MiniChat({
         ) : (
           <button
             type={ready ? "submit" : "button"}
-            className="cmp-send cmp-send-float"
+            className="cmp-send cmp-send-float cmp-tip-end"
             data-on={ready}
+            data-tip={SEND_TOOLTIP}
             aria-disabled={!ready}
             aria-label="Send message"
-            title={SEND_TITLE}
           >
             <Icons.arrowUp size={16} />
           </button>
@@ -1345,6 +1399,7 @@ function MemoryPanel({
   acceptCandidate,
   rejectCandidate,
   forgetMemoryAction,
+  compact = false,
 }: {
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
@@ -1354,6 +1409,7 @@ function MemoryPanel({
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
+  readonly compact?: boolean;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
@@ -1365,6 +1421,21 @@ function MemoryPanel({
     disclosureButtonRef.current?.focus();
   }, []);
   const memoryCount = latestMemory?.context.memories.length ?? 0;
+  const memoryDisclosureLabel =
+    memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included";
+  const budgetControl = (
+    <label className="chat-memory-budget">
+      <span>Budget (tokens)</span>
+      <input
+        type="number"
+        min={0}
+        step={100}
+        value={memoryBudgetTokens}
+        onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
+      />
+    </label>
+  );
+
   return (
     <section className="chat-memory-panel" aria-label="Conversation memory">
       <div className="chat-memory-panel-head">
@@ -1380,27 +1451,22 @@ function MemoryPanel({
           />
           <span>MemoriaViva {memoryEnabled ? "on" : "off"}</span>
         </div>
-        <label className="chat-memory-budget">
-          <span>Budget (tokens)</span>
-          <input
-            type="number"
-            min={0}
-            step={100}
-            value={memoryBudgetTokens}
-            onChange={(event) =>
-              setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))
-            }
-          />
-        </label>
+        {compact ? null : budgetControl}
         <button
           ref={disclosureButtonRef}
           type="button"
-          className="chip"
+          className={`chip${compact ? " chip-icon chat-memory-disclosure-toggle ui-tip cmp-tip-end" : ""}`}
           aria-expanded={open}
           aria-controls={disclosureId}
+          aria-label={memoryDisclosureLabel}
+          data-tip={compact ? memoryDisclosureLabel : undefined}
           onClick={() => setOpen((current) => !current)}
         >
-          {memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included"}
+          {compact ? (
+            <Icons.brainSlash size={16} style={{ color: "var(--accent)" }} />
+          ) : (
+            memoryDisclosureLabel
+          )}
         </button>
       </div>
       {open ? (
@@ -1471,7 +1537,14 @@ function MemoryPanel({
   );
 }
 
-export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
+export function ChatWindow({
+  mini = false,
+  minimalChat = false,
+  compact = false,
+  controlsNarrow = false,
+  barCompact = false,
+  workflowCompact = false,
+}: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
   const {
     messages,
@@ -1510,6 +1583,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
   const prevSendingRef = useRef(false);
   const lastVisible = visible.length > 0 ? visible[visible.length - 1] : undefined;
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
+  const effectiveMinimal = minimalChat;
+  const effectiveCompact = compact || mini;
+  const effectiveControlsNarrow = controlsNarrow || mini;
+  const effectiveBarCompact = barCompact || effectiveMinimal;
+  const effectiveWorkflowCompact = workflowCompact || mini || effectiveMinimal;
   useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
@@ -1517,30 +1595,10 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
     if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [visible.length, sending, lastContent]);
 
-  if (mini) {
-    return (
-      <div className="chatw chatw-mini">
-        {activeChat !== undefined ? (
-          <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
-        ) : null}
-        {noEligibleModels ? <NoModelAlert /> : null}
-        <MiniChat session={session} ready={ready} />
-        {/* uiux-fix F009 C079 — the mini branch previously rendered no error
-            path at all: a failed send removed the optimistic message and the
-            user saw nothing. Same role="alert" block as the full composer. */}
-        {error !== undefined ? (
-          <ErrorNoticeFromError
-            error={error}
-            fallback="Could not send message."
-            onDismiss={session.clearError}
-          />
-        ) : null}
-      </div>
-    );
-  }
-
   return (
-    <div className="chatw">
+    <div
+      className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
+    >
       {activeChat !== undefined ? (
         <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
       ) : null}
@@ -1554,6 +1612,7 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
           forgetMemoryAction={forgetMemoryAction}
+          compact={effectiveCompact || effectiveMinimal}
         />
       ) : null}
       {noEligibleModels ? (
@@ -1586,7 +1645,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
       >
         {visible.length === 0 ? (
           activeChat !== undefined ? (
-            <EmptyComposerState session={session} noEligibleModels={noEligibleModels} />
+            <EmptyComposerState
+              session={session}
+              noEligibleModels={noEligibleModels}
+              minimal={effectiveMinimal}
+            />
           ) : (
             <NoChatState />
           )
@@ -1626,13 +1689,22 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
       {visible.length > 0 ? (
         <div className="chatw-foot">
           <form
-            className="composer"
+            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
               event.preventDefault();
               void sendMessage();
             }}
           >
-            <ComposerCore session={session} ready={ready} placeholder={COMPOSER_PLACEHOLDER} />
+            <ComposerCore
+              session={session}
+              ready={ready}
+              placeholder={COMPOSER_PLACEHOLDER}
+              minimal={effectiveMinimal}
+              compact={effectiveCompact}
+              controlsNarrow={effectiveControlsNarrow}
+              barCompact={effectiveBarCompact}
+              workflowCompact={effectiveWorkflowCompact}
+            />
             {error !== undefined ? (
               <ErrorNoticeFromError
                 error={error}
@@ -1649,7 +1721,7 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
       {visible.length === 0 && activeChat !== undefined ? (
         <div className="chatw-foot">
           <form
-            className="composer"
+            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
               event.preventDefault();
               void sendMessage();
@@ -1659,6 +1731,11 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
               session={session}
               ready={ready}
               placeholder={loading ? "Connecting to your gateway…" : COMPOSER_PLACEHOLDER}
+              minimal={effectiveMinimal}
+              compact={effectiveCompact}
+              controlsNarrow={effectiveControlsNarrow}
+              barCompact={effectiveBarCompact}
+              workflowCompact={effectiveWorkflowCompact}
             />
             {error !== undefined ? (
               <ErrorNoticeFromError

@@ -263,7 +263,7 @@ describe("AC #2 — disabled controls aria-describedby", () => {
     const sendBtn = screen.getByRole("button", { name: "Send message" });
     expect(sendBtn).not.toHaveAttribute("disabled");
     expect(sendBtn).toHaveAttribute("aria-disabled", "true");
-    expect(sendBtn).toHaveAttribute("title", "Connecting to your gateway");
+    expect(sendBtn).toHaveAttribute("data-tip", "Connecting to gateway");
     const describedById = sendBtn.getAttribute("aria-describedby");
     expect(describedById).toBe("cmp-loading-status");
     expect(document.getElementById(describedById ?? "")).toHaveTextContent(

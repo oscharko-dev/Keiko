@@ -1581,6 +1581,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+  min-width: 0;
+}
+.cmp-bar-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .cmp-add {
   width: 32px;
@@ -1598,6 +1606,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-mode {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
   padding: 7px 11px;
   border-radius: 9px;
@@ -1612,15 +1621,38 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-model {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
   padding: 7px 11px;
+  border: 1px solid var(--line-soft);
   border-radius: 9px;
   font-size: 12.5px;
+  background: transparent;
   color: var(--fg-muted);
 }
 .cmp-model:hover {
   background: var(--card-2);
   color: var(--fg);
+}
+.cmp-model:focus-within {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.cmp-pill-standard {
+  flex: 0 0 184px;
+  width: 184px;
+  max-width: 184px;
+}
+.cmp-mode > svg,
+.cmp-model > svg {
+  flex: none;
+}
+.cmp-mode.cmp-pill-standard > svg:last-child {
+  margin-left: auto;
+}
+.cmp-model > .cmp-model-select {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .cmp-eff {
   color: var(--fg-faint);
@@ -1660,6 +1692,124 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-send:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 2px;
+}
+.cmp-mode-compact {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+.cmp-mode:not(.cmp-mode-compact) {
+  max-width: 184px;
+}
+.cmp-mode[data-tip]::after,
+.cmp-model[data-tip]::after,
+.cmp-send[data-tip]::after,
+.cmp-icon[data-tip]::after,
+.ui-tip[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(180px, calc(100vw - 24px));
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: normal;
+  text-wrap: balance;
+  text-align: center;
+  box-shadow: var(--shadow-pop);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 9999;
+}
+.cmp-tip-start[data-tip]::after {
+  left: 0;
+  transform: none;
+  transform-origin: left bottom;
+  text-align: left;
+}
+.cmp-tip-end[data-tip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+  transform-origin: right bottom;
+  text-align: right;
+}
+.cmp-bar-compact {
+  flex-wrap: nowrap;
+}
+.cmp-bar-compact .cmp-bar-main {
+  min-width: 0;
+}
+.cmp-model-compact {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  gap: 5px;
+  font-size: 12px;
+  justify-content: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-muted);
+}
+.cmp-model-compact:hover {
+  background: var(--card-2);
+  color: var(--fg);
+}
+.cmp-model-compact,
+.cmp-mode-compact,
+.cmp-model,
+.cmp-mode {
+  min-width: 0;
+}
+.cmp-model-compact .cmp-model-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  opacity: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.cmp-bar-compact .cmp-model-select {
+  max-width: 118px;
+}
+.cmp-icon,
+.cmp-send {
+  position: relative;
+}
+.cmp-send {
+  flex: none;
+  margin-left: auto;
+}
+.cmp-mode[data-tip]:hover::after,
+.cmp-mode[data-tip]:focus-visible::after,
+.cmp-model[data-tip]:hover::after,
+.cmp-model[data-tip]:focus-within::after,
+.cmp-send[data-tip]:hover::after,
+.cmp-send[data-tip]:focus-visible::after,
+.cmp-icon[data-tip]:hover::after,
+.cmp-icon[data-tip]:focus-visible::after,
+.ui-tip[data-tip]:hover::after,
+.ui-tip[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+.ui-tip {
+  position: relative;
 }
 
 /* ---------- ATTACHMENT SURFACES (Issue #147) ---------- */
@@ -1804,6 +1954,13 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-color: var(--line);
   color: var(--fg);
 }
+.chip-icon {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  justify-content: center;
+}
 /* stale .chip-value rule removed — markup uses .chip-label, which inherits
    .chip styles (uiux-fix F037 C328) */
 
@@ -1842,6 +1999,13 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border: 1px solid var(--line-soft);
   background: var(--card);
   color: var(--fg);
+}
+.chat-memory-disclosure-toggle {
+  margin-left: auto;
+  flex: none;
+}
+.chat-memory-disclosure-toggle[data-tip]::after {
+  max-width: min(144px, calc(100vw - 20px));
 }
 
 .chat-memory-disclosure {
@@ -1945,6 +2109,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 
 /* ---------- COMPOSER (compact, inside chat window) ---------- */
 .composer-compact {
+  max-width: none;
+  margin: 0;
+}
+.composer-chat-compact {
   max-width: none;
   margin: 0;
 }
@@ -3882,16 +4050,22 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .composer-fill {
   height: 100%;
   display: flex;
+  flex: 1;
   /* column (uiux-fix F041 C139): the send-lifecycle status region renders BELOW
      the input box instead of being squeezed beside it as a row flex item. */
   flex-direction: column;
   padding: 12px;
   min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 .cmp-box-fill {
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   padding: 0;
   overflow: hidden;
 }
@@ -4706,6 +4880,104 @@ select.dlg-input {
   max-width: none;
   margin: 0;
 }
+.chatw-compact .chatw-foot {
+  padding: 0 12px 12px;
+}
+.chatw-compact .chatw-scroll {
+  padding: 4px 12px 14px;
+}
+.chatw-compact .chat-memory-panel {
+  padding: 8px 12px 0;
+}
+.chatw-compact .chat-memory-panel-head {
+  gap: 8px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.chatw-compact .chat-memory-toggle,
+.chatw-compact .chat-memory-budget,
+.chatw-compact .scope-grounding {
+  font-size: 11.5px;
+}
+.chatw-compact .chat-memory-budget input {
+  width: 72px;
+  padding: 4px 8px;
+}
+.chatw-compact .scope-grounding-select {
+  max-width: 180px;
+}
+.chatw-compact .cmp-box {
+  padding: 12px 12px 8px;
+}
+.chatw-compact .cmp-budget {
+  font-size: 11.5px;
+}
+.chatw-compact .cmp-budget-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chatw-compact .cmp-budget-info {
+  width: 14px;
+  height: 14px;
+}
+.chatw-minimal .chatw-scroll {
+  padding: 0 6px 4px;
+}
+.chatw-minimal .chatw-foot {
+  padding: 0 6px 6px;
+}
+.chatw-minimal .chat-memory-panel {
+  padding: 4px 6px 0;
+}
+.chatw-minimal .chat-memory-panel-head {
+  gap: 4px;
+  justify-content: space-between;
+  align-items: center;
+}
+.chatw-minimal .chat-memory-toggle,
+.chatw-minimal .chat-memory-budget,
+.chatw-minimal .scope-grounding {
+  font-size: 11px;
+}
+.chatw-minimal .chat-memory-budget input {
+  width: 68px;
+  padding: 3px 7px;
+}
+.chatw-minimal .scope-grounding-select {
+  max-width: 136px;
+}
+.chatw-minimal .cmp-box {
+  padding: 6px;
+  gap: 4px;
+}
+.chatw-minimal .cmp-input {
+  min-height: 44px;
+  padding: 7px 8px 9px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.chatw-minimal .cmp-bar {
+  gap: 4px;
+  margin-top: 6px;
+}
+.chatw-minimal .cmp-model-select {
+  max-width: 100%;
+}
+.chatw-empty-minimal {
+  min-height: 0;
+  padding: 4px 2px 6px;
+}
+.chatw-minimal .chatw-empty-headline {
+  margin-bottom: 4px;
+  font-size: 16px;
+}
+.chatw-minimal .chatw-empty-sub {
+  max-width: 24ch;
+  margin-bottom: 0;
+  font-size: 10.5px;
+}
 .chat-msg {
   display: flex;
   margin-bottom: 14px;
@@ -5135,9 +5407,7 @@ select.dlg-input {
 
 /* focus-visible ring for model select (WCAG 2.4.7) */
 .cmp-model-select:focus-visible {
-  outline: 2px solid var(--accent-text);
-  outline-offset: 2px;
-  border-radius: 4px;
+  outline: none;
 }
 
 /* ---------- RIGHT RAIL ---------- */

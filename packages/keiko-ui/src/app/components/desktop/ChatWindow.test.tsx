@@ -811,6 +811,71 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
   });
 });
 
+describe("ChatWindow compact responsive controls (#1216)", () => {
+  it("compacts workflow and model controls together while keeping send anchored", () => {
+    const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+          draft: "hello",
+        })}
+      >
+        <ChatWindow compact controlsNarrow barCompact workflowCompact />
+      </ChatSessionProvider>,
+    );
+
+    expect(container.querySelector(".chatw")).toHaveClass("chatw-compact");
+    const launch = screen.getByRole("button", { name: "Launch workflow" });
+    expect(launch).toHaveClass("cmp-mode-compact");
+    expect(launch).toHaveAttribute("data-tip", "Launch workflow");
+
+    const modelControl = container.querySelector(".cmp-model");
+    expect(modelControl).toHaveClass("cmp-model-compact");
+    expect(modelControl).toHaveAttribute("data-tip", "Change model");
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+      "data-tip",
+      "Send message",
+    );
+  });
+
+  it("uses the compact no-memory disclosure icon and hides budget in minimal mode", () => {
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          activeChat: makeChat(),
+          budget: {
+            approximateBytes: 2_000,
+            approximateTokens: 500,
+            contextWindowTokens: 10_000,
+            reservedOutputTokens: 2_000,
+            availableInputTokens: 8_000,
+            pressure: "low",
+            breakdown: {
+              draftBytes: 100,
+              historyBytes: 1_900,
+              documentBytes: 0,
+              repoContextBytes: 0,
+              knowledgeBytes: 0,
+              memoryBytes: 0,
+            },
+          },
+        })}
+      >
+        <ChatWindow minimalChat compact />
+      </ChatSessionProvider>,
+    );
+
+    expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
+    const disclosure = screen.getByRole("button", { name: "No memories included" });
+    expect(disclosure).toHaveClass("chat-memory-disclosure-toggle");
+    expect(disclosure).toHaveAttribute("data-tip", "No memories included");
+    expect(screen.queryByText(/Approximate context:/)).toBeNull();
+  });
+});
+
 describe("ChatWindow memory controls", () => {
   it("lets users disable MemoriaViva for the next request and adjust the context budget", () => {
     const setMemoryEnabled = vi.fn();

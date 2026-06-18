@@ -159,7 +159,15 @@ function ChatWindowSessionHost({
       ) : waitingForTarget ? (
         <div className="lk-loading">Opening chat...</div>
       ) : (
-        <ChatWindow mini={ctx.mini === true} linkedRoot={ctx.linkedRoot} />
+        <ChatWindow
+          mini={ctx.mini === true}
+          minimalChat={ctx.minimalChat === true}
+          compact={ctx.compact === true}
+          controlsNarrow={ctx.controlsNarrow === true}
+          barCompact={ctx.barCompact === true}
+          workflowCompact={ctx.workflowCompact === true}
+          linkedRoot={ctx.linkedRoot}
+        />
       )}
     </ChatSessionProvider>
   );

@@ -412,21 +412,29 @@ describe("isConversationEligibleModel (AC #2 wire-level)", () => {
 // ---------------------------------------------------------------------------
 
 describe("ChatWindow mini composer (AC #2)", () => {
-  it("renders the mini composer and inherits selectedModel from the session (no own picker)", () => {
-    // The mini composer does not render its own model select; it relies on the
-    // parent session (ChatSessionProvider) for the selected model.
+  it("renders the mini composer and inherits selectedModel from the session", () => {
     renderWindow(
       makeSession({
+        activeChat: {
+          id: "chat-1",
+          projectPath: "/repo",
+          title: "Chat 1",
+          selectedModel: "inherited-model",
+          branchLabel: undefined,
+          status: undefined,
+          connectedScope: undefined,
+          localKnowledgeScope: undefined,
+          createdAt: 1,
+          updatedAt: 2,
+        },
         selectedModel: "inherited-model",
         noEligibleModels: false,
         models: [chatModel("inherited-model")],
       }),
       true, // mini=true
     );
-    // The mini composer renders a textarea but no model <select> at the top level
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
-    // The model select is not rendered in mini mode (no ComposerBar)
-    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.getByLabelText("Model")).toHaveValue("inherited-model");
   });
 
   it("renders the no-model alert in mini mode when noEligibleModels is true", () => {

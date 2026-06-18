@@ -79,10 +79,10 @@ describe("Header connection status", () => {
 });
 
 describe("Header split action wording (F039 C401)", () => {
-  it("uses the CommandPalette's wording 'Split front windows' for title and aria-label", () => {
+  it("uses the CommandPalette's wording 'Split front windows' for tooltip and aria-label", () => {
     renderHeader();
     const btn = screen.getByRole("button", { name: "Split front windows" });
-    expect(btn.getAttribute("title")).toBe("Split front windows");
+    expect(btn.getAttribute("data-tip")).toBe("Split front windows");
   });
 });
 
