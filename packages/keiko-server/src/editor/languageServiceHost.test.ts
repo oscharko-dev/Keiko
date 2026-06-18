@@ -2,6 +2,10 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  type LanguageServiceLimits,
+} from "@oscharko-dev/keiko-contracts";
 import ts from "typescript";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createContainedLanguageServiceHost } from "./languageServiceHost.js";
@@ -25,7 +29,10 @@ afterEach(() => {
   rmSync(dirname(root), { recursive: true, force: true });
 });
 
-function host(overlayText = "export const x = 1;\n"): ts.LanguageServiceHost {
+function host(
+  overlayText = "export const x = 1;\n",
+  limits: LanguageServiceLimits = DEFAULT_LANGUAGE_SERVICE_LIMITS,
+): ts.LanguageServiceHost {
   return createContainedLanguageServiceHost({
     fs: nodeWorkspaceFs,
     realRoot: root,
@@ -33,6 +40,7 @@ function host(overlayText = "export const x = 1;\n"): ts.LanguageServiceHost {
     overlayText,
     languageId: "typescript",
     cancellation: NO_CANCEL,
+    limits,
   });
 }
 
@@ -60,6 +68,45 @@ describe("contained language-service host", () => {
     const h = host();
     expect(h.readFile(link)).toBeUndefined();
     expect(h.getScriptSnapshot(link)).toBeUndefined();
+  });
+
+  it("refuses a denied real target reached through an allowed-looking symlink", () => {
+    const secret = join(root, ".env");
+    const link = join(root, "src", "config.ts");
+    writeFileSync(secret, "export const secret = 'do-not-read';\n", "utf8");
+    symlinkSync(secret, link);
+    const h = host();
+    expect(h.readFile(link)).toBeUndefined();
+    expect(h.fileExists(link)).toBe(false);
+    expect(h.getScriptSnapshot(link)).toBeUndefined();
+  });
+
+  it("enforces per-operation workspace read file and byte limits", () => {
+    for (let index = 0; index < 80; index += 1) {
+      const suffix = String(index);
+      writeFileSync(
+        join(root, "src", `file-${suffix}.ts`),
+        `export const value${suffix} = 1;\n`,
+        "utf8",
+      );
+    }
+    const fileLimited = host("export const x = 1;\n", {
+      ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+      maxWorkspaceReadFiles: 32,
+    });
+    const reads = Array.from({ length: 80 }, (_unused, index) =>
+      fileLimited.readFile(join(root, "src", `file-${String(index)}.ts`)),
+    );
+    const successfulReads = reads.filter((value): value is string => value !== undefined);
+    expect(successfulReads.length).toBeGreaterThan(0);
+    expect(successfulReads.length).toBeLessThan(reads.length);
+
+    const byteLimited = host("export const x = 1;\n", {
+      ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+      maxWorkspaceReadFileBytes: 4,
+      maxWorkspaceReadBytes: 4,
+    });
+    expect(byteLimited.readFile(join(root, "src", "inside.ts"))).toBeUndefined();
   });
 
   it("still serves the TypeScript compiler's own default library files", () => {

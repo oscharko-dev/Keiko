@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -115,6 +115,28 @@ describe("completion (model-free)", () => {
       expect(outcome.result.items.map((item) => item.label)).toContain("gamma");
     }
   });
+
+  it("keeps JavaScript overlays analyzable even when tsconfig disables allowJs", () => {
+    writeFileSync(
+      join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { allowJs: false } }),
+      "utf8",
+    );
+    const text = "const obj = { gamma: 1 };\nobj.\n";
+    const outcome = runLanguageOperation(
+      {
+        operation: "completion",
+        root,
+        document: { path: "src/b.js", languageId: "javascript", text },
+        position: { line: 1, character: 4 },
+      },
+      options("src/b.js"),
+    );
+    expect(outcome.kind).toBe("completion");
+    if (outcome.kind === "completion") {
+      expect(outcome.result.items.map((item) => item.label)).toContain("gamma");
+    }
+  });
 });
 
 describe("diagnostics reflect the unsaved overlay, not disk", () => {
@@ -199,6 +221,32 @@ describe("cross-file resolution and tsconfig discovery", () => {
       // The import resolved (no "cannot find module") and the argument is type-checked against it.
       expect(messages).not.toContain("Cannot find module");
       expect(messages.toLowerCase()).toContain("not assignable");
+    }
+  });
+
+  it("does not read a denied file reached through an allowed-looking symlink import", () => {
+    writeFileSync(
+      join(root, ".env"),
+      "export const PASSWORD = 'bank-super-secret' as const;\n",
+      "utf8",
+    );
+    try {
+      symlinkSync(join(root, ".env"), join(root, "src", "config.ts"));
+    } catch {
+      return;
+    }
+    const overlay = "import { PASSWORD } from './config.js';\nexport const n: 1 = PASSWORD;\n";
+    const outcome = runLanguageOperation(
+      { operation: "diagnostics", root, document: tsDocument("src/main.ts", overlay) },
+      options("src/main.ts"),
+    );
+    expect(outcome.kind).toBe("diagnostics");
+    if (outcome.kind === "diagnostics") {
+      const messages = outcome.result.diagnostics
+        .map((diagnostic) => diagnostic.message)
+        .join("\n");
+      expect(messages).not.toContain("bank-super-secret");
+      expect(messages).toContain("Cannot find module");
     }
   });
 
@@ -447,5 +495,19 @@ describe("provider pluggability (AC7)", () => {
       expect(outcome.result.diagnostics[0]?.message).toBe("stub diagnostic");
       expect(outcome.result.diagnostics[0]?.source).toBe("stub");
     }
+  });
+
+  it("rejects operations a provider descriptor does not advertise", () => {
+    const registry = createLanguageProviderRegistry([stubProvider()]);
+    const outcome = runLanguageOperation(
+      {
+        operation: "completion",
+        root,
+        document: { path: "src/x.fic", languageId: "fictional", text: "anything" },
+        position: { line: 0, character: 0 },
+      },
+      options("src/x.fic", { registry }),
+    );
+    expect(outcome).toMatchObject({ kind: "error", code: "UNSUPPORTED_OPERATION" });
   });
 });

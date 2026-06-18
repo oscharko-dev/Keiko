@@ -40,9 +40,10 @@ export function sanitizeDiagnostics(
   raw: LanguageDiagnosticsRaw,
   limits: LanguageServiceLimits,
 ): LanguageDiagnosticsResult {
+  const capped = raw.diagnostics.slice(0, limits.maxDiagnostics);
   return {
-    diagnostics: raw.diagnostics.map((diagnostic) => sanitizeDiagnostic(diagnostic, limits)),
-    truncated: raw.truncated,
+    diagnostics: capped.map((diagnostic) => sanitizeDiagnostic(diagnostic, limits)),
+    truncated: raw.truncated || raw.diagnostics.length > capped.length,
   };
 }
 
@@ -70,10 +71,11 @@ export function sanitizeCompletion(
   result: LanguageCompletionResult,
   limits: LanguageServiceLimits,
 ): LanguageCompletionResult {
+  const capped = result.items.slice(0, limits.maxCompletionItems);
   return {
-    items: result.items.map((item) => sanitizeCompletionItem(item, limits)),
+    items: capped.map((item) => sanitizeCompletionItem(item, limits)),
     isIncomplete: result.isIncomplete,
-    truncated: result.truncated,
+    truncated: result.truncated || result.items.length > capped.length,
   };
 }
 
@@ -107,8 +109,9 @@ export function sanitizeSymbols(
   raw: LanguageSymbolsRaw,
   limits: LanguageServiceLimits,
 ): LanguageSymbolResult {
+  const capped = raw.symbols.slice(0, limits.maxSymbols);
   return {
-    symbols: raw.symbols.map((symbol) => sanitizeSymbol(symbol, limits)),
-    truncated: raw.truncated,
+    symbols: capped.map((symbol) => sanitizeSymbol(symbol, limits)),
+    truncated: raw.truncated || raw.symbols.length > capped.length,
   };
 }

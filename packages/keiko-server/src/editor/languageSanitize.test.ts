@@ -63,6 +63,22 @@ describe("sanitizeCompletion", () => {
     expect(result.isIncomplete).toBe(true);
     expect(result.truncated).toBe(true);
   });
+
+  it("caps items centrally when a provider returns too many", () => {
+    const result = sanitizeCompletion(
+      {
+        items: [
+          { label: "a", kind: "variable" },
+          { label: "b", kind: "variable" },
+        ],
+        isIncomplete: false,
+        truncated: false,
+      },
+      { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxCompletionItems: 1 },
+    );
+    expect(result.items).toEqual([{ label: "a", kind: "variable" }]);
+    expect(result.truncated).toBe(true);
+  });
 });
 
 describe("sanitizeDiagnostics", () => {
@@ -98,6 +114,21 @@ describe("sanitizeDiagnostics", () => {
       DEFAULT_LANGUAGE_SERVICE_LIMITS,
     );
     expect("code" in (result.diagnostics[0] ?? {})).toBe(false);
+  });
+
+  it("caps diagnostics centrally when a provider returns too many", () => {
+    const result = sanitizeDiagnostics(
+      {
+        diagnostics: [
+          { range, severity: "warning", message: "a", source: "typescript" },
+          { range, severity: "warning", message: "b", source: "typescript" },
+        ],
+        truncated: false,
+      },
+      { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxDiagnostics: 1 },
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.truncated).toBe(true);
   });
 });
 
@@ -142,5 +173,20 @@ describe("sanitizeSymbols", () => {
       DEFAULT_LANGUAGE_SERVICE_LIMITS,
     );
     expect(result.symbols[0]).toEqual({ name: "n", kind: "class", range });
+  });
+
+  it("caps symbols centrally when a provider returns too many", () => {
+    const result = sanitizeSymbols(
+      {
+        symbols: [
+          { name: "a", kind: "class", range },
+          { name: "b", kind: "class", range },
+        ],
+        truncated: false,
+      },
+      { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxSymbols: 1 },
+    );
+    expect(result.symbols).toEqual([{ name: "a", kind: "class", range }]);
+    expect(result.truncated).toBe(true);
   });
 });

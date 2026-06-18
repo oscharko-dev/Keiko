@@ -6,6 +6,12 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+import {
+  buildRedactor,
+  createInMemoryUiStore,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "./index.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 
@@ -232,6 +238,58 @@ describe("unknown API routes", () => {
     });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+  });
+
+  it("serves POST /api/editor/language through the live BFF dispatch path (#1198)", async () => {
+    const workspaceRoot = join(staticRoot, "workspace");
+    await mkdir(join(workspaceRoot, "src"), { recursive: true });
+    const store = createInMemoryUiStore();
+    store.createProject(workspaceRoot, "fixture");
+    const handlerDeps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store,
+    };
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    try {
+      const response = await fetch(`${baseUrl()}/api/editor/language`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({
+          operation: "completion",
+          root: workspaceRoot,
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: "const value = { alpha: 1 };\nvalue.\n",
+          },
+          position: { line: 1, character: 6 },
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { result?: { items?: { label: string }[] } };
+      expect(body.result?.items?.map((item) => item.label)).toContain("alpha");
+    } finally {
+      store.close();
+    }
   });
 });
 
