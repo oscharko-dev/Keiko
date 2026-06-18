@@ -122,6 +122,48 @@ export {
   parseEditorDocumentVersion,
 } from "./editor-session.js";
 
+// ─── Language service (Issue #1198) ───────────────────────────────────────────────
+// Provider-pluggable, language-agnostic deterministic language-intelligence contracts
+// (completion, diagnostics, hover, document symbols). Owned by #1198, disjoint from the
+// editor-session namespace (#1197). The TS/JS provider is first; the LSP expansion is staged (#1213).
+export type {
+  LanguageServiceOperation,
+  LanguageServiceErrorCode,
+  LanguagePosition,
+  LanguageRange,
+  LanguageDocumentOverlay,
+  LanguageDiagnosticSeverity,
+  LanguageDiagnostic,
+  LanguageDiagnosticsResult,
+  LanguageCompletionItemKind,
+  LanguageCompletionItem,
+  LanguageCompletionResult,
+  LanguageHoverResult,
+  LanguageSymbolKind,
+  LanguageDocumentSymbol,
+  LanguageSymbolResult,
+  LanguageProviderDescriptor,
+  LanguageServiceCapabilities,
+  LanguageServiceLimits,
+  LanguageDiagnosticsRequest,
+  LanguageCompletionRequest,
+  LanguageHoverRequest,
+  LanguageSymbolsRequest,
+  LanguageServiceRequest,
+  LanguageServiceParseOk,
+  LanguageServiceParseFail,
+  LanguageServiceParse,
+} from "./language-service.js";
+export {
+  LANGUAGE_SERVICE_SCHEMA_VERSION,
+  LANGUAGE_SERVICE_OPERATIONS,
+  LANGUAGE_SERVICE_ERROR_CODES,
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  isLanguagePosition,
+  isLanguageDocumentOverlay,
+  parseLanguageServiceRequest,
+} from "./language-service.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,

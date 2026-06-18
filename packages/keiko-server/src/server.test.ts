@@ -219,6 +219,20 @@ describe("unknown API routes", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
   });
+
+  it("rejects POST /api/editor/language without the CSRF header (#1198)", async () => {
+    const response = await fetch(`${baseUrl()}/api/editor/language`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "diagnostics",
+        root: "/tmp/x",
+        document: { path: "a.ts", languageId: "typescript", text: "const x = 1;\n" },
+      }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+  });
 });
 
 describe("CSRF guard — PATCH/DELETE methods (M1)", () => {
