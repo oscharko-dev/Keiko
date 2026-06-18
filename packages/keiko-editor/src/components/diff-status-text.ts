@@ -72,7 +72,7 @@ export function deriveDiffSummary(args: DiffSummaryArgs): DiffStatusViewModel {
     return {
       role: "alert",
       ariaLive: "assertive",
-      message: `Diff failed to load: ${args.loadState.message}`,
+      message: "Diff failed to load. Review actions that require the diff editor are unavailable.",
     };
   }
   if (args.model.totalFileCount === 0) {

@@ -87,11 +87,14 @@ interface FileRowProps {
 }
 
 function FileRow({ file, selected, onSelect, onOpenFile }: FileRowProps): ReactElement {
+  const statusLabel = diffFileStatusLabel(file.status);
+  const fileLabel = `${file.displayPath} ${statusLabel}${file.truncated ? " truncated" : ""}`;
   return (
     <li data-diff-status={file.status} data-truncated={file.truncated ? "true" : undefined}>
       <button
         type="button"
         data-testid="keiko-diff-file"
+        aria-label={fileLabel}
         aria-current={selected ? "true" : undefined}
         onClick={(): void => {
           onSelect(file.uri);
@@ -108,7 +111,7 @@ function FileRow({ file, selected, onSelect, onOpenFile }: FileRowProps): ReactE
           }}
         />
         <span>{file.displayPath}</span>
-        <span>{diffFileStatusLabel(file.status)}</span>
+        <span>{statusLabel}</span>
         {file.truncated ? <span>(truncated)</span> : null}
       </button>
       {onOpenFile === undefined ? null : (
@@ -352,7 +355,7 @@ function DiffEditorColumn(props: DiffEditorColumnProps): ReactElement {
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 }}>
       <DiffToolbar
-        canNavigate={canNavigateDiffs(props.selected)}
+        canNavigate={props.loadState.status === "ready" && canNavigateDiffs(props.selected)}
         actions={props.actions}
         onPrev={props.controller.goToPrev}
         onNext={props.controller.goToNext}

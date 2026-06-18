@@ -73,6 +73,16 @@ interface ResolvedEdit {
   readonly newText: string;
 }
 
+interface ByteLimitState {
+  bytes: number;
+  truncated: boolean;
+}
+
+export interface BoundedTextEditResult {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
 function resolveEdit(
   text: string,
   lineStarts: readonly number[],
@@ -110,4 +120,87 @@ export function applyTextEditsToText(original: string, edits: readonly EditorTex
   }
   out.push(original.slice(cursor));
   return out.join("");
+}
+
+function utf8ByteLength(codePoint: number): number {
+  if (codePoint <= 0x7f) {
+    return 1;
+  }
+  if (codePoint <= 0x7ff) {
+    return 2;
+  }
+  if (codePoint <= 0xffff) {
+    return 3;
+  }
+  return 4;
+}
+
+function appendWithinByteLimit(
+  out: string[],
+  text: string,
+  maxBytes: number,
+  state: ByteLimitState,
+): void {
+  if (state.truncated || text.length === 0) {
+    return;
+  }
+  if (maxBytes <= state.bytes) {
+    state.truncated = true;
+    return;
+  }
+
+  let end = 0;
+  for (let index = 0; index < text.length; ) {
+    const codePoint = text.codePointAt(index) ?? 0;
+    const codeUnits = codePoint > 0xffff ? 2 : 1;
+    const nextBytes = utf8ByteLength(codePoint);
+    if (state.bytes + nextBytes > maxBytes) {
+      if (end > 0) {
+        out.push(text.slice(0, end));
+      }
+      state.truncated = true;
+      return;
+    }
+    state.bytes += nextBytes;
+    end = index + codeUnits;
+    index += codeUnits;
+  }
+
+  out.push(text);
+}
+
+/**
+ * Apply `edits` like {@link applyTextEditsToText}, but stop appending output once `maxBytes` would be
+ * exceeded. The returned text is never larger than the byte budget and never splits a Unicode code
+ * point. Overlap validation still runs across all edits.
+ */
+export function applyTextEditsToTextWithinLimit(
+  original: string,
+  edits: readonly EditorTextEdit[],
+  maxBytes: number,
+): BoundedTextEditResult {
+  const state: ByteLimitState = { bytes: 0, truncated: false };
+  if (edits.length === 0) {
+    const out: string[] = [];
+    appendWithinByteLimit(out, original, maxBytes, state);
+    return { text: out.join(""), truncated: state.truncated };
+  }
+
+  const lineStarts = buildLineStarts(original);
+  const resolved = edits
+    .map((edit) => resolveEdit(original, lineStarts, edit))
+    .sort((a, b) => (a.start !== b.start ? a.start - b.start : a.end - b.end));
+
+  const out: string[] = [];
+  let cursor = 0;
+  for (const edit of resolved) {
+    if (edit.start < cursor) {
+      throw new OverlappingPatchEditError("patch contains overlapping edits");
+    }
+    appendWithinByteLimit(out, original.slice(cursor, edit.start), maxBytes, state);
+    appendWithinByteLimit(out, edit.newText, maxBytes, state);
+    cursor = edit.end;
+  }
+  appendWithinByteLimit(out, original.slice(cursor), maxBytes, state);
+  return { text: out.join(""), truncated: state.truncated };
 }

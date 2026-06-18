@@ -17,13 +17,18 @@
  */
 import type { FileContent } from "@oscharko-dev/keiko-contracts";
 
-import { applyTextEditsToText, isOverlappingPatchEditError } from "./apply-text-edits.js";
+import {
+  applyTextEditsToTextWithinLimit,
+  isOverlappingPatchEditError,
+} from "./apply-text-edits.js";
 import { inferMonacoLanguageId, type MonacoLanguageId } from "./monaco/language-inference.js";
 import type {
   EditorGeneratedPatch,
+  EditorOutputProvenance,
   EditorPatchFileChange,
   EditorPatchStatus,
   EditorPreviewedPatch,
+  EditorVerificationRef,
 } from "./types.js";
 
 /**
@@ -93,6 +98,10 @@ export interface PatchPreviewFile {
 export interface PatchPreviewModel {
   readonly patchId: string;
   readonly status: EditorPatchStatus;
+  /** Content-free metadata for the generated output behind this review model. */
+  readonly provenance: EditorOutputProvenance;
+  /** Optional verification metadata carried by the generated patch contract. */
+  readonly verification?: EditorVerificationRef | undefined;
   readonly files: readonly PatchPreviewFile[];
   /** Files included in {@link PatchPreviewModel.files}. */
   readonly fileCount: number;
@@ -128,18 +137,25 @@ function clampToLimit(
   text: string,
   maxBytes: number,
 ): { readonly text: string; readonly truncated: boolean } {
-  const encoded = new TextEncoder().encode(text);
-  if (encoded.length <= maxBytes) {
-    return { text, truncated: false };
+  if (maxBytes <= 0) {
+    return { text: "", truncated: text.length > 0 };
   }
-  // Truncate on the byte budget (not code units), so multi-byte content cannot overrun it. Back the
-  // cut off any trailing UTF-8 continuation bytes (0b10xxxxxx) so a code point is never split.
-  // Display-only; the file is flagged truncated.
-  let end = maxBytes;
-  while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) {
-    end -= 1;
+
+  let bytes = 0;
+  let end = 0;
+  for (let index = 0; index < text.length; ) {
+    const codePoint = text.codePointAt(index) ?? 0;
+    const codeUnits = codePoint > 0xffff ? 2 : 1;
+    const nextBytes =
+      codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (bytes + nextBytes > maxBytes) {
+      return { text: text.slice(0, end), truncated: true };
+    }
+    bytes += nextBytes;
+    end = index + codeUnits;
+    index += codeUnits;
   }
-  return { text: new TextDecoder().decode(encoded.subarray(0, end)), truncated: true };
+  return { text, truncated: false };
 }
 
 /**
@@ -156,20 +172,26 @@ function lookupSource(
 
 interface DiffSides {
   readonly status: PatchPreviewFileStatus;
+  readonly diffable?: boolean | undefined;
   readonly original: string;
   readonly modified: string;
+  readonly originalTruncated: boolean;
+  readonly modifiedTruncated: boolean;
   readonly note?: string | undefined;
 }
 
 function modifiedSides(
   change: EditorPatchFileChange,
   source: PatchPreviewSource | undefined,
+  maxBytesPerFile: number,
 ): DiffSides {
   if (source === undefined) {
     return {
       status: "unsupported",
       original: "",
       modified: "",
+      originalTruncated: false,
+      modifiedTruncated: false,
       note: "Original content unavailable — preview cannot be rendered.",
     };
   }
@@ -178,18 +200,30 @@ function modifiedSides(
       status: "unsupported",
       original: "",
       modified: "",
+      originalTruncated: false,
+      modifiedTruncated: false,
       note: "Original file is truncated — diff preview unavailable.",
     };
   }
   const original = source.content.text;
   try {
-    return { status: "modified", original, modified: applyTextEditsToText(original, change.edits) };
+    const originalClamp = clampToLimit(original, maxBytesPerFile);
+    const modified = applyTextEditsToTextWithinLimit(original, change.edits, maxBytesPerFile);
+    return {
+      status: "modified",
+      original: originalClamp.text,
+      modified: modified.text,
+      originalTruncated: originalClamp.truncated,
+      modifiedTruncated: modified.truncated,
+    };
   } catch (error) {
     if (isOverlappingPatchEditError(error)) {
       return {
         status: "unsupported",
         original: "",
         modified: "",
+        originalTruncated: false,
+        modifiedTruncated: false,
         note: "Patch edits could not be applied to the original — preview unavailable.",
       };
     }
@@ -197,22 +231,70 @@ function modifiedSides(
   }
 }
 
+function deletedSides(source: PatchPreviewSource | undefined, maxBytesPerFile: number): DiffSides {
+  if (source === undefined) {
+    return {
+      status: "deleted",
+      diffable: false,
+      original: "",
+      modified: "",
+      originalTruncated: false,
+      modifiedTruncated: false,
+      note: "Original content unavailable — deleted-file preview cannot be rendered.",
+    };
+  }
+  if (source.content.truncated) {
+    return {
+      status: "deleted",
+      diffable: false,
+      original: "",
+      modified: "",
+      originalTruncated: false,
+      modifiedTruncated: false,
+      note: "Original file is truncated — deleted-file preview unavailable.",
+    };
+  }
+  const originalClamp = clampToLimit(source.content.text, maxBytesPerFile);
+  return {
+    status: "deleted",
+    original: originalClamp.text,
+    modified: "",
+    originalTruncated: originalClamp.truncated,
+    modifiedTruncated: false,
+  };
+}
+
 function classifySides(
   change: EditorPatchFileChange,
   source: PatchPreviewSource | undefined,
+  maxBytesPerFile: number,
 ): DiffSides {
   if (isBinarySource(source)) {
-    return { status: "binary", original: "", modified: "", note: BINARY_NOTE };
+    return {
+      status: "binary",
+      original: "",
+      modified: "",
+      originalTruncated: false,
+      modifiedTruncated: false,
+      note: BINARY_NOTE,
+    };
   }
   if (change.isDeletion) {
-    return { status: "deleted", original: source?.content.text ?? "", modified: "" };
+    return deletedSides(source, maxBytesPerFile);
   }
   if (change.isNewFile) {
     // Applying edits to an empty original cannot overlap (every position clamps to offset 0), so no
     // overlap guard is needed here — unlike the modified path, which diffs against real content.
-    return { status: "created", original: "", modified: applyTextEditsToText("", change.edits) };
+    const modified = applyTextEditsToTextWithinLimit("", change.edits, maxBytesPerFile);
+    return {
+      status: "created",
+      original: "",
+      modified: modified.text,
+      originalTruncated: false,
+      modifiedTruncated: modified.truncated,
+    };
   }
-  return modifiedSides(change, source);
+  return modifiedSides(change, source, maxBytesPerFile);
 }
 
 function buildFile(
@@ -221,21 +303,19 @@ function buildFile(
   maxBytesPerFile: number,
 ): PatchPreviewFile {
   const displayPath = source?.content.relativePath ?? change.uri;
-  const sides = classifySides(change, source);
-  const diffable = sides.status !== "binary" && sides.status !== "unsupported";
-  const originalClamp = clampToLimit(sides.original, maxBytesPerFile);
-  const modifiedClamp = clampToLimit(sides.modified, maxBytesPerFile);
-  const truncated = originalClamp.truncated || modifiedClamp.truncated;
+  const sides = classifySides(change, source, maxBytesPerFile);
+  const diffable = sides.diffable ?? (sides.status !== "binary" && sides.status !== "unsupported");
+  const truncated = sides.originalTruncated || sides.modifiedTruncated;
   const note = truncated ? [sides.note, TRUNCATED_NOTE].filter(Boolean).join(" ") : sides.note;
   return {
     uri: change.uri,
     displayPath,
     status: sides.status,
     diffable,
-    original: originalClamp.text,
-    modified: modifiedClamp.text,
+    original: sides.original,
+    modified: sides.modified,
     language: inferMonacoLanguageId(displayPath),
-    hasChanges: diffable && originalClamp.text !== modifiedClamp.text,
+    hasChanges: diffable && sides.original !== sides.modified,
     truncated,
     note: note === undefined || note === "" ? undefined : note,
   };
@@ -287,6 +367,8 @@ export function buildPatchPreview(input: BuildPatchPreviewInput): PatchPreviewMo
   return {
     patchId: input.patch.patchId,
     status: input.patch.status,
+    provenance: input.patch.provenance,
+    verification: input.patch.verification,
     files: acc.files,
     fileCount: acc.files.length,
     totalFileCount,

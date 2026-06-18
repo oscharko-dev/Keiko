@@ -11,6 +11,7 @@ function model(overrides?: Partial<PatchPreviewModel>): PatchPreviewModel {
   return {
     patchId: "p1",
     status: "previewed",
+    provenance: { origin: "applied-patch" },
     files: [],
     fileCount: 0,
     totalFileCount: 0,
@@ -62,16 +63,19 @@ describe("deriveDiffSummary", () => {
     expect(summary.message).toBe("Loading diff…");
   });
 
-  it("is an assertive alert when the runtime failed to load", () => {
+  it("is an assertive content-free alert when the runtime failed to load", () => {
     const summary = deriveDiffSummary({
       model: model(),
-      loadState: { status: "error", message: "worker boot failed" },
+      loadState: { status: "error", message: "worker boot failed token=secret" },
       selectedDisplayPath: null,
       selectedStatus: null,
     });
     expect(summary.role).toBe("alert");
     expect(summary.ariaLive).toBe("assertive");
-    expect(summary.message).toContain("worker boot failed");
+    expect(summary.message).toBe(
+      "Diff failed to load. Review actions that require the diff editor are unavailable.",
+    );
+    expect(summary.message).not.toContain("secret");
   });
 
   it("reports an empty patch as no changes", () => {
