@@ -69,6 +69,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "registerKeikoEditorTheme",
       "createDomEditorTokenResolverDeps",
       "resolveEditorThemeTokens",
+      "resolveEditorThemeTokensFromDom",
       "createMonacoEnvironment",
       "installMonacoEnvironment",
       "defaultMonacoWorkerFactories",
@@ -76,6 +77,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "describeEditorRuntimeError",
       "detectEditorRuntimeSupport",
       "editorRuntimeLoadFailure",
+      "isMonacoLoaderConfigured",
       "probeEditorRuntime",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());

@@ -4,6 +4,7 @@ import { EDITOR_THEME_TOKEN_NAMES } from "./theme.js";
 import {
   hexFromColorString,
   resolveEditorThemeTokens,
+  resolveEditorThemeTokensFromDom,
   type EditorTokenResolverDeps,
 } from "./theme-resolver.js";
 
@@ -48,6 +49,7 @@ describe("resolveEditorThemeTokens", () => {
     return {
       readResolvedColor: () => color,
       toHex: hexFromColorString,
+      dispose: () => undefined,
     };
   }
 
@@ -67,6 +69,7 @@ describe("resolveEditorThemeTokens", () => {
         return "#000000";
       },
       toHex: hexFromColorString,
+      dispose: () => undefined,
     });
     expect(seen).toEqual([...EDITOR_THEME_TOKEN_NAMES]);
   });
@@ -75,7 +78,70 @@ describe("resolveEditorThemeTokens", () => {
     const deps: EditorTokenResolverDeps = {
       readResolvedColor: (name) => (name === "--ed-bg" ? "" : "#000000"),
       toHex: hexFromColorString,
+      dispose: () => undefined,
     };
     expect(() => resolveEditorThemeTokens(deps)).toThrow(/--ed-bg/);
+  });
+});
+
+describe("resolveEditorThemeTokensFromDom (browser one-shot)", () => {
+  function fakeView(resolvedColor: string): {
+    view: Window;
+    root: HTMLElement;
+    events: { appended: number; removed: number };
+  } {
+    const events = { appended: 0, removed: 0 };
+    const probe = {
+      style: {} as Record<string, string>,
+      remove: (): void => {
+        events.removed += 1;
+      },
+    };
+    let fill = "";
+    const context = {
+      set fillStyle(value: string) {
+        // Mimic canvas: parseable colours overwrite; an unparseable value is rejected (keeps prior).
+        fill = value.startsWith("#")
+          ? value
+          : value.startsWith("rgb")
+            ? hexFromColorString(value)
+            : fill;
+      },
+      get fillStyle(): string {
+        return fill;
+      },
+    };
+    const document = {
+      createElement: (tag: string): unknown =>
+        tag === "canvas" ? { getContext: (): unknown => context } : probe,
+    };
+    const view = {
+      document,
+      getComputedStyle: (): { color: string } => ({ color: resolvedColor }),
+    };
+    const root = {
+      appendChild: (): void => {
+        events.appended += 1;
+      },
+    };
+    return {
+      view: view as unknown as Window,
+      root: root as unknown as HTMLElement,
+      events,
+    };
+  }
+
+  it("resolves all tokens and removes its probe (no DOM leak)", () => {
+    const { view, root, events } = fakeView("rgb(16, 32, 48)");
+    const resolved = resolveEditorThemeTokensFromDom(root, view);
+    expect(Object.keys(resolved).sort()).toEqual([...EDITOR_THEME_TOKEN_NAMES].sort());
+    expect(events.appended).toBe(1);
+    expect(events.removed).toBe(1);
+  });
+
+  it("disposes the probe even when the browser rejects a colour (two-sentinel guard)", () => {
+    const { view, root, events } = fakeView("not-a-parseable-colour");
+    expect(() => resolveEditorThemeTokensFromDom(root, view)).toThrow(/could not parse/);
+    expect(events.removed).toBe(1);
   });
 });
