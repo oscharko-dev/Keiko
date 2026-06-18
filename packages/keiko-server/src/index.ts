@@ -5,7 +5,7 @@
 
 export { createUiServer, DEFAULT_UI_PORT, UI_HOST, type UiServerDeps } from "./server.js";
 export { buildCspHeader, extractInlineScriptHashes } from "./csp.js";
-export { loadCspHeader } from "./load-csp.js";
+export { createLiveCspHeaderProvider, loadCspHeader } from "./load-csp.js";
 export { applySecurityHeaders } from "./headers.js";
 export { isAllowedHost } from "./host-check.js";
 export { resolveContainedPath, serveFile } from "./static.js";

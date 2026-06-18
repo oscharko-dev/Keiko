@@ -256,15 +256,19 @@ describe("runUiCli", () => {
 
   it("starts the server, listens on the parsed port, and prints the URL", async () => {
     const { io, out } = captureIo();
-    const record: { port?: number } = {};
+    const record: { port?: number; hasCspProvider?: boolean } = {};
     const deps: UiCliDeps = {
       staticRoot,
       hashesFile: join(staticRoot, "csp-hashes.json"),
-      createServer: () => fakeServer(record),
+      createServer: ({ cspProvider }) => {
+        record.hasCspProvider = typeof cspProvider === "function";
+        return fakeServer(record);
+      },
     };
     const code = await runUiCli(["--port", "4399"], io, {}, deps);
     expect(code).toBe(0);
     expect(record.port).toBe(4399);
+    expect(record.hasCspProvider).toBe(true);
     expect(out.join("")).toContain("http://127.0.0.1:4399");
   });
 

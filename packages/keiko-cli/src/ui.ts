@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import {
   createUiServer,
+  createLiveCspHeaderProvider,
   loadCspHeader,
   buildUiHandlerDeps,
   DEFAULT_UI_PORT,
@@ -70,6 +71,7 @@ export interface UiCliDeps {
   readonly createServer?: (deps: {
     staticRoot: string;
     csp: string;
+    cspProvider?: (() => string | Promise<string>) | undefined;
     port: number;
     handlerDeps: UiHandlerDeps;
   }) => Server | Promise<Server>;
@@ -424,13 +426,14 @@ async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<vo
 async function startUiServer(
   staticRoot: string,
   csp: string,
+  cspProvider: (() => string | Promise<string>) | undefined,
   parsed: UiCliArgs,
   handlerDeps: UiHandlerDeps,
   io: CliIo,
   deps: UiCliDeps,
 ): Promise<void> {
   const factory = deps.createServer ?? createUiServer;
-  const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
+  const server = await factory({ staticRoot, csp, cspProvider, port: parsed.port, handlerDeps });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
@@ -455,7 +458,9 @@ export async function runUiCli(
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
   }
-  const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
+  const hashesFile = deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json");
+  const cspProvider = createLiveCspHeaderProvider(hashesFile);
+  const csp = await loadCspHeader(hashesFile);
   const handlerDeps = buildHandlerDepsOrReport(
     parsed,
     cwd,
@@ -465,6 +470,6 @@ export async function runUiCli(
   if (typeof handlerDeps === "number") return handlerDeps;
   const launchProjectResult = registerLaunchProjectOrReport(cwd, handlerDeps, io);
   if (launchProjectResult !== null) return launchProjectResult;
-  await startUiServer(staticRoot, csp, parsed, handlerDeps, io, deps);
+  await startUiServer(staticRoot, csp, cspProvider, parsed, handlerDeps, io, deps);
   return 0;
 }

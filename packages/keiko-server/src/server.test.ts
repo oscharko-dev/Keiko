@@ -107,6 +107,27 @@ describe("security headers", () => {
       "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
     );
   });
+
+  it("refreshes the CSP header from the provider between requests", async () => {
+    let csp = buildCspHeader(["'sha256-before'"]);
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      cspProvider: () => csp,
+      port,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    const before = await fetchRaw("/");
+    expect(before.headers.get("content-security-policy")).toContain("'sha256-before'");
+
+    csp = buildCspHeader(["'sha256-after'"]);
+    const after = await fetchRaw("/");
+    const header = after.headers.get("content-security-policy") ?? "";
+    expect(header).toContain("'sha256-after'");
+    expect(header).not.toContain("'sha256-before'");
+  });
 });
 
 describe("DNS-rebinding defense", () => {
