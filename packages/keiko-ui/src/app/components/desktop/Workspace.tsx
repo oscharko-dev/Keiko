@@ -58,6 +58,7 @@ interface WorkspaceProps {
   readonly wsRef: RefObject<HTMLDivElement>;
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
+  readonly outlineOpen?: boolean;
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
@@ -320,7 +321,12 @@ function WorkspaceOutline({
   const hasWindows = wins !== null && wins.length > 0;
 
   return (
-    <section className="ws-outline" aria-labelledby="ws-outline-title">
+    <section
+      id="workspace-outline"
+      className="ws-outline"
+      aria-labelledby="ws-outline-title"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       <div className="ws-outline-inner">
         <h2 id="ws-outline-title">Workspace outline</h2>
         <p className="ws-outline-summary">
@@ -406,7 +412,13 @@ function WorkspaceOutline({
   );
 }
 
-export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
+export function Workspace({
+  ws,
+  wsRef,
+  openPalette,
+  palette,
+  outlineOpen,
+}: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
@@ -811,6 +823,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   };
 
   const empty = wins !== null && wins.length === 0;
+  const hasMaximizedWindow = wins?.some((win) => win.max) ?? false;
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
@@ -819,6 +832,8 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       ref={wsRef}
       aria-label="Workspace surface"
       tabIndex={0}
+      data-window-maxed={hasMaximizedWindow ? "true" : undefined}
+      data-canvas-overlays-hidden={hasMaximizedWindow ? "true" : "false"}
       data-connecting={connecting !== null ? "true" : undefined}
       data-panning={panning ? "true" : undefined}
       data-hand-tool={handTool ? "true" : undefined}
@@ -830,7 +845,15 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      <WorkspaceOutline wins={wins} conns={conns} top={top} api={api} openPalette={openPalette} />
+      {outlineOpen === true ? (
+        <WorkspaceOutline
+          wins={wins}
+          conns={conns}
+          top={top}
+          api={api}
+          openPalette={openPalette}
+        />
+      ) : null}
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
@@ -875,40 +898,40 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       <div className="ws-zoom">
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
           disabled={view.zoom <= MIN_ZOOM}
           aria-label="Zoom out"
-          title="Zoom out"
+          data-tip="Zoom out"
         >
           <Icons.zoomOut size={15} />
         </button>
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={api.fitView}
           disabled={visibleWins === null || visibleWins.length === 0}
           aria-label="Fit workspace to windows"
-          title="Fit workspace to windows"
+          data-tip="Fit workspace to windows"
         >
           <Icons.expand size={15} />
         </button>
         <button
           type="button"
-          className="ws-zoom-pct mono"
+          className="ws-zoom-pct mono ui-tip"
           onClick={api.resetView}
-          aria-label={`${String(Math.round(view.zoom * 100))}% — reset view`}
-          title="Reset view to 100%"
+          aria-label={`${String(Math.round(view.zoom * 100))}% — reset`}
+          data-tip="Reset"
         >
           {Math.round(view.zoom * 100)}%
         </button>
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-end"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
           disabled={view.zoom >= MAX_ZOOM}
           aria-label="Zoom in"
-          title="Zoom in"
+          data-tip="Zoom in"
         >
           <Icons.zoomIn size={15} />
         </button>
@@ -916,16 +939,16 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
       <button
         type="button"
-        className="ws-fab"
+        className="ws-fab ui-tip"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={openPalette}
         aria-label="New window"
-        title="New window"
+        data-tip="New window"
       >
         <Icons.add size={20} />
       </button>
 
-      {palette ?? null}
+      {hasMaximizedWindow ? null : (palette ?? null)}
     </main>
   );
   /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */

@@ -478,6 +478,7 @@ function AppShellInner(): ReactNode {
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
   const [cmdkOpen, setCmdkOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
 
   const winCount = ws.wins?.length ?? 0;
@@ -669,7 +670,13 @@ function AppShellInner(): ReactNode {
               onToggleTheme={toggleTheme}
             />
             <div className="stage" id="main" tabIndex={-1}>
-              <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+              <Workspace
+                ws={ws}
+                wsRef={wsRef}
+                openPalette={openPalette}
+                palette={paletteNode}
+                outlineOpen={outlineOpen}
+              />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
               {sourceConnectionNotice !== null && (
@@ -686,7 +693,12 @@ function AppShellInner(): ReactNode {
                 </div>
               )}
             </div>
-            <RightRail openTools={openTools} onTool={onTool} />
+            <RightRail
+              openTools={openTools}
+              onTool={onTool}
+              outlineOpen={outlineOpen}
+              onToggleOutline={() => setOutlineOpen((open) => !open)}
+            />
           </div>
           <Footer
             winCount={winCount}
