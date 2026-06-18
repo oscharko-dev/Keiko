@@ -24,10 +24,13 @@ export interface EditorViewModel {
 export function computeEditorViewModel(props: KeikoCodeEditorProps): EditorViewModel {
   const maxSizeBytes = props.maxSizeBytes ?? DEFAULT_MAX_SIZE_BYTES;
   const truncated = props.buffer.content.truncated;
+  const overLimit = isMaxSizeExceeded(props.buffer.content, maxSizeBytes);
   const readOnly = effectiveReadOnly({
     modelReadOnly: props.fileModel.readOnly,
+    bufferReadOnly: props.buffer.readOnly,
     override: props.readOnly,
     truncated,
+    overLimit,
     notReady: props.loadState.status !== "ready",
   });
   const status = deriveStatusViewModel({
@@ -41,7 +44,7 @@ export function computeEditorViewModel(props: KeikoCodeEditorProps): EditorViewM
   return {
     readOnly,
     truncated,
-    overLimit: isMaxSizeExceeded(props.buffer.content, maxSizeBytes),
+    overLimit,
     maxSizeBytes,
     status,
   };
