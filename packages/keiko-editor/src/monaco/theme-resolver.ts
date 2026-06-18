@@ -117,17 +117,80 @@ interface OklchComponents {
   readonly lightness: number;
 }
 
-function parseOklchComponents(color: string): OklchComponents | undefined {
-  const oklchMatch = /^oklch\(([^)]+)\)$/.exec(color);
-  if (oklchMatch?.[1] === undefined) {
+interface OklchBodyParts {
+  readonly alpha: string | undefined;
+  readonly channels: string;
+}
+
+function cssWhitespace(charCode: number): boolean {
+  return (
+    charCode === 0x20 ||
+    charCode === 0x09 ||
+    charCode === 0x0a ||
+    charCode === 0x0c ||
+    charCode === 0x0d
+  );
+}
+
+function splitCssWhitespace(text: string): string[] {
+  const parts: string[] = [];
+  let partStart = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    if (cssWhitespace(text.charCodeAt(i))) {
+      if (partStart !== -1) {
+        parts.push(text.slice(partStart, i));
+        partStart = -1;
+      }
+    } else if (partStart === -1) {
+      partStart = i;
+    }
+  }
+  if (partStart !== -1) {
+    parts.push(text.slice(partStart));
+  }
+  return parts;
+}
+
+function oklchBody(color: string): string | undefined {
+  const prefix = "oklch(";
+  if (!color.startsWith(prefix)) {
     return undefined;
   }
-  const [channels, alpha] = oklchMatch[1].split(/\s*\/\s*/, 2);
-  const parts = (channels ?? "").split(/\s+/).filter((part) => part !== "");
-  const [lToken, cToken, hToken] = parts;
-  if (lToken === undefined || cToken === undefined || hToken === undefined) {
+  if (!color.endsWith(")")) {
     throw new Error(`Keiko editor theme: unparseable oklch colour "${color}".`);
   }
+  return color.slice(prefix.length, -1);
+}
+
+function splitOklchBody(color: string, body: string): OklchBodyParts {
+  const slashIndex = body.indexOf("/");
+  if (slashIndex === -1) {
+    return { alpha: undefined, channels: body };
+  }
+  if (body.includes("/", slashIndex + 1)) {
+    throw new Error(`Keiko editor theme: unparseable oklch colour "${color}".`);
+  }
+  return {
+    alpha: body.slice(slashIndex + 1).trim(),
+    channels: body.slice(0, slashIndex),
+  };
+}
+
+function parseOklchChannelTokens(color: string, channels: string): [string, string, string] {
+  const parts = splitCssWhitespace(channels.trim());
+  if (parts.length !== 3) {
+    throw new Error(`Keiko editor theme: unparseable oklch colour "${color}".`);
+  }
+  return parts as [string, string, string];
+}
+
+function parseOklchComponents(color: string): OklchComponents | undefined {
+  const body = oklchBody(color);
+  if (body === undefined) {
+    return undefined;
+  }
+  const { alpha, channels } = splitOklchBody(color, body);
+  const [lToken, cToken, hToken] = parseOklchChannelTokens(color, channels);
 
   const lightness = parseOklchLightness(lToken);
   const chroma = Number.parseFloat(cToken);
