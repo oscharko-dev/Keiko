@@ -166,3 +166,21 @@ export type {
 // consistently with what the component expects, without re-implementing the FSM.
 export { saveStatusReducer, detectSaveConflict } from "./components/save-state.js";
 export type { EditorSaveAction } from "./components/save-state.js";
+
+// ─── Runtime: patch-preview model adapter (#1195) ───
+// Pure, browser-safe projection of a generated patch (the #1192 contract) plus original buffers into
+// the render model the diff editor consumes. It applies the patch's text edits in memory and never
+// writes to disk or calls a Node-domain patch tool (ADR-0042 D2/D7).
+export { buildPatchPreview, DEFAULT_PATCH_PREVIEW_LIMITS } from "./patch-preview.js";
+export type {
+  BuildPatchPreviewInput,
+  PatchPreviewFile,
+  PatchPreviewFileStatus,
+  PatchPreviewLimits,
+  PatchPreviewModel,
+  PatchPreviewSource,
+} from "./patch-preview.js";
+
+// ─── Runtime: KeikoDiffEditor React component (#1195) ───
+export { KeikoDiffEditor } from "./components/KeikoDiffEditor.js";
+export type { DiffActionAvailability, KeikoDiffEditorProps } from "./components/diff-types.js";

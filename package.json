@@ -77,7 +77,8 @@
   "overrides": {
     "postcss": "8.5.15",
     "sharp": "npm:empty-npm-package@1.0.0",
-    "@monaco-editor/loader": "1.7.0"
+    "@monaco-editor/loader": "1.7.0",
+    "undici": "7.28.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

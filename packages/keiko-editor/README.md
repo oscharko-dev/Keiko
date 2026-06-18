@@ -85,6 +85,40 @@ into the keiko-ui runtime by lifting them into `packages/keiko-ui/src/app/global
 following the existing token-lift convention; no `@import`, no CSP change, no Monaco mount). The
 theme resolver reads those custom properties from the live DOM at registration time.
 
+## Diff editor and patch preview (Issue #1195)
+
+`#1195` adds the review surface for Keiko-generated changes: the `KeikoDiffEditor` React component and
+the `buildPatchPreview` model adapter. It is **review-only** — a generated patch is inspected without
+mutating workspace files, and apply/reject are host-owned (ADR-0042 D7).
+
+| Concern               | Export                                                                                                                                  | Notes                                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Patch-preview adapter | `buildPatchPreview(input)`, `DEFAULT_PATCH_PREVIEW_LIMITS`                                                                              | Pure, browser-safe. Projects an `EditorPreviewedPatch`/`EditorGeneratedPatch` (#1192 contract) + original buffers into a render-only model.     |
+| Diff component        | `KeikoDiffEditor`                                                                                                                       | Thin shell over `@monaco-editor/react`'s `<DiffEditor>`: changed-file list, read-only side-by-side diff, hunk navigation, content-free summary. |
+| Model types           | `PatchPreviewModel`, `PatchPreviewFile`, `PatchPreviewFileStatus`, `PatchPreviewSource`, `PatchPreviewLimits`, `BuildPatchPreviewInput` | The render model and its inputs. `DiffActionAvailability` / `KeikoDiffEditorProps` shape the component.                                         |
+
+**Reuse boundary (Engineering Notes).** The editor does **not** introduce a parallel patch parser.
+Unified-diff parsing/validation/application lives in `keiko-tools` (`parseUnifiedDiff`,
+`computeFileContent`, `validatePatch`, `applyPatch`) — a Node-domain package the browser tier must not
+value-import (ADR-0042 D2). Those run server-side and are reached only through host ports
+(`previewPatch`/`applyPatchReview`). The editor consumes the already-structured `{range, newText}`
+edit contract from `#1192` and applies it to the original text **in memory** for display via a small
+pure helper (`applyTextEditsToText`); it parses nothing and writes nothing.
+
+**Acceptance criteria mapping.** A generated patch is reviewed without mutating files because both
+diff sides are read-only and no write API is called (AC1); the file list plus Monaco's built-in
+`goToDiff` provide changed-file and hunk navigation (AC2); apply/reject/open/verify are emitted as
+intent through host callbacks with host-computed availability (AC3); the accessible change summary
+reports counts, file paths, and status words only — never diff content (AC4); and large patches are
+bounded by per-file, total-byte, and file-count limits that report omissions and truncation
+explicitly (AC5). Binary and unsupported files are surfaced with a content-free note instead of a
+diff.
+
+**Theming.** The diff editor uses the registered Keiko Monaco theme, whose inserted/removed
+line/text colours come from the `#1212` `--ed-diff-*` tokens. The file-list status indicators use the
+`--ed-diff-*-gutter` tokens directly (the diff gutter is a decoration, not a Monaco theme key — see
+`monaco/theme.ts`), each with a `currentColor` fallback.
+
 ## Dependency and license record
 
 All dependencies are pinned and permissively licensed. The package manifest declares
