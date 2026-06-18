@@ -8,10 +8,10 @@ import type {
   EditorContextResult,
   EditorDiagnostic,
   EditorDocumentIdentity,
-  EditorGeneratedPatch,
   EditorInlineCompletionRequest,
   EditorInlineCompletionResponse,
   EditorPatchApplyResult,
+  EditorPreviewPatchResult,
   EditorPatchReviewDecision,
   EditorSaveRequest,
   EditorSaveResult,
@@ -70,7 +70,7 @@ export interface EditorHostPort {
     request: EditorTestGenerationRequest,
     signal?: AbortSignal,
   ) => Promise<EditorTestGenerationResult>;
-  readonly previewPatch?: (patchId: string) => Promise<EditorGeneratedPatch>;
+  readonly previewPatch?: (patchId: string) => Promise<EditorPreviewPatchResult>;
   readonly applyPatchReview?: (
     decision: EditorPatchReviewDecision,
   ) => Promise<EditorPatchApplyResult>;
