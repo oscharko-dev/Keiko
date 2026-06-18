@@ -642,6 +642,7 @@ function AppShellInner(): ReactNode {
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
   ) : null;
+  const toggleOutline = (): void => setOutlineOpen((open) => !open);
 
   return (
     <ChatSessionProvider value={session}>
@@ -676,6 +677,7 @@ function AppShellInner(): ReactNode {
                 openPalette={openPalette}
                 palette={paletteNode}
                 outlineOpen={outlineOpen}
+                onToggleOutline={toggleOutline}
               />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
@@ -697,7 +699,7 @@ function AppShellInner(): ReactNode {
               openTools={openTools}
               onTool={onTool}
               outlineOpen={outlineOpen}
-              onToggleOutline={() => setOutlineOpen((open) => !open)}
+              onToggleOutline={toggleOutline}
             />
           </div>
           <Footer

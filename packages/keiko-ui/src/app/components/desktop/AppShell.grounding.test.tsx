@@ -42,7 +42,9 @@ const mocks = vi.hoisted(() => ({
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
-    workspaceProps: undefined as { readonly outlineOpen?: boolean } | undefined,
+    workspaceProps: undefined as
+      | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
+      | undefined,
     rightRailProps: undefined as
       | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
       | undefined,
@@ -165,7 +167,7 @@ vi.mock("./RightRail", () => ({
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: (props: { readonly outlineOpen?: boolean }) => {
+  Workspace: (props: { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }) => {
     mocks.state.workspaceProps = props;
     return <main data-testid="workspace" data-outline-open={props.outlineOpen === true} />;
   },
@@ -442,6 +444,25 @@ describe("AppShell grounding connections", () => {
     expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
     expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
     expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
+  });
+
+  it("passes the outline toggle into Workspace so the in-outline hide button can close it", async () => {
+    await renderMounted();
+
+    await act(async () => {
+      mocks.state.rightRailProps?.onToggleOutline?.();
+    });
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
+    expect(mocks.state.workspaceProps?.onToggleOutline).toBeTypeOf("function");
+
+    await act(async () => {
+      mocks.state.workspaceProps?.onToggleOutline?.();
+    });
+
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");
+    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline closed");
+    expect(mocks.state.workspaceProps?.outlineOpen).toBe(false);
+    expect(mocks.state.rightRailProps?.outlineOpen).toBe(false);
   });
 
   it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {
