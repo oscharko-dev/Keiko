@@ -3,11 +3,11 @@
  *
  * Content boundary (ADR-0042 D5/D6/D7). Content-bearing fields are confined to the reviewable
  * code artifacts the user owns: buffer/save payloads ({@link EditorSaveRequest}), patch edits
- * ({@link EditorTextEdit} `newText`, {@link EditorPatchFileChange}), and completion insert text
- * ({@link EditorCompletionItem} / {@link EditorInlineCompletionItem} `insertText`). Everything else
- * — all provenance, diagnostics, the context port, verification linkage, and telemetry — is
- * content-free: it carries no raw prompt, no raw model output beyond the reviewable artifact, and
- * no secret, credential, or authorization material. `promptHash`/`citationRef`/`evidenceRef`/`id`
+ * ({@link EditorTextEdit} `newText`, {@link EditorPatchFileChange}), and completion response insert
+ * text ({@link EditorCompletionItem} / {@link EditorInlineCompletionItem} `insertText`). Completion,
+ * inline-completion, and test-generation requests — including recent-edit metadata — are
+ * content-free: they carry no raw prompt, no raw model output beyond the reviewable artifact, and no
+ * secret, credential, or authorization material. `promptHash`/`citationRef`/`evidenceRef`/`id`
  * fields are opaque references and hashes, never the underlying content.
  *
  * `import type` keeps every contract import a type-only edge (ADR-0042; ADR-0019 direction rule 8):
@@ -48,7 +48,11 @@ export type EditorChangeOrigin =
   | "applied-patch"
   | "verification";
 
-/** `version` is a monotonic host counter; it increments on every edit the host applies. */
+/**
+ * `uri` is a host-scoped opaque document URI/id, not an absolute filesystem path or
+ * credential-bearing URL. `version` is a monotonic host counter; it increments on every edit the
+ * host applies.
+ */
 export interface EditorDocumentIdentity {
   readonly uri: string;
   readonly language: EditorLanguageId;
@@ -120,12 +124,25 @@ export interface EditorRequestIdentity {
 }
 
 /**
- * Recent buffer edits supplied as an additive, optional channel so a later `edit-prediction` mode
- * (#1210, a deferred non-goal) can be introduced without breaking the completion contract. Today's
- * completion providers may ignore it.
+ * Content-free summary of a recent buffer edit. The range identifies the edit coordinate span; the
+ * remaining fields are metadata and digests only, never the inserted or deleted text.
+ */
+export interface EditorRecentEditSummary {
+  readonly range: EditorRange;
+  readonly insertedBytes: number;
+  readonly insertedLineCount: number;
+  readonly insertedHash: string;
+  readonly netByteDelta?: number | undefined;
+  readonly netLineDelta?: number | undefined;
+}
+
+/**
+ * Recent buffer edits supplied as an additive, optional metadata channel so a later
+ * `edit-prediction` mode (#1210, a deferred non-goal) can be introduced without breaking the
+ * completion contract. Today's completion providers may ignore it.
  */
 export interface EditorRecentEditContext {
-  readonly edits: readonly EditorTextEdit[];
+  readonly edits: readonly EditorRecentEditSummary[];
   readonly truncated: boolean;
 }
 
@@ -288,21 +305,35 @@ export interface EditorGeneratedPatch {
   readonly verification?: EditorVerificationRef | undefined;
 }
 
+export type EditorPreviewedPatch = Omit<EditorGeneratedPatch, "status"> & {
+  readonly status: "previewed";
+};
+
+export type EditorPreviewPatchResult = EditorPreviewedPatch;
+
 export interface EditorPatchReviewDecision {
   readonly patchId: string;
   readonly decision: "apply" | "reject";
   readonly decidedAt: number;
 }
 
-export interface EditorPatchApplyResult {
-  readonly patchId: string;
-  readonly status: EditorPatchStatus;
-  readonly appliedChanges: number;
-}
+export type EditorPatchApplyResult =
+  | {
+      readonly patchId: string;
+      readonly decision: "apply";
+      readonly status: "applied";
+      readonly appliedChanges: number;
+    }
+  | {
+      readonly patchId: string;
+      readonly decision: "reject";
+      readonly status: "rejected";
+      readonly appliedChanges: 0;
+    };
 
 // ─── Context port (content-free; no concrete provider imports) ────────────────────
 
-export type EditorContextPurpose = "completion" | "inline" | "test-generation" | "explanation";
+export type EditorContextPurpose = "completion" | "inline" | "test-generation";
 
 /** Editor-originated intent and coordinates only; the host resolves and ranks the providers. */
 export interface EditorContextRequest {

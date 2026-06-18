@@ -15,6 +15,11 @@ import type {
   EditorInlineCompletionResponse,
   EditorModelProvenance,
   EditorOutputProvenance,
+  EditorPatchApplyResult,
+  EditorPatchReviewDecision,
+  EditorPreviewPatchResult,
+  EditorRecentEditContext,
+  EditorRecentEditSummary,
   EditorRequestIdentity,
   EditorSaveRequest,
   EditorSaveResult,
@@ -30,7 +35,7 @@ const requestIdentity: EditorRequestIdentity = {
 };
 
 const documentIdentity = {
-  uri: "file:///src/a.ts",
+  uri: "keiko-doc:src-a-ts",
   language: "typescript",
   version: 12,
 } as const;
@@ -53,11 +58,11 @@ const allOutputProvenance: readonly EditorOutputProvenance[] = [
   { origin: "verification" },
 ];
 
-const generatedPatch: EditorGeneratedPatch = {
+const previewPatchResult: EditorPreviewPatchResult = {
   patchId: "p1",
   changes: [
     {
-      uri: "file:///src/a.ts",
+      uri: "keiko-doc:src-a-ts",
       edits: [
         { range: { start: { line: 0, column: 0 }, end: { line: 0, column: 0 } }, newText: "x" },
       ],
@@ -70,6 +75,48 @@ const generatedPatch: EditorGeneratedPatch = {
   verification: { verificationId: "v1", outcome: "passed", evidenceRef: "ev1" },
 };
 
+const generatedPatch: EditorGeneratedPatch = previewPatchResult;
+
+const patchApplyDecision: EditorPatchReviewDecision = {
+  patchId: "p1",
+  decision: "apply",
+  decidedAt: 1_700_000_000_001,
+};
+
+const patchRejectDecision: EditorPatchReviewDecision = {
+  patchId: "p1",
+  decision: "reject",
+  decidedAt: 1_700_000_000_002,
+};
+
+const patchApplyResult: EditorPatchApplyResult = {
+  patchId: "p1",
+  decision: "apply",
+  status: "applied",
+  appliedChanges: 1,
+};
+
+const patchRejectResult: EditorPatchApplyResult = {
+  patchId: "p1",
+  decision: "reject",
+  status: "rejected",
+  appliedChanges: 0,
+};
+
+const recentEditSummary: EditorRecentEditSummary = {
+  range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } },
+  insertedBytes: 1,
+  insertedLineCount: 1,
+  insertedHash: "sha256:inserted-a",
+  netByteDelta: 0,
+  netLineDelta: 0,
+};
+
+const recentEditContext: EditorRecentEditContext = {
+  edits: [recentEditSummary],
+  truncated: false,
+};
+
 const completionRequest: EditorCompletionRequest = {
   request: requestIdentity,
   document: documentIdentity,
@@ -77,12 +124,7 @@ const completionRequest: EditorCompletionRequest = {
   triggerKind: "invoked",
   triggerCharacter: ".",
   contextBudgetBytes: 4096,
-  recentEdits: {
-    edits: [
-      { range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } }, newText: "a" },
-    ],
-    truncated: false,
-  },
+  recentEdits: recentEditContext,
 };
 
 const completionResponse: EditorCompletionResponse = {
@@ -107,6 +149,7 @@ const inlineRequest: EditorInlineCompletionRequest = {
   position: { line: 1, column: 2 },
   triggerKind: "automatic",
   contextBudgetBytes: 2048,
+  recentEdits: recentEditContext,
 };
 
 const inlineResponse: EditorInlineCompletionResponse = {
@@ -128,7 +171,7 @@ const diagnostic: EditorDiagnostic = {
   code: "2304",
   related: [
     {
-      uri: "file:///src/b.ts",
+      uri: "keiko-doc:src-b-ts",
       range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } },
       message: "declared here",
     },
@@ -214,6 +257,13 @@ const crossBoundaryInstances: Readonly<Record<string, unknown>> = {
   testGenerationRequest,
   testGenerationResult,
   generatedPatch,
+  previewPatchResult,
+  patchApplyDecision,
+  patchRejectDecision,
+  patchApplyResult,
+  patchRejectResult,
+  recentEditSummary,
+  recentEditContext,
   contextRequest,
   contextReady: contextResults[0],
   contextDegraded: contextResults[1],
@@ -268,7 +318,7 @@ describe("cross-boundary contracts are serializable and callback-free", () => {
 });
 
 const FORBIDDEN_KEY =
-  /^(prompt|rawPrompt|promptText|content|text|excerpt|query|rawQuery|secret|apiKey|token|credential|authorization)$/i;
+  /^(prompt|rawPrompt|promptText|content|text|newText|insertText|excerpt|query|rawQuery|secret|apiKey|token|credential|authorization)$/i;
 
 describe("content-free types carry no content-bearing key", () => {
   const contentFreeInstances: Readonly<Record<string, unknown>> = {
@@ -277,6 +327,8 @@ describe("content-free types carry no content-bearing key", () => {
     contextEntry,
     contextPack,
     contextOmission,
+    recentEditSummary,
+    recentEditContext,
     // The completion/inline/generated-test request contracts must also carry no content-bearing
     // field (Issue #1192 Addendum 1: "no provenance or request/response field can transport a raw
     // prompt or secret-bearing content; tests assert this").
@@ -306,6 +358,30 @@ describe("the recursive forbidden-key scanner descends into nested objects and a
     const keys = new Set<string>();
     collectKeys({ a: { b: { c: { secret: "leak" } } } }, keys);
     expect([...keys].filter((key) => FORBIDDEN_KEY.test(key))).toEqual(["secret"]);
+  });
+
+  it("finds old recent-edit newText leakage inside a content-free request", () => {
+    const keys = new Set<string>();
+    collectKeys(
+      {
+        request: requestIdentity,
+        document: documentIdentity,
+        position: { line: 1, column: 2 },
+        triggerKind: "invoked",
+        contextBudgetBytes: 4096,
+        recentEdits: {
+          edits: [
+            {
+              range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } },
+              newText: "leak",
+            },
+          ],
+          truncated: false,
+        },
+      },
+      keys,
+    );
+    expect([...keys].filter((key) => FORBIDDEN_KEY.test(key))).toEqual(["newText"]);
   });
 });
 
