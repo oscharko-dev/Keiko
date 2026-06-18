@@ -27,6 +27,11 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     ],
   ],
   ["@oscharko-dev/keiko-contracts", []],
+  // Browser-tier editor package (ADR-0042). Like keiko-ui it lives in the browser tier; its only
+  // permitted workspace dependency is keiko-contracts (type-only where possible). The browser-tier
+  // value-import boundary is enforced separately by adr-0042-editor-not-node-domain-values in
+  // .dependency-cruiser.cjs.
+  ["@oscharko-dev/keiko-editor", ["@oscharko-dev/keiko-contracts"]],
   [
     "@oscharko-dev/keiko-evaluations",
     [
