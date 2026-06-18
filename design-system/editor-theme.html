@@ -34,6 +34,7 @@
       .ed-ghost { color: var(--ed-ghost); font-style: italic; }
       .ed-cursor-bar { display: inline-block; width: 2px; height: 1.15em; background: var(--ed-cursor); vertical-align: text-bottom; margin: 0 -1px; animation: edcar 1.1s steps(1) infinite; }
       @keyframes edcar { 50% { opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) { .ed-cursor-bar { animation: none; } }
       .ed-sq { text-decoration: underline wavy var(--ed-error) 1px; text-underline-offset: 3px; }
       .ed-sq-w { text-decoration: underline wavy var(--ed-warn) 1px; text-underline-offset: 3px; }
       .ed-indent { border-left: 1px solid var(--ed-indent-guide); margin-left: 0; }
@@ -183,24 +184,24 @@
         <div class="sec-head"><div class="num">02 — SYNTAX PALETTE</div><h2>Semantic token types</h2><p>A minimum-viable semantic set, authored TS/JS-first so other languages reuse the same types. Contrast is measured against the editor well for the active variant (dark on <code style="font-family:var(--font-mono);color:var(--accent-text)">oklch(.16)</code>, light on <code style="font-family:var(--font-mono);color:var(--accent-text)">oklch(.985)</code>).</p></div>
         <div class="card" style="padding:8px 22px">
           <table class="swt">
-            <thead><tr><th>Token type</th><th>Sample</th><th>Token</th><th>Dark</th><th>Light</th><th>HC</th></tr></thead>
+            <thead><tr><th scope="col">Token type</th><th scope="col">Sample</th><th scope="col">Token</th><th scope="col">Dark</th><th scope="col">Light</th><th scope="col">HC</th></tr></thead>
             <tbody>
-              <tr><td class="tok">keyword</td><td><span class="sample t-key">import · return</span></td><td class="scope">--ed-syn-keyword</td><td><span class="ratio">8.1</span></td><td><span class="ratio">6.2</span></td><td><span class="ratio aaa">12.1</span></td></tr>
-              <tr><td class="tok">string</td><td><span class="sample t-str">"running"</span></td><td class="scope">--ed-syn-string</td><td><span class="ratio aaa">14.2</span></td><td><span class="ratio">5.3</span></td><td><span class="ratio aaa">15.8</span></td></tr>
-              <tr><td class="tok">comment</td><td><span class="sample t-com">// note</span></td><td class="scope">--ed-syn-comment</td><td><span class="ratio">5.1</span></td><td><span class="ratio">5.4</span></td><td><span class="ratio aaa">9.5</span></td></tr>
-              <tr><td class="tok">type</td><td><span class="sample t-typ">Agent</span></td><td class="scope">--ed-syn-type</td><td><span class="ratio aaa">13.0</span></td><td><span class="ratio">5.3</span></td><td><span class="ratio aaa">15.0</span></td></tr>
-              <tr><td class="tok">function</td><td><span class="sample t-fn">fetchAgents</span></td><td class="scope">--ed-syn-function</td><td><span class="ratio aaa">8.5</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">11.6</span></td></tr>
-              <tr><td class="tok">number</td><td><span class="sample t-num">5_000</span></td><td class="scope">--ed-syn-number</td><td><span class="ratio aaa">8.3</span></td><td><span class="ratio">5.4</span></td><td><span class="ratio aaa">12.1</span></td></tr>
-              <tr><td class="tok">constant</td><td><span class="sample t-con">true · null</span></td><td class="scope">--ed-syn-constant</td><td><span class="ratio aaa">8.3</span></td><td><span class="ratio">5.4</span></td><td><span class="ratio aaa">12.1</span></td></tr>
-              <tr><td class="tok">property</td><td><span class="sample t-prop">status</span></td><td class="scope">--ed-syn-property</td><td><span class="ratio aaa">11.0</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">13.8</span></td></tr>
-              <tr><td class="tok">variable</td><td><span class="sample t-var">res</span></td><td class="scope">--ed-syn-variable</td><td><span class="ratio aaa">12.2</span></td><td><span class="ratio aaa">11.6</span></td><td><span class="ratio aaa">21.0</span></td></tr>
-              <tr><td class="tok">operator</td><td><span class="sample t-op">=&gt; | !</span></td><td class="scope">--ed-syn-operator</td><td><span class="ratio aaa">12.9</span></td><td><span class="ratio">4.9</span></td><td><span class="ratio aaa">15.7</span></td></tr>
-              <tr><td class="tok">punctuation</td><td><span class="sample t-pun">{ } ; ,</span></td><td class="scope">--ed-syn-punct</td><td><span class="ratio aaa">12.9</span></td><td><span class="ratio">4.9</span></td><td><span class="ratio aaa">15.7</span></td></tr>
-              <tr><td class="tok">regexp / escape</td><td><span class="sample t-re">/\d+/g</span></td><td class="scope">--ed-syn-regexp</td><td><span class="ratio aaa">9.3</span></td><td><span class="ratio">5.5</span></td><td><span class="ratio aaa">10.4</span></td></tr>
+              <tr><td class="tok">keyword</td><td><span class="sample t-key">import · return</span></td><td class="scope">--ed-syn-keyword</td><td><span class="ratio">8.1</span></td><td><span class="ratio">6.4</span></td><td><span class="ratio aaa">12.0</span></td></tr>
+              <tr><td class="tok">string</td><td><span class="sample t-str">"running"</span></td><td class="scope">--ed-syn-string</td><td><span class="ratio aaa">14.1</span></td><td><span class="ratio">5.5</span></td><td><span class="ratio aaa">15.7</span></td></tr>
+              <tr><td class="tok">comment</td><td><span class="sample t-com">// note</span></td><td class="scope">--ed-syn-comment</td><td><span class="ratio">5.6</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">9.4</span></td></tr>
+              <tr><td class="tok">type</td><td><span class="sample t-typ">Agent</span></td><td class="scope">--ed-syn-type</td><td><span class="ratio aaa">12.9</span></td><td><span class="ratio">5.5</span></td><td><span class="ratio aaa">14.9</span></td></tr>
+              <tr><td class="tok">function</td><td><span class="sample t-fn">fetchAgents</span></td><td class="scope">--ed-syn-function</td><td><span class="ratio aaa">8.4</span></td><td><span class="ratio">5.8</span></td><td><span class="ratio aaa">11.5</span></td></tr>
+              <tr><td class="tok">number</td><td><span class="sample t-num">5_000</span></td><td class="scope">--ed-syn-number</td><td><span class="ratio aaa">8.2</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">12.0</span></td></tr>
+              <tr><td class="tok">constant</td><td><span class="sample t-con">true · null</span></td><td class="scope">--ed-syn-constant</td><td><span class="ratio aaa">8.2</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">12.0</span></td></tr>
+              <tr><td class="tok">property</td><td><span class="sample t-prop">status</span></td><td class="scope">--ed-syn-property</td><td><span class="ratio aaa">10.4</span></td><td><span class="ratio">6.1</span></td><td><span class="ratio aaa">13.7</span></td></tr>
+              <tr><td class="tok">variable</td><td><span class="sample t-var">res</span></td><td class="scope">--ed-syn-variable</td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">17.7</span></td></tr>
+              <tr><td class="tok">operator</td><td><span class="sample t-op">=&gt; | !</span></td><td class="scope">--ed-syn-operator</td><td><span class="ratio aaa">12.8</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">15.6</span></td></tr>
+              <tr><td class="tok">punctuation</td><td><span class="sample t-pun">{ } ; ,</span></td><td class="scope">--ed-syn-punct</td><td><span class="ratio aaa">12.8</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">15.6</span></td></tr>
+              <tr><td class="tok">regexp / escape</td><td><span class="sample t-re">/\d+/g</span></td><td class="scope">--ed-syn-regexp</td><td><span class="ratio aaa">9.4</span></td><td><span class="ratio">6.2</span></td><td><span class="ratio aaa">11.6</span></td></tr>
             </tbody>
           </table>
         </div>
-        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Targets</span><div>Every coloured token clears <b>≥ 4.5:1</b> in dark &amp; light and <b>≥ 7:1</b> in high-contrast against the code well. <b>Comment</b> is deliberately the quietest hue but is held at ≥ 4.5 (not pushed lower), so de-emphasis never costs legibility.</div></div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Targets</span><div>Every coloured token clears <b>≥ 4.5:1</b> in dark &amp; light and <b>≥ 7:1</b> in high-contrast against the code well — measured per variant, not estimated. <b>Comment</b> is intentionally the most de-emphasised hue yet still held above the floor (5.6:1 dark), so quietness never costs legibility.</div></div>
       </section>
 
       <!-- CHROME -->
@@ -213,12 +214,14 @@
           <div class="chrome-cell"><div class="chrome-prev"><span class="ed-find" style="padding:2px 6px">match</span>&nbsp;&nbsp;<span class="ed-bm" style="padding:2px 6px">( )</span></div><div class="chrome-meta"><div class="nm">Find match · bracket match</div><div class="tk">--ed-find-match · --ed-bracket-match</div></div></div>
           <div class="chrome-cell"><div class="chrome-prev"><span style="border-left:1px solid var(--ed-indent-guide);height:34px"></span><span style="border-left:1px solid var(--ed-indent-guide-active);height:34px;margin-left:22px"></span></div><div class="chrome-meta"><div class="nm">Indent guides (idle / active)</div><div class="tk">--ed-indent-guide · -active</div></div></div>
           <div class="chrome-cell"><div class="chrome-prev"><span style="color:var(--ed-whitespace)">·&nbsp;·&nbsp;·&nbsp;→&nbsp;·&nbsp;·</span></div><div class="chrome-meta"><div class="nm">Whitespace render</div><div class="tk">--ed-whitespace</div></div></div>
+          <div class="chrome-cell"><div class="chrome-prev"><span style="padding:5px 18px;border-radius:5px;color:var(--ed-fg);box-shadow:0 0 0 2px var(--ed-focus-inner),0 0 0 4px var(--ed-focus)">focused widget</span></div><div class="chrome-meta"><div class="nm">Keyboard focus ring (two-tone)</div><div class="tk">--ed-focus · --ed-focus-inner</div></div></div>
         </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Non-text · WCAG 1.4.11</span><div>Indicators that carry meaning without text clear <b style="color:var(--fg)">≥ 3:1</b> against their adjacent surface: the caret, focused selection, the keyboard focus ring (two-tone, so it stays visible even over the green selection well), diff gutter signs and the diagnostic squiggles. Diagnostics also differ by <b style="color:var(--fg)">shape</b> — wavy error, wavy warning, dotted info — so state never rides on colour alone.</div></div>
       </section>
 
       <!-- DIFF -->
       <section class="sec" id="diff">
-        <div class="sec-head"><div class="num">04 — DIFF</div><h2>Patch-review surface</h2><p>Line backgrounds for the hunk, a stronger inline tint for the changed characters, and gutter signs. Greens are a dedicated diff hue; removals reuse <code style="font-family:var(--font-mono);color:var(--accent-text)">--danger</code>.</p></div>
+        <div class="sec-head"><div class="num">04 — DIFF</div><h2>Patch-review surface</h2><p>Line backgrounds for the hunk, a stronger inline tint for the changed characters, and gutter signs. Greens are a dedicated diff hue; removals reuse <code style="font-family:var(--font-mono);color:var(--accent-text)">--danger</code>. A modified / word-diff middle state uses the info-hued <code style="font-family:var(--font-mono);color:var(--accent-text)">--ed-diff-chg-*</code> set, distinct from the green/red pair.</p></div>
         <div class="ed-demo" style="box-shadow:none">
           <div class="ed-code" style="padding:12px 0">
             <div class="ed-gutter" style="width:64px"><div style="color:var(--ed-diff-rem-gutter)">−&nbsp;14</div><div style="color:var(--ed-diff-ins-gutter)">+&nbsp;14</div><div style="color:var(--ed-diff-ins-gutter)">+&nbsp;15</div><div>&nbsp;&nbsp;16</div></div>
@@ -226,7 +229,7 @@
 <span class="ed-line" style="background:var(--ed-diff-rem-line)">  <span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="ed-find" style="background:var(--ed-diff-rem-text)"><span class="t-str">`/api/agents`</span></span><span class="t-pun">)</span><span class="t-pun">;</span></span><span class="ed-line" style="background:var(--ed-diff-ins-line)">  <span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="ed-find" style="background:var(--ed-diff-ins-text);outline:none"><span class="t-str">`/api/v2/agents`</span></span><span class="t-pun">)</span><span class="t-pun">;</span></span><span class="ed-line" style="background:var(--ed-diff-ins-line)">  <span class="t-key">const</span> <span class="t-var">agents</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-var">res</span><span class="t-op">.</span><span class="t-fn">json</span><span class="t-pun">(</span><span class="t-pun">)</span><span class="t-pun">;</span></span><span class="ed-line">  <span class="t-key">return</span> <span class="t-var">agents</span><span class="t-pun">;</span></span></div>
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Default code text stays ≥ 8.7:1 over both diff line tints, so syntax colour survives on changed lines.</p>
+        <p class="muted-cap" style="margin-top:14px">Default code text stays ≥ 9.5:1 over every diff line tint (insert / remove / change), so syntax colour survives on changed lines.</p>
       </section>
 
       <!-- DIAGNOSTICS + GHOST -->
@@ -265,12 +268,16 @@
               <tr><td><code>--ed-bg · --ed-fg</code></td><td class="mono-fg">colors →</td><td><code>editor.background · editor.foreground</code></td></tr>
               <tr><td><code>--ed-line-active</code></td><td class="mono-fg">colors →</td><td><code>editor.lineHighlightBackground</code></td></tr>
               <tr><td><code>--ed-selection</code></td><td class="mono-fg">colors →</td><td><code>editor.selectionBackground</code></td></tr>
-              <tr><td><code>--ed-diff-ins-line · -rem-line</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedTextBackground · removedTextBackground</code></td></tr>
+              <tr><td><code>--ed-diff-ins-line · -rem-line</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedLineBackground · removedLineBackground</code></td></tr>
+              <tr><td><code>--ed-diff-ins-text · -rem-text</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedTextBackground · removedTextBackground</code></td></tr>
               <tr><td><code>--ed-error · -warn · -info</code></td><td class="mono-fg">colors →</td><td><code>editorError · editorWarning · editorInfo .foreground</code></td></tr>
               <tr><td><code>--ed-ghost</code></td><td class="mono-fg">colors →</td><td><code>editorGhostText.foreground</code></td></tr>
+              <tr><td><code>--ed-focus</code></td><td class="mono-fg">colors →</td><td><code>focusBorder · editorWidget.border · editor.findMatchBorder</code></td></tr>
+              <tr><td><code>--ed-diff-chg-gutter</code></td><td class="mono-fg">colors →</td><td><code>editorGutter.modifiedBackground · editorOverviewRuler.modifiedForeground</code></td></tr>
             </tbody>
           </table>
         </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Boundary</span><div>The table is a representative sample, not row-per-token — every remaining <code style="font-family:var(--font-mono)">--ed-*</code> has a name-obvious Monaco target (e.g. <code style="font-family:var(--font-mono)">--ed-cursor → editorCursor.foreground</code>, <code style="font-family:var(--font-mono)">--ed-syn-number → constant.numeric</code>, <code style="font-family:var(--font-mono)">--ed-suggest-* → editorSuggestWidget.*</code>). One split matters: <b style="color:var(--fg)">Monaco theme vs surrounding chrome.</b> The <code style="font-family:var(--font-mono)">colors{}</code> dictionary and <code style="font-family:var(--font-mono)">tokenColors</code> cover the code well, gutter, diff, diagnostics, ghost text and <code style="font-family:var(--font-mono)">--ed-minimap-*</code>. The <code style="font-family:var(--font-mono)">--ed-tab-*</code> and <code style="font-family:var(--font-mono)">--ed-statusbar-*</code> tokens are <b style="color:var(--fg)">not</b> Monaco editor keys — they style the React editor-card chrome around Monaco via plain <code style="font-family:var(--font-mono)">var()</code>, so #1193 wires them in the component, not in the Monaco theme.</div></div>
       </section>
 
       <!-- RATIONALE -->
