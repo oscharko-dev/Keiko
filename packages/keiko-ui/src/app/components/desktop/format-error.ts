@@ -35,7 +35,10 @@ function sanitizeMessage(message: string): string {
   return out;
 }
 
-function parseFormattedMessage(message: string): { readonly message: string; readonly code: string | undefined } {
+function parseFormattedMessage(message: string): {
+  readonly message: string;
+  readonly code: string | undefined;
+} {
   const match = TRAILING_CODE_PATTERN.exec(message);
   if (match === null) return { message, code: undefined };
   return { message: message.slice(0, match.index).trim(), code: match[1] };
@@ -53,6 +56,17 @@ function isClarificationNeeded(code: string | undefined): boolean {
   return code === "CLARIFICATION_NEEDED";
 }
 
+function friendlyMessageForCode(
+  message: string,
+  code: string | undefined,
+  fallback: string,
+): string {
+  if (code === "GATEWAY_TIMEOUT" && (message.length === 0 || message === code)) {
+    return "The model gateway timed out before the model returned a response.";
+  }
+  return message.length > 0 ? message : fallback;
+}
+
 function titleForError(message: string, code: string | undefined): string {
   if (isClarificationNeeded(code)) {
     return "Keiko braucht mehr Kontext";
@@ -60,6 +74,7 @@ function titleForError(message: string, code: string | undefined): string {
   if (isTooBroadRepositoryQuestion(message, code)) {
     return "Narrow the connected-source question";
   }
+  if (code === "GATEWAY_TIMEOUT") return "Model gateway timed out";
   if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
   if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";
@@ -73,6 +88,9 @@ function remediationForError(message: string, code: string | undefined): string 
   if (isTooBroadRepositoryQuestion(message, code)) {
     return "Ask about a specific file, folder, symbol, identifier, or exact phrase. For broad questions over large project folders, narrow the Files scope first.";
   }
+  if (code === "GATEWAY_TIMEOUT") {
+    return "Retry the request. If it repeats, choose a smaller prompt or another configured model, then check the gateway base URL, proxy, and model deployment availability in Settings.";
+  }
   if (code === "PAYLOAD_TOO_LARGE") {
     return "Reduce the selected scope or remove large attachments before retrying.";
   }
@@ -81,9 +99,12 @@ function remediationForError(message: string, code: string | undefined): string 
 
 export function formatUserError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
-    const message = sanitizeMessage(error.message.trim());
-    if (message.length > 0) return `${message} (${error.code})`;
-    return `${fallback} (${error.code})`;
+    const message = friendlyMessageForCode(
+      sanitizeMessage(error.message.trim()),
+      error.code,
+      fallback,
+    );
+    return `${message} (${error.code})`;
   }
   if (error instanceof Error && error.message.trim().length > 0) {
     return sanitizeMessage(error.message.trim());
@@ -93,7 +114,11 @@ export function formatUserError(error: unknown, fallback: string): string {
 
 export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNotice {
   if (error instanceof ApiError) {
-    const message = sanitizeMessage(error.message.trim()) || fallback;
+    const message = friendlyMessageForCode(
+      sanitizeMessage(error.message.trim()),
+      error.code,
+      fallback,
+    );
     return {
       title: titleForError(message, error.code),
       message,
@@ -102,11 +127,7 @@ export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNo
     };
   }
   const rawMessage =
-    typeof error === "string"
-      ? error.trim()
-      : error instanceof Error
-        ? error.message.trim()
-        : "";
+    typeof error === "string" ? error.trim() : error instanceof Error ? error.message.trim() : "";
   const formatted = parseFormattedMessage(sanitizeMessage(rawMessage || fallback));
   return {
     title: titleForError(formatted.message, formatted.code),

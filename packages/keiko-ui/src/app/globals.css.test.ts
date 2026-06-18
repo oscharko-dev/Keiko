@@ -190,13 +190,14 @@ describe("Fix 2 — reduced-motion wrapping (WCAG 2.3.3)", () => {
 });
 
 describe("Gateway setup constrained-height scrolling", () => {
-  it("keeps the fixed backdrop and rounded frame from becoming scroll containers", () => {
-    expect(cssBlock(".gw-setup-backdrop")).toContain("overflow: hidden");
-    expect(cssBlock(".gw-setup")).toContain("overflow: hidden");
+  it("lets the backdrop recover on short viewports while the rounded frame clips", () => {
+    expect(cssBlock(".gw-setup-backdrop")).toContain("overflow-y: auto");
+    expect(cssBlock(".gw-setup {")).toContain("overflow: hidden");
   });
 
   it("uses the form as the internal scroll region", () => {
     const block = cssBlock(".gw-form");
+    expect(block).toContain("flex: 1");
     expect(block).toContain("min-height: 0");
     expect(block).toContain("overflow-y: auto");
   });
@@ -373,6 +374,26 @@ describe("Conversation memory switch target size (WCAG 2.5.8)", () => {
     const block = cssBlock(".auto-toggle span");
     expect(block).toContain("width: 18px");
     expect(block).toContain("height: 18px");
+  });
+});
+
+describe("Issue #1227 — first-run gateway setup responsiveness", () => {
+  it(".gw-setup-backdrop uses safe centering and vertical overflow scrolling", () => {
+    const block = cssBlock(".gw-setup-backdrop {");
+    expect(block).toContain("place-items: safe center");
+    expect(block).toContain("overflow-y: auto");
+  });
+
+  it(".gw-setup clips scrollbar bleed while the form owns internal scrolling", () => {
+    const setupBlock = cssBlock(".gw-setup {");
+    expect(setupBlock).toContain("max-height: calc(100vh - 48px)");
+    expect(setupBlock).toContain("max-height: calc(100dvh - 48px)");
+    expect(setupBlock).toContain("overflow: hidden");
+
+    const formBlock = cssBlock(".gw-form {");
+    expect(formBlock).toContain("flex: 1");
+    expect(formBlock).toContain("min-height: 0");
+    expect(formBlock).toContain("overflow-y: auto");
   });
 });
 

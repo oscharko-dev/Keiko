@@ -6485,9 +6485,9 @@ select.dlg-input {
   inset: 0;
   z-index: 10000;
   display: grid;
-  place-items: center;
+  place-items: safe center;
   padding: 24px;
-  overflow: hidden;
+  overflow-y: auto;
   background:
     radial-gradient(
       circle at 50% 12%,
@@ -6499,8 +6499,8 @@ select.dlg-input {
 }
 .gw-setup {
   width: min(760px, 100%);
-  max-height: min(940px, calc(100vh - 48px));
-  max-height: min(940px, calc(100dvh - 48px));
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -6522,6 +6522,7 @@ select.dlg-input {
   }
 }
 .gw-form {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 18px;
