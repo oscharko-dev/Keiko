@@ -17,6 +17,7 @@
 import { Editor } from "@monaco-editor/react";
 import { useMemo, type ReactElement } from "react";
 
+import { inferMonacoLanguageId } from "../monaco/language-inference.js";
 import { buildEditorOptions } from "./editor-options.js";
 import type { EditorStatusViewModel } from "./status-text.js";
 import type { KeikoCodeEditorProps } from "./types.js";
@@ -71,6 +72,10 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
     () => buildEditorOptions({ readOnly: view.readOnly, ariaPath: buffer.content.relativePath }),
     [view.readOnly, buffer.content.relativePath],
   );
+  const monacoLanguage = useMemo(
+    () => inferMonacoLanguageId(buffer.content.relativePath),
+    [buffer.content.relativePath],
+  );
 
   return (
     <div
@@ -78,20 +83,24 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
       style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}
     >
       <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
-        <Editor
-          value={buffer.content.text}
-          language={buffer.language}
-          path={fileModel.identity.uri}
-          theme={`keiko-editor-${props.themeVariant ?? "dark"}`}
-          height={EDITOR_HEIGHT}
-          loading={<EditorLoadingBox />}
-          options={options}
-          // Scroll/fold/cursor view state is restored per `path` by `@monaco-editor/react`'s default
-          // `saveViewState` mechanism as the host swaps files within a mounted editor; the package's
-          // own view-state seam (use-editor-handlers.ts) is a secondary, host-injectable hook.
-          onChange={handlers.onChange}
-          onMount={handlers.onMount}
-        />
+        {props.loadState.status === "ready" ? (
+          <Editor
+            value={buffer.content.text}
+            language={monacoLanguage}
+            path={fileModel.identity.uri}
+            theme={`keiko-editor-${props.themeVariant ?? "dark"}`}
+            height={EDITOR_HEIGHT}
+            loading={<EditorLoadingBox />}
+            options={options}
+            // Scroll/fold/cursor view state is restored per `path` by `@monaco-editor/react`'s default
+            // `saveViewState` mechanism as the host swaps files within a mounted editor; the package's
+            // own view-state seam (use-editor-handlers.ts) is a secondary, host-injectable hook.
+            onChange={handlers.onChange}
+            onMount={handlers.onMount}
+          />
+        ) : (
+          <EditorLoadingBox />
+        )}
       </div>
       <EditorStatusFooter
         status={view.status}

@@ -70,6 +70,7 @@ export function buildSaveRequest(
   identity: EditorDocumentIdentity,
   text: string,
   relativePath: string,
+  expectedSavedVersion?: number,
 ): EditorSaveRequest {
   const content: FileContent = {
     relativePath,
@@ -77,17 +78,23 @@ export function buildSaveRequest(
     text,
     truncated: false,
   };
-  return { identity, content };
+  return expectedSavedVersion === undefined
+    ? { identity, content }
+    : { identity, expectedSavedVersion, content };
 }
 
 /** Inputs that determine whether the editor is effectively read-only. */
 export interface EffectiveReadOnlyArgs {
   /** The host file model's read-only flag. */
   readonly modelReadOnly: boolean;
+  /** The host buffer's read-only flag. */
+  readonly bufferReadOnly: boolean;
   /** Explicit per-render override (e.g. a prop the host passes). */
   readonly override?: boolean | undefined;
   /** Whether the loaded buffer is truncated (a partial view of a too-large file). */
   readonly truncated: boolean;
+  /** Whether the loaded buffer exceeds the configured editable-size limit. */
+  readonly overLimit: boolean;
   /** True while the document is not `ready` — still loading or failed to load. */
   readonly notReady: boolean;
 }
@@ -100,7 +107,14 @@ export interface EffectiveReadOnlyArgs {
  * adjust and retry.
  */
 export function effectiveReadOnly(args: EffectiveReadOnlyArgs): boolean {
-  return args.modelReadOnly || args.override === true || args.truncated || args.notReady;
+  return (
+    args.modelReadOnly ||
+    args.bufferReadOnly ||
+    args.override === true ||
+    args.truncated ||
+    args.overLimit ||
+    args.notReady
+  );
 }
 
 /** Whether `content` exceeds `maxBytes` either by an explicit truncation flag or by byte size. */

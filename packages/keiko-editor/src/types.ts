@@ -69,6 +69,8 @@ export interface EditorFileModel {
 
 export interface EditorSaveRequest {
   readonly identity: EditorDocumentIdentity;
+  /** Saved document version the host should still observe before persisting this content. */
+  readonly expectedSavedVersion?: number | undefined;
   readonly content: FileContent;
 }
 

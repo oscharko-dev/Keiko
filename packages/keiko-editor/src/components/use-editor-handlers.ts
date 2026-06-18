@@ -54,6 +54,7 @@ function useSaveEmitter(
         current.fileModel.identity,
         current.buffer.content.text,
         current.buffer.content.relativePath,
+        current.fileModel.savedVersion,
       ),
     );
   }, [editorRef]);

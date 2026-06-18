@@ -40,13 +40,29 @@ describe("hexFromColorString", () => {
     expect(hexFromColorString("rgb(100% 50% 0%)")).toBe("#ff8000");
   });
 
+  it("converts percentage alpha channels", () => {
+    expect(hexFromColorString("rgba(255 128 0 / 50%)")).toBe("#ff800080");
+  });
+
   it("drops a fully-opaque alpha channel", () => {
     expect(hexFromColorString("rgba(0, 0, 0, 1)")).toBe("#000000");
+  });
+
+  it("accepts oklch none hue and empty alpha as browser-normalised colour output", () => {
+    expect(hexFromColorString("oklch(0.16 0.004 none)")).toBe("#0f0d0d");
+    expect(hexFromColorString("oklch(0.16 0.004 160 / )")).toBe("#0c0e0d");
   });
 
   it("throws on colour forms it cannot convert (post-canvas these never occur)", () => {
     expect(() => hexFromColorString("rebeccapurple")).toThrow(/cannot convert/);
     expect(() => hexFromColorString("#12")).toThrow(/unparseable hex/);
+    expect(() => hexFromColorString("rgb(1 2)")).toThrow(/unparseable rgb/);
+    expect(() => hexFromColorString("oklch(0.16 0.004 160")).toThrow(/unparseable oklch/);
+    expect(() => hexFromColorString("oklch(0.16 0.004 160 / 0.5 / 0.6)")).toThrow(
+      /unparseable oklch/,
+    );
+    expect(() => hexFromColorString("oklch(0.16 0.004)")).toThrow(/unparseable oklch/);
+    expect(() => hexFromColorString("oklch(nope 0.004 160)")).toThrow(/unparseable oklch/);
   });
 });
 
@@ -174,6 +190,26 @@ describe("DOM editor token resolver", () => {
     const deps = createDomEditorTokenResolverDeps(root, view);
     expect(() => deps.toHex("not-a-colour")).toThrow(/could not parse/);
     deps.dispose();
+  });
+
+  it("fails closed when the browser cannot provide a 2D canvas normaliser", () => {
+    const events = { removed: 0 };
+    const probe = {
+      style: {} as Record<string, string>,
+      remove: (): void => {
+        events.removed += 1;
+      },
+    };
+    const view = {
+      document: {
+        createElement: (tag: string): unknown =>
+          tag === "canvas" ? { getContext: (): null => null } : probe,
+      },
+    } as unknown as Window;
+    const root = { appendChild: (): void => undefined } as unknown as HTMLElement;
+
+    expect(() => createDomEditorTokenResolverDeps(root, view)).toThrow(/2D canvas context/);
+    expect(events.removed).toBe(1);
   });
 
   it("resolves all tokens and removes its probe (no DOM leak)", () => {
