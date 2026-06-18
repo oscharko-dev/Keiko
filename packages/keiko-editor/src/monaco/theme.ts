@@ -80,6 +80,8 @@ const ITALIC_SYNTAX_TOKENS: ReadonlySet<string> = new Set(["--ed-syn-comment"]);
  * map onto real standalone-Monaco colour ids are included; the editor-card chrome tokens
  * (`--ed-tab-*`, `--ed-statusbar-*`) style the keiko-ui React card via CSS — explicitly **not**
  * Monaco theme keys per the §06 boundary note — so they are wired in the component, not here.
+ * Likewise, the `--ed-diff-chg-*` middle-state tokens have no Monaco 0.55.1 diff colour id and
+ * are reserved for the Keiko diff surface.
  */
 export const CHROME_TOKEN_COLOR_IDS: Readonly<Record<string, readonly string[]>> = {
   "--ed-bg": ["editor.background"],

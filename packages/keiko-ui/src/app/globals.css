@@ -263,8 +263,8 @@ button {
    editor-specific chrome/diff/ghost-text are net-new. Surfaced here so the --ed-* / --ed-syn-*
    custom properties resolve at runtime when the editor mounts (host integration, #1194); the
    Monaco theme reads them via getComputedStyle and embeds no colour literals. Dark is the default;
-   the light and high-contrast variants follow the source. The demo-only [data-hc] selectors are
-   intentionally not lifted — keiko-ui drives high contrast through prefers-contrast only.
+   the light and high-contrast variants follow the source. High contrast is exposed both through
+   prefers-contrast and [data-hc="more"], matching the design-system source.
    ============================================================ */
 :root {
   /* editor surface (reuses the inset tone as the code well) */
@@ -402,6 +402,45 @@ button {
     --ed-syn-regexp: #8a2020;
     --ed-ghost: oklch(0.42 0.01 160);
   }
+}
+[data-hc="more"] {
+  --ed-bg: oklch(0.07 0.004 160);
+  --ed-bg-gutter: oklch(0.07 0.004 160);
+  --ed-fg: #ffffff;
+  --ed-syn-comment: #9bb0c9;
+  --ed-syn-string: #b6f08a;
+  --ed-syn-number: #ffb38a;
+  --ed-syn-constant: #ffb38a;
+  --ed-syn-keyword: #d8b6ff;
+  --ed-syn-type: #ffd479;
+  --ed-syn-function: #9fc1ff;
+  --ed-syn-property: #8fe0d8;
+  --ed-syn-variable: #e8edf3;
+  --ed-syn-operator: #a6e9ff;
+  --ed-syn-punct: #a6e9ff;
+  --ed-syn-regexp: #f3b0b0;
+  --ed-line-active: color-mix(in oklch, var(--fg) 10%, transparent);
+  --ed-indent-guide: var(--line);
+  --ed-whitespace: color-mix(in oklch, var(--fg) 34%, transparent);
+  --ed-ghost: oklch(0.74 0.004 160);
+}
+[data-hc="more"][data-theme="light"] {
+  --ed-bg: oklch(1 0 0);
+  --ed-bg-gutter: oklch(1 0 0);
+  --ed-fg: #000000;
+  --ed-syn-comment: #46525f;
+  --ed-syn-string: #1a5d1d;
+  --ed-syn-number: #8a3600;
+  --ed-syn-constant: #8a3600;
+  --ed-syn-keyword: #6f1b96;
+  --ed-syn-type: #5f4200;
+  --ed-syn-function: #143f8f;
+  --ed-syn-property: #0a5c57;
+  --ed-syn-variable: #000000;
+  --ed-syn-operator: #0a5e75;
+  --ed-syn-punct: #0a5e75;
+  --ed-syn-regexp: #8a2020;
+  --ed-ghost: oklch(0.42 0.01 160);
 }
 [data-theme="light"] .dlg-overlay {
   background: oklch(0.3 0.01 160 / 0.34);

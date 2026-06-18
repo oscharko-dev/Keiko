@@ -775,13 +775,36 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     for (const token of [
       "--ed-bg:",
       "--ed-fg:",
+      "--ed-bg-gutter:",
+      "--ed-gutter-fg:",
+      "--ed-gutter-fg-active:",
       "--ed-line-active:",
+      "--ed-cursor:",
       "--ed-selection:",
+      "--ed-selection-blur:",
       "--ed-find-match:",
+      "--ed-find-match-active:",
+      "--ed-focus:",
+      "--ed-bracket-match:",
+      "--ed-indent-guide:",
+      "--ed-indent-guide-active:",
+      "--ed-whitespace:",
       "--ed-diff-ins-line:",
+      "--ed-diff-ins-text:",
       "--ed-diff-rem-line:",
+      "--ed-diff-rem-text:",
+      "--ed-diff-ins-gutter:",
+      "--ed-diff-rem-gutter:",
+      "--ed-error:",
+      "--ed-warn:",
+      "--ed-info:",
+      "--ed-hint:",
       "--ed-ghost:",
+      "--ed-suggest-bg:",
+      "--ed-suggest-sel:",
+      "--ed-suggest-match:",
       "--ed-minimap-bg:",
+      "--ed-minimap-slider:",
     ]) {
       expect(css).toContain(token);
     }
@@ -835,7 +858,10 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(edHcBlock).toContain("--ed-fg: #000000"); // prefers-contrast light
   });
 
-  it("does not lift the demo-only [data-hc] selectors (keiko-ui drives HC via prefers-contrast)", () => {
-    expect(css).not.toContain('[data-hc="more"]');
+  it("provides the explicit [data-hc] high-contrast hook from the design source", () => {
+    expect(css).toContain('[data-hc="more"]');
+    expect(css).toContain('[data-hc="more"][data-theme="light"]');
+    expect(css).toContain("--ed-syn-keyword: #d8b6ff");
+    expect(css).toContain("--ed-syn-keyword: #6f1b96");
   });
 });
