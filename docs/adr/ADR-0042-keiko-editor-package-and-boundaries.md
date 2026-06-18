@@ -11,13 +11,16 @@ full plan, reuse matrices, dependency decision record, risk register, and regula
 the companion blueprint:
 [docs/planning/keiko-editor-architecture-blueprint.md](../planning/keiko-editor-architecture-blueprint.md).
 
+Amended 2026-06-18 for Issue [#1196](https://github.com/oscharko-dev/Keiko/issues/1196): added
+decision D3.7 (Monaco DOMPurify supply-chain control for the keiko-ui host mount).
+
 ## Date
 
 2026-06-18
 
 ## Version
 
-1.0
+1.1
 
 ## Context
 
@@ -110,6 +113,17 @@ base branch):
    per-keystroke main-thread work < 50 ms and INP ≤ 200 ms at p75; files > 500 KB or > 10,000 lines
    enter read-only/degraded mode, and files > 1,000,000 bytes use the existing too-large path without
    instantiating Monaco. #1207 measures and enforces these budgets; #1209 records release evidence.
+7. **Monaco DOMPurify supply-chain control (#1196 host mount).** Mounting Monaco in `keiko-ui` brings
+   `monaco-editor`'s declared `dompurify@3.2.7` dependency into keiko-ui's audit closure, tripping the
+   `ui` job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui`. The control is a
+   root `overrides: { dompurify: "3.4.11" }` pinning the patched DOMPurify line (the advisories affect
+   `<= 3.4.10`); `monaco-editor` stays at the `0.55.1` pin and the `npm audit fix` downgrade to `0.53.0`
+   is not taken. The override does not replace Monaco's vendored DOMPurify copy, but the mounted editor
+   disables every Markdown-rendering sink in `buildEditorOptions` (hover, suggest docs, parameter hints,
+   inline suggest, code lens, lightbulb, inlay hints, links) and wires no completion/diagnostics
+   provider, so the vendored sanitiser never executes and runtime exposure is nil. The durable fix
+   remains upgrading Monaco to a release vendoring DOMPurify `>= 3.3.2` once one exists. Detailed in the
+   `@oscharko-dev/keiko-editor` README supply-chain note.
 
 ### D4 — Server-side deterministic language service is the single source of truth
 
