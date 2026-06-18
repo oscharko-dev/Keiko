@@ -44,6 +44,7 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 
 afterEach(() => {
   surface.props = null;
+  delete document.documentElement.dataset.theme;
   vi.clearAllMocks();
 });
 
@@ -258,6 +259,16 @@ describe("EditorWidget — load-error recovery", () => {
     await userEvent.click(retry);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileLoadState.status).toBe("ready");
+  });
+});
+
+describe("EditorWidget — theme coupling", () => {
+  it("drives the editor surface with the live app theme variant", async () => {
+    document.documentElement.dataset.theme = "light";
+    await renderLoaded();
+    await waitFor(() => {
+      expect(surface.props?.themeVariant).toBe("light");
+    });
   });
 });
 

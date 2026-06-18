@@ -37,6 +37,7 @@ import {
 } from "@oscharko-dev/keiko-editor";
 import { ApiError, fetchFilesContent, saveFilesContent } from "../../../../../lib/api";
 import { Icons } from "../../Icons";
+import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import type { EditorSurfaceProps } from "./EditorSurface";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
@@ -101,6 +102,10 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
   contentRef.current = content;
 
   const dirty = fileModel !== null && isDocumentDirty(fileModel);
+  // Follow the live app appearance (light/dark/high-contrast). Keyed onto the surface below so a
+  // theme switch remounts it, which re-runs the editor's on-mount theme registration against the
+  // now-current design tokens — the editor registers only its mount-time variant.
+  const themeVariant = useEditorThemeVariant();
 
   const load = useCallback(
     (signal: { cancelled: boolean }): void => {
@@ -273,6 +278,7 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
       {hasTarget && buffer !== null && fileModel !== null ? (
         <div className="ed-host">
           <EditorSurface
+            key={themeVariant}
             buffer={buffer}
             fileModel={fileModel}
             fileLoadState={loadState}
@@ -280,7 +286,7 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
             saveError={saveError}
             modifiedAt={modifiedAt ?? undefined}
             maxSizeBytes={maxBytes ?? undefined}
-            themeVariant="dark"
+            themeVariant={themeVariant}
             onContentChange={onContentChange}
             onSaveRequested={onSaveRequested}
             onRuntimeError={onRuntimeError}
