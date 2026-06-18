@@ -3,7 +3,11 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { CliIo } from "./runner.js";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  hasBuiltKeikoLayout,
+  localPackageRoot,
+  resolvePreferredInstallLayout,
+} from "./install-layout.js";
 
 interface PackageJsonLike {
   readonly version?: unknown;
@@ -40,10 +44,10 @@ function readVersion(packageJsonPath: string): string | undefined {
 }
 
 function resolveLocalPackageInstall(cwd: string): LocalInstall | undefined {
-  const packageRoot = resolve(cwd, "node_modules", "@oscharko-dev", "keiko");
+  const packageRoot = localPackageRoot(cwd);
   const cliEntry = resolve(packageRoot, "dist", "cli", "index.js");
   const version = readVersion(join(packageRoot, "package.json"));
-  if (!existsSync(cliEntry) || version === undefined) return undefined;
+  if (!hasBuiltKeikoLayout(packageRoot) || version === undefined) return undefined;
   return { packageRoot, cliEntry, version };
 }
 
