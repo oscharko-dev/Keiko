@@ -36,7 +36,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -62,6 +61,7 @@ import {
   upsertEntry,
   type LauncherStateEntry,
 } from "./launcher-state.js";
+import { resolveKeikoBinary } from "./install-layout.js";
 
 type LauncherSubcommand = "install" | "remove" | "status";
 
@@ -167,58 +167,15 @@ function parseRemoveArgs(rest: readonly string[]): ParseResult<RemoveArgs> {
   return { ok: true, value: { dryRun, explain } };
 }
 
-// Pure-node `which`: searches PATH dirs for an executable named `keiko` (or `keiko.cmd`/
-// `keiko.exe` on Windows). Returns the first absolute hit that exists on disk and passes
-// the exec-path allow-list. Returns undefined if nothing found.
-function isExecutableFile(full: string): boolean {
-  try {
-    return statSync(full).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function findInDir(dir: string, candidates: readonly string[]): string | undefined {
-  if (dir.length === 0) return undefined;
-  for (const name of candidates) {
-    const full = join(dir, name);
-    if (isExecutableFile(full)) return full;
-  }
-  return undefined;
-}
-
-function nodeWhich(env: EnvSource, platform: NodeJS.Platform): string | undefined {
-  const pathVar = env.PATH ?? process.env.PATH;
-  if (typeof pathVar !== "string" || pathVar.length === 0) return undefined;
-  const delimiter = platform === "win32" ? ";" : ":";
-  const candidates =
-    platform === "win32" ? ["keiko.cmd", "keiko.exe", "keiko.bat", "keiko"] : ["keiko"];
-  for (const dir of pathVar.split(delimiter)) {
-    const hit = findInDir(dir, candidates);
-    if (hit !== undefined) return hit;
-  }
-  return undefined;
-}
-
 function defaultResolveExe(env: EnvSource): string {
-  const fromBinShim = env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH;
-  if (typeof fromBinShim === "string" && isAbsolute(fromBinShim) && existsSync(fromBinShim)) {
-    return validateExecPath(fromBinShim);
+  const resolution = resolveKeikoBinary(process.cwd(), env, process.argv);
+  if (resolution === undefined) {
+    throw new LauncherError(
+      "EXE_NOT_FOUND",
+      "keiko launcher: cannot locate the `keiko` executable on PATH. Install with `npm install -g @oscharko-dev/keiko` before re-running.",
+    );
   }
-  const entry = process.argv[1];
-  if (typeof entry === "string" && isAbsolute(entry) && existsSync(entry)) {
-    // When the current invocation already has an absolute entry path, prefer that known
-    // active installation over an unrelated `keiko` found earlier on PATH. Otherwise an
-    // older global install can keep winning after an upgrade and a generated shortcut can
-    // continue launching the stale version the operator was trying to replace.
-    return validateExecPath(entry);
-  }
-  const onPath = nodeWhich(env, process.platform);
-  if (onPath !== undefined) return validateExecPath(onPath);
-  throw new LauncherError(
-    "EXE_NOT_FOUND",
-    "keiko launcher: cannot locate the `keiko` executable on PATH. Install with `npm install -g @oscharko-dev/keiko` before re-running.",
-  );
+  return validateExecPath(resolution.binPath);
 }
 
 // Path-containment helpers (realpathSync + ancestor walk) live in `./launcher-paths.ts`
