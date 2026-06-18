@@ -69,8 +69,13 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   // `options` identity changes, so a fresh object every render (on each cursor move or status
   // update) would churn the editor needlessly.
   const options = useMemo(
-    () => buildEditorOptions({ readOnly: view.readOnly, ariaPath: buffer.content.relativePath }),
-    [view.readOnly, buffer.content.relativePath],
+    () =>
+      buildEditorOptions({
+        readOnly: view.readOnly,
+        ariaPath: buffer.content.relativePath,
+        ariaLabel: props.ariaLabel,
+      }),
+    [view.readOnly, buffer.content.relativePath, props.ariaLabel],
   );
   const monacoLanguage = useMemo(
     () => inferMonacoLanguageId(buffer.content.relativePath),

@@ -12,9 +12,13 @@ vi.mock("./editorMonacoRuntime", () => ({
 // Replace the real KeikoCodeEditor with a probe that records the load state it was driven with, so
 // the surface's runtime-gating decision is observable without mounting Monaco.
 vi.mock("@oscharko-dev/keiko-editor", () => ({
-  KeikoCodeEditor: (props: { loadState: { status: string; message?: string } }) => (
+  KeikoCodeEditor: (props: {
+    ariaLabel?: string;
+    loadState: { status: string; message?: string };
+  }) => (
     <div
       data-testid="code-editor"
+      data-aria-label={props.ariaLabel ?? ""}
       data-load-status={props.loadState.status}
       data-load-message={props.loadState.message ?? ""}
     />
@@ -50,8 +54,17 @@ afterEach(() => {
 describe("EditorSurface", () => {
   it("passes the host file-load state through when the Monaco runtime is supported", () => {
     ensureMonacoRuntime.mockReturnValue({ supported: true });
-    render(<EditorSurface {...buildProps({ fileLoadState: { status: "ready" } })} />);
-    expect(screen.getByTestId("code-editor")).toHaveAttribute("data-load-status", "ready");
+    render(
+      <EditorSurface
+        {...buildProps({
+          ariaLabel: "Editor: src/a.ts in /repo",
+          fileLoadState: { status: "ready" },
+        })}
+      />,
+    );
+    const editor = screen.getByTestId("code-editor");
+    expect(editor).toHaveAttribute("data-load-status", "ready");
+    expect(editor).toHaveAttribute("data-aria-label", "Editor: src/a.ts in /repo");
   });
 
   it("forces a controlled load-error state when the Monaco runtime is unsupported", () => {

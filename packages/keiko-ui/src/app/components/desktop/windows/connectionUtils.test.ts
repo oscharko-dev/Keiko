@@ -154,6 +154,7 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("files", { root: "/repo" })).toBe("/repo");
     expect(subText("browser", { url: "https://example.test" })).toBe("https://example.test");
     expect(subText("editor", { file: "src/app.ts" })).toBe("src/app.ts");
+    expect(subText("editor", { root: "/repo", file: "src/app.ts" })).toBe("src/app.ts — /repo");
     expect(subText("terminal", { cwd: "/repo" })).toBe("/repo");
     expect(subText("review", { base: "main", head: "release/0.2.0" })).toBe("main → release/0.2.0");
     expect(subText("review", { base: "main" })).toBeNull();

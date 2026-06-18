@@ -4950,10 +4950,10 @@ select.dlg-input {
   background: var(--card);
   border: 1px solid var(--line-soft);
 }
-.ed-save:hover:not(:disabled) {
+.ed-save:hover:not([aria-disabled="true"]) {
   background: var(--card-2);
 }
-.ed-save:disabled {
+.ed-save[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }

@@ -4,8 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // and the loader's CDN config must not run for real. The keiko-editor helpers stay real — they are
 // pure and node-safe — so this exercises the host's actual wiring decisions.
 const config = vi.fn();
+const setTypeScriptModeConfiguration = vi.fn();
+const setJavaScriptModeConfiguration = vi.fn();
 vi.mock("@monaco-editor/react", () => ({ loader: { config } }));
-vi.mock("monaco-editor", () => ({ editor: {} }));
+vi.mock("monaco-editor", () => ({
+  editor: {},
+  typescript: {
+    typescriptDefaults: { setModeConfiguration: setTypeScriptModeConfiguration },
+    javascriptDefaults: { setModeConfiguration: setJavaScriptModeConfiguration },
+  },
+}));
 
 interface MutableScope {
   Worker?: unknown;
@@ -17,6 +25,8 @@ const scope = globalThis as unknown as MutableScope;
 beforeEach(() => {
   vi.resetModules();
   config.mockClear();
+  setTypeScriptModeConfiguration.mockClear();
+  setJavaScriptModeConfiguration.mockClear();
   delete scope.Worker;
   delete scope.MonacoEnvironment;
 });
@@ -36,21 +46,57 @@ describe("ensureMonacoRuntime", () => {
       expect(status.reason).toBe("web-workers-unavailable");
     }
     expect(config).not.toHaveBeenCalled();
+    expect(setTypeScriptModeConfiguration).not.toHaveBeenCalled();
+    expect(setJavaScriptModeConfiguration).not.toHaveBeenCalled();
     expect(scope.MonacoEnvironment).toBeUndefined();
   });
 
-  it("installs the worker environment and configures the no-CDN loader exactly once when supported", async () => {
+  it("installs the worker environment, no-CDN loader, and governed language services exactly once when supported", async () => {
     scope.Worker = class {};
     const { ensureMonacoRuntime } = await import("./editorMonacoRuntime");
 
     const first = ensureMonacoRuntime();
     expect(first.supported).toBe(true);
     expect(config).toHaveBeenCalledTimes(1);
+    expect(setTypeScriptModeConfiguration).toHaveBeenCalledTimes(1);
+    expect(setJavaScriptModeConfiguration).toHaveBeenCalledTimes(1);
+    expect(setTypeScriptModeConfiguration).toHaveBeenCalledWith({
+      codeActions: false,
+      completionItems: false,
+      definitions: false,
+      diagnostics: false,
+      documentHighlights: false,
+      documentRangeFormattingEdits: false,
+      documentSymbols: false,
+      hovers: false,
+      inlayHints: false,
+      onTypeFormattingEdits: false,
+      references: false,
+      rename: false,
+      signatureHelp: false,
+    });
+    expect(setJavaScriptModeConfiguration).toHaveBeenCalledWith({
+      codeActions: false,
+      completionItems: false,
+      definitions: false,
+      diagnostics: false,
+      documentHighlights: false,
+      documentRangeFormattingEdits: false,
+      documentSymbols: false,
+      hovers: false,
+      inlayHints: false,
+      onTypeFormattingEdits: false,
+      references: false,
+      rename: false,
+      signatureHelp: false,
+    });
     expect(scope.MonacoEnvironment).toBeDefined();
 
     // Idempotent: a second call neither reconfigures the loader nor reinstalls the environment.
     const second = ensureMonacoRuntime();
     expect(second.supported).toBe(true);
     expect(config).toHaveBeenCalledTimes(1);
+    expect(setTypeScriptModeConfiguration).toHaveBeenCalledTimes(1);
+    expect(setJavaScriptModeConfiguration).toHaveBeenCalledTimes(1);
   });
 });

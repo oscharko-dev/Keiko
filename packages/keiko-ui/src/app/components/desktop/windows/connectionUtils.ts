@@ -253,8 +253,11 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
       return cfgString("root");
     case "browser":
       return cfgString("url");
-    case "editor":
-      return cfgString("file");
+    case "editor": {
+      const file = cfgString("file");
+      const root = cfgString("root");
+      return file !== null && root !== null ? `${file} — ${root}` : file;
+    }
     case "terminal":
       return cfgString("cwd");
     case "review": {

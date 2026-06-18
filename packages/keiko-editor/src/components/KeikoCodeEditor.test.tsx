@@ -204,6 +204,11 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(delta.sizeBytes).toBe(new TextEncoder().encode(delta.text).length);
   });
 
+  it("uses a host-provided accessible editor label", () => {
+    render(<KeikoCodeEditor {...baseProps({ ariaLabel: "Editor: src/a.ts in /repo" })} />);
+    expect(screen.getByLabelText("Editor: src/a.ts in /repo")).toBeInTheDocument();
+  });
+
   it("does not emit onContentChange when read-only", async () => {
     const onContentChange = vi.fn();
     render(
