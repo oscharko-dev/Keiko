@@ -112,9 +112,12 @@ describe("buildPatchPreview — file classification", () => {
     });
     const file = model.files[0];
     expect(file?.status).toBe("deleted");
+    expect(file?.diffable).toBe(false);
     expect(file?.original).toBe("");
     expect(file?.modified).toBe("");
     expect(file?.hasChanges).toBe(false);
+    expect(file?.note).toMatch(/deleted-file preview/i);
+    expect(model.unsupportedCount).toBe(0);
     expect(model.deletedCount).toBe(1);
   });
 
@@ -192,6 +195,21 @@ describe("buildPatchPreview — file classification", () => {
     expect(model.files[0]?.note).toMatch(/truncated/i);
   });
 
+  it("keeps a deleted file non-diffable when the original is truncated", () => {
+    const truncatedSource: PatchPreviewSource = {
+      content: { relativePath: "src/gone.ts", sizeBytes: 999, text: "partial", truncated: true },
+    };
+    const model = buildPatchPreview({
+      patch: patch([change({ uri: "keiko://doc/gone.ts", isDeletion: true })]),
+      sources: { "keiko://doc/gone.ts": truncatedSource },
+    });
+    expect(model.files[0]?.status).toBe("deleted");
+    expect(model.files[0]?.diffable).toBe(false);
+    expect(model.files[0]?.note).toMatch(/deleted-file preview unavailable/i);
+    expect(model.deletedCount).toBe(1);
+    expect(model.unsupportedCount).toBe(0);
+  });
+
   it("marks a file unsupported when its edits overlap", () => {
     const model = buildPatchPreview({
       patch: patch([
@@ -254,6 +272,21 @@ describe("buildPatchPreview — empty and aggregate state", () => {
     const model = buildPatchPreview({ patch: patch([]) });
     expect(model.patchId).toBe("patch-1");
     expect(model.status).toBe("previewed");
+    expect(model.provenance).toEqual({ origin: "applied-patch" });
+  });
+
+  it("carries optional verification metadata through to the model", () => {
+    const model = buildPatchPreview({
+      patch: {
+        ...patch([]),
+        verification: { verificationId: "verify-1", outcome: "passed", evidenceRef: "ev-1" },
+      },
+    });
+    expect(model.verification).toEqual({
+      verificationId: "verify-1",
+      outcome: "passed",
+      evidenceRef: "ev-1",
+    });
   });
 
   it("aggregates per-status counts across a mixed patch", () => {

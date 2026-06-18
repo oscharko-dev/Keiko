@@ -22,6 +22,7 @@ function model(files: readonly PatchPreviewFile[]): PatchPreviewModel {
   return {
     patchId: "p1",
     status: "previewed",
+    provenance: { origin: "applied-patch" },
     files,
     fileCount: files.length,
     totalFileCount: files.length,
