@@ -13,6 +13,7 @@ afterEach(() => {
 
 describe("pointer guards", () => {
   it("treats a primary click as activation but a macOS ctrl+click as a context click, not a pan", () => {
+    expect(isCanvasPanPointer({ button: 0, ctrlKey: false })).toBe(false);
     expect(isPrimaryActivationPointer({ button: 0, ctrlKey: false })).toBe(true);
     expect(isMacContextClick({ button: 0, ctrlKey: true })).toBe(true);
     expect(isPrimaryActivationPointer({ button: 0, ctrlKey: true })).toBe(false);

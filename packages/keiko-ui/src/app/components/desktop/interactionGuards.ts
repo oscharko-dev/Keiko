@@ -28,7 +28,7 @@ export function isCanvasPanPointer(event: {
   readonly button: number;
   readonly ctrlKey: boolean;
 }): boolean {
-  return isPrimaryActivationPointer(event) || isMiddlePointerButton(event.button);
+  return isMiddlePointerButton(event.button);
 }
 
 export function isWindowDragPointer(event: {
