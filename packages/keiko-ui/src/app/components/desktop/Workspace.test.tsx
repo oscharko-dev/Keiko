@@ -27,6 +27,10 @@ import {
   serializeLocalKnowledgeConnectorDrag,
 } from "../../local-knowledge/connector-drag";
 
+vi.mock("./WorkspaceShader", () => ({
+  WorkspaceShader: () => null,
+}));
+
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
     x: 40,
@@ -176,6 +180,19 @@ describe("Workspace card connections", () => {
     ).toBeNull();
   });
 
+  it("does not expose the workspace outline until the shell-controlled rail opens it", () => {
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole("region", { name: "Workspace outline" })).not.toBeInTheDocument();
+  });
+
   it("exposes a semantic workspace outline with window actions and textual relationships", async () => {
     const restore = vi.fn();
     const minimize = vi.fn();
@@ -211,6 +228,7 @@ describe("Workspace card connections", () => {
         })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={openPalette}
+        outlineOpen={true}
       />,
     );
 
@@ -271,10 +289,27 @@ describe("Workspace card connections", () => {
         })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={vi.fn()}
+        outlineOpen={true}
       />,
     );
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("marks canvas overlays hidden when a visible window is maximized", () => {
+    const wins = [appWindow({ id: "agents-1", type: "agents", max: true })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(container.querySelector(".workspace")).toHaveAttribute(
+      "data-canvas-overlays-hidden",
+      "true",
+    );
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", () => {

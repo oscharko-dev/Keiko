@@ -42,12 +42,19 @@ const mocks = vi.hoisted(() => ({
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
+    workspaceProps: undefined as { readonly outlineOpen?: boolean } | undefined,
+    rightRailProps: undefined as
+      | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
+      | undefined,
   },
   fetchConfig: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   updateChatLocalKnowledgeScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
   registerSw: vi.fn(),
+  useKeyboardShortcuts: vi.fn(),
+  undo: vi.fn(),
+  redo: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -85,7 +92,7 @@ vi.mock("./hooks/useChatSession", () => ({
 }));
 
 vi.mock("./hooks/useKeyboardShortcuts", () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: mocks.useKeyboardShortcuts,
 }));
 
 vi.mock("./hooks/useUndoStack", () => ({
@@ -95,8 +102,8 @@ vi.mock("./hooks/useUndoStack", () => ({
     undoLabel: null,
     redoLabel: null,
     push: vi.fn(),
-    undo: vi.fn(),
-    redo: vi.fn(),
+    undo: mocks.undo,
+    redo: mocks.redo,
     clear: vi.fn(),
   }),
 }));
@@ -125,8 +132,16 @@ vi.mock("./Header", () => ({
 }));
 
 vi.mock("./Footer", () => ({
-  Footer: ({ winCount }: { readonly winCount: number }) => (
-    <footer data-testid="footer">{winCount}</footer>
+  Footer: ({
+    winCount,
+    statusRef,
+  }: {
+    readonly winCount: number;
+    readonly statusRef?: (node: HTMLElement | null) => void;
+  }) => (
+    <footer ref={statusRef} data-testid="footer" tabIndex={-1}>
+      {winCount}
+    </footer>
   ),
 }));
 
@@ -139,11 +154,21 @@ vi.mock("./LeftRail", () => ({
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: () => <aside data-testid="right-rail" />,
+  RightRail: (props: { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }) => {
+    mocks.state.rightRailProps = props;
+    return (
+      <button type="button" data-testid="right-rail" onClick={props.onToggleOutline}>
+        {props.outlineOpen === true ? "Outline open" : "Outline closed"}
+      </button>
+    );
+  },
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: () => <main data-testid="workspace" />,
+  Workspace: (props: { readonly outlineOpen?: boolean }) => {
+    mocks.state.workspaceProps = props;
+    return <main data-testid="workspace" data-outline-open={props.outlineOpen === true} />;
+  },
 }));
 
 vi.mock("./modals/CommandPalette", () => ({
@@ -284,6 +309,8 @@ describe("AppShell grounding connections", () => {
       win("chat", { chatId: "chat-1" }, "chat-window"),
     ]);
     mocks.state.workspaceOptions = undefined;
+    mocks.state.workspaceProps = undefined;
+    mocks.state.rightRailProps = undefined;
   });
 
   it("persists a new Files source and records the governed reads-context relationship", async () => {
@@ -339,6 +366,37 @@ describe("AppShell grounding connections", () => {
     );
   });
 
+  it("lets the user dismiss the inline source-limit notice", async () => {
+    const connectedScopes = Array.from({ length: 8 }, (_unused, index) =>
+      fileScope(`/repo-${String(index)}`, index),
+    );
+    const localKnowledgeScopes = Array.from({ length: 8 }, (_unused, index) =>
+      capsuleScope(`cap-${String(index)}`),
+    );
+    const cappedChat = chat({ connectedScopes, localKnowledgeScopes });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [cappedChat],
+      activeChat: cappedChat,
+    };
+    await renderMounted();
+
+    await act(async () => {
+      await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-17"));
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("already has 16 of 16 connected sources");
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Dismiss source connection notice" }).click();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
   it("removes connector scopes through the plural local-knowledge patch", async () => {
     const scopeA = capsuleScope("cap-a");
     const scopeB = capsuleScope("cap-b");
@@ -362,5 +420,63 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("keeps the workspace outline closed by default", async () => {
+    await renderMounted();
+
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");
+    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline closed");
+    expect(mocks.state.workspaceProps?.outlineOpen).toBe(false);
+    expect(mocks.state.rightRailProps?.outlineOpen).toBe(false);
+  });
+
+  it("opens the workspace outline when the right rail toggles it", async () => {
+    await renderMounted();
+
+    await act(async () => {
+      screen.getByTestId("right-rail").click();
+    });
+
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
+    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
+    expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
+    expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
+  });
+
+  it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {
+    await renderMounted();
+
+    const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
+      | { readonly dispatch?: (commandId: string) => void }
+      | undefined;
+    expect(keyboardProps?.dispatch).toBeTypeOf("function");
+
+    const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+    keyboardProps?.dispatch?.("undo");
+    keyboardProps?.dispatch?.("redo");
+    keyboardProps?.dispatch?.("focus-status");
+
+    expect(mocks.undo).toHaveBeenCalledTimes(1);
+    expect(mocks.redo).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalled();
+    statusSpy.mockRestore();
+  });
+
+  it("toggles the command palette from the Cmd/Ctrl+K shell shortcut", async () => {
+    await renderMounted();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+    });
+    expect(screen.getByTestId("command-palette")).toBeInTheDocument();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("command-palette")).toBeNull();
+    });
   });
 });

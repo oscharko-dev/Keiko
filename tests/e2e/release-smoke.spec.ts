@@ -169,12 +169,13 @@ test("chat window renders a bound Files grounding source and enforces the 16-sou
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Chat: E2E grounded chat" })).toBeVisible();
-  const grounding = page.getByLabel("Grounding mode");
+  const chatWindow = page.getByRole("region", { name: "Chat — E2E grounded chat" });
+  await expect(chatWindow).toBeVisible();
+  const grounding = chatWindow.getByLabel("Grounding mode");
   await expect(grounding).toBeVisible();
   await expect(grounding).toHaveValue("files");
   await expect(grounding.locator("option:checked")).toHaveText("Live Files context");
-  await expect(page.getByRole("textbox", { name: "Chat message" })).toBeVisible();
+  await expect(chatWindow.getByRole("textbox", { name: "Chat message" })).toBeVisible();
 
   assertNoPageErrors();
 });

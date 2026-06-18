@@ -88,6 +88,13 @@ describe("Palette", () => {
     expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Figma Snapshot", "Files"]);
   });
 
+  it("uses the compact two-column arrangement for a two-card picker", () => {
+    renderPalette(["chat", "files"]);
+
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-columns", "2");
+    expect(cardNames()).toEqual(["Chat", "Files"]);
+  });
+
   it("focuses the first card on mount and closes on Escape", () => {
     const { onClose } = renderPalette();
     const list = cards();
