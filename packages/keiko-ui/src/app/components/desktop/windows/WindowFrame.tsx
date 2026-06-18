@@ -24,7 +24,7 @@ import {
   isWindowDragPointer,
 } from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
-import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
+import { CHAT_MINI_W, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 
@@ -122,12 +122,23 @@ function selectBody(
 ): BodySelection {
   const def = WIN_TYPES[type];
   if (type === "chat") {
-    const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
+    const compact = ew < 640;
+    const barCompact = ew < 520;
+    const minimalChat = ew < 360 || eh < 320;
+    const footerControlsCompact = ew < 520;
+    const controlsNarrow = footerControlsCompact;
+    const workflowCompact = footerControlsCompact;
+    const mini = ew < CHAT_MINI_W;
     return {
       mode: mini ? "mini" : "full",
       node: def.render(cfg, {
         windowId,
         mini,
+        minimalChat,
+        compact,
+        controlsNarrow,
+        barCompact,
+        workflowCompact,
         linkedRoot,
         linkedFilePath,
         linkedRoots,

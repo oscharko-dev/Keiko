@@ -46,6 +46,7 @@ import type {
 
 export interface LaunchWorkflowButtonProps {
   readonly selectedModel: ModelCapability | undefined;
+  readonly compact?: boolean;
   readonly launch: (
     input: LaunchWorkflowFromConversationInput,
   ) => Promise<LaunchWorkflowFromConversationResult>;
@@ -53,6 +54,7 @@ export interface LaunchWorkflowButtonProps {
 
 export function LaunchWorkflowButton({
   selectedModel,
+  compact = false,
   launch,
 }: LaunchWorkflowButtonProps): ReactNode {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -67,13 +69,15 @@ export function LaunchWorkflowButton({
       <button
         ref={triggerRef}
         type="button"
-        className="cmp-mode"
-        title="Launch a governed workflow with the current model"
+        className={`cmp-mode${compact ? " cmp-mode-compact" : " cmp-pill-standard"} ui-tip`}
+        aria-label="Launch workflow"
         aria-haspopup="dialog"
+        data-tip={compact ? "Launch workflow" : undefined}
         onClick={() => setPickerOpen(true)}
       >
-        <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Launch workflow
-        <Icons.chevron size={12} />
+        <Icons.spark size={compact ? 16 : 14} style={{ color: "var(--accent)" }} />
+        {compact ? <span className="sr-only">Launch workflow</span> : "Launch workflow"}
+        {compact ? null : <Icons.chevron size={12} />}
       </button>
       {pickerOpen ? (
         <WorkflowPickerDialog
@@ -439,8 +443,8 @@ export function LaunchGroundedWorkflowButton({
       <button
         ref={triggerRef}
         type="button"
-        className="cmp-mode"
-        title="Launch a governed workflow from this grounded answer"
+        className="cmp-mode ui-tip"
+        data-tip="Launch grounded workflow"
         aria-haspopup="dialog"
         aria-disabled={isBusy || undefined}
         aria-describedby={isBusy ? busyHintId : undefined}

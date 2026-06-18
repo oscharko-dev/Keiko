@@ -67,6 +67,11 @@ export interface ConfigField {
 export interface WindowRenderContext {
   readonly windowId: string;
   readonly mini?: boolean;
+  readonly minimalChat?: boolean;
+  readonly compact?: boolean;
+  readonly controlsNarrow?: boolean;
+  readonly barCompact?: boolean;
+  readonly workflowCompact?: boolean;
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
   readonly linkedRoots: readonly string[];

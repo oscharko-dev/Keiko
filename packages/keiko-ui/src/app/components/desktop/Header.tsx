@@ -38,9 +38,9 @@ export function Header({
       <div className="hd-tools">
         <button
           type="button"
-          className="hd-tool hd-tool-cta"
+          className="hd-tool hd-tool-cta ui-tip"
           onClick={openPalette}
-          title="New window — press Ctrl/⌘K for all commands"
+          data-tip="New window"
         >
           <Icons.add size={16} />
           <span>New</span>
@@ -49,9 +49,9 @@ export function Header({
             CommandPalette) so the palette has a discoverable on-screen entry point. */}
         <button
           type="button"
-          className="hd-tool hd-tool-kbd"
+          className="hd-tool hd-tool-kbd ui-tip"
           onClick={openCommandPalette}
-          title="Open the command palette (Ctrl/⌘K)"
+          data-tip="Open command palette"
           aria-label="Open the command palette (Ctrl/⌘K)"
         >
           <span className="kbd" aria-hidden="true">
@@ -61,9 +61,9 @@ export function Header({
         <span className="hd-div" />
         <button
           type="button"
-          className="hd-tool"
+          className="hd-tool ui-tip"
           onClick={onTileAll}
-          title="Tile all windows"
+          data-tip="Tile all windows"
           aria-label="Tile all windows"
         >
           <Icons.tile size={16} />
@@ -72,18 +72,18 @@ export function Header({
             windows") so the action is recognizable across tooltip and palette. */}
         <button
           type="button"
-          className="hd-tool"
+          className="hd-tool ui-tip"
           onClick={onSplitFront}
-          title="Split front windows"
+          data-tip="Split front windows"
           aria-label="Split front windows"
         >
           <Icons.split size={16} />
         </button>
         <button
           type="button"
-          className="hd-tool"
+          className="hd-tool ui-tip"
           onClick={onCascade}
-          title="Cascade windows"
+          data-tip="Cascade windows"
           aria-label="Cascade windows"
         >
           <Icons.cascade size={16} />
