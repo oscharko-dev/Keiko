@@ -803,11 +803,36 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
   });
 
   it("provides dark (default), light, and high-contrast editor surfaces from the token source", () => {
-    // dark default + light + high-contrast each set --ed-fg to a distinct value from the #1212 source.
-    expect(css).toContain("--ed-fg: #c5cdd9"); // dark default (:root)
-    expect(css).toContain("--ed-fg: #2b3440"); // [data-theme="light"]
-    expect(css).toContain("--ed-fg: #ffffff"); // prefers-contrast dark
-    expect(css).toContain("--ed-fg: #000000"); // prefers-contrast light
+    // Scope the assertions to the editor token section + its own prefers-contrast block so the
+    // high-contrast values cannot accidentally satisfy the test from :root/[data-theme] (mutation-robust).
+    const edStart = css.indexOf("Editor theme tokens (#1212)");
+    expect(edStart, "editor token section not found").toBeGreaterThan(-1);
+    const edHcStart = css.indexOf("@media (prefers-contrast: more)", edStart);
+    expect(edHcStart, "editor HC @media block not found").toBeGreaterThan(-1);
+
+    let depth = 0;
+    let edHcEnd = edHcStart;
+    let started = false;
+    for (let i = css.indexOf("{", edHcStart); i < css.length; i++) {
+      if (css[i] === "{") {
+        depth++;
+        started = true;
+      } else if (css[i] === "}") {
+        depth--;
+      }
+      if (started && depth === 0) {
+        edHcEnd = i;
+        break;
+      }
+    }
+    const edHcBlock = css.slice(edHcStart, edHcEnd + 1);
+    const edBeforeHc = css.slice(edStart, edHcStart);
+
+    // dark default + light overrides live before the HC block; HC dark/light live inside it.
+    expect(edBeforeHc).toContain("--ed-fg: #c5cdd9"); // dark default (:root)
+    expect(edBeforeHc).toContain("--ed-fg: #2b3440"); // [data-theme="light"]
+    expect(edHcBlock).toContain("--ed-fg: #ffffff"); // prefers-contrast dark
+    expect(edHcBlock).toContain("--ed-fg: #000000"); // prefers-contrast light
   });
 
   it("does not lift the demo-only [data-hc] selectors (keiko-ui drives HC via prefers-contrast)", () => {

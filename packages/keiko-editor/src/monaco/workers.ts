@@ -13,7 +13,7 @@
  * worker constructors so it is fully unit-testable.
  */
 
-/** The distinct Monaco worker bundles the editor loads. */
+/** The distinct Monaco worker bundles the editor loads. @internal (not part of the public API). */
 export const MONACO_WORKER_ENTRIES = ["editor", "ts", "json", "css", "html"] as const;
 
 /** One of the {@link MONACO_WORKER_ENTRIES}. */
@@ -23,6 +23,7 @@ export type MonacoWorkerEntry = (typeof MONACO_WORKER_ENTRIES)[number];
  * Local, same-origin ESM module specifier for each worker bundle in the installed `monaco-editor`
  * package. These resolve inside `node_modules/monaco-editor`; no CDN host appears here. Used both to
  * construct the workers (`./worker-entries.ts`) and to verify worker availability in the build.
+ * @internal Not part of the package public API (used by `./worker-entries.ts` and tests).
  */
 export const MONACO_WORKER_MODULES: Readonly<Record<MonacoWorkerEntry, string>> = {
   editor: "monaco-editor/esm/vs/editor/editor.worker.js",
@@ -38,6 +39,7 @@ export const MONACO_WORKER_MODULES: Readonly<Record<MonacoWorkerEntry, string>> 
  * Monaco passes its language ids (`typescript`/`javascript`, `json`, `css`/`scss`/`less`,
  * `html`/`handlebars`/`razor`) or `editorWorkerService` for the base editor worker. Anything else
  * (including the base service and unknown labels) falls back to the editor worker.
+ * @internal Consumed by {@link createMonacoEnvironment}; not part of the package public API.
  */
 export function monacoWorkerEntryForLabel(label: string): MonacoWorkerEntry {
   switch (label) {
