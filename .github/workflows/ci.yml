@@ -43,6 +43,11 @@ jobs:
           node-version: "22.x"
           cache: "npm"
       - run: npm ci
+      - name: Verify Keiko Editor package
+        run: |
+          npm --workspace @oscharko-dev/keiko-editor run build
+          npm --workspace @oscharko-dev/keiko-editor run typecheck
+          npm --workspace @oscharko-dev/keiko-editor test
       - run: npm run typecheck
       - run: npm run check:version-consistency
       - run: npm run lint
