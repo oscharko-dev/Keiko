@@ -24,7 +24,10 @@ interface CapturedEditor {
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
-const captured: { editor: CapturedEditor | null } = { editor: null };
+const captured: { editor: CapturedEditor | null; language: string | null } = {
+  editor: null,
+  language: null,
+};
 
 vi.mock("@monaco-editor/react", () => {
   interface FakeSelection {
@@ -36,6 +39,7 @@ vi.mock("@monaco-editor/react", () => {
   }
   interface MockProps {
     value?: string;
+    language?: string;
     options?: { ariaLabel?: string; readOnly?: boolean };
     onChange?: (value: string | undefined) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
@@ -143,6 +147,7 @@ vi.mock("@monaco-editor/react", () => {
       };
       ref.current = s;
     }
+    captured.language = props.language ?? null;
     const state = ref.current;
     if (!state.mounted) {
       state.mounted = true;
@@ -176,6 +181,7 @@ async function flushMount(): Promise<void> {
 
 beforeEach(() => {
   captured.editor = null;
+  captured.language = null;
 });
 
 afterEach(() => {
@@ -207,6 +213,15 @@ describe("KeikoCodeEditor — controlled editing", () => {
     await userEvent.type(textarea, "X");
     expect(onContentChange).not.toHaveBeenCalled();
   });
+
+  it("does not emit onContentChange when the buffer is read-only", async () => {
+    const onContentChange = vi.fn();
+    const buffer = { ...buildBuffer(), readOnly: true };
+    render(<KeikoCodeEditor {...baseProps({ onContentChange, buffer })} />);
+    const textarea = screen.getByLabelText("Editor: src/a.ts");
+    await userEvent.type(textarea, "X");
+    expect(onContentChange).not.toHaveBeenCalled();
+  });
 });
 
 describe("KeikoCodeEditor — save command", () => {
@@ -223,6 +238,7 @@ describe("KeikoCodeEditor — save command", () => {
     expect(request.content.relativePath).toBe("src/a.ts");
     expect(request.content.sizeBytes).toBe(new TextEncoder().encode("const a = 1;\n").length);
     expect(request.content.truncated).toBe(false);
+    expect(request.expectedSavedVersion).toBe(fileModel.savedVersion);
   });
 
   it("saves the CURRENT text after an edit, not the mount-time text", async () => {
@@ -241,6 +257,7 @@ describe("KeikoCodeEditor — save command", () => {
     const request = onSaveRequested.mock.calls.at(-1)?.[0] as EditorSaveRequest;
     expect(request.content.text).toBe("const a = 2;\n");
     expect(request.content.sizeBytes).toBe(new TextEncoder().encode("const a = 2;\n").length);
+    expect(request.expectedSavedVersion).toBe(fileModel.savedVersion);
   });
 
   it("does not save a read-only buffer", async () => {
@@ -248,6 +265,15 @@ describe("KeikoCodeEditor — save command", () => {
     render(
       <KeikoCodeEditor {...baseProps({ onSaveRequested, fileModel: buildFileModel(true) })} />,
     );
+    await flushMount();
+    captured.editor?.runSaveAction();
+    expect(onSaveRequested).not.toHaveBeenCalled();
+  });
+
+  it("does not save when the buffer is read-only", async () => {
+    const onSaveRequested = vi.fn();
+    const buffer = { ...buildBuffer(), readOnly: true };
+    render(<KeikoCodeEditor {...baseProps({ onSaveRequested, buffer })} />);
     await flushMount();
     captured.editor?.runSaveAction();
     expect(onSaveRequested).not.toHaveBeenCalled();
@@ -315,6 +341,26 @@ describe("KeikoCodeEditor — runtime errors", () => {
   });
 });
 
+describe("KeikoCodeEditor — Monaco language", () => {
+  it("infers Monaco language from the file path without changing the governed buffer language", () => {
+    const pyBuffer = {
+      ...buildBuffer({ relativePath: "scripts/build.py" }),
+      language: "plaintext" as const,
+    };
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({ buffer: pyBuffer })} />);
+    expect(captured.language).toBe("python");
+    expect(pyBuffer.language).toBe("plaintext");
+
+    const jsonBuffer = {
+      ...buildBuffer({ relativePath: "config/settings.json" }),
+      language: "plaintext" as const,
+    };
+    rerender(<KeikoCodeEditor {...baseProps({ buffer: jsonBuffer })} />);
+    expect(captured.language).toBe("json");
+    expect(jsonBuffer.language).toBe("plaintext");
+  });
+});
+
 describe("KeikoCodeEditor — lifecycle", () => {
   it("focuses the editor on mount when autoFocus is set", async () => {
     render(<KeikoCodeEditor {...baseProps({ autoFocus: true })} />);
@@ -341,7 +387,7 @@ describe("KeikoCodeEditor — lifecycle", () => {
   });
 });
 
-describe("KeikoCodeEditor — read-only and error keep the editor mounted", () => {
+describe("KeikoCodeEditor — read-only and error rendering", () => {
   it("keeps the editor mounted (copy/select preserved) when read-only", () => {
     render(<KeikoCodeEditor {...baseProps({ fileModel: buildFileModel(true) })} />);
     expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();
@@ -356,18 +402,24 @@ describe("KeikoCodeEditor — read-only and error keep the editor mounted", () =
     expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();
   });
 
-  it("keeps the editor mounted but read-only when the load failed (prevents edits)", async () => {
+  it("does not mount Monaco when the load failed", () => {
     const onContentChange = vi.fn();
     render(
       <KeikoCodeEditor
         {...baseProps({ onContentChange, loadState: { status: "error", message: "boot failed" } })}
       />,
     );
-    const textarea = screen.getByLabelText("Editor: src/a.ts");
-    expect(textarea).toBeInTheDocument();
-    expect(textarea).toHaveAttribute("readonly");
-    await userEvent.type(textarea, "X");
+    expect(screen.queryByLabelText("Editor: src/a.ts")).not.toBeInTheDocument();
+    expect(screen.getByTestId("keiko-editor-loading")).toBeInTheDocument();
+    expect(captured.editor).toBeNull();
     expect(onContentChange).not.toHaveBeenCalled();
+  });
+
+  it("does not mount Monaco while the local runtime is still loading", () => {
+    render(<KeikoCodeEditor {...baseProps({ loadState: { status: "loading" } })} />);
+    expect(screen.queryByLabelText("Editor: src/a.ts")).not.toBeInTheDocument();
+    expect(screen.getByTestId("keiko-editor-loading")).toBeInTheDocument();
+    expect(captured.editor).toBeNull();
   });
 });
 
@@ -382,6 +434,25 @@ describe("KeikoCodeEditor — max size", () => {
     const buffer = buildBuffer({ truncated: true });
     render(<KeikoCodeEditor {...baseProps({ buffer })} />);
     expect(screen.getByLabelText("Editor: src/a.ts")).toHaveAttribute("readonly");
+  });
+
+  it("forces read-only and blocks save when sizeBytes exceeds maxSizeBytes without truncation", async () => {
+    const onContentChange = vi.fn();
+    const onSaveRequested = vi.fn();
+    const buffer = buildBuffer({ sizeBytes: 999_999, truncated: false });
+    render(
+      <KeikoCodeEditor
+        {...baseProps({ buffer, maxSizeBytes: 128, onContentChange, onSaveRequested })}
+      />,
+    );
+    const textarea = screen.getByLabelText("Editor: src/a.ts");
+    expect(textarea).toHaveAttribute("readonly");
+    expect(screen.getByTestId("keiko-editor-limit")).toBeInTheDocument();
+    await userEvent.type(textarea, "X");
+    expect(onContentChange).not.toHaveBeenCalled();
+    await flushMount();
+    captured.editor?.runSaveAction();
+    expect(onSaveRequested).not.toHaveBeenCalled();
   });
 });
 

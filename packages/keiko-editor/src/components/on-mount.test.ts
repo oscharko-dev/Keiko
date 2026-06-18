@@ -20,6 +20,37 @@ interface FakeSelectionEvent {
   };
 }
 
+interface FakeKeyboardEvent {
+  readonly key: string;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly cancelable: boolean;
+  defaultPrevented: boolean;
+  preventDefault: () => void;
+}
+
+interface FakeEditorContainer {
+  readonly addEventListener: ReturnType<
+    typeof vi.fn<
+      (
+        type: string,
+        listener: (event: KeyboardEvent) => void,
+        options?: AddEventListenerOptions,
+      ) => void
+    >
+  >;
+  readonly removeEventListener: ReturnType<
+    typeof vi.fn<
+      (
+        type: string,
+        listener: (event: KeyboardEvent) => void,
+        options?: EventListenerOptions,
+      ) => void
+    >
+  >;
+  dispatchKeyboardEvent(event: FakeKeyboardEvent): void;
+}
+
 // A structurally-loose stand-in for `MountEditor`: it captures the real wiring's calls while
 // emitting plain coordinate objects (not full Monaco `Position`/`Selection` instances). It is cast
 // to `MountEditor` at the `wireEditorOnMount` boundary, exactly as a real editor would be supplied.
@@ -28,7 +59,7 @@ interface FakeEditor {
   onDidChangeCursorPosition: (listener: (event: FakeCursorEvent) => void) => FakeDisposable;
   onDidChangeCursorSelection: (listener: (event: FakeSelectionEvent) => void) => FakeDisposable;
   focus: () => void;
-  getContainerDomNode: () => HTMLElement;
+  getContainerDomNode: () => FakeEditorContainer;
   saveViewState: () => null;
   restoreViewState: () => void;
 }
@@ -36,7 +67,7 @@ interface FakeEditor {
 interface Fakes {
   readonly editor: FakeEditor;
   readonly monaco: MountMonaco;
-  readonly container: HTMLElement;
+  readonly container: FakeEditorContainer;
   readonly actionDisposable: FakeDisposable;
   readonly cursorDisposable: FakeDisposable;
   readonly selectionDisposable: FakeDisposable;
@@ -44,6 +75,45 @@ interface Fakes {
   readonly lastActionKeybindings: () => readonly number[] | undefined;
   cursorListener: ((event: FakeCursorEvent) => void) | null;
   selectionListener: ((event: FakeSelectionEvent) => void) | null;
+}
+
+function buildContainer(): FakeEditorContainer {
+  let keydownListener: ((event: KeyboardEvent) => void) | null = null;
+  return {
+    addEventListener: vi.fn((type, listener) => {
+      if (type === "keydown") {
+        keydownListener = listener;
+      }
+    }),
+    removeEventListener: vi.fn((type, listener) => {
+      if (type === "keydown" && listener === keydownListener) {
+        keydownListener = null;
+      }
+    }),
+    dispatchKeyboardEvent(event): void {
+      keydownListener?.(event as unknown as KeyboardEvent);
+    },
+  };
+}
+
+function buildKeyboardEvent(args: {
+  readonly key: string;
+  readonly metaKey?: boolean | undefined;
+  readonly ctrlKey?: boolean | undefined;
+}): FakeKeyboardEvent {
+  const event: FakeKeyboardEvent = {
+    key: args.key,
+    metaKey: args.metaKey ?? false,
+    ctrlKey: args.ctrlKey ?? false,
+    cancelable: true,
+    defaultPrevented: false,
+    preventDefault: (): void => {
+      if (event.cancelable) {
+        event.defaultPrevented = true;
+      }
+    },
+  };
+  return event;
 }
 
 function buildFakes(): Fakes {
@@ -57,7 +127,7 @@ function buildFakes(): Fakes {
     cursorDisposable,
     selectionDisposable,
     focus,
-    container: document.createElement("div"),
+    container: buildContainer(),
     monaco: {
       editor: { defineTheme: vi.fn() },
       KeyMod: { CtrlCmd: 2048 },
@@ -92,7 +162,7 @@ function wire(fakes: Fakes, overrides?: Partial<WireEditorOnMountArgs>): () => v
   return wireEditorOnMount({
     editor: fakes.editor as unknown as MountEditor,
     monaco: fakes.monaco,
-    container: fakes.container,
+    container: fakes.container as unknown as HTMLElement,
     themeVariant: "dark",
     autoFocus: false,
     onSave: vi.fn(),
@@ -123,12 +193,12 @@ describe("wireEditorOnMount", () => {
   it("installs a capturing keydown backstop that prevents the browser save dialog", () => {
     const fakes = buildFakes();
     wire(fakes);
-    const saveEvent = new KeyboardEvent("keydown", { key: "s", metaKey: true, cancelable: true });
-    fakes.container.dispatchEvent(saveEvent);
+    const saveEvent = buildKeyboardEvent({ key: "s", metaKey: true });
+    fakes.container.dispatchKeyboardEvent(saveEvent);
     expect(saveEvent.defaultPrevented).toBe(true);
 
-    const otherEvent = new KeyboardEvent("keydown", { key: "a", metaKey: true, cancelable: true });
-    fakes.container.dispatchEvent(otherEvent);
+    const otherEvent = buildKeyboardEvent({ key: "a", metaKey: true });
+    fakes.container.dispatchKeyboardEvent(otherEvent);
     expect(otherEvent.defaultPrevented).toBe(false);
   });
 
@@ -163,7 +233,7 @@ describe("wireEditorOnMount", () => {
     expect(unfocused.focus).not.toHaveBeenCalled();
   });
 
-  it("reports a theme-registration failure without throwing (no --ed-* tokens in jsdom)", () => {
+  it("reports a theme-registration failure without throwing when DOM tokens are unavailable", () => {
     const fakes = buildFakes();
     const onThemeError = vi.fn();
     expect(() => wire(fakes, { onThemeError })).not.toThrow();
@@ -172,12 +242,13 @@ describe("wireEditorOnMount", () => {
 
   it("disposes the action, subscriptions, and the keydown backstop on teardown", () => {
     const fakes = buildFakes();
-    const removeSpy = vi.spyOn(fakes.container, "removeEventListener");
     const dispose = wire(fakes, { onCursorChange: vi.fn(), onSelectionChange: vi.fn() });
     dispose();
     expect(fakes.actionDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(fakes.cursorDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(fakes.selectionDisposable.dispose).toHaveBeenCalledTimes(1);
-    expect(removeSpy).toHaveBeenCalledWith("keydown", expect.any(Function), { capture: true });
+    expect(fakes.container.removeEventListener).toHaveBeenCalledWith("keydown", expect.any(Function), {
+      capture: true,
+    });
   });
 });

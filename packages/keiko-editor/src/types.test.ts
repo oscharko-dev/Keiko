@@ -239,6 +239,7 @@ const contextResults: readonly EditorContextResult[] = [
 
 const saveRequest: EditorSaveRequest = {
   identity: documentIdentity,
+  expectedSavedVersion: 11,
   content: { relativePath: "src/a.ts", sizeBytes: 12, text: "const x = 1;", truncated: false },
 };
 

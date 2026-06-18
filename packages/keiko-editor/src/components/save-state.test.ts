@@ -59,6 +59,12 @@ describe("saveStatusReducer", () => {
     expect(saveStatusReducer("error", { type: "edited" })).toBe("error");
     expect(saveStatusReducer("conflict", { type: "edited" })).toBe("conflict");
   });
+
+  it("keeps failed, conflicted, and reloaded transitions scoped to their source states", () => {
+    expect(saveStatusReducer("idle", { type: "failed" })).toBe("idle");
+    expect(saveStatusReducer("saved", { type: "conflicted" })).toBe("saved");
+    expect(saveStatusReducer("idle", { type: "reloaded" })).toBe("idle");
+  });
 });
 
 describe("detectSaveConflict", () => {
@@ -86,38 +92,85 @@ describe("buildSaveRequest", () => {
     expect(request.content.sizeBytes).toBe(new TextEncoder().encode("café — €").length);
     expect(request.content.sizeBytes).toBeGreaterThan("café — €".length);
   });
+
+  it("optionally carries the saved-version baseline expected by the host", () => {
+    const request = buildSaveRequest(identity, "const a = 1;\n", "src/a.ts", 2);
+    expect(request.expectedSavedVersion).toBe(2);
+    expect(request.identity).toBe(identity);
+    expect(request.content.text).toBe("const a = 1;\n");
+  });
 });
 
 describe("effectiveReadOnly", () => {
   it("is read-only when the model is read-only", () => {
-    expect(effectiveReadOnly({ modelReadOnly: true, truncated: false, notReady: false })).toBe(
-      true,
-    );
+    expect(
+      effectiveReadOnly({
+        modelReadOnly: true,
+        bufferReadOnly: false,
+        truncated: false,
+        overLimit: false,
+        notReady: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("is read-only when the buffer is read-only", () => {
+    expect(
+      effectiveReadOnly({
+        modelReadOnly: false,
+        bufferReadOnly: true,
+        truncated: false,
+        overLimit: false,
+        notReady: false,
+      }),
+    ).toBe(true);
   });
 
   it("is read-only when the override forces it", () => {
     expect(
       effectiveReadOnly({
         modelReadOnly: false,
+        bufferReadOnly: false,
         override: true,
         truncated: false,
+        overLimit: false,
         notReady: false,
       }),
     ).toBe(true);
   });
 
   it("is read-only when the buffer is truncated", () => {
-    expect(effectiveReadOnly({ modelReadOnly: false, truncated: true, notReady: false })).toBe(
-      true,
-    );
+    expect(
+      effectiveReadOnly({
+        modelReadOnly: false,
+        bufferReadOnly: false,
+        truncated: true,
+        overLimit: true,
+        notReady: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("is read-only when the buffer exceeds the max editable size without truncation", () => {
+    expect(
+      effectiveReadOnly({
+        modelReadOnly: false,
+        bufferReadOnly: false,
+        truncated: false,
+        overLimit: true,
+        notReady: false,
+      }),
+    ).toBe(true);
   });
 
   it("is read-only while the document is not ready (loading or load error)", () => {
     expect(
       effectiveReadOnly({
         modelReadOnly: false,
+        bufferReadOnly: false,
         override: false,
         truncated: false,
+        overLimit: false,
         notReady: true,
       }),
     ).toBe(true);
@@ -127,8 +180,10 @@ describe("effectiveReadOnly", () => {
     expect(
       effectiveReadOnly({
         modelReadOnly: false,
+        bufferReadOnly: false,
         override: false,
         truncated: false,
+        overLimit: false,
         notReady: false,
       }),
     ).toBe(false);

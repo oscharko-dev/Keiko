@@ -36,6 +36,37 @@ describe("buildEditorOptions", () => {
     });
   });
 
+  it("disables Monaco hover, suggest, and markdown-capable helper surfaces", () => {
+    expect(options.hover).toEqual({ enabled: false });
+    expect(options.quickSuggestions).toBe(false);
+    expect(options.quickSuggestionsDelay).toBe(0);
+    expect(options.suggestOnTriggerCharacters).toBe(false);
+    expect(options.parameterHints).toEqual({ enabled: false });
+    expect(options.wordBasedSuggestions).toBe("off");
+    expect(options.inlineSuggest).toEqual({
+      enabled: false,
+      showToolbar: "never",
+      syntaxHighlightingEnabled: false,
+      suppressSuggestions: true,
+    });
+    expect(options.suggest).toMatchObject({
+      showStatusBar: false,
+      preview: false,
+      showInlineDetails: false,
+      showIcons: false,
+      showMethods: false,
+      showFunctions: false,
+      showKeywords: false,
+      showWords: false,
+      showSnippets: false,
+    });
+    expect(options.links).toBe(false);
+    expect(options.colorDecorators).toBe(false);
+    expect(options.codeLens).toBe(false);
+    expect(options.lightbulb).toEqual({ enabled: "off" });
+    expect(options.inlayHints).toEqual({ enabled: "off" });
+  });
+
   it("uses alt as the multi-cursor modifier", () => {
     expect(options.multiCursorModifier).toBe("alt");
   });
