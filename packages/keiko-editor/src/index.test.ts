@@ -38,7 +38,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
     ]);
   });
 
-  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193)", () => {
+  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195)", () => {
     const expected = [
       // Package identity, language + workspace contract, geometry, file model, completion,
       // commands (#1191 + #1192).
@@ -84,6 +84,10 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       // Save-lifecycle helpers a host uses to drive `saveStatus` (#1194).
       "saveStatusReducer",
       "detectSaveConflict",
+      // Patch-preview adapter + KeikoDiffEditor React component (#1195).
+      "buildPatchPreview",
+      "DEFAULT_PATCH_PREVIEW_LIMITS",
+      "KeikoDiffEditor",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });
