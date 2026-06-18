@@ -26,6 +26,10 @@ vi.mock("next/dynamic", () => ({
     },
 }));
 
+// The content-free document version the loaded fixture reports; the host captures it and sends it
+// back as the version-aware baseVersion token on save (Issue #1197).
+const BASE_VERSION = { sizeBytes: 12, modifiedAt: 1, contentHash: "a".repeat(64) };
+
 function fileResponse(over?: Partial<FilesContentResponse>): FilesContentResponse {
   return {
     root: "/repo",
@@ -38,6 +42,7 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
     symlink: false,
     content: "const value = 1;\n",
     maxBytes: 1_000_000,
+    session: { schemaVersion: "1", version: BASE_VERSION },
     ...over,
   };
 }
@@ -100,7 +105,7 @@ describe("EditorWidget — edit and save", () => {
     expect(screen.getByTitle("Unsaved changes")).toBeInTheDocument();
   });
 
-  it("saves with optimistic-concurrency token and clears dirty on success", async () => {
+  it("saves with the version-aware token and clears dirty on success", async () => {
     await renderLoaded();
     vi.mocked(saveFilesContent).mockResolvedValueOnce(
       fileResponse({ modifiedAt: 2, content: "const value = 2;\n" }),
@@ -114,7 +119,7 @@ describe("EditorWidget — edit and save", () => {
         root: "/repo",
         path: "src/app.ts",
         content: "const value = 2;\n",
-        expectedModifiedAt: 1,
+        baseVersion: BASE_VERSION,
       });
     });
     await waitFor(() => {
@@ -122,6 +127,36 @@ describe("EditorWidget — edit and save", () => {
     });
     expect(surface.props?.modifiedAt).toBe(2);
     expect(surface.props?.fileModel.dirty).toBe(false);
+  });
+
+  it("adopts the persisted version so the next save sends the fresh baseVersion token", async () => {
+    await renderLoaded();
+    const nextVersion = { sizeBytes: 17, modifiedAt: 2, contentHash: "c".repeat(64) };
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        modifiedAt: 2,
+        content: "const value = 2;\n",
+        session: { schemaVersion: "1", version: nextVersion },
+      }),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("saved");
+    });
+
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 3 }));
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 3;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(saveFilesContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ baseVersion: nextVersion }),
+      );
+    });
   });
 
   it("ignores an editor Cmd/Ctrl+S save request when the buffer is clean", async () => {
@@ -161,7 +196,7 @@ describe("EditorWidget — edit and save", () => {
     });
     await waitFor(() => {
       expect(saveFilesContent).toHaveBeenCalledWith(
-        expect.objectContaining({ content: "const value = 9;\n", expectedModifiedAt: 1 }),
+        expect.objectContaining({ content: "const value = 9;\n", baseVersion: BASE_VERSION }),
       );
     });
   });
@@ -184,7 +219,10 @@ describe("EditorWidget — conflict and error", () => {
     expect(surface.props?.fileModel.dirty).toBe(true);
     const reload = await screen.findByRole("button", { name: "Reload" });
 
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 5 }));
+    const reloadedVersion = { sizeBytes: 20, modifiedAt: 5, contentHash: "d".repeat(64) };
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 5, session: { schemaVersion: "1", version: reloadedVersion } }),
+    );
     await userEvent.click(reload);
     await waitFor(() => {
       expect(fetchFilesContent).toHaveBeenCalledTimes(2);
@@ -193,8 +231,36 @@ describe("EditorWidget — conflict and error", () => {
       expect(surface.props?.saveStatus).toBe("idle");
     });
     // Reload must adopt the new concurrency token, or the next save would send a stale
-    // expectedModifiedAt and immediately re-conflict.
+    // baseVersion and immediately re-conflict.
     expect(surface.props?.modifiedAt).toBe(5);
+
+    // The next save must send the RELOADED version as baseVersion — pins the reload→save token chain.
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 6 }));
+    act(() => {
+      surface.props?.onContentChange({ text: "edited-again\n", sizeBytes: 13 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(saveFilesContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ baseVersion: reloadedVersion }),
+      );
+    });
+  });
+
+  it("treats a STALE_SESSION 409 as a recoverable conflict (Issue #1197)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("STALE_SESSION", "This file changed since it was opened.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(await screen.findByRole("button", { name: "Reload" })).toBeInTheDocument();
   });
 
   it("surfaces a non-conflict save failure as an error state", async () => {

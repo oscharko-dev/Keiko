@@ -103,6 +103,25 @@ export {
   DEFAULT_CONTEXT_REQUEST,
 } from "./workspace.js";
 
+// ─── Editor session (Issue #1197) ─────────────────────────────────────────────────
+// Content-free editor-session/file-state correlation metadata + stable error codes. Owned by
+// #1197, disjoint from the language-service namespace (#1198).
+export type {
+  EditorDocumentVersion,
+  EditorSessionAiProvenance,
+  EditorDocumentSession,
+  EditorSessionErrorCode,
+  EditorSessionValidation,
+  EditorSessionValidationOk,
+  EditorSessionValidationFail,
+} from "./editor-session.js";
+export {
+  EDITOR_SESSION_SCHEMA_VERSION,
+  EDITOR_SESSION_ERROR_CODES,
+  isEditorDocumentVersion,
+  parseEditorDocumentVersion,
+} from "./editor-session.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,
