@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import * as editor from "./index.js";
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(packageDir, "..", "..");
 
 interface EditorManifest {
   readonly dependencies?: Record<string, string>;
@@ -14,8 +15,16 @@ interface EditorManifest {
   readonly peerDependencies?: Record<string, string>;
 }
 
+interface RootManifest {
+  readonly overrides?: Record<string, string>;
+}
+
 function readManifest(): EditorManifest {
   return JSON.parse(readFileSync(resolve(packageDir, "package.json"), "utf8")) as EditorManifest;
+}
+
+function readRootManifest(): RootManifest {
+  return JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as RootManifest;
 }
 
 describe("@oscharko-dev/keiko-editor public API", () => {
@@ -52,9 +61,20 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
 
   it("treats React as a peer dependency, never a bundled runtime dependency", () => {
     const manifest = readManifest();
-    expect(manifest.peerDependencies?.react).toBeDefined();
-    expect(manifest.dependencies?.react).toBeUndefined();
-    expect(manifest.devDependencies?.react).toBeUndefined();
+    for (const packageName of ["react", "react-dom"]) {
+      expect(manifest.peerDependencies?.[packageName]).toBe("^18.3.1");
+      expect(manifest.dependencies?.[packageName]).toBeUndefined();
+      expect(manifest.devDependencies?.[packageName]).toBeUndefined();
+    }
+  });
+
+  it("pins Monaco dependencies and the transitive loader override", () => {
+    const manifest = readManifest();
+    const rootManifest = readRootManifest();
+
+    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.55.1");
+    expect(manifest.dependencies?.["@monaco-editor/react"]).toBe("4.7.0");
+    expect(rootManifest.overrides?.["@monaco-editor/loader"]).toBe("1.7.0");
   });
 
   it("limits workspace dependencies to keiko-contracts (browser-tier allowlist, ADR-0042)", () => {
