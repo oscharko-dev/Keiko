@@ -11,6 +11,8 @@ interface Captured {
   readonly err: () => string;
 }
 
+const VERIFY_CLI_SPAWN_TIMEOUT_MS = 15_000;
+
 function makeIo(): Captured {
   const outChunks: string[] = [];
   const errChunks: string[] = [];
@@ -103,56 +105,76 @@ describe("runVerifyCli — --help / -h (issue #640)", () => {
 });
 
 describe("runVerifyCli", () => {
-  it("exits 0 when every step passes and prints a human table", async () => {
-    writePackage({ test: 'node -e "process.exit(0)"' });
-    const c = makeIo();
-    const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
-    expect(code).toBe(0);
-    expect(c.out()).toContain("Verification: passed");
-    expect(c.out()).toContain("test\tpassed");
-    expect(c.out()).toContain("\tCOMMAND\t");
-    expect(c.out()).toContain("\tnpm test\t");
-  });
+  it(
+    "exits 0 when every step passes and prints a human table",
+    async () => {
+      writePackage({ test: 'node -e "process.exit(0)"' });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
+      expect(code).toBe(0);
+      expect(c.out()).toContain("Verification: passed");
+      expect(c.out()).toContain("test\tpassed");
+      expect(c.out()).toContain("\tCOMMAND\t");
+      expect(c.out()).toContain("\tnpm test\t");
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
-  it("exits 1 when a step fails", async () => {
-    writePackage({ test: 'node -e "process.exit(1)"' });
-    const c = makeIo();
-    const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
-    expect(code).toBe(1);
-    expect(c.out()).toContain("Verification: failed");
-  });
+  it(
+    "exits 1 when a step fails",
+    async () => {
+      writePackage({ test: 'node -e "process.exit(1)"' });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
+      expect(code).toBe(1);
+      expect(c.out()).toContain("Verification: failed");
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
-  it("runs a non-literal test script selected by script detection", async () => {
-    writePackage({ "test:unit": 'node -e "process.exit(0)"' });
-    const c = makeIo();
-    const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
-    expect(code).toBe(0);
-    expect(c.out()).toContain("test\tpassed");
-    expect(c.out()).toContain("\tnpm run test:unit\t");
-  });
+  it(
+    "runs a non-literal test script selected by script detection",
+    async () => {
+      writePackage({ "test:unit": 'node -e "process.exit(0)"' });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
+      expect(code).toBe(0);
+      expect(c.out()).toContain("test\tpassed");
+      expect(c.out()).toContain("\tnpm run test:unit\t");
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
-  it("emits a JSON summary with --json (exit 0 on pass)", async () => {
-    writePackage({ test: 'node -e "process.exit(0)"' });
-    const c = makeIo();
-    const code = await runVerifyCli(["--dir", dir, "--only", "test", "--json"], c.io);
-    expect(code).toBe(0);
-    const parsed = JSON.parse(c.out()) as {
-      overallStatus: string;
-      results: { kind: string; status: string; appliedLimits: unknown[] }[];
-    };
-    expect(parsed.overallStatus).toBe("passed");
-    expect(parsed.results[0]?.kind).toBe("test");
-    expect(parsed.results[0]?.appliedLimits).toHaveLength(4);
-  });
+  it(
+    "emits a JSON summary with --json (exit 0 on pass)",
+    async () => {
+      writePackage({ test: 'node -e "process.exit(0)"' });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "test", "--json"], c.io);
+      expect(code).toBe(0);
+      const parsed = JSON.parse(c.out()) as {
+        overallStatus: string;
+        results: { kind: string; status: string; appliedLimits: unknown[] }[];
+      };
+      expect(parsed.overallStatus).toBe("passed");
+      expect(parsed.results[0]?.kind).toBe("test");
+      expect(parsed.results[0]?.appliedLimits).toHaveLength(4);
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
-  it("filters with --only and marks an unrequested kind absent from the report", async () => {
-    writePackage({ test: 'node -e "process.exit(0)"', lint: 'node -e "process.exit(0)"' });
-    const c = makeIo();
-    const code = await runVerifyCli(["--dir", dir, "--only", "lint", "--json"], c.io);
-    expect(code).toBe(0);
-    const parsed = JSON.parse(c.out()) as { results: { kind: string }[] };
-    expect(parsed.results.map((r) => r.kind)).toEqual(["lint"]);
-  });
+  it(
+    "filters with --only and marks an unrequested kind absent from the report",
+    async () => {
+      writePackage({ test: 'node -e "process.exit(0)"', lint: 'node -e "process.exit(0)"' });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "lint", "--json"], c.io);
+      expect(code).toBe(0);
+      const parsed = JSON.parse(c.out()) as { results: { kind: string }[] };
+      expect(parsed.results.map((r) => r.kind)).toEqual(["lint"]);
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
   it("runs a targeted-test step from --changed and reports command evidence", async () => {
     writePackage({ test: 'node -e "process.exit(0)"' }, { devDependencies: { vitest: "4.1.7" } });
@@ -225,14 +247,18 @@ describe("runVerifyCli", () => {
     expect(c.err()).toContain("Usage");
   });
 
-  it("redacts a secret printed by a verification command", async () => {
-    const secret = "ghp_" + "0123456789abcdefABCDEFghijklmnopqrst";
-    writePackage({ test: `node -e "console.log('${secret}'); process.exit(1)"` });
-    const c = makeIo();
-    const code = await runVerifyCli(["--dir", dir, "--only", "test", "--json"], c.io);
-    expect(code).toBe(1);
-    expect(c.out()).not.toContain(secret);
-  });
+  it(
+    "redacts a secret printed by a verification command",
+    async () => {
+      const secret = "ghp_" + "0123456789abcdefABCDEFghijklmnopqrst";
+      writePackage({ test: `node -e "console.log('${secret}'); process.exit(1)"` });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "test", "--json"], c.io);
+      expect(code).toBe(1);
+      expect(c.out()).not.toContain(secret);
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
   it("returns 1 and writes to err on a WorkspaceError (non-existent --dir)", async () => {
     // Exercises the WorkspaceError catch branch in runVerifyCli.
