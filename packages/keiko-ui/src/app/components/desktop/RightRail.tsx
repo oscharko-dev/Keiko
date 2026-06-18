@@ -24,7 +24,6 @@ export function RightRail({
           data-active={outlineOpen ? "true" : "false"}
           aria-label="Workspace outline"
           aria-pressed={outlineOpen}
-          aria-controls="workspace-outline"
           data-tip="Workspace outline"
           onClick={onToggleOutline}
         >

@@ -13,7 +13,6 @@ describe("RightRail", () => {
     render(<RightRail openTools={new Set()} onTool={vi.fn()} />);
     const outline = screen.getByRole("button", { name: "Workspace outline" });
     expect(outline).toHaveAttribute("aria-pressed", "false");
-    expect(outline).toHaveAttribute("aria-controls", "workspace-outline");
     expect(screen.queryByRole("button", { name: "Inspector" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
