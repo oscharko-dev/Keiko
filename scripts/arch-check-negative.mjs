@@ -33,8 +33,10 @@ const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|package
 // direction-8 (ui) fires three times because it pins three distinct Node-domain boundaries the
 // browser tier must not value-import: keiko-tools, keiko-quality-intelligence, and
 // keiko-local-knowledge (the two latter added for the native QI UI surface, issue #280). The
-// import-policy expectations below cover literal import specifiers dependency-cruiser does not
-// expose as source graph edges in this repository configuration.
+// editor browser-tier rule (adr-0042-editor-not-node-domain-values) fires once against its
+// dedicated editor-browser fixture, which value-imports keiko-model-gateway. The import-policy
+// expectations below cover literal import specifiers dependency-cruiser does not expose as source
+// graph edges in this repository configuration.
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-1-contracts-leaf": 1,
   "adr-0019-direction-2-security-only-contracts": 1,
@@ -58,6 +60,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-6-domain-not-server": 1,
   "adr-0019-direction-7-domain-not-cli": 1,
   "adr-0019-direction-8-ui-not-node-domain-values": 3,
+  "adr-0042-editor-not-node-domain-values": 1,
   "adr-0019-direction-9-root-product-composition-only": 1,
   "adr-0019-trust-2-ui-no-provider-config": 1,
   "adr-0019-trust-3-ui-no-gateway-internals": 1,

@@ -19,6 +19,11 @@ const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
     "@oscharko-dev/keiko-ui",
     "build-time-only workspace whose runtime artifact is copied into dist/ui/static",
   ],
+  [
+    "@oscharko-dev/keiko-editor",
+    "browser-tier editor package developed independently of the published product bundle; not yet " +
+      "consumed by keiko-ui or the CLI product (Issue #1191; integration tracked under Epic #1189)",
+  ],
 ]);
 
 function packFiles() {
