@@ -145,31 +145,32 @@ Notes:
   community-maintained packages with a small maintainer base. The pinned versions, the lockfile
   integrity hashes, the SBOM + license gate (`npm run check:workspace-supply-chain`), and the
   no-CDN policy are the controls that bound this supply-chain exposure (blueprint §12, risk R1).
-- **Known advisory (accepted, documented non-exploitable).** `monaco-editor@0.55.1` carries a set of
-  **moderate** transitive `dompurify@3.2.7` advisories (`npm audit` reports several distinct DOMPurify
-  XSS / mutation-XSS / prototype-pollution items in this version) — headlined by **CVE-2026-0540**
-  (XSS via rawtext elements, CVSS 5.1, affected `>=3.1.3 <=3.3.1`, fixed `3.3.2`), all rated moderate
-  (0 high/critical). Per #1193's supply-chain review:
-  - **A dependency override does not fix it.** Monaco does not consume the npm `dompurify` package at
-    runtime: it ships a **vendored copy** and imports it relatively
-    (`esm/vs/base/browser/domSanitize.js` → `import purify from "./dompurify/dompurify.js"`, banner
-    `DOMPurify 3.2.7`); there is no `from "dompurify"` import anywhere in Monaco. An
-    `overrides: { dompurify }` entry would bump only the unused hoisted copy and silence `npm audit`
-    while the vulnerable vendored code still runs — a false fix. (`npm audit`'s own `fixAvailable`
-    points to downgrading Monaco to `0.53.0`, a semver-major change that breaks the
-    ADR-0042-mandated `0.55.1` pin, so that is not taken either.) The override is therefore
-    deliberately **not** applied.
-  - **Not reachable in #1193.** #1193 ships standalone helpers and **does not instantiate or mount a
-    Monaco editor** (host mount is #1194/#1196), so no Monaco runtime code — including the DOMPurify-
-    backed markdown sanitiser (`markdownRenderer.js`) — executes from this issue at all. When the
-    editor is later mounted, that sanitiser is reached only through markdown-rendering surfaces (hover
-    tooltips, suggest-widget docs, parameter hints, and other `IMarkdownString` sinks), none of which
-    #1193 wires. The advisories are also moderate, below the `npm audit --audit-level=high` CI gate.
-  - **Revisit trigger.** When a later issue mounts the editor and registers a hover /
-    completion-with-docs / parameter-hint / markdown-rendering surface (e.g. #1194/#1199/#1200), the
-    path becomes reachable; the real remediation is upgrading `monaco-editor` to a release that vendors
-    DOMPurify `>= 3.3.2` (prefer the latest that also clears the later ADD_ATTR / USE_PROFILES /
-    mutation-XSS advisories), since an npm override cannot replace Monaco's vendored copy.
+- **Known advisory — resolved for the host mount via a patched override (#1196); runtime sink stays
+  closed.** `monaco-editor@0.55.1` declares `dompurify@3.2.7` as an npm dependency, which carries a set
+  of **moderate** DOMPurify advisories (`npm audit` reports several distinct XSS / mutation-XSS /
+  prototype-pollution items affecting `<= 3.4.10`), all rated moderate (0 high/critical). #1193 deferred
+  any change because the editor was not yet mounted and the only `npm audit fix` was a semver-major
+  downgrade. #1196 mounts the editor in `keiko-ui`, so the chain
+  `keiko-ui → keiko-editor → monaco-editor → dompurify` now enters keiko-ui's audit closure and the
+  `ui` CI job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` gate fails. The
+  resolution is a root `overrides: { dompurify: "3.4.11" }` entry:
+  - **Patched version, not a silencing pin.** `3.4.11` is the fixed DOMPurify line (the advisories
+    affect `<= 3.4.10`), so the override removes the vulnerable package from the installed npm tree
+    rather than masking the warning. `monaco-editor` stays pinned at the ADR-0042-mandated `0.55.1`;
+    `npm audit`'s own `fixAvailable` (a `0.53.0` downgrade) is still **not** taken.
+  - **Runtime sink independently closed.** Monaco still bundles a **vendored** DOMPurify copy
+    (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is
+    reached only through Markdown-rendering surfaces (hover tooltips, suggest-widget docs, parameter
+    hints, other `IMarkdownString` sinks). The mounted editor disables every one of those surfaces in
+    `buildEditorOptions` (`hover`, `suggest`, `parameterHints`, `inlineSuggest`, `codeLens`,
+    `lightbulb`, `inlayHints`, and `links` are all off, and #1196 wires no completion/diagnostics
+    provider), so no Monaco Markdown sanitiser executes. Runtime exposure is therefore nil — the same
+    closed-sink basis #1193 relied on, now enforced by the editor's construction options.
+  - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
+    that vendors DOMPurify `>= 3.3.2`; as of #1196 no such release exists (the latest `0.56.0-dev`
+    builds still vendor and pin `3.2.7`), so the patched override is the interim control. Revisit when a
+    hover / completion-with-docs / parameter-hint / Markdown surface is wired (#1199/#1200) or a newer
+    Monaco ships.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers; the editor is
   not yet mounted by `keiko-ui` (host integration is #1194/#1196).
 
