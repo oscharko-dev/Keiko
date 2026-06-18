@@ -1,10 +1,6 @@
-// Loads the precomputed inline-script CSP hashes emitted by the UI build step (build:ui writes
-// `dist/ui/csp-hashes.json`) and folds them into the policy. When the file is absent or malformed,
-// the policy is built with no hashes — `script-src 'self'` — which fails closed (inline scripts are
-// blocked) rather than weakening the policy with `'unsafe-inline'`.
-
-import { readFile, stat } from "node:fs/promises";
-import { buildCspHeader } from "./csp.js";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { buildCspHeader, extractInlineScriptHashes } from "./csp.js";
 
 function parseHashes(raw: string): readonly string[] {
   const parsed: unknown = JSON.parse(raw);
@@ -14,18 +10,72 @@ function parseHashes(raw: string): readonly string[] {
   return parsed.filter((entry): entry is string => typeof entry === "string");
 }
 
+async function collectHtmlFiles(staticRoot: string): Promise<readonly string[]> {
+  let entries: { isDirectory: () => boolean; name: string }[];
+  try {
+    const raw = await readdir(staticRoot, { withFileTypes: true });
+    entries = raw.map((entry) => ({ isDirectory: () => entry.isDirectory(), name: entry.name }));
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const resolved = join(staticRoot, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectHtmlFiles(resolved)));
+      continue;
+    }
+    if (entry.name.endsWith(".html")) {
+      files.push(resolved);
+    }
+  }
+  return files;
+}
+
+function normalizeHashes(raw: readonly string[]): readonly string[] {
+  return [...raw].filter((value) => value !== "").sort();
+}
+
+function hashesMatch(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+async function loadHashesFromFile(hashesFile: string): Promise<readonly string[]> {
+  try {
+    const raw = await readFile(hashesFile, "utf8");
+    return normalizeHashes(parseHashes(raw));
+  } catch {
+    return [];
+  }
+}
+
+async function loadHashesFromExport(staticRoot: string): Promise<readonly string[]> {
+  const htmlFiles = await collectHtmlFiles(staticRoot);
+  if (htmlFiles.length === 0) {
+    return [];
+  }
+  try {
+    const documents = await Promise.all(htmlFiles.map((file) => readFile(file, "utf8")));
+    return normalizeHashes(extractInlineScriptHashes(documents));
+  } catch {
+    return [];
+  }
+}
+
 export async function loadCspHeader(hashesFile: string): Promise<string> {
-  let raw: string;
-  try {
-    raw = await readFile(hashesFile, "utf8");
-  } catch {
-    return buildCspHeader([]);
-  }
-  try {
-    return buildCspHeader(parseHashes(raw));
-  } catch {
-    return buildCspHeader([]);
-  }
+  const fileHashes = await loadHashesFromFile(hashesFile);
+  const staticRoot = join(dirname(hashesFile), "static");
+  const exportHashes = await loadHashesFromExport(staticRoot);
+
+  // If persisted hashes are stale or incompatible with current exported HTML,
+  // prefer derived hashes so startup can recover from stale artifacts.
+  const hashes = exportHashes.length > 0 && !hashesMatch(fileHashes, exportHashes) ? exportHashes : fileHashes;
+  return buildCspHeader(hashes);
 }
 
 interface LiveCspCache {
