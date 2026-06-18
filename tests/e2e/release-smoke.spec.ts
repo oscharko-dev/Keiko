@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,7 +59,9 @@ async function ensureProject(request: APIRequestContext, projectPath: string): P
     data: { path: projectPath, name: "Keiko E2E" },
   });
   if (!response.ok()) {
-    throw new Error(`Project setup failed (${String(response.status())}): ${await response.text()}`);
+    throw new Error(
+      `Project setup failed (${String(response.status())}): ${await response.text()}`,
+    );
   }
 }
 
@@ -82,7 +84,9 @@ async function createGroundedChat(request: APIRequestContext): Promise<ChatRespo
     data: { connectedScopes: fileScopes(projectPath, 16) },
   });
   if (!atLimit.ok()) {
-    throw new Error(`16-source setup failed (${String(atLimit.status())}): ${await atLimit.text()}`);
+    throw new Error(
+      `16-source setup failed (${String(atLimit.status())}): ${await atLimit.text()}`,
+    );
   }
 
   const overLimit = await request.patch(`/api/chats?id=${encodeURIComponent(created.chat.id)}`, {
@@ -135,6 +139,52 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
   );
 }
 
+async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
+  await page.addInitScript((root) => {
+    window.localStorage.setItem(
+      "keiko.workspace.v4",
+      JSON.stringify([
+        {
+          id: "e2e-files-window",
+          type: "files",
+          x: 96,
+          y: 72,
+          w: 620,
+          h: 640,
+          z: 10,
+          cfg: { root },
+          max: false,
+        },
+      ]),
+    );
+    window.localStorage.removeItem("keiko.conns.v1");
+  }, projectPath);
+}
+
+async function openTreePath(
+  filesWindow: ReturnType<Page["getByRole"]>,
+  path: string,
+): Promise<void> {
+  const row = filesWindow.locator(`button.tr-row[data-path="${path}"]`);
+  await expect(row).toBeVisible();
+  await row.click();
+}
+
+async function replaceMonacoText(
+  page: Page,
+  editorWindow: ReturnType<Page["getByRole"]>,
+  text: string,
+): Promise<void> {
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible();
+  await editor.click();
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.down(modifier);
+  await page.keyboard.press("KeyA");
+  await page.keyboard.up(modifier);
+  await page.keyboard.insertText(text);
+}
+
 test("app start exposes the workspace shell and health endpoint @smoke", async ({
   page,
   request,
@@ -146,11 +196,66 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   await expect(health.json()).resolves.toMatchObject({ status: "ok" });
 
   await page.goto("/");
-  await expect(page.getByRole("navigation", { name: "Primary workspace navigation" })).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Primary workspace navigation" }),
+  ).toBeVisible();
   await expect(page.getByText("Keiko").first()).toBeVisible();
   await expect(page.locator(".header .hd-tool-cta")).toBeVisible();
   await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
 
+  assertNoPageErrors();
+});
+
+test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
+  page,
+}) => {
+  const projectPath = createProjectFixture();
+  const relativePath = "packages/keiko-cli/src/run.ts";
+  const absolutePath = join(projectPath, relativePath);
+  writeFileSync(absolutePath, "", "utf8");
+  await seedFilesWindow(page, projectPath);
+  const assertNoPageErrors = collectPageErrors(page);
+
+  await page.goto("/");
+  const filesWindow = page.getByRole("region", { name: /^Files/u });
+  await expect(filesWindow).toBeVisible();
+
+  await openTreePath(filesWindow, "packages");
+  await openTreePath(filesWindow, "packages/keiko-cli");
+  await openTreePath(filesWindow, "packages/keiko-cli/src");
+  await openTreePath(filesWindow, relativePath);
+  await expect(filesWindow.getByRole("region", { name: "File preview: run.ts" })).toBeVisible();
+  await filesWindow.getByRole("button", { name: "Open in editor" }).click();
+
+  const editorWindow = page.getByRole("region", {
+    name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
+  });
+  await expect(editorWindow).toBeVisible();
+  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await expect(filesWindow).toBeHidden();
+  await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
+
+  const savedText = "export const e2eFixture = 'saved in browser smoke';\n";
+  await replaceMonacoText(page, editorWindow, savedText);
+  await expect(editorWindow.getByText("Unsaved changes")).toBeVisible();
+  await editorWindow.getByRole("button", { name: "Save" }).click();
+  await expect
+    .poll(() => readFileSync(absolutePath, "utf8").replace(/\r\n/gu, "\n"))
+    .toBe(savedText);
+  await expect(editorWindow.getByText(/Saved at/u)).toBeVisible();
+
+  const conflictDraft = "export const e2eFixture = 'conflicting browser draft';\n";
+  await replaceMonacoText(page, editorWindow, conflictDraft);
+  writeFileSync(absolutePath, "export const e2eFixture = 'external edit';\n", "utf8");
+  await editorWindow.getByRole("button", { name: "Save" }).click();
+  await expect(editorWindow.getByRole("alert")).toContainText("Save conflict");
+
+  await editorWindow.getByRole("button", { name: "Reload" }).click();
+  await expect(editorWindow.getByText("Ready")).toBeVisible();
+  await expect(editorWindow.getByText("external edit")).toBeVisible();
+
+  await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+  await expect(editorWindow).toBeHidden();
   assertNoPageErrors();
 });
 
