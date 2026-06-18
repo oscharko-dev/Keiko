@@ -122,16 +122,15 @@ Notes:
     points to downgrading Monaco to `0.53.0`, a semver-major change that breaks the
     ADR-0042-mandated `0.55.1` pin, so that is not taken either.) The override is therefore
     deliberately **not** applied.
-  - **Not reachable in #1193.** Monaco's only DOMPurify-backed path is its markdown sanitiser
-    (`markdownRenderer.js`), imported solely by hover tooltips and suggest-widget documentation.
-    `#1193` ships the runtime, worker strategy, themes, and language inference and registers **no**
-    hover, completion, parameter-hint, or markdown-rendering provider, so no `IMarkdownString`
-    reaches a Monaco widget and the path is unreachable. The advisory is also moderate, below the
-    `npm audit --audit-level=high` CI gate.
-  - **Revisit trigger.** When a later issue registers a hover / completion-with-docs / markdown
-    provider (e.g. #1199/#1200), the path becomes reachable; the real remediation is upgrading
-    `monaco-editor` to a release that vendors DOMPurify `>= 3.3.2` (prefer `>= 3.4.9` to also clear
-    the later ADD_ATTR / USE_PROFILES advisories).
+  - **Not reached by Keiko in #1193.** `#1193` ships unmounted runtime helpers and registers no
+    Keiko-owned hover, completion, parameter-hint, or markdown-rendering provider. The advisory path
+    is therefore not reachable from Keiko product code in this issue, and the advisory remains below
+    the `npm audit --audit-level=high` CI gate. Host integration must not treat that as a permanent
+    exception: importing full Monaco can enable built-in hover/suggest documentation paths.
+  - **Revisit trigger.** Before a later issue mounts Monaco with hover/suggest documentation over
+    untrusted workspace content, either upgrade `monaco-editor` to a release that vendors DOMPurify
+    `>= 3.3.2` (prefer `>= 3.4.9` to also clear the later ADD_ATTR / USE_PROFILES advisories) or
+    explicitly disable the built-in markdown documentation paths until such an upgrade is available.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers; the editor is
   not yet mounted by `keiko-ui` (host integration is #1194/#1196).
 

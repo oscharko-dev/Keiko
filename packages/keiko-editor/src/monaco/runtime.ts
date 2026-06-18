@@ -90,11 +90,23 @@ export interface EditorRuntimeGlobalScope {
   readonly URL?: unknown;
 }
 
+function isConstructor(value: unknown): boolean {
+  if (typeof value !== "function") {
+    return false;
+  }
+  try {
+    Reflect.construct(Object, [], value as new (...args: never[]) => unknown);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Build an {@link EditorRuntimeProbe} from a global scope (injectable for tests). */
 export function probeEditorRuntime(scope: EditorRuntimeGlobalScope): EditorRuntimeProbe {
   return {
-    hasWorker: typeof scope.Worker !== "undefined",
-    hasUrl: typeof scope.URL !== "undefined",
+    hasWorker: isConstructor(scope.Worker),
+    hasUrl: isConstructor(scope.URL),
   };
 }
 
