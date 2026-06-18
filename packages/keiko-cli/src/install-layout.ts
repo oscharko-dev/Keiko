@@ -82,35 +82,43 @@ export function resolveKeikoBinary(
   env: EnvSource = process.env,
   argv: readonly string[] = process.argv,
 ): KeikoBinaryResolution | undefined {
-  const built = builtCheckoutLayout(cwd);
-  if (built !== undefined) {
-    return { source: "local-build", binPath: built.binPath };
-  }
-  const local = localPackageLayout(cwd);
-  if (local !== undefined) {
-    return { source: "local-package", binPath: local.binPath };
-  }
-  const fromEnv = env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH;
-  if (typeof fromEnv === "string" && isAbsolute(fromEnv) && existsSync(fromEnv)) {
-    return { source: "env-override", binPath: fromEnv };
-  }
-  const entry = argv[1];
-  if (typeof entry === "string" && isAbsolute(entry) && existsSync(entry)) {
-    return { source: "argv", binPath: entry };
-  }
-  const cwdEnv = env.PATH ?? process.env.PATH;
-  const delimiter = process.platform === "win32" ? ";" : ":";
-  const names =
-    process.platform === "win32" ? ["keiko.cmd", "keiko.exe", "keiko.bat", "keiko"] : ["keiko"];
-  if (typeof cwdEnv === "string" && cwdEnv.length > 0) {
-    for (const dir of cwdEnv.split(delimiter)) {
-      for (const name of names) {
-        const candidate = join(dir, name);
-        if (existsSync(candidate)) {
-          return { source: "path", binPath: candidate };
-        }
-      }
+  const checks: readonly {
+    readonly source: KeikoBinarySource;
+    readonly binPath: string | undefined;
+  }[] = [
+    { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
+    { source: "local-package", binPath: localPackageLayout(cwd)?.binPath },
+    { source: "env-override", binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH) },
+    { source: "argv", binPath: absoluteExistingPath(argv[1]) },
+  ];
+
+  for (const candidate of checks) {
+    if (candidate.binPath !== undefined) {
+      return { source: candidate.source, binPath: candidate.binPath };
     }
   }
+
+  const pathHit = resolveKeikoBinaryFromPath(process.platform, env.PATH ?? process.env.PATH);
+  if (pathHit !== undefined) {
+    return { source: "path", binPath: pathHit };
+  }
   return undefined;
+}
+
+function absoluteExistingPath(value: unknown): string | undefined {
+  return typeof value === "string" && isAbsolute(value) && existsSync(value) ? value : undefined;
+}
+
+function resolveKeikoBinaryFromPath(
+  platform: NodeJS.Platform,
+  pathValue: unknown,
+): string | undefined {
+  if (typeof pathValue !== "string" || pathValue.length === 0) return undefined;
+  const delimiter = platform === "win32" ? ";" : ":";
+  const names =
+    platform === "win32" ? ["keiko.cmd", "keiko.exe", "keiko.bat", "keiko"] : ["keiko"];
+  return pathValue
+    .split(delimiter)
+    .flatMap((directory) => names.map((name) => join(directory, name)))
+    .find((candidate) => existsSync(candidate));
 }
