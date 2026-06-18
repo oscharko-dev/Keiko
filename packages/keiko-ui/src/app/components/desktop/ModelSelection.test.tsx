@@ -415,7 +415,18 @@ describe("ChatWindow mini composer (AC #2)", () => {
   it("renders the mini composer and inherits selectedModel from the session", () => {
     renderWindow(
       makeSession({
-        activeChat: { id: "chat-1", projectId: "project-1", title: "Chat 1", model: "inherited-model" },
+        activeChat: {
+          id: "chat-1",
+          projectPath: "/repo",
+          title: "Chat 1",
+          selectedModel: "inherited-model",
+          branchLabel: undefined,
+          status: undefined,
+          connectedScope: undefined,
+          localKnowledgeScope: undefined,
+          createdAt: 1,
+          updatedAt: 2,
+        },
         selectedModel: "inherited-model",
         noEligibleModels: false,
         models: [chatModel("inherited-model")],
