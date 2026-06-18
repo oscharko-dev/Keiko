@@ -118,7 +118,9 @@ class BodyTooLargeError extends Error {
   }
 }
 
-class FilesError extends Error {
+// Exported for reuse by the editor language-service route (#1198) so denied/invalid roots map to the
+// same status + content-free code envelope as the files routes.
+export class FilesError extends Error {
   public constructor(
     public readonly status: number,
     public readonly code: string,
@@ -138,7 +140,10 @@ interface ResolvedTarget {
   readonly symlink: boolean;
 }
 
-interface ResolvedProjectRoot {
+// Exported for reuse by the editor language-service route (#1198): the same realpath +
+// deny-list-guarded workspace-root resolution backs file reads and deterministic analysis so
+// containment is single-sourced.
+export interface ResolvedProjectRoot {
   readonly root: string;
   readonly realRoot: string;
 }
@@ -147,7 +152,7 @@ function filesErrorResult(error: FilesError): RouteResult {
   return { status: error.status, body: errorBody(error.code, error.message) };
 }
 
-async function runFilesHandler(
+export async function runFilesHandler(
   work: () => Promise<RouteResult> | RouteResult,
 ): Promise<RouteResult> {
   try {
@@ -242,7 +247,7 @@ async function resolveArbitraryRoot(
   return { root: rootInput, realRoot };
 }
 
-async function resolveRoot(
+export async function resolveRoot(
   store: UiStore,
   rootInput: string | null,
   redactor: FilesMetadataRedactor,
@@ -649,7 +654,7 @@ async function readBody(req: IncomingMessage, maxBytes: number): Promise<string>
   });
 }
 
-async function readJsonObject(
+export async function readJsonObject(
   req: IncomingMessage,
   maxBytes: number,
 ): Promise<Record<string, unknown> | RouteResult> {

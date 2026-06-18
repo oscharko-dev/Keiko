@@ -82,6 +82,7 @@ import {
   handleFilesPreview,
   handleFilesTree,
 } from "./files.js";
+import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -250,6 +251,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
+  // Issue #1198 — deterministic, model-free language intelligence (completion, diagnostics, hover,
+  // symbols) over an editor overlay (ADR-0042 D4). Capabilities advertises the registered providers.
+  {
+    method: "GET",
+    pattern: "/api/editor/language/capabilities",
+    handler: handleEditorLanguageCapabilities,
+  },
+  { method: "POST", pattern: "/api/editor/language", handler: handleEditorLanguage },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
     method: "GET",
