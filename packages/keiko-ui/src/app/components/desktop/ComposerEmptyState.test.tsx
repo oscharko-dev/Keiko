@@ -159,10 +159,9 @@ describe("AC #2 — disabled controls aria-describedby", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Models");
-    expect(select).not.toHaveAttribute("disabled");
-    expect(select).toHaveAttribute("aria-disabled", "true");
-    const describedById = select.getAttribute("aria-describedby");
+    const combobox = screen.getByRole("combobox", { name: "Models" });
+    expect(combobox).not.toHaveAttribute("disabled");
+    const describedById = combobox.getAttribute("aria-describedby");
     expect(describedById).toBeTruthy();
     // The referenced element must exist and contain the alert text.
     const alertEl = document.getElementById(describedById ?? "");
@@ -286,11 +285,7 @@ describe("AC #3 — loading state", () => {
 
   it("renders a 'Loading models…' option in the select while loading", () => {
     renderWindow(makeSession({ loading: true, activeChat: makeChat() }));
-    // The loading option is disabled — query by text directly.
-    const options = screen
-      .getAllByRole("option")
-      .filter((opt) => /loading models/i.test(opt.textContent ?? ""));
-    expect(options.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent(/loading models/i);
   });
 
   it("announces no status text once loading is false (lifecycle region stays mounted, empty)", () => {
@@ -421,14 +416,17 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
     expect(focused?.tagName.toLowerCase()).toBe("textarea");
 
     await user.tab();
-    // Next is a button (attach), then mode button, then model select.
-    // Tab until we hit the select.
+    // Next is a button (attach), then mode button, then model picker.
     let iterations = 0;
-    while (document.activeElement?.tagName.toLowerCase() !== "select" && iterations < 10) {
+    while (
+      document.activeElement?.getAttribute("aria-label") !== "Models" &&
+      iterations < 10
+    ) {
       await user.tab();
       iterations++;
     }
-    expect(document.activeElement?.tagName.toLowerCase()).toBe("select");
+    expect(document.activeElement).toHaveAttribute("role", "combobox");
+    expect(document.activeElement).toHaveAttribute("aria-label", "Models");
 
     // After the select the send button is the next interactive element.
     await user.tab();

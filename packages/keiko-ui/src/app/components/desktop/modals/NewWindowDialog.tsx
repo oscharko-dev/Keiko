@@ -23,6 +23,7 @@ import {
   type WIN_TYPES as WinTypes,
   type WindowType,
 } from "../windows/WindowsRegistry";
+import { KeikoSelect } from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 
@@ -435,22 +436,24 @@ function renderField(
     const options = f.options ?? [];
     return (
       <span className="dlg-selwrap">
-        <select
-          ref={firstRef ?? undefined}
-          className="dlg-input mono"
+        <KeikoSelect
+          triggerClassName="dlg-input mono"
           value={value}
-          onChange={(e) => set(f.key, e.target.value)}
           disabled={options.length === 0}
-        >
-          {options.map((o) => (
-            <option key={o} value={o}>
-              {(f.prefix ?? "") + o}
-            </option>
-          ))}
-        </select>
-        <span className="dlg-selchev">
-          <Icons.chevron size={15} />
-        </span>
+          /* eslint-disable-next-line jsx-a11y/no-autofocus -- dialog opens with the first configured launcher control focused. */
+          autoFocus={firstRef !== null}
+          menuTitle={f.label}
+          mono
+          sections={[
+            {
+              options: options.map((option) => ({
+                value: option,
+                label: `${f.prefix ?? ""}${option}`,
+              })),
+            },
+          ]}
+          onValueChange={(next) => set(f.key, next)}
+        />
       </span>
     );
   }
@@ -702,27 +705,30 @@ function AgentLauncher({
     if (workflow === "unit-test-generation") {
       return (
         <>
-          <label className="dlg-field">
+          <div className="dlg-field">
             <span className="dlg-label">Target</span>
             <span className="dlg-selwrap">
-              <select
-                className="dlg-input mono"
+              <KeikoSelect
+                triggerClassName="dlg-input mono"
                 value={fields.unitTargetKind}
-                onChange={(event) =>
-                  updateField({
-                    unitTargetKind: event.target.value as AgentLauncherFields["unitTargetKind"],
-                  })
+                ariaLabel="Target"
+                menuTitle="Target"
+                mono
+                sections={[
+                  {
+                    options: [
+                      { value: "file", label: "Single file" },
+                      { value: "module", label: "Module" },
+                      { value: "changedFiles", label: "Changed files" },
+                    ],
+                  },
+                ]}
+                onValueChange={(next) =>
+                  updateField({ unitTargetKind: next as AgentLauncherFields["unitTargetKind"] })
                 }
-              >
-                <option value="file">Single file</option>
-                <option value="module">Module</option>
-                <option value="changedFiles">Changed files</option>
-              </select>
-              <span className="dlg-selchev">
-                <Icons.chevron size={15} />
-              </span>
+              />
             </span>
-          </label>
+          </div>
           {fields.unitTargetKind === "module" ? (
             <label className="dlg-field">
               <span className="dlg-label">Module folder</span>
@@ -828,26 +834,29 @@ function AgentLauncher({
 
   return (
     <>
-      <label className="dlg-field">
+      <div className="dlg-field">
         <span className="dlg-label">Workflow</span>
         <span className="dlg-selwrap">
-          <select
-            ref={firstRef}
-            className="dlg-input mono"
+          <KeikoSelect
+            triggerClassName="dlg-input mono"
             value={workflow}
-            onChange={(event) => setWorkflow(event.target.value as AgentWorkflowId)}
-          >
-            {AGENT_WORKFLOWS.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <span className="dlg-selchev">
-            <Icons.chevron size={15} />
-          </span>
+            ariaLabel="Workflow"
+            /* eslint-disable-next-line jsx-a11y/no-autofocus -- launcher dialog starts on workflow selection for keyboard users. */
+            autoFocus
+            menuTitle="Workflow"
+            mono
+            sections={[
+              {
+                options: AGENT_WORKFLOWS.map((item) => ({
+                  value: item.id,
+                  label: item.label,
+                })),
+              },
+            ]}
+            onValueChange={(next) => setWorkflow(next as AgentWorkflowId)}
+          />
         </span>
-      </label>
+      </div>
       <label className="dlg-field">
         <span className="dlg-label">Workspace</span>
         <span className="dlg-dirwrap">
@@ -888,26 +897,28 @@ function AgentLauncher({
           </button>
         </div>
       ) : null}
-      <label className="dlg-field">
+      <div className="dlg-field">
         <span className="dlg-label">Model</span>
         <span className="dlg-selwrap">
-          <select
-            className="dlg-input mono"
+          <KeikoSelect
+            triggerClassName="dlg-input mono"
             value={modelId}
-            onChange={(event) => setModelId(event.target.value)}
+            ariaLabel="Model"
             disabled={models.length === 0}
-          >
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.id}
-              </option>
-            ))}
-          </select>
-          <span className="dlg-selchev">
-            <Icons.chevron size={15} />
-          </span>
+            menuTitle="Model"
+            mono
+            sections={[
+              {
+                options: models.map((model) => ({
+                  value: model.id,
+                  label: model.id,
+                })),
+              },
+            ]}
+            onValueChange={setModelId}
+          />
         </span>
-      </label>
+      </div>
       {currentFile !== null ? (
         <button
           type="button"

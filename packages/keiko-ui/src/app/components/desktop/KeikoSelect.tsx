@@ -140,6 +140,7 @@ function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode 
 
   return (
     <>
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- passive hover/focus tooltip; option button owns keyboard activation. */}
       <span
         className="ksel-option-label"
         ref={labelRef}
@@ -546,6 +547,7 @@ export default function KeikoSelect({
         aria-haspopup="listbox"
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
+        /* eslint-disable-next-line jsx-a11y/no-autofocus -- callers opt in for modal initial-focus handoff. */
         autoFocus={autoFocus}
         className={triggerClasses}
         disabled={disabled}

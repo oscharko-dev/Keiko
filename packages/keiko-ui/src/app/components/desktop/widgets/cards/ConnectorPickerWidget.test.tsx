@@ -56,6 +56,14 @@ function defaultMocks(): void {
   mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [CAPSULE_SET] });
 }
 
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  option: string | RegExp,
+): Promise<void> {
+  await user.click(await screen.findByRole("combobox"));
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("ConnectorPickerWidget", () => {
@@ -92,10 +100,10 @@ describe("ConnectorPickerWidget", () => {
     await waitFor(() => {
       expect(screen.getByRole("combobox")).toBeInTheDocument();
     });
-    const options = screen.getAllByRole("option");
-    const optionTexts = options.map((o) => o.textContent ?? "");
-    expect(optionTexts.some((t) => t.includes("My Docs"))).toBe(true);
-    expect(optionTexts.some((t) => t.includes("All Sources"))).toBe(true);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("option", { name: /My Docs/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /All Sources/i })).toBeInTheDocument();
   });
 
   it("calls onSelect with kind=capsule when user selects a capsule", async () => {
@@ -104,7 +112,7 @@ describe("ConnectorPickerWidget", () => {
     const user = userEvent.setup();
     render(<ConnectorPickerWidget onSelect={onSelect} />);
     await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
-    await user.selectOptions(screen.getByRole("combobox"), "capsule:cap-abc");
+    await chooseComboboxOption(user, /My Docs/i);
     expect(onSelect).toHaveBeenCalledWith({ selectedKind: "capsule", selectedId: "cap-abc" });
   });
 
@@ -114,7 +122,7 @@ describe("ConnectorPickerWidget", () => {
     const user = userEvent.setup();
     render(<ConnectorPickerWidget onSelect={onSelect} />);
     await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
-    await user.selectOptions(screen.getByRole("combobox"), "capsule-set:set-xyz");
+    await chooseComboboxOption(user, /All Sources/i);
     expect(onSelect).toHaveBeenCalledWith({ selectedKind: "capsule-set", selectedId: "set-xyz" });
   });
 

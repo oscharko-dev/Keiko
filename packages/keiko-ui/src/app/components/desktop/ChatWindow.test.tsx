@@ -119,6 +119,19 @@ function makeCapsuleSetId(value: string): CapsuleSetId {
   return value as CapsuleSetId;
 }
 
+async function openCombobox(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
+  await user.click(await screen.findByRole("combobox", { name }));
+}
+
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+  option: string | RegExp,
+): Promise<void> {
+  await openCombobox(user, name);
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
 describe("ChatWindow cancel button", () => {
   it("keeps connected resource details out of the chat header", () => {
     const chat = makeChat({
@@ -130,8 +143,9 @@ describe("ChatWindow cancel button", () => {
       </ChatSessionProvider>,
     );
 
-    const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
-    expect(select.value).toBe("files");
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+      "Live Files context",
+    );
     expect(container.querySelector(".scope-grounding")).toHaveAttribute("data-connected", "true");
     expect(container.querySelector(".scope-pill")).toBeNull();
     expect(container.querySelector(".chat-ctx")).toBeNull();
@@ -428,11 +442,11 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    await openCombobox(user, "Grounding mode");
     expect(screen.getByRole("option", { name: "Live Files context" })).not.toBeDisabled();
     expect(screen.queryByRole("option", { name: /Still indexing/i })).toBeNull();
 
-    await user.selectOptions(select, "capsule:cap-release");
+    await user.click(screen.getByRole("option", { name: "Knowledge capsule: Release notes" }));
 
     await waitFor(() => {
       // GRD-009: connecting a connector must NOT clear connected folders (no connectedScopes
@@ -484,7 +498,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
 
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
@@ -536,7 +550,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -584,7 +598,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -618,12 +632,10 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     updateChatMock.mockResolvedValueOnce({ chat: updated });
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    const filesOption = (await screen.findByRole("option", {
-      name: "Live Files context",
-    })) as HTMLOptionElement;
-    expect(filesOption.disabled).toBe(true);
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Live Files context" })).toBeDisabled();
 
-    await user.selectOptions(screen.getByLabelText("Grounding mode"), "capsule-set:set-release");
+    await user.click(screen.getByRole("option", { name: "Capsule set: Release pack" }));
 
     await waitFor(() => {
       // GRD-009: non-destructive — no connectedScopes clear; appends the capsule set.
@@ -658,7 +670,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
@@ -688,7 +700,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     updateChatMock.mockRejectedValueOnce(new Error("knowledge store unavailable"));
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-release");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Release notes");
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("knowledge store unavailable");
@@ -712,11 +724,13 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => {
-      const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
-      expect(select.value).toBe("capsule:cap-stale");
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Knowledge capsule: cap-stale (unavailable)",
+      );
     });
     // uiux-fix F041 (C173) — "(unavailable)" is the single degraded suffix
     // (previously "(not ready)" for capsules vs "(unavailable)" for sets).
+    await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
       screen.getByRole("option", { name: "Knowledge capsule: cap-stale (unavailable)" }),
     ).toBeInTheDocument();
@@ -738,9 +752,11 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => {
-      const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
-      expect(select.value).toBe("capsule-set:set-1");
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Capsule set: set-1 (unavailable)",
+      );
     });
+    await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
       screen.getByRole("option", { name: "Capsule set: set-1 (unavailable)" }),
     ).toBeInTheDocument();
@@ -775,7 +791,8 @@ function chatModelCapability(id: string): ModelCapability {
 }
 
 describe("ChatWindow conversation model dropdown (Issue #144)", () => {
-  it("renders every chat-eligible model id in the Model dropdown options", () => {
+  it("renders every chat-eligible model id in the Model dropdown options", async () => {
+    const user = userEvent.setup();
     // activeChat is required so the composer bar (containing the model select)
     // is rendered — without it the new NoChatState shows instead (#146).
     renderWindow(
@@ -785,13 +802,13 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Models");
-    const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
-    expect(options).toContain("test-chat-1");
-    expect(options).toContain("test-chat-2");
+    await openCombobox(user, "Models");
+    expect(screen.getByRole("option", { name: "test-chat-1" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "test-chat-2" })).toBeInTheDocument();
   });
 
-  it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", () => {
+  it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", async () => {
+    const user = userEvent.setup();
     // UI rendering path only: ChatWindow renders whatever session.models
     // contains and never re-filters it. The bootstrap-level filter that keeps
     // embedding / ocr-vision models out of session.models is separately
@@ -804,10 +821,9 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Models");
-    const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
-    expect(options).not.toContain("test-embedding-1");
-    expect(options).toContain("test-chat-1");
+    await openCombobox(user, "Models");
+    expect(screen.queryByRole("option", { name: "test-embedding-1" })).toBeNull();
+    expect(screen.getByRole("option", { name: "test-chat-1" })).toBeInTheDocument();
   });
 });
 
@@ -1303,8 +1319,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
       }),
     );
 
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
-    await user.selectOptions(select, "none");
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     // Confirmation was shown.
     expect(confirmSpy).toHaveBeenCalledOnce();
@@ -1334,7 +1349,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
       }),
     );
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
@@ -1356,19 +1371,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
 
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    // No capsules loaded so the default "none" is the current value;
-    // navigate away to "files" first (disabled but selectable via fireEvent),
-    // then back to "none" — or just use fireEvent.change directly to force
-    // the value="none" onChange without the browser disabling it.
-    // Actually the select already shows "none" (no scopes), so changing to
-    // the same value won't fire onChange. We need an intermediate value.
-    // Use fireEvent.change to simulate picking "none" when already at "none"
-    // by jumping through "files" (even though it's disabled in UA, the
-    // event still fires in jsdom).
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
-    // Jump to "files" (zero folder scopes so button is disabled in UA, but
-    // fireEvent bypasses that), then back to "none".
-    fireEvent.change(select, { target: { value: "none" } });
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     // confirm must NOT have been called because there are no active sources.
     expect(confirmSpy).not.toHaveBeenCalled();
@@ -1410,7 +1413,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
     // The chat has 2 sources → "multi" is shown. Selecting "files" clears
     // localKnowledgeScopes but keeps connectedScopes (the "files" arm only
     // sends { localKnowledgeScopes: null }).
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "files");
+    await chooseComboboxOption(user, "Grounding mode", "Live Files context");
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", { localKnowledgeScopes: null });
@@ -1455,11 +1458,12 @@ describe("ChatWindow multi-scope grounding display (#28)", () => {
       }),
     );
 
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
-    // The select value must be "multi", not just the first capsule id.
     await waitFor(() => {
-      expect(select.value).toBe("multi");
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Multiple sources",
+      );
     });
+    await openCombobox(userEvent.setup(), "Grounding mode");
     // A disabled read-only "Multiple sources" option is present.
     expect(screen.getByRole("option", { name: "Multiple sources" })).toBeInTheDocument();
   });

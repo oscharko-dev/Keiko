@@ -965,9 +965,6 @@ function LocalKnowledgeScopeControl({
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // #2 — needed to revert the <select> to its prior value when the user
-  // cancels the "Model only" confirmation dialog.
-  const selectRef = useRef<HTMLSelectElement>(null);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -983,12 +980,7 @@ function LocalKnowledgeScopeControl({
           const confirmed = window.confirm(
             `This will disconnect ${String(sourceCount)} grounding ${sourceCount === 1 ? "source" : "sources"}. Continue?`,
           );
-          if (!confirmed) {
-            if (selectRef.current !== null) {
-              selectRef.current.value = groundedModeValue(chat);
-            }
-            return;
-          }
+          if (!confirmed) return;
         }
         const response = await updateChat(chat.id, {
           connectedScopes: null,
@@ -1060,7 +1052,6 @@ function LocalKnowledgeScopeControl({
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">Grounding</span>
       <KeikoSelect
-        ref={selectRef}
         className="scope-grounding-select"
         value={value}
         disabled={busy}

@@ -3,9 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseUiArgs, runUiCli, waitForShutdown, type UiCliArgs, type UiCliDeps } from "./ui.js";
-import { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-server";
+import {
+  createLiveCspSource,
+  parseUiArgs,
+  runUiCli,
+  waitForShutdown,
+  type UiCliArgs,
+  type UiCliDeps,
+} from "./ui.js";
+import { DEFAULT_UI_PORT, extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
 
@@ -404,6 +412,38 @@ describe("runUiCli", () => {
       handlerDeps.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createLiveCspSource", () => {
+  it("reloads the CSP when csp-hashes.json changes after startup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-csp-live-"));
+    const staticRoot = join(dir, "static");
+    const hashesFile = join(dir, "csp-hashes.json");
+    const { io } = captureIo();
+    try {
+      await mkdir(staticRoot, { recursive: true });
+      const html = "<html><body><script>window.__TEST__='new';</script></body></html>";
+      await writeFile(
+        join(staticRoot, "index.html"),
+        html,
+        "utf8",
+      );
+      const [expectedHash] = extractInlineScriptHashes([html]);
+      await writeFile(hashesFile, JSON.stringify(["'sha256-old'"]), "utf8");
+      const runtime = await createLiveCspSource(staticRoot, hashesFile, io);
+      expect(expectedHash).toBeDefined();
+      if (expectedHash === undefined) throw new Error("expected inline script hash");
+      expect(runtime.csp()).toContain(expectedHash);
+      expect(runtime.csp()).not.toContain("'sha256-old'");
+      await writeFile(hashesFile, JSON.stringify(["'sha256-new'"]), "utf8");
+      await sleep(700);
+      expect(runtime.csp()).toContain(expectedHash);
+      expect(runtime.csp()).not.toContain("'sha256-new'");
+      runtime.dispose();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

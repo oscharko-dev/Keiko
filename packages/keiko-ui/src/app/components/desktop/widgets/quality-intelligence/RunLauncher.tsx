@@ -37,6 +37,7 @@ import {
   type CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
 import { Icons } from "@/app/components/desktop/Icons";
+import { KeikoSelect } from "../../KeikoSelect";
 import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
@@ -807,23 +808,25 @@ export function RunLauncher({
           </p>
         ) : null}
         <div className="qi-launcher-controls">
-          <label className="qi-field qi-field-inline">
+          <div className="qi-field qi-field-inline">
             <span className="qi-field-label">Policy profile</span>
-            <select
-              className="qi-select"
+            <KeikoSelect
+              triggerClassName="qi-select"
               value={profileId}
+              ariaLabel="Policy profile"
               disabled={running}
-              onChange={(e) => {
-                setProfileId(e.target.value);
-              }}
-            >
-              {PROFILES.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              menuTitle="Policy profile"
+              sections={[
+                {
+                  options: PROFILES.map((profile) => ({
+                    value: profile.id,
+                    label: profile.label,
+                  })),
+                },
+              ]}
+              onValueChange={setProfileId}
+            />
+          </div>
           <label className="qi-field qi-field-inline">
             <span className="qi-field-label">Seed (optional)</span>
             <span className="number-control qi-number-control">
