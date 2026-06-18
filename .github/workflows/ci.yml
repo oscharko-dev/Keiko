@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - dev
+      - feat/keiko-editor
       - "release/**"
   pull_request:
     branches:
       - dev
+      - feat/keiko-editor
       - "release/**"
 
 permissions: {}
@@ -21,11 +23,11 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${{ github.ref }}:${{ github.base_ref }}" in
-            refs/heads/dev: | refs/heads/release/*: | *:dev | *:release/*)
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:release/*)
               echo "Protected branch gate satisfied."
               ;;
             *)
-              echo "This gate is only valid for protected dev and release branches."
+              echo "This gate is only valid for protected dev, feat/keiko-editor, and release branches."
               exit 1
               ;;
           esac

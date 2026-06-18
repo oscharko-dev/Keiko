@@ -92,14 +92,24 @@ base branch):
    with Turbopack). Workers load via `new Worker(new URL("…", import.meta.url), { type: "module" })`
    in a `MonacoEnvironment.getWorker` factory, behind a client-only dynamic import (`ssr: false`),
    following the existing client-only-guard pattern (`registerSw.ts`).
-4. **CSP unchanged.** The server CSP already sets `worker-src 'self'` and `script-src 'self'` with
-   inline SHA-256 hashes (no `unsafe-inline`), and `style-src 'self' 'unsafe-inline'` (pre-existing,
-   for Tailwind) (`packages/keiko-server/src/csp.ts`). Same-origin ESM workers and Monaco's runtime
-   style injection both satisfy this; no new `worker-src`/`script-src`/`style-src` widening is
-   permitted for Monaco.
-5. **No-CDN proof.** #1193 proves zero non-loopback requests on editor + worker-backed features under
-   both `next dev` (Turbopack) and the static production build, plus a build-output assertion that the
-   worker chunks ship in the static export.
+4. **CSP unchanged.** The server CSP already sets `worker-src 'self'`, `script-src 'self'` with inline
+   SHA-256 hashes (no `unsafe-inline`), `connect-src 'self'`, and `style-src 'self' 'unsafe-inline'`
+   (pre-existing, for Tailwind) (`packages/keiko-server/src/csp.ts`). Same-origin ESM workers,
+   same-origin BFF calls, and Monaco's runtime style injection satisfy this; no
+   `worker-src`/`script-src`/`connect-src`/`style-src` widening is permitted for Monaco or editor coding
+   features. `@oscharko-dev/keiko-editor` may not issue direct browser network calls to non-same-origin
+   model, retrieval, analytics, telemetry, or provider endpoints.
+5. **No-CDN / no-browser-egress proof.** #1193 proves zero non-loopback and non-same-origin browser
+   requests on editor + worker-backed features under both `next dev` (Turbopack) and the static
+   production build; #1206/#1207 extend that network-intercept proof to completion, inline completion,
+   diagnostics/context, and disabled test-generation actions. #1193 also asserts that worker chunks
+   ship in the static export.
+6. **Initial performance budgets.** The static shell carries 0 bytes gzip of Monaco/editor code in
+   first-load JavaScript; the lazy editor + Monaco runtime budget is ≤ 2.5 MB gzip total with no worker
+   chunk > 750 KB gzip; first editor-card open targets p50 ≤ 1.5 s and p95 ≤ 2.5 s; typing keeps
+   per-keystroke main-thread work < 50 ms and INP ≤ 200 ms at p75; files > 500 KB or > 10,000 lines
+   enter read-only/degraded mode, and files > 1,000,000 bytes use the existing too-large path without
+   instantiating Monaco. #1207 measures and enforces these budgets; #1209 records release evidence.
 
 ### D4 — Server-side deterministic language service is the single source of truth
 
@@ -124,8 +134,9 @@ existing `latencyClass: "fast"` field on `ModelCapability`, so a `standard`/`slo
 elected for per-keystroke ghost text. **Degradation policy:** as-you-type ghost text only when a fast
 FIM-capable model is available; otherwise manual-invoke inline suggestion backed by deterministic
 completion — never a silent ungoverned fallback. The as-you-type path is debounced and self-cancelling
-(`AbortSignal`). Completion must use aligned/instruct models, not raw base-model FIM
-(prompt-injection risk).
+(`AbortSignal`) and remains enabled only while content-free telemetry stays within p50 ≤ 200 ms / p95
+≤ 750 ms after debounce; deterministic completion targets p50 ≤ 150 ms / p95 ≤ 500 ms. Completion must
+use aligned/instruct models, not raw base-model FIM (prompt-injection risk).
 
 ### D6 — Agentic coding context is assembled by existing backend retrieval, not the editor
 
@@ -137,7 +148,12 @@ connected-context orchestration (`grounded-orchestrator`), Local Knowledge retri
 and workflow context selectors. All run server-side and query-only. The editor package contains **no**
 retrieval/knowledge/memory/context-assembly logic. Per-keystroke completion uses only the cheapest
 deterministic context; heavier providers serve explicit requests. Every provider has defined
-degradation behaviour (unavailable/not-ready/denied/too-expensive/out-of-budget) recorded as evidence.
+degradation behaviour (unavailable/not-ready/denied/too-expensive/out-of-budget) recorded as
+metadata-only evidence: redacted relative labels, hashes, byte counts, provider/provenance ids,
+omissions, and policy decisions only — never raw queries, excerpts, prompts, workspace roots, secrets,
+or customer content. Retrieved repo text, Local Knowledge chunks, memory, and QI evidence are untrusted
+model input; #1211/#1206 must test malicious retrieval fixtures and prove retrieved content cannot grant
+tool authority, request secrets, bypass review/evidence gates, apply patches, or execute tests.
 
 ### D7 — Patches stay reviewable; code execution is deferred behind enforced egress
 
