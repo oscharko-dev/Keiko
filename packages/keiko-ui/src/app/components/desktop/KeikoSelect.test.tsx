@@ -204,11 +204,84 @@ describe("KeikoSelect menu geometry", () => {
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(screen.getByRole("tooltip")).toHaveTextContent("gpt-4o-mini-search-preview-2025-03-11");
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("gpt-4o-mini-search-preview-2025-03-11");
+    expect(tooltip).toHaveAttribute("data-placement", "top-left");
+    expect(tooltip).toHaveStyle({ left: "32px", top: "98px" });
 
     fireEvent.pointerLeave(label);
     expect(screen.queryByRole("tooltip")).toBeNull();
     vi.useRealTimers();
+  });
+
+  it("anchors long-label tooltips to the option's top-right edge near the viewport edge", async () => {
+    const user = userEvent.setup();
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 360 });
+    try {
+      render(
+        <KeikoSelect
+          ariaLabel="Models"
+          menuTitle="Models"
+          onValueChange={vi.fn()}
+          sections={[
+            {
+              options: [
+                {
+                  value: "gpt-4o-mini-search-preview-2025-03-11",
+                  label: "gpt-4o-mini-search-preview-2025-03-11",
+                },
+              ],
+            },
+          ]}
+          value="gpt-4o-mini-search-preview-2025-03-11"
+        />,
+      );
+
+      const trigger = screen.getByRole("combobox", { name: "Models" });
+      vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+        bottom: 82,
+        height: 34,
+        left: 180,
+        right: 340,
+        top: 48,
+        width: 160,
+        x: 180,
+        y: 48,
+        toJSON: () => ({}),
+      });
+
+      await user.click(trigger);
+      vi.useFakeTimers();
+      const label = screen.getAllByText("gpt-4o-mini-search-preview-2025-03-11")[1]!;
+      Object.defineProperties(label, {
+        clientWidth: { configurable: true, value: 100 },
+        scrollWidth: { configurable: true, value: 280 },
+      });
+      vi.spyOn(label, "getBoundingClientRect").mockReturnValue({
+        bottom: 130,
+        height: 24,
+        left: 220,
+        right: 336,
+        top: 106,
+        width: 116,
+        x: 220,
+        y: 106,
+        toJSON: () => ({}),
+      });
+
+      fireEvent.pointerEnter(label);
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+
+      const tooltip = screen.getByRole("tooltip");
+      expect(tooltip).toHaveAttribute("data-placement", "top-right");
+      expect(tooltip).toHaveStyle({ left: "336px", top: "98px" });
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+    }
   });
 });
 

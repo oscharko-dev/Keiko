@@ -72,6 +72,7 @@ type MenuPosition = {
 type OverflowTooltipPosition = {
   readonly left: number;
   readonly top: number;
+  readonly placement: "top-left" | "top-right";
 };
 
 const OVERFLOW_TOOLTIP_DELAY_MS = 2000;
@@ -128,10 +129,12 @@ function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode 
       if (node === null || node.scrollWidth <= node.clientWidth) return;
       const rect = node.getBoundingClientRect();
       const preferredWidth = Math.min(520, window.innerWidth - 32);
-      const rightAlignedLeft = rect.right - preferredWidth;
+      const hasRoomRight = rect.left + preferredWidth <= window.innerWidth - 16;
+      const placement = hasRoomRight ? "top-left" : "top-right";
       setTooltipPosition({
-        left: clamp(rightAlignedLeft, 16, Math.max(16, window.innerWidth - preferredWidth - 16)),
-        top: Math.max(16, rect.top - 10),
+        left: clamp(placement === "top-left" ? rect.left : rect.right, 16, window.innerWidth - 16),
+        placement,
+        top: Math.max(16, rect.top - 8),
       });
     }, OVERFLOW_TOOLTIP_DELAY_MS);
   };
@@ -155,6 +158,7 @@ function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode 
         ? createPortal(
             <div
               className="ksel-overflow-tooltip"
+              data-placement={tooltipPosition.placement}
               role="tooltip"
               style={{
                 left: `${tooltipPosition.left.toString()}px`,

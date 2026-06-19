@@ -1061,10 +1061,12 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("does not pan the free workspace surface on primary-button clicks", () => {
+  it("pans the free workspace surface on primary-button drag", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
     render(
       <Workspace
-        ws={workspace({})}
+        ws={workspace({ api: workspaceApi })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={() => undefined}
       />,
@@ -1072,9 +1074,11 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
-    expect(surface).not.toHaveAttribute("data-panning");
-
+    expect(surface).toHaveAttribute("data-panning", "true");
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
     fireEvent.pointerUp(window);
+
+    expect(panBy).toHaveBeenCalledWith(30, 15);
     expect(surface).not.toHaveAttribute("data-panning");
   });
 

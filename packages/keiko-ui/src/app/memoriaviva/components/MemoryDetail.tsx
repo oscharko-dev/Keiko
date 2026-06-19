@@ -178,7 +178,6 @@ function RecordHeader({
 }): ReactNode {
   return (
     <header className="mc-detail-header">
-      <BackToMemoriaControl onBack={onBack}>← Back</BackToMemoriaControl>
       <div className="mc-detail-title-row">
         <h1 className="lk-title" style={{ flex: 1 }}>
           {TYPE_LABELS[record.type]} memory
@@ -192,6 +191,7 @@ function RecordHeader({
           </span>
         ) : null}
       </div>
+      <BackToMemoriaControl onBack={onBack}>Back</BackToMemoriaControl>
     </header>
   );
 }

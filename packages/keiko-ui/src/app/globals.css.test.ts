@@ -205,6 +205,60 @@ describe("Gateway setup constrained-height scrolling", () => {
   });
 });
 
+describe("Compact model picker", () => {
+  it("keeps the model icon visible while hiding compact-only text and caret chrome", () => {
+    const triggerBlock = cssBlock(".cmp-model-compact .cmp-model-select");
+    expect(triggerBlock).not.toContain("opacity: 0");
+    expect(triggerBlock).toContain("width: 34px");
+    expect(triggerBlock).toContain("height: 34px");
+    expect(triggerBlock).toContain("max-width: 34px");
+    expect(triggerBlock).toContain("display: flex");
+    expect(triggerBlock).toContain("align-items: center");
+    expect(triggerBlock).toContain("justify-content: center");
+    expect(triggerBlock).toContain("gap: 0");
+
+    const copyRule = css.indexOf(
+      ".cmp-model-compact .cmp-model-select .ksel-trigger-copy,\n" +
+        ".cmp-model-compact .cmp-model-select .ksel-trigger-caret",
+    );
+    expect(copyRule).toBeGreaterThan(-1);
+    const copyBlock = css.slice(copyRule, css.indexOf("}", copyRule) + 1);
+    expect(copyBlock).toContain("display: none");
+
+    const leadingBlock = cssBlock(".cmp-model-compact .cmp-model-select .ksel-trigger-leading");
+    expect(leadingBlock).toContain("width: 100%");
+    expect(leadingBlock).toContain("height: 100%");
+    expect(leadingBlock).toContain("display: grid");
+    expect(leadingBlock).toContain("place-items: center");
+
+    expect(cssBlock(".cmp-bar-compact .cmp-model-compact .cmp-model-select")).toContain(
+      "max-width: 34px",
+    );
+  });
+});
+
+describe("Workspace outline positioning", () => {
+  it("aligns the open outline with the right side of the workspace", () => {
+    const outlineBlock = cssBlock(".ws-outline {");
+    expect(outlineBlock).toContain("right: 4px");
+    expect(outlineBlock).toContain("width: min(420px, calc(100% - 16px))");
+
+    const mobileOverride = css.slice(css.indexOf("@media (max-width: 420px)"));
+    expect(mobileOverride).toContain(".ws-outline");
+    expect(mobileOverride).toContain("right: 6px");
+    expect(mobileOverride).toContain("width: min(420px, calc(100% - 16px))");
+  });
+
+  it("visually collapses the outline when the right rail toggle closes it", () => {
+    const closedBlock = cssBlock('.ws-outline[data-open="false"]');
+    expect(closedBlock).toContain("opacity: 0");
+    expect(closedBlock).toContain("pointer-events: none");
+    expect(closedBlock).toContain("border-color: transparent");
+    expect(closedBlock).toContain("box-shadow: none");
+    expect(closedBlock).toContain("transform: translateX(12px)");
+  });
+});
+
 // ─── Fix 3: WCAG 1.4.3 — light-theme text contrast ───────────────────────────
 
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {

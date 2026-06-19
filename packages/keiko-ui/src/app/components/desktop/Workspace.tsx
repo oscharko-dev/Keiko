@@ -13,9 +13,9 @@ import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import {
   acquireGrabbingBodyStyle,
+  isCanvasPanPointer,
   isHandToolKeyIgnoredTarget,
   isInteractiveSurfaceTarget,
-  isMiddlePointerButton,
   isPrimaryActivationPointer,
   isTextEntryTarget,
   workspaceInteractionLocked,
@@ -521,7 +521,7 @@ export function Workspace({
       }
       return;
     }
-    if (!isMiddlePointerButton(event.button)) return;
+    if (!isCanvasPanPointer(event)) return;
     startBgPan(api.panBy, event, setPanning);
   };
 

@@ -43,7 +43,11 @@ const mocks = vi.hoisted(() => ({
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
     workspaceProps: undefined as
-      | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
+      | {
+          readonly outlineOpen?: boolean;
+          readonly onToggleOutline?: () => void;
+          readonly renderOutlineToggle?: boolean;
+        }
       | undefined,
     rightRailProps: undefined as
       | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
@@ -167,7 +171,11 @@ vi.mock("./RightRail", () => ({
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: (props: { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }) => {
+  Workspace: (props: {
+    readonly outlineOpen?: boolean;
+    readonly onToggleOutline?: () => void;
+    readonly renderOutlineToggle?: boolean;
+  }) => {
     mocks.state.workspaceProps = props;
     return <main data-testid="workspace" data-outline-open={props.outlineOpen === true} />;
   },
@@ -443,20 +451,23 @@ describe("AppShell grounding connections", () => {
     expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
     expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
     expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
+    expect(mocks.state.workspaceProps?.renderOutlineToggle).toBe(false);
     expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
   });
 
-  it("passes the outline toggle into Workspace so the in-outline hide button can close it", async () => {
+  it("keeps the right rail as the only product outline toggle surface", async () => {
     await renderMounted();
+
+    expect(mocks.state.workspaceProps?.renderOutlineToggle).toBe(false);
+    expect(mocks.state.workspaceProps?.onToggleOutline).toBeTypeOf("function");
 
     await act(async () => {
       mocks.state.rightRailProps?.onToggleOutline?.();
     });
     expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
-    expect(mocks.state.workspaceProps?.onToggleOutline).toBeTypeOf("function");
 
     await act(async () => {
-      mocks.state.workspaceProps?.onToggleOutline?.();
+      mocks.state.rightRailProps?.onToggleOutline?.();
     });
 
     expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");

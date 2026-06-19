@@ -427,6 +427,9 @@ button {
   pointer-events: none;
   transform: translateY(-100%);
 }
+.ksel-overflow-tooltip[data-placement="top-right"] {
+  transform: translate(-100%, -100%);
+}
 
 .ksel-option-desc {
   color: var(--fg-dim);
@@ -1316,10 +1319,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .ws-outline {
   position: absolute;
-  right: 0;
+  right: 4px;
   top: 4px;
   z-index: 4;
-  width: min(420px, calc(100% - 28px));
+  width: min(420px, calc(100% - 16px));
   max-height: calc(100% - 18px);
   overflow: auto;
   padding: 12px;
@@ -1329,6 +1332,13 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   box-shadow: var(--shadow-pop);
   color: var(--fg);
   pointer-events: auto;
+}
+.ws-outline[data-open="false"] {
+  opacity: 0;
+  pointer-events: none;
+  border-color: transparent;
+  box-shadow: none;
+  transform: translateX(12px);
 }
 .ws-outline-inner {
   display: flex;
@@ -1659,6 +1669,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 
   .ws-outline {
     right: 6px;
+    width: min(420px, calc(100% - 16px));
   }
 }
 .tw-title {
@@ -2296,14 +2307,39 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-model-compact .cmp-model-select {
   position: absolute;
   inset: 0;
-  width: 100%;
-  max-width: none;
-  opacity: 0;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  max-width: 34px;
   cursor: pointer;
   padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  color: var(--fg);
+}
+.cmp-model-compact .cmp-model-select .ksel-trigger-copy,
+.cmp-model-compact .cmp-model-select .ksel-trigger-caret {
+  display: none;
+}
+.cmp-model-compact .cmp-model-select .ksel-trigger-leading {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.cmp-model-compact .cmp-model-select .ksel-trigger-leading svg {
+  display: block;
 }
 .cmp-bar-compact .cmp-model-select {
   max-width: 118px;
+}
+.cmp-bar-compact .cmp-model-compact .cmp-model-select {
+  max-width: 34px;
 }
 .cmp-icon,
 .cmp-send {
@@ -8907,8 +8943,9 @@ select.dlg-input {
 }
 
 .mc-detail-header {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 8px;
   flex-shrink: 0;
 }
@@ -8921,7 +8958,7 @@ select.dlg-input {
 }
 
 .mc-back-link {
-  align-self: flex-start;
+  justify-self: end;
   text-decoration: none;
 }
 

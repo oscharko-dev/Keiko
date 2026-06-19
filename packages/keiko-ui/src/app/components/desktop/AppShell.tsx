@@ -678,6 +678,7 @@ function AppShellInner(): ReactNode {
                 palette={paletteNode}
                 outlineOpen={outlineOpen}
                 onToggleOutline={toggleOutline}
+                renderOutlineToggle={false}
               />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
