@@ -14,6 +14,14 @@ the companion blueprint:
 Amended 2026-06-18 for Issue [#1196](https://github.com/oscharko-dev/Keiko/issues/1196): added
 decision D3.7 (Monaco DOMPurify supply-chain control for the keiko-ui host mount).
 
+Amended 2026-06-19 for Issue [#1201](https://github.com/oscharko-dev/Keiko/issues/1201): clarified
+D4 — document **formatting** joins the governed deterministic language-service surface (an explicit,
+cancellable "format document" operation, model-free), and the editor's **hover** widget is enabled
+only when a governed hover provider is wired, with quick info rendered as an inert Markdown code fence
+so the vendored DOMPurify sink (D3.7) only ever processes HTML-escaped text. No boundary is relaxed:
+diagnostics, hover, symbols, and formatting are Monaco-provider bridges to the server language
+service; the in-browser worker stays disabled for governed features.
+
 ## Date
 
 2026-06-18

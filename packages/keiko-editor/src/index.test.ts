@@ -38,7 +38,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
     ]);
   });
 
-  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195 + #1199 + #1200)", () => {
+  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195 + #1199 + #1200 + #1201)", () => {
     const expected = [
       // Package identity, language + workspace contract, geometry, file model, completion,
       // commands (#1191 + #1192).
@@ -115,6 +115,32 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "createInlineCompletionTelemetry",
       "inlineCompletionTelemetryReducer",
       "EMPTY_INLINE_COMPLETION_TELEMETRY",
+      // Monaco diagnostics / hover / symbols / formatting bridges (#1201).
+      "registerKeikoDiagnostics",
+      "severityToMarker",
+      "editorDiagnosticToMarker",
+      "diagnosticsToMarkers",
+      "defaultDiagnosticsScheduler",
+      "DIAGNOSTICS_ELIGIBLE_LANGUAGES",
+      "DEFAULT_DIAGNOSTICS_DEBOUNCE_MS",
+      "DEFAULT_DIAGNOSTICS_OWNER",
+      "createKeikoHoverProvider",
+      "registerKeikoHoverProvider",
+      "hoverResponseToMonaco",
+      "toInertCodeFence",
+      "HOVER_ELIGIBLE_LANGUAGES",
+      "createKeikoDocumentSymbolProvider",
+      "registerKeikoDocumentSymbolProvider",
+      "editorSymbolKindToMonaco",
+      "editorSymbolToMonaco",
+      "symbolsToMonaco",
+      "SYMBOLS_ELIGIBLE_LANGUAGES",
+      "createKeikoFormattingProvider",
+      "registerKeikoFormattingProvider",
+      "editorTextEditToMonaco",
+      "editsToMonaco",
+      "monacoFormattingOptionsToEditor",
+      "FORMATTING_ELIGIBLE_LANGUAGES",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

@@ -13,11 +13,15 @@ import type {
   EditorBuffer,
   EditorChangeOrigin,
   EditorCompletionResolver,
+  EditorDiagnosticsResolver,
   EditorFileModel,
+  EditorFormattingResolver,
+  EditorHoverResolver,
   EditorInlineCompletionResolver,
   EditorPosition,
   EditorRange,
   EditorSaveRequest,
+  EditorSymbolsResolver,
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
@@ -99,4 +103,30 @@ export interface KeikoCodeEditorProps {
   readonly onInlineCompletionTelemetry?:
     | ((snapshot: InlineCompletionTelemetrySnapshot) => void)
     | undefined;
+  /**
+   * Host-injected diagnostics resolver (Issue #1201). When present, the editor drives Monaco markers
+   * for the governed languages from buffer-change events through this resolver; the host owns the BFF
+   * call (ADR-0042 D4). When absent, no diagnostics run and no markers are written.
+   */
+  readonly provideDiagnostics?: EditorDiagnosticsResolver | undefined;
+  /** Per-change debounce (ms) for diagnostics; defaults to ~400 ms when omitted. */
+  readonly diagnosticsDebounceMs?: number | undefined;
+  /**
+   * Host-injected hover (quick-info) resolver (Issue #1201). When present, the editor registers a
+   * Monaco hover provider for the governed languages and enables the hover widget; the host owns the
+   * BFF call (ADR-0042 D4). When absent, no hover provider is registered and the hover widget stays
+   * disabled.
+   */
+  readonly provideHover?: EditorHoverResolver | undefined;
+  /**
+   * Host-injected document-symbol resolver (Issue #1201) backing the editor outline and "Go to
+   * Symbol" navigation. When absent, no symbol provider is registered.
+   */
+  readonly provideSymbols?: EditorSymbolsResolver | undefined;
+  /**
+   * Host-injected document-formatting resolver (Issue #1201). When present, the editor registers an
+   * explicit, cancellable "Format Document" provider for the governed languages; the host owns the
+   * BFF call (ADR-0042 D4). When absent, no formatting provider is registered.
+   */
+  readonly provideFormatting?: EditorFormattingResolver | undefined;
 }

@@ -61,28 +61,41 @@ function EditorStatusFooter(props: {
   );
 }
 
+// Memoise the Monaco construction options + inferred language: `@monaco-editor/react` calls
+// `editor.updateOptions` whenever the `options` identity changes, so a fresh object every render (on
+// each cursor move or status update) would churn the editor needlessly. Provider presence toggles the
+// inline-suggest and hover sinks (Issues #1200/#1201).
+function useEditorConstructionOptions(
+  props: KeikoCodeEditorProps,
+  readOnly: boolean,
+): {
+  readonly options: ReturnType<typeof buildEditorOptions>;
+  readonly monacoLanguage: string;
+} {
+  const relativePath = props.buffer.content.relativePath;
+  const { ariaLabel } = props;
+  const inlineCompletionEnabled = props.provideInlineCompletions !== undefined;
+  const hoverEnabled = props.provideHover !== undefined;
+  const options = useMemo(
+    () =>
+      buildEditorOptions({
+        readOnly,
+        ariaPath: relativePath,
+        ariaLabel,
+        inlineCompletionEnabled,
+        hoverEnabled,
+      }),
+    [readOnly, relativePath, ariaLabel, inlineCompletionEnabled, hoverEnabled],
+  );
+  const monacoLanguage = useMemo(() => inferMonacoLanguageId(relativePath), [relativePath]);
+  return { options, monacoLanguage };
+}
+
 export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   const view = computeEditorViewModel(props);
   const handlers = useEditorHandlers(props, view.readOnly);
   const { buffer, fileModel } = props;
-  // Memoise the options object: `@monaco-editor/react` calls `editor.updateOptions` whenever the
-  // `options` identity changes, so a fresh object every render (on each cursor move or status
-  // update) would churn the editor needlessly.
-  const inlineCompletionEnabled = props.provideInlineCompletions !== undefined;
-  const options = useMemo(
-    () =>
-      buildEditorOptions({
-        readOnly: view.readOnly,
-        ariaPath: buffer.content.relativePath,
-        ariaLabel: props.ariaLabel,
-        inlineCompletionEnabled,
-      }),
-    [view.readOnly, buffer.content.relativePath, props.ariaLabel, inlineCompletionEnabled],
-  );
-  const monacoLanguage = useMemo(
-    () => inferMonacoLanguageId(buffer.content.relativePath),
-    [buffer.content.relativePath],
-  );
+  const { options, monacoLanguage } = useEditorConstructionOptions(props, view.readOnly);
 
   return (
     <div

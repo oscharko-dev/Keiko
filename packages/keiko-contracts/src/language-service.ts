@@ -23,15 +23,24 @@
 // changes incompatibly; consumers pin against the literal to detect skew.
 export const LANGUAGE_SERVICE_SCHEMA_VERSION = "1" as const;
 
-// The governed operations. Completion, diagnostics, hover (quick info), and document symbols are
-// the first-release deterministic surface; each provider advertises the subset it implements.
-export type LanguageServiceOperation = "diagnostics" | "completion" | "hover" | "symbols";
+// The governed operations. Completion, diagnostics, hover (quick info), document symbols, and
+// document formatting are the first-release deterministic surface; each provider advertises the
+// subset it implements. Formatting (Issue #1201) returns the reviewable text edits an explicit,
+// cancellable "format document" command applies; it is computed deterministically by the provider,
+// never by a model.
+export type LanguageServiceOperation =
+  | "diagnostics"
+  | "completion"
+  | "hover"
+  | "symbols"
+  | "formatting";
 
 export const LANGUAGE_SERVICE_OPERATIONS: readonly LanguageServiceOperation[] = [
   "diagnostics",
   "completion",
   "hover",
   "symbols",
+  "formatting",
 ] as const;
 
 // Stable, content-free error codes the editor relies on to drive recovery UX. The BFF emits them as
@@ -172,6 +181,29 @@ export interface LanguageSymbolResult {
   readonly truncated: boolean;
 }
 
+// A single reformatting edit (Issue #1201). `newText` replaces the source span identified by
+// `range` — a reviewable code artifact the editor applies only when the user invokes the explicit
+// "format document" command, never automatically. Edits within a result are non-overlapping, so the
+// editor can apply them independently.
+export interface LanguageTextEdit {
+  readonly range: LanguageRange;
+  readonly newText: string;
+}
+
+// Caller-supplied formatting preferences (Issue #1201). They mirror the editor's indentation
+// settings so the deterministic provider reflows to the active configuration; both fields are
+// optional and the provider falls back to its language default when either is absent.
+export interface LanguageFormattingOptions {
+  readonly tabSize?: number;
+  readonly insertSpaces?: boolean;
+}
+
+export interface LanguageFormattingResult {
+  readonly edits: readonly LanguageTextEdit[];
+  // True when edits were dropped to honour the result cap.
+  readonly truncated: boolean;
+}
+
 // The pluggability surface. A provider declares its id, the `languages` it serves, and the
 // `operations` it implements. The registry resolves a request's `languageId` to a provider; adding
 // a language provider is a registration, never a contract change.
@@ -194,6 +226,7 @@ export interface LanguageServiceLimits {
   readonly maxCompletionItems: number;
   readonly maxDiagnostics: number;
   readonly maxSymbols: number;
+  readonly maxFormattingEdits: number;
   readonly maxHoverChars: number;
   readonly maxLabelChars: number;
   readonly maxDetailChars: number;
@@ -214,6 +247,7 @@ export const DEFAULT_LANGUAGE_SERVICE_LIMITS: LanguageServiceLimits = {
   maxCompletionItems: 256,
   maxDiagnostics: 512,
   maxSymbols: 512,
+  maxFormattingEdits: 4_096,
   maxHoverChars: 4_096,
   maxLabelChars: 256,
   maxDetailChars: 1_024,
@@ -253,11 +287,19 @@ export interface LanguageSymbolsRequest {
   readonly document: LanguageDocumentOverlay;
 }
 
+export interface LanguageFormattingRequest {
+  readonly operation: "formatting";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly options?: LanguageFormattingOptions;
+}
+
 export type LanguageServiceRequest =
   | LanguageDiagnosticsRequest
   | LanguageCompletionRequest
   | LanguageHoverRequest
-  | LanguageSymbolsRequest;
+  | LanguageSymbolsRequest
+  | LanguageFormattingRequest;
 
 // ─── Pure validation (trust-boundary edge: the BFF validates a client-supplied request) ──────────
 // Result envelope follows the package convention: a discriminated `{ ok: true; value } | { ok:
@@ -302,6 +344,28 @@ export function isLanguageDocumentOverlay(value: unknown): value is LanguageDocu
   );
 }
 
+// A tab width is a positive integer column count; zero or fractional widths cannot describe
+// indentation, so they are rejected.
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+// Formatting options are optional; an absent block is valid (the provider uses its default). When
+// present, each declared field must be well-typed — a malformed `tabSize`/`insertSpaces` is rejected
+// rather than silently dropped, so a hostile client cannot smuggle an unexpected shape past the BFF.
+export function isLanguageFormattingOptions(value: unknown): value is LanguageFormattingOptions {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.tabSize !== undefined && !isPositiveInteger(value.tabSize)) {
+    return false;
+  }
+  if (value.insertSpaces !== undefined && typeof value.insertSpaces !== "boolean") {
+    return false;
+  }
+  return true;
+}
+
 function isLanguageServiceOperation(value: unknown): value is LanguageServiceOperation {
   return (
     typeof value === "string" && (LANGUAGE_SERVICE_OPERATIONS as readonly string[]).includes(value)
@@ -342,6 +406,13 @@ export function parseLanguageServiceRequest(
   if (needsPosition(operation) && !isLanguagePosition(value.position)) {
     errors.push("position must be { line, character }");
   }
+  if (
+    operation === "formatting" &&
+    value.options !== undefined &&
+    !isLanguageFormattingOptions(value.options)
+  ) {
+    errors.push("options must be { tabSize?, insertSpaces? }");
+  }
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -357,6 +428,11 @@ function assembleRequest(
   const document = value.document as LanguageDocumentOverlay;
   if (operation === "completion" || operation === "hover") {
     return { operation, root, document, position: value.position as LanguagePosition };
+  }
+  if (operation === "formatting") {
+    return value.options === undefined
+      ? { operation, root, document }
+      : { operation, root, document, options: value.options as LanguageFormattingOptions };
   }
   return { operation, root, document };
 }

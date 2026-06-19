@@ -36,6 +36,11 @@ import type {
   EditorInlineCompletionWireResponse,
   EditorInlineCompletionWireTriggerKind,
   EditorInlineCompletionTelemetryReport,
+  LanguageDiagnosticsResult,
+  LanguageHoverResult,
+  LanguageSymbolResult,
+  LanguageFormattingResult,
+  LanguageFormattingOptions,
   CostClass,
   GroundingLimits,
   MessageResponse,
@@ -965,6 +970,110 @@ export async function reportEditorInlineCompletionTelemetry(
     method: "POST",
     body: JSON.stringify(report),
   });
+}
+
+// Issue #1201 — deterministic language intelligence (diagnostics, hover, document symbols,
+// formatting). All four reuse the governed `POST /api/editor/language` route (#1198): a single
+// model-free, workspace-contained, bounded analysis over the in-editor overlay. The browser never
+// reaches a model. `signal` lets the editor cancel a superseded or in-flight request.
+export interface EditorLanguageRequestInput {
+  readonly root: string;
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+}
+
+interface LanguageOperationEnvelope<TResult> {
+  readonly operation: string;
+  readonly result: TResult;
+}
+
+function languageDocument(input: EditorLanguageRequestInput): {
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+} {
+  return { path: input.path, languageId: input.languageId, text: input.text };
+}
+
+export async function requestEditorDiagnostics(
+  input: EditorLanguageRequestInput,
+  signal?: AbortSignal,
+): Promise<LanguageDiagnosticsResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageDiagnosticsResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "diagnostics",
+        root: input.root,
+        document: languageDocument(input),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorHover(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageHoverResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageHoverResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "hover",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorSymbols(
+  input: EditorLanguageRequestInput,
+  signal?: AbortSignal,
+): Promise<LanguageSymbolResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageSymbolResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "symbols",
+        root: input.root,
+        document: languageDocument(input),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorFormatting(
+  input: EditorLanguageRequestInput & { readonly options?: LanguageFormattingOptions | undefined },
+  signal?: AbortSignal,
+): Promise<LanguageFormattingResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageFormattingResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "formatting",
+        root: input.root,
+        document: languageDocument(input),
+        ...(input.options === undefined ? {} : { options: input.options }),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
 }
 
 // ---------------------------------------------------------------------------

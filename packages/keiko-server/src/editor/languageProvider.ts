@@ -8,10 +8,12 @@ import type {
   LanguageCompletionResult,
   LanguageDiagnostic,
   LanguageDocumentSymbol,
+  LanguageFormattingOptions,
   LanguageHoverResult,
   LanguagePosition,
   LanguageProviderDescriptor,
   LanguageServiceLimits,
+  LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { LanguageCancellation } from "./languageCancellation.js";
@@ -41,6 +43,13 @@ export interface LanguageProvider {
   ): LanguageCompletionResult;
   getHover(ctx: LanguageProviderContext, position: LanguagePosition): LanguageHoverResult;
   getSymbols(ctx: LanguageProviderContext): LanguageSymbolsRaw;
+  // Returns the reformatting edits an explicit "format document" command applies (Issue #1201).
+  // `options` carries the caller's indentation preferences; the provider falls back to its language
+  // default for any absent field. Edits are non-overlapping so the editor can apply them directly.
+  getFormatting(
+    ctx: LanguageProviderContext,
+    options: LanguageFormattingOptions | undefined,
+  ): LanguageFormattingRaw;
 }
 
 export interface LanguageDiagnosticsRaw {
@@ -50,6 +59,11 @@ export interface LanguageDiagnosticsRaw {
 
 export interface LanguageSymbolsRaw {
   readonly symbols: readonly LanguageDocumentSymbol[];
+  readonly truncated: boolean;
+}
+
+export interface LanguageFormattingRaw {
+  readonly edits: readonly LanguageTextEdit[];
   readonly truncated: boolean;
 }
 

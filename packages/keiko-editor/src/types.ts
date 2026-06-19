@@ -314,6 +314,151 @@ export interface EditorDiagnostic {
   readonly related?: readonly EditorDiagnosticRelatedInformation[] | undefined;
 }
 
+// ─── Language-intelligence resolvers: diagnostics, hover, symbols, formatting (Issue #1201) ────────
+//
+// Deterministic, model-free language features bridged from the server language service (#1198) into
+// Monaco providers. Each request is content-free (a request identity plus document coordinates); the
+// live buffer text travels in the `*Query` the bridge hands the host resolver — exactly like
+// completion (#1199) — and is intentionally NOT part of the content-free request audit contract. The
+// host owns the BFF call to the governed language route; the editor registers Monaco providers,
+// renders host-resolved results, and computes nothing (ADR-0042 D4/D5).
+
+/** Content-free diagnostics request: which document/version to analyse. */
+export interface EditorDiagnosticsRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+}
+
+/** What the diagnostics bridge passes to the host resolver: the request plus the live buffer. */
+export interface EditorDiagnosticsQuery {
+  readonly request: EditorDiagnosticsRequest;
+  readonly documentText: string;
+}
+
+export interface EditorDiagnosticsResponse {
+  readonly request: EditorRequestIdentity;
+  readonly diagnostics: readonly EditorDiagnostic[];
+}
+
+/**
+ * The host-injected callback the editor calls to resolve diagnostics. The bridge drives it from
+ * buffer-change events, applies stale-response discard, and renders the result as Monaco markers; the
+ * host owns the BFF call (ADR-0042 D4).
+ */
+export type EditorDiagnosticsResolver = (
+  query: EditorDiagnosticsQuery,
+  signal: AbortSignal,
+) => Promise<EditorDiagnosticsResponse>;
+
+/**
+ * Plain-text quick info for a position, or `null` when there is none. `contents` is rendered as
+ * inert text (no Markdown/HTML sink), matching the server contract (ADR-0042 D3.7/D4).
+ */
+export interface EditorHover {
+  readonly contents: string | null;
+  readonly range?: EditorRange | undefined;
+}
+
+/** Content-free hover request: a document position to describe. */
+export interface EditorHoverRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+  readonly position: EditorPosition;
+}
+
+export interface EditorHoverQuery {
+  readonly request: EditorHoverRequest;
+  readonly documentText: string;
+}
+
+export interface EditorHoverResponse {
+  readonly request: EditorRequestIdentity;
+  readonly hover: EditorHover;
+}
+
+export type EditorHoverResolver = (
+  query: EditorHoverQuery,
+  signal: AbortSignal,
+) => Promise<EditorHoverResponse>;
+
+/** Monaco-independent subset of document-symbol kinds (LSP-aligned; mirrors the server contract). */
+export type EditorSymbolKind =
+  | "file"
+  | "module"
+  | "namespace"
+  | "class"
+  | "method"
+  | "property"
+  | "field"
+  | "constructor"
+  | "enum"
+  | "interface"
+  | "function"
+  | "variable"
+  | "constant"
+  | "struct"
+  | "enumMember"
+  | "typeParameter";
+
+/** A document symbol for the editor outline/navigation. */
+export interface EditorDocumentSymbol {
+  readonly name: string;
+  readonly kind: EditorSymbolKind;
+  readonly range: EditorRange;
+  readonly detail?: string | undefined;
+  readonly containerName?: string | undefined;
+}
+
+/** Content-free symbols request: which document to outline. */
+export interface EditorSymbolsRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+}
+
+export interface EditorSymbolsQuery {
+  readonly request: EditorSymbolsRequest;
+  readonly documentText: string;
+}
+
+export interface EditorSymbolsResponse {
+  readonly request: EditorRequestIdentity;
+  readonly symbols: readonly EditorDocumentSymbol[];
+}
+
+export type EditorSymbolsResolver = (
+  query: EditorSymbolsQuery,
+  signal: AbortSignal,
+) => Promise<EditorSymbolsResponse>;
+
+/** Indentation preferences the editor passes to the formatter (from the Monaco model options). */
+export interface EditorFormattingOptions {
+  readonly tabSize: number;
+  readonly insertSpaces: boolean;
+}
+
+/** Content-free formatting request: which document to reformat and the indentation preferences. */
+export interface EditorFormattingRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+  readonly options: EditorFormattingOptions;
+}
+
+export interface EditorFormattingQuery {
+  readonly request: EditorFormattingRequest;
+  readonly documentText: string;
+}
+
+/** The reviewable reformatting edits the editor applies on an explicit "format document" command. */
+export interface EditorFormattingResponse {
+  readonly request: EditorRequestIdentity;
+  readonly edits: readonly EditorTextEdit[];
+}
+
+export type EditorFormattingResolver = (
+  query: EditorFormattingQuery,
+  signal: AbortSignal,
+) => Promise<EditorFormattingResponse>;
+
 // ─── Test generation ─────────────────────────────────────────────────────────────
 //
 // Wave-2 surface (ADR-0042 D7): editor-driven test generation/execution/verification is gated

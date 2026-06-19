@@ -23,6 +23,14 @@ export interface BuildEditorOptionsArgs {
    * text never renders Markdown, so the vendored DOMPurify sink is never reached.
    */
   readonly inlineCompletionEnabled?: boolean | undefined;
+  /**
+   * Whether a governed hover (quick-info) provider is wired (Issue #1201). Monaco's hover widget is
+   * enabled only when true; absent/false keeps it disabled (ADR-0042 D3.7 baseline). Defaults to
+   * false. The hover bridge renders the server's plain-text quick info inside an inert Markdown code
+   * fence (HTML-escaped, no active markup), so the vendored DOMPurify sink only processes inert text;
+   * no other Markdown sink (suggest docs, parameter hints, links, code lens, lightbulb) is enabled.
+   */
+  readonly hoverEnabled?: boolean | undefined;
 }
 
 /** Stable monospace stack: a dense tool surface needs a predictable, ligature-free code font. */
@@ -76,6 +84,7 @@ export function buildEditorOptions(
   args: BuildEditorOptionsArgs,
 ): monaco.editor.IStandaloneEditorConstructionOptions {
   const inlineCompletionEnabled = args.inlineCompletionEnabled ?? false;
+  const hoverEnabled = args.hoverEnabled ?? false;
   return {
     automaticLayout: true,
     fontFamily: EDITOR_FONT_FAMILY,
@@ -86,7 +95,10 @@ export function buildEditorOptions(
     folding: true,
     foldingStrategy: "auto",
     find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "always" },
-    hover: { enabled: false },
+    // Enabled only when a governed hover provider is wired (Issue #1201). The bridge renders quick
+    // info as an inert Markdown code fence, so the vendored DOMPurify sink only processes HTML-escaped
+    // text; no Markdown-rendering hover content originates from the editor itself.
+    hover: { enabled: hoverEnabled },
     quickSuggestions: false,
     quickSuggestionsDelay: 0,
     suggestOnTriggerCharacters: true,

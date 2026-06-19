@@ -19,7 +19,7 @@ backend/workflow responsibilities reached only through host-injected ports. The 
 outside `keiko-ui` and must not import `keiko-ui` internals (ADR-0019 browser-tier direction rule 8;
 ADR-0042 D1/D2).
 
-### Current status (#1191-#1196)
+### Current status (#1191-#1201)
 
 The package now ships the browser-tier editor surface and is mounted by `keiko-ui` in the Workspace
 card/window model (#1196). The public surface includes:
@@ -32,12 +32,19 @@ card/window model (#1196). The public surface includes:
   card.
 - `KeikoDiffEditor`, `buildPatchPreview` — the generated-change review surface and its pure render
   model adapter.
+- Monaco provider bridges to the governed server language service: completion (#1199), inline
+  completion (#1200), and — added by #1201 — diagnostics markers (`registerKeikoDiagnostics`), hover
+  / quick info (`registerKeikoHoverProvider`), document symbols / outline
+  (`registerKeikoDocumentSymbolProvider`), and explicit, cancellable document formatting
+  (`registerKeikoFormattingProvider`). Every bridge is pure wiring: it maps a Monaco call to a
+  content-free request, hands the host resolver the live buffer, and renders host-resolved results.
+  The editor computes nothing and calls no model (ADR-0042 D4/D5).
 
-**Still out of scope** (tracked under the epic): server completion/diagnostics/test-generation
-endpoints and any model-producing editor feature (#1197/#1198 and follow-ups). `keiko-ui` depends on
+**Still out of scope** (tracked under the epic): test-generation/execution endpoints and any
+model-producing editor feature behind the wave-2 egress gate (ADR-0042 D7). `keiko-ui` depends on
 this package only for browser-tier editor rendering and host-injected intent callbacks; workspace
-authority, file I/O, model access, patch application, evidence, and verification remain outside this
-package.
+authority, file I/O, model access, the language-service computation itself, patch application,
+evidence, and verification remain outside this package.
 
 ## Monaco runtime and worker strategy (Issue #1193)
 
@@ -197,22 +204,28 @@ Notes:
   - **Runtime sink independently closed.** Monaco still bundles a **vendored** DOMPurify copy
     (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is
     reached only through Markdown-rendering surfaces (hover tooltips, suggest-widget docs, parameter
-    hints, the inline-suggest toolbar, other `IMarkdownString` sinks). The mounted editor disables
-    those surfaces in `buildEditorOptions` (`hover`, `suggest`, `parameterHints`, `codeLens`,
-    `lightbulb`, `inlayHints`, and `links` are all off). **Inline suggest** (`inlineSuggest.enabled`)
-    is enabled only when a governed inline-completion provider is wired (#1200); even then it keeps
-    `showToolbar: "never"` and `syntaxHighlightingEnabled: false`, and ghost text renders as plain
-    text, so no Markdown sink is reached. The #1196 host bootstrap also disables Monaco's built-in
-    TypeScript/JavaScript
-    `modeConfiguration` providers for completion, hover, diagnostics, formatting, symbols, code
-    actions, rename, references, and inlay hints, so Monaco cannot re-enable productive local
-    language-service flows behind the host's back. Runtime exposure is therefore nil — the same
-    closed-sink basis #1193 relied on, now enforced by construction options and runtime defaults.
+    hints, the inline-suggest toolbar, other `IMarkdownString` sinks). The mounted editor keeps
+    `suggest` docs, `parameterHints`, `codeLens`, `lightbulb`, `inlayHints`, and `links` off in
+    `buildEditorOptions`. **Inline suggest** (`inlineSuggest.enabled`) is enabled only when a governed
+    inline-completion provider is wired (#1200); even then it keeps `showToolbar: "never"` and
+    `syntaxHighlightingEnabled: false`, and ghost text renders as plain text, so no Markdown sink is
+    reached. **Hover** (`hover.enabled`) is enabled only when a governed hover provider is wired
+    (#1201); the hover bridge (`hover-bridge.ts`) renders the server's plain-text quick info inside an
+    inert Markdown code fence sized longer than any backtick run in the content (`toInertCodeFence`),
+    so the Markdown renderer HTML-escapes the content and the vendored DOMPurify only ever processes
+    inert, escaped text — never active markup a buffer's own type signatures could smuggle in. The
+    #1196 host bootstrap also disables Monaco's built-in TypeScript/JavaScript `modeConfiguration`
+    providers for completion, hover, diagnostics, formatting, symbols, code actions, rename,
+    references, and inlay hints, so Monaco cannot re-enable productive local language-service flows
+    behind the host's back; the #1201 providers are governed bridges to the deterministic server
+    language service, not Monaco's local worker. Runtime exposure is therefore nil — the closed-sink
+    basis #1193 relied on, now enforced for hover by inert rendering and for every other Markdown
+    sink by construction options and runtime defaults.
   - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
-    that vendors DOMPurify `>= 3.3.2`; as of #1196 no such release exists (the latest `0.56.0-dev`
-    builds still vendor and pin `3.2.7`), so the patched override is the interim control. Revisit when a
-    hover / completion-with-docs / parameter-hint / Markdown surface is wired (#1199/#1200) or a newer
-    Monaco ships.
+    that vendors DOMPurify `>= 3.3.2`; as of #1201 no such release exists (the latest `0.56.0-dev`
+    builds still vendor and pin `3.2.7`), so the patched override plus inert hover rendering are the
+    interim controls. Revisit when a suggest-docs / parameter-hint / other Markdown surface is wired or
+    a newer Monaco ships.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers and mounted by
   `keiko-ui` through the #1196 client-only Workspace editor surface.
 

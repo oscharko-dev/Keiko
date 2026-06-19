@@ -13,10 +13,12 @@ import type {
   LanguageDiagnostic,
   LanguageDiagnosticSeverity,
   LanguageDocumentSymbol,
+  LanguageFormattingOptions,
   LanguageHoverResult,
   LanguagePosition,
   LanguageProviderDescriptor,
   LanguageSymbolKind,
+  LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createContainedLanguageServiceHost,
@@ -24,6 +26,7 @@ import {
 } from "./languageServiceHost.js";
 import type {
   LanguageDiagnosticsRaw,
+  LanguageFormattingRaw,
   LanguageProvider,
   LanguageProviderContext,
   LanguageSymbolsRaw,
@@ -40,7 +43,7 @@ const TS_LANGUAGES: readonly string[] = [
 const DESCRIPTOR: LanguageProviderDescriptor = {
   id: "typescript",
   languages: TS_LANGUAGES,
-  operations: ["diagnostics", "completion", "hover", "symbols"],
+  operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
 };
 
 const SEVERITY_BY_CATEGORY: Readonly<Record<ts.DiagnosticCategory, LanguageDiagnosticSeverity>> = {
@@ -231,6 +234,45 @@ function buildSymbols(
   return { symbols: truncated ? out.slice(0, limit) : out, truncated };
 }
 
+// Build the TypeScript formatter settings from the caller's preferences (Issue #1201). Starts from
+// the compiler's own defaults (consistent, deterministic whitespace rules) and overrides only the
+// indentation fields the editor supplies, so a buffer is reflowed to the active editor configuration
+// rather than an arbitrary one. The newline is pinned to "\n" so the result is stable across hosts.
+function buildFormatCodeSettings(
+  options: LanguageFormattingOptions | undefined,
+): ts.FormatCodeSettings {
+  const settings: ts.FormatCodeSettings = { ...ts.getDefaultFormatCodeSettings("\n") };
+  if (options?.tabSize !== undefined) {
+    settings.tabSize = options.tabSize;
+    settings.indentSize = options.tabSize;
+  }
+  if (options?.insertSpaces !== undefined) {
+    settings.convertTabsToSpaces = options.insertSpaces;
+  }
+  return settings;
+}
+
+function buildFormatting(
+  ctx: LanguageProviderContext,
+  service: ts.LanguageService,
+  options: LanguageFormattingOptions | undefined,
+): LanguageFormattingRaw {
+  ctx.cancellation.throwIfCancellationRequested();
+  const changes = service.getFormattingEditsForDocument(
+    ctx.overlayPath,
+    buildFormatCodeSettings(options),
+  );
+  const lineStarts = computeLineStarts(ctx.overlayText);
+  const capped = changes.slice(0, ctx.limits.maxFormattingEdits);
+  const edits = capped.map(
+    (change): LanguageTextEdit => ({
+      range: spanToRange(ctx.overlayText, lineStarts, change.span.start, change.span.length),
+      newText: change.newText,
+    }),
+  );
+  return { edits, truncated: changes.length > capped.length };
+}
+
 export function createTypescriptLanguageProvider(): LanguageProvider {
   return {
     descriptor: DESCRIPTOR,
@@ -242,5 +284,7 @@ export function createTypescriptLanguageProvider(): LanguageProvider {
     getHover: (ctx, position): LanguageHoverResult =>
       withService(ctx, (svc) => buildHover(ctx, svc, position)),
     getSymbols: (ctx): LanguageSymbolsRaw => withService(ctx, (svc) => buildSymbols(ctx, svc)),
+    getFormatting: (ctx, options): LanguageFormattingRaw =>
+      withService(ctx, (svc) => buildFormatting(ctx, svc, options)),
   };
 }

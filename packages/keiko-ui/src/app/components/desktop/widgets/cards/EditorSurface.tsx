@@ -17,12 +17,16 @@ import {
   type EditorChangeOrigin,
   type EditorCompletionResolver,
   type EditorContentDelta,
+  type EditorDiagnosticsResolver,
   type EditorFileModel,
+  type EditorFormattingResolver,
+  type EditorHoverResolver,
   type EditorInlineCompletionResolver,
   type EditorPosition,
   type EditorRange,
   type EditorSaveRequest,
   type EditorSaveStatus,
+  type EditorSymbolsResolver,
   type EditorThemeVariant,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
@@ -66,6 +70,16 @@ export interface EditorSurfaceProps {
   readonly onInlineCompletionTelemetry?:
     | ((snapshot: InlineCompletionTelemetrySnapshot) => void)
     | undefined;
+  /**
+   * Host language-intelligence resolvers (Issue #1201). When present, the editor registers the
+   * corresponding Monaco surface (diagnostics markers, hover widget, document-symbol outline,
+   * explicit "format document") that bridges to the host's governed `/api/editor/language` BFF call.
+   * Absent for non-source buffers, where no governed deterministic provider exists.
+   */
+  readonly provideDiagnostics?: EditorDiagnosticsResolver | undefined;
+  readonly provideHover?: EditorHoverResolver | undefined;
+  readonly provideSymbols?: EditorSymbolsResolver | undefined;
+  readonly provideFormatting?: EditorFormattingResolver | undefined;
 }
 
 export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
@@ -96,6 +110,10 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
       completionTriggerCharacters={props.completionTriggerCharacters}
       provideInlineCompletions={props.provideInlineCompletions}
       onInlineCompletionTelemetry={props.onInlineCompletionTelemetry}
+      provideDiagnostics={props.provideDiagnostics}
+      provideHover={props.provideHover}
+      provideSymbols={props.provideSymbols}
+      provideFormatting={props.provideFormatting}
     />
   );
 }

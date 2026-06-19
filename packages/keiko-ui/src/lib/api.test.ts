@@ -12,6 +12,10 @@ import {
   fetchModels,
   fetchProjects,
   requestEditorCompletion,
+  requestEditorDiagnostics,
+  requestEditorFormatting,
+  requestEditorHover,
+  requestEditorSymbols,
   saveFilesContent,
   sendDesktopChatStream,
   startGroundedWorkflowHandoff,
@@ -110,6 +114,126 @@ describe("requestEditorCompletion (Issue #1199)", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/editor/completion",
       expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
+
+describe("language-intelligence helpers (Issue #1201)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requestEditorDiagnostics posts a diagnostics operation and unwraps the result", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "diagnostics",
+        result: {
+          diagnostics: [{ range: {}, severity: "error", message: "x", source: "typescript" }],
+          truncated: false,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestEditorDiagnostics({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const x: number = 'no';\n",
+    });
+
+    expect(result.diagnostics).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          operation: "diagnostics",
+          root: "/repo",
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: "const x: number = 'no';\n",
+          },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorHover posts a hover operation with the cursor position", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ operation: "hover", result: { contents: "x: number" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestEditorHover({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const x = 1;\n",
+      position: { line: 0, character: 6 },
+    });
+
+    expect(result.contents).toBe("x: number");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "hover",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "const x = 1;\n" },
+          position: { line: 0, character: 6 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorSymbols posts a symbols operation and forwards the abort signal", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "symbols", result: { symbols: [], truncated: false } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await requestEditorSymbols(
+      { root: "/repo", path: "src/a.ts", languageId: "typescript", text: "export const a = 1;\n" },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("requestEditorFormatting posts a formatting operation with indentation options", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "formatting", result: { edits: [], truncated: false } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorFormatting({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const x   =   1;\n",
+      options: { tabSize: 2, insertSpaces: true },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "formatting",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "const x   =   1;\n" },
+          options: { tabSize: 2, insertSpaces: true },
+        }),
+      }),
     );
   });
 });
