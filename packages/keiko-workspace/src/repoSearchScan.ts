@@ -270,6 +270,7 @@ export interface SearchTextRunner {
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly startMs: number;
+  readonly signal?: AbortSignal | undefined;
   readonly matcher: LineMatcher;
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
@@ -286,7 +287,15 @@ export function elapsed(runner: SearchTextRunner): number {
   return runner.nowMs() - runner.startMs;
 }
 
+function isRunnerAborted(runner: SearchTextRunner): boolean {
+  return runner.signal?.aborted === true;
+}
+
 export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
+  if (isRunnerAborted(runner)) {
+    state.truncated = true;
+    return true;
+  }
   if (state.filesScanned >= runner.limits.maxFilesScanned) {
     state.truncated = true;
     return true;
@@ -303,6 +312,10 @@ export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
 }
 
 function hitEmissionLimit(runner: SearchTextRunner, state: RunState): boolean {
+  if (isRunnerAborted(runner)) {
+    state.truncated = true;
+    return true;
+  }
   if (state.matchesReturned >= runner.limits.maxMatchesReturned) {
     state.truncated = true;
     return true;
@@ -388,6 +401,41 @@ function scanLines(
   emitBestLines(runner, relativePath, state, atoms, collectBestLines(runner, text, state));
 }
 
+function filePolicyOmission(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+): { readonly omitted?: CandidateOmissionReason | undefined; readonly path?: string | undefined } {
+  if (isImageScopePath(file.relativePath)) {
+    return { omitted: "binary" };
+  }
+  if (isDenied(file.relativePath)) {
+    return { omitted: "ignored" };
+  }
+  const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
+  const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
+  const realRel = normalizeScopePath(contained.realRelative);
+  if (isDenied(realRel)) {
+    return { omitted: "ignored" };
+  }
+  return { omitted: policyOmissionReason(file.relativePath, runner.policy), path: contained.path };
+}
+
+async function binaryOmission(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  path: string,
+): Promise<CandidateOmissionReason | undefined> {
+  try {
+    return (await probeBinary(runner.fs, path, file.sizeBytes)) ? "binary" : undefined;
+  } catch (err) {
+    // TOCTOU: file may have become unreadable (EACCES, ENOENT, …) between discovery and probe.
+    if (isIoError(err)) {
+      return "tool-unavailable";
+    }
+    throw err;
+  }
+}
+
 export async function scanFile(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -395,39 +443,22 @@ export async function scanFile(
   atoms: EvidenceAtom[],
   candidates: CandidateFile[],
 ): Promise<void> {
-  if (isImageScopePath(file.relativePath)) {
-    candidates.push(buildCandidate(file.relativePath, "binary"));
+  if (isRunnerAborted(runner)) {
+    state.truncated = true;
     return;
   }
-  if (isDenied(file.relativePath)) {
-    candidates.push(buildCandidate(file.relativePath, "ignored"));
+  const policy = filePolicyOmission(runner, file);
+  if (policy.omitted !== undefined) {
+    candidates.push(buildCandidate(file.relativePath, policy.omitted));
     return;
   }
-  const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
-  const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
-  const realRel = normalizeScopePath(contained.realRelative);
-  if (isDenied(realRel)) {
-    candidates.push(buildCandidate(file.relativePath, "ignored"));
+  const binary = policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
+  if (binary !== undefined) {
+    candidates.push(buildCandidate(file.relativePath, binary));
     return;
   }
-  const omitted = policyOmissionReason(file.relativePath, runner.policy);
-  if (omitted !== undefined) {
-    candidates.push(buildCandidate(file.relativePath, omitted));
-    return;
-  }
-  let isBinary: boolean;
-  try {
-    isBinary = await probeBinary(runner.fs, contained.path, file.sizeBytes);
-  } catch (err) {
-    // TOCTOU: file may have become unreadable (EACCES, ENOENT, …) between discovery and probe.
-    if (isIoError(err)) {
-      candidates.push(buildCandidate(file.relativePath, "tool-unavailable"));
-      return;
-    }
-    throw err;
-  }
-  if (isBinary) {
-    candidates.push(buildCandidate(file.relativePath, "binary"));
+  if (isRunnerAborted(runner)) {
+    state.truncated = true;
     return;
   }
   state.filesScanned += 1;

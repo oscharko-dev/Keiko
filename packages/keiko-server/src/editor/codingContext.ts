@@ -18,6 +18,7 @@ import {
   type CodingContextPack,
   type CodingContextRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { selectScoredTextByByteBudget } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   runLocalKnowledgeProvider,
@@ -28,6 +29,12 @@ import {
   type RawExcerpt,
 } from "./codingContextProviders.js";
 
+const DEFERRED_CONTEXT_PROVIDERS: readonly CodingContextOmission["sourceKind"][] = [
+  "connected-context",
+  "quality-intelligence",
+  "workflow-context",
+];
+
 export interface AssembleCodingContextDeps {
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
@@ -35,44 +42,34 @@ export interface AssembleCodingContextDeps {
   readonly nowMs: number;
 }
 
-function utf8Bytes(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
 // Greedy byte-budget packer: highest score first, ties broken by id for determinism, dropped when the
-// pack byte budget is exhausted. Mirrors keiko-workspace contextPack assembly.
+// pack byte budget is exhausted. Reuses the keiko-workspace context-pack budget selector.
 function packExcerpts(
   candidates: readonly RawExcerpt[],
   budgetBytes: number,
 ): { excerpts: CodingContextExcerpt[]; usedBytes: number; droppedForBudget: number } {
-  const ordered = [...candidates].sort(
-    (a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  );
-  const excerpts: CodingContextExcerpt[] = [];
-  let usedBytes = 0;
-  let droppedForBudget = 0;
-  for (const candidate of ordered) {
-    const byteCount = utf8Bytes(candidate.text);
-    if (usedBytes + byteCount > budgetBytes) {
-      droppedForBudget += 1;
-      continue;
-    }
-    excerpts.push({
+  const packed = selectScoredTextByByteBudget(candidates, budgetBytes, {
+    id: (candidate) => candidate.id,
+    score: (candidate) => candidate.score,
+    text: (candidate) => candidate.text,
+  });
+  return {
+    excerpts: packed.selected.map(({ item: candidate, byteCount }, rank) => ({
       citation: {
         sourceKind: candidate.sourceKind,
         sourceTier: tierForCodingContextSource(candidate.sourceKind),
         id: candidate.id,
         score: candidate.score,
-        rank: excerpts.length,
+        rank,
         citationRef: candidate.citationRef,
         byteCount,
         truncated: candidate.truncated,
       },
       text: candidate.text,
-    });
-    usedBytes += byteCount;
-  }
-  return { excerpts, usedBytes, droppedForBudget };
+    })),
+    usedBytes: packed.usedBytes,
+    droppedForBudget: packed.droppedForBudget,
+  };
 }
 
 export async function assembleCodingContext(
@@ -119,6 +116,7 @@ export async function assembleCodingContext(
     omissions.push({ sourceKind: "memory", reason: "too-expensive" });
   }
 
+  collectDeferredProviderOmissions(omissions);
   const packed = packExcerpts(candidates, budget.budgetBytes);
   return {
     schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
@@ -139,5 +137,14 @@ function collect(
   candidates.push(...outcome.excerpts);
   if (outcome.omission !== undefined) {
     omissions.push(outcome.omission);
+  }
+}
+
+function collectDeferredProviderOmissions(omissions: CodingContextOmission[]): void {
+  const seen = new Set(omissions.map((entry) => entry.sourceKind));
+  for (const sourceKind of DEFERRED_CONTEXT_PROVIDERS) {
+    if (!seen.has(sourceKind)) {
+      omissions.push({ sourceKind, reason: "unavailable" });
+    }
   }
 }

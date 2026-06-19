@@ -67,8 +67,10 @@ export interface ProviderContext {
 
 const REPO_SEARCH_MAX_HITS = 6;
 const FILES_FOCUS_MAX_LINES = 240;
+const FILES_FOCUS_MAX_CHANGED_FILES = 4;
 const LOCAL_KNOWLEDGE_MAX_REFERENCES = 8;
 const MEMORY_MAX_ENTRIES = 8;
+const MAX_CITATION_REF_CHARS = 160;
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
@@ -79,6 +81,32 @@ function basename(scopePath: string): string {
 // prevents Trojan-source splits from confusing the redactor; the redactor then removes secrets.
 function redactExcerpt(deps: UiHandlerDeps, text: string): string {
   return String(deps.redactor(stripUnsafeFormatChars(text)));
+}
+
+function sanitizeCitationRef(ctx: ProviderContext, citationRef: string | undefined): string | undefined {
+  if (citationRef === undefined) {
+    return undefined;
+  }
+  const redacted = String(ctx.deps.redactor(stripUnsafeFormatChars(citationRef)));
+  let out = "";
+  let pendingSpace = false;
+  for (const char of redacted) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x20 || code === 0x7f) {
+      pendingSpace = out.length > 0;
+      continue;
+    }
+    if (pendingSpace) {
+      out += " ";
+      pendingSpace = false;
+    }
+    out += char;
+    if (out.length >= MAX_CITATION_REF_CHARS) {
+      break;
+    }
+  }
+  const trimmed = out.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // UTF-8-safe byte clamp (no multi-byte split).
@@ -116,7 +144,7 @@ function prepareExcerpt(
     sourceKind: raw.sourceKind,
     id: raw.id,
     score: raw.score,
-    citationRef: raw.citationRef,
+    citationRef: sanitizeCitationRef(ctx, raw.citationRef),
     text: clamped.text,
     // truncated if the upstream read clamped OR our per-excerpt cap clamped.
     truncated: (raw.truncated ?? false) || clamped.truncated,
@@ -149,6 +177,7 @@ function buildQuery(text: string, symbol: string | undefined, nowMs: number): Re
 }
 
 async function readHitExcerpt(
+  signal: AbortSignal,
   scope: SearchScope,
   atom: { scopePath: string; lineRange: { startLine: number; endLine: number } | undefined },
   maxBytes: number,
@@ -156,12 +185,16 @@ async function readHitExcerpt(
   const startLine = atom.lineRange?.startLine ?? 1;
   const endLine = atom.lineRange?.endLine ?? startLine;
   try {
-    const result = await readExcerpt(scope, {
-      scopePath: atom.scopePath,
-      startLine,
-      endLine,
-      maxBytes,
-    });
+    const result = await readExcerpt(
+      scope,
+      {
+        scopePath: atom.scopePath,
+        startLine,
+        endLine,
+        maxBytes,
+      },
+      { signal },
+    );
     return { content: result.content, truncated: result.truncated };
   } catch {
     return undefined;
@@ -182,18 +215,23 @@ async function readFocusExcerpt(
   ctx: ProviderContext,
   scope: SearchScope,
   documentPath: string,
+  score = 1,
 ): Promise<RawExcerpt | "denied" | undefined> {
   try {
-    const focus = await readExcerpt(scope, {
-      scopePath: documentPath,
-      startLine: 1,
-      endLine: FILES_FOCUS_MAX_LINES,
-      maxBytes: ctx.maxBytesPerExcerpt,
-    });
+    const focus = await readExcerpt(
+      scope,
+      {
+        scopePath: documentPath,
+        startLine: 1,
+        endLine: FILES_FOCUS_MAX_LINES,
+        maxBytes: ctx.maxBytesPerExcerpt,
+      },
+      { signal: ctx.signal },
+    );
     return prepareExcerpt(ctx, {
       sourceKind: "files-focus",
       id: focus.atom.stableId,
-      score: 1,
+      score,
       citationRef: basename(documentPath),
       text: focus.content,
       truncated: focus.truncated,
@@ -211,7 +249,9 @@ async function searchHitExcerpts(
 ): Promise<readonly RawExcerpt[] | "unavailable"> {
   let hits: Awaited<ReturnType<typeof searchText>>;
   try {
-    hits = await searchText(scope, buildQuery(term, symbol, ctx.nowMs), DEFAULT_SEARCH_LIMITS);
+    hits = await searchText(scope, buildQuery(term, symbol, ctx.nowMs), DEFAULT_SEARCH_LIMITS, {
+      signal: ctx.signal,
+    });
   } catch {
     return "unavailable";
   }
@@ -220,7 +260,7 @@ async function searchHitExcerpts(
     if (isAborted(ctx.signal)) {
       break;
     }
-    const hit = await readHitExcerpt(scope, atom, ctx.maxBytesPerExcerpt);
+    const hit = await readHitExcerpt(ctx.signal, scope, atom, ctx.maxBytesPerExcerpt);
     if (hit === undefined) {
       continue;
     }
@@ -239,6 +279,29 @@ async function searchHitExcerpts(
   return excerpts;
 }
 
+async function readFocusExcerpts(
+  ctx: ProviderContext,
+  scope: SearchScope,
+  documentPath: string,
+  changedFiles: readonly string[] | undefined,
+): Promise<readonly RawExcerpt[] | "denied"> {
+  const focus = await readFocusExcerpt(ctx, scope, documentPath);
+  if (focus === "denied") {
+    return "denied";
+  }
+  const excerpts: RawExcerpt[] = focus !== undefined ? [focus] : [];
+  for (const changed of (changedFiles ?? []).slice(0, FILES_FOCUS_MAX_CHANGED_FILES)) {
+    if (changed === documentPath || isAborted(ctx.signal)) {
+      continue;
+    }
+    const changedFocus = await readFocusExcerpt(ctx, scope, changed, 0.85);
+    if (changedFocus !== undefined && changedFocus !== "denied") {
+      excerpts.push(changedFocus);
+    }
+  }
+  return excerpts;
+}
+
 export async function runRepoSearchProvider(
   ctx: ProviderContext,
   input: {
@@ -251,17 +314,23 @@ export async function runRepoSearchProvider(
   if (isAborted(ctx.signal)) {
     return { excerpts: [], omission: omission("repo-search", "unavailable") };
   }
-  const scope = buildScope(ctx.realRoot, [input.documentPath, ...(input.changedFiles ?? [])]);
-  const focus = await readFocusExcerpt(ctx, scope, input.documentPath);
-  if (focus === "denied") {
+  const focusPaths = [input.documentPath, ...(input.changedFiles ?? [])];
+  const focusScope = buildScope(ctx.realRoot, focusPaths);
+  const searchScope = buildScope(ctx.realRoot, []);
+  const excerpts = await readFocusExcerpts(
+    ctx,
+    focusScope,
+    input.documentPath,
+    input.changedFiles,
+  );
+  if (excerpts === "denied") {
     return { excerpts: [], omission: omission("files-focus", "denied") };
   }
-  const excerpts: RawExcerpt[] = focus !== undefined ? [focus] : [];
   const term = input.symbol ?? input.queryText ?? basename(input.documentPath);
   if (term.trim().length === 0 || isAborted(ctx.signal)) {
     return { excerpts, omission: undefined };
   }
-  const hits = await searchHitExcerpts(ctx, scope, term, input.symbol);
+  const hits = await searchHitExcerpts(ctx, searchScope, term, input.symbol);
   if (hits === "unavailable") {
     return { excerpts, omission: omission("repo-search", "unavailable") };
   }
@@ -357,6 +426,9 @@ async function runMemoryRetrieval(
   queryText: string | undefined,
   scopes: readonly MemoryScope[],
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
+  if (isAborted(ctx.signal)) {
+    throw new Error("memory retrieval aborted");
+  }
   // Embedding egress gate (#204 O-F4): never send a secret-shaped query to the secondary embedding
   // model — identical to the conversation memory path.
   const safeForSecondaryModel =
@@ -369,11 +441,17 @@ async function runMemoryRetrieval(
     scopes,
     ctx.nowMs,
     safeForSecondaryModel,
+    ctx.signal,
   );
+  if (isAborted(ctx.signal)) {
+    throw new Error("memory retrieval aborted");
+  }
   return retrieveMemoryContext(
     {
       scopes,
       nowMs: ctx.nowMs,
+      maxIncluded: MEMORY_MAX_ENTRIES,
+      budgetTokens: Math.max(1, Math.ceil((ctx.maxBytesPerExcerpt * MEMORY_MAX_ENTRIES) / 4)),
       ...(queryText !== undefined ? { queryText } : {}),
       fusion: conversationFusionMode(ctx.deps),
       ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
