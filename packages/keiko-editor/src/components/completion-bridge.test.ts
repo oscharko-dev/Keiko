@@ -76,17 +76,24 @@ function fakeModel(
   };
 }
 
-function fakeToken(): MonacoCancellationToken & { cancel: () => void } {
+function fakeToken(): MonacoCancellationToken & {
+  cancel: () => void;
+  disposeListener: ReturnType<typeof vi.fn>;
+} {
   let listener: (() => void) | null = null;
+  const disposeListener = vi.fn(() => {
+    listener = null;
+  });
   return {
     isCancellationRequested: false,
     onCancellationRequested(fn): { dispose: () => void } {
       listener = fn;
-      return { dispose: vi.fn() };
+      return { dispose: disposeListener };
     },
     cancel(): void {
       listener?.();
     },
+    disposeListener,
   };
 }
 
@@ -339,6 +346,49 @@ describe("createKeikoCompletionProvider", () => {
     expect(firstList.suggestions).toEqual([]);
   });
 
+  it("aborts the previous active request when a newer request starts", async () => {
+    const first = deferred<EditorCompletionResponse>();
+    const second = deferred<EditorCompletionResponse>();
+    const queue = [first, second];
+    const captured: EditorRequestIdentity[] = [];
+    const signals: AbortSignal[] = [];
+    let index = 0;
+    const resolve: EditorCompletionResolver = (query, signal) => {
+      captured.push(query.request.request);
+      signals.push(signal);
+      const slot = queue[index];
+      index += 1;
+      return slot === undefined
+        ? Promise.resolve(response(query.request.request, []))
+        : slot.promise;
+    };
+    const provider = createKeikoCompletionProvider(providerDeps(resolve));
+
+    const firstCall = provider.provideCompletionItems(
+      fakeModel(),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+    const secondCall = provider.provideCompletionItems(
+      fakeModel(),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    const [firstReq, secondReq] = captured;
+    if (firstReq === undefined || secondReq === undefined) {
+      throw new Error("expected two captured requests");
+    }
+    first.resolve(response(firstReq, [item({ label: "stale" })]));
+    second.resolve(response(secondReq, [item({ label: "fresh" })]));
+    expect((await firstCall).suggestions).toEqual([]);
+    expect((await secondCall).suggestions.map((suggestion) => suggestion.label)).toEqual(["fresh"]);
+  });
+
   it("aborts the resolver signal when Monaco cancels the request", async () => {
     const token = fakeToken();
     let observedAborted: boolean | null = null;
@@ -354,6 +404,7 @@ describe("createKeikoCompletionProvider", () => {
     token.cancel();
     await call;
     expect(observedAborted).toBe(true);
+    expect(token.disposeListener).toHaveBeenCalledTimes(1);
   });
 
   it("aborts immediately when the token is already cancelled before the call", async () => {
@@ -372,6 +423,7 @@ describe("createKeikoCompletionProvider", () => {
       cancelledToken,
     );
     expect(abortedAtStart).toBe(true);
+    expect(token.disposeListener).toHaveBeenCalledTimes(1);
   });
 
   it("returns an empty list when the resolver rejects, so editing is never broken (AC4)", async () => {

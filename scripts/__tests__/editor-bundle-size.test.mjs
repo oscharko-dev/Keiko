@@ -6,9 +6,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   evaluateOwnCodeBudget,
+  extractInitialScriptSrcs,
   extractValueImportSpecifiers,
+  findForbiddenStaticExportMarkers,
+  findUnexpectedFirstLoadRuntimeImporters,
   findUnexpectedMonacoImporters,
   gzipSizeBytes,
+  isEditorFirstLoadForbiddenSpecifier,
   isMonacoSpecifier,
   runEditorBundleSizeCheck,
 } from "../editor-bundle-size.mjs";
@@ -57,6 +61,20 @@ describe("isMonacoSpecifier", () => {
     expect(isMonacoSpecifier("@oscharko-dev/keiko-editor")).toBe(false);
     expect(isMonacoSpecifier("react")).toBe(false);
     expect(isMonacoSpecifier("not-monaco-editor-clone")).toBe(false);
+  });
+});
+
+describe("isEditorFirstLoadForbiddenSpecifier", () => {
+  it("matches Monaco and the Keiko editor runtime package root", () => {
+    expect(isEditorFirstLoadForbiddenSpecifier("monaco-editor")).toBe(true);
+    expect(isEditorFirstLoadForbiddenSpecifier("@monaco-editor/react")).toBe(true);
+    expect(isEditorFirstLoadForbiddenSpecifier("@oscharko-dev/keiko-editor")).toBe(true);
+    expect(isEditorFirstLoadForbiddenSpecifier("@oscharko-dev/keiko-editor/subpath")).toBe(true);
+  });
+
+  it("does not match type-support or unrelated packages", () => {
+    expect(isEditorFirstLoadForbiddenSpecifier("@oscharko-dev/keiko-contracts")).toBe(false);
+    expect(isEditorFirstLoadForbiddenSpecifier("react")).toBe(false);
   });
 });
 
@@ -110,19 +128,37 @@ describe("extractValueImportSpecifiers", () => {
   });
 });
 
-describe("findUnexpectedMonacoImporters", () => {
+describe("findUnexpectedFirstLoadRuntimeImporters", () => {
   const allowlist = ["packages/keiko-ui/.../editorMonacoRuntime.ts"];
 
-  it("returns nothing when only the allow-listed module imports Monaco", () => {
+  it("returns nothing when only allow-listed modules import editor runtime packages", () => {
     const sources = [
       { path: allowlist[0], specifiers: ["monaco-editor", "@monaco-editor/react"] },
       {
-        path: "packages/keiko-ui/.../EditorSurface.tsx",
+        path: "packages/keiko-ui/.../Shell.tsx",
+        specifiers: ["@oscharko-dev/keiko-contracts"],
+      },
+    ];
+    expect(findUnexpectedFirstLoadRuntimeImporters({ sources, allowlist })).toEqual([]);
+  });
+
+  it("flags non-allow-listed modules that value-import Monaco or the editor root", () => {
+    const sources = [
+      { path: "packages/keiko-ui/.../SomeRoute.tsx", specifiers: ["monaco-editor"] },
+      {
+        path: "packages/keiko-ui/.../EditorShell.tsx",
         specifiers: ["@oscharko-dev/keiko-editor"],
       },
     ];
-    expect(findUnexpectedMonacoImporters({ sources, allowlist })).toEqual([]);
+    expect(findUnexpectedFirstLoadRuntimeImporters({ sources, allowlist })).toEqual([
+      "packages/keiko-ui/.../SomeRoute.tsx",
+      "packages/keiko-ui/.../EditorShell.tsx",
+    ]);
   });
+});
+
+describe("findUnexpectedMonacoImporters", () => {
+  const allowlist = ["packages/keiko-ui/.../editorMonacoRuntime.ts"];
 
   it("flags a non-allow-listed module that value-imports Monaco", () => {
     const sources = [
@@ -130,6 +166,32 @@ describe("findUnexpectedMonacoImporters", () => {
     ];
     expect(findUnexpectedMonacoImporters({ sources, allowlist })).toEqual([
       "packages/keiko-ui/.../SomeRoute.tsx",
+    ]);
+  });
+});
+
+describe("static export first-load helpers", () => {
+  it("extracts initial script sources from static export HTML", () => {
+    const html = [
+      '<script src="/_next/static/chunks/webpack.js" defer></script>',
+      '<script defer src="/_next/static/chunks/app/page.js?build=1"></script>',
+      "<script>window.__NEXT_DATA__ = {};</script>",
+    ].join("\n");
+    expect(extractInitialScriptSrcs(html)).toEqual([
+      "/_next/static/chunks/webpack.js",
+      "/_next/static/chunks/app/page.js?build=1",
+    ]);
+  });
+
+  it("finds Monaco/editor runtime markers in first-load JavaScript content", () => {
+    const findings = findForbiddenStaticExportMarkers({
+      files: [
+        { path: "a.js", content: "const ok = true;" },
+        { path: "b.js", content: "globalThis.MonacoEnvironment = {};" },
+      ],
+    });
+    expect(findings).toEqual([
+      { path: "b.js", label: "Monaco environment marker", marker: "MonacoEnvironment" },
     ]);
   });
 });
@@ -173,14 +235,31 @@ describe("runEditorBundleSizeCheck (integration against the real repo state)", (
   it("fails when an allow-listed Monaco importer no longer imports Monaco (stale allow-list)", () => {
     const { failures } = run({
       ...committedBudget,
-      monacoFirstLoadValueImporters: ["packages/keiko-ui/src/lib/api.ts"],
+      firstLoadRuntimeValueImporters: ["packages/keiko-ui/src/lib/api.ts"],
     });
-    expect(failures.some((m) => m.includes("no longer imports Monaco"))).toBe(true);
+    expect(failures.some((m) => m.includes("no longer imports an editor runtime package"))).toBe(
+      true,
+    );
   });
 
-  it("fails when a module value-imports Monaco outside the allow-list (first-load leak)", () => {
-    // With an empty allow-list, the real Monaco runtime module becomes an unexpected first-load importer.
-    const { failures } = run({ ...committedBudget, monacoFirstLoadValueImporters: [] });
+  it("fails when a module value-imports editor runtime packages outside the allow-list", () => {
+    // With an empty allow-list, the real runtime modules become unexpected first-load importers.
+    const { failures } = run({ ...committedBudget, firstLoadRuntimeValueImporters: [] });
     expect(failures.some((m) => m.includes("value-imported outside the allow-listed"))).toBe(true);
+  });
+
+  it("requires a built static export when the static-export scan is requested", () => {
+    const failures = [];
+    runEditorBundleSizeCheck({
+      repoRoot,
+      budget: committedBudget,
+      requireStaticExport: true,
+      fail: (message) => failures.push(message),
+      log: () => undefined,
+    });
+    expect(
+      failures.length === 0 ||
+        failures.some((m) => m.includes("packages/keiko-ui/out/index.html does not exist")),
+    ).toBe(true);
   });
 });

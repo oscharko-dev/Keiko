@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import "../../vitest.setup";
+
 import { render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useRef, type ReactElement } from "react";
@@ -231,7 +234,9 @@ describe("KeikoDiffEditor — non-diffable, empty, and truncated states", () => 
       },
     });
     render(<KeikoDiffEditor {...baseDiffProps({ model })} />);
-    expect(screen.getByRole("button", { name: /keiko:\/\/doc\/gone\.ts deleted/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /keiko:\/\/doc\/gone\.ts deleted/ }),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("keiko-diff-unavailable")).toHaveTextContent(
       /deleted-file preview cannot be rendered/i,
     );
@@ -360,7 +365,9 @@ describe("KeikoDiffEditor — runtime and load state", () => {
   it("surfaces a load failure as an assertive alert and renders no diff", () => {
     render(
       <KeikoDiffEditor
-        {...baseDiffProps({ loadState: { status: "error", message: "worker boot failed token=secret" } })}
+        {...baseDiffProps({
+          loadState: { status: "error", message: "worker boot failed token=secret" },
+        })}
       />,
     );
     const summary = screen.getByTestId("keiko-diff-summary");

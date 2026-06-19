@@ -207,18 +207,22 @@ function buildRequest(
 interface InlineProviderState {
   sequence: number;
   latest: EditorRequestIdentity | null;
+  activeController: AbortController | null;
 }
 
 // Wires an AbortController to Monaco's cancellation token (immediate + on-request abort).
-function controllerForToken(token: MonacoCancellationToken): AbortController {
+function controllerForToken(token: MonacoCancellationToken): {
+  readonly controller: AbortController;
+  readonly cancellationSub: MonacoDisposable;
+} {
   const controller = new AbortController();
   if (token.isCancellationRequested) {
     controller.abort();
   }
-  token.onCancellationRequested(() => {
+  const cancellationSub = token.onCancellationRequested(() => {
     controller.abort();
   });
-  return controller;
+  return { controller, cancellationSub };
 }
 
 // The provider's `provideInlineCompletions` body, extracted so the factory stays a thin assembler.
@@ -233,7 +237,9 @@ async function provideInline(
   state.sequence += 1;
   const request = buildRequest(deps, model, position, context, state.sequence);
   state.latest = request.request;
-  const controller = controllerForToken(token);
+  state.activeController?.abort();
+  const { controller, cancellationSub } = controllerForToken(token);
+  state.activeController = controller;
   const now = deps.now ?? Date.now;
   const startedAt = now();
   try {
@@ -258,6 +264,10 @@ async function provideInline(
     // break typing — render no ghost text.
     return undefined;
   } finally {
+    cancellationSub.dispose();
+    if (state.activeController === controller) {
+      state.activeController = null;
+    }
     deps.telemetry?.recordLatency(now() - startedAt);
   }
 }
@@ -287,7 +297,7 @@ function recordEndOfLife(
 export function createKeikoInlineCompletionProvider(
   deps: KeikoInlineCompletionProviderDeps,
 ): MonacoInlineCompletionsProvider {
-  const state: InlineProviderState = { sequence: 0, latest: null };
+  const state: InlineProviderState = { sequence: 0, latest: null, activeController: null };
   return {
     debounceDelayMs: deps.debounceDelayMs,
     provideInlineCompletions: (

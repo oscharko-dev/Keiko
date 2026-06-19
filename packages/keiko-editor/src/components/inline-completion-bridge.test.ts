@@ -54,17 +54,24 @@ function fakeModel(value = "const a = 1;\n"): MonacoInlineCompletionModel {
   return { getValue: () => value, uri: { toString: () => "inmemory://model/a.ts" } };
 }
 
-function fakeToken(): MonacoCancellationToken & { cancel: () => void } {
+function fakeToken(): MonacoCancellationToken & {
+  cancel: () => void;
+  disposeListener: ReturnType<typeof vi.fn>;
+} {
   let listener: (() => void) | null = null;
+  const disposeListener = vi.fn(() => {
+    listener = null;
+  });
   return {
     isCancellationRequested: false,
     onCancellationRequested(fn): { dispose: () => void } {
       listener = fn;
-      return { dispose: vi.fn() };
+      return { dispose: disposeListener };
     },
     cancel(): void {
       listener?.();
     },
+    disposeListener,
   };
 }
 
@@ -120,6 +127,14 @@ function providerDeps(
     debounceDelayMs: DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
     ...overrides,
   };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolveFn: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((res) => {
+    resolveFn = res;
+  });
+  return { promise, resolve: resolveFn };
 }
 
 describe("pure mappers", () => {
@@ -244,17 +259,65 @@ describe("createKeikoInlineCompletionProvider", () => {
 
   it("aborts the resolver signal when Monaco cancels", async () => {
     const signals: AbortSignal[] = [];
+    const result = deferred<EditorInlineCompletionResponse>();
     const provider = createKeikoInlineCompletionProvider(
       providerDeps((query, signal) => {
         signals.push(signal);
-        return Promise.resolve(response(query.request.request, [inlineItem()]));
+        return result.promise;
       }),
     );
     const token = fakeToken();
-    await provider.provideInlineCompletions(fakeModel(), position(), context(), token);
+    const call = provider.provideInlineCompletions(fakeModel(), position(), context(), token);
     expect(signals[0]?.aborted).toBe(false);
     token.cancel();
     expect(signals[0]?.aborted).toBe(true);
+    result.resolve(response({ requestId: "req-1", streamId: "stream-1", sequence: 1 }, []));
+    await call;
+    expect(token.disposeListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the previous active request when a newer request starts", async () => {
+    const first = deferred<EditorInlineCompletionResponse>();
+    const second = deferred<EditorInlineCompletionResponse>();
+    const queue = [first, second];
+    const captured: EditorRequestIdentity[] = [];
+    const signals: AbortSignal[] = [];
+    let index = 0;
+    const provider = createKeikoInlineCompletionProvider(
+      providerDeps((query, signal) => {
+        captured.push(query.request.request);
+        signals.push(signal);
+        const slot = queue[index];
+        index += 1;
+        return slot === undefined
+          ? Promise.resolve(response(query.request.request, []))
+          : slot.promise;
+      }),
+    );
+
+    const firstCall = provider.provideInlineCompletions(
+      fakeModel(),
+      position(),
+      context(),
+      fakeToken(),
+    );
+    const secondCall = provider.provideInlineCompletions(
+      fakeModel(),
+      position(),
+      context(),
+      fakeToken(),
+    );
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    const [firstReq, secondReq] = captured;
+    if (firstReq === undefined || secondReq === undefined) {
+      throw new Error("expected two captured requests");
+    }
+    first.resolve(response(firstReq, [inlineItem({ insertText: "stale" })]));
+    second.resolve(response(secondReq, [inlineItem({ insertText: "fresh" })]));
+    expect(await firstCall).toBeUndefined();
+    expect((await secondCall)?.items.map((item) => item.insertText)).toEqual(["fresh"]);
   });
 
   it("renders nothing when the resolver rejects, never breaking typing (AC1)", async () => {

@@ -37,6 +37,7 @@ import {
   type EditorCompletionWireResponse,
   type LanguageCompletionItem,
   type LanguageCompletionResult,
+  type LanguageServiceLimits,
   type LanguageServiceRequest,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
@@ -88,6 +89,10 @@ export interface EditorCompletionRouteOptions {
   readonly tokenBudget?: EditorModelTokenBudget | undefined;
   /** Injectable clock for the token budget; defaults to `Date.now`. */
   readonly now?: (() => number) | undefined;
+  /** Test-only deterministic language-service limits seam; production keeps the default deadline. */
+  readonly languageServiceLimits?: LanguageServiceLimits | undefined;
+  /** Test-only deterministic language-service clock seam; production keeps the real clock. */
+  readonly languageServiceNow?: (() => number) | undefined;
 }
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
@@ -560,6 +565,8 @@ function runDeterministicCompletion(input: {
   readonly realRoot: string;
   readonly overlayAbsolutePath: string;
   readonly signal: AbortSignal;
+  readonly limits?: LanguageServiceLimits | undefined;
+  readonly now?: (() => number) | undefined;
 }): LanguageCompletionResult | RouteResult {
   const langRequest: LanguageServiceRequest = {
     operation: "completion",
@@ -572,7 +579,8 @@ function runDeterministicCompletion(input: {
     realRoot: input.realRoot,
     overlayAbsolutePath: input.overlayAbsolutePath,
     signal: input.signal,
-    limits: COMPLETION_LANGUAGE_SERVICE_LIMITS,
+    limits: input.limits ?? COMPLETION_LANGUAGE_SERVICE_LIMITS,
+    now: input.now,
   });
   if (outcome.kind === "error") {
     return {
@@ -617,6 +625,8 @@ export async function handleEditorCompletion(
       realRoot: root.realRoot,
       overlayAbsolutePath,
       signal,
+      limits: options.languageServiceLimits,
+      now: options.languageServiceNow,
     });
     if (isRouteResult(deterministic)) {
       return deterministic;

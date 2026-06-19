@@ -24,7 +24,7 @@ import {
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
-import { EditorWidget } from "./EditorWidget";
+import EditorRuntimeWidget from "./EditorRuntimeWidget";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -123,11 +123,11 @@ afterEach(() => {
 });
 
 async function renderLoaded(
-  props: Partial<Parameters<typeof EditorWidget>[0]> = {},
+  props: Partial<Parameters<typeof EditorRuntimeWidget>[0]> = {},
 ): Promise<ReturnType<typeof render>> {
   vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
   const view = render(
-    <EditorWidget windowId="editor-test" root="/repo" file="src/app.ts" {...props} />,
+    <EditorRuntimeWidget windowId="editor-test" root="/repo" file="src/app.ts" {...props} />,
   );
   await screen.findByTestId("editor-surface");
   return view;
@@ -143,7 +143,7 @@ function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
 
 describe("EditorWidget — empty state", () => {
   it("renders an honest empty state and mounts no editor until a file is opened", () => {
-    render(<EditorWidget />);
+    render(<EditorRuntimeWidget />);
     expect(screen.getByRole("note")).toHaveTextContent(/choose a file from the files window/i);
     expect(screen.queryByTestId("editor-surface")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
@@ -170,7 +170,7 @@ describe("EditorWidget — load", () => {
     vi.mocked(fetchFilesContent).mockRejectedValueOnce(
       new ApiError("FILE_TOO_LARGE", "This file is too large to edit here.", 413),
     );
-    render(<EditorWidget root="/repo" file="big.bin" />);
+    render(<EditorRuntimeWidget root="/repo" file="big.bin" />);
     expect(await screen.findByText(/this file is too large to edit here/i)).toBeInTheDocument();
     expect(screen.queryByTestId("editor-surface")).toBeNull();
   });
@@ -613,7 +613,7 @@ describe("EditorWidget — load-error recovery", () => {
     vi.mocked(fetchFilesContent).mockRejectedValueOnce(
       new ApiError("UNSUPPORTED_FILE", "This file cannot be edited.", 400),
     );
-    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     const retry = await screen.findByRole("button", { name: "Retry" });
     expect(screen.queryByTestId("editor-surface")).toBeNull();
 
@@ -640,7 +640,7 @@ describe("EditorWidget — language inference", () => {
     ["notes/readme.md", "plaintext"],
   ])("maps %s to editor language %s", async (file, language) => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ path: file }));
-    render(<EditorWidget root="/repo" file={file} />);
+    render(<EditorRuntimeWidget root="/repo" file={file} />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe(language);
     expect(surface.props?.buffer.language).toBe(language);
@@ -675,7 +675,7 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
   it("wires a completion resolver for a TS/JS file and posts the overlay to the BFF", async () => {
     vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await screen.findByTestId("editor-surface");
 
     const resolver = surface.props?.provideCompletions;
@@ -705,7 +705,7 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
     render(
-      <EditorWidget
+      <EditorRuntimeWidget
         root="/repo"
         file="src/app.ts"
         linkedRoot="/repo"
@@ -737,7 +737,7 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
     render(
-      <EditorWidget
+      <EditorRuntimeWidget
         root="/repo"
         file="src/app.ts"
         linkedRoot="/other"
@@ -767,7 +767,7 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
-    render(<EditorWidget root="/repo" file="notes.md" />);
+    render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe("plaintext");
     expect(surface.props?.provideCompletions).toBeUndefined();
@@ -805,7 +805,7 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
   it("wires an inline resolver for a TS/JS file and posts the overlay to the inline BFF", async () => {
     vi.mocked(requestEditorInlineCompletion).mockResolvedValueOnce(inlineWireResponse());
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await screen.findByTestId("editor-surface");
 
     const resolver = surface.props?.provideInlineCompletions;
@@ -830,7 +830,7 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
 
   it("forwards content-free telemetry snapshots to the telemetry route", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await screen.findByTestId("editor-surface");
 
     const report = surface.props?.onInlineCompletionTelemetry;
@@ -866,7 +866,7 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
-    render(<EditorWidget root="/repo" file="notes.md" />);
+    render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
     expect(surface.props?.onInlineCompletionTelemetry).toBeUndefined();
@@ -876,13 +876,13 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     vi.mocked(fetchFilesContent)
       .mockResolvedValueOnce(fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }))
       .mockResolvedValueOnce(fileResponse());
-    const { rerender } = render(<EditorWidget root="/repo" file="notes.md" />);
+    const { rerender } = render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe("plaintext");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
     expect(surface.mounts).toBe(1);
 
-    rerender(<EditorWidget root="/repo" file="src/app.ts" />);
+    rerender(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await waitFor(() => {
       expect(surface.props?.fileModel.identity.language).toBe("typescript");
     });
@@ -926,7 +926,7 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
       ],
       truncated: false,
     });
-    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await screen.findByTestId("editor-surface");
 
     const identity = { requestId: "r", streamId: "s", sequence: 1 };
@@ -995,7 +995,7 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
-    render(<EditorWidget root="/repo" file="notes.md" />);
+    render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.provideDiagnostics).toBeUndefined();
     expect(surface.props?.provideHover).toBeUndefined();
@@ -1032,8 +1032,8 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
 
     render(
       <>
-        <EditorWidget windowId="win/a" root="/repo" file="src/a.ts" />
-        <EditorWidget windowId="win:b" root="/repo" file="src/b.ts" />
+        <EditorRuntimeWidget windowId="win/a" root="/repo" file="src/a.ts" />
+        <EditorRuntimeWidget windowId="win:b" root="/repo" file="src/b.ts" />
       </>,
     );
 
@@ -1058,7 +1058,7 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
   it("keeps tabpanel wiring for loading, error, and empty editor states", async () => {
     vi.mocked(fetchFilesContent).mockReturnValueOnce(new Promise<FilesContentResponse>(() => {}));
     const loading = render(
-      <EditorWidget windowId="editor-loading" root="/repo" file="src/app.ts" />,
+      <EditorRuntimeWidget windowId="editor-loading" root="/repo" file="src/app.ts" />,
     );
     const loadingTab = screen.getByRole("tab", { name: /src\/app\.ts/ });
     const loadingPanel = screen.getByRole("tabpanel");
@@ -1071,7 +1071,7 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
       new ApiError("UNSUPPORTED_FILE", "This file cannot be edited.", 400),
     );
     const error = render(
-      <EditorWidget windowId="editor-error" root="/repo" file="src/app.ts" />,
+      <EditorRuntimeWidget windowId="editor-error" root="/repo" file="src/app.ts" />,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be edited/i);
     const errorTab = screen.getByRole("tab", { name: /src\/app\.ts/ });
@@ -1080,7 +1080,7 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(errorPanel).toHaveAttribute("aria-labelledby", errorTab.id);
     error.unmount();
 
-    render(<EditorWidget windowId="editor-empty" />);
+    render(<EditorRuntimeWidget windowId="editor-empty" />);
     const emptyTab = screen.getByRole("tab", { name: "Editor" });
     const emptyPanel = screen.getByRole("tabpanel");
     expect(emptyPanel).toContainElement(screen.getByRole("note"));
@@ -1093,7 +1093,7 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: longPath, name: "with-a-long-file-name-for-tabs.ts" }),
     );
-    render(<EditorWidget windowId="editor-long-path" root="/repo" file={longPath} />);
+    render(<EditorRuntimeWidget windowId="editor-long-path" root="/repo" file={longPath} />);
     await screen.findByTestId("editor-surface");
 
     const tab = screen.getByRole("tab", { name: longPath });
@@ -1157,11 +1157,45 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
-    render(<EditorWidget root="/repo" file="notes.md" />);
+    render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.onGenerateTests).toBeUndefined();
     expect(surface.props?.onDiagnosticsSummary).toBeUndefined();
     expect(statusField("completions")).toHaveTextContent("Completions off");
     expect(statusField("problems")).toBeNull();
+  });
+
+  it("disables editor-intelligence providers and surfaces status in large-file degraded mode", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        content: "x".repeat(500_001),
+        sizeBytes: 500_001,
+      }),
+    );
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    expect(surface.props?.buffer.readOnly).toBe(true);
+    expect(surface.props?.provideCompletions).toBeUndefined();
+    expect(surface.props?.provideInlineCompletions).toBeUndefined();
+    expect(surface.props?.onInlineCompletionTelemetry).toBeUndefined();
+    expect(surface.props?.provideDiagnostics).toBeUndefined();
+    expect(surface.props?.provideHover).toBeUndefined();
+    expect(surface.props?.provideSymbols).toBeUndefined();
+    expect(surface.props?.provideFormatting).toBeUndefined();
+    expect(surface.props?.onDiagnosticsSummary).toBeUndefined();
+    expect(surface.props?.onGenerateTests).toBeUndefined();
+    expect(statusField("large-file")).toHaveTextContent("Large file mode");
+    expect(statusField("completions")).toHaveTextContent("Completions off");
+    expect(screen.getByTestId("editor-status-bar-live")).toHaveTextContent(
+      "Large file mode: completions and analysis disabled",
+    );
+    expect(requestEditorCompletion).not.toHaveBeenCalled();
+    expect(requestEditorInlineCompletion).not.toHaveBeenCalled();
+    expect(requestEditorDiagnostics).not.toHaveBeenCalled();
+    expect(requestEditorHover).not.toHaveBeenCalled();
+    expect(requestEditorSymbols).not.toHaveBeenCalled();
+    expect(requestEditorFormatting).not.toHaveBeenCalled();
+    expect(requestEditorTestGeneration).not.toHaveBeenCalled();
   });
 });

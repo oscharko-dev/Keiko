@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import "../../vitest.setup";
+
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";

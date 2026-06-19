@@ -7,7 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
-import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./languageRoutes.js";
+import {
+  handleEditorLanguage,
+  handleEditorLanguageCapabilities,
+  type EditorLanguageRouteOptions,
+} from "./languageRoutes.js";
 
 function rawPostContext(raw: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
@@ -63,6 +67,8 @@ function redactEveryString(value: unknown): unknown {
   return value;
 }
 
+const stableLanguageOptions: EditorLanguageRouteOptions = { now: () => 0 };
+
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "keiko-ls-route-")));
   await mkdir(join(root, "src"));
@@ -95,6 +101,7 @@ describe("POST /api/editor/language", () => {
         document: { path: "src/a.ts", languageId: "typescript", text: "const x: number = 'no';\n" },
       }),
       deps(),
+      stableLanguageOptions,
     );
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ operation: "diagnostics" });
@@ -115,6 +122,7 @@ describe("POST /api/editor/language", () => {
         position: { line: 1, character: 6 },
       }),
       deps(),
+      stableLanguageOptions,
     );
     expect(result.status).toBe(200);
     const body = result.body as { result: { items: { label: string }[] } };
@@ -130,6 +138,7 @@ describe("POST /api/editor/language", () => {
         options: { tabSize: 2, insertSpaces: true },
       }),
       deps(),
+      stableLanguageOptions,
     );
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ operation: "formatting" });
@@ -146,6 +155,7 @@ describe("POST /api/editor/language", () => {
         options: { tabSize: 2, insertSpaces: true },
       }),
       deps(redactEveryString),
+      stableLanguageOptions,
     );
     expect(result.status).toBe(200);
     const body = result.body as { operation: string; result: { edits: { newText: string }[] } };
@@ -165,6 +175,7 @@ describe("POST /api/editor/language", () => {
         false,
       ),
       deps(),
+      stableLanguageOptions,
     );
     expect(result.status).toBe(499);
     expect(result.body).toMatchObject({ error: { code: "CANCELLED" } });

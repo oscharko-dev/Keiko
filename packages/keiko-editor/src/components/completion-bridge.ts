@@ -296,6 +296,7 @@ export function createKeikoCompletionProvider(
 ): MonacoCompletionItemProvider {
   let sequence = 0;
   let latest: EditorRequestIdentity | null = null;
+  let activeController: AbortController | null = null;
 
   return {
     triggerCharacters: deps.triggerCharacters,
@@ -304,11 +305,13 @@ export function createKeikoCompletionProvider(
       const request = buildRequest(deps, model, position, context, sequence);
       latest = request.request;
 
+      activeController?.abort();
       const controller = new AbortController();
+      activeController = controller;
       if (token.isCancellationRequested) {
         controller.abort();
       }
-      token.onCancellationRequested(() => {
+      const cancellationSub = token.onCancellationRequested(() => {
         controller.abort();
       });
 
@@ -331,6 +334,11 @@ export function createKeikoCompletionProvider(
       } catch {
         // AC4: a completion failure (network, abort, host error) must never break editing.
         return EMPTY_LIST;
+      } finally {
+        cancellationSub.dispose();
+        if (activeController === controller) {
+          activeController = null;
+        }
       }
     },
   };

@@ -142,6 +142,7 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
             height={EDITOR_HEIGHT}
             loading={<EditorLoadingBox />}
             options={options}
+            keepCurrentModel={false}
             // Scroll/fold/cursor view state is restored per `path` by `@monaco-editor/react`'s default
             // `saveViewState` mechanism as the host swaps files within a mounted editor; the package's
             // own view-state seam (use-editor-handlers.ts) is a secondary, host-injectable hook.
