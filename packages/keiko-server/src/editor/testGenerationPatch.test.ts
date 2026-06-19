@@ -61,6 +61,36 @@ describe("translateDiffToWirePatch", () => {
     expect(translateDiffToWirePatch(MODIFY_DIFF, "pid", NO_ORIGINAL)).toBeUndefined();
   });
 
+  it("rejects unsafe parsed diff paths before reading originals or surfacing a patch", () => {
+    const diff = [
+      "--- a/../secret.ts",
+      "+++ b/../secret.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const reader: OriginalContentReader = () => {
+      throw new Error("unsafe path was read");
+    };
+    expect(translateDiffToWirePatch(diff, "pid", reader)).toBeUndefined();
+  });
+
+  it("rejects deny-listed parsed diff paths before reading originals or surfacing a patch", () => {
+    const diff = [
+      "--- a/.env",
+      "+++ b/.env",
+      "@@ -1,1 +1,1 @@",
+      "-TOKEN=old",
+      "+TOKEN=new",
+      "",
+    ].join("\n");
+    const reader: OriginalContentReader = () => {
+      throw new Error("denied path was read");
+    };
+    expect(translateDiffToWirePatch(diff, "pid", reader)).toBeUndefined();
+  });
+
   it("returns undefined for an unparseable or empty diff", () => {
     expect(translateDiffToWirePatch("not a diff", "pid", NO_ORIGINAL)).toBeUndefined();
     expect(translateDiffToWirePatch("", "pid", NO_ORIGINAL)).toBeUndefined();

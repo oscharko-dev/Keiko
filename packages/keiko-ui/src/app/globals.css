@@ -4991,6 +4991,9 @@ select.dlg-input {
   font-size: 11.5px;
   color: var(--fg-dim);
 }
+.ed-status[data-empty="true"] {
+  padding-block: 0;
+}
 .ed-host {
   position: relative;
   flex: 1 1 auto;

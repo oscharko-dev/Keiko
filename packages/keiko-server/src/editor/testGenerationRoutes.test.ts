@@ -36,6 +36,17 @@ function postContext(body: unknown): RouteContext {
   };
 }
 
+function rawPostContext(body: string): RouteContext {
+  const req = Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "POST";
+  return {
+    req,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL("http://localhost/api/editor/test-generation"),
+  };
+}
+
 function deps(
   input: { env?: Record<string, string | undefined>; evidenceStore?: EvidenceStore } = {},
 ): UiHandlerDeps {
@@ -147,6 +158,12 @@ describe("POST /api/editor/test-generation — switched off (v1 default)", () =>
     expect(body.funnel.executionEnabled).toBe(false);
   });
 
+  it("does not parse the editor buffer when the feature is disabled", async () => {
+    const result = await handleEditorTestGeneration(rawPostContext("{not-json"), deps());
+    expect(result.status).toBe(200);
+    expect(wire(result).status).toBe("disabled");
+  });
+
   it("rejects a malformed request with 400", async () => {
     const result = await handleEditorTestGeneration(postContext({ root }), deps({ env: ENABLED }));
     expect(result.status).toBe(400);
@@ -184,6 +201,19 @@ describe("POST /api/editor/test-generation — enabled, egress not enforced (def
     // Reuse of the governed retrieval substrate (#1211) is proven by the content-free context pack.
     expect(body.context?.purpose).toBe("test-generation");
     expect(body.funnel.executionEnabled).toBe(false);
+  });
+
+  it("omits embedding-backed providers while deferred before the egress boundary", async () => {
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody({ context: { queryText: "edge cases", capsuleId: "cap-1" } })),
+      deps({ env: ENABLED }),
+    );
+    expect(result.status).toBe(200);
+    const omissions = new Map(
+      wire(result).context?.omissions.map((omission) => [omission.sourceKind, omission.reason]),
+    );
+    expect(omissions.get("local-knowledge")).toBe("too-expensive");
+    expect(omissions.get("memory")).toBe("too-expensive");
   });
 });
 

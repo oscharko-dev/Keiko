@@ -67,6 +67,13 @@ describe("parseEditorTestGenerationRequest — rejections", () => {
     expect(parseEditorTestGenerationRequest(fileRequest({ root: "" })).ok).toBe(false);
   });
 
+  it("rejects a missing or mismatched schema version", () => {
+    expect(parseEditorTestGenerationRequest(fileRequest({ schemaVersion: undefined })).ok).toBe(
+      false,
+    );
+    expect(parseEditorTestGenerationRequest(fileRequest({ schemaVersion: "2" })).ok).toBe(false);
+  });
+
   it("rejects an unknown target kind and a missing document overlay", () => {
     expect(parseEditorTestGenerationRequest(fileRequest({ target: { kind: "nope" } })).ok).toBe(
       false,

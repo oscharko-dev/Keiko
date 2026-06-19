@@ -5,6 +5,7 @@
 // fully unit-testable without the filesystem.
 
 import { computeFileContent, parseUnifiedDiff, PatchParseError } from "@oscharko-dev/keiko-tools";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 import type {
   EditorTestGenerationWireChangeKind,
   EditorTestGenerationWireEdit,
@@ -13,6 +14,7 @@ import type {
   PatchChangeKind,
   PatchFileChange,
 } from "@oscharko-dev/keiko-contracts";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts";
 
 /** Resolves the current workspace content of a file, or undefined when it does not exist / is unreadable. */
 export type OriginalContentReader = (relativePath: string) => string | undefined;
@@ -41,6 +43,9 @@ function fileChangeToWire(
   change: PatchFileChange,
   readOriginal: OriginalContentReader,
 ): EditorTestGenerationWireFileChange | undefined {
+  if (!isValidScopePath(change.path, { mustBeRelative: true }) || isDenied(change.path)) {
+    return undefined;
+  }
   const original = change.kind === "create" ? undefined : readOriginal(change.path);
   if (change.kind !== "create" && original === undefined) {
     return undefined;

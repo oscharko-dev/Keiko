@@ -341,6 +341,9 @@ function collectTargetErrors(target: unknown, errors: string[]): void {
 
 function collectRequestErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
+  if (value.schemaVersion !== EDITOR_TEST_GENERATION_SCHEMA_VERSION) {
+    errors.push(`schemaVersion must be ${EDITOR_TEST_GENERATION_SCHEMA_VERSION}`);
+  }
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
   }
