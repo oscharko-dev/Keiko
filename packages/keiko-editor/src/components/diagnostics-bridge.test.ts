@@ -172,6 +172,8 @@ interface DeferredResolver {
   readonly resolve: EditorDiagnosticsResolver;
   readonly calls: {
     readonly signal: AbortSignal;
+    readonly documentText: string;
+    readonly language: string;
     settle(diagnostics: readonly EditorDiagnostic[]): void;
     fail(error: unknown): void;
   }[];
@@ -183,6 +185,8 @@ function deferredResolver(): DeferredResolver {
     new Promise((res, rej) => {
       calls.push({
         signal,
+        documentText: query.documentText,
+        language: query.request.document.language,
         settle: (diagnostics): void => {
           res({ request: query.request.request, diagnostics });
         },
@@ -275,6 +279,9 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     const editor = buildEditor(model.model);
     const { markers, resolver } = register(model, editor);
     expect(resolver.calls).toHaveLength(1);
+    // AC1: the resolver is handed the live buffer text and the governed language id.
+    expect(resolver.calls[0]?.documentText).toBe("const x = 1;\n");
+    expect(resolver.calls[0]?.language).toBe("typescript");
     resolver.calls[0]?.settle([diagnostic()]);
     await tick();
     expect(markers.calls).toHaveLength(1);

@@ -133,7 +133,11 @@ export function sanitizeFormatting(
   limits: LanguageServiceLimits,
 ): LanguageFormattingResult {
   const capped = raw.edits.slice(0, limits.maxFormattingEdits);
-  const withinLength = capped.filter((edit) => edit.newText.length <= limits.maxDocumentBytes);
+  // Measure UTF-8 bytes so the per-edit ceiling matches the `maxDocumentBytes` byte budget rather
+  // than UTF-16 code units (which would under-count multi-byte content).
+  const withinLength = capped.filter(
+    (edit) => Buffer.byteLength(edit.newText, "utf8") <= limits.maxDocumentBytes,
+  );
   return {
     edits: withinLength,
     truncated:

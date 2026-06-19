@@ -6,6 +6,12 @@
 //
 // The only structural conversion is the position field name: the language-service contract uses LSP's
 // zero-based `character`, while the editor uses zero-based `column` (both UTF-16 code units).
+//
+// The wire results carry a `truncated` flag (set when the server caps diagnostics/symbols/formatting
+// edits at the configured bounds). It is intentionally NOT threaded into the editor render contracts:
+// like the deterministic completion surface (#1198/#1199), it is a server-side/evidence-only signal,
+// and the caps are defensive ceilings a legitimate document does not reach. Surfacing a truncation
+// notice in the editor is out of scope for #1201; the bounds are enforced and tested server-side.
 
 import type {
   EditorDiagnostic,

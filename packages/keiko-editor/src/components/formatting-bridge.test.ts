@@ -111,6 +111,31 @@ describe("createKeikoFormattingProvider", () => {
     expect(edits).toEqual([]);
   });
 
+  it("drops edits when cancelled mid-flight, after the request starts (cancellable)", async () => {
+    // Exercise the post-await abort guard: cancellation fires while the request is in flight, before
+    // it settles, so the resolved edits must NOT be applied to the buffer.
+    let fireCancel: (() => void) | undefined;
+    const liveToken: MonacoCancellationToken = {
+      isCancellationRequested: false,
+      onCancellationRequested: (listener) => {
+        fireCancel = listener;
+        return { dispose: (): void => undefined };
+      },
+    };
+    let settle: (() => void) | undefined;
+    const resolve: EditorFormattingResolver = (query) =>
+      new Promise((res) => {
+        settle = (): void => {
+          res({ request: query.request.request, edits: [edit(" = ")] });
+        };
+      });
+    const pending = provider(resolve).provideDocumentFormattingEdits(model(), OPTIONS, liveToken);
+    expect(fireCancel).toBeDefined();
+    fireCancel?.();
+    settle?.();
+    expect(await pending).toEqual([]);
+  });
+
   it("aborts the resolver signal when the token is already cancelled", async () => {
     let aborted = false;
     const resolve: EditorFormattingResolver = (query, signal) => {
