@@ -114,6 +114,9 @@ describe("reportEditorInlineCompletionTelemetry (Issue #1200)", () => {
       rejected: 1,
       ignored: 1,
       partiallyAccepted: 0,
+      requestCount: 5,
+      requestLatencyMsP50: 48,
+      requestLatencyMsP95: 120,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -129,6 +132,9 @@ describe("reportEditorInlineCompletionTelemetry (Issue #1200)", () => {
           rejected: 1,
           ignored: 1,
           partiallyAccepted: 0,
+          requestCount: 5,
+          requestLatencyMsP50: 48,
+          requestLatencyMsP95: 120,
         }),
       }),
     );

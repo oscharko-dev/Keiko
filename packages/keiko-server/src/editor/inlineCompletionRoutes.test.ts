@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
 import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type {
+  CostClass,
   EditorInlineCompletionWireResponse,
   LatencyClass,
 } from "@oscharko-dev/keiko-contracts";
@@ -48,16 +50,23 @@ function deps(
 ): UiHandlerDeps {
   return {
     store,
-    redactor: buildRedactor({}),
+    redactor: buildRedactor(input.env ?? {}, input.config),
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
     ...(input.config === undefined ? {} : { config: input.config }),
   } as unknown as UiHandlerDeps;
 }
 
-function fimCapability(latencyClass: LatencyClass): ModelCapability {
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function fimCapability(
+  latencyClass: LatencyClass,
+  overrides: { readonly id?: string; readonly costClass?: CostClass } = {},
+): ModelCapability {
   return {
-    id: "fim-1",
+    id: overrides.id ?? "fim-1",
     kind: "chat",
     contextWindow: 8_192,
     maxOutputTokens: 1_024,
@@ -67,7 +76,7 @@ function fimCapability(latencyClass: LatencyClass): ModelCapability {
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: false,
-    costClass: "low",
+    costClass: overrides.costClass ?? "low",
     latencyClass,
     throughputHint: "test",
     preferredUseCases: [],
@@ -77,11 +86,15 @@ function fimCapability(latencyClass: LatencyClass): ModelCapability {
   };
 }
 
-function fimConfig(latencyClass: LatencyClass): GatewayConfig {
+function fimConfig(
+  latencyClass: LatencyClass,
+  overrides: { readonly id?: string; readonly costClass?: CostClass } = {},
+): GatewayConfig {
+  const capability = fimCapability(latencyClass, overrides);
   return {
-    providers: [{ modelId: "fim-1", baseUrl: "http://localhost", apiKey: "x" }],
+    providers: [{ modelId: capability.id, baseUrl: "http://localhost", apiKey: "x" }],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
-    capabilities: [fimCapability(latencyClass)],
+    capabilities: [capability],
   } as unknown as GatewayConfig;
 }
 
@@ -218,6 +231,44 @@ describe("POST /api/editor/inline-completion — degradation (model-only)", () =
     expect(wire.items[0]?.insertText).toBe("a + b;");
     expect(wire.provenance.modelMode).toBe("manual");
   });
+
+  it("applies the server-owned low cost ceiling when the client omits maxCostClass", async () => {
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast", { costClass: "high" }) }),
+      permissiveOptions(() => chat),
+    );
+    const wire = body(result);
+    expect(wire.items).toEqual([]);
+    expect(wire.provenance.modelMode).toBe("deterministic");
+    expect(wire.provenance.degradeReason).toBe("over-cost-ceiling");
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("does not let the client raise the server-owned cost ceiling", async () => {
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody({ maxCostClass: "high" })),
+      deps({ config: fimConfig("fast", { costClass: "high" }) }),
+      permissiveOptions(() => chat),
+    );
+    expect(body(result).items).toEqual([]);
+    expect(body(result).provenance.degradeReason).toBe("over-cost-ceiling");
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("allows deployment policy to raise the server cost ceiling", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({
+        config: fimConfig("fast", { costClass: "high" }),
+        env: { KEIKO_EDITOR_INLINE_COMPLETION_MAX_COST_CLASS: "high" },
+      }),
+      permissiveOptions(),
+    );
+    expect(body(result).items).toHaveLength(1);
+  });
 });
 
 describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-type)", () => {
@@ -260,6 +311,35 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     expect(modelRecord).not.toContain("a + b;");
   });
 
+  it("redacts overlay secrets before the model prompt is sent", async () => {
+    const secret = "example-env-token-1234567890abcd";
+    let capturedUserPrompt = "";
+    const chatFactory: InlineCompletionChatFactory = () => (request) => {
+      capturedUserPrompt = request.user;
+      return Promise.resolve("safe;");
+    };
+    const result = await handleEditorInlineCompletion(
+      postContext(
+        inlineBody({
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: `const token = "${secret}";\nconst value = \n`,
+          },
+          position: { line: 1, character: 14 },
+        }),
+      ),
+      deps({
+        config: fimConfig("fast"),
+        env: { KEIKO_DEFAULT_API_KEY: secret },
+      }),
+      permissiveOptions(chatFactory),
+    );
+    expect(body(result).items).toHaveLength(1);
+    expect(capturedUserPrompt).not.toContain(secret);
+    expect(capturedUserPrompt).toContain("[REDACTED]");
+  });
+
   it("degrades to zero items when the model call fails (never breaks the route)", async () => {
     const failing: InlineCompletionChatFactory = () => () => Promise.reject(new Error("boom"));
     const result = await handleEditorInlineCompletion(
@@ -269,6 +349,37 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     );
     expect(result.status).toBe(200);
     expect(body(result).items).toEqual([]);
+  });
+
+  it("self-cancels as-you-type model calls after the latency budget", async () => {
+    let chatCalls = 0;
+    const abortingChat: ReturnType<InlineCompletionChatFactory> = (_request, signal) => {
+      chatCalls += 1;
+      return new Promise<string>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(new Error("aborted"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+    };
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      {
+        ...permissiveOptions(() => abortingChat),
+        asYouTypeTimeoutMs: 5,
+      },
+    );
+    expect(result.status).toBe(200);
+    expect(body(result).items).toEqual([]);
+    expect(chatCalls).toBe(1);
   });
 
   it("bounds output length by maxOutputTokens (≈4 chars/token)", async () => {
@@ -309,6 +420,33 @@ describe("POST /api/editor/inline-completion — rate limiting", () => {
     expect(body(second).items).toEqual([]);
     expect(chat).toHaveBeenCalledTimes(1);
   });
+
+  it("shares a limiter bucket across root aliases that resolve to the same real root", async () => {
+    const rateLimiter = createInlineCompletionRateLimiter({
+      minIntervalMs: 1_000,
+      maxPerWindow: 10,
+      windowMs: 60_000,
+    });
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const options: EditorInlineCompletionRouteOptions = {
+      chatFactory: () => chat,
+      rateLimiter,
+      now: () => 5_000,
+    };
+    const first = await handleEditorInlineCompletion(
+      postContext(inlineBody({ root })),
+      deps({ config: fimConfig("fast") }),
+      options,
+    );
+    const second = await handleEditorInlineCompletion(
+      postContext(inlineBody({ root: `${root}/.` })),
+      deps({ config: fimConfig("fast") }),
+      options,
+    );
+    expect(body(first).items).toHaveLength(1);
+    expect(body(second).items).toEqual([]);
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("POST /api/editor/inline-completion/telemetry", () => {
@@ -321,6 +459,9 @@ describe("POST /api/editor/inline-completion/telemetry", () => {
       rejected: 1,
       ignored: 1,
       partiallyAccepted: 0,
+      requestCount: 6,
+      requestLatencyMsP50: 45,
+      requestLatencyMsP95: 120,
       ...overrides,
     };
   }
@@ -345,7 +486,37 @@ describe("POST /api/editor/inline-completion/telemetry", () => {
     const record = records.find((value) => value.includes("editor-inline-completion-telemetry"));
     expect(record).toBeDefined();
     expect(record).toContain('"accepted":2');
+    expect(record).toContain('"requestLatencyMsP50":45');
+    expect(record).toContain('"requestLatencyMsP95":120');
     // The raw workspace root path is never persisted (only a hash).
     expect(record).not.toContain(root);
+  });
+
+  it("canonicalizes root aliases before hashing telemetry evidence", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const aliasRoot = `${root}/.`;
+    const result = await handleEditorInlineCompletionTelemetry(
+      postContext(telemetryReport({ root: aliasRoot })),
+      deps({ evidenceStore }),
+      { now: () => 9_001 },
+    );
+    expect(result.status).toBe(200);
+    const records = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
+    const record = records.find((value) => value.includes("editor-inline-completion-telemetry"));
+    expect(record).toBeDefined();
+    expect(record).toContain(sha256Hex(root));
+    expect(record).not.toContain(sha256Hex(aliasRoot));
+    expect(record).not.toContain(aliasRoot);
+  });
+
+  it("rejects telemetry for a nonexistent root instead of recording spoofed evidence", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleEditorInlineCompletionTelemetry(
+      postContext(telemetryReport({ root: join(root, "missing") })),
+      deps({ evidenceStore }),
+      { now: () => 9_002 },
+    );
+    expect(result.status).not.toBe(200);
+    expect(evidenceStore.list()).toEqual([]);
   });
 });

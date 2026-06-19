@@ -1,8 +1,9 @@
 // Content-free audit linkage for inline-completion acceptance/rejection telemetry (Issue #1200,
 // Acceptance Criterion 6; EU AI Act Reg. (EU) 2024/1689 Art. 12 record-keeping). The record carries
-// only counts plus a HASH of the workspace root — never the root path itself, never buffer text,
-// inserted ghost text, prompts, or any code content. It is the auditable acceptance-rate signal the
-// product can report without persisting what the user typed or accepted.
+// only counts, latency aggregates, plus a HASH of the workspace root — never the root path itself,
+// never buffer text, inserted ghost text, prompts, or any code content. It is the auditable
+// acceptance-rate and p50/p95 latency signal the product can report without persisting what the user
+// typed or accepted.
 
 import { createHash } from "node:crypto";
 import type {
@@ -43,6 +44,9 @@ export function recordInlineCompletionTelemetryEvidence(
     rejected: report.rejected,
     ignored: report.ignored,
     partiallyAccepted: report.partiallyAccepted,
+    requestCount: report.requestCount,
+    requestLatencyMsP50: report.requestLatencyMsP50,
+    requestLatencyMsP95: report.requestLatencyMsP95,
   };
   try {
     store.put(runId, JSON.stringify(redactor(manifest)));

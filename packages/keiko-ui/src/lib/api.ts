@@ -940,6 +940,9 @@ export interface EditorInlineCompletionTelemetryInput {
   readonly rejected: number;
   readonly ignored: number;
   readonly partiallyAccepted: number;
+  readonly requestCount: number;
+  readonly requestLatencyMsP50: number;
+  readonly requestLatencyMsP95: number;
 }
 
 export async function reportEditorInlineCompletionTelemetry(
@@ -954,6 +957,9 @@ export async function reportEditorInlineCompletionTelemetry(
     rejected: input.rejected,
     ignored: input.ignored,
     partiallyAccepted: input.partiallyAccepted,
+    requestCount: input.requestCount,
+    requestLatencyMsP50: input.requestLatencyMsP50,
+    requestLatencyMsP95: input.requestLatencyMsP95,
   };
   await fetchJson("/api/editor/inline-completion/telemetry", {
     method: "POST",

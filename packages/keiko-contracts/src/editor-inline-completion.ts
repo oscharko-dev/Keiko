@@ -96,7 +96,8 @@ export interface EditorInlineCompletionWireRequest {
   // verbatim from the completion gateway. For the `inline` purpose the route runs repository search
   // only (embedding-cost providers are excluded as keystroke-sensitive).
   readonly context?: EditorCompletionContextSelectors;
-  // Cost ceiling for electing a model-assisted infilling model (#1206). Absent = no ceiling.
+  // Optional client-side cost ceiling for electing a model-assisted infilling model (#1206). The BFF
+  // also applies a server-owned ceiling and uses the stricter value; absent means "use server policy".
   readonly maxCostClass?: CostClass;
   // Advisory upper bound on generated ghost-text length (output tokens). The route additionally
   // clamps the returned `insertText` to a hard server-owned character cap. A positive integer.
@@ -105,9 +106,10 @@ export interface EditorInlineCompletionWireRequest {
 
 // ─── Content-free acceptance/rejection telemetry (Acceptance Criterion 6) ──────────────────────────
 // The browser-tier inline-completion bridge accumulates these counts from Monaco's content-free
-// lifecycle callbacks (shown / partial-accept / end-of-lifetime accepted|rejected|ignored) and the
-// host posts a cumulative snapshot to `POST /api/editor/inline-completion/telemetry`, which records it
-// as content-free evidence. There is NO code content here — only counts and the workspace root.
+// lifecycle callbacks (shown / partial-accept / end-of-lifetime accepted|rejected|ignored) plus
+// request latency aggregates, and the host posts a cumulative snapshot to
+// `POST /api/editor/inline-completion/telemetry`, which records it as content-free evidence. There is
+// NO code content here — only counts, latency numbers, and the workspace root.
 
 export const EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION = "1" as const;
 
@@ -126,6 +128,12 @@ export interface EditorInlineCompletionTelemetryReport {
   readonly ignored: number;
   // Times the user accepted part of an item (word/line partial accept).
   readonly partiallyAccepted: number;
+  // Count of inline-completion resolver requests observed by the editor bridge.
+  readonly requestCount: number;
+  // Content-free nearest-rank p50 resolver latency, in milliseconds.
+  readonly requestLatencyMsP50: number;
+  // Content-free nearest-rank p95 resolver latency, in milliseconds.
+  readonly requestLatencyMsP95: number;
 }
 
 // ─── Pure validation (trust-boundary edge: the BFF validates a client-supplied request) ───────────
@@ -289,15 +297,13 @@ const TELEMETRY_COUNT_FIELDS = [
   "ignored",
   "partiallyAccepted",
 ] as const;
+const TELEMETRY_LATENCY_FIELDS = [
+  "requestCount",
+  "requestLatencyMsP50",
+  "requestLatencyMsP95",
+] as const;
 
-// Validates an `unknown` payload into a content-free EditorInlineCompletionTelemetryReport. Every
-// metric must be a non-negative integer; the report carries only counts plus the workspace root.
-export function parseEditorInlineCompletionTelemetry(
-  value: unknown,
-): EditorInlineCompletionTelemetryParse {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["telemetry report must be an object"] };
-  }
+function collectTelemetryErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
@@ -307,20 +313,55 @@ export function parseEditorInlineCompletionTelemetry(
       errors.push(`${field} must be a non-negative integer`);
     }
   }
+  for (const field of TELEMETRY_LATENCY_FIELDS) {
+    if (value[field] !== undefined && !isNonNegativeInteger(value[field])) {
+      errors.push(`${field} must be a non-negative integer when provided`);
+    }
+  }
+  if (
+    isNonNegativeInteger(value.requestLatencyMsP50) &&
+    isNonNegativeInteger(value.requestLatencyMsP95) &&
+    value.requestLatencyMsP95 < value.requestLatencyMsP50
+  ) {
+    errors.push("requestLatencyMsP95 must be greater than or equal to requestLatencyMsP50");
+  }
+  return errors;
+}
+
+function telemetryMetric(value: Record<string, unknown>, field: string): number {
+  const metric = value[field];
+  return isNonNegativeInteger(metric) ? metric : 0;
+}
+
+function buildTelemetryReport(value: Record<string, unknown>): EditorInlineCompletionTelemetryReport {
+  return {
+    schemaVersion: EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+    root: value.root as string,
+    offered: value.offered as number,
+    shown: value.shown as number,
+    accepted: value.accepted as number,
+    rejected: value.rejected as number,
+    ignored: value.ignored as number,
+    partiallyAccepted: value.partiallyAccepted as number,
+    requestCount: telemetryMetric(value, "requestCount"),
+    requestLatencyMsP50: telemetryMetric(value, "requestLatencyMsP50"),
+    requestLatencyMsP95: telemetryMetric(value, "requestLatencyMsP95"),
+  };
+}
+
+// Validates an `unknown` payload into a content-free EditorInlineCompletionTelemetryReport. Every
+// metric must be a non-negative integer; the report carries only counts, latency aggregates, and the
+// workspace root. Latency fields default to 0 so older cumulative telemetry snapshots do not break
+// during rollout; current clients always emit them.
+export function parseEditorInlineCompletionTelemetry(
+  value: unknown,
+): EditorInlineCompletionTelemetryParse {
+  if (!isRecord(value)) {
+    return { ok: false, errors: ["telemetry report must be an object"] };
+  }
+  const errors = collectTelemetryErrors(value);
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
-      root: value.root as string,
-      offered: value.offered as number,
-      shown: value.shown as number,
-      accepted: value.accepted as number,
-      rejected: value.rejected as number,
-      ignored: value.ignored as number,
-      partiallyAccepted: value.partiallyAccepted as number,
-    },
-  };
+  return { ok: true, value: buildTelemetryReport(value) };
 }
