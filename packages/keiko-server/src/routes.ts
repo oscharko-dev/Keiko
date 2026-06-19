@@ -269,7 +269,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/editor/language/capabilities",
     handler: handleEditorLanguageCapabilities,
   },
-  { method: "POST", pattern: "/api/editor/language", handler: handleEditorLanguage },
+  {
+    method: "POST",
+    pattern: "/api/editor/language",
+    handler: (ctx, deps) => handleEditorLanguage(ctx, deps, deps.editorLanguageRouteOptions),
+  },
   // Issue #1211 — governed coding-context retrieval (ADR-0042 D6). The context route assembles a
   // bounded, redacted pack (repo-search always; Local Knowledge + memory only for explicit,
   // embedding-eligible purposes) and returns the content-free wire pack; the repo-search and
