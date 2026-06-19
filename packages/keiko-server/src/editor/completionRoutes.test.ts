@@ -211,6 +211,24 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     expect(invokedPayload.provenance.modelMode).toBe("manual");
   });
 
+  it("omits model identity/hash when the model is invoked but returns no items", async () => {
+    // Provenance honesty: modelId/gatewayPolicyVersion/promptHash identify the model that produced
+    // the response's items, so an invoked-but-empty model must not stamp them on the response.
+    const emptyChat: CompletionChatFactory = () => () => Promise.resolve("[]");
+    const result = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast")),
+      { chatFactory: emptyChat },
+    );
+    const payload = body(result);
+    expect(payload.items.every((item) => item.origin === "deterministic")).toBe(true);
+    expect(payload.provenance.sources).toEqual(["deterministic-language-service"]);
+    expect(payload.provenance.modelMode).toBe("as-you-type");
+    expect(payload.provenance.modelId).toBeUndefined();
+    expect(payload.provenance.gatewayPolicyVersion).toBeUndefined();
+    expect(payload.provenance.promptHash).toBeUndefined();
+  });
+
   it("degrades to deterministic-only when the model call fails (AC4)", async () => {
     const failingChat: CompletionChatFactory = () => () =>
       Promise.reject(new Error("gateway down"));

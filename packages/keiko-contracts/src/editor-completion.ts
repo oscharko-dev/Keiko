@@ -87,9 +87,11 @@ export const EDITOR_COMPLETION_SOURCES: readonly EditorCompletionSource[] = [
 ] as const;
 
 // Content-free provenance summary for one completion response. `modelMode` echoes the Model Gateway
-// completion-model selection (#1210); `degradeReason` is present only when model-assisted completion
-// was not produced. `modelId`/`gatewayPolicyVersion`/`promptHash` are present only when model-assisted
-// items were produced and are opaque ids/hashes — never the prompt, never customer content.
+// completion-model selection (#1210) and is always present; `degradeReason` is present only when
+// `modelMode === "deterministic"`. `modelId`/`latencyClass`/`gatewayPolicyVersion`/`promptHash` are
+// present only when model-assisted items were actually produced (they identify the model that
+// produced this response's items) and are opaque ids/hashes — never the prompt, never customer
+// content. An elected-but-unused model stays visible only through `modelMode`.
 export interface EditorCompletionWireProvenance {
   readonly sources: readonly EditorCompletionSource[];
   readonly modelMode: CompletionInteractionMode;

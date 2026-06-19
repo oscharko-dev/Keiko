@@ -94,7 +94,6 @@ interface ModelTierOutcome {
   readonly degradeReason?: CompletionDegradeReason | undefined;
   readonly modelId?: string | undefined;
   readonly latencyClass?: string | undefined;
-  readonly invoked: boolean;
   readonly promptHash?: string | undefined;
   readonly contextSources: readonly EditorCompletionSource[];
   readonly truncated: boolean;
@@ -111,7 +110,6 @@ const DETERMINISTIC_OUTCOME = (
   degradeReason,
   modelId,
   latencyClass,
-  invoked: false,
   contextSources: [],
   truncated: false,
 });
@@ -192,7 +190,6 @@ async function runElectedModel(
     modelMode: selection.mode,
     modelId,
     latencyClass: selection.latencyClass,
-    invoked: true,
     promptHash: generated.promptHash,
     contextSources: generated.items.length > 0 ? contextSourcesFromPack(pack) : [],
     truncated: generated.truncated,
@@ -317,6 +314,12 @@ function mergeItems(
   return { items, capped };
 }
 
+// The model-identifying fields (modelId, latencyClass, gatewayPolicyVersion, promptHash) are present
+// only when model-assisted items were actually produced — they identify the model that produced THIS
+// response's items, matching the wire contract. `modelMode`/`degradeReason` always reflect the
+// selection, so an elected-but-unused model is still visible to the client without a misleading
+// model-identity/audit signal at the response level. (The model invocation itself, including the
+// invoked-but-empty case, is recorded server-side as content-free evidence by the route.)
 function buildProvenance(
   model: ModelTierOutcome,
   producedModelItems: boolean,
@@ -328,11 +331,15 @@ function buildProvenance(
   return {
     sources: [...new Set(sources)],
     modelMode: model.modelMode,
-    ...(model.modelId === undefined ? {} : { modelId: model.modelId }),
-    ...(model.latencyClass === undefined ? {} : { latencyClass: model.latencyClass }),
     ...(model.degradeReason === undefined ? {} : { degradeReason: model.degradeReason }),
-    ...(model.invoked ? { gatewayPolicyVersion: COMPLETION_GATEWAY_POLICY_VERSION } : {}),
-    ...(model.promptHash === undefined ? {} : { promptHash: model.promptHash }),
+    ...(producedModelItems && model.modelId !== undefined ? { modelId: model.modelId } : {}),
+    ...(producedModelItems && model.latencyClass !== undefined
+      ? { latencyClass: model.latencyClass }
+      : {}),
+    ...(producedModelItems ? { gatewayPolicyVersion: COMPLETION_GATEWAY_POLICY_VERSION } : {}),
+    ...(producedModelItems && model.promptHash !== undefined
+      ? { promptHash: model.promptHash }
+      : {}),
   };
 }
 
