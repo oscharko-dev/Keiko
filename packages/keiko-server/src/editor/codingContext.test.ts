@@ -23,7 +23,6 @@ function request(overrides: Partial<CodingContextRequest> = {}): CodingContextRe
     changedFiles: undefined,
     capsuleId: undefined,
     capsuleSetId: undefined,
-    memoryScopes: undefined,
     ...overrides,
   };
 }

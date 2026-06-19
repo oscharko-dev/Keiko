@@ -97,7 +97,6 @@ function buildInternalRequest(body: Record<string, unknown>): CodingContextReque
     changedFiles: Array.isArray(body.changedFiles) ? (body.changedFiles as string[]) : undefined,
     capsuleId: typeof body.capsuleId === "string" ? body.capsuleId : undefined,
     capsuleSetId: typeof body.capsuleSetId === "string" ? body.capsuleSetId : undefined,
-    memoryScopes: Array.isArray(body.memoryScopes) ? (body.memoryScopes as string[]) : undefined,
   };
 }
 

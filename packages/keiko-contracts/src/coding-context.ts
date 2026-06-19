@@ -181,7 +181,9 @@ export type CodingContextScopeKind = "file" | "symbol" | "selection" | "changed-
 
 // Editor-originated intent + coordinates. The workspace root is resolved and contained server-side
 // (it is never accepted from the browser as an absolute path); the request carries workspace-relative
-// coordinates only.
+// coordinates only. Memory-retrieval scopes are NOT client-controlled: the service derives them
+// server-side from the contained workspace root (workspace/project/operator/global), so a browser
+// cannot widen retrieval into another workspace's or tenant's memory.
 export interface CodingContextRequest {
   readonly schemaVersion: typeof CODING_CONTEXT_SCHEMA_VERSION;
   readonly purpose: CodingContextPurpose;
@@ -191,7 +193,6 @@ export interface CodingContextRequest {
   readonly changedFiles: readonly string[] | undefined;
   readonly capsuleId: string | undefined;
   readonly capsuleSetId: string | undefined;
-  readonly memoryScopes: readonly string[] | undefined;
 }
 
 // ─── Validation result (shared shape with connected-context) ────────────────────────
@@ -288,7 +289,6 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
     [isOptionalStringArray(value.changedFiles), "request.changedFiles invalid"],
     [isOptionalString(value.capsuleId), "request.capsuleId invalid"],
     [isOptionalString(value.capsuleSetId), "request.capsuleSetId invalid"],
-    [isOptionalStringArray(value.memoryScopes), "request.memoryScopes invalid"],
   ];
   const reasons = checks.filter(([ok]) => !ok).map(([, reason]) => reason);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };

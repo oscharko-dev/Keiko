@@ -49,7 +49,6 @@ function validRequest(overrides: Partial<CodingContextRequest> = {}): CodingCont
     changedFiles: undefined,
     capsuleId: undefined,
     capsuleSetId: undefined,
-    memoryScopes: undefined,
     ...overrides,
   };
 }
@@ -195,8 +194,6 @@ describe("validateCodingContextRequest", () => {
     expect(validateCodingContextRequest(validRequest({ changedFiles: [7] as never })).ok).toBe(
       false,
     );
-    expect(validateCodingContextRequest(validRequest({ memoryScopes: "user" as never })).ok).toBe(
-      false,
-    );
+    expect(validateCodingContextRequest(validRequest({ capsuleId: 7 as never })).ok).toBe(false);
   });
 });
