@@ -41,6 +41,7 @@ export interface AssembleCodingContextDeps {
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly budgetBytes?: number | undefined;
+  readonly allowEmbeddingProviders?: boolean | undefined;
 }
 
 // Greedy byte-budget packer: highest score first, ties broken by id for determinism, dropped when the
@@ -76,7 +77,7 @@ function packExcerpts(
 function effectiveCodingContextBudget(
   purpose: CodingContextRequest["purpose"],
   requestedBudgetBytes: number | undefined,
-): typeof CODING_CONTEXT_BUDGETS[CodingContextRequest["purpose"]] {
+): (typeof CODING_CONTEXT_BUDGETS)[CodingContextRequest["purpose"]] {
   const baseBudget = CODING_CONTEXT_BUDGETS[purpose];
   const effectiveBudgetBytes =
     requestedBudgetBytes === undefined
@@ -87,6 +88,34 @@ function effectiveCodingContextBudget(
     budgetBytes: effectiveBudgetBytes,
     maxBytesPerSource: Math.min(baseBudget.maxBytesPerSource, effectiveBudgetBytes),
   };
+}
+
+async function collectEmbeddingProviderContext(
+  request: CodingContextRequest,
+  providerCtx: ProviderContext,
+  allowEmbeddingProviders: boolean,
+  candidates: RawExcerpt[],
+  omissions: CodingContextOmission[],
+): Promise<void> {
+  if (!allowEmbeddingProviders) {
+    // Per-keystroke and deferred-execution exclusions are not silent: embedding-cost providers are
+    // recorded as content-free `too-expensive` omissions so the exclusion is auditable.
+    omissions.push({ sourceKind: "local-knowledge", reason: "too-expensive" });
+    omissions.push({ sourceKind: "memory", reason: "too-expensive" });
+    return;
+  }
+  if (!providerCtx.signal.aborted) {
+    const knowledge = await runLocalKnowledgeProvider(providerCtx, {
+      queryText: request.queryText,
+      capsuleId: request.capsuleId,
+      capsuleSetId: request.capsuleSetId,
+    });
+    collect(knowledge, candidates, omissions);
+  }
+  if (!providerCtx.signal.aborted) {
+    const memory = await runMemoryProvider(providerCtx, { queryText: request.queryText });
+    collect(memory, candidates, omissions);
+  }
 }
 
 export async function assembleCodingContext(
@@ -113,25 +142,15 @@ export async function assembleCodingContext(
   });
   collect(repo, candidates, omissions);
 
-  if (embeddingProvidersAllowed(request.purpose)) {
-    if (!context.signal.aborted) {
-      const knowledge = await runLocalKnowledgeProvider(providerCtx, {
-        queryText: request.queryText,
-        capsuleId: request.capsuleId,
-        capsuleSetId: request.capsuleSetId,
-      });
-      collect(knowledge, candidates, omissions);
-    }
-    if (!context.signal.aborted) {
-      const memory = await runMemoryProvider(providerCtx, { queryText: request.queryText });
-      collect(memory, candidates, omissions);
-    }
-  } else {
-    // Per-keystroke exclusion (AC3): embedding-cost providers are not silently skipped; they are
-    // recorded as a content-free `too-expensive` omission so the exclusion is auditable.
-    omissions.push({ sourceKind: "local-knowledge", reason: "too-expensive" });
-    omissions.push({ sourceKind: "memory", reason: "too-expensive" });
-  }
+  const allowEmbeddingProviders =
+    context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose);
+  await collectEmbeddingProviderContext(
+    request,
+    providerCtx,
+    allowEmbeddingProviders,
+    candidates,
+    omissions,
+  );
 
   collectDeferredProviderOmissions(omissions);
   const packed = packExcerpts(candidates, budget.budgetBytes);

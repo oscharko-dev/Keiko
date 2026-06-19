@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorCompletionWireResponse,
   EditorInlineCompletionWireResponse,
+  EditorTestGenerationWireResponse,
   FilesContentResponse,
 } from "../../../../../lib/types";
 import {
@@ -21,6 +22,7 @@ import {
   saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
+import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import { EditorWidget } from "./EditorWidget";
 
 vi.mock("../../../../../lib/api", async () => {
@@ -49,21 +51,43 @@ const surface: { props: EditorSurfaceProps | null; mounts: number; unmounts: num
   mounts: 0,
   unmounts: 0,
 };
-vi.mock("next/dynamic", () => ({
-  default: () => {
-    function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
-      useEffect(() => {
-        surface.mounts += 1;
-        return (): void => {
-          surface.unmounts += 1;
-        };
-      }, []);
-      surface.props = props;
-      return <div data-testid="editor-surface" />;
-    }
-    return EditorSurfaceProbe;
-  },
-}));
+const diffSurface: { props: EditorDiffSurfaceProps | null; mounts: number; unmounts: number } = {
+  props: null,
+  mounts: 0,
+  unmounts: 0,
+};
+vi.mock("next/dynamic", () => {
+  let dynamicComponentIndex = 0;
+  return {
+    default: () => {
+      const index = dynamicComponentIndex++;
+      if (index > 0) {
+        function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
+          useEffect(() => {
+            diffSurface.mounts += 1;
+            return (): void => {
+              diffSurface.unmounts += 1;
+            };
+          }, []);
+          diffSurface.props = props;
+          return <div data-testid="editor-diff-surface" />;
+        }
+        return EditorDiffSurfaceProbe;
+      }
+      function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
+        useEffect(() => {
+          surface.mounts += 1;
+          return (): void => {
+            surface.unmounts += 1;
+          };
+        }, []);
+        surface.props = props;
+        return <div data-testid="editor-surface" />;
+      }
+      return EditorSurfaceProbe;
+    },
+  };
+});
 
 // The content-free document version the loaded fixture reports; the host captures it and sends it
 // back as the version-aware baseVersion token on save (Issue #1197).
@@ -90,6 +114,9 @@ afterEach(() => {
   surface.props = null;
   surface.mounts = 0;
   surface.unmounts = 0;
+  diffSurface.props = null;
+  diffSurface.mounts = 0;
+  diffSurface.unmounts = 0;
   delete document.documentElement.dataset.theme;
   vi.clearAllMocks();
 });
@@ -157,16 +184,22 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     antiTautology: "not-run",
   } as const;
 
+  const DISABLED_RESPONSE: EditorTestGenerationWireResponse = {
+    schemaVersion: "1",
+    status: "disabled",
+    reason: "Editor-driven test generation is disabled in this build.",
+    funnel: NOT_RUN_FUNNEL,
+  };
+
   it("offers a Generate Tests action for a TS file and surfaces the switched-off status", async () => {
     await renderLoaded();
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveAttribute("aria-atomic", "true");
+    expect(status).toBeEmptyDOMElement();
     const button = screen.getByRole("button", { name: "Generate Tests" });
     expect(button).toBeInTheDocument();
-    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce({
-      schemaVersion: "1",
-      status: "disabled",
-      reason: "Editor-driven test generation is disabled in this build.",
-      funnel: NOT_RUN_FUNNEL,
-    });
+    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce(DISABLED_RESPONSE);
 
     await userEvent.click(button);
 
@@ -175,9 +208,95 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
         root: "/repo",
         target: expect.objectContaining({ kind: "file" }),
       }),
+      expect.any(AbortSignal),
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(/disabled in this build/i);
+    await waitFor(() => {
+      expect(status).toHaveTextContent(/disabled in this build/i);
+    });
     // The editor surface stays mounted and usable after the run resolves.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  it("uses a selection target when the editor reports a reliable non-empty selection", async () => {
+    await renderLoaded();
+    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce(DISABLED_RESPONSE);
+    act(() => {
+      surface.props?.onSelectionChange?.({
+        start: { line: 0, column: 6 },
+        end: { line: 0, column: 11 },
+      });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+
+    expect(requestEditorTestGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          kind: "selection",
+          range: {
+            start: { line: 0, character: 6 },
+            end: { line: 0, character: 11 },
+          },
+        }),
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("aborts an in-flight test-generation request when cancelled", async () => {
+    await renderLoaded();
+    let signal: AbortSignal | undefined;
+    vi.mocked(requestEditorTestGeneration).mockImplementationOnce((_input, requestSignal) => {
+      signal = requestSignal;
+      return new Promise<EditorTestGenerationWireResponse>(() => {});
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i);
+  });
+
+  it("renders a generated test patch in the review diff surface with apply disabled", async () => {
+    await renderLoaded();
+    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce({
+      schemaVersion: "1",
+      status: "generated",
+      assurance: "unverified",
+      funnel: { ...NOT_RUN_FUNNEL, candidatesGenerated: 1, candidatesSurfaced: 1 },
+      patch: {
+        patchId: "p1",
+        files: [
+          {
+            path: "src/app.test.ts",
+            changeKind: "added",
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                newText: "it('renders', () => {});\n",
+              },
+            ],
+          },
+        ],
+      },
+      provenance: { modelId: "m", gatewayPolicyVersion: "v", promptHash: "h", producedAt: 1 },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+
+    expect(await screen.findByTestId("editor-diff-surface")).toBeInTheDocument();
+    expect(diffSurface.props?.model.files[0]?.uri).toBe("src/app.test.ts");
+    expect(diffSurface.props?.actions?.canApply).toBe(false);
+    expect(diffSurface.props?.actions?.canRunVerification).toBe(false);
+
+    act(() => {
+      diffSurface.props?.onReject?.();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("editor-diff-surface")).toBeNull();
+    });
     expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
   });
 });

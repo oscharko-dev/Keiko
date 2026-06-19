@@ -210,6 +210,7 @@ async function assembleDiscoveryContext(
   realRoot: string,
   signal: AbortSignal,
   nowMs: number,
+  allowEmbeddingProviders: boolean,
 ): Promise<{ readonly pack: CodingContextPack; readonly wire: CodingContextWirePack }> {
   const pack = await assembleCodingContext(buildDiscoveryRequest(request), {
     deps,
@@ -217,6 +218,7 @@ async function assembleDiscoveryContext(
     signal,
     nowMs,
     budgetBytes: contextBudgetBytes(request),
+    allowEmbeddingProviders,
   });
   const wire = toCodingContextWirePack(pack);
   recordCodingContextEvidence(deps.evidenceStore, deps.redactor, wire, nowMs);
@@ -276,6 +278,11 @@ export async function handleEditorTestGeneration(
   deps: UiHandlerDeps,
   options: EditorTestGenerationRouteOptions = {},
 ): Promise<RouteResult> {
+  // Gate A — default OFF: the feature is switched off, so no request-body parsing, retrieval, model, or
+  // execution runs. This avoids serializing/parsing the full editor buffer for a disabled wave-2 feature.
+  if (!isTestGenerationEnabledByPolicy(deps.env)) {
+    return { status: 200, body: deps.redactor(disabledResponse()) };
+  }
   const body = await readJsonObject(ctx.req, MAX_TEST_GENERATION_BODY_BYTES);
   if (isRouteResult(body)) {
     return body;
@@ -285,10 +292,6 @@ export async function handleEditorTestGeneration(
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   const request = parsed.value;
-  // Gate A — default OFF: the feature is switched off, so no retrieval, model, or execution runs.
-  if (!isTestGenerationEnabledByPolicy(deps.env)) {
-    return { status: 200, body: deps.redactor(disabledResponse()) };
-  }
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     const containment = validateTargetContainment(root.realRoot, request.target);
@@ -297,7 +300,15 @@ export async function handleEditorTestGeneration(
     }
     const nowMs = (options.now ?? Date.now)();
     const signal = clientAbortSignal(ctx);
-    const discovery = await assembleDiscoveryContext(request, deps, root.realRoot, signal, nowMs);
+    const executionEnabled = isTestGenerationExecutionEnabledByPolicy(deps.env);
+    const discovery = await assembleDiscoveryContext(
+      request,
+      deps,
+      root.realRoot,
+      signal,
+      nowMs,
+      executionEnabled,
+    );
     const outcome = await produceOutcome(
       { request, deps, realRoot: root.realRoot, signal, nowMs, options },
       discovery,

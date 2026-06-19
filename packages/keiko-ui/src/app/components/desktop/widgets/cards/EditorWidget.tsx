@@ -25,6 +25,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import {
+  buildTestGenerationPreview,
   createEditorRequestId,
   createFileModel,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
@@ -34,6 +35,7 @@ import {
   isDocumentDirty,
   isSupportedEditorLanguage,
   isTestGenerationBusy,
+  isTestGenerationPreviewing,
   saveStatusReducer,
   testGenerationReducer,
   type EditorBuffer,
@@ -47,12 +49,14 @@ import {
   type EditorHoverResolver,
   type EditorInlineCompletionResolver,
   type EditorLanguageId,
+  type EditorRange,
   type EditorRequestIdentity,
   type EditorSaveRequest,
   type EditorSaveStatus,
   type EditorSymbolsResolver,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
+  type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
 import {
   ApiError,
@@ -83,9 +87,15 @@ import type {
 } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
+import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
+  ssr: false,
+  loading: () => <div className="ed-host-loading" aria-hidden="true" />,
+});
+
+const EditorDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./EditorDiffSurface"), {
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
@@ -230,6 +240,8 @@ export function EditorWidget({
     IDLE_TEST_GENERATION_STATE,
   );
   const testGenSeqRef = useRef(0);
+  const testGenAbortRef = useRef<AbortController | null>(null);
+  const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
 
   // Refs the imperative save path reads so a Cmd/Ctrl+S immediately after an edit always persists
   // the latest values, independent of React state-batching timing. The version-aware
@@ -242,6 +254,17 @@ export function EditorWidget({
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+
+  useEffect(() => {
+    setCurrentSelection(null);
+  }, [file, root]);
+
+  useEffect(
+    () => () => {
+      testGenAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const dirty = fileModel !== null && isDocumentDirty(fileModel);
   const dirtyRef = useRef(false);
@@ -498,7 +521,13 @@ export function EditorWidget({
     [hasTarget, root],
   );
 
-  // Issue #1202: trigger governed unit-test generation for the whole current file. The host owns the
+  const cancelTestGeneration = useCallback((): void => {
+    testGenAbortRef.current?.abort();
+    testGenAbortRef.current = null;
+    dispatchTestGen({ type: "cancel" });
+  }, []);
+
+  // Issue #1202: trigger governed unit-test generation for the current file or reliable selection. The host owns the
   // gated BFF call; the editor package owns the flow reducer (run status, stale-response discard) and,
   // when a candidate is eventually produced (wave 2), the diff-review surface. In v1 the server returns
   // `disabled`/`deferred`, so this surfaces a content-free status and the editor stays usable.
@@ -506,16 +535,34 @@ export function EditorWidget({
     if (!hasTarget || root === undefined || file === undefined || fileModel === null) {
       return;
     }
+    testGenAbortRef.current?.abort();
+    const abortController = new AbortController();
+    testGenAbortRef.current = abortController;
     const sequence = (testGenSeqRef.current += 1);
     const requestIdentity: EditorRequestIdentity = {
       requestId: createEditorRequestId(),
       streamId: "editor-test-generation",
       sequence,
     };
-    const target: EditorTestGenerationWireTarget = {
-      kind: "file",
-      document: { path: file, languageId: fileModel.identity.language, text: contentRef.current },
+    const document = {
+      path: file,
+      languageId: fileModel.identity.language,
+      text: contentRef.current,
     };
+    const target: EditorTestGenerationWireTarget =
+      currentSelection === null
+        ? { kind: "file", document }
+        : {
+            kind: "selection",
+            document,
+            range: {
+              start: {
+                line: currentSelection.start.line,
+                character: currentSelection.start.column,
+              },
+              end: { line: currentSelection.end.line, character: currentSelection.end.column },
+            },
+          };
     const selectors = completionContextSelectors({
       root,
       file,
@@ -528,12 +575,15 @@ export function EditorWidget({
       linkedCapsuleSetIds,
     });
     dispatchTestGen({ type: "request", requestId: requestIdentity.requestId });
-    void requestEditorTestGeneration({
-      root,
-      target,
-      contextBudgetBytes: TEST_GENERATION_CONTEXT_BUDGET_BYTES,
-      ...(selectors === undefined ? {} : { context: selectors }),
-    })
+    void requestEditorTestGeneration(
+      {
+        root,
+        target,
+        contextBudgetBytes: TEST_GENERATION_CONTEXT_BUDGET_BYTES,
+        ...(selectors === undefined ? {} : { context: selectors }),
+      },
+      abortController.signal,
+    )
       .then((wire) => {
         dispatchTestGen({
           type: "resolve",
@@ -541,9 +591,19 @@ export function EditorWidget({
         });
       })
       .catch(() => {
+        if (abortController.signal.aborted) {
+          dispatchTestGen({ type: "cancel" });
+          return;
+        }
         dispatchTestGen({ type: "error", reason: TEST_GENERATION_FAILURE_MESSAGE });
+      })
+      .finally(() => {
+        if (testGenAbortRef.current === abortController) {
+          testGenAbortRef.current = null;
+        }
       });
   }, [
+    currentSelection,
     file,
     fileModel,
     hasTarget,
@@ -664,6 +724,14 @@ export function EditorWidget({
             truncated: false,
           },
         };
+  const testGenerationPreview: TestGenerationPreview | null =
+    isTestGenerationPreviewing(testGenState) && buffer !== null
+      ? buildTestGenerationPreview({
+          result: testGenState.result,
+          assurance: testGenState.assurance,
+          sources: { [buffer.content.relativePath]: { content: buffer.content } },
+        })
+      : null;
 
   return (
     <div className="editor">
@@ -690,6 +758,11 @@ export function EditorWidget({
             {testGenBusy ? "Generating…" : "Generate Tests"}
           </button>
         ) : null}
+        {testGenBusy ? (
+          <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
+            Cancel
+          </button>
+        ) : null}
         {hasTarget && saveStatus === "conflict" ? (
           <button type="button" className="ed-reload" onClick={reload}>
             Reload
@@ -708,12 +781,28 @@ export function EditorWidget({
           </button>
         ) : null}
       </div>
-      {testGenStatusText.length > 0 ? (
-        <div className="ed-status" role="status">
-          {testGenStatusText}
+      <div
+        className="ed-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-empty={testGenStatusText.length === 0 ? "true" : undefined}
+      >
+        {testGenStatusText}
+      </div>
+      {testGenerationPreview !== null ? (
+        <div className="ed-host">
+          <EditorDiffSurface
+            model={testGenerationPreview.model}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+            actions={testGenerationPreview.actions}
+            onReject={() => {
+              dispatchTestGen({ type: "dismiss" });
+            }}
+          />
         </div>
-      ) : null}
-      {hasTarget && loadState.status === "error" ? (
+      ) : hasTarget && loadState.status === "error" ? (
         <div className="ed-host">
           <div className="ed-host-loading" role="alert">
             <span>{`Editor failed to load: ${loadState.message}`}</span>
@@ -750,6 +839,7 @@ export function EditorWidget({
             provideHover={completionEnabled ? provideHover : undefined}
             provideSymbols={completionEnabled ? provideSymbols : undefined}
             provideFormatting={completionEnabled ? provideFormatting : undefined}
+            onSelectionChange={setCurrentSelection}
           />
         </div>
       ) : hasTarget ? (
