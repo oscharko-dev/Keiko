@@ -235,6 +235,25 @@ describe("sanitizeFormatting", () => {
     expect(result.truncated).toBe(true);
   });
 
+  it("drops edits that would exceed the aggregate formatting byte budget", () => {
+    const result = sanitizeFormatting(
+      {
+        edits: [
+          { range, newText: "aa" },
+          { range, newText: "bb" },
+          { range, newText: "c" },
+        ],
+        truncated: false,
+      },
+      { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxDocumentBytes: 4 },
+    );
+    expect(result.edits).toEqual([
+      { range, newText: "aa" },
+      { range, newText: "bb" },
+    ]);
+    expect(result.truncated).toBe(true);
+  });
+
   it("propagates a provider-reported truncation", () => {
     const result = sanitizeFormatting(
       { edits: [{ range, newText: "ok" }], truncated: true },

@@ -35,6 +35,7 @@ import {
 
 export interface MonacoFormattingModel {
   getValue(): string;
+  getVersionId(): number;
   readonly uri: { toString(): string };
 }
 
@@ -90,6 +91,8 @@ export function monacoFormattingOptionsToEditor(
 export interface KeikoFormattingProviderDeps {
   /** The host-injected resolver that actually produces the reformat edits (BFF call lives here). */
   readonly resolve: EditorFormattingResolver;
+  /** True when the Monaco model URI still belongs to this editor instance's current document. */
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   /** The editor language id (e.g. "typescript"); also the registration selector. */
   readonly documentLanguage: EditorLanguageId;
   /** Stream identity for this provider instance. */
@@ -100,9 +103,10 @@ export interface KeikoFormattingProviderDeps {
 
 function buildRequest(
   deps: KeikoFormattingProviderDeps,
-  model: MonacoFormattingModel,
+  documentUri: string,
   options: MonacoFormattingOptions,
   sequence: number,
+  version: number,
 ): EditorFormattingRequest {
   const identity: EditorRequestIdentity = {
     requestId: deps.newRequestId(),
@@ -111,7 +115,7 @@ function buildRequest(
   };
   return {
     request: identity,
-    document: { uri: model.uri.toString(), language: deps.documentLanguage, version: sequence },
+    document: { uri: documentUri, language: deps.documentLanguage, version },
     options: monacoFormattingOptionsToEditor(options),
   };
 }
@@ -146,14 +150,24 @@ export function createKeikoFormattingProvider(
       options,
       token,
     ): Promise<readonly MonacoTextEdit[]> {
+      const documentUri = model.uri.toString();
+      if (!deps.isCurrentDocument(documentUri)) {
+        return EMPTY_EDITS;
+      }
       sequence += 1;
-      const request = buildRequest(deps, model, options, sequence);
+      const versionBefore = model.getVersionId();
+      const request = buildRequest(deps, documentUri, options, sequence, versionBefore);
       const controller = controllerForToken(token);
       try {
         const query: EditorFormattingQuery = { request, documentText: model.getValue() };
         const response = await deps.resolve(query, controller.signal);
-        // A request cancelled while in flight must not mutate the buffer: drop the (now stale) edits.
-        if (controller.signal.aborted) {
+        // A request cancelled or superseded by a model change while in flight must not mutate the
+        // buffer: drop the now-stale edits instead of applying them to a different document state.
+        if (
+          controller.signal.aborted ||
+          !deps.isCurrentDocument(documentUri) ||
+          model.getVersionId() !== versionBefore
+        ) {
           return EMPTY_EDITS;
         }
         return editsToMonaco(response.edits);
@@ -167,6 +181,7 @@ export function createKeikoFormattingProvider(
 export interface RegisterKeikoFormattingProviderArgs {
   readonly languages: MonacoDocumentFormattingRegistrar;
   readonly resolve: EditorFormattingResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
@@ -192,6 +207,7 @@ export function registerKeikoFormattingProvider(
   const disposers = args.documentLanguages.map((documentLanguage) => {
     const provider = createKeikoFormattingProvider({
       resolve: args.resolve,
+      isCurrentDocument: args.isCurrentDocument,
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,

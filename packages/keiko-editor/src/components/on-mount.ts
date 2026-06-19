@@ -121,6 +121,7 @@ export interface WireEditorDiagnostics {
 /** Host-injected hover wiring (Issue #1201); absent when the host supplies no resolver. */
 export interface WireEditorHover {
   readonly resolve: EditorHoverResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly languages?: readonly EditorLanguageId[] | undefined;
@@ -129,6 +130,7 @@ export interface WireEditorHover {
 /** Host-injected document-symbol wiring (Issue #1201); absent when the host supplies no resolver. */
 export interface WireEditorSymbols {
   readonly resolve: EditorSymbolsResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly languages?: readonly EditorLanguageId[] | undefined;
@@ -137,6 +139,7 @@ export interface WireEditorSymbols {
 /** Host-injected document-formatting wiring (Issue #1201); absent when the host supplies no resolver. */
 export interface WireEditorFormatting {
   readonly resolve: EditorFormattingResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly languages?: readonly EditorLanguageId[] | undefined;
@@ -304,6 +307,7 @@ function installHoverProvider(args: WireEditorOnMountArgs): MonacoDisposable | n
   return registerKeikoHoverProvider({
     languages: registrar,
     resolve: hover.resolve,
+    isCurrentDocument: hover.isCurrentDocument,
     documentLanguages: hover.languages ?? HOVER_ELIGIBLE_LANGUAGES,
     streamId: hover.streamId,
     newRequestId: hover.newRequestId,
@@ -324,6 +328,7 @@ function installDocumentSymbolProvider(args: WireEditorOnMountArgs): MonacoDispo
   return registerKeikoDocumentSymbolProvider({
     languages: registrar,
     resolve: symbols.resolve,
+    isCurrentDocument: symbols.isCurrentDocument,
     documentLanguages: symbols.languages ?? SYMBOLS_ELIGIBLE_LANGUAGES,
     streamId: symbols.streamId,
     newRequestId: symbols.newRequestId,
@@ -345,6 +350,7 @@ function installFormattingProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   return registerKeikoFormattingProvider({
     languages: registrar,
     resolve: formatting.resolve,
+    isCurrentDocument: formatting.isCurrentDocument,
     documentLanguages: formatting.languages ?? FORMATTING_ELIGIBLE_LANGUAGES,
     streamId: formatting.streamId,
     newRequestId: formatting.newRequestId,

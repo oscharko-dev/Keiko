@@ -6,19 +6,20 @@
 // deterministic.
 
 import ts from "typescript";
-import type {
-  LanguageCompletionItem,
-  LanguageCompletionItemKind,
-  LanguageCompletionResult,
-  LanguageDiagnostic,
-  LanguageDiagnosticSeverity,
-  LanguageDocumentSymbol,
-  LanguageFormattingOptions,
-  LanguageHoverResult,
-  LanguagePosition,
-  LanguageProviderDescriptor,
-  LanguageSymbolKind,
-  LanguageTextEdit,
+import {
+  MAX_LANGUAGE_FORMATTING_TAB_SIZE,
+  type LanguageCompletionItem,
+  type LanguageCompletionItemKind,
+  type LanguageCompletionResult,
+  type LanguageDiagnostic,
+  type LanguageDiagnosticSeverity,
+  type LanguageDocumentSymbol,
+  type LanguageFormattingOptions,
+  type LanguageHoverResult,
+  type LanguagePosition,
+  type LanguageProviderDescriptor,
+  type LanguageSymbolKind,
+  type LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createContainedLanguageServiceHost,
@@ -243,8 +244,9 @@ function buildFormatCodeSettings(
 ): ts.FormatCodeSettings {
   const settings: ts.FormatCodeSettings = { ...ts.getDefaultFormatCodeSettings("\n") };
   if (options?.tabSize !== undefined) {
-    settings.tabSize = options.tabSize;
-    settings.indentSize = options.tabSize;
+    const tabSize = Math.min(Math.max(1, options.tabSize), MAX_LANGUAGE_FORMATTING_TAB_SIZE);
+    settings.tabSize = tabSize;
+    settings.indentSize = tabSize;
   }
   if (options?.insertSpaces !== undefined) {
     settings.convertTabsToSpaces = options.insertSpaces;

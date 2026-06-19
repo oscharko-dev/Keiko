@@ -98,6 +98,14 @@ async function renderLoaded(): Promise<void> {
   await screen.findByTestId("editor-surface");
 }
 
+function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
+  const identity = surface.props?.fileModel.identity;
+  if (identity === undefined) {
+    throw new Error("editor identity unavailable");
+  }
+  return identity;
+}
+
 describe("EditorWidget — empty state", () => {
   it("renders an honest empty state and mounts no editor until a file is opened", () => {
     render(<EditorWidget />);
@@ -115,6 +123,9 @@ describe("EditorWidget — load", () => {
     expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
     expect(surface.props?.buffer.content.relativePath).toBe("src/app.ts");
     expect(surface.props?.fileModel.identity.language).toBe("typescript");
+    expect(surface.props?.fileModel.identity.uri).toMatch(
+      /^keiko-editor:\/\/workspace\/[0-9a-f]{8}\/src\/app\.ts$/,
+    );
     expect(surface.props?.ariaLabel).toBe("Editor: src/app.ts in /repo");
     expect(surface.props?.modifiedAt).toBe(1);
     expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("aria-disabled", "true");
@@ -202,7 +213,7 @@ describe("EditorWidget — edit and save", () => {
     await renderLoaded();
     act(() => {
       surface.props?.onSaveRequested({
-        identity: { uri: "/repo/src/app.ts", language: "typescript", version: 1 },
+        identity: { ...loadedIdentity(), version: 1 },
         expectedSavedVersion: 0,
         content: {
           relativePath: "src/app.ts",
@@ -223,7 +234,7 @@ describe("EditorWidget — edit and save", () => {
     });
     act(() => {
       surface.props?.onSaveRequested({
-        identity: { uri: "/repo/src/app.ts", language: "typescript", version: 1 },
+        identity: { ...loadedIdentity(), version: 1 },
         expectedSavedVersion: 0,
         content: {
           relativePath: "src/app.ts",
@@ -344,10 +355,12 @@ describe("EditorWidget — conflict and error", () => {
 });
 
 describe("EditorWidget — concurrent save safety", () => {
-  const saveRequest = {
-    identity: { uri: "/repo/src/app.ts", language: "typescript" as const, version: 1 },
-    content: { relativePath: "src/app.ts", text: "v2\n", sizeBytes: 3, truncated: false },
-  };
+  function saveRequest(): Parameters<NonNullable<EditorSurfaceProps["onSaveRequested"]>>[0] {
+    return {
+      identity: { ...loadedIdentity(), version: 1 },
+      content: { relativePath: "src/app.ts", text: "v2\n", sizeBytes: 3, truncated: false },
+    };
+  }
 
   it("ignores a second save request while one is already in flight", async () => {
     await renderLoaded();
@@ -361,8 +374,8 @@ describe("EditorWidget — concurrent save safety", () => {
       surface.props?.onContentChange({ text: "v2\n", sizeBytes: 3 }, "human");
     });
     act(() => {
-      surface.props?.onSaveRequested(saveRequest);
-      surface.props?.onSaveRequested(saveRequest);
+      surface.props?.onSaveRequested(saveRequest());
+      surface.props?.onSaveRequested(saveRequest());
     });
     expect(saveFilesContent).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Saving…" })).toHaveAttribute(
@@ -723,7 +736,7 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     await screen.findByTestId("editor-surface");
 
     const identity = { requestId: "r", streamId: "s", sequence: 1 };
-    const document = { uri: "/repo/src/app.ts", language: "typescript" as const, version: 1 };
+    const document = { ...loadedIdentity(), version: 1 };
 
     const diagnostics = surface.props?.provideDiagnostics;
     expect(diagnostics).toBeDefined();

@@ -41,8 +41,26 @@ function postContextWithResponseClose(body: unknown, writableEnded: boolean): Ro
 let root: string;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
-  return { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps;
+function deps(redactor: UiHandlerDeps["redactor"] = buildRedactor({})): UiHandlerDeps {
+  return { store, redactor } as unknown as UiHandlerDeps;
+}
+
+function redactEveryString(value: unknown): unknown {
+  if (typeof value === "string") {
+    if (value.startsWith("/")) {
+      return value;
+    }
+    return "[REDACTED]";
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactEveryString);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, redactEveryString(entry)]),
+    );
+  }
+  return value;
 }
 
 beforeEach(async () => {
@@ -117,6 +135,23 @@ describe("POST /api/editor/language", () => {
     expect(result.body).toMatchObject({ operation: "formatting" });
     const body = result.body as { result: { edits: { newText: string }[] } };
     expect(body.result.edits.length).toBeGreaterThan(0);
+  });
+
+  it("does not redact formatting edits that are applied back to the buffer", async () => {
+    const result = await handleEditorLanguage(
+      postContext({
+        operation: "formatting",
+        root,
+        document: { path: "src/a.ts", languageId: "typescript", text: "const x   =   1;\n" },
+        options: { tabSize: 2, insertSpaces: true },
+      }),
+      deps(redactEveryString),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { operation: string; result: { edits: { newText: string }[] } };
+    expect(body.operation).toBe("formatting");
+    expect(body.result.edits.length).toBeGreaterThan(0);
+    expect(body.result.edits.map((edit) => edit.newText)).not.toContain("[REDACTED]");
   });
 
   it("cancels analysis when the response closes before finishing", async () => {
