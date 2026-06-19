@@ -192,6 +192,7 @@ describe("POST /api/editor/language", () => {
         true,
       ),
       deps(),
+      stableLanguageOptions,
     );
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ operation: "diagnostics" });
