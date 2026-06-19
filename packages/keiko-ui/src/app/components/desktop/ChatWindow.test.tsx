@@ -999,6 +999,12 @@ describe("ChatWindow memory controls", () => {
 
     fireEvent.change(screen.getByLabelText("Budget (tokens)"), { target: { value: "800" } });
     expect(setMemoryBudgetTokens).toHaveBeenCalledWith(800);
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase memory budget" }));
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1300);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decrease memory budget" }));
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1100);
   });
 
   it("discloses disabled no-memory responses without deleting stored memories", async () => {

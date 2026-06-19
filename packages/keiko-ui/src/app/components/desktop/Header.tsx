@@ -38,29 +38,6 @@ export function Header({
       <div className="hd-tools">
         <button
           type="button"
-          className="hd-tool hd-tool-cta ui-tip"
-          onClick={openPalette}
-          data-tip="New window"
-        >
-          <Icons.add size={16} />
-          <span>New</span>
-        </button>
-        {/* uiux-fix F039 C223 — clickable ⌘K chip (reuses the shared .kbd optic from the
-            CommandPalette) so the palette has a discoverable on-screen entry point. */}
-        <button
-          type="button"
-          className="hd-tool hd-tool-kbd ui-tip"
-          onClick={openCommandPalette}
-          data-tip="Open command palette"
-          aria-label="Open the command palette (Ctrl/⌘K)"
-        >
-          <span className="kbd" aria-hidden="true">
-            ⌘K
-          </span>
-        </button>
-        <span className="hd-div" />
-        <button
-          type="button"
           className="hd-tool ui-tip"
           onClick={onTileAll}
           data-tip="Tile all windows"

@@ -79,6 +79,9 @@ export function GatewaySetupDialog({
     const previousCount = Number(root.dataset.keikoModalOpenCount ?? "0");
     root.dataset.keikoModalOpenCount = String(previousCount + 1);
     root.setAttribute("data-keiko-modal-open", "true");
+    const previousGatewayCount = Number(root.dataset.keikoGatewaySetupOpenCount ?? "0");
+    root.dataset.keikoGatewaySetupOpenCount = String(previousGatewayCount + 1);
+    root.setAttribute("data-keiko-gateway-setup-open", "true");
     triggerRef.current = document.activeElement as HTMLElement | null;
     if (preserveExisting) {
       figmaAccessTokenRef.current?.focus();
@@ -95,6 +98,16 @@ export function GatewaySetupDialog({
         root.removeAttribute("data-keiko-modal-open");
       } else {
         root.dataset.keikoModalOpenCount = String(nextCount);
+      }
+      const nextGatewayCount = Math.max(
+        0,
+        Number(root.dataset.keikoGatewaySetupOpenCount ?? "1") - 1,
+      );
+      if (nextGatewayCount === 0) {
+        delete root.dataset.keikoGatewaySetupOpenCount;
+        root.removeAttribute("data-keiko-gateway-setup-open");
+      } else {
+        root.dataset.keikoGatewaySetupOpenCount = String(nextGatewayCount);
       }
       triggerRef.current?.focus?.();
     };

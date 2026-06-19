@@ -141,6 +141,12 @@ describe("MemoryConsolidation", () => {
 
     fireEvent.wheel(maxAgeInput, { deltaY: 100 });
     expect(maxAgeInput).toHaveValue(90);
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase max age (days)" }));
+    expect(maxAgeInput).toHaveValue(91);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decrease max age (days)" }));
+    expect(maxAgeInput).toHaveValue(90);
   });
 
   it("starts a job with explicit settings and renders polled results", async () => {

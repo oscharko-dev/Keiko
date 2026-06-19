@@ -87,7 +87,7 @@ body {
   margin: 0;
   height: 100%;
   background: var(--bg);
-  color: var(--fg);
+  color: var(--fg-muted);
   font-family: var(--font-ui);
   /* Preserve native subpixel/font rasterization. Forced grayscale antialiasing
      made dense 11-13px UI text look thin and soft on 1x displays. */
@@ -197,8 +197,8 @@ button {
 }
 
 .number-control {
-  --number-stepper-size: 18px;
-  --number-stepper-right: 8px;
+  --number-stepper-size: 28px;
+  --number-stepper-right: 6px;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -220,21 +220,39 @@ button {
 }
 
 .number-control-stepper {
-  pointer-events: none;
   position: absolute;
-  top: 50%;
+  top: 4px;
+  bottom: 4px;
   right: var(--number-stepper-right);
+  display: grid;
+  grid-template-rows: 1fr 1fr;
   width: var(--number-stepper-size);
-  height: var(--number-stepper-size);
-  transform: translateY(-50%);
   border-radius: calc(var(--radius-sm) - 5px);
   border: 0;
   background: transparent;
   color: var(--accent-text);
+  overflow: visible;
 }
 
-.number-control-stepper::before,
-.number-control-stepper::after {
+.number-control-stepper-button {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.number-control-stepper-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.number-control-stepper-button::before {
   content: "";
   position: absolute;
   left: 50%;
@@ -244,19 +262,26 @@ button {
   border-bottom: 1.5px solid currentColor;
 }
 
-.number-control-stepper::before {
-  top: 3px;
-  transform: translateX(-50%) rotate(225deg);
+.number-control-stepper-up::before {
+  top: 50%;
+  transform: translate(-50%, -30%) rotate(225deg);
 }
 
-.number-control-stepper::after {
-  bottom: 3px;
-  transform: translateX(-50%) rotate(45deg);
+.number-control-stepper-down::before {
+  bottom: 50%;
+  transform: translate(-50%, 30%) rotate(45deg);
 }
 
-.number-control:focus-within .number-control-stepper {
+.number-control:focus-within .number-control-stepper,
+.number-control-stepper-button:hover:not(:disabled),
+.number-control-stepper-button:focus-visible {
   color: var(--accent-text);
   background: transparent;
+}
+
+:root[data-input-modality="keyboard"] .number-control-stepper-button:focus-visible {
+  outline: 1px solid var(--accent-text);
+  outline-offset: -1px;
 }
 
 .ksel-trigger-open {
@@ -290,7 +315,7 @@ button {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: color-mix(in oklch, var(--surface) 98%, black);
-  color: var(--fg);
+  color: var(--fg-muted);
   box-shadow:
     0 18px 42px -26px rgba(0, 0, 0, 0.85),
     0 0 0 1px var(--line-soft);
@@ -447,23 +472,25 @@ button {
   position: fixed;
   z-index: 100120;
   max-width: min(520px, calc(100vw - 32px));
-  padding: 7px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--surface) 96%, black);
-  box-shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.88);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.35;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--card);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.3;
   letter-spacing: normal;
   white-space: normal;
   overflow-wrap: anywhere;
   pointer-events: none;
   transform: translateY(-100%);
+  transform-origin: left bottom;
 }
 .ksel-overflow-tooltip[data-placement="top-right"] {
   transform: translate(-100%, -100%);
+  transform-origin: right bottom;
 }
 
 .ksel-option-desc {
@@ -752,7 +779,7 @@ button {
   flex: none;
   padding: 0 12px;
   background: color-mix(in oklch, var(--surface) 94%, transparent);
-  border-bottom: 1px solid color-mix(in oklch, var(--line-soft) 78%, transparent);
+  border-bottom: 0;
 }
 .hd-brand {
   display: flex;
@@ -1058,7 +1085,7 @@ button {
   flex: none;
   padding: 0 12px;
   background: color-mix(in oklch, var(--surface) 96%, transparent);
-  border-top: 1px solid color-mix(in oklch, var(--line-soft) 75%, transparent);
+  border-top: 0;
   font-size: 11.5px;
   /* --fg-muted meets WCAG 1.4.3 ≥4.5:1 on both themes; --fg-dim (prior value)
      measured 4.17:1 on dark (FAIL). Override rules on child segments are unaffected. */
@@ -1215,7 +1242,7 @@ button {
   flex: 1;
   min-width: 0;
   display: flex;
-  gap: 8px;
+  gap: 0;
   padding: 8px;
 }
 .ws-scene {
@@ -1292,12 +1319,7 @@ button {
   background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%));
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.025),
-    inset 0 0 0 1px color-mix(in oklch, var(--bg) 55%, transparent),
-    inset 0 0 34px
-      color-mix(in oklch, var(--accent) var(--frame-inner-glow-strength, 0%), transparent),
-    inset 0 0 86px
-      color-mix(in oklch, var(--accent) var(--frame-inner-glow-strength, 0%), transparent),
-    0 22px 60px -42px rgba(0, 0, 0, 0.9);
+    inset 0 0 0 1px color-mix(in oklch, var(--line-soft) 52%, transparent);
 }
 /* The credential dialog is portalled above the workspace. When it is open the
    background stage must be fully inert, otherwise injected browser overlays or
@@ -1350,108 +1372,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     transparent 0
   );
 }
-.ws-outline {
-  position: absolute;
-  right: 4px;
-  top: 4px;
-  z-index: 4;
-  width: min(420px, calc(100% - 16px));
-  max-height: calc(100% - 18px);
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--accent-line);
-  border-radius: var(--radius);
-  background: color-mix(in oklch, var(--surface) 96%, transparent);
-  box-shadow: var(--shadow-pop);
-  color: var(--fg);
-  pointer-events: auto;
-}
-.ws-outline[data-open="false"] {
-  opacity: 0;
-  pointer-events: none;
-  border-color: transparent;
-  box-shadow: none;
-  transform: translateX(12px);
-}
-.ws-outline-inner {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.ws-outline h2,
-.ws-outline h3,
-.ws-outline h4,
-.ws-outline p {
-  margin: 0;
-}
-.ws-outline h2 {
-  font-size: 14px;
-  font-weight: 700;
-}
-.ws-outline h3 {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--fg-muted);
-}
-.ws-outline h4 {
-  font-size: 12.5px;
-  font-weight: 700;
-}
-.ws-outline p {
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--fg-muted);
-}
-.ws-outline-summary {
-  color: var(--fg);
-}
-.ws-outline-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.ws-outline-list li {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: var(--card);
-}
-.ws-outline-list article {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ws-outline-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.ws-outline button {
-  min-height: 28px;
-  padding: 5px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--inset);
-  color: var(--fg);
-  font-size: 12px;
-  line-height: 1.2;
-}
-.ws-outline button:hover:not(:disabled) {
-  border-color: var(--line-strong);
-  background: var(--card-2);
-}
-.ws-outline button:disabled {
-  cursor: not-allowed;
-  color: var(--fg-dim);
-  opacity: 0.7;
-}
-
 /* ---------- TOOL RAILS ---------- */
 .rail {
   position: relative;
@@ -1464,6 +1384,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   padding: 10px 0;
   gap: 5px;
+}
+.rail-left {
+  border-radius: 0 14px 14px 0;
+}
+.rail-right {
+  border-radius: 14px 0 0 14px;
 }
 .rail:has(
   .rail-btn:hover,
@@ -1495,7 +1421,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .rail-div {
   width: 22px;
   height: 1px;
-  background: var(--line-soft);
+  background: color-mix(in oklch, var(--line-soft) 68%, transparent);
   margin: 6px 0 7px;
 }
 .rail-group {
@@ -1590,7 +1516,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 
 @media (max-width: 700px), (max-height: 430px) {
   .stage {
-    gap: 6px;
+    gap: 0;
     padding: 6px;
   }
 
@@ -1623,11 +1549,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 
   .workspace {
     border-radius: 12px;
-  }
-
-  .ws-outline {
-    top: 8px;
-    width: min(320px, 100%);
   }
 
   .ws-zoom {
@@ -1700,10 +1621,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     max-width: max(220px, calc(100vw - 88px));
   }
 
-  .ws-outline {
-    right: 6px;
-    width: min(420px, calc(100% - 16px));
-  }
 }
 .tw-title {
   font-size: 13px;
@@ -2785,13 +2702,29 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--fg);
 }
 .win-sub {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 1 auto;
+  min-width: 72px;
+  min-height: 24px;
+  box-sizing: border-box;
   font-size: 11.5px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--inset);
-  padding: 2px 7px;
-  border-radius: 6px;
-  max-width: 150px;
+  font-weight: 560;
+  line-height: 1;
+  color: color-mix(in oklch, var(--fg-muted) 88%, var(--fg));
+  background: color-mix(in oklch, var(--card-2) 86%, white);
+  border: 1px solid var(--line-soft);
+  padding: 0 8px;
+  border-radius: 7px;
+  max-width: clamp(128px, 26vw, 260px);
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.win-sub-text {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4919,7 +4852,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   position: absolute;
   right: 18px;
   bottom: 74px;
-  z-index: 1;
+  z-index: 14000;
   width: min(560px, calc(100% - 36px));
   max-width: calc(100% - 36px);
   max-height: calc(100% - 88px);
@@ -7167,6 +7100,11 @@ select.dlg-input {
     oklch(0.08 0.004 160 / 0.78);
   backdrop-filter: blur(12px);
 }
+
+html[data-keiko-gateway-setup-open="true"] .rail {
+  display: none;
+}
+
 .gw-setup {
   width: min(760px, 100%);
   max-height: calc(100vh - 48px);
@@ -7963,11 +7901,9 @@ select.dlg-input {
 
 .memoria-window .mc-review-header {
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
 .memoria-window .mc-review-header .mc-badge-count {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  width: 100%;
   margin-left: 0;
 }
 .memoria-window .mc-review-header .lk-btn-lg {
@@ -10348,13 +10284,13 @@ select.dlg-input {
   white-space: nowrap;
 }
 .qi-source-kind-label {
-  color: var(--fg);
+  color: currentColor;
   font-weight: 650;
 }
 .qi-source-kind-icon {
   display: none;
   flex: none;
-  color: var(--fg);
+  color: currentColor;
 }
 .qi-source-kind-icon svg {
   display: block;
@@ -10376,12 +10312,12 @@ select.dlg-input {
   background: transparent;
   border-color: transparent;
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-  color: var(--fg);
 }
 .qi-source-kind-option[aria-checked="true"] {
   background: transparent;
   border-color: transparent;
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
+  color: var(--fg);
 }
 .qi-source-kind-option[aria-checked="true"]:hover:not(:disabled) {
   background: transparent;
@@ -10389,7 +10325,7 @@ select.dlg-input {
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option[aria-checked="true"] .qi-source-kind-label {
-  color: var(--fg);
+  color: currentColor;
 }
 .qi-source-kind-option:disabled {
   opacity: 0.55;
@@ -10486,7 +10422,7 @@ select.qi-select {
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: var(--fg);
+  color: var(--fg-muted);
   font: inherit;
   text-align: center;
   cursor: pointer;
@@ -10526,7 +10462,7 @@ select.qi-select {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 10.5px;
-  color: var(--fg-muted);
+  color: currentColor;
 }
 .qi-path-picker {
   display: grid;
@@ -14465,8 +14401,7 @@ ul.integ {
 .cmp-mode:focus-visible,
 .pal-card:focus-visible,
 .palette-x:focus-visible,
-.auto-toggle:focus-visible,
-.ws-outline button:focus-visible {
+.auto-toggle:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
@@ -14645,9 +14580,13 @@ ul.integ {
   line-clamp: 3;
   overflow: hidden;
   overflow-wrap: anywhere;
+  color: var(--fg);
+  font-size: clamp(14px, 1.5vw, 17px);
+  font-weight: 620;
+  line-height: 1.26;
 }
 
-/* C024 — in-row link to the full memory (review-queue rows are not links,
+/* C024 — in-row route to the full memory (review-queue rows are not links,
    unlike the list). --accent-text keeps light-theme contrast >= 4.5:1. */
 .mc-row-detail-link {
   font-size: 11px;
@@ -15088,20 +15027,7 @@ ul.integ {
   outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
-/* ==== uiux-fix F039: cmdk header entry point + boot placeholder (C223/C402) ==== */
-/* C223: clickable ⌘K chip in the header (reuses the shared .kbd optic) so the
-   command palette has a visible entry point instead of a hover-only tooltip. */
-.hd-tool-kbd {
-  width: auto;
-  padding: 0 5px;
-}
-/* The shortcut chip is keyboard-centric noise on narrow/touch layouts — collapse it
-   alongside the .hd-tool-cta label (cf. the 680px header media query above). */
-@media (max-width: 680px) {
-  .hd-tool-kbd {
-    display: none;
-  }
-}
+/* ==== uiux-fix F039: boot placeholder (C402) ==== */
 /* C402: pure-CSS boot placeholder inside the mount gate — the pre-hydration shell
    used to be a completely empty surface with zero loading feedback. Pulse only
    under no-preference (reduced-motion discipline, cf. globals.css.test). */

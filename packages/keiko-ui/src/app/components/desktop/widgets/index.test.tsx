@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -317,6 +317,15 @@ function makeCtx(): WindowRenderContext & {
 }
 
 describe("workspace widget renderer registry", () => {
+  it("syncs an open chat window title when the active chat is renamed", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Old title" }, ctx)}</>);
+
+    await waitFor(() => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
+    });
+  });
+
   it("maps window cfg into widget props and follow-up workspace actions", () => {
     const ctx = makeCtx();
     const view = render(<>{WIN_TYPES.files.render({ root: "/repo" }, ctx)}</>);

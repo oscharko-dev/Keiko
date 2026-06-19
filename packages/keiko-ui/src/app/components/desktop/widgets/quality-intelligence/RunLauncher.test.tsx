@@ -615,6 +615,18 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     fireEvent.wheel(seedInput, { deltaY: 100 });
     expect(seedInput).toHaveValue(0);
   });
+
+  it("steps the seed with the custom number-control buttons", () => {
+    render(<RunLauncher startImpl={vi.fn()} />);
+
+    const seedInput = screen.getByRole("spinbutton", { name: /seed \(optional\)/i });
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase seed" }));
+    expect(seedInput).toHaveValue(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decrease seed" }));
+    expect(seedInput).toHaveValue(0);
+  });
 });
 
 describe("RunLauncher — run lifecycle (in-progress state)", () => {
@@ -635,6 +647,8 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
       expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: /generate test cases/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Increase seed" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Decrease seed" })).toBeDisabled();
 
     // Let the run finish.
     act(() => {

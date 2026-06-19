@@ -58,9 +58,6 @@ interface WorkspaceProps {
   readonly wsRef: RefObject<HTMLDivElement>;
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
-  readonly outlineOpen?: boolean;
-  readonly onToggleOutline?: () => void;
-  readonly renderOutlineToggle?: boolean;
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
@@ -255,242 +252,11 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
   );
 }
 
-function workspaceObjectLabel(win: AppWindow): string {
-  const title = WIN_TYPES[win.type].title;
-  const sub = subText(win.type, win.cfg);
-  return sub !== null ? `${title}: ${sub}` : title;
-}
-
-function workspaceObjectStatus(win: AppWindow, top: AppWindow | null): string {
-  const parts: string[] = [];
-  parts.push(top !== null && top.id === win.id ? "active" : "background");
-  parts.push(win.minimized === true ? "minimized" : "open");
-  if (win.max) parts.push("maximized");
-  const zoom = win.zoom ?? 1;
-  if (zoom !== 1) parts.push(`${String(Math.round(zoom * 100))}% content zoom`);
-  return parts.join(", ");
-}
-
-function relationshipLabel(
-  conn: Connection,
-  wins: readonly AppWindow[],
-): { readonly text: string; readonly source: AppWindow; readonly target: AppWindow } | null {
-  const source = wins.find((w) => w.id === conn.a);
-  const target = wins.find((w) => w.id === conn.b);
-  if (source === undefined || target === undefined) return null;
-  return {
-    source,
-    target,
-    text: `${workspaceObjectLabel(source)} ${relLabel(source, target)} ${workspaceObjectLabel(
-      target,
-    )}`,
-  };
-}
-
-type RelationshipOutlineItem = {
-  readonly conn: Connection;
-  readonly label: {
-    readonly text: string;
-    readonly source: AppWindow;
-    readonly target: AppWindow;
-  };
-};
-
-interface WorkspaceOutlineProps {
-  readonly wins: readonly AppWindow[] | null;
-  readonly conns: readonly Connection[];
-  readonly top: AppWindow | null;
-  readonly api: UseWorkspaceResult["api"];
-  readonly openPalette: () => void;
-  readonly outlineOpen?: boolean;
-  readonly onToggleOutline?: () => void;
-  readonly renderOutlineToggle?: boolean;
-}
-
-function WorkspaceOutline({
-  wins,
-  conns,
-  top,
-  api,
-  openPalette,
-  outlineOpen,
-  onToggleOutline,
-  renderOutlineToggle = true,
-}: WorkspaceOutlineProps): ReactNode {
-  const relationships = useMemo(
-    () =>
-      wins === null
-        ? []
-        : conns
-            .map((conn) => ({ conn, label: relationshipLabel(conn, wins) }))
-            .filter((item): item is RelationshipOutlineItem => item.label !== null),
-    [conns, wins],
-  );
-  const hasWindows = wins !== null && wins.length > 0;
-  // #1153: reveal is state-driven, not CSS-`:focus-within`-only. A collapsed
-  // panel previously kept pointer-events:none buttons in the a11y tree, so a
-  // pointer (or AT-driven) click fell through to the canvas as a silent no-op.
-  // `pinned` is the deliberate toggle; hover and focus-within are tracked
-  // separately so the panel stays open while keyboard focus remains inside,
-  // even after the pointer leaves.
-  const [pinned, setPinned] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  const [focusWithin, setFocusWithin] = useState(false);
-  const controlled = outlineOpen !== undefined;
-  const open = controlled ? outlineOpen : pinned || hovered || focusWithin;
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const syncContentInert = useCallback(
-    (node: HTMLDivElement | null): void => {
-      contentRef.current = node;
-      node?.toggleAttribute("inert", !open);
-    },
-    [open],
-  );
-
-  useEffect(() => {
-    contentRef.current?.toggleAttribute("inert", !open);
-  }, [open]);
-
-  return (
-    <section
-      className="ws-outline"
-      data-open={open ? "true" : "false"}
-      aria-label="Workspace outline"
-      onPointerDown={(event) => event.stopPropagation()}
-      onPointerEnter={controlled ? undefined : () => setHovered(true)}
-      onPointerLeave={controlled ? undefined : () => setHovered(false)}
-      onFocusCapture={controlled ? undefined : () => setFocusWithin(true)}
-      onBlurCapture={
-        controlled
-          ? undefined
-          : (event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) setFocusWithin(false);
-            }
-      }
-    >
-      {renderOutlineToggle ? (
-        <button
-          type="button"
-          className="ws-outline-toggle"
-          aria-expanded={open}
-          aria-controls="ws-outline-content"
-          // Hiding from the pinned state should collapse immediately instead of
-          // waiting for hover/focus to clear.
-          onClick={() => {
-            if (controlled) {
-              onToggleOutline?.();
-              return;
-            }
-            if (pinned) {
-              setPinned(false);
-              setHovered(false);
-              setFocusWithin(false);
-              return;
-            }
-            setPinned(true);
-          }}
-        >
-          {open ? "Hide workspace outline" : "Show workspace outline"}
-        </button>
-      ) : null}
-      <div
-        ref={syncContentInert}
-        id="ws-outline-content"
-        className="ws-outline-content ws-outline-inner"
-        aria-hidden={open ? undefined : true}
-      >
-        <h2 id="ws-outline-title">Workspace outline</h2>
-        <p className="ws-outline-summary">
-          {wins === null
-            ? "Workspace is loading."
-            : `${String(wins.length)} workspace window${wins.length === 1 ? "" : "s"}, ${String(
-                relationships.length,
-              )} relationship${relationships.length === 1 ? "" : "s"}.`}
-        </p>
-        <div className="ws-outline-actions">
-          <button type="button" onClick={openPalette}>
-            New window
-          </button>
-          <button type="button" onClick={api.tileAll} disabled={!hasWindows}>
-            Tile all windows
-          </button>
-          <button type="button" onClick={api.cascade} disabled={!hasWindows}>
-            Cascade windows
-          </button>
-        </div>
-
-        <section aria-labelledby="ws-outline-windows-title">
-          <h3 id="ws-outline-windows-title">Windows</h3>
-          {wins === null ? (
-            <p>Loading windows.</p>
-          ) : wins.length === 0 ? (
-            <p>No workspace windows are open.</p>
-          ) : (
-            <ul className="ws-outline-list">
-              {wins.map((win) => {
-                const label = workspaceObjectLabel(win);
-                const def = WIN_TYPES[win.type];
-                return (
-                  <li key={win.id}>
-                    <article aria-labelledby={`ws-outline-window-${win.id}`}>
-                      <h4 id={`ws-outline-window-${win.id}`}>{label}</h4>
-                      <p>
-                        Type: {def.title}. Status: {workspaceObjectStatus(win, top)}.
-                      </p>
-                      <p>{def.desc}</p>
-                      <div className="ws-outline-actions" aria-label={`${label} actions`}>
-                        <button type="button" onClick={() => api.restore(win.id)}>
-                          {win.minimized === true ? `Restore ${label}` : `Open ${label}`}
-                        </button>
-                        <button type="button" onClick={() => api.minimize(win.id)}>
-                          Minimize {label}
-                        </button>
-                        <button type="button" onClick={() => api.maximize(win.id)}>
-                          {win.max ? `Restore size of ${label}` : `Full screen ${label}`}
-                        </button>
-                        <button type="button" onClick={() => api.close(win.id)}>
-                          Close {label}
-                        </button>
-                      </div>
-                    </article>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        <section aria-labelledby="ws-outline-relationships-title">
-          <h3 id="ws-outline-relationships-title">Relationships</h3>
-          {relationships.length === 0 ? (
-            <p>No relationships are connected.</p>
-          ) : (
-            <ul className="ws-outline-list">
-              {relationships.map(({ conn, label }) => (
-                <li key={conn.id}>
-                  <p>{label.text}.</p>
-                  <button type="button" onClick={() => api.removeConn(conn.id)}>
-                    Remove relationship between {workspaceObjectLabel(label.source)} and{" "}
-                    {workspaceObjectLabel(label.target)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
-    </section>
-  );
-}
-
 export function Workspace({
   ws,
   wsRef,
   openPalette,
   palette,
-  outlineOpen,
-  onToggleOutline,
-  renderOutlineToggle,
 }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
@@ -918,16 +684,6 @@ export function Workspace({
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      <WorkspaceOutline
-        wins={wins}
-        conns={conns}
-        top={top}
-        api={api}
-        openPalette={openPalette}
-        {...(renderOutlineToggle !== undefined ? { renderOutlineToggle } : {})}
-        {...(outlineOpen !== undefined ? { outlineOpen } : {})}
-        {...(onToggleOutline !== undefined ? { onToggleOutline } : {})}
-      />
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
@@ -1013,7 +769,7 @@ export function Workspace({
 
       <button
         type="button"
-        className="ws-fab ui-tip"
+        className="ws-fab ui-tip cmp-tip-end"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={openPalette}
         aria-label="New window"

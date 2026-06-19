@@ -75,7 +75,9 @@ type OverflowTooltipPosition = {
   readonly placement: "top-left" | "top-right";
 };
 
-const OVERFLOW_TOOLTIP_DELAY_MS = 2000;
+const OVERFLOW_TOOLTIP_DELAY_MS = 1500;
+const OVERFLOW_TOOLTIP_EDGE_OFFSET_PX = 8;
+const OVERFLOW_TOOLTIP_VERTICAL_OFFSET_PX = 6;
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
@@ -105,11 +107,25 @@ function nextEnabledIndex(
   return -1;
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
-function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode {
+function OverflowOptionButton({
+  active,
+  index,
+  onCommit,
+  onOptionKeyDown,
+  option,
+  setOptionRef,
+}: {
+  readonly active: boolean;
+  readonly index: number;
+  readonly onCommit: (option: FlatOption) => void;
+  readonly onOptionKeyDown: (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => void;
+  readonly option: FlatOption;
+  readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
+}): ReactNode {
+  const optionRef = useRef<HTMLButtonElement | null>(null);
   const labelRef = useRef<HTMLSpanElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<OverflowTooltipPosition | null>(null);
@@ -125,16 +141,27 @@ function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode 
   const scheduleTooltip = (): void => {
     if (timerRef.current !== null) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      const node = labelRef.current;
-      if (node === null || node.scrollWidth <= node.clientWidth) return;
-      const rect = node.getBoundingClientRect();
+      const labelNode = labelRef.current;
+      const optionNode = optionRef.current;
+      if (
+        labelNode === null ||
+        optionNode === null ||
+        labelNode.scrollWidth <= labelNode.clientWidth
+      ) {
+        return;
+      }
+      const rect = optionNode.getBoundingClientRect();
       const preferredWidth = Math.min(520, window.innerWidth - 32);
-      const hasRoomRight = rect.left + preferredWidth <= window.innerWidth - 16;
+      const hasRoomRight =
+        rect.right + OVERFLOW_TOOLTIP_EDGE_OFFSET_PX + preferredWidth <= window.innerWidth - 16;
       const placement = hasRoomRight ? "top-left" : "top-right";
       setTooltipPosition({
-        left: clamp(placement === "top-left" ? rect.left : rect.right, 16, window.innerWidth - 16),
+        left:
+          placement === "top-left"
+            ? rect.right + OVERFLOW_TOOLTIP_EDGE_OFFSET_PX
+            : rect.left - OVERFLOW_TOOLTIP_EDGE_OFFSET_PX,
         placement,
-        top: Math.max(16, rect.top - 8),
+        top: rect.top - OVERFLOW_TOOLTIP_VERTICAL_OFFSET_PX,
       });
     }, OVERFLOW_TOOLTIP_DELAY_MS);
   };
@@ -142,18 +169,35 @@ function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode 
   useEffect(() => clearTooltip, []);
 
   return (
-    <>
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- passive hover/focus tooltip; option button owns keyboard activation. */}
-      <span
-        className="ksel-option-label"
-        ref={labelRef}
-        onBlur={clearTooltip}
-        onFocus={scheduleTooltip}
-        onPointerEnter={scheduleTooltip}
-        onPointerLeave={clearTooltip}
-      >
-        {label}
+    <button
+      ref={(element) => {
+        optionRef.current = element;
+        setOptionRef(index, element);
+      }}
+      aria-selected={active}
+      className={`ksel-option${active ? " ksel-option-active" : ""}`}
+      data-disabled={option.disabled === true ? "true" : undefined}
+      disabled={option.disabled}
+      onBlur={clearTooltip}
+      onClick={() => onCommit(option)}
+      onFocus={scheduleTooltip}
+      onKeyDown={(event) => onOptionKeyDown(event, index)}
+      onPointerEnter={scheduleTooltip}
+      onPointerLeave={clearTooltip}
+      role="option"
+      type="button"
+    >
+      <span className="ksel-option-copy">
+        <span className="ksel-option-label" ref={labelRef}>
+          {option.label}
+        </span>
+        {option.description !== undefined ? (
+          <span className="ksel-option-desc">{option.description}</span>
+        ) : null}
       </span>
+      {option.badge !== undefined ? (
+        <span className="ksel-option-badge">{option.badge}</span>
+      ) : null}
       {tooltipPosition !== null
         ? createPortal(
             <div
@@ -165,12 +209,12 @@ function DelayedOverflowLabel({ label }: { readonly label: string }): ReactNode 
                 top: `${tooltipPosition.top.toString()}px`,
               }}
             >
-              {label}
+              {option.label}
             </div>,
             document.body,
           )
         : null}
-    </>
+    </button>
   );
 }
 
@@ -506,31 +550,20 @@ export default function KeikoSelect({
                         entry.value === option.value && entry.sectionLabel === section.label,
                     );
                     const active = index === selectedIndex;
+                    const flatOption = flatOptions[index];
+                    if (flatOption === undefined) return null;
                     return (
-                      <button
+                      <OverflowOptionButton
+                        active={active}
+                        index={index}
                         key={`${section.label ?? "section"}-${option.value}`}
-                        ref={(element) => {
-                          if (index >= 0) optionRefs.current[index] = element;
+                        onCommit={commit}
+                        onOptionKeyDown={onOptionKeyDown}
+                        option={flatOption}
+                        setOptionRef={(optionIndex, element) => {
+                          optionRefs.current[optionIndex] = element;
                         }}
-                        aria-selected={active}
-                        className={`ksel-option${active ? " ksel-option-active" : ""}`}
-                        data-disabled={option.disabled === true ? "true" : undefined}
-                        disabled={option.disabled}
-                        onClick={() => commit(flatOptions[index]!)}
-                        onKeyDown={(event) => onOptionKeyDown(event, index)}
-                        role="option"
-                        type="button"
-                      >
-                        <span className="ksel-option-copy">
-                          <DelayedOverflowLabel label={option.label} />
-                          {option.description !== undefined ? (
-                            <span className="ksel-option-desc">{option.description}</span>
-                          ) : null}
-                        </span>
-                        {option.badge !== undefined ? (
-                          <span className="ksel-option-badge">{option.badge}</span>
-                        ) : null}
-                      </button>
+                      />
                     );
                   })}
                 </div>

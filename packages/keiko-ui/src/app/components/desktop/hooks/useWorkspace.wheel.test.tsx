@@ -33,11 +33,6 @@ function Harness(): ReactElement {
       <section className="window" data-window-id="files-1">
         <div data-testid="window-target" />
       </section>
-      <aside className="ws-outline">
-        <button type="button" data-testid="outline-action">
-          Outline action
-        </button>
-      </aside>
       <output data-testid="files-zoom">{files?.zoom ?? "missing"}</output>
       <output data-testid="view-zoom">{ws.view.zoom}</output>
       <output data-testid="view-x">{ws.view.x}</output>
@@ -110,26 +105,6 @@ describe("useWorkspace wheel zoom routing", () => {
       expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1),
     );
     expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
-  });
-
-  it("does not pan the workspace when scrolling inside the workspace outline", async () => {
-    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
-    render(<Harness />);
-    mockWorkspaceRect();
-
-    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1"));
-
-    fireEvent.wheel(screen.getByTestId("outline-action"), {
-      bubbles: true,
-      cancelable: true,
-      deltaX: 32,
-      deltaY: 48,
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("view-x")).toHaveTextContent("0");
-      expect(screen.getByTestId("view-y")).toHaveTextContent("0");
-    });
   });
 
   it("fits the workspace view around visible windows", async () => {

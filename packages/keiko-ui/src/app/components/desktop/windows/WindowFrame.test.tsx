@@ -157,6 +157,35 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).not.toHaveBeenCalled();
   });
 
+  it("hides content zoom controls when Quality Intelligence is at its narrow width", () => {
+    render(
+      <WindowFrame
+        win={appWindow({ type: "quality", id: "quality-1", w: 300, h: 420 })}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Quality Intelligence" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom Quality Intelligence content out" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "100% — reset Quality Intelligence content zoom",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom Quality Intelligence content in" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Quality Intelligence window controls" }),
+    ).toBeInTheDocument();
+  });
+
   it("ignores header double clicks in the right-side control gutter", () => {
     const maximize = vi.fn();
     const { container } = render(

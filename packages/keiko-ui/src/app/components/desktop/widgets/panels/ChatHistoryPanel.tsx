@@ -136,7 +136,6 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       const response = await updateChat(chat.id, { status: "open" });
       session.replaceChat(response.chat);
       setDeleteConfirmId(null);
-      setView("active");
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "Request failed.";
       setError(`Restore failed: ${detail}`);
