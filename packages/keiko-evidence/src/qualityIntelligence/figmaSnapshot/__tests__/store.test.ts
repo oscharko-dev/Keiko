@@ -239,6 +239,14 @@ describe("createNodeFigmaSnapshotStore", () => {
     );
   });
 
+  it("rejects invalid JSON when loading metadata only", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    writeFileSync(snapshotFile(), "{", "utf8");
+
+    expect(() => store.loadMetadata(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
   it("is WRITE-ONCE: a second record for the same runId is refused", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
@@ -282,6 +290,89 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
   });
 
+  it("preserves an existing display name when only updatedAt changes", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "  Release   baseline  ",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
+  it("rejects invalid mutable display names", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "x".repeat(121),
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "bad\u0007name",
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("ignores malformed mutable management sidecars on read", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const invalidRecords: readonly unknown[] = [
+      null,
+      [],
+      { figmaSnapshotManagementSchemaVersion: 0, runId: RUN_ID, updatedAt: "2026-06-19T10:00:00Z" },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID_2,
+        updatedAt: "2026-06-19T10:00:00Z",
+      },
+      { figmaSnapshotManagementSchemaVersion: 1, runId: RUN_ID },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID,
+        updatedAt: "2026-06-19T10:00:00Z",
+        displayName: 42,
+      },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID,
+        updatedAt: "2026-06-19T10:00:00Z",
+        displayName: "bad\u0007name",
+      },
+    ];
+
+    for (const invalidRecord of invalidRecords) {
+      writeFileSync(snapshotManagementFile(), JSON.stringify(invalidRecord), "utf8");
+      expect(store.loadUserMetadata(RUN_ID)).toBeUndefined();
+    }
+    writeFileSync(snapshotManagementFile(), "{", "utf8");
+    expect(store.loadUserMetadata(RUN_ID)).toBeUndefined();
+  });
+
+  it("rejects metadata updates for missing snapshots", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "Release baseline",
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
   it("deletes the snapshot record, side-files, and mutable management metadata together", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     const result = store.record(baseInput());
@@ -302,6 +393,17 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(lstatSync(snapshotFile(), { throwIfNoEntry: false })).toBeUndefined();
     expect(lstatSync(result.sideFileDir, { throwIfNoEntry: false })).toBeUndefined();
     expect(lstatSync(snapshotManagementFile(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("reports no deleted artifacts when deleting a missing snapshot", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    expect(store.deleteSnapshot(RUN_ID)).toEqual({
+      runId: RUN_ID,
+      recordDeleted: false,
+      sideFileDirDeleted: false,
+      metadataDeleted: false,
+    });
   });
 
   it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
@@ -813,6 +915,7 @@ describe("createNodeFigmaSnapshotStore — listRecent", () => {
 
     expect(store.listRecent()).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
     expect(store.listRecent(2)).toEqual([RUN_ID_2, RUN_ID_3]);
+    expect(store.listRecent(0)).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
   });
 
   it("skips unparseable snapshot files silently", () => {
