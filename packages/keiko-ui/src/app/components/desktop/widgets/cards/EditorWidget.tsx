@@ -23,7 +23,16 @@
  * `disabled`/`deferred` and no model-generated code is produced or executed in v1.
  */
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   buildTestGenerationPreview,
   createEditorRequestId,
@@ -113,6 +122,7 @@ const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
 
 interface EditorWidgetProps {
+  readonly windowId?: string | undefined;
   readonly root?: string;
   readonly file?: string;
   readonly linkedRoot?: string | null;
@@ -124,6 +134,11 @@ interface EditorWidgetProps {
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return error instanceof Error ? error.message : "The file could not be loaded.";
+}
+
+function safeDomIdSegment(value: string): string {
+  const safe = value.replace(/[^A-Za-z0-9_-]/gu, "-");
+  return safe.length > 0 ? safe : "editor";
 }
 
 /** Map a workspace path to a governed {@link EditorLanguageId}; non-source files are plaintext. */
@@ -141,6 +156,10 @@ function inferEditorLanguage(path: string): EditorLanguageId {
   };
   const language = byExt[ext] ?? "plaintext";
   return isSupportedEditorLanguage(language) ? language : "plaintext";
+}
+
+function isSourceEditorLanguage(language: EditorLanguageId): boolean {
+  return language === "typescript" || language === "javascript";
 }
 
 function rootHash(root: string): string {
@@ -219,6 +238,7 @@ function completionContextSelectors(input: {
 }
 
 export function EditorWidget({
+  windowId,
   root,
   file,
   linkedRoot,
@@ -227,6 +247,13 @@ export function EditorWidget({
   linkedCapsuleSetIds,
 }: EditorWidgetProps): ReactNode {
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
+  const generatedId = useId();
+  const editorDomIdPrefix = useMemo(
+    () => `ed-${safeDomIdSegment(windowId ?? generatedId)}`,
+    [generatedId, windowId],
+  );
+  const tabId = `${editorDomIdPrefix}-active-tab`;
+  const tabpanelId = `${editorDomIdPrefix}-tabpanel`;
 
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
@@ -547,6 +574,13 @@ export function EditorWidget({
     if (!hasTarget || root === undefined || file === undefined || fileModel === null) {
       return;
     }
+    if (
+      loadState.status !== "ready" ||
+      isTestGenerationBusy(testGenState) ||
+      !isSourceEditorLanguage(fileModel.identity.language)
+    ) {
+      return;
+    }
     testGenAbortRef.current?.abort();
     const abortController = new AbortController();
     testGenAbortRef.current = abortController;
@@ -623,7 +657,9 @@ export function EditorWidget({
     linkedCapsuleSetIds,
     linkedFilePath,
     linkedRoot,
+    loadState.status,
     root,
+    testGenState,
   ]);
 
   // Issue #1201: governed language-intelligence resolvers (diagnostics, hover, symbols, formatting).
@@ -709,7 +745,7 @@ export function EditorWidget({
   // governed deterministic TS/JS gate.
   const completionLanguage = fileModel?.identity.language;
   const completionEnabled =
-    completionLanguage === "typescript" || completionLanguage === "javascript";
+    completionLanguage !== undefined && isSourceEditorLanguage(completionLanguage);
   const editorSurfaceKey = `${themeVariant ?? "dark"}:${completionEnabled ? "source" : "plain"}`;
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
@@ -723,19 +759,23 @@ export function EditorWidget({
     hasTarget && completionEnabled && loadState.status === "ready" && !testGenBusy;
   const testGenStatusText = describeTestGenerationStatus(testGenState);
 
-  const buffer: EditorBuffer | null =
-    fileModel === null
-      ? null
-      : {
-          language: fileModel.identity.language,
-          readOnly: false,
-          content: {
-            relativePath: file ?? "",
-            text: content,
-            sizeBytes: new TextEncoder().encode(content).length,
-            truncated: false,
+  const contentSizeBytes = useMemo(() => new TextEncoder().encode(content).length, [content]);
+  const buffer: EditorBuffer | null = useMemo(
+    () =>
+      fileModel === null
+        ? null
+        : {
+            language: fileModel.identity.language,
+            readOnly: false,
+            content: {
+              relativePath: file ?? "",
+              text: content,
+              sizeBytes: contentSizeBytes,
+              truncated: false,
+            },
           },
-        };
+    [content, contentSizeBytes, file, fileModel],
+  );
   const testGenerationPreview: TestGenerationPreview | null =
     isTestGenerationPreviewing(testGenState) && buffer !== null
       ? buildTestGenerationPreview({
@@ -769,6 +809,81 @@ export function EditorWidget({
           ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
         });
 
+  const showUnifiedStatusBar =
+    testGenerationPreview === null &&
+    hasTarget &&
+    loadState.status === "ready" &&
+    buffer !== null &&
+    fileModel !== null &&
+    statusBarViewModel !== null;
+
+  let panel: ReactNode;
+  if (testGenerationPreview !== null) {
+    panel = (
+      <EditorDiffSurface
+        model={testGenerationPreview.model}
+        loadState={{ status: "ready" }}
+        themeVariant={themeVariant}
+        actions={testGenerationPreview.actions}
+        onReject={() => {
+          dispatchTestGen({ type: "dismiss" });
+        }}
+      />
+    );
+  } else if (hasTarget && loadState.status === "error") {
+    panel = (
+      <div className="ed-host-loading" role="alert">
+        <span>{`Editor failed to load: ${loadState.message}`}</span>
+        <button type="button" className="ed-reload" onClick={reload}>
+          Retry
+        </button>
+      </div>
+    );
+  } else if (hasTarget && buffer !== null && fileModel !== null) {
+    panel = (
+      <EditorSurface
+        key={editorSurfaceKey}
+        buffer={buffer}
+        fileModel={fileModel}
+        fileLoadState={loadState}
+        saveStatus={saveStatus}
+        saveError={saveError}
+        modifiedAt={modifiedAt ?? undefined}
+        maxSizeBytes={maxBytes ?? undefined}
+        themeVariant={themeVariant}
+        ariaLabel={root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined}
+        onContentChange={onContentChange}
+        onSaveRequested={onSaveRequested}
+        onRuntimeError={onRuntimeError}
+        provideCompletions={completionEnabled ? provideCompletions : undefined}
+        completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
+        provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
+        onInlineCompletionTelemetry={completionEnabled ? onInlineCompletionTelemetry : undefined}
+        provideDiagnostics={completionEnabled ? provideDiagnostics : undefined}
+        provideHover={completionEnabled ? provideHover : undefined}
+        provideSymbols={completionEnabled ? provideSymbols : undefined}
+        provideFormatting={completionEnabled ? provideFormatting : undefined}
+        onSelectionChange={setCurrentSelection}
+        onCursorChange={setCursor}
+        onDiagnosticsSummary={completionEnabled ? setDiagnosticsSummary : undefined}
+        onGenerateTests={completionEnabled ? runTestGeneration : undefined}
+        showStatusFooter={false}
+      />
+    );
+  } else if (hasTarget) {
+    panel = (
+      <div className="ed-host-loading" role="status">
+        Loading file…
+      </div>
+    );
+  } else {
+    panel = (
+      <div className="ed-empty" role="note">
+        Choose a file from the Files window and use <strong>Open in editor</strong>.
+      </div>
+    );
+  }
+
   return (
     <div className="editor">
       <div className="ed-tabs mono">
@@ -776,12 +891,14 @@ export function EditorWidget({
           <span
             className="ed-tab active"
             role="tab"
-            id="ed-active-tab"
+            id={tabId}
             aria-selected="true"
-            aria-controls="ed-tabpanel"
+            aria-controls={tabpanelId}
             tabIndex={0}
+            title={file ?? "Editor"}
           >
-            <Icons.editor size={12} /> {file ?? "Editor"}
+            <Icons.editor size={12} />
+            <span className="ed-tab-label">{file ?? "Editor"}</span>
             {dirty ? (
               <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
                 ●
@@ -826,76 +943,12 @@ export function EditorWidget({
           </button>
         ) : null}
       </div>
-      {testGenerationPreview !== null ? (
-        <div className="ed-host">
-          <EditorDiffSurface
-            model={testGenerationPreview.model}
-            loadState={{ status: "ready" }}
-            themeVariant={themeVariant}
-            actions={testGenerationPreview.actions}
-            onReject={() => {
-              dispatchTestGen({ type: "dismiss" });
-            }}
-          />
-        </div>
-      ) : hasTarget && loadState.status === "error" ? (
-        <div className="ed-host">
-          <div className="ed-host-loading" role="alert">
-            <span>{`Editor failed to load: ${loadState.message}`}</span>
-            <button type="button" className="ed-reload" onClick={reload}>
-              Retry
-            </button>
-          </div>
-        </div>
-      ) : hasTarget && buffer !== null && fileModel !== null ? (
-        <>
-          <div className="ed-host" id="ed-tabpanel" role="tabpanel" aria-labelledby="ed-active-tab">
-            <EditorSurface
-              key={editorSurfaceKey}
-              buffer={buffer}
-              fileModel={fileModel}
-              fileLoadState={loadState}
-              saveStatus={saveStatus}
-              saveError={saveError}
-              modifiedAt={modifiedAt ?? undefined}
-              maxSizeBytes={maxBytes ?? undefined}
-              themeVariant={themeVariant}
-              ariaLabel={
-                root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
-              }
-              onContentChange={onContentChange}
-              onSaveRequested={onSaveRequested}
-              onRuntimeError={onRuntimeError}
-              provideCompletions={completionEnabled ? provideCompletions : undefined}
-              completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
-              provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
-              onInlineCompletionTelemetry={
-                completionEnabled ? onInlineCompletionTelemetry : undefined
-              }
-              provideDiagnostics={completionEnabled ? provideDiagnostics : undefined}
-              provideHover={completionEnabled ? provideHover : undefined}
-              provideSymbols={completionEnabled ? provideSymbols : undefined}
-              provideFormatting={completionEnabled ? provideFormatting : undefined}
-              onSelectionChange={setCurrentSelection}
-              onCursorChange={setCursor}
-              onDiagnosticsSummary={completionEnabled ? setDiagnosticsSummary : undefined}
-              onGenerateTests={completionEnabled ? runTestGeneration : undefined}
-              showStatusFooter={false}
-            />
-          </div>
-          {statusBarViewModel !== null ? <EditorStatusBar viewModel={statusBarViewModel} /> : null}
-        </>
-      ) : hasTarget ? (
-        <div className="ed-host">
-          <div className="ed-host-loading" role="status">
-            Loading file…
-          </div>
-        </div>
-      ) : (
-        <div className="ed-empty" role="note">
-          Choose a file from the Files window and use <strong>Open in editor</strong>.
-        </div>
-      )}
+      <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
+        {panel}
+      </div>
+      {showUnifiedStatusBar && statusBarViewModel !== null ? (
+        <EditorStatusBar viewModel={statusBarViewModel} />
+      ) : null}
     </div>
   );
 }

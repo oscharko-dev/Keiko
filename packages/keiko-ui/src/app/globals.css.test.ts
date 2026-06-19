@@ -865,3 +865,21 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(css).toContain("--ed-syn-keyword: #6f1b96");
   });
 });
+
+describe("Issue #1205 — editor tab truncation", () => {
+  it("keeps the tab strip shrinkable inside compact editor cards", () => {
+    expect(cssBlock(".ed-tabs {")).toContain("min-width: 0");
+    expect(cssBlock(".ed-tablist {")).toContain("min-width: 0");
+    expect(cssBlock(".ed-tablist {")).toContain("overflow: hidden");
+  });
+
+  it("truncates long editor tab labels instead of expanding the header", () => {
+    for (const selector of [".ed-tab {", ".ed-tab-label {"]) {
+      const block = cssBlock(selector);
+      expect(block).toContain("min-width: 0");
+      expect(block).toContain("overflow: hidden");
+      expect(block).toContain("white-space: nowrap");
+      expect(block).toContain("text-overflow: ellipsis");
+    }
+  });
+});

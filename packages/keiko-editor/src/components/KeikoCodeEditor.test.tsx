@@ -468,7 +468,7 @@ describe("KeikoCodeEditor — read-only and error rendering", () => {
       />,
     );
     expect(screen.queryByLabelText("Editor: src/a.ts")).not.toBeInTheDocument();
-    expect(screen.getByTestId("keiko-editor-loading")).toBeInTheDocument();
+    expect(screen.getByTestId("keiko-editor-runtime-error")).toHaveTextContent("boot failed");
     expect(captured.editor).toBeNull();
     expect(onContentChange).not.toHaveBeenCalled();
   });

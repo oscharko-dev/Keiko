@@ -297,6 +297,7 @@ registerWindowRender("editor", (cfg, ctx) => {
   const props: {
     root?: string;
     file?: string;
+    windowId?: string;
     linkedRoot?: string | null;
     linkedFilePath?: string | undefined;
     linkedCapsuleIds?: readonly string[];
@@ -308,6 +309,7 @@ registerWindowRender("editor", (cfg, ctx) => {
   props.linkedFilePath = ctx.linkedFilePath;
   props.linkedCapsuleIds = ctx.linkedCapsuleIds;
   props.linkedCapsuleSetIds = ctx.linkedCapsuleSetIds;
+  props.windowId = ctx.windowId;
   return <EditorWidget {...props} />;
 });
 registerWindowRender("browser", (cfg) => {
