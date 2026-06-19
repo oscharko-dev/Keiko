@@ -74,6 +74,8 @@ const screenIr = (id: string, name: string, text?: string): Record<string, unkno
 });
 
 const snapshotFile = (runId = RUN_ID): string => join(dir, "qi", `${runId}.figma-snapshot.json`);
+const snapshotManagementFile = (runId = RUN_ID): string =>
+  join(dir, "qi", `${runId}.figma-snapshot.management.json`);
 
 const readSnapshotFile = (runId = RUN_ID): Record<string, unknown> =>
   JSON.parse(readFileSync(snapshotFile(runId), "utf8")) as Record<string, unknown>;
@@ -242,6 +244,64 @@ describe("createNodeFigmaSnapshotStore", () => {
     store.record(baseInput());
 
     expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+  });
+
+  it("stores mutable display metadata without mutating the immutable snapshot record", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const immutableBefore = readFileSync(snapshotFile(), "utf8");
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+    expect(readFileSync(snapshotFile(), "utf8")).toBe(immutableBefore);
+    expect(readSnapshotFile().integrityHash).toBe(loadOrThrow(store, RUN_ID).integrityHash);
+  });
+
+  it("clears the mutable display name when an empty name is stored", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "   ",
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({ updatedAt: "2026-06-19T11:00:00.000Z" });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
+  it("deletes the snapshot record, side-files, and mutable management metadata together", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const deleted = store.deleteSnapshot(RUN_ID);
+
+    expect(deleted).toEqual({
+      runId: RUN_ID,
+      recordDeleted: true,
+      sideFileDirDeleted: true,
+      metadataDeleted: true,
+    });
+    expect(store.load(RUN_ID)).toBeUndefined();
+    expect(lstatSync(snapshotFile(), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(result.sideFileDir, { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotManagementFile(), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   it("does not overwrite a record that appears between the write-once precheck and final commit", () => {

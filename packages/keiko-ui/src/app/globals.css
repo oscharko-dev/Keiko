@@ -107,9 +107,18 @@ button {
   background: none;
 }
 :root[data-input-modality="pointer"]
-  :where(button, a, input, textarea, select, [role="button"], [tabindex]:not([tabindex="-1"])):focus {
+  :where(
+    button,
+    a,
+    input,
+    textarea,
+    select,
+    [role="button"],
+    [tabindex]:not([tabindex="-1"])
+  ):focus {
   outline: none !important;
 }
+/* prettier-ignore */
 :root[data-input-modality="pointer"]
   :where(button, a, input, textarea, select, [role="button"], [tabindex]:not([tabindex="-1"])):focus:not(
     [data-on="true"],
@@ -10677,27 +10686,38 @@ select.qi-select {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
 }
 .qi-cand-card {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  padding: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 .qi-cand-card-editing {
   grid-column: 1 / -1;
+  padding: 0;
+  background: color-mix(in oklab, var(--accent) 6%, var(--card));
+  border-color: var(--accent-line);
 }
 .qi-cand-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: 14px;
+  padding: 12px 14px 10px;
+}
+.qi-cand-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 .qi-cand-title {
   font-size: 13px;
@@ -10705,14 +10725,23 @@ select.qi-select {
   color: var(--fg);
   margin: 0;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.qi-cand-status {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 48%;
 }
 .qi-cand-badges {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
 }
-.qi-cand-pri,
 .qi-cand-risk {
   font-size: 10px;
   font-weight: 700;
@@ -10723,8 +10752,82 @@ select.qi-select {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+.qi-cand-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: 0;
+}
+.qi-cand-meta div {
+  min-width: 48px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--inset);
+}
+.qi-cand-meta dt {
+  margin: 0 0 2px;
+  color: var(--fg-faint);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.qi-cand-meta dd {
+  margin: 0;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.qi-cand-accordion-stack {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line-soft);
+}
+.qi-cand-accordion {
+  border-bottom: 1px solid var(--line-soft);
+}
+.qi-cand-accordion-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 9px 14px;
+  color: var(--fg);
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 650;
+}
+.qi-cand-accordion-summary::-webkit-details-marker {
+  display: none;
+}
+.qi-cand-accordion-summary::after {
+  content: "";
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-right: 1.5px solid var(--fg-muted);
+  border-bottom: 1.5px solid var(--fg-muted);
+  transform: rotate(-45deg);
+  transition: transform 0.12s ease;
+}
+.qi-cand-accordion[open] > .qi-cand-accordion-summary::after {
+  transform: rotate(45deg);
+}
+.qi-cand-accordion-summary:hover {
+  background: var(--card-2);
+}
+.qi-cand-accordion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px 12px 34px;
+}
 .qi-cand-block {
-  margin-top: 8px;
+  margin: 0;
 }
 .qi-cand-block-label {
   font-size: 10px;
@@ -10746,7 +10849,7 @@ select.qi-select {
 }
 .qi-cand-tags {
   list-style: none;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
@@ -10762,8 +10865,8 @@ select.qi-select {
 .qi-cand-actions {
   display: flex;
   gap: 6px;
-  margin-top: 12px;
   flex-wrap: wrap;
+  margin-top: 0;
 }
 .qi-cand-governance-note {
   margin: 0 0 10px;
@@ -10773,8 +10876,54 @@ select.qi-select {
 .qi-edit-form {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+.qi-edit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.qi-edit-head-copy {
+  min-width: 0;
+}
+.qi-edit-eyebrow {
+  margin: 0 0 3px;
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.qi-edit-heading {
+  margin: 0;
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.qi-edit-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.32fr);
+  gap: 14px;
+  align-items: start;
+}
+.qi-edit-main,
+.qi-edit-side {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  max-width: 760px;
+  min-width: 0;
+}
+.qi-edit-side {
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
 }
 .qi-edit-field {
   display: flex;
@@ -10792,18 +10941,18 @@ select.qi-select {
 .qi-edit-textarea,
 .qi-edit-select {
   width: 100%;
-  background: var(--card-2);
+  background: var(--inset);
   color: var(--fg);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: 9px 10px;
+  font-size: 13px;
   font-family: inherit;
   box-sizing: border-box;
 }
 .qi-edit-textarea {
   resize: vertical;
-  min-height: 72px;
+  min-height: 96px;
   line-height: 1.45;
 }
 .qi-edit-input:focus-visible,
@@ -10818,12 +10967,10 @@ select.qi-select {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 8px 0;
-  background: var(--card);
-  border-bottom: 1px solid var(--line-soft);
+  flex: none;
+}
+.qi-edit-actions .qi-btn {
+  min-height: 30px;
 }
 .qi-edit-error {
   margin: 0;
@@ -10869,17 +11016,94 @@ select.qi-select {
   background: var(--card-2);
   color: var(--fg);
 }
-/* Light theme: the small priority/risk pills use the strong text colour for 4.5:1 (a11y M2). */
-[data-theme="light"] .qi-cand-pri,
+/* Light theme: the small risk pill uses the strong text colour for 4.5:1 (a11y M2). */
 [data-theme="light"] .qi-cand-risk {
   color: var(--fg);
+}
+@media (max-width: 760px) {
+  .qi-cand-header,
+  .qi-edit-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .qi-cand-status {
+    align-items: flex-start;
+    max-width: none;
+  }
+  .qi-cand-badges,
+  .qi-cand-meta {
+    justify-content: flex-start;
+  }
+  .qi-cand-accordion-body {
+    padding-left: 14px;
+  }
+  .qi-edit-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .qi-edit-actions {
+    justify-content: flex-start;
+  }
 }
 /* Export control */
 .qi-export {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  flex-wrap: wrap;
+  width: min(100%, 520px);
+  margin-left: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--card) 92%, var(--inset));
+}
+.qi-export-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.qi-export-copy {
+  min-width: 0;
+}
+.qi-export-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.qi-export-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.qi-export-format {
+  min-width: 0;
+}
+.qi-export-format .qi-select {
+  min-height: 34px;
+  background-color: var(--inset);
+}
+.qi-export-action {
+  min-height: 34px;
+  padding-inline: 14px;
+}
+.qi-export-approved-label {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 .qi-export-preview {
   width: 100%;
@@ -10897,18 +11121,36 @@ select.qi-select {
   font-family: var(--font-mono, monospace);
 }
 .qi-export-hint {
-  width: 100%;
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   font-size: 11px;
   line-height: 1.4;
   color: var(--fg-muted);
 }
 .qi-export-success {
-  width: 100%;
-  margin: 6px 0 0;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--accent) 36%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--accent) 9%, transparent);
   font-size: 11px;
   line-height: 1.4;
-  color: var(--fg);
+  color: var(--accent-text);
+}
+@media (max-width: 760px) {
+  .qi-export {
+    width: 100%;
+    margin-left: 0;
+  }
+  .qi-export-head {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .qi-export-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .qi-export-action {
+    width: 100%;
+  }
 }
 
 /* ─── Epic #270 — QI Workspace windows (hub + run card) ───────────────────── */
@@ -10972,6 +11214,10 @@ select.qi-select {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  box-shadow: 0 8px 18px color-mix(in oklch, var(--bg) 72%, transparent);
 }
 .qi-run-governance-input {
   max-width: 320px;
@@ -11031,7 +11277,7 @@ select.qi-select {
 }
 .qi-run-cases-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
@@ -11382,23 +11628,17 @@ select.qi-select {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
+  gap: 5px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--card-2);
   color: var(--fg);
   text-align: left;
-  cursor: pointer;
-  outline-offset: 2px;
 }
 
 .figma-snapshot-dashboard-item:hover {
   border-color: color-mix(in oklch, var(--accent) 35%, var(--line));
-}
-
-.figma-snapshot-dashboard-item:focus-visible {
-  outline: 2px solid var(--accent-text);
 }
 
 .figma-snapshot-dashboard-item[aria-current="true"] {
@@ -11410,14 +11650,31 @@ select.qi-select {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
   width: 100%;
 }
 
-.figma-snapshot-dashboard-item-date {
-  font-size: 12px;
-  font-weight: 600;
+.figma-snapshot-dashboard-item-title-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.figma-snapshot-dashboard-item-title {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 700;
   color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.figma-snapshot-dashboard-item-date {
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 
 .figma-snapshot-dashboard-item-badge {
@@ -11432,15 +11689,168 @@ select.qi-select {
   font-weight: 600;
 }
 
+.figma-snapshot-dashboard-item-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.figma-snapshot-dashboard-load,
+.figma-snapshot-dashboard-icon-btn,
+.figma-snapshot-dashboard-rename-save,
+.figma-snapshot-dashboard-rename-cancel,
+.figma-snapshot-dashboard-delete-confirm-btn,
+.figma-snapshot-dashboard-delete-cancel-btn {
+  min-height: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-load {
+  padding: 4px 9px;
+}
+
+.figma-snapshot-dashboard-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-dashboard-icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.figma-snapshot-dashboard-load:hover,
+.figma-snapshot-dashboard-icon-btn:hover,
+.figma-snapshot-dashboard-rename-save:hover,
+.figma-snapshot-dashboard-rename-cancel:hover,
+.figma-snapshot-dashboard-delete-cancel-btn:hover {
+  border-color: color-mix(in oklch, var(--accent) 38%, var(--line));
+  color: var(--fg);
+}
+
+.figma-snapshot-dashboard-icon-btn-danger:hover,
+.figma-snapshot-dashboard-delete-confirm-btn {
+  border-color: color-mix(in oklch, var(--danger) 50%, var(--line));
+  color: var(--danger);
+}
+
+.figma-snapshot-dashboard-load:focus-visible,
+.figma-snapshot-dashboard-icon-btn:focus-visible,
+.figma-snapshot-dashboard-rename-input:focus-visible,
+.figma-snapshot-dashboard-rename-save:focus-visible,
+.figma-snapshot-dashboard-rename-cancel:focus-visible,
+.figma-snapshot-dashboard-delete-confirm-btn:focus-visible,
+.figma-snapshot-dashboard-delete-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent-text);
+}
+
+.figma-snapshot-dashboard-load:disabled,
+.figma-snapshot-dashboard-icon-btn:disabled,
+.figma-snapshot-dashboard-rename-save:disabled,
+.figma-snapshot-dashboard-rename-cancel:disabled,
+.figma-snapshot-dashboard-delete-confirm-btn:disabled,
+.figma-snapshot-dashboard-delete-cancel-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .figma-snapshot-dashboard-item-hint {
+  margin: 0;
   font-size: 12px;
   color: var(--fg);
 }
 
 .figma-snapshot-dashboard-item-meta,
 .figma-snapshot-dashboard-item-scope {
+  margin: 0;
   font-size: 11px;
   color: var(--fg-dim);
+}
+
+.figma-snapshot-dashboard-rename {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.figma-snapshot-dashboard-rename-input {
+  min-width: 0;
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--fg);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline-offset: 2px;
+}
+
+.figma-snapshot-dashboard-rename-save,
+.figma-snapshot-dashboard-rename-cancel,
+.figma-snapshot-dashboard-delete-confirm-btn,
+.figma-snapshot-dashboard-delete-cancel-btn {
+  padding: 4px 9px;
+}
+
+.figma-snapshot-dashboard-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.figma-snapshot-dashboard-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  width: 100%;
+  margin: 5px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.figma-snapshot-dashboard-details div {
+  min-width: 0;
+}
+
+.figma-snapshot-dashboard-details dt,
+.figma-snapshot-dashboard-details dd {
+  margin: 0;
+  font-size: 11px;
+}
+
+.figma-snapshot-dashboard-details dt {
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.figma-snapshot-dashboard-details dd {
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+  overflow-wrap: anywhere;
 }
 
 /* ── Snapshot result ──────────────────────────────────────────────────────── */
@@ -11458,11 +11868,76 @@ select.qi-select {
   border: 1px solid var(--line);
 }
 
+.figma-snapshot-result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.figma-snapshot-result-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.figma-snapshot-result-run,
+.figma-snapshot-result-hash {
+  margin: 2px 0 0;
+  color: var(--fg-dim);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.figma-snapshot-result-hash {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+}
+
 .figma-snapshot-reduction-hint {
   font-size: 13px;
   color: var(--fg);
   font-weight: 600;
   margin: 0;
+}
+
+.figma-snapshot-result-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 10px;
+  margin: 8px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.figma-snapshot-result-metadata div {
+  min-width: 0;
+}
+
+.figma-snapshot-result-metadata dt,
+.figma-snapshot-result-metadata dd {
+  margin: 0;
+  font-size: 11px;
+}
+
+.figma-snapshot-result-metadata dt {
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.figma-snapshot-result-metadata dd {
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+  overflow-wrap: anywhere;
 }
 
 .figma-snapshot-skipped-notice {
@@ -11806,8 +12281,8 @@ select.qi-select {
 .figma-view-window {
   gap: 10px;
   padding: 12px;
-  height: auto;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   overflow: visible;
 }
 
@@ -12021,10 +12496,12 @@ button.figma-view-preview {
 }
 
 .figma-view-json-inspector {
+  flex: 1 1 280px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 220px;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: color-mix(in oklch, var(--card) 88%, black);
@@ -12039,7 +12516,9 @@ button.figma-view-preview {
 }
 
 .figma-view-json-drag-surface {
+  flex: 1 1 auto;
   min-width: 0;
+  align-self: stretch;
   cursor: grab;
 }
 
@@ -12074,8 +12553,10 @@ button.figma-view-preview {
 }
 
 .figma-view-json-code {
+  flex: 1 1 auto;
   margin: 0;
-  max-height: 360px;
+  min-height: 120px;
+  max-height: none;
   overflow: auto;
   border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
   border-radius: var(--radius-xs);
@@ -14504,13 +14985,34 @@ ul.integ {
    row with the same 6px gap as .qi-cand-actions; the inner group's margin-top moves up here. */
 .qi-cand-actions-row {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 0;
+  padding: 10px 14px 12px;
+  background: color-mix(in oklab, var(--card) 92%, var(--inset));
+}
+.qi-cand-action-note {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--warn) 34%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.qi-cand-action-buttons {
+  display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 12px;
 }
-.qi-cand-actions-row .qi-cand-actions {
+.qi-cand-action-buttons .qi-cand-actions {
   margin-top: 0;
+}
+.qi-cand-card .qi-btn[aria-disabled="true"] {
+  opacity: 0.82;
 }
 /* C279 — two-stage discard notice in the candidate edit form ("press Escape/Cancel again"). */
 .qi-edit-discard-note {

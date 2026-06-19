@@ -47,10 +47,12 @@ import {
 import type { RouteContext } from "../../routes.js";
 import {
   handleFigmaInspectSnapshotScreenJson,
+  handleFigmaDeleteSnapshot,
   handleFigmaListSnapshots,
   handleFigmaLoadSnapshot,
   handleFigmaRevokeToken,
   handleFigmaTriggerSnapshot,
+  handleFigmaUpdateSnapshotMetadata,
   figmaPaginationFromEnv,
   makeInFlightMap,
   resetInFlightMap,
@@ -779,6 +781,20 @@ function makeGetCtx(runId: string): RouteContext {
   };
 }
 
+function makePatchSnapshotCtx(runId: string, body: Record<string, unknown>): RouteContext {
+  const reqStream = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+  const fakeReq = Object.assign(reqStream, {
+    headers: { "content-type": "application/json" },
+    once: (_event: string, _listener: () => void): unknown => fakeReq,
+  }) as unknown as IncomingMessage;
+  return {
+    req: fakeReq,
+    res: {} as RouteContext["res"],
+    params: { runId },
+    url: new URL(`http://127.0.0.1/api/figma/snapshots/${encodeURIComponent(runId)}`),
+  };
+}
+
 function makeScreenJsonCtx(runId: string, screenId: string): RouteContext {
   const reqStream = Readable.from([]);
   const fakeReq = Object.assign(reqStream, {
@@ -981,6 +997,113 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
   });
 });
 
+describe("PATCH /api/figma/snapshots/:runId — handleFigmaUpdateSnapshotMetadata", () => {
+  it("stores a display name outside the immutable record and projects it through GET and list", async () => {
+    const runId = "fs-00000000-0000-0000-0000-000000000301";
+    seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {
+      fileKey: "file-key",
+      nodeId: "0:1",
+    });
+
+    const patchResult = await handleFigmaUpdateSnapshotMetadata(
+      makePatchSnapshotCtx(runId, { displayName: "Release baseline" }),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(patchResult.status).toBe(200);
+    const patched = patchResult.body as FigmaSnapshotSummary;
+    expect(patched.displayName).toBe("Release baseline");
+    expect(patched.management.displayName).toBe("Release baseline");
+    expect(patched.management.updatedAt).toMatch(/^20/u);
+
+    const loadResult = handleFigmaLoadSnapshot(makeGetCtx(runId), makeDeps(evidenceDir, {}));
+    expect(loadResult.status).toBe(200);
+    const loaded = loadResult.body as FigmaSnapshotSummary;
+    expect(loaded.displayName).toBe("Release baseline");
+
+    const listResult = handleFigmaListSnapshots(makeListCtx(), makeDeps(evidenceDir, {}));
+    expect(listResult.status).toBe(200);
+    const list = listResult.body as {
+      snapshots: { runId: string; displayName?: string; management: { displayName?: string } }[];
+    };
+    const entry = list.snapshots.find((snapshot) => snapshot.runId === runId);
+    expect(entry).toBeDefined();
+    expect(entry?.displayName).toBe("Release baseline");
+    expect(entry?.management.displayName).toBe("Release baseline");
+  });
+
+  it("rejects invalid display names with FIGMA_BAD_METADATA", async () => {
+    const runId = "fs-00000000-0000-0000-0000-000000000302";
+    seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {
+      fileKey: "file-key",
+      nodeId: "0:1",
+    });
+
+    const result = await handleFigmaUpdateSnapshotMetadata(
+      makePatchSnapshotCtx(runId, { displayName: "x".repeat(121) }),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("FIGMA_BAD_METADATA");
+  });
+
+  it("returns 404 when renaming a missing snapshot", async () => {
+    const result = await handleFigmaUpdateSnapshotMetadata(
+      makePatchSnapshotCtx("fs-00000000-0000-0000-0000-000000000399", {
+        displayName: "Missing",
+      }),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(result.status).toBe(404);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "FIGMA_SNAPSHOT_NOT_FOUND",
+    );
+  });
+});
+
+describe("DELETE /api/figma/snapshots/:runId — handleFigmaDeleteSnapshot", () => {
+  it("deletes a stored snapshot and removes it from subsequent loads/lists", () => {
+    const runId = "fs-00000000-0000-0000-0000-000000000401";
+    seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {
+      fileKey: "file-key",
+      nodeId: "0:1",
+    });
+    const store = createNodeFigmaSnapshotStore(evidenceDir);
+    store.updateUserMetadata(runId, {
+      displayName: "Delete me",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const result = handleFigmaDeleteSnapshot(makeGetCtx(runId), makeDeps(evidenceDir, {}));
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      runId,
+      deleted: true,
+      sideFileDirDeleted: true,
+      metadataDeleted: true,
+    });
+    expect(handleFigmaLoadSnapshot(makeGetCtx(runId), makeDeps(evidenceDir, {})).status).toBe(404);
+    const listResult = handleFigmaListSnapshots(makeListCtx(), makeDeps(evidenceDir, {}));
+    expect(listResult.status).toBe(200);
+    expect((listResult.body as { snapshots: { runId: string }[] }).snapshots).toEqual([]);
+  });
+
+  it("returns 404 when deleting a missing snapshot", () => {
+    const result = handleFigmaDeleteSnapshot(
+      makeGetCtx("fs-00000000-0000-0000-0000-000000000499"),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(result.status).toBe(404);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "FIGMA_SNAPSHOT_NOT_FOUND",
+    );
+  });
+});
+
 describe("GET /api/figma/snapshots/:runId/screens/:screenId/json", () => {
   it("returns scoped Screen-IR JSON for one rendered screen", () => {
     const runId = "fs-00000000-0000-0000-0000-000000000201";
@@ -1028,7 +1151,11 @@ describe("GET /api/figma/snapshots/:runId/screens/:screenId/json", () => {
     expect(result.status).toBe(200);
     const body = result.body as {
       readonly source: { readonly screenIds: readonly string[] };
-      readonly screen: { readonly screenId: string; readonly irJson: unknown; readonly image: unknown };
+      readonly screen: {
+        readonly screenId: string;
+        readonly irJson: unknown;
+        readonly image: unknown;
+      };
       readonly relatedLinks: readonly unknown[];
     };
     expect(body.source.screenIds).toEqual([screenId]);

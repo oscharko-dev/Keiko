@@ -121,6 +121,18 @@ export function LeftRail({
         >
           <Icons.localKnowledge size={19} />
         </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("figma") ? "true" : "false"}
+          aria-label="Figma Snapshot"
+          aria-pressed={openTools.has("figma")}
+          data-tip="Figma Snapshot"
+          onClick={() => onTool("figma")}
+        >
+          <Icons.layers size={19} />
+        </button>
       </div>
       <div className="rail-div" />
       {/* SH-01: aria-pressed reflects current state (true = light theme is active);

@@ -786,8 +786,41 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     const notice = await screen.findByTestId("qi-coverage-notice");
     // Both halves of the coverage notice render: the >16 cap drop AND the per-source skip with label.
     expect(notice).toHaveTextContent("3 sources over the 16-source limit were not included");
-    expect(notice).toHaveTextContent("1 connected source could not be read");
+    expect(notice).toHaveTextContent("1 connected source was skipped");
     expect(notice).toHaveTextContent("Empty capsule");
+    expect(notice).toHaveTextContent("knowledge source is unavailable");
+  });
+
+  it("explains image-description skips without blaming Figma image reads", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-image-skip-1",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 2,
+        atomCount: 4,
+        skippedSources: [
+          {
+            label: "Image · Login mask",
+            kind: "image",
+            code: "QI_IMAGE_DESCRIPTION_UNAVAILABLE",
+          },
+        ],
+      },
+      DONE_FRAME,
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Spec line");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    const notice = await screen.findByTestId("qi-coverage-notice");
+    expect(notice).toHaveTextContent("1 connected source was skipped");
+    expect(notice).toHaveTextContent("Image · Login mask");
+    expect(notice).toHaveTextContent(
+      "image was readable, but the image model produced no usable description",
+    );
   });
 
   it("renders NO coverage notice when no sources were dropped or skipped", async () => {

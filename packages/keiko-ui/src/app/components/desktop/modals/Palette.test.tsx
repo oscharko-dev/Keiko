@@ -6,11 +6,12 @@ import { Palette } from "./Palette";
 // 10 cards in the 3-column .palette-grid — mirrors the live picker size the
 // C363 audit observed (rows: [0,1,2] [3,4,5] [6,7,8] [9]).
 const ORDER = TYPE_ORDER.slice(0, 10);
-const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "figma", "files"];
+const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "files"];
 
-function renderPalette(
-  order: readonly WindowType[] = ORDER,
-): { onAdd: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
+function renderPalette(order: readonly WindowType[] = ORDER): {
+  onAdd: ReturnType<typeof vi.fn>;
+  onClose: ReturnType<typeof vi.fn>;
+} {
   const onAdd = vi.fn();
   const onClose = vi.fn();
   render(<Palette types={WIN_TYPES} order={order} onAdd={onAdd} onClose={onClose} />);
@@ -80,12 +81,18 @@ describe("Palette", () => {
     expect(cardNames()).not.toContain("Review");
   });
 
-  it("lays out the four visible picker cards as a two-column grid", () => {
+  it("does not render the Figma Snapshot manager in the new-window picker", () => {
+    renderPalette(PICKER_ORDER);
+
+    expect(cardNames()).not.toContain("Figma Snapshot");
+  });
+
+  it("lays out the three visible picker cards as a two-column grid", () => {
     renderPalette(PICKER_ORDER);
     const dialog = screen.getByRole("dialog");
 
     expect(dialog).toHaveAttribute("data-columns", "2");
-    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Figma Snapshot", "Files"]);
+    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Files"]);
   });
 
   it("uses the compact two-column arrangement for a two-card picker", () => {
@@ -155,12 +162,12 @@ describe("Palette", () => {
     expect(list[1]).toHaveFocus();
 
     fireEvent.keyDown(list[1] as HTMLElement, { key: "ArrowDown" });
-    expect(list[3]).toHaveFocus();
-
-    fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowLeft" });
     expect(list[2]).toHaveFocus();
 
-    fireEvent.keyDown(list[2] as HTMLElement, { key: "ArrowUp" });
+    fireEvent.keyDown(list[2] as HTMLElement, { key: "ArrowLeft" });
+    expect(list[1]).toHaveFocus();
+
+    fireEvent.keyDown(list[1] as HTMLElement, { key: "ArrowUp" });
     expect(list[0]).toHaveFocus();
   });
 

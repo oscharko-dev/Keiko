@@ -90,6 +90,93 @@ function StringList({
   );
 }
 
+function CandidateMeta({
+  candidate,
+}: {
+  readonly candidate: CandidateWithQualityVerdict;
+}): ReactNode {
+  return (
+    <dl className="qi-cand-meta" aria-label="Test case metadata">
+      <div>
+        <dt>Steps</dt>
+        <dd>{candidate.steps.length.toString()}</dd>
+      </div>
+      <div>
+        <dt>Expected</dt>
+        <dd>{candidate.expectedResults.length.toString()}</dd>
+      </div>
+      {candidate.qualityVerdict !== undefined ? (
+        <div>
+          <dt>Quality</dt>
+          <dd>{Math.round(candidate.qualityVerdict.score).toString()}</dd>
+        </div>
+      ) : null}
+    </dl>
+  );
+}
+
+function CandidateAccordion({
+  title,
+  children,
+}: {
+  readonly title: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <details className="qi-cand-accordion">
+      <summary className="qi-cand-accordion-summary">
+        <span>{title}</span>
+      </summary>
+      <div className="qi-cand-accordion-body">{children}</div>
+    </details>
+  );
+}
+
+function CandidateScenario({
+  candidate,
+}: {
+  readonly candidate: QualityIntelligenceUiCandidate;
+}): ReactNode {
+  return (
+    <CandidateAccordion title="Scenario">
+      <StringList items={candidate.preconditions} label="Preconditions" />
+      <StringList items={candidate.steps} label="Steps" />
+      <StringList items={candidate.expectedResults} label="Expected results" />
+    </CandidateAccordion>
+  );
+}
+
+function CandidateEvidence({
+  candidate,
+}: {
+  readonly candidate: CandidateWithQualityVerdict;
+}): ReactNode {
+  if (
+    candidate.tags.length === 0 &&
+    candidate.qualityVerdict === undefined &&
+    candidate.weakTestFlag === undefined
+  ) {
+    return null;
+  }
+  return (
+    <CandidateAccordion title="Evidence">
+      {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
+      {candidate.qualityVerdict !== undefined ? (
+        <CandidateQualityVerdictNote verdict={candidate.qualityVerdict} />
+      ) : null}
+      {candidate.tags.length > 0 ? (
+        <ul className="qi-cand-tags" aria-label="Tags">
+          {candidate.tags.map((t) => (
+            <li key={t} className="qi-cand-tag">
+              {t}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </CandidateAccordion>
+  );
+}
+
 // A governance-gated review/edit action. We use aria-disabled (NOT the native `disabled` attribute)
 // so the control stays in the focus order and a screen reader announces both the action and its
 // disabled reason via aria-describedby — native `disabled` removes the button from the a11y tree,
@@ -218,6 +305,7 @@ function CandidateView({
   onReview,
   onStartEdit,
   actionsDisabled = false,
+  actionsDisabledReason,
   describedBy,
   editButtonRef,
   pendingReview,
@@ -226,62 +314,69 @@ function CandidateView({
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onStartEdit?: (() => void) | undefined;
   readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string | undefined;
   readonly describedBy?: string | undefined;
   readonly editButtonRef?: Ref<HTMLButtonElement> | undefined;
   readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
+  const localDisabledReasonId = useId();
+  const actionDescribedBy =
+    actionsDisabled && actionsDisabledReason !== undefined
+      ? [describedBy, localDisabledReasonId].filter(Boolean).join(" ")
+      : describedBy;
   return (
     <>
       <div className="qi-cand-header">
-        <h3 className="qi-cand-title">{candidate.title}</h3>
-        <div className="qi-cand-badges">
-          <span className="qi-cand-pri">{candidate.priority}</span>
-          <span className="qi-cand-risk">{candidate.riskClass}</span>
-          <ReviewBadge state={candidate.reviewState} />
+        <div className="qi-cand-title-wrap">
+          <h3 className="qi-cand-title">{candidate.title}</h3>
+        </div>
+        <div className="qi-cand-status">
+          <div className="qi-cand-badges">
+            <span className="qi-cand-risk">{candidate.riskClass}</span>
+            {candidate.reviewState !== "open" ? (
+              <ReviewBadge state={candidate.reviewState} />
+            ) : null}
+          </div>
+          <CandidateMeta candidate={candidate} />
         </div>
       </div>
-      {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
-      {candidate.qualityVerdict !== undefined ? (
-        <CandidateQualityVerdictNote verdict={candidate.qualityVerdict} />
-      ) : null}
-      <StringList items={candidate.preconditions} label="Preconditions" />
-      <StringList items={candidate.steps} label="Steps" />
-      <StringList items={candidate.expectedResults} label="Expected results" />
-      {candidate.tags.length > 0 ? (
-        <ul className="qi-cand-tags" aria-label="Tags">
-          {candidate.tags.map((t) => (
-            <li key={t} className="qi-cand-tag">
-              {t}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <div className="qi-cand-accordion-stack">
+        <CandidateScenario candidate={candidate} />
+        <CandidateEvidence candidate={candidate} />
+      </div>
       <div className="qi-cand-actions-row">
-        {onStartEdit !== undefined ? (
-          <button
-            ref={editButtonRef}
-            type="button"
-            className="qi-btn qi-btn-secondary qi-cand-edit"
-            aria-disabled={actionsDisabled || undefined}
-            aria-describedby={actionsDisabled ? describedBy : undefined}
-            onClick={() => {
-              if (actionsDisabled) return;
-              onStartEdit();
-            }}
-          >
-            Edit
-          </button>
+        {actionsDisabled && actionsDisabledReason !== undefined ? (
+          <p id={localDisabledReasonId} className="qi-cand-action-note" role="note">
+            {actionsDisabledReason}
+          </p>
         ) : null}
-        {onReview !== undefined ? (
-          <ReviewControls
-            candidateId={candidate.id}
-            state={candidate.reviewState}
-            onReview={onReview}
-            disabled={actionsDisabled}
-            describedBy={describedBy}
-            pendingReview={pendingReview}
-          />
-        ) : null}
+        <div className="qi-cand-action-buttons">
+          {onStartEdit !== undefined ? (
+            <button
+              ref={editButtonRef}
+              type="button"
+              className="qi-btn qi-btn-secondary qi-cand-edit"
+              aria-disabled={actionsDisabled || undefined}
+              aria-describedby={actionsDisabled ? actionDescribedBy : undefined}
+              onClick={() => {
+                if (actionsDisabled) return;
+                onStartEdit();
+              }}
+            >
+              Edit
+            </button>
+          ) : null}
+          {onReview !== undefined ? (
+            <ReviewControls
+              candidateId={candidate.id}
+              state={candidate.reviewState}
+              onReview={onReview}
+              disabled={actionsDisabled}
+              describedBy={actionDescribedBy}
+              pendingReview={pendingReview}
+            />
+          ) : null}
+        </div>
       </div>
     </>
   );
@@ -292,6 +387,7 @@ function CandidateCard({
   onReview,
   onEdit,
   actionsDisabled = false,
+  actionsDisabledReason,
   describedBy,
   pendingReview,
 }: {
@@ -299,6 +395,7 @@ function CandidateCard({
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string | undefined;
   readonly describedBy?: string | undefined;
   readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
@@ -330,6 +427,7 @@ function CandidateCard({
           candidate={candidate}
           onReview={onReview}
           actionsDisabled={actionsDisabled}
+          actionsDisabledReason={actionsDisabledReason}
           describedBy={describedBy}
           pendingReview={pendingReview}
           editButtonRef={editButtonRef}
@@ -395,6 +493,7 @@ export function CandidatesPane({
             onReview={onReview}
             onEdit={onEdit}
             actionsDisabled={actionsDisabled}
+            actionsDisabledReason={actionsDisabledReason}
             describedBy={showGovernanceNote ? governanceNoteId : undefined}
             pendingReview={pendingReview}
           />

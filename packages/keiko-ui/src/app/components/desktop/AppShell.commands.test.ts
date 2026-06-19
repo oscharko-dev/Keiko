@@ -76,15 +76,8 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const newCommands = commands.filter((c) => c.id.startsWith("new-"));
-    expect(newCommands.map((c) => c.id)).toEqual([
-      "new-chat",
-      "new-connector",
-      "new-figma",
-      "new-files",
-    ]);
-    // Epic #750 #756 — the Figma Snapshot window must be launchable (it was unreachable when "figma"
-    // was missing from CARD_TYPES); pin it so the surface cannot regress to dead code.
-    expect(newCommands.find((c) => c.id === "new-figma")).toBeDefined();
+    expect(newCommands.map((c) => c.id)).toEqual(["new-chat", "new-connector", "new-files"]);
+    expect(newCommands.find((c) => c.id === "new-figma")).toBeUndefined();
   });
 
   it("includes Tile / Split / Cascade / Theme commands", () => {
@@ -192,8 +185,8 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
 
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
-  // command palette (same forgotten-WindowType pattern as #756/"figma"). Pin them.
-  it("includes Open commands for MemoriaViva, settings, local knowledge, quality and relationships", () => {
+  // command palette. Pin the visible singleton tools here.
+  it("includes Open commands for MemoriaViva, settings, local knowledge, Figma Snapshot, quality and relationships", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -206,6 +199,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(ids.has("open-memoria")).toBe(true);
     expect(ids.has("open-settings")).toBe(true);
     expect(ids.has("open-localKnowledge")).toBe(true);
+    expect(ids.has("open-figma")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);
     expect(ids.has("open-relationships")).toBe(true);
   });

@@ -81,7 +81,7 @@ describe("workspace-persistence", () => {
     ]);
   });
 
-  it("preserves scoped Figma snapshot references without persisting raw snapshot payloads", () => {
+  it("migrates legacy scoped Figma windows to repeatable Figma View cards", () => {
     const persisted = sanitizePersistedWindows([
       win({
         id: "figma-1",
@@ -97,6 +97,7 @@ describe("workspace-persistence", () => {
     ]);
 
     expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.type).toBe("figmaView");
     expect(persisted[0]?.cfg).toEqual({
       snapshotRunId: "fs-abc-123",
       selectedScreenIdsJson: JSON.stringify(["3:1466"]),
@@ -104,6 +105,17 @@ describe("workspace-persistence", () => {
     });
     expect(JSON.stringify(persisted)).not.toContain("must");
     expect(JSON.stringify(persisted)).not.toContain("iVBORw0KGgo");
+  });
+
+  it("normalizes persisted Figma Snapshot managers to a singleton", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "figma-old", type: "figma", z: 1, cfg: { snapshotRunId: "fs-old" } }),
+      win({ id: "figma-current", type: "figma", z: 5, cfg: { snapshotRunId: "fs-current" } }),
+      win({ id: "chat-1", type: "chat", cfg: { title: "Design review" } }),
+    ]);
+
+    expect(persisted.map((entry) => entry.id)).toEqual(["figma-current", "chat-1"]);
+    expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-current" });
   });
 
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {

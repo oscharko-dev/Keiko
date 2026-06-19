@@ -47,6 +47,7 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   chat: ["chatId"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
+  figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaImage: ["snapshotRunId", "screenId", "selectedScreenName", "imageSrc"],
 };
@@ -211,7 +212,7 @@ function sanitizeConfigValue(
   key: string,
   value: unknown,
 ): JsonScalar | undefined {
-  if (type === "figma" || type === "figmaJson" || type === "figmaImage") {
+  if (type === "figma" || type === "figmaView" || type === "figmaJson" || type === "figmaImage") {
     return sanitizeFigmaConfigValue(key, value);
   }
   if (!isJsonScalar(value) || isCredentialKey(key)) return undefined;
@@ -297,13 +298,41 @@ function sanitizeWindow(win: unknown): AppWindow | null {
   };
 }
 
+function firstSelectedFigmaScreenId(cfg: Record<string, unknown>): string | undefined {
+  const raw = cfg["selectedScreenIdsJson"];
+  if (typeof raw !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const first = parsed[0];
+    return typeof first === "string" && first.length > 0 ? first : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
+  if (win.type !== "figma") return win;
+  if (firstSelectedFigmaScreenId(win.cfg) === undefined) return win;
+  return {
+    ...win,
+    type: "figmaView",
+    cfg: {
+      ...win.cfg,
+    },
+  };
+}
+
 export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
   const out: AppWindow[] = [];
   for (const win of wins) {
     const next = sanitizeWindow(win);
-    if (next !== null) out.push(next);
+    if (next !== null) out.push(migrateLegacyFigmaWindow(next));
   }
-  return out;
+  const figmaManagers = out.filter((win) => win.type === "figma");
+  if (figmaManagers.length <= 1) return out;
+  const keeper = figmaManagers.reduce((best, next) => (next.z > best.z ? next : best));
+  return out.filter((win) => win.type !== "figma" || win.id === keeper.id);
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {

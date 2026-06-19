@@ -369,7 +369,7 @@ describe("workspace widget renderer registry", () => {
     fireEvent.click(screen.getByTestId("figma-window"));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ snapshotRunId: "fs-2" });
     fireEvent.click(screen.getByRole("button", { name: "Add screen source" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("figma", {
+    expect(ctx.openWindow).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-1",
       selectedScreenIdsJson: JSON.stringify(["screen-1"]),
       selectedScreenName: "Screen 1",
@@ -378,6 +378,20 @@ describe("workspace widget renderer registry", () => {
     view.rerender(
       <>
         {WIN_TYPES.figma.render(
+          {
+            snapshotRunId: "fs-1",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Screen 1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
+
+    view.rerender(
+      <>
+        {WIN_TYPES.figmaView.render(
           {
             snapshotRunId: "fs-1",
             selectedScreenIdsJson: JSON.stringify(["screen-1"]),

@@ -41,6 +41,9 @@ export type WindowType =
   // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
   // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.
   | "figma"
+  // A scoped Figma View card derived from the singleton Snapshot manager. Unlike the manager, this
+  // is intentionally repeatable: each card can expose its JSON and image sources independently.
+  | "figmaView"
   // A scoped, JSON-only Figma Screen-IR source window derived from a Figma Snapshot view.
   | "figmaJson"
   // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
@@ -459,18 +462,30 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
-  // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
-  // view captured screens + IR summaries, connect to the QI hub as a figma-snapshot source.
-  // PAT stays server-side; the window only stores the resulting snapshotRunId in cfg.
+  // Epic #750, Issue #756 — Figma Snapshot manager. Paste a board link, trigger snapshot builds,
+  // inspect stored snapshots, and open scoped screen source cards for Quality Intelligence.
+  // PAT stays server-side; the manager stores only the currently loaded snapshotRunId in cfg.
   figma: {
     title: "Figma Snapshot",
     icon: "layers",
     accent: true,
-    desc: "Capture a Figma board snapshot",
+    desc: "Manage Figma snapshots",
     w: 420,
     h: 540,
     min: { w: 320, h: 360 },
     tiny: { w: 280, h: 240 },
+    tool: true,
+    singleton: true,
+  },
+  figmaView: {
+    title: "Figma View",
+    icon: "layers",
+    accent: true,
+    desc: "Inspect a scoped Figma screen view",
+    w: 360,
+    h: 360,
+    min: { w: 300, h: 260 },
+    tiny: { w: 260, h: 200 },
   },
   figmaJson: {
     title: "Figma JSON",

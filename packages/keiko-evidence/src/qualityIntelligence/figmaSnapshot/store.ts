@@ -38,6 +38,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -68,9 +69,12 @@ import {
 
 const QI_DIR_MODE = 0o700;
 const SNAPSHOT_SUFFIX = ".figma-snapshot.json";
+const SNAPSHOT_MANAGEMENT_SUFFIX = ".figma-snapshot.management.json";
+const FIGMA_SNAPSHOT_MANAGEMENT_SCHEMA_VERSION = 1 as const;
 const SIDE_FILE_SUBDIR = "figma-snapshots";
 const MAX_SIDE_FILE_NAME_LENGTH = 128;
 const SIDE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
+const MAX_SNAPSHOT_DISPLAY_NAME_LENGTH = 120;
 
 export interface RecordFigmaSnapshotScreenInput {
   readonly screenId: string;
@@ -122,6 +126,31 @@ export interface FigmaSnapshotScopeEntry {
   readonly integrityHash: string;
 }
 
+/**
+ * Mutable operator-facing management metadata for a write-once snapshot record.
+ *
+ * Stored separately from `<runId>.figma-snapshot.json` so a human rename never mutates the
+ * immutable evidence artifact or its integrity hash graph.
+ */
+export interface FigmaSnapshotUserMetadata {
+  readonly displayName?: string;
+  readonly updatedAt: string;
+}
+
+export interface UpdateFigmaSnapshotUserMetadataInput {
+  /** Empty string or null clears the display name. */
+  readonly displayName?: string | null | undefined;
+  /** Injectable for tests and audited routes; defaults to the current time. */
+  readonly updatedAt?: string | undefined;
+}
+
+export interface DeleteFigmaSnapshotResult {
+  readonly runId: string;
+  readonly recordDeleted: boolean;
+  readonly sideFileDirDeleted: boolean;
+  readonly metadataDeleted: boolean;
+}
+
 export interface FigmaSnapshotImageBytes {
   readonly mimeType: "image/png";
   readonly bytes: Uint8Array;
@@ -138,6 +167,15 @@ export interface FigmaSnapshotStore {
    */
   readonly loadMetadata: (runId: string) => FigmaSnapshotRecord | undefined;
   readonly loadImage: (runId: string, image: FigmaSnapshotImageRef) => FigmaSnapshotImageBytes;
+  /** Loads mutable user metadata without touching the immutable evidence record. */
+  readonly loadUserMetadata: (runId: string) => FigmaSnapshotUserMetadata | undefined;
+  /** Upserts mutable user metadata next to the immutable record. */
+  readonly updateUserMetadata: (
+    runId: string,
+    input: UpdateFigmaSnapshotUserMetadataInput,
+  ) => FigmaSnapshotUserMetadata;
+  /** Deletes the immutable record, rendered side-files, and mutable management metadata together. */
+  readonly deleteSnapshot: (runId: string) => DeleteFigmaSnapshotResult;
   readonly location: (runId: string) => string;
   /**
    * List all snapshot records for a specific Figma scope, sorted by `fetchedAt` descending
@@ -379,6 +417,27 @@ function containedRecordPath(runId: string, realBase: string, fs: WorkspaceFs): 
   return assertContainedRealPath(fs, realBase, lexical, name);
 }
 
+function containedManagementPath(runId: string, realBase: string, fs: WorkspaceFs): string {
+  assertValidRunId(runId);
+  const name = `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`;
+  const lexical = resolveWithinWorkspace(realBase, name);
+  return assertContainedRealPath(fs, realBase, lexical, name);
+}
+
+function containedSideFileRunDir(ctx: StoreCtx, runId: string): string {
+  assertValidRunId(runId);
+  const realQiBase = realBaseForRead(ctx.qiDir, ctx.fs) ?? realBaseForWrite(ctx.qiDir, ctx.fs);
+  const sideBaseLexical = resolveWithinWorkspace(realQiBase, SIDE_FILE_SUBDIR);
+  const realSideBase = assertContainedRealPath(
+    ctx.fs,
+    realQiBase,
+    sideBaseLexical,
+    SIDE_FILE_SUBDIR,
+  );
+  const runDirLexical = resolveWithinWorkspace(realSideBase, runId);
+  return assertContainedRealPath(ctx.fs, realSideBase, runDirLexical, runId);
+}
+
 function assertSnapshotAbsent(target: string): void {
   if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
     throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
@@ -388,6 +447,17 @@ function assertSnapshotAbsent(target: string): void {
 function runIdFromSnapshotName(name: string): string | undefined {
   if (!name.endsWith(SNAPSHOT_SUFFIX)) return undefined;
   const runId = name.slice(0, -SNAPSHOT_SUFFIX.length);
+  try {
+    assertValidRunId(runId);
+    return runId;
+  } catch {
+    return undefined;
+  }
+}
+
+function runIdFromManagementName(name: string): string | undefined {
+  if (!name.endsWith(SNAPSHOT_MANAGEMENT_SUFFIX)) return undefined;
+  const runId = name.slice(0, -SNAPSHOT_MANAGEMENT_SUFFIX.length);
   try {
     assertValidRunId(runId);
     return runId;
@@ -447,6 +517,95 @@ function atomicWriteOnce(target: string, json: string, randomSuffix: () => strin
       `Figma snapshot write failed: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
+}
+
+function atomicWriteMutable(target: string, json: string, randomSuffix: () => string): void {
+  const temp = `${target}.${randomSuffix()}.tmp`;
+  try {
+    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
+    try {
+      chmodSync(temp, 0o600);
+    } catch {
+      // non-fatal: not every filesystem supports chmod (e.g. Windows)
+    }
+    renameSync(temp, target);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw new EvidenceWriteError(
+      `Figma snapshot management metadata write failed: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+function normalizeDisplayName(value: string | null | undefined): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const trimmed = value.trim().replace(/\s+/gu, " ");
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.length > MAX_SNAPSHOT_DISPLAY_NAME_LENGTH) {
+    throw new EvidenceWriteError("Figma snapshot display name is too long");
+  }
+  if (hasControlCharacter(trimmed)) {
+    throw new EvidenceWriteError("Figma snapshot display name contains control characters");
+  }
+  return trimmed;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function userMetadataRecord(
+  value: unknown,
+  expectedRunId: string,
+): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.figmaSnapshotManagementSchemaVersion !== FIGMA_SNAPSHOT_MANAGEMENT_SCHEMA_VERSION) {
+    return undefined;
+  }
+  return record.runId === expectedRunId ? record : undefined;
+}
+
+function metadataUpdatedAt(record: Record<string, unknown>): string | undefined {
+  return typeof record.updatedAt === "string" && record.updatedAt.length > 0
+    ? record.updatedAt
+    : undefined;
+}
+
+function metadataDisplayName(record: Record<string, unknown>): string | undefined | null {
+  if (record.displayName === undefined) return undefined;
+  if (typeof record.displayName !== "string") return null;
+  try {
+    return normalizeDisplayName(record.displayName);
+  } catch {
+    return null;
+  }
+}
+
+function parseUserMetadata(
+  value: unknown,
+  expectedRunId: string,
+): FigmaSnapshotUserMetadata | undefined {
+  const record = userMetadataRecord(value, expectedRunId);
+  if (record === undefined) return undefined;
+  const updatedAt = metadataUpdatedAt(record);
+  if (updatedAt === undefined) return undefined;
+  const displayName = metadataDisplayName(record);
+  if (displayName === null) return undefined;
+  return displayName === undefined ? { updatedAt } : { displayName, updatedAt };
+}
+
+function metadataToJson(runId: string, metadata: FigmaSnapshotUserMetadata): string {
+  return JSON.stringify({
+    figmaSnapshotManagementSchemaVersion: FIGMA_SNAPSHOT_MANAGEMENT_SCHEMA_VERSION,
+    runId,
+    ...(metadata.displayName !== undefined ? { displayName: metadata.displayName } : {}),
+    updatedAt: metadata.updatedAt,
+  });
 }
 
 function writeScreenSideFiles(
@@ -622,10 +781,23 @@ function parseScopeEntry(
 
 // ─── Orphan sweep ─────────────────────────────────────────────────────────────────────────────
 
-// Removes side-file dirs and stray *.tmp files under sideFileBase that have no matching record
-// in qiDir. Called lazily once per store instance to clean up dirs left by an interrupted
-// record() call (side-files written, JSON write failed).
-function sweepOrphanedSideDirs(qiDir: string, sideFileBase: string): void {
+function snapshotRecordExists(qiDir: string, runId: string): boolean {
+  const recordPath = join(qiDir, `${runId}${SNAPSHOT_SUFFIX}`);
+  return lstatSync(recordPath, { throwIfNoEntry: false })?.isFile() === true;
+}
+
+function sweepSideFileBaseEntry(qiDir: string, sideFileBase: string, name: string): void {
+  if (name.endsWith(".tmp")) {
+    rmSync(join(sideFileBase, name), { force: true });
+    return;
+  }
+  if (snapshotRecordExists(qiDir, name)) return;
+  const runDir = join(sideFileBase, name);
+  const stat = lstatSync(runDir, { throwIfNoEntry: false });
+  if (stat?.isDirectory() === true) rmSync(runDir, { recursive: true, force: true });
+}
+
+function sweepSideFileBaseEntries(qiDir: string, sideFileBase: string): void {
   const sideBaseStat = lstatSync(sideFileBase, { throwIfNoEntry: false });
   if (!sideBaseStat?.isDirectory()) return;
   let entries: string[];
@@ -634,23 +806,29 @@ function sweepOrphanedSideDirs(qiDir: string, sideFileBase: string): void {
   } catch {
     return; // non-fatal: best-effort sweep
   }
-  for (const name of entries) {
-    // Remove stray temp files at the top level of sideFileBase.
-    if (name.endsWith(".tmp")) {
-      rmSync(join(sideFileBase, name), { force: true });
-      continue;
-    }
-    // Each subdirectory name should equal a runId that has a matching record.
-    const recordPath = join(qiDir, `${name}${SNAPSHOT_SUFFIX}`);
-    const hasRecord = lstatSync(recordPath, { throwIfNoEntry: false })?.isFile() === true;
-    if (!hasRecord) {
-      const runDir = join(sideFileBase, name);
-      const stat = lstatSync(runDir, { throwIfNoEntry: false });
-      if (stat?.isDirectory() === true) {
-        rmSync(runDir, { recursive: true, force: true });
-      }
-    }
+  for (const name of entries) sweepSideFileBaseEntry(qiDir, sideFileBase, name);
+}
+
+function sweepManagementMetadataFiles(qiDir: string): void {
+  let qiEntries: Dirent[];
+  try {
+    qiEntries = readdirSync(qiDir, { withFileTypes: true });
+  } catch {
+    return;
   }
+  for (const entry of qiEntries) {
+    if (!entry.isFile() || entry.isSymbolicLink()) continue;
+    const runId = runIdFromManagementName(entry.name);
+    if (runId === undefined) continue;
+    if (!snapshotRecordExists(qiDir, runId)) rmSync(join(qiDir, entry.name), { force: true });
+  }
+}
+
+// Removes side-file dirs, stray *.tmp files, and orphaned mutable management sidecars that have no
+// matching record in qiDir. Called lazily once per store instance to clean up interrupted writes.
+function sweepOrphanedSideDirs(qiDir: string, sideFileBase: string): void {
+  sweepSideFileBaseEntries(qiDir, sideFileBase);
+  sweepManagementMetadataFiles(qiDir);
 }
 
 // Read the fetchedAt timestamp from one snapshot file, or undefined when unparseable.
@@ -716,6 +894,7 @@ export function enforceFigmaSnapshotRetention(
   for (const { runId } of toEvict) {
     // Delete record first — after this the side-dir is unreachable by any normal path.
     rmSync(join(qiDir, `${runId}${SNAPSHOT_SUFFIX}`), { force: true });
+    rmSync(join(qiDir, `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`), { force: true });
     // Best-effort: remove the side-file dir; failure is non-fatal (it is orphaned, not
     // linked to a live record, and will be removed by the next sweepOrphanedSideDirs pass).
     const runDir = join(sideFileBase, runId);
@@ -840,6 +1019,71 @@ function loadImageOp(
   };
 }
 
+function loadUserMetadataOp(ctx: StoreCtx, runId: string): FigmaSnapshotUserMetadata | undefined {
+  assertValidRunId(runId);
+  ctx.ensureSwept();
+  const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
+  if (realBase === undefined) return undefined;
+  const target = containedManagementPath(runId, realBase, ctx.fs);
+  if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
+  try {
+    return parseUserMetadata(JSON.parse(readFileSync(target, "utf8")), runId);
+  } catch {
+    return undefined;
+  }
+}
+
+function updateUserMetadataOp(
+  ctx: StoreCtx,
+  runId: string,
+  input: UpdateFigmaSnapshotUserMetadataInput,
+): FigmaSnapshotUserMetadata {
+  assertValidRunId(runId);
+  const record = loadMetadataOp(ctx, runId);
+  if (record === undefined) {
+    throw new EvidenceWriteError("Figma snapshot does not exist");
+  }
+  const existing = loadUserMetadataOp(ctx, runId);
+  const nextDisplayName =
+    input.displayName === undefined
+      ? existing?.displayName
+      : normalizeDisplayName(input.displayName);
+  const next: FigmaSnapshotUserMetadata = {
+    ...(nextDisplayName !== undefined ? { displayName: nextDisplayName } : {}),
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+  };
+  const realBase = realBaseForWrite(ctx.qiDir, ctx.fs);
+  atomicWriteMutable(
+    containedManagementPath(record.runId, realBase, ctx.fs),
+    metadataToJson(runId, next),
+    ctx.randomSuffix,
+  );
+  return next;
+}
+
+function deleteSnapshotOp(ctx: StoreCtx, runId: string): DeleteFigmaSnapshotResult {
+  assertValidRunId(runId);
+  ctx.ensureSwept();
+  const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
+  if (realBase === undefined) {
+    return { runId, recordDeleted: false, sideFileDirDeleted: false, metadataDeleted: false };
+  }
+
+  const recordPath = containedRecordPath(runId, realBase, ctx.fs);
+  const metadataPath = containedManagementPath(runId, realBase, ctx.fs);
+  const sideFileDir = containedSideFileRunDir(ctx, runId);
+  const recordDeleted = lstatSync(recordPath, { throwIfNoEntry: false })?.isFile() === true;
+  const metadataDeleted = lstatSync(metadataPath, { throwIfNoEntry: false })?.isFile() === true;
+  const sideStat = lstatSync(sideFileDir, { throwIfNoEntry: false });
+  const sideFileDirDeleted = sideStat !== undefined;
+
+  rmSync(recordPath, { force: true });
+  rmSync(metadataPath, { force: true });
+  if (sideStat !== undefined) rmSync(sideFileDir, { recursive: true, force: true });
+
+  return { runId, recordDeleted, sideFileDirDeleted, metadataDeleted };
+}
+
 function listByScopeOp(
   ctx: StoreCtx,
   fileKey: string,
@@ -881,6 +1125,9 @@ export function createNodeFigmaSnapshotStore(
     load: (runId) => loadOp(ctx, runId),
     loadMetadata: (runId) => loadMetadataOp(ctx, runId),
     loadImage: (runId, image) => loadImageOp(ctx, runId, image),
+    loadUserMetadata: (runId) => loadUserMetadataOp(ctx, runId),
+    updateUserMetadata: (runId, input) => updateUserMetadataOp(ctx, runId, input),
+    deleteSnapshot: (runId) => deleteSnapshotOp(ctx, runId),
     location: (runId): string => {
       assertValidRunId(runId);
       const realBase = realBaseForRead(qiDir, ctx.fs);

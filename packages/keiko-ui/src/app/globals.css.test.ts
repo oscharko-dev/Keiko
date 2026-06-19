@@ -1099,6 +1099,26 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(block).toContain("object-fit: contain");
   });
 
+  it(".figma-view-json-drag-surface spans the free JSON inspector header area", () => {
+    const block = cssBlock(".figma-view-json-drag-surface {");
+    expect(block).toContain("flex: 1 1 auto");
+    expect(block).toContain("align-self: stretch");
+    expect(block).toContain("cursor: grab");
+  });
+
+  it(".figma-view-json-code grows with a resized Figma View card", () => {
+    const viewBlock = cssBlock(".figma-view-window {");
+    const inspectorBlock = cssBlock(".figma-view-json-inspector {");
+    const codeBlock = cssBlock(".figma-view-json-code {");
+    expect(viewBlock).toContain("height: 100%");
+    expect(viewBlock).toContain("min-height: 0");
+    expect(inspectorBlock).toContain("flex: 1 1 280px");
+    expect(inspectorBlock).toContain("overflow: hidden");
+    expect(codeBlock).toContain("flex: 1 1 auto");
+    expect(codeBlock).toContain("max-height: none");
+    expect(codeBlock).not.toContain("max-height: 360px");
+  });
+
   it(".figma-snapshot-error-card uses the contrast-pinned danger token, not raw red HSL", () => {
     const card = cssBlock(".figma-snapshot-error-card {");
     const title = cssBlock(".figma-snapshot-error-title {");
