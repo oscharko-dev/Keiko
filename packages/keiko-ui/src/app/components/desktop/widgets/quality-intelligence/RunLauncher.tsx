@@ -173,6 +173,40 @@ function progressAnnouncement(running: boolean, progress: Progress): string {
   return `${stage}${cases}${findings}`;
 }
 
+function skippedSourceDetail(source: QualityIntelligenceSkippedSource): string {
+  switch (source.code) {
+    case "QI_IMAGE_DESCRIPTION_UNAVAILABLE":
+      return `${source.label} (image was readable, but the image model produced no usable description)`;
+    case "QI_IMAGE_UNAVAILABLE":
+      return `${source.label} (stored image could not be found or read)`;
+    case "QI_FIGMA_SNAPSHOT_UNAVAILABLE":
+      return `${source.label} (stored Figma snapshot could not be found or read)`;
+    case "QI_SOURCE_EMPTY":
+      return `${source.label} (source produced no usable evidence)`;
+    case "QI_SOURCE_DENIED":
+      return `${source.label} (source is in a protected location)`;
+    case "QI_SOURCE_TOO_LARGE":
+      return `${source.label} (source is too large for this run)`;
+    case "QI_SOURCE_UNSUPPORTED":
+      return `${source.label} (source format is not supported)`;
+    case "QI_WORKSPACE_NOT_FOUND":
+      return `${source.label} (workspace path could not be read)`;
+    case "QI_CAPSULE_UNAVAILABLE":
+      return `${source.label} (knowledge source is unavailable)`;
+    default:
+      return `${source.label} (could not be read)`;
+  }
+}
+
+function skippedSourcesNotice(
+  skippedSources: readonly QualityIntelligenceSkippedSource[],
+): string | null {
+  if (skippedSources.length === 0) return null;
+  const count = skippedSources.length.toString();
+  const noun = skippedSources.length !== 1 ? "sources were" : "source was";
+  return `${count} connected ${noun} skipped: ${skippedSources.map(skippedSourceDetail).join(", ")}.`;
+}
+
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
   if (msg.type === "accepted") {
     return {
@@ -704,10 +738,7 @@ export function RunLauncher({
     progress.droppedSourceCount > 0
       ? `${progress.droppedSourceCount.toString()} source${progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit ${progress.droppedSourceCount !== 1 ? "were" : "was"} not included.`
       : null;
-  const skippedNotice =
-    progress.skippedSources.length > 0
-      ? `${progress.skippedSources.length.toString()} connected source${progress.skippedSources.length !== 1 ? "s" : ""} could not be read and ${progress.skippedSources.length !== 1 ? "were" : "was"} skipped: ${progress.skippedSources.map((s) => s.label).join(", ")}.`
-      : null;
+  const skippedNotice = skippedSourcesNotice(progress.skippedSources);
   const coverageAnnouncement = [droppedNotice, skippedNotice]
     .filter((line): line is string => line !== null)
     .join(" ");

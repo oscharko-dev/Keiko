@@ -68,6 +68,9 @@ export interface FigmaStructuralScreenSummary {
 
 export interface FigmaSnapshotSummary {
   readonly runId: string;
+  /** Mutable display name stored outside the immutable evidence record. */
+  readonly displayName?: string;
+  readonly management?: FigmaSnapshotManagementSummary;
   readonly fileKey: string;
   readonly nodeId: string;
   readonly version: string | undefined;
@@ -90,8 +93,15 @@ export interface FigmaSnapshotSummary {
   readonly structuralScreens?: readonly FigmaStructuralScreenSummary[];
 }
 
+export interface FigmaSnapshotManagementSummary {
+  readonly displayName?: string;
+  readonly updatedAt?: string;
+}
+
 export interface FigmaSnapshotListEntry {
   readonly runId: string;
+  readonly displayName?: string;
+  readonly management?: FigmaSnapshotManagementSummary;
   readonly fileKey: string;
   readonly nodeId: string;
   readonly version: string | undefined;
@@ -101,6 +111,13 @@ export interface FigmaSnapshotListEntry {
   readonly structuralOnlyCount?: number;
   readonly reductionHint: string;
   readonly integrityHash: string;
+}
+
+export interface DeleteFigmaSnapshotResult {
+  readonly runId: string;
+  readonly deleted: boolean;
+  readonly sideFileDirDeleted: boolean;
+  readonly metadataDeleted: boolean;
 }
 
 export interface FigmaSnapshotScreenJsonResponse {
@@ -229,6 +246,28 @@ export async function listFigmaSnapshots(
     { ...(options.signal !== undefined ? { signal: options.signal } : {}) },
   );
   return result.snapshots;
+}
+
+export async function updateFigmaSnapshotMetadata(
+  runId: string,
+  displayName: string | null,
+  signal?: AbortSignal,
+): Promise<FigmaSnapshotSummary> {
+  return fetchJson<FigmaSnapshotSummary>(`/api/figma/snapshots/${encodeURIComponent(runId)}`, {
+    method: "PATCH",
+    ...(signal !== undefined ? { signal } : {}),
+    body: JSON.stringify({ displayName }),
+  });
+}
+
+export async function deleteFigmaSnapshot(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<DeleteFigmaSnapshotResult> {
+  return fetchJson<DeleteFigmaSnapshotResult>(`/api/figma/snapshots/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+    ...(signal !== undefined ? { signal } : {}),
+  });
 }
 
 export function figmaSnapshotScreenImageUrl(runId: string, screenIndex: number): string {

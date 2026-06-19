@@ -189,6 +189,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  figmaView: {
+    lifecycle: ["idle", "results", "error"],
+    trustBoundary: ["ui", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
   figmaJson: {
     lifecycle: ["idle", "results", "error"],
     trustBoundary: ["ui", "evidence"],

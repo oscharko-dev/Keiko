@@ -175,7 +175,7 @@ function selectBody(
 
 function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): boolean {
   return (
-    type === "figma" &&
+    type === "figmaView" &&
     typeof cfg["selectedScreenIdsJson"] === "string" &&
     cfg["selectedScreenIdsJson"].length > 0
   );

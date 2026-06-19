@@ -385,6 +385,37 @@ describe("makeFigmaVisionHintProvider", () => {
     }
   });
 
+  it("accepts strict JSON returned inside a markdown code fence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-fenced-json-"));
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: () =>
+          Promise.resolve(
+            normalizedResponse('```json\n["Primary CTA is visible below the amount fields"]\n```'),
+          ),
+      };
+      const deps = depsWith({
+        config: configWith([capability("vision", { supportsImageInput: true })]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      await expect(
+        makeFigmaVisionHintProvider(deps)({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual(["Primary CTA is visible below the amount fields"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("routes the call through the capability-selected model id (no hard-coded id)", () => {
     const deps = depsWith({
       config: configWith([

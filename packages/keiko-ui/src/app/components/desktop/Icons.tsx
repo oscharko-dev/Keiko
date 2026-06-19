@@ -226,6 +226,32 @@ export const Icons = {
     </Ico>
   ),
   check: (p: IcoProps): ReactNode => <Ico {...p} d="M5 12.5l4.5 4.5L19 6.5" />,
+  /* Lift: info ring open at the top seam + stem. */
+  info: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M14.51 4.96 A8.6 8.6 0 1 1 9.49 4.96" />
+      <path d="M12 8.2 h.01" />
+      <path d="M12 11.3 V16.3" />
+    </Ico>
+  ),
+  /* Lift: edit — open paper lines with a pen gesture. */
+  edit: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M4.5 6.5 H13" />
+      <path d="M4.5 10 H10" />
+      <path d="M14.4 13.6 l4-4 a1.6 1.6 0 0 1 2.3 2.3 l-6.2 6.2 -3 .7 .7 -3 z" />
+    </Ico>
+  ),
+  /* Lift: trash — open lid + open can contour, no filled shape. */
+  trash: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M5 7 H19" />
+      <path d="M9 7 V5.6 A1.6 1.6 0 0 1 10.6 4 H13.4 A1.6 1.6 0 0 1 15 5.6 V7" />
+      <path d="M17.5 10 L16.8 18.2 A2 2 0 0 1 14.8 20 H9.2 A2 2 0 0 1 7.2 18.2 L6.5 10" />
+      <path d="M10 11.5 V17" />
+      <path d="M14 11.5 V17" />
+    </Ico>
+  ),
   reset: (p: IcoProps): ReactNode => (
     <Ico {...p}>
       <path d="M4 12a8 8 0 1 1 2.3 5.6" />

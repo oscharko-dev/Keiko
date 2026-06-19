@@ -164,21 +164,12 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-const CARD_TYPES: readonly WindowType[] = [
-  "chat",
-  "connector",
-  // Epic #750 #756 — the Figma Snapshot window was registered (WindowsRegistry + render + TYPE_ORDER)
-  // but omitted here, so it never appeared in the New-Window palette or the "New …" command list,
-  // i.e. a user could not open it at all (an unreachable surface). Listed here (ordered as in
-  // TYPE_ORDER) so it is launchable like every other card.
-  "figma",
-  "files",
-];
+const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files"];
 const TOOL_TYPES: readonly WindowType[] = [
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with rail buttons but were missing here, so the command palette could not open them
-  // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
-  // the WindowsRegistry declaration.
+  // (same forgotten-WindowType pattern as the Figma Snapshot manager). Ordered as in the
+  // WindowsRegistry declaration.
   "chatHistory",
   "memoria",
   "settings",
@@ -189,6 +180,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "notifications",
   "resources",
   "localKnowledge",
+  "figma",
   "quality",
   "relationships",
 ];

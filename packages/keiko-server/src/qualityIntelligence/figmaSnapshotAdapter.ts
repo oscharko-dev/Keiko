@@ -145,8 +145,13 @@ function sanitiseCallResult(value: unknown): readonly string[] {
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
+function stripJsonCodeFence(raw: string): string {
+  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(raw);
+  return match?.[1]?.trim() ?? raw;
+}
+
 function parseHintResponse(raw: string): readonly string[] {
-  const trimmed = raw.trim();
+  const trimmed = stripJsonCodeFence(raw.trim());
   if (trimmed.length === 0) return [];
   try {
     const parsed = JSON.parse(trimmed) as unknown;

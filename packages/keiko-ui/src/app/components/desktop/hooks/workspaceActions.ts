@@ -764,7 +764,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedConnectorCapsuleSetIds: WorkspaceApi["linkedConnectorCapsuleSetIds"] = (id) =>
     linkedConnectorSelectionIds(id, "capsule-set");
 
-  // Epic #750 #756 — read the snapshotRunId stored in cfg of each connected Figma Snapshot window.
+  // Epic #750 #756 — legacy fallback for whole-snapshot sources. Scoped Figma View/JSON windows
+  // are exposed through linkedFigmaSnapshotSources so they cannot be widened to a whole snapshot.
   // Deduped and capped at MAX_SCOPES, matching the connector capsule reader above — including its
   // whitespace-only skip: a blank run id would be rejected server-side, so treat it as "no selection"
   // and skip it rather than emit an unusable figma-snapshot source on Generate.
@@ -776,7 +777,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
-      if (w === undefined || (w.type !== "figma" && w.type !== "figmaJson")) continue;
+      if (w === undefined || w.type !== "figma") continue;
       const runId = w.cfg["snapshotRunId"];
       if (typeof runId !== "string" || runId.trim().length === 0) continue;
       if (seen.has(runId)) continue;
@@ -820,20 +821,26 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
-      if (w === undefined || (w.type !== "figma" && w.type !== "figmaJson")) continue;
+      if (
+        w === undefined ||
+        (w.type !== "figma" && w.type !== "figmaView" && w.type !== "figmaJson")
+      ) {
+        continue;
+      }
       const runId = w.cfg["snapshotRunId"];
       if (typeof runId !== "string" || runId.trim().length === 0) continue;
       const rawScreenIdsJson = w.cfg["selectedScreenIdsJson"];
       const screenName = w.cfg["selectedScreenName"];
       const screenIds = selectedScreenIdsForFigmaWindow(w);
-      // A figma window opened via "Add to workspace" is SCOPED — it carries selectedScreenIdsJson
-      // and/or selectedScreenName. If such a window's scope cannot be resolved (missing, corrupt, or
+      // A figmaView/figmaJson window is SCOPED — it carries selectedScreenIdsJson and/or
+      // selectedScreenName. If such a window's scope cannot be resolved (missing, corrupt, or
       // over-cap persisted JSON the persistence layer dropped on reload), it must contribute NOTHING —
       // never silently widen to the whole board. Only a genuinely unscoped figma window (no scope
       // marker at all) ingests the full snapshot. This is the UI half of the no-leak guarantee; the
       // server enforces the same invariant on the wire.
       const isScopedWindow =
         w.type === "figmaJson" ||
+        w.type === "figmaView" ||
         rawScreenIdsJson !== undefined ||
         (typeof screenName === "string" && screenName.trim().length > 0);
       if (isScopedWindow && screenIds.length === 0) continue;

@@ -293,16 +293,13 @@ export function CandidateEditForm({
         void handleSubmit();
       }}
     >
-      <InputField
-        id={`${id}-title`}
-        label="Title"
-        value={state.title}
-        disabled={saving}
-        required
-        onChange={(v) => {
-          set("title", v);
-        }}
-      />
+      <div className="qi-edit-head">
+        <div className="qi-edit-head-copy">
+          <p className="qi-edit-eyebrow">Edit test case</p>
+          <h3 className="qi-edit-heading">{candidate.title}</h3>
+        </div>
+        <EditActions onCancel={requestCancel} saving={saving} />
+      </div>
       {saveError !== null ? (
         <p className="qi-edit-error" role="alert" aria-live="assertive">
           {saveError}
@@ -316,63 +313,78 @@ export function CandidateEditForm({
           ? "Unsaved changes — press Escape or activate Cancel again to discard them."
           : ""}
       </p>
-      <EditActions onCancel={requestCancel} saving={saving} />
-      <TextAreaField
-        id={`${id}-preconditions`}
-        label="Preconditions (one per line)"
-        value={state.preconditions}
-        disabled={saving}
-        onChange={(v) => {
-          set("preconditions", v);
-        }}
-      />
-      <TextAreaField
-        id={`${id}-steps`}
-        label="Steps (one per line)"
-        value={state.steps}
-        disabled={saving}
-        onChange={(v) => {
-          set("steps", v);
-        }}
-      />
-      <TextAreaField
-        id={`${id}-expected`}
-        label="Expected results (one per line)"
-        value={state.expectedResults}
-        disabled={saving}
-        onChange={(v) => {
-          set("expectedResults", v);
-        }}
-      />
-      <SelectField
-        id={`${id}-priority`}
-        label="Priority"
-        value={state.priority}
-        options={QUALITY_INTELLIGENCE_PRIORITIES}
-        disabled={saving}
-        onChange={(v) => {
-          set("priority", v);
-        }}
-      />
-      <SelectField
-        id={`${id}-risk`}
-        label="Risk class"
-        value={state.riskClass}
-        options={QUALITY_INTELLIGENCE_RISK_CLASSES}
-        disabled={saving}
-        onChange={(v) => {
-          set("riskClass", v);
-        }}
-      />
-      <InputField
-        id={`${id}-tags`}
-        label="Tags (comma-separated)"
-        value={state.tags}
-        disabled={saving}
-        onChange={(v) => {
-          set("tags", v);
-        }}
-      />
+      <div className="qi-edit-layout">
+        <div className="qi-edit-main">
+          <InputField
+            id={`${id}-title`}
+            label="Title"
+            value={state.title}
+            disabled={saving}
+            required
+            onChange={(v) => {
+              set("title", v);
+            }}
+          />
+          <TextAreaField
+            id={`${id}-preconditions`}
+            label="Preconditions (one per line)"
+            value={state.preconditions}
+            disabled={saving}
+            onChange={(v) => {
+              set("preconditions", v);
+            }}
+          />
+          <TextAreaField
+            id={`${id}-steps`}
+            label="Steps (one per line)"
+            value={state.steps}
+            disabled={saving}
+            onChange={(v) => {
+              set("steps", v);
+            }}
+          />
+          <TextAreaField
+            id={`${id}-expected`}
+            label="Expected results (one per line)"
+            value={state.expectedResults}
+            disabled={saving}
+            onChange={(v) => {
+              set("expectedResults", v);
+            }}
+          />
+        </div>
+        <div className="qi-edit-side">
+          <SelectField
+            id={`${id}-priority`}
+            label="Priority"
+            value={state.priority}
+            options={QUALITY_INTELLIGENCE_PRIORITIES}
+            disabled={saving}
+            onChange={(v) => {
+              set("priority", v);
+            }}
+          />
+          <SelectField
+            id={`${id}-risk`}
+            label="Risk class"
+            value={state.riskClass}
+            options={QUALITY_INTELLIGENCE_RISK_CLASSES}
+            disabled={saving}
+            onChange={(v) => {
+              set("riskClass", v);
+            }}
+          />
+          <InputField
+            id={`${id}-tags`}
+            label="Tags (comma-separated)"
+            value={state.tags}
+            disabled={saving}
+            onChange={(v) => {
+              set("tags", v);
+            }}
+          />
+        </div>
+      </div>
     </form>
   );
 }

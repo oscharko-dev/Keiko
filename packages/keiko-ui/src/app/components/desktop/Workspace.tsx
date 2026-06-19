@@ -657,7 +657,7 @@ export function Workspace({
 
   const addFigmaViewNode = useCallback(
     (payload: FigmaViewDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
-      const id = api.add("figma", {
+      const id = api.add("figmaView", {
         snapshotRunId: payload.snapshotRunId,
         selectedScreenIdsJson: JSON.stringify([payload.screenId]),
         selectedScreenName: payload.name,

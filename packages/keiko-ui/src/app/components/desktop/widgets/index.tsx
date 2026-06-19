@@ -348,12 +348,29 @@ registerWindowRender("figma", (cfg, ctx) => {
       selectedScreenIds={selectedScreenIds}
       selectedScreenName={selectedScreenName}
       openScreenSource={({ snapshotRunId: runId, screenId, name }) => {
-        ctx.openWindow("figma", {
+        ctx.openWindow("figmaView", {
           snapshotRunId: runId,
           selectedScreenIdsJson: JSON.stringify([screenId]),
           selectedScreenName: name,
         });
       }}
+      updateCfg={(patch) => {
+        ctx.updateCfg(patch);
+      }}
+    />
+  );
+});
+
+registerWindowRender("figmaView", (cfg, ctx) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
+  const selectedScreenIds = stringArrayJson(cfg, "selectedScreenIdsJson");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return (
+    <FigmaSnapshotWindow
+      sourceWindowId={ctx.windowId}
+      snapshotRunId={snapshotRunId}
+      selectedScreenIds={selectedScreenIds}
+      selectedScreenName={selectedScreenName}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}

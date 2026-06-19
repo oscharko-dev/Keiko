@@ -35,7 +35,7 @@ export function isWindowDragPointer(event: {
   readonly button: number;
   readonly ctrlKey: boolean;
 }): boolean {
-  return isMiddlePointerButton(event.button);
+  return isPrimaryActivationPointer(event) || isMiddlePointerButton(event.button);
 }
 
 export function isInteractiveSurfaceTarget(target: EventTarget | null): boolean {

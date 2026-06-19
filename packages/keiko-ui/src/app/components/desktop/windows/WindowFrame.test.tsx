@@ -219,7 +219,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).toHaveBeenCalledTimes(1);
   });
 
-  it("focuses the window without starting header dragging from the primary button", () => {
+  it("drags the window from the header with the primary button", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -245,9 +245,9 @@ describe("WindowFrame content zoom controls", () => {
     fireEvent.pointerUp(window);
 
     expect(focus).toHaveBeenCalledWith("agents-1");
-    expect(update).not.toHaveBeenCalled();
-    expect(setSnap).not.toHaveBeenCalled();
-    expect(commitSnap).not.toHaveBeenCalled();
+    expect(update).toHaveBeenLastCalledWith("agents-1", { x: 680, y: -0 });
+    expect(setSnap).toHaveBeenLastCalledWith("tr");
+    expect(commitSnap).toHaveBeenCalledWith("agents-1");
     expect(document.body.style.cursor).toBe("");
     expect(document.body.style.userSelect).toBe("");
     expect(section).not.toHaveAttribute("data-dragging");

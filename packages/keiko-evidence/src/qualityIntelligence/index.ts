@@ -104,13 +104,16 @@ export type {
 } from "./figmaSnapshot/schema.js";
 export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
 export type {
+  DeleteFigmaSnapshotResult,
   FigmaSnapshotImageBytes,
   FigmaSnapshotStore,
   FigmaSnapshotStoreOptions,
+  FigmaSnapshotUserMetadata,
   RecordFigmaSnapshotInput,
   RecordFigmaSnapshotResult,
   RecordFigmaSnapshotScreenInput,
   RecordFigmaSnapshotStructuralScreenInput,
+  UpdateFigmaSnapshotUserMetadataInput,
 } from "./figmaSnapshot/store.js";
 
 // ─── Retention, deletion, recovery (M3) ────────────────────────────────────────────

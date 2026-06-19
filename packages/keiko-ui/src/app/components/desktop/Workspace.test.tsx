@@ -521,7 +521,7 @@ describe("Workspace card connections", () => {
     expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
   });
 
-  it("creates a scoped Figma view card when a snapshot thumbnail is dropped", () => {
+  it("creates a scoped Figma View card when a snapshot thumbnail is dropped", () => {
     const add = vi.fn(() => "figma-view-1");
     const update = vi.fn();
     const workspaceApi = api({ add, update });
@@ -570,7 +570,7 @@ describe("Workspace card connections", () => {
     });
     fireEvent(surface, dropEvent);
 
-    expect(add).toHaveBeenCalledWith("figma", {
+    expect(add).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-123",
       selectedScreenIdsJson: JSON.stringify(["1:102746"]),
       selectedScreenName: "Kontokorrentkredit hinzufügen",
@@ -578,7 +578,7 @@ describe("Workspace card connections", () => {
     expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
   });
 
-  it("creates the same scoped Figma view card from the pointer drag-out event", () => {
+  it("creates the same scoped Figma View card from the pointer drag-out event", () => {
     const add = vi.fn(() => "figma-view-1");
     const update = vi.fn();
     const workspaceApi = api({ add, update });
@@ -621,7 +621,7 @@ describe("Workspace card connections", () => {
       }),
     );
 
-    expect(add).toHaveBeenCalledWith("figma", {
+    expect(add).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-123",
       selectedScreenIdsJson: JSON.stringify(["1:102746"]),
       selectedScreenName: "Kontokorrentkredit hinzufügen",
@@ -645,7 +645,7 @@ describe("Workspace card connections", () => {
         }),
         appWindow({
           id: "figma-view-1",
-          type: "figma",
+          type: "figmaView",
           x: 420,
           z: 1,
           cfg: {
@@ -786,7 +786,7 @@ describe("Workspace card connections", () => {
       const workspaceApi = api({ add, update, removeConn, connect });
       const wins = [
         appWindow({ id: "quality", type: "quality", z: 2 }),
-        appWindow({ id: "figma-view-1", type: "figma", x: 420, z: 1 }),
+        appWindow({ id: "figma-view-1", type: "figmaView", x: 420, z: 1 }),
       ];
       render(
         <Workspace
