@@ -277,7 +277,7 @@ describe("useChatSession pending attachment validation", () => {
   async function setupAttachmentSession(
     models: readonly ModelCapability[] = [model({ id: "chat-a" })],
   ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
-    vi.mocked(fetchModels).mockResolvedValue({ models });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [...models] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
     vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
     vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
