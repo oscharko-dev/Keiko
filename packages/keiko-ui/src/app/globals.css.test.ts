@@ -70,6 +70,13 @@ describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
   });
 });
 
+describe("Gateway credential dialog chrome", () => {
+  it("hides workspace rails while the gateway setup dialog is open", () => {
+    const block = cssBlock('html[data-keiko-gateway-setup-open="true"] .rail');
+    expect(block).toContain("display: none");
+  });
+});
+
 // ─── Fix 2: WCAG 2.3.3 — reduced motion ──────────────────────────────────────
 
 /**
@@ -234,37 +241,6 @@ describe("Compact model picker", () => {
     expect(cssBlock(".cmp-bar-compact .cmp-model-compact .cmp-model-select")).toContain(
       "max-width: 34px",
     );
-  });
-});
-
-describe("Workspace outline positioning", () => {
-  it("aligns the open outline with the right side of the workspace", () => {
-    const outlineBlock = cssBlock(".ws-outline {");
-    expect(outlineBlock).toContain("right: 4px");
-    expect(outlineBlock).toContain("width: min(420px, calc(100% - 16px))");
-
-    const mobileOverride = css.slice(css.indexOf("@media (max-width: 420px)"));
-    expect(mobileOverride).toContain(".ws-outline");
-    expect(mobileOverride).toContain("right: 6px");
-    expect(mobileOverride).toContain("width: min(420px, calc(100% - 16px))");
-  });
-
-  it("visually collapses the outline when the right rail toggle closes it", () => {
-    const closedBlock = cssBlock('.ws-outline[data-open="false"]');
-    expect(closedBlock).toContain("opacity: 0");
-    expect(closedBlock).toContain("pointer-events: none");
-    expect(closedBlock).toContain("border-color: transparent");
-    expect(closedBlock).toContain("box-shadow: none");
-    expect(closedBlock).toContain("transform: translateX(12px)");
-  });
-});
-
-describe("Workspace frame lighting", () => {
-  it("lets settings control an inward edge light from the workspace frame", () => {
-    const block = cssBlock(".workspace {");
-    expect(block).toContain("--frame-inner-glow-strength");
-    expect(block).toContain("inset 0 0 34px");
-    expect(block).toContain("inset 0 0 86px");
   });
 });
 
@@ -477,6 +453,7 @@ describe("Quality Intelligence source-type picker", () => {
     expect(optionBlock).toContain("height: 100%");
     expect(optionBlock).toContain("border: 1px solid transparent");
     expect(optionBlock).toContain("align-items: center");
+    expect(optionBlock).toContain("color: var(--fg-muted)");
     expect(optionBlock).toContain("line-height: 1");
   });
 
@@ -489,6 +466,8 @@ describe("Quality Intelligence source-type picker", () => {
 
     const iconBlock = cssBlock(".qi-source-kind-icon {");
     expect(iconBlock).toContain("display: none");
+    expect(iconBlock).toContain("color: currentColor");
+    expect(cssBlock(".qi-source-kind-option > span:last-child")).toContain("color: currentColor");
     expect(cssBlock(".qi-source-kind-icon svg {", { fromLast: true })).toContain(
       "stroke-width: 3.1",
     );
@@ -497,6 +476,7 @@ describe("Quality Intelligence source-type picker", () => {
     const selectedBlock = cssBlock('.qi-source-kind-option[aria-checked="true"] {');
     expect(selectedBlock).toContain("border-color: transparent");
     expect(selectedBlock).toContain("background: transparent");
+    expect(selectedBlock).toContain("color: var(--fg)");
     expect(selectedBlock).toContain("inset 0 0 0 1.5px");
   });
 
@@ -553,9 +533,18 @@ describe("Fix 4 — dense desktop text clarity", () => {
     expect(titleBlock).toContain("font-size: 13.5px");
     expect(titleBlock).toContain("font-weight: 650");
 
-    const subtitleBlock = cssBlock(".win-sub");
+    const subtitleBlock = cssBlock(".win-sub {");
+    expect(subtitleBlock).toContain("display: inline-flex");
+    expect(subtitleBlock).toContain("align-items: center");
+    expect(subtitleBlock).toContain("justify-content: center");
+    expect(subtitleBlock).toContain("min-width: 72px");
     expect(subtitleBlock).toContain("font-size: 11.5px");
-    expect(subtitleBlock).toContain("font-weight: 500");
+    expect(subtitleBlock).toContain("font-weight: 560");
+    expect(subtitleBlock).toContain("max-width: clamp(128px, 26vw, 260px)");
+
+    const subtitleTextBlock = cssBlock(".win-sub-text");
+    expect(subtitleTextBlock).toContain("overflow: hidden");
+    expect(subtitleTextBlock).toContain("text-overflow: ellipsis");
   });
 
   it("keeps window controls large enough for full-screen cards (WCAG 2.5.8)", () => {
@@ -723,6 +712,31 @@ describe("uiux-fix F013 — header responsive stages and tab truncation", () => 
 // ─── uiux-fix A11Y (WCAG 2.2 AA audit) — focus rings, reduced-motion, contrast ──
 
 describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)", () => {
+  it("keeps shell chrome seamless without hard rail cutoff lines", () => {
+    expect(cssBlock(".header {")).toContain("border-bottom: 0");
+    expect(cssBlock(".footer {")).toContain("border-top: 0");
+    expect(cssBlock(".rail-div {")).toContain(
+      "background: color-mix(in oklch, var(--line-soft) 68%, transparent)",
+    );
+  });
+
+  it("molds the rails around the rounded workspace canvas", () => {
+    const stageBlock = cssBlock(".stage {");
+    expect(stageBlock).toContain("gap: 0");
+    expect(stageBlock).toContain("padding: 8px");
+
+    const workspaceBlock = cssBlock(".workspace {");
+    expect(workspaceBlock).toContain("border-radius: 14px");
+    expect(workspaceBlock).toContain(
+      "background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%))",
+    );
+    expect(workspaceBlock).not.toContain("color-mix(in oklch, var(--accent) 8%, transparent)");
+    expect(workspaceBlock).not.toContain("0 22px 60px");
+
+    expect(cssBlock(".rail-left")).toContain("border-radius: 0 14px 14px 0");
+    expect(cssBlock(".rail-right")).toContain("border-radius: 14px 0 0 14px");
+  });
+
   it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
     const block = cssBlock(".footer:focus-visible");
     expect(block).toContain("outline: 2px solid var(--accent-text)");
@@ -884,6 +898,17 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(block).toContain("padding: 0 18px");
     expect(block).toContain("border-radius: 10px");
     expect(block).toContain("font-weight: 650");
+
+  });
+
+  it("keeps the bottom-right new-window affordance and palette above workspace windows", () => {
+    const fabSelector = ".ws-fab {\n  position: absolute;";
+    const fabIdx = css.indexOf(fabSelector);
+    expect(fabIdx, "base .ws-fab block not found").toBeGreaterThan(-1);
+    const fabBlock = css.slice(fabIdx, css.indexOf("}", fabIdx) + 1);
+    expect(fabBlock).toContain("z-index: 1");
+    expect(css).toContain("z-index: 14000");
+    expect(css).toContain("z-index: 99999");
   });
 
   it("makes MemoriaViva responsive to its window width, not only viewport width", () => {
@@ -1034,6 +1059,26 @@ describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
     expect(optionBlock).toContain("min-height: 28px");
     expect(optionBlock).toContain("font-size: 0.74em");
     expect(optionBlock).toContain("line-height: 1.15");
+  });
+
+  it("keeps custom number steppers clickable while preserving the Keiko chevron styling", () => {
+    expect(cssBlock(".number-control {")).toContain("--number-stepper-size: 28px");
+
+    const stepperBlock = cssBlock(".number-control-stepper");
+    expect(stepperBlock).toContain("display: grid");
+    expect(stepperBlock).toContain("top: 4px");
+    expect(stepperBlock).toContain("bottom: 4px");
+    expect(stepperBlock).not.toContain("pointer-events: none");
+
+    const buttonBlock = cssBlock(".number-control-stepper-button");
+    expect(buttonBlock).toContain("appearance: none");
+    expect(buttonBlock).toContain("cursor: pointer");
+
+    expect(cssBlock(".number-control-stepper-button::before")).toContain(
+      "border-right: 1.5px solid currentColor",
+    );
+    expect(cssBlock(".number-control-stepper-up::before")).toContain("rotate(225deg)");
+    expect(cssBlock(".number-control-stepper-down::before")).toContain("rotate(45deg)");
   });
 });
 

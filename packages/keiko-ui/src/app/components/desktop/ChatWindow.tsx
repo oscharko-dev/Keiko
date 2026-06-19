@@ -17,6 +17,7 @@ import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
+import { NumberControlStepper } from "./NumberControlStepper";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   AttachButton,
@@ -1383,11 +1384,14 @@ function MemoryPanel({
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   const memoryDisclosureLabel =
     memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included";
+  const stepMemoryBudget = (delta: number): void => {
+    setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + delta));
+  };
   const handleBudgetWheel = (event: WheelEvent<HTMLInputElement>): void => {
     if (event.deltaY === 0) return;
     event.preventDefault();
     const direction = event.deltaY < 0 ? 1 : -1;
-    setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + direction * 100));
+    stepMemoryBudget(direction * 100);
   };
   const budgetControl = (
     <label className="chat-memory-budget">
@@ -1402,7 +1406,11 @@ function MemoryPanel({
           onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
           onWheel={handleBudgetWheel}
         />
-        <span className="number-control-stepper" aria-hidden="true" />
+        <NumberControlStepper
+          label="memory budget"
+          onStepUp={() => stepMemoryBudget(100)}
+          onStepDown={() => stepMemoryBudget(-100)}
+        />
       </span>
     </label>
   );

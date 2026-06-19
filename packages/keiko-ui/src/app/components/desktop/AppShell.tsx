@@ -470,7 +470,6 @@ function AppShellInner(): ReactNode {
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
   const [cmdkOpen, setCmdkOpen] = useState(false);
-  const [outlineOpen, setOutlineOpen] = useState(false);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
 
   const winCount = ws.wins?.length ?? 0;
@@ -624,17 +623,6 @@ function AppShellInner(): ReactNode {
     };
   }, []);
 
-  useEffect(() => {
-    const h = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
-        setCmdkOpen((o) => !o);
-      }
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, []);
-
   const commands = useMemo(
     () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack),
     [ws.api, onTool, pick, theme, toggleTheme, undoStack],
@@ -657,7 +645,6 @@ function AppShellInner(): ReactNode {
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
   ) : null;
-  const toggleOutline = (): void => setOutlineOpen((open) => !open);
 
   return (
     <ChatSessionProvider value={session}>
@@ -678,22 +665,21 @@ function AppShellInner(): ReactNode {
             onCascade={ws.api.cascade}
           />
           <div className="mid">
-            <LeftRail
-              openTools={openTools}
-              onTool={onTool}
-              onNewChat={onNewChat}
-              theme={theme}
-              onToggleTheme={toggleTheme}
-            />
+            {needsGatewaySetup ? null : (
+              <LeftRail
+                openTools={openTools}
+                onTool={onTool}
+                onNewChat={onNewChat}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+              />
+            )}
             <div className="stage" id="main" tabIndex={-1}>
               <Workspace
                 ws={ws}
                 wsRef={wsRef}
                 openPalette={openPalette}
                 palette={paletteNode}
-                outlineOpen={outlineOpen}
-                onToggleOutline={toggleOutline}
-                renderOutlineToggle={false}
               />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
@@ -711,12 +697,9 @@ function AppShellInner(): ReactNode {
                 </div>
               )}
             </div>
-            <RightRail
-              openTools={openTools}
-              onTool={onTool}
-              outlineOpen={outlineOpen}
-              onToggleOutline={toggleOutline}
-            />
+            {needsGatewaySetup ? null : (
+              <RightRail openTools={openTools} onTool={onTool} />
+            )}
           </div>
           <Footer
             winCount={winCount}

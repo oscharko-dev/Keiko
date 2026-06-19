@@ -178,12 +178,10 @@ describe("KeikoSelect menu geometry", () => {
 
     await user.click(trigger);
     vi.useFakeTimers();
-    const label = screen.getAllByText("gpt-4o-mini-search-preview-2025-03-11")[1]!;
-    Object.defineProperties(label, {
-      clientWidth: { configurable: true, value: 120 },
-      scrollWidth: { configurable: true, value: 280 },
+    const option = screen.getByRole("option", {
+      name: "gpt-4o-mini-search-preview-2025-03-11",
     });
-    vi.spyOn(label, "getBoundingClientRect").mockReturnValue({
+    vi.spyOn(option, "getBoundingClientRect").mockReturnValue({
       bottom: 130,
       height: 24,
       left: 32,
@@ -194,10 +192,15 @@ describe("KeikoSelect menu geometry", () => {
       y: 106,
       toJSON: () => ({}),
     });
+    const label = screen.getAllByText("gpt-4o-mini-search-preview-2025-03-11")[1]!;
+    Object.defineProperties(label, {
+      clientWidth: { configurable: true, value: 120 },
+      scrollWidth: { configurable: true, value: 280 },
+    });
 
-    fireEvent.pointerEnter(label);
+    fireEvent.pointerEnter(option);
     act(() => {
-      vi.advanceTimersByTime(1999);
+      vi.advanceTimersByTime(1499);
     });
     expect(screen.queryByRole("tooltip")).toBeNull();
 
@@ -207,14 +210,14 @@ describe("KeikoSelect menu geometry", () => {
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("gpt-4o-mini-search-preview-2025-03-11");
     expect(tooltip).toHaveAttribute("data-placement", "top-left");
-    expect(tooltip).toHaveStyle({ left: "32px", top: "98px" });
+    expect(tooltip).toHaveStyle({ left: "160px", top: "100px" });
 
-    fireEvent.pointerLeave(label);
+    fireEvent.pointerLeave(option);
     expect(screen.queryByRole("tooltip")).toBeNull();
     vi.useRealTimers();
   });
 
-  it("anchors long-label tooltips to the option's top-right edge near the viewport edge", async () => {
+  it("mirrors long-label tooltips to the option's top-left edge near the viewport edge", async () => {
     const user = userEvent.setup();
     const originalInnerWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 360 });
@@ -253,12 +256,10 @@ describe("KeikoSelect menu geometry", () => {
 
       await user.click(trigger);
       vi.useFakeTimers();
-      const label = screen.getAllByText("gpt-4o-mini-search-preview-2025-03-11")[1]!;
-      Object.defineProperties(label, {
-        clientWidth: { configurable: true, value: 100 },
-        scrollWidth: { configurable: true, value: 280 },
+      const option = screen.getByRole("option", {
+        name: "gpt-4o-mini-search-preview-2025-03-11",
       });
-      vi.spyOn(label, "getBoundingClientRect").mockReturnValue({
+      vi.spyOn(option, "getBoundingClientRect").mockReturnValue({
         bottom: 130,
         height: 24,
         left: 220,
@@ -269,15 +270,20 @@ describe("KeikoSelect menu geometry", () => {
         y: 106,
         toJSON: () => ({}),
       });
+      const label = screen.getAllByText("gpt-4o-mini-search-preview-2025-03-11")[1]!;
+      Object.defineProperties(label, {
+        clientWidth: { configurable: true, value: 100 },
+        scrollWidth: { configurable: true, value: 280 },
+      });
 
-      fireEvent.pointerEnter(label);
+      fireEvent.pointerEnter(option);
       act(() => {
-        vi.advanceTimersByTime(2000);
+        vi.advanceTimersByTime(1500);
       });
 
       const tooltip = screen.getByRole("tooltip");
       expect(tooltip).toHaveAttribute("data-placement", "top-right");
-      expect(tooltip).toHaveStyle({ left: "336px", top: "98px" });
+      expect(tooltip).toHaveStyle({ left: "212px", top: "100px" });
     } finally {
       vi.useRealTimers();
       Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });

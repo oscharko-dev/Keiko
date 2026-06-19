@@ -30,6 +30,7 @@ import {
   displayLocalPath,
   LocalFileBrowserDialog,
 } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
+import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import { startQiRun } from "@/lib/quality-intelligence-api";
 import {
   fetchCapsules,
@@ -412,14 +413,17 @@ export function RunLauncher({
         : Number.NaN;
   const seedValid =
     parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  const stepSeed = (delta: number): void => {
+    const current = Number.parseInt(seed.trim(), 10);
+    const base = Number.isFinite(current) ? current : 0;
+    setSeed(String(Math.max(0, base + delta)));
+    setError(null);
+  };
   const handleSeedWheel = (event: WheelEvent<HTMLInputElement>): void => {
     if (running || event.deltaY === 0) return;
     event.preventDefault();
     const direction = event.deltaY < 0 ? 1 : -1;
-    const current = Number.parseInt(seed.trim(), 10);
-    const base = Number.isFinite(current) ? current : 0;
-    setSeed(String(Math.max(0, base + direction)));
-    setError(null);
+    stepSeed(direction);
   };
   // Generate stays focusable when blocked (aria-disabled, not native disabled) so keyboard and
   // screen-reader users can reach it and hear WHY it is inactive via aria-describedby — the same
@@ -890,7 +894,12 @@ export function RunLauncher({
                 }}
                 onWheel={handleSeedWheel}
               />
-              <span className="number-control-stepper" aria-hidden="true" />
+              <NumberControlStepper
+                label="seed"
+                disabled={running}
+                onStepUp={() => stepSeed(1)}
+                onStepDown={() => stepSeed(-1)}
+              />
             </span>
             {!seedValid ? (
               <span className="qi-field-error" id={seedErrorId}>

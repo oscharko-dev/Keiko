@@ -42,16 +42,8 @@ const mocks = vi.hoisted(() => ({
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
-    workspaceProps: undefined as
-      | {
-          readonly outlineOpen?: boolean;
-          readonly onToggleOutline?: () => void;
-          readonly renderOutlineToggle?: boolean;
-        }
-      | undefined,
-    rightRailProps: undefined as
-      | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
-      | undefined,
+    workspaceRendered: false,
+    rightRailRendered: false,
   },
   fetchConfig: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
@@ -153,31 +145,23 @@ vi.mock("./Footer", () => ({
 
 vi.mock("./LeftRail", () => ({
   LeftRail: ({ onNewChat }: { readonly onNewChat: () => void }) => (
-    <button type="button" onClick={onNewChat}>
+    <button type="button" data-testid="left-rail" onClick={onNewChat}>
       New chat
     </button>
   ),
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: (props: { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }) => {
-    mocks.state.rightRailProps = props;
-    return (
-      <button type="button" data-testid="right-rail" onClick={props.onToggleOutline}>
-        {props.outlineOpen === true ? "Outline open" : "Outline closed"}
-      </button>
-    );
+  RightRail: () => {
+    mocks.state.rightRailRendered = true;
+    return <aside data-testid="right-rail" />;
   },
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: (props: {
-    readonly outlineOpen?: boolean;
-    readonly onToggleOutline?: () => void;
-    readonly renderOutlineToggle?: boolean;
-  }) => {
-    mocks.state.workspaceProps = props;
-    return <main data-testid="workspace" data-outline-open={props.outlineOpen === true} />;
+  Workspace: () => {
+    mocks.state.workspaceRendered = true;
+    return <main data-testid="workspace" />;
   },
 }));
 
@@ -319,8 +303,8 @@ describe("AppShell grounding connections", () => {
       win("chat", { chatId: "chat-1" }, "chat-window"),
     ]);
     mocks.state.workspaceOptions = undefined;
-    mocks.state.workspaceProps = undefined;
-    mocks.state.rightRailProps = undefined;
+    mocks.state.workspaceRendered = false;
+    mocks.state.rightRailRendered = false;
     document.documentElement.removeAttribute("data-input-modality");
   });
 
@@ -463,48 +447,19 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
   });
 
-  it("keeps the workspace outline closed by default", async () => {
+  it("hides both side rails while the first-run gateway setup is open", async () => {
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      models: [],
+      noEligibleModels: true,
+      selectedModel: "",
+    };
+
     await renderMounted();
 
-    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");
-    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline closed");
-    expect(mocks.state.workspaceProps?.outlineOpen).toBe(false);
-    expect(mocks.state.rightRailProps?.outlineOpen).toBe(false);
-  });
-
-  it("opens the workspace outline when the right rail toggles it", async () => {
-    await renderMounted();
-
-    await act(async () => {
-      screen.getByTestId("right-rail").click();
-    });
-
-    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
-    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
-    expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
-    expect(mocks.state.workspaceProps?.renderOutlineToggle).toBe(false);
-    expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
-  });
-
-  it("keeps the right rail as the only product outline toggle surface", async () => {
-    await renderMounted();
-
-    expect(mocks.state.workspaceProps?.renderOutlineToggle).toBe(false);
-    expect(mocks.state.workspaceProps?.onToggleOutline).toBeTypeOf("function");
-
-    await act(async () => {
-      mocks.state.rightRailProps?.onToggleOutline?.();
-    });
-    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
-
-    await act(async () => {
-      mocks.state.rightRailProps?.onToggleOutline?.();
-    });
-
-    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");
-    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline closed");
-    expect(mocks.state.workspaceProps?.outlineOpen).toBe(false);
-    expect(mocks.state.rightRailProps?.outlineOpen).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
+    expect(screen.queryByTestId("left-rail")).toBeNull();
+    expect(screen.queryByTestId("right-rail")).toBeNull();
   });
 
   it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {
@@ -526,20 +481,18 @@ describe("AppShell grounding connections", () => {
     statusSpy.mockRestore();
   });
 
-  it("toggles the command palette from the Cmd/Ctrl+K shell shortcut", async () => {
+  it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {
     await renderMounted();
     expect(screen.queryByTestId("command-palette")).toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
     });
-    expect(screen.getByTestId("command-palette")).toBeInTheDocument();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
     });
-    await waitFor(() => {
-      expect(screen.queryByTestId("command-palette")).toBeNull();
-    });
+    expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 });

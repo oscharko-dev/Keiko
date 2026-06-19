@@ -67,7 +67,6 @@ export function isInteractiveSurfaceTarget(target: EventTarget | null): boolean 
         ".ws-zoom",
         ".ws-fab",
         ".empty-workspace-blob",
-        ".ws-outline",
         ".conn-badge",
       ].join(","),
     ) !== null

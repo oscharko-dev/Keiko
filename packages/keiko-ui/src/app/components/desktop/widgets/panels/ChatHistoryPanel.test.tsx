@@ -140,6 +140,26 @@ describe("ChatHistoryPanel", () => {
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "open" });
   });
 
+  it("keeps the deleted tab selected after restoring a chat", async () => {
+    const chat = makeChat({ status: "closed" });
+    vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "open" } });
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [chat] }));
+
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: /restore/i }));
+
+    await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
+    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("renames a chat through the PATCH helper", async () => {
     const chat = makeChat({ title: "Old title" });
     vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, title: "New title" } });

@@ -13,6 +13,7 @@ import {
   type MemoryConsolidationStaleFlag,
   type StartMemoryConsolidationInput,
 } from "@/lib/memory-api";
+import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import { formatError } from "./format-error";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -173,15 +174,18 @@ function SettingsField({
      .mc-dialog-label (12px/600) instead of inheriting 16px (C241); inputs use
      the existing .mc-dialog-input instead of the undefined `lk-input` (C134). */
   const helpId = useId();
-  const handleWheel = (event: WheelEvent<HTMLInputElement>): void => {
-    if (disabled || event.deltaY === 0) return;
-    event.preventDefault();
-    const direction = event.deltaY < 0 ? 1 : -1;
+  const stepField = (direction: 1 | -1): void => {
     const stepValue = step ?? 1;
     const base = Number.isFinite(value) ? value : (min ?? 0);
     const precision = Math.min(decimalsForStep(stepValue) + 2, 8);
     const next = Number((base + direction * stepValue).toFixed(precision));
     onChange(name, clamp(next, min, max));
+  };
+  const handleWheel = (event: WheelEvent<HTMLInputElement>): void => {
+    if (disabled || event.deltaY === 0) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    stepField(direction);
   };
   return (
     <div style={{ display: "grid", gap: 6 }}>
@@ -204,7 +208,12 @@ function SettingsField({
             }}
             onWheel={handleWheel}
           />
-          <span className="number-control-stepper" aria-hidden="true" />
+          <NumberControlStepper
+            label={label.toLowerCase()}
+            disabled={disabled}
+            onStepUp={() => stepField(1)}
+            onStepDown={() => stepField(-1)}
+          />
         </span>
       </label>
       <span id={helpId} style={{ color: "var(--fg-muted)", fontSize: 12 }}>

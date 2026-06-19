@@ -143,6 +143,11 @@ function ChatWindowSessionHost({
       });
   }, [chatId, activeTarget?.id, chats, loading, openChat, openNewChat, title, updateCfg]);
 
+  useEffect(() => {
+    if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
+    if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
+  }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
+
   const targetMissing =
     chatId !== undefined &&
     !session.loading &&

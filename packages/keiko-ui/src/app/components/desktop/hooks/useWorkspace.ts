@@ -301,10 +301,7 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
         return;
       }
       const target = e.target;
-      if (
-        target instanceof Element &&
-        (target.closest(".window") !== null || target.closest(".ws-outline") !== null)
-      ) {
+      if (target instanceof Element && target.closest(".window") !== null) {
         return;
       }
       e.preventDefault();
