@@ -84,6 +84,11 @@ import {
 } from "./files.js";
 import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
 import {
+  handleEditorContext,
+  handleEditorLocalKnowledgeRetrieve,
+  handleEditorRepoSearch,
+} from "./editor/contextRoutes.js";
+import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
   handleBrowserEvents,
@@ -259,6 +264,18 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleEditorLanguageCapabilities,
   },
   { method: "POST", pattern: "/api/editor/language", handler: handleEditorLanguage },
+  // Issue #1211 — governed coding-context retrieval (ADR-0042 D6). The context route assembles a
+  // bounded, redacted pack (repo-search always; Local Knowledge + memory only for explicit,
+  // embedding-eligible purposes) and returns the content-free wire pack; the repo-search and
+  // local-knowledge routes expose the governed building blocks (EvidenceAtom[] and query-only
+  // retrieval references). No browser-side retrieval, embedding, or model access.
+  { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
+  { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  {
+    method: "POST",
+    pattern: "/api/editor/local-knowledge/retrieve",
+    handler: handleEditorLocalKnowledgeRetrieve,
+  },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
     method: "GET",
