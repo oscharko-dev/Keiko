@@ -38,7 +38,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
     ]);
   });
 
-  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195 + #1199)", () => {
+  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195 + #1199 + #1200)", () => {
     const expected = [
       // Package identity, language + workspace contract, geometry, file model, completion,
       // commands (#1191 + #1192).
@@ -102,6 +102,19 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "DEFAULT_COMPLETION_TRIGGER_CHARACTERS",
       "DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES",
       "COMPLETION_ELIGIBLE_LANGUAGES",
+      // Monaco inline-completion (ghost-text) bridge + content-free telemetry (#1200).
+      "createKeikoInlineCompletionProvider",
+      "registerKeikoInlineCompletionProvider",
+      "monacoInlineTriggerToEditor",
+      "editorInlineItemToMonaco",
+      "responseToInlineCompletions",
+      "endOfLifeReasonToEvent",
+      "INLINE_COMPLETION_ELIGIBLE_LANGUAGES",
+      "DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS",
+      "DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES",
+      "createInlineCompletionTelemetry",
+      "inlineCompletionTelemetryReducer",
+      "EMPTY_INLINE_COMPLETION_TELEMETRY",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

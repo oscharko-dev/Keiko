@@ -189,6 +189,33 @@ export {
   parseEditorCompletionRequest,
 } from "./editor-completion.js";
 
+// ─── Editor inline completion (ghost text) (Issue #1200) ───────────────────────────
+// Wire request/response for the governed `POST /api/editor/inline-completion` route (model-only,
+// suffix-aware FIM via #1210 over coding context #1211) plus the content-free acceptance/rejection
+// telemetry report for `POST /api/editor/inline-completion/telemetry`. Content-free apart from
+// reviewable `insertText` (ADR-0042 D5/D6).
+export type {
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireProvenance,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionTelemetryReport,
+  EditorInlineCompletionParseOk,
+  EditorInlineCompletionParseFail,
+  EditorInlineCompletionParse,
+  EditorInlineCompletionTelemetryParseOk,
+  EditorInlineCompletionTelemetryParseFail,
+  EditorInlineCompletionTelemetryParse,
+} from "./editor-inline-completion.js";
+export {
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+  parseEditorInlineCompletionRequest,
+  parseEditorInlineCompletionTelemetry,
+} from "./editor-inline-completion.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,

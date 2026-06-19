@@ -22,7 +22,13 @@ import {
   type MonacoDisposable,
   type MonacoLanguagesRegistrar,
 } from "./completion-bridge.js";
-import type { EditorCompletionResolver } from "../types.js";
+import {
+  INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
+  registerKeikoInlineCompletionProvider,
+  type MonacoInlineCompletionsRegistrar,
+} from "./inline-completion-bridge.js";
+import type { InlineCompletionTelemetry } from "./inline-completion-telemetry.js";
+import type { EditorCompletionResolver, EditorInlineCompletionResolver } from "../types.js";
 import {
   monacoPositionToEditorPosition,
   monacoSelectionToEditorRange,
@@ -47,6 +53,19 @@ export interface WireEditorCompletion {
   readonly streamId: string;
   readonly newRequestId: () => string;
   /** Restrict registration to the governed languages eligible for completion (defaults to TS/JS). */
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected inline-completion (ghost-text) wiring (Issue #1200); absent when unsupported. */
+export interface WireEditorInlineCompletion {
+  readonly resolve: EditorInlineCompletionResolver;
+  readonly contextBudgetBytes: number;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly debounceDelayMs: number;
+  /** Content-free acceptance/rejection telemetry sink fed from Monaco's lifecycle callbacks. */
+  readonly telemetry?: InlineCompletionTelemetry | undefined;
+  /** Restrict registration to the governed inline-eligible languages (defaults to TS/JS). */
   readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
@@ -82,6 +101,8 @@ export interface WireEditorOnMountArgs {
   readonly onThemeError?: ((message: string) => void) | undefined;
   /** Completion wiring (Issue #1199); absent when the host supplies no completion resolver. */
   readonly completion?: WireEditorCompletion | undefined;
+  /** Inline-completion wiring (Issue #1200); absent when the host supplies no inline resolver. */
+  readonly inlineCompletion?: WireEditorInlineCompletion | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -159,6 +180,32 @@ function installCompletionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   });
 }
 
+// Registers the inline-completion (ghost-text) provider when the host supplies a resolver and the
+// live `monaco.languages` registry actually offers `registerInlineCompletionsProvider` (Issue #1200,
+// ADR-0042 D5). The narrow cast is the single seam where the structural mount view meets the inline
+// registrar surface; the runtime guard degrades cleanly on a Monaco build without inline support.
+function installInlineCompletionProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const inlineCompletion = args.inlineCompletion;
+  const languages = args.monaco.languages;
+  if (inlineCompletion === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoInlineCompletionsRegistrar;
+  if (typeof registrar.registerInlineCompletionsProvider !== "function") {
+    return null;
+  }
+  return registerKeikoInlineCompletionProvider({
+    languages: registrar,
+    resolve: inlineCompletion.resolve,
+    documentLanguages: inlineCompletion.languages ?? INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
+    contextBudgetBytes: inlineCompletion.contextBudgetBytes,
+    streamId: inlineCompletion.streamId,
+    newRequestId: inlineCompletion.newRequestId,
+    debounceDelayMs: inlineCompletion.debounceDelayMs,
+    ...(inlineCompletion.telemetry === undefined ? {} : { telemetry: inlineCompletion.telemetry }),
+  });
+}
+
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
 export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   registerTheme(args);
@@ -167,6 +214,7 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const cursorSub = subscribeCursor(args);
   const selectionSub = subscribeSelection(args);
   const completionSub = installCompletionProvider(args);
+  const inlineCompletionSub = installInlineCompletionProvider(args);
   if (args.autoFocus) {
     args.editor.focus();
   }
@@ -176,5 +224,6 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     cursorSub?.dispose();
     selectionSub?.dispose();
     completionSub?.dispose();
+    inlineCompletionSub?.dispose();
   };
 }

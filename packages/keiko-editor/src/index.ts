@@ -43,7 +43,10 @@ export type {
   EditorCompletionResponse,
   EditorCompletionQuery,
   EditorCompletionResolver,
+  EditorInlineCompletionProvenance,
   EditorInlineCompletionResponse,
+  EditorInlineCompletionQuery,
+  EditorInlineCompletionResolver,
   EditorDiagnosticSeverity,
   EditorDiagnosticRelatedInformation,
   EditorDiagnostic,
@@ -192,6 +195,47 @@ export type {
   MonacoPositionLike,
   MonacoRange,
 } from "./components/completion-bridge.js";
+
+// ─── Runtime: Monaco inline-completion (ghost-text) bridge (#1200) ───
+// Bridges Monaco's inline-completion provider to the host inline resolver: pure mappers plus a
+// provider factory, registration helper, and a content-free acceptance/rejection telemetry
+// accumulator. The editor renders host-resolved ghost text and computes nothing (ADR-0042 D5).
+// Consumed by the KeikoCodeEditor `provideInlineCompletions` prop; the factory/mappers/telemetry are
+// exported for advanced hosts and tests.
+export {
+  createKeikoInlineCompletionProvider,
+  registerKeikoInlineCompletionProvider,
+  monacoInlineTriggerToEditor,
+  editorInlineItemToMonaco,
+  responseToInlineCompletions,
+  endOfLifeReasonToEvent,
+  INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
+  DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
+  DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
+} from "./components/inline-completion-bridge.js";
+export type {
+  KeikoInlineCompletionProviderDeps,
+  RegisterKeikoInlineCompletionProviderArgs,
+  MonacoInlineCompletionsProvider,
+  MonacoInlineCompletionsRegistrar,
+  MonacoInlineCompletionTriggerKinds,
+  MonacoInlineCompletionEndOfLifeReasonKinds,
+  MonacoInlineCompletionContext,
+  MonacoInlineCompletionModel,
+  MonacoInlineCompletion,
+  MonacoInlineCompletions,
+  MonacoInlineCompletionEndOfLifeReason,
+} from "./components/inline-completion-bridge.js";
+export {
+  createInlineCompletionTelemetry,
+  inlineCompletionTelemetryReducer,
+  EMPTY_INLINE_COMPLETION_TELEMETRY,
+} from "./components/inline-completion-telemetry.js";
+export type {
+  InlineCompletionTelemetry,
+  InlineCompletionTelemetrySnapshot,
+  InlineCompletionTelemetryEvent,
+} from "./components/inline-completion-telemetry.js";
 
 // ─── Runtime: KeikoCodeEditor React component (#1194) ───
 export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";

@@ -18,6 +18,7 @@ import type {
   EditorContextOmission,
   EditorContextPack,
   EditorContextRequest,
+  EditorInlineCompletionProvenance,
   EditorInlineCompletionRequest,
   EditorModelProvenance,
   EditorRecentEditContext,
@@ -65,6 +66,7 @@ const _modelProvenanceIsContentFree: AssertNoForbiddenKeys<EditorModelProvenance
 const _completionProvenanceIsContentFree: AssertNoForbiddenKeys<EditorCompletionProvenance> = true;
 const _completionRequestIsContentFree: AssertNoForbiddenKeys<EditorCompletionRequest> = true;
 const _inlineCompletionRequestIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionRequest> = true;
+const _inlineCompletionProvenanceIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionProvenance> = true;
 const _testGenerationRequestIsContentFree: AssertNoForbiddenKeys<EditorTestGenerationRequest> = true;
 const _recentEditContextIsContentFree: AssertNoForbiddenKeys<EditorRecentEditContext> = true;
 const _recentEditSummaryIsContentFree: AssertNoForbiddenKeys<EditorRecentEditSummary> = true;
@@ -77,6 +79,7 @@ void _modelProvenanceIsContentFree;
 void _completionProvenanceIsContentFree;
 void _completionRequestIsContentFree;
 void _inlineCompletionRequestIsContentFree;
+void _inlineCompletionProvenanceIsContentFree;
 void _testGenerationRequestIsContentFree;
 void _recentEditContextIsContentFree;
 void _recentEditSummaryIsContentFree;

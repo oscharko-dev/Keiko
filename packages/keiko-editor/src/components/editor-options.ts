@@ -16,6 +16,13 @@ export interface BuildEditorOptionsArgs {
   readonly ariaPath: string;
   /** Optional host-provided accessible name when the path alone is ambiguous. */
   readonly ariaLabel?: string | undefined;
+  /**
+   * Whether a governed inline-completion (ghost-text) provider is wired (Issue #1200). Monaco's
+   * inline-suggest UI is enabled only when true; absent/false keeps it fully disabled (ADR-0042 D3.7
+   * baseline). Defaults to false. Even when enabled, the inline-suggest toolbar stays off and ghost
+   * text never renders Markdown, so the vendored DOMPurify sink is never reached.
+   */
+  readonly inlineCompletionEnabled?: boolean | undefined;
 }
 
 /** Stable monospace stack: a dense tool surface needs a predictable, ligature-free code font. */
@@ -68,6 +75,7 @@ const GOVERNED_COMPLETION_SUGGEST_OPTIONS = {
 export function buildEditorOptions(
   args: BuildEditorOptionsArgs,
 ): monaco.editor.IStandaloneEditorConstructionOptions {
+  const inlineCompletionEnabled = args.inlineCompletionEnabled ?? false;
   return {
     automaticLayout: true,
     fontFamily: EDITOR_FONT_FAMILY,
@@ -85,10 +93,14 @@ export function buildEditorOptions(
     parameterHints: { enabled: false },
     suggest: { ...GOVERNED_COMPLETION_SUGGEST_OPTIONS },
     inlineSuggest: {
-      enabled: false,
+      // Enabled only when a governed inline-completion provider is wired (Issue #1200). The toolbar
+      // stays off and syntax highlighting of ghost text stays off so no Markdown sink runs (the
+      // vendored DOMPurify is never reached); `suppressSuggestions: false` lets the #1199 completion
+      // dropdown and inline ghost text coexist without one hiding the other.
+      enabled: inlineCompletionEnabled,
       showToolbar: "never",
       syntaxHighlightingEnabled: false,
-      suppressSuggestions: true,
+      suppressSuggestions: !inlineCompletionEnabled,
     },
     wordBasedSuggestions: "off",
     links: false,

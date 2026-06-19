@@ -34,6 +34,20 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 export { EDITOR_COMPLETION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
+// ─── Editor inline-completion (ghost text) wire shapes (Issue #1200, contracts root barrel) ─────
+export type {
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireProvenance,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionTelemetryReport,
+} from "@oscharko-dev/keiko-contracts";
+export {
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts";
+
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
 // trust-3, error severity); contracts is the legitimate value-import source
