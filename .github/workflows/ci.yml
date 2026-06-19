@@ -62,8 +62,11 @@ jobs:
           npm run check:editor-bundle-size -- --require-static-export
       - name: Package surface and installable smoke
         run: |
+          npm run build
+          npm run prepare:bin
+          npm run prune:package-native-optionals
           npm run check:package-surface
-          npm run smoke:install
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality
