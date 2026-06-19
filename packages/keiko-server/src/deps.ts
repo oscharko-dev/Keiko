@@ -60,6 +60,7 @@ import {
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -138,6 +139,9 @@ export interface UiHandlerDeps {
   readonly figmaCredentialTester?:
     | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
     | undefined;
+  // Test-only deterministic editor language route options. Production leaves this undefined so the
+  // language service keeps the default deadline and real clock.
+  readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:

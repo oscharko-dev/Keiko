@@ -259,6 +259,7 @@ describe("unknown API routes", () => {
       registry: createRunRegistry(),
       modelPortFactory: () => undefined,
       store,
+      editorLanguageRouteOptions: { now: () => 0 },
     };
     await closeServer();
     server = createUiServer({
