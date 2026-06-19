@@ -9,10 +9,31 @@ vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
     mini,
     linkedRoot,
+    onOpenRunResult,
   }: {
     readonly mini?: boolean;
     readonly linkedRoot?: string | null;
-  }) => <div data-testid="chat-window">{`${String(mini)}:${linkedRoot ?? ""}`}</div>,
+    readonly onOpenRunResult?: (message: {
+      readonly runId: string;
+      readonly workflowId: string;
+      readonly taskType?: string | undefined;
+    }) => void;
+  }) => (
+    <div data-testid="chat-window">
+      {`${String(mini)}:${linkedRoot ?? ""}`}
+      <button
+        type="button"
+        onClick={() =>
+          onOpenRunResult?.({
+            runId: "run-chat",
+            workflowId: "unit-test-generation",
+          })
+        }
+      >
+        Open chat run
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("../context/ChatSessionContext", () => ({
@@ -22,6 +43,7 @@ vi.mock("../context/ChatSessionContext", () => ({
 vi.mock("../hooks/useChatSession", () => ({
   useChatSession: () => ({
     activeChat: { id: "chat-1", title: "Chat 1", status: "open" },
+    activeProject: { path: "/repo" },
     chats: [{ id: "chat-1", title: "Chat 1", status: "open" }],
     loading: false,
     openChat: vi.fn(),
@@ -440,6 +462,12 @@ describe("workspace widget renderer registry", () => {
       </>,
     );
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Open chat run" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("agents", {
+      runId: "run-chat",
+      workflow: "unit-test-generation",
+      workspaceRoot: "/repo",
+    });
     expect(screen.getByTestId("connector-graph")).toHaveTextContent("false");
     expect(screen.getByText("RelationshipsView")).toBeInTheDocument();
   });

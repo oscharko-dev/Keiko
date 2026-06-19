@@ -1,7 +1,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyRun, fetchModels, fetchRunReport } from "../../../../../lib/api";
+import {
+  ApiError,
+  applyRun,
+  fetchEvidenceManifest,
+  fetchModels,
+  fetchRunReport,
+} from "../../../../../lib/api";
 import { useSSE } from "../../../../../lib/useSSE";
 import { AgentRunWidget } from "./AgentRunWidget";
 
@@ -161,6 +167,66 @@ describe("AgentRunWidget", () => {
 
     expect(await screen.findByText("Fix proposed")).toBeInTheDocument();
     expect(screen.queryByText("fix-proposed")).not.toBeInTheDocument();
+  });
+
+  it("renders the proposed diff from evidence when the live run report is unavailable", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockRejectedValue(
+      new ApiError("NOT_FOUND", "Unknown run.", 404),
+    );
+    vi.mocked(fetchEvidenceManifest).mockResolvedValue({
+      manifest: {
+        evidenceSchemaVersion: "1",
+        run: {
+          runId: "run-evidence",
+          fingerprint: "fp",
+          harnessVersion: "test",
+          taskType: "generate-unit-tests",
+          outcome: "completed",
+          startedAt: 0,
+          finishedAt: 50,
+          durationMs: 50,
+        },
+        model: { modelId: "example-chat-model", costClass: "unknown" },
+        usageTotals: {
+          promptTokens: 0,
+          completionTokens: 0,
+          requestCount: 0,
+          totalLatencyMs: 0,
+        },
+        stateTransitions: [],
+        toolCalls: [],
+        commandExecutions: [],
+        patch: {
+          proposed: true,
+          applied: false,
+          targetFileCount: 1,
+          patchBytes: 35,
+          changedFiles: 1,
+          created: 1,
+          deleted: 0,
+          redactedDiff: "diff --git a/tests/add.test.ts b/tests/add.test.ts",
+        },
+      },
+    });
+
+    render(
+      <AgentRunWidget
+        cfg={{
+          workflow: "unit-test-generation",
+          model: "example-chat-model",
+          runId: "run-evidence",
+          workspaceRoot: "/repo",
+        }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Proposed diff")).toBeInTheDocument();
+    expect(screen.getByText("diff --git a/tests/add.test.ts b/tests/add.test.ts")).toBeInTheDocument();
+    expect(screen.getByText("Generate unit tests evidence loaded with a reviewable diff.")).toBeInTheDocument();
   });
 
   it("renders explain reports and terminal failure details without a diff", async () => {

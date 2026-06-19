@@ -792,6 +792,7 @@ function GroundedWorkflowDialog({
 
 export interface RunSummaryCardProps {
   readonly message: ChatMessage;
+  readonly onOpenResult?: ((message: ChatMessage) => void) | undefined;
 }
 
 // A system message qualifies as a "run summary" when it carries a runId. Without one we keep
@@ -800,10 +801,12 @@ export function isRunSummaryMessage(message: ChatMessage): boolean {
   return message.role === "system" && typeof message.runId === "string";
 }
 
-export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
+export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): ReactNode {
   const status = message.workflowStatus ?? "queued";
   const workflowLabel = message.workflowId ?? message.taskType ?? "workflow";
   const runIdShort = message.runId === undefined ? "" : message.runId.slice(0, 8);
+  const evidenceHref =
+    message.runId === undefined ? undefined : `/api/evidence/${encodeURIComponent(message.runId)}`;
 
   // WCAG 4.1.3: the card's aria-label changes when the run completes (running → succeeded/failed),
   // but AT does not re-read a static container on re-render, so a screen-reader user never hears the
@@ -849,6 +852,29 @@ export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
               {runIdShort}
             </span>
           </p>
+        ) : null}
+        {message.runId !== undefined ? (
+          <div className="run-summary-card-actions" aria-label="Workflow result actions">
+            {onOpenResult !== undefined ? (
+              <button
+                type="button"
+                className="run-summary-card-action"
+                onClick={() => onOpenResult(message)}
+              >
+                Open result
+              </button>
+            ) : null}
+            {evidenceHref !== undefined ? (
+              <a
+                className="run-summary-card-action run-summary-card-action-secondary"
+                href={evidenceHref}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Evidence
+              </a>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <p className="sr-only" role="status" aria-live="polite" data-testid="run-summary-card-sr">

@@ -230,6 +230,9 @@ function shortSummary(
   if (report?.status === "failed" || report?.status === "rejected") return `${label} failed.`;
   if (report?.status === "cancelled") return `${label} was cancelled.`;
   if (report !== null) return `${label} completed.`;
+  if (evidence?.patch?.redactedDiff !== undefined) {
+    return `${label} evidence loaded with a reviewable diff.`;
+  }
   return `${label} evidence loaded: ${evidence?.run.outcome ?? "unknown"}.`;
 }
 
@@ -666,16 +669,36 @@ export function AgentRunWidget({
           ) : null}
         </div>
       ) : evidence !== null ? (
-        <div className="arun-result-card">
-          <div className="arun-result-title">Evidence</div>
-          <div className="arun-kv">
-            <span>Outcome</span>
-            <strong>{evidence.run.outcome}</strong>
+        <div className="arun-results">
+          <div className="arun-result-card">
+            <div className="arun-result-title">Evidence</div>
+            <div className="arun-kv">
+              <span>Outcome</span>
+              <strong>{evidence.run.outcome}</strong>
+            </div>
+            <div className="arun-kv">
+              <span>Duration</span>
+              <strong>{formatMs(evidence.run.durationMs)}</strong>
+            </div>
+            {evidence.patch !== undefined ? (
+              <>
+                <div className="arun-kv">
+                  <span>Changed files</span>
+                  <strong>{evidence.patch.changedFiles.toString()}</strong>
+                </div>
+                <div className="arun-kv">
+                  <span>Patch size</span>
+                  <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
+                </div>
+              </>
+            ) : null}
           </div>
-          <div className="arun-kv">
-            <span>Duration</span>
-            <strong>{formatMs(evidence.run.durationMs)}</strong>
-          </div>
+          {evidence.patch?.redactedDiff !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Proposed diff</div>
+              <pre>{evidence.patch.redactedDiff}</pre>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

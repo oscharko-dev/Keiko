@@ -61,6 +61,7 @@ interface ChatWindowProps {
   readonly barCompact?: boolean;
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
+  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
 
 // AC #1 — voice is not yet implemented. Gate on a constant so that when the
@@ -184,13 +185,19 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   );
 }
 
-function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
+function ChatBubble({
+  message,
+  onOpenRunResult,
+}: {
+  readonly message: ChatMessage;
+  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+}): ReactNode {
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
   // without weakening evidence semantics (the BFF's persisted runId is still the source of
   // truth; this surface is read-only and never exposes apply/exec — AC#4).
   if (isRunSummaryMessage(message)) {
-    return <RunSummaryCard message={message} />;
+    return <RunSummaryCard message={message} onOpenResult={onOpenRunResult} />;
   }
   const isUser = message.role === "user";
   return (
@@ -595,50 +602,54 @@ function ComposerCore({
 
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
-      {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-      <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-      {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-      <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-      <textarea
-        className="cmp-input"
-        ref={taRef}
-        rows={2}
-        value={draft}
-        aria-label="Chat message"
-        placeholder={placeholder}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={onComposerKeyDown(sendMessage)}
-        // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
-        // fully editable while a send is in flight so the next message can be
-        // pre-typed during streaming. Re-submit stays blocked by the isInFlight
-        // guard in useChatSession, and the primary button is "Cancel" meanwhile.
-      />
-      {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-      <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-      {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
-          adjacent to the textarea so SR users hear the state without losing
-          composer focus. Hidden when there is nothing to announce. */}
-      <SendLifecycleStatus status={sendStatus} />
-      {/* Issue #151 — context-pressure indicator + clear-history affordance */}
-      {minimal ? null : (
-        <BudgetIndicator
-          budget={budget}
-          onClearHistory={clearHistory}
-          disabled={sending || loading}
-          compact={compact}
+      <div className="cmp-input-stack">
+        {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
+        <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+        <textarea
+          className="cmp-input"
+          ref={taRef}
+          rows={2}
+          value={draft}
+          aria-label="Chat message"
+          placeholder={placeholder}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onComposerKeyDown(sendMessage)}
+          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
+          // fully editable while a send is in flight so the next message can be
+          // pre-typed during streaming. Re-submit stays blocked by the isInFlight
+          // guard in useChatSession, and the primary button is "Cancel" meanwhile.
         />
-      )}
-      <ComposerBar
-        session={session}
-        ready={ready}
-        selectedModelCapability={selectedModelCapability}
-        onAttachFiles={handleFiles}
-        compact={compact}
-        controlsNarrow={controlsNarrow}
-        barCompact={barCompact}
-        workflowCompact={workflowCompact}
-        budgetExceeded={budgetExceeded}
-      />
+        {/* Chip strip below the textarea, above the composer bar (AC #3) */}
+        <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
+        {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
+        <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+        {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
+            adjacent to the textarea so SR users hear the state without losing
+            composer focus. Hidden when there is nothing to announce. */}
+        <SendLifecycleStatus status={sendStatus} />
+      </div>
+      <div className="cmp-footer-row">
+        {/* Issue #151 — context-pressure indicator + clear-history affordance */}
+        {minimal ? null : (
+          <BudgetIndicator
+            budget={budget}
+            onClearHistory={clearHistory}
+            disabled={sending || loading}
+            compact={compact}
+          />
+        )}
+        <ComposerBar
+          session={session}
+          ready={ready}
+          selectedModelCapability={selectedModelCapability}
+          onAttachFiles={handleFiles}
+          compact={compact}
+          controlsNarrow={controlsNarrow}
+          barCompact={barCompact}
+          workflowCompact={workflowCompact}
+          budgetExceeded={budgetExceeded}
+        />
+      </div>
     </div>
   );
 }
@@ -1504,6 +1515,7 @@ export function ChatWindow({
   controlsNarrow = false,
   barCompact = false,
   workflowCompact = false,
+  onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
   const {
@@ -1612,7 +1624,11 @@ export function ChatWindow({
         ) : (
           <div className="chatw-log">
             {visible.map((message) => (
-              <ChatBubble key={message.id} message={message} />
+              <ChatBubble
+                key={message.id}
+                message={message}
+                onOpenRunResult={onOpenRunResult}
+              />
             ))}
             {sending && sendStatus !== "streaming" ? (
               <div className="chatw-typing-row">

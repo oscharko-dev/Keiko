@@ -271,7 +271,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   agents: {
     title: "Agents",
     icon: "agents",
-    desc: "Run a BFF workflow",
+    desc: "Choose a coding agent",
     w: 520,
     h: 560,
     tiny: { w: 250, h: 140 },

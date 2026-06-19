@@ -76,7 +76,12 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const newCommands = commands.filter((c) => c.id.startsWith("new-"));
-    expect(newCommands.map((c) => c.id)).toEqual(["new-chat", "new-connector", "new-files"]);
+    expect(newCommands.map((c) => c.id)).toEqual([
+      "new-chat",
+      "new-connector",
+      "new-files",
+      "new-agents",
+    ]);
     expect(newCommands.find((c) => c.id === "new-figma")).toBeUndefined();
   });
 
@@ -252,7 +257,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(commands.find((c) => c.id === "open-keiko")).toBeUndefined();
   });
 
-  it("does not expose the hidden Agents surface through create commands", () => {
+  it("exposes Agents through create commands", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -261,7 +266,10 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       vi.fn(),
       fakeUndoStack(),
     );
-    expect(commands.find((c) => c.id === "new-agents")).toBeUndefined();
+    expect(commands.find((c) => c.id === "new-agents")).toMatchObject({
+      label: "New Agents",
+      group: "Create",
+    });
   });
 
   it("does not expose the hidden Integrations surface through create commands", () => {

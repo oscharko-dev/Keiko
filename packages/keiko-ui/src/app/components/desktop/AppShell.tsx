@@ -164,7 +164,7 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files"];
+const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files", "agents"];
 const TOOL_TYPES: readonly WindowType[] = [
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with rail buttons but were missing here, so the command palette could not open them

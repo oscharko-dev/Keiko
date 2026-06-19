@@ -6,6 +6,7 @@ import {
   ApiError,
   createProject,
   fetchFilesDirectories,
+  fetchFilesTree,
   fetchModels,
   fetchProjects,
   startRun,
@@ -13,6 +14,7 @@ import {
 import type {
   AgentWorkflowId,
   FilesDirectoryListing,
+  FilesTreeEntry,
   ModelCapability,
   ProjectWithAvailability,
 } from "../../../../lib/types";
@@ -222,11 +224,25 @@ function DirectoryPicker({
   );
 }
 
-const AGENT_WORKFLOWS: readonly { id: AgentWorkflowId; label: string }[] = [
-  { id: "verify", label: "Verify" },
-  { id: "explain-plan", label: "Explain plan" },
-  { id: "unit-test-generation", label: "Generate unit tests" },
-  { id: "bug-investigation", label: "Investigate bug" },
+interface FilePickerProps {
+  readonly root: string;
+  readonly value: string;
+  readonly onSelect: (path: string) => void;
+  readonly onClose: () => void;
+}
+
+type ProductionAgentWorkflowId = Extract<
+  AgentWorkflowId,
+  "unit-test-generation" | "bug-investigation"
+>;
+
+const AGENT_WORKFLOWS: readonly {
+  readonly id: ProductionAgentWorkflowId;
+  readonly label: string;
+  readonly scope: string;
+}[] = [
+  { id: "unit-test-generation", label: "Unit Test Agent", scope: "Source file" },
+  { id: "bug-investigation", label: "Bugfix Agent", scope: "Bug report" },
 ];
 
 function availableProjectPaths(projects: readonly ProjectWithAvailability[]): readonly string[] {
@@ -238,6 +254,29 @@ function splitPaths(value: string): string[] {
     .split(/[\n,]/u)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function parentRelativeFilePath(path: string): string {
+  const normalized = toPosix(path.trim()).replace(/\/+$/u, "");
+  const idx = normalized.lastIndexOf("/");
+  return idx > 0 ? normalized.slice(0, idx) : "";
+}
+
+function displayPickerDirectory(path: string): string {
+  return path.length === 0 ? "Repository root" : path;
+}
+
+function formatPickerBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const value = index === 0 ? size.toFixed(0) : size.toFixed(size >= 10 ? 1 : 2);
+  return `${value} ${units[index]}`;
 }
 
 // AC #4: no longer prefers a placeholder id — use the first available model.
@@ -272,6 +311,133 @@ function normalizePathList(workspaceRoot: string, value: string): string {
     .join(", ");
 }
 
+function FilePicker({ root, value, onSelect, onClose }: FilePickerProps): ReactNode {
+  const initialPath = normalizeAgentPathForWorkspace(root, value);
+  const [directory, setDirectory] = useState(parentRelativeFilePath(initialPath));
+  const [selectedPath, setSelectedPath] = useState(initialPath);
+  const [entries, setEntries] = useState<readonly FilesTreeEntry[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (root.trim().length === 0) {
+      setEntries([]);
+      setTruncated(false);
+      setLoading(false);
+      setError("Select a repository first.");
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void fetchFilesTree(root.trim(), directory)
+      .then((listing) => {
+        if (cancelled) return;
+        setEntries(listing.entries);
+        setTruncated(listing.truncated);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setEntries([]);
+        setTruncated(false);
+        setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [directory, root]);
+
+  const goParent = (): void => setDirectory(parentRelativeFilePath(directory));
+  const choose = (): void => {
+    if (selectedPath.trim().length === 0) return;
+    onSelect(normalizeAgentPathForWorkspace(root, selectedPath));
+    onClose();
+  };
+
+  const directories = entries.filter((entry) => entry.kind === "directory");
+  const files = entries.filter((entry) => entry.kind !== "directory");
+
+  return (
+    <div className="file-picker" role="group" aria-label="File picker">
+      <div className="file-picker-head">
+        <span className="file-picker-path mono">{displayPickerDirectory(directory)}</span>
+      </div>
+      <div className="dir-list file-picker-list">
+        {directory.length > 0 ? (
+          <button type="button" className="dir-row" onClick={goParent}>
+            <Icons.back size={14} />
+            <span>Parent folder</span>
+          </button>
+        ) : null}
+        {directories.map((entry) => (
+          <button
+            type="button"
+            className="dir-row file-picker-row"
+            key={entry.path}
+            disabled={!entry.readable}
+            onClick={() => setDirectory(entry.path)}
+            title={entry.path}
+          >
+            <Icons.folder size={14} />
+            <span>{entry.name}</span>
+          </button>
+        ))}
+        {files.map((entry) => (
+          <button
+            type="button"
+            className="dir-row file-picker-row"
+            data-selected={selectedPath === entry.path ? "true" : undefined}
+            key={entry.path}
+            disabled={!entry.readable}
+            aria-pressed={selectedPath === entry.path}
+            onClick={() => setSelectedPath(entry.path)}
+            title={entry.path}
+          >
+            <Icons.file size={14} />
+            <span>{entry.name}</span>
+            <span className="file-picker-meta mono">{formatPickerBytes(entry.sizeBytes)}</span>
+          </button>
+        ))}
+        {loading ? (
+          <div className="dir-note" role="status">
+            Loading files…
+          </div>
+        ) : null}
+        {!loading && error === null && entries.length === 0 ? (
+          <div className="dir-note">No files in this folder.</div>
+        ) : null}
+        {truncated ? (
+          <div className="dir-note file-picker-warning" role="status">
+            Showing only the first {entries.length.toString()} entries.
+          </div>
+        ) : null}
+        {error !== null ? (
+          <div className="dir-error" role="alert">
+            {error}
+          </div>
+        ) : null}
+      </div>
+      <div className="dir-actions">
+        <button type="button" className="dlg-btn" onClick={onClose}>
+          Close
+        </button>
+        <button
+          type="button"
+          className="dlg-btn dlg-primary"
+          onClick={choose}
+          disabled={selectedPath.trim().length === 0}
+        >
+          Use file
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function buildInitialAgentFields(
   workspaceRoot: string,
   currentFile: string | null,
@@ -282,10 +448,7 @@ function buildInitialAgentFields(
     verifyTargetFiles: file,
     explainFilePath: file,
     explainQuestion: "",
-    unitTargetKind: "file",
     unitFilePath: file,
-    unitModuleDir: "",
-    unitFilePaths: file,
     bugDescription: "",
     bugFailingOutput: "",
     bugStackTrace: "",
@@ -326,25 +489,16 @@ function workflowRunBody(
     };
   }
   if (workflow === "unit-test-generation") {
-    const filePaths = splitPaths(fields.unitFilePaths).map((entry) =>
-      normalizeAgentPathForWorkspace(workspaceRoot, entry),
-    );
-    const target =
-      fields.unitTargetKind === "module"
-        ? {
-            kind: "module",
-            moduleDir: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitModuleDir),
-          }
-        : fields.unitTargetKind === "changedFiles"
-          ? { kind: "changedFiles", filePaths }
-          : {
-              kind: "file",
-              filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitFilePath),
-            };
     return {
       workflowId: "unit-test-generation",
       modelId,
-      input: { workspaceRoot, target },
+      input: {
+        workspaceRoot,
+        target: {
+          kind: "file",
+          filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitFilePath),
+        },
+      },
     };
   }
   return {
@@ -378,10 +532,7 @@ interface AgentLauncherFields {
   readonly verifyTargetFiles: string;
   readonly explainFilePath: string;
   readonly explainQuestion: string;
-  readonly unitTargetKind: "file" | "module" | "changedFiles";
   readonly unitFilePath: string;
-  readonly unitModuleDir: string;
-  readonly unitFilePaths: string;
   readonly bugDescription: string;
   readonly bugFailingOutput: string;
   readonly bugStackTrace: string;
@@ -394,30 +545,18 @@ function validationMessage(
   modelId: string,
   fields: AgentLauncherFields,
 ): string | null {
-  if (workspaceRoot.length === 0) return "Workspace is required.";
-  if (modelId.length === 0) return "No model is available.";
+  if (workspaceRoot.length === 0) return "Repository is required.";
+  if (modelId.length === 0) return "No compatible model is available.";
   if (workflow === "explain-plan" && fields.explainFilePath.trim().length === 0) {
     return "Explain plan requires a file path.";
   }
   if (workflow === "unit-test-generation") {
-    if (fields.unitTargetKind === "file" && fields.unitFilePath.trim().length === 0) {
-      return "Unit test generation requires a file path.";
-    }
-    if (fields.unitTargetKind === "module" && fields.unitModuleDir.trim().length === 0) {
-      return "Unit test generation requires a module folder.";
-    }
-    if (fields.unitTargetKind === "changedFiles" && splitPaths(fields.unitFilePaths).length === 0) {
-      return "Unit test generation requires at least one file path.";
-    }
+    if (fields.unitFilePath.trim().length === 0)
+      return "Unit Test Agent requires a source file.";
   }
   if (workflow === "bug-investigation") {
-    const hasEvidence =
-      fields.bugDescription.trim().length > 0 ||
-      fields.bugFailingOutput.trim().length > 0 ||
-      fields.bugStackTrace.trim().length > 0 ||
-      splitPaths(fields.bugTargetFiles).length > 0;
-    if (!hasEvidence)
-      return "Bug investigation requires description, output, stack trace, or target files.";
+    if (fields.bugDescription.trim().length === 0)
+      return "Bugfix Agent requires an observed behavior.";
   }
   return null;
 }
@@ -518,7 +657,8 @@ function AgentLauncher({
   setDialogError,
   onConfirm,
 }: AgentLauncherProps): ReactNode {
-  const [workflow, setWorkflow] = useState<AgentWorkflowId>("verify");
+  const [workflow, setWorkflow] =
+    useState<ProductionAgentWorkflowId>("unit-test-generation");
   const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
@@ -540,6 +680,10 @@ function AgentLauncher({
   const registered = workspace.length > 0 && projects.includes(workspace);
   const validation = validationMessage(workflow, workspace, modelId, fields);
   const canStart = validation === null && registered && !starting && !loading;
+  const selectedAgent =
+    AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
+  const startLabel =
+    workflow === "unit-test-generation" ? "Start Unit Test Agent" : "Start Bugfix Agent";
 
   useEffect(() => {
     let cancelled = false;
@@ -578,7 +722,6 @@ function AgentLauncher({
       if (current.explainFilePath.trim().length === 0)
         patch.explainFilePath = normalizedCurrentFile;
       if (current.unitFilePath.trim().length === 0) patch.unitFilePath = normalizedCurrentFile;
-      if (current.unitFilePaths.trim().length === 0) patch.unitFilePaths = normalizedCurrentFile;
       if (current.bugTargetFiles.trim().length === 0) patch.bugTargetFiles = normalizedCurrentFile;
       return Object.keys(patch).length === 0 ? current : { ...current, ...patch };
     });
@@ -587,12 +730,8 @@ function AgentLauncher({
   const useCurrentFile = (): void => {
     if (currentFile === null) return;
     const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
-    if (workflow === "verify") updateField({ verifyTargetFiles: normalizedCurrentFile });
-    else if (workflow === "explain-plan") updateField({ explainFilePath: normalizedCurrentFile });
-    else if (workflow === "unit-test-generation") {
-      if (fields.unitTargetKind === "changedFiles")
-        updateField({ unitFilePaths: normalizedCurrentFile });
-      else updateField({ unitTargetKind: "file", unitFilePath: normalizedCurrentFile });
+    if (workflow === "unit-test-generation") {
+      updateField({ unitFilePath: normalizedCurrentFile });
     } else {
       updateField({ bugTargetFiles: normalizedCurrentFile });
     }
@@ -619,7 +758,7 @@ function AgentLauncher({
 
   const startAgent = async (): Promise<void> => {
     if (!canStart) {
-      setDialogError(validation ?? "Workspace is not registered.");
+      setDialogError(validation ?? "Repository is not registered.");
       return;
     }
     setStarting(true);
@@ -641,7 +780,7 @@ function AgentLauncher({
     } catch (error: unknown) {
       if (error instanceof ApiError && error.code === "WORKSPACE_NOT_REGISTERED") {
         await refreshProjects().catch(() => undefined);
-        setDialogError("Workspace is not registered.");
+        setDialogError("Repository is not registered.");
       } else {
         setDialogError(errorMessage(error));
       }
@@ -650,139 +789,47 @@ function AgentLauncher({
     }
   };
 
-  const renderWorkflowFields = (): ReactNode => {
-    if (workflow === "verify") {
+  const renderAgentFields = (): ReactNode => {
+    if (workflow === "unit-test-generation") {
       return (
         <label className="dlg-field">
-          <span className="dlg-label">
-            Target files <span className="dlg-opt">optional</span>
-          </span>
-          <textarea
-            className="dlg-input dlg-textarea mono"
-            rows={2}
-            placeholder="src/file.ts, src/other.ts"
-            value={fields.verifyTargetFiles}
-            onChange={(event) => updateField({ verifyTargetFiles: event.target.value })}
-            onBlur={(event) =>
-              updateField({ verifyTargetFiles: normalizePathList(workspace, event.target.value) })
-            }
-          />
-        </label>
-      );
-    }
-    if (workflow === "explain-plan") {
-      return (
-        <>
-          <label className="dlg-field">
-            <span className="dlg-label">File path</span>
+          <span className="dlg-label">Source file</span>
+          <span className="dlg-dirwrap">
             <input
               className="dlg-input mono"
               placeholder="src/file.ts"
-              value={fields.explainFilePath}
-              onChange={(event) => updateField({ explainFilePath: event.target.value })}
+              value={fields.unitFilePath}
+              onChange={(event) => updateField({ unitFilePath: event.target.value })}
               onBlur={(event) =>
                 updateField({
-                  explainFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
+                  unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
                 })
               }
             />
-          </label>
-          <label className="dlg-field">
-            <span className="dlg-label">
-              Question <span className="dlg-opt">optional</span>
-            </span>
-            <textarea
-              className="dlg-input dlg-textarea"
-              rows={2}
-              placeholder="What should the plan focus on?"
-              value={fields.explainQuestion}
-              onChange={(event) => updateField({ explainQuestion: event.target.value })}
+            <button
+              type="button"
+              className="dlg-btn dlg-dirbtn"
+              aria-label="Browse source file"
+              onClick={() => setDirectoryField("unitSourceFile")}
+            >
+              Browse
+            </button>
+          </span>
+          {directoryField === "unitSourceFile" ? (
+            <FilePicker
+              root={workspace}
+              value={fields.unitFilePath}
+              onSelect={(path) => updateField({ unitFilePath: path })}
+              onClose={() => setDirectoryField(null)}
             />
-          </label>
-        </>
-      );
-    }
-    if (workflow === "unit-test-generation") {
-      return (
-        <>
-          <div className="dlg-field">
-            <span className="dlg-label">Target</span>
-            <span className="dlg-selwrap">
-              <KeikoSelect
-                triggerClassName="dlg-input mono"
-                value={fields.unitTargetKind}
-                ariaLabel="Target"
-                menuTitle="Target"
-                mono
-                sections={[
-                  {
-                    options: [
-                      { value: "file", label: "Single file" },
-                      { value: "module", label: "Module" },
-                      { value: "changedFiles", label: "Changed files" },
-                    ],
-                  },
-                ]}
-                onValueChange={(next) =>
-                  updateField({ unitTargetKind: next as AgentLauncherFields["unitTargetKind"] })
-                }
-              />
-            </span>
-          </div>
-          {fields.unitTargetKind === "module" ? (
-            <label className="dlg-field">
-              <span className="dlg-label">Module folder</span>
-              <input
-                className="dlg-input mono"
-                placeholder="src/module"
-                value={fields.unitModuleDir}
-                onChange={(event) => updateField({ unitModuleDir: event.target.value })}
-                onBlur={(event) =>
-                  updateField({
-                    unitModuleDir: normalizeAgentPathForWorkspace(workspace, event.target.value),
-                  })
-                }
-              />
-            </label>
-          ) : fields.unitTargetKind === "changedFiles" ? (
-            <label className="dlg-field">
-              <span className="dlg-label">File paths</span>
-              <textarea
-                className="dlg-input dlg-textarea mono"
-                rows={2}
-                placeholder="src/file.ts, src/other.ts"
-                value={fields.unitFilePaths}
-                onChange={(event) => updateField({ unitFilePaths: event.target.value })}
-                onBlur={(event) =>
-                  updateField({ unitFilePaths: normalizePathList(workspace, event.target.value) })
-                }
-              />
-            </label>
-          ) : (
-            <label className="dlg-field">
-              <span className="dlg-label">File path</span>
-              <input
-                className="dlg-input mono"
-                placeholder="src/file.ts"
-                value={fields.unitFilePath}
-                onChange={(event) => updateField({ unitFilePath: event.target.value })}
-                onBlur={(event) =>
-                  updateField({
-                    unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
-                  })
-                }
-              />
-            </label>
-          )}
-        </>
+          ) : null}
+        </label>
       );
     }
     return (
       <>
         <label className="dlg-field">
-          <span className="dlg-label">
-            Description <span className="dlg-opt">optional</span>
-          </span>
+          <span className="dlg-label">Observed behavior</span>
           <textarea
             className="dlg-input dlg-textarea"
             rows={2}
@@ -815,7 +862,7 @@ function AgentLauncher({
         </label>
         <label className="dlg-field">
           <span className="dlg-label">
-            Target files <span className="dlg-opt">optional</span>
+            Related files <span className="dlg-opt">optional</span>
           </span>
           <textarea
             className="dlg-input dlg-textarea mono"
@@ -834,36 +881,63 @@ function AgentLauncher({
 
   return (
     <>
-      <div className="dlg-field">
-        <span className="dlg-label">Workflow</span>
-        <span className="dlg-selwrap">
-          <KeikoSelect
-            triggerClassName="dlg-input mono"
-            value={workflow}
-            ariaLabel="Workflow"
-            /* eslint-disable-next-line jsx-a11y/no-autofocus -- launcher dialog starts on workflow selection for keyboard users. */
-            autoFocus
-            menuTitle="Workflow"
-            mono
-            sections={[
-              {
-                options: AGENT_WORKFLOWS.map((item) => ({
-                  value: item.id,
-                  label: item.label,
-                })),
-              },
-            ]}
-            onValueChange={(next) => setWorkflow(next as AgentWorkflowId)}
-          />
-        </span>
+      <div className="dlg-agent-grid">
+        <div className="dlg-field">
+          <span className="dlg-label">Agent</span>
+          <span className="dlg-selwrap">
+            <KeikoSelect
+              triggerClassName="dlg-input"
+              value={workflow}
+              ariaLabel="Agent"
+              /* eslint-disable-next-line jsx-a11y/no-autofocus -- launcher dialog starts on workflow selection for keyboard users. */
+              autoFocus
+              menuTitle="Agent"
+              menuCountLabel={`${AGENT_WORKFLOWS.length.toString()} agents`}
+              sections={[
+                {
+                  options: AGENT_WORKFLOWS.map((item) => ({
+                    value: item.id,
+                    label: item.label,
+                  })),
+                },
+              ]}
+              onValueChange={(next) => {
+                const item = AGENT_WORKFLOWS.find((candidate) => candidate.id === next);
+                if (item !== undefined) setWorkflow(item.id);
+              }}
+            />
+          </span>
+        </div>
+        <div className="dlg-field">
+          <span className="dlg-label">Model</span>
+          <span className="dlg-selwrap">
+            <KeikoSelect
+              triggerClassName="dlg-input mono"
+              value={modelId}
+              ariaLabel="Model"
+              disabled={models.length === 0}
+              menuTitle="Model"
+              mono
+              sections={[
+                {
+                  options: models.map((model) => ({
+                    value: model.id,
+                    label: model.id,
+                  })),
+                },
+              ]}
+              onValueChange={setModelId}
+            />
+          </span>
+        </div>
       </div>
       <label className="dlg-field">
-        <span className="dlg-label">Workspace</span>
+        <span className="dlg-label">Repository</span>
         <span className="dlg-dirwrap">
           <input
             className="dlg-input mono"
             value={workspaceRoot}
-            placeholder="/absolute/project/path"
+            placeholder="/absolute/repository/path"
             onClick={() => setDirectoryField("agentWorkspace")}
             onChange={(event) => setWorkspaceRoot(event.target.value)}
           />
@@ -886,39 +960,17 @@ function AgentLauncher({
       </label>
       {workspace.length > 0 && !registered ? (
         <div className="dlg-agent-warning">
-          <span>Workspace is not registered.</span>
+          <span>Repository is not registered.</span>
           <button
             type="button"
             className="dlg-btn"
             disabled={registering}
             onClick={() => void registerWorkspace()}
           >
-            {registering ? "Registering…" : "Register workspace"}
+            {registering ? "Registering…" : "Register repository"}
           </button>
         </div>
       ) : null}
-      <div className="dlg-field">
-        <span className="dlg-label">Model</span>
-        <span className="dlg-selwrap">
-          <KeikoSelect
-            triggerClassName="dlg-input mono"
-            value={modelId}
-            ariaLabel="Model"
-            disabled={models.length === 0}
-            menuTitle="Model"
-            mono
-            sections={[
-              {
-                options: models.map((model) => ({
-                  value: model.id,
-                  label: model.id,
-                })),
-              },
-            ]}
-            onValueChange={setModelId}
-          />
-        </span>
-      </div>
       {currentFile !== null ? (
         <button
           type="button"
@@ -929,7 +981,13 @@ function AgentLauncher({
           <Icons.files size={13} /> Use current file <span className="mono">{currentFile}</span>
         </button>
       ) : null}
-      {renderWorkflowFields()}
+      <div className="dlg-agent-task">
+        <div className="dlg-agent-task-head">
+          <span className="dlg-agent-task-title">{selectedAgent.label}</span>
+          <span className="dlg-agent-task-scope">{selectedAgent.scope}</span>
+        </div>
+        {renderAgentFields()}
+      </div>
       <div className="dlg-agent-actions">
         <button
           type="button"
@@ -939,7 +997,7 @@ function AgentLauncher({
           aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
           onClick={() => void startAgent()}
         >
-          {starting ? "Starting…" : "Start agent"}
+          {starting ? "Starting…" : startLabel}
         </button>
         {loading ? (
           <span id="agent-start-validation" className="dlg-note" role="status">
@@ -1098,7 +1156,7 @@ export function NewWindowDialog({
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Esc/Tab/⌘Enter key handling */}
       <div
         ref={dlgRef}
-        className="dlg"
+        className={type === "agents" ? "dlg dlg-agents" : "dlg"}
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-window-title"
