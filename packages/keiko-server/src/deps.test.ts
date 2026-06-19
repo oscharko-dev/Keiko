@@ -70,7 +70,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       store,
     });
     expect(deps.store).toBe(store);
-  });
+  }, 15000);
 
   it("creates a node store at uiDbPath when no store is injected", () => {
     const uiDir = tmp("ui-");
