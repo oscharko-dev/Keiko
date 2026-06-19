@@ -339,6 +339,19 @@ export type {
   MonacoTextEdit,
 } from "./components/formatting-bridge.js";
 
+// ─── Runtime: large-file degraded-mode policy (#1207) ───
+// Pure derivation of the editor render mode from buffer size (ADR-0042 D3.6: > 500 KB or > 10,000
+// lines → degraded). The host can reuse it to drive its own large-file affordances consistently with
+// the editor's Monaco-option degradation.
+export {
+  deriveLargeFileMode,
+  isLargeFileDegraded,
+  exceedsLineCount,
+  LARGE_FILE_DEGRADED_BYTES,
+  LARGE_FILE_DEGRADED_LINES,
+} from "./components/large-file-mode.js";
+export type { EditorLargeFileMode, LargeFileModeInput } from "./components/large-file-mode.js";
+
 // ─── Runtime: KeikoCodeEditor React component (#1194) ───
 export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";
 export type {

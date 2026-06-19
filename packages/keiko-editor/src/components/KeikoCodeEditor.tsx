@@ -19,6 +19,7 @@ import { useMemo, type ReactElement } from "react";
 
 import { inferMonacoLanguageId } from "../monaco/language-inference.js";
 import { buildEditorOptions } from "./editor-options.js";
+import { deriveLargeFileMode } from "./large-file-mode.js";
 import type { EditorStatusViewModel } from "./status-text.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 import { useEditorHandlers } from "./use-editor-handlers.js";
@@ -96,6 +97,14 @@ function useEditorConstructionOptions(
   const { ariaLabel } = props;
   const inlineCompletionEnabled = props.provideInlineCompletions !== undefined;
   const hoverEnabled = props.provideHover !== undefined;
+  // Large-file degraded mode (Issue #1207, ADR-0042 D3.6). Recomputed only when the buffer size or
+  // text changes; the byte check short-circuits before the bounded line scan so the derivation never
+  // dominates a keystroke.
+  const { sizeBytes, text } = props.buffer.content;
+  const degraded = useMemo(
+    () => deriveLargeFileMode({ sizeBytes, text }) === "degraded",
+    [sizeBytes, text],
+  );
   const options = useMemo(
     () =>
       buildEditorOptions({
@@ -104,8 +113,9 @@ function useEditorConstructionOptions(
         ariaLabel,
         inlineCompletionEnabled,
         hoverEnabled,
+        degraded,
       }),
-    [readOnly, relativePath, ariaLabel, inlineCompletionEnabled, hoverEnabled],
+    [readOnly, relativePath, ariaLabel, inlineCompletionEnabled, hoverEnabled, degraded],
   );
   const monacoLanguage = useMemo(() => inferMonacoLanguageId(relativePath), [relativePath]);
   return { options, monacoLanguage };

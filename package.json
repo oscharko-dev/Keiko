@@ -53,6 +53,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "prune:package-native-optionals": "node scripts/prune-package-native-optionals.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
+    "check:editor-bundle-size": "node scripts/editor-bundle-size.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",

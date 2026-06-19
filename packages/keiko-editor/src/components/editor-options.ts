@@ -31,6 +31,15 @@ export interface BuildEditorOptionsArgs {
    * no other Markdown sink (suggest docs, parameter hints, links, code lens, lightbulb) is enabled.
    */
   readonly hoverEnabled?: boolean | undefined;
+  /**
+   * Whether the buffer is in large-file degraded mode (Issue #1207, ADR-0042 D3.6: buffers > 500 KB
+   * or > 10,000 lines). Defaults to false. In degraded mode the per-render/per-keystroke-expensive
+   * features (bracket-pair colorization, folding, occurrence highlighting, whitespace rendering) are
+   * turned off and Monaco's `largeFileOptimizations` is engaged, keeping per-keystroke main-thread
+   * work within the typing budget on large buffers. Derived by {@link
+   * import("./large-file-mode.js").deriveLargeFileMode}.
+   */
+  readonly degraded?: boolean | undefined;
 }
 
 /** Stable monospace stack: a dense tool surface needs a predictable, ligature-free code font. */
@@ -85,15 +94,23 @@ export function buildEditorOptions(
 ): monaco.editor.IStandaloneEditorConstructionOptions {
   const inlineCompletionEnabled = args.inlineCompletionEnabled ?? false;
   const hoverEnabled = args.hoverEnabled ?? false;
+  // Large-file degraded mode (Issue #1207, ADR-0042 D3.6). On buffers > 500 KB or > 10,000 lines the
+  // per-render/per-keystroke-expensive features are disabled and Monaco's large-file optimizations are
+  // engaged, so typing stays within the < 50 ms main-thread budget. Normal buffers are unaffected.
+  const degraded = args.degraded ?? false;
   return {
     automaticLayout: true,
     fontFamily: EDITOR_FONT_FAMILY,
     fontSize: EDITOR_FONT_SIZE,
-    bracketPairColorization: { enabled: true },
-    matchBrackets: "always",
+    // Engaged explicitly (default-on in Monaco) so the ADR-0042 D3.6 large-file contract is asserted,
+    // not merely inherited; it tokenises/highlights large models lazily.
+    largeFileOptimizations: true,
+    bracketPairColorization: { enabled: !degraded },
+    matchBrackets: degraded ? "never" : "always",
     lineNumbers: "on",
-    folding: true,
+    folding: !degraded,
     foldingStrategy: "auto",
+    occurrencesHighlight: degraded ? "off" : "singleFile",
     find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "always" },
     // Enabled only when a governed hover provider is wired (Issue #1201). The bridge renders quick
     // info as an inert Markdown code fence, so the vendored DOMPurify sink only processes HTML-escaped
@@ -134,7 +151,7 @@ export function buildEditorOptions(
     // editor chrome (tabs, status bar, command palette, find) holds WCAG 2.2 AA; the Monaco editing
     // canvas inherits Monaco's documented accessibility behaviour. See the editor UX spec.
     accessibilitySupport: "auto",
-    renderWhitespace: "selection",
+    renderWhitespace: degraded ? "none" : "selection",
     scrollBeyondLastLine: false,
     tabSize: 2,
     wordWrap: "off",
