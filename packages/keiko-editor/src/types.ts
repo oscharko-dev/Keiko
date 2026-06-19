@@ -504,6 +504,70 @@ export interface EditorTestGenerationResult {
   readonly provenance: EditorOutputProvenance;
 }
 
+/**
+ * The four governed outcomes of a test-generation request, mirroring the server wire status:
+ *   - `disabled`  — the feature flag is off (the v1 default); the editor shows the action disabled.
+ *   - `deferred`  — enabled, but the assured-execution (egress) boundary is not enforced, so no
+ *                   model-generated code is produced or executed; governed discovery still ran.
+ *   - `generated` — a reviewable candidate patch was produced (reachable only once the egress boundary
+ *                   is enforced, ADR-0042 D7); in v1 `assurance` is always `"unverified"`.
+ *   - `failed`    — a content-free, actionable failure; the editor stays usable.
+ */
+export type EditorTestGenerationStatus = "disabled" | "deferred" | "generated" | "failed";
+
+/** The assurance level of a surfaced candidate; v1 only ever produces `"unverified"` candidates. */
+export type EditorTestGenerationAssurance = "unverified" | "assured";
+
+/** One gate of the assured pre-filter funnel. */
+export type EditorTestGenerationGateState = "passed" | "failed" | "not-run";
+
+/**
+ * The assured pre-filter funnel (Review Addenda): build → pass → stable across `stabilityRunsRequired`
+ * (>= 5) runs → coverage increase → mutation/oracle strength → anti-tautology, reported in the run
+ * status. In v1 `executionEnabled` is false and every gate is `"not-run"` because the pre-filter
+ * executes untrusted model-generated code, deferred behind the enforced egress boundary (ADR-0042 D7).
+ */
+export interface EditorTestGenerationFunnel {
+  readonly executionEnabled: boolean;
+  readonly candidatesGenerated: number;
+  readonly candidatesSurfaced: number;
+  readonly stabilityRunsRequired: number;
+  readonly build: EditorTestGenerationGateState;
+  readonly pass: EditorTestGenerationGateState;
+  readonly stability: EditorTestGenerationGateState;
+  readonly coverage: EditorTestGenerationGateState;
+  readonly mutation: EditorTestGenerationGateState;
+  readonly antiTautology: EditorTestGenerationGateState;
+}
+
+/**
+ * Discriminated by `status`. The host resolves the BFF wire response into one of these; the editor
+ * renders the diff only for `generated`, and a content-free, actionable message for the others.
+ * `reason` is a stable, content-free explanation — never a prompt, model output, or secret.
+ */
+export type EditorTestGenerationOutcome =
+  | {
+      readonly status: "disabled";
+      readonly request: EditorRequestIdentity;
+      readonly reason: string;
+    }
+  | {
+      readonly status: "deferred";
+      readonly request: EditorRequestIdentity;
+      readonly reason: string;
+      readonly funnel: EditorTestGenerationFunnel;
+      readonly context?: EditorContextPack | undefined;
+    }
+  | {
+      readonly status: "generated";
+      readonly request: EditorRequestIdentity;
+      readonly result: EditorTestGenerationResult;
+      readonly funnel: EditorTestGenerationFunnel;
+      readonly assurance: EditorTestGenerationAssurance;
+      readonly context?: EditorContextPack | undefined;
+    }
+  | { readonly status: "failed"; readonly request: EditorRequestIdentity; readonly reason: string };
+
 // ─── Patches (reviewable; dry-run by default per D7) ─────────────────────────────
 //
 // Preview is v1; explicit patch apply (status `"applied"`) is the same wave-2, flag-gated,

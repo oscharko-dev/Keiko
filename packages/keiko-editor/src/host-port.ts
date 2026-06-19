@@ -15,8 +15,8 @@ import type {
   EditorPatchReviewDecision,
   EditorSaveRequest,
   EditorSaveResult,
+  EditorTestGenerationOutcome,
   EditorTestGenerationRequest,
-  EditorTestGenerationResult,
 } from "./types.js";
 
 /**
@@ -69,7 +69,7 @@ export interface EditorHostPort {
   readonly generateTests?: (
     request: EditorTestGenerationRequest,
     signal?: AbortSignal,
-  ) => Promise<EditorTestGenerationResult>;
+  ) => Promise<EditorTestGenerationOutcome>;
   readonly previewPatch?: (patchId: string) => Promise<EditorPreviewPatchResult>;
   readonly applyPatchReview?: (
     decision: EditorPatchReviewDecision,

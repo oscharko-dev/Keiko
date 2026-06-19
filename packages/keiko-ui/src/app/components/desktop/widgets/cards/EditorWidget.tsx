@@ -16,17 +16,26 @@
  * posts to the governed `/api/editor/completion` BFF and adapts the content-free wire response into
  * the editor render contract. The editor package owns only Monaco provider registration and
  * rendering; all retrieval, model routing, and the BFF call stay in this host (ADR-0042 D5).
- * Test-generation remains out of scope (its wave-2 server features are not yet enabled).
+ *
+ * Test generation is wired here (Issue #1202) as the v1, switched-off scaffold: the host owns the gated
+ * `/api/editor/test-generation` BFF call and surfaces the run status; the editor package owns the pure
+ * flow reducer and the diff-review surface. The feature ships OFF (ADR-0042 D7), so the server returns
+ * `disabled`/`deferred` and no model-generated code is produced or executed in v1.
  */
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import {
+  createEditorRequestId,
   createFileModel,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
+  describeTestGenerationStatus,
   editorFileModelReducer,
+  IDLE_TEST_GENERATION_STATE,
   isDocumentDirty,
   isSupportedEditorLanguage,
+  isTestGenerationBusy,
   saveStatusReducer,
+  testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
   type EditorCompletionResolver,
@@ -38,6 +47,7 @@ import {
   type EditorHoverResolver,
   type EditorInlineCompletionResolver,
   type EditorLanguageId,
+  type EditorRequestIdentity,
   type EditorSaveRequest,
   type EditorSaveStatus,
   type EditorSymbolsResolver,
@@ -54,10 +64,12 @@ import {
   requestEditorHover,
   requestEditorInlineCompletion,
   requestEditorSymbols,
+  requestEditorTestGeneration,
   saveFilesContent,
 } from "../../../../../lib/api";
 import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
 import { mapWireToEditorInlineCompletionResponse } from "../../../../../lib/editor-inline-completion";
+import { mapWireToEditorTestGenerationOutcome } from "../../../../../lib/editor-test-generation";
 import {
   mapWireToEditorDiagnosticsResponse,
   mapWireToEditorFormattingResponse,
@@ -67,6 +79,7 @@ import {
 import type {
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
+  EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
@@ -76,6 +89,13 @@ const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
+
+// Issue #1202: advisory coding-context budget for a test-generation run; the BFF clamps it to the
+// server-owned `test-generation` purpose budget.
+const TEST_GENERATION_CONTEXT_BUDGET_BYTES = 65_536;
+// Content-free transport-failure message; the editor stays usable after a failed run.
+const TEST_GENERATION_FAILURE_MESSAGE =
+  "Test generation could not be reached. The editor is still usable.";
 
 interface EditorWidgetProps {
   readonly root?: string;
@@ -203,6 +223,13 @@ export function EditorWidget({
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
+  // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
+  const [testGenState, dispatchTestGen] = useReducer(
+    testGenerationReducer,
+    IDLE_TEST_GENERATION_STATE,
+  );
+  const testGenSeqRef = useRef(0);
 
   // Refs the imperative save path reads so a Cmd/Ctrl+S immediately after an edit always persists
   // the latest values, independent of React state-batching timing. The version-aware
@@ -471,6 +498,62 @@ export function EditorWidget({
     [hasTarget, root],
   );
 
+  // Issue #1202: trigger governed unit-test generation for the whole current file. The host owns the
+  // gated BFF call; the editor package owns the flow reducer (run status, stale-response discard) and,
+  // when a candidate is eventually produced (wave 2), the diff-review surface. In v1 the server returns
+  // `disabled`/`deferred`, so this surfaces a content-free status and the editor stays usable.
+  const runTestGeneration = useCallback((): void => {
+    if (!hasTarget || root === undefined || file === undefined || fileModel === null) {
+      return;
+    }
+    const sequence = (testGenSeqRef.current += 1);
+    const requestIdentity: EditorRequestIdentity = {
+      requestId: createEditorRequestId(),
+      streamId: "editor-test-generation",
+      sequence,
+    };
+    const target: EditorTestGenerationWireTarget = {
+      kind: "file",
+      document: { path: file, languageId: fileModel.identity.language, text: contentRef.current },
+    };
+    const selectors = completionContextSelectors({
+      root,
+      file,
+      text: contentRef.current,
+      line: 0,
+      character: 0,
+      linkedRoot,
+      linkedFilePath,
+      linkedCapsuleIds,
+      linkedCapsuleSetIds,
+    });
+    dispatchTestGen({ type: "request", requestId: requestIdentity.requestId });
+    void requestEditorTestGeneration({
+      root,
+      target,
+      contextBudgetBytes: TEST_GENERATION_CONTEXT_BUDGET_BYTES,
+      ...(selectors === undefined ? {} : { context: selectors }),
+    })
+      .then((wire) => {
+        dispatchTestGen({
+          type: "resolve",
+          outcome: mapWireToEditorTestGenerationOutcome(requestIdentity, wire),
+        });
+      })
+      .catch(() => {
+        dispatchTestGen({ type: "error", reason: TEST_GENERATION_FAILURE_MESSAGE });
+      });
+  }, [
+    file,
+    fileModel,
+    hasTarget,
+    linkedCapsuleIds,
+    linkedCapsuleSetIds,
+    linkedFilePath,
+    linkedRoot,
+    root,
+  ]);
+
   // Issue #1201: governed language-intelligence resolvers (diagnostics, hover, symbols, formatting).
   // Each bridges a Monaco surface to the deterministic `POST /api/editor/language` BFF (#1198) and
   // maps the wire result into the editor render contract. A failure rejects here and the editor bridge
@@ -560,6 +643,14 @@ export function EditorWidget({
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
 
+  // Issue #1202: the "Generate Tests" action is offered for governed TS/JS files; the server is the
+  // authority and returns `disabled` while the wave-2 feature is switched off. The status line reflects
+  // the flow reducer (a content-free message); a busy run disables the action.
+  const testGenBusy = isTestGenerationBusy(testGenState);
+  const canGenerateTests =
+    hasTarget && completionEnabled && loadState.status === "ready" && !testGenBusy;
+  const testGenStatusText = describeTestGenerationStatus(testGenState);
+
   const buffer: EditorBuffer | null =
     fileModel === null
       ? null
@@ -586,6 +677,19 @@ export function EditorWidget({
           ) : null}
         </span>
         <span className="spacer" />
+        {hasTarget && completionEnabled ? (
+          <button
+            type="button"
+            className="ed-save"
+            onClick={() => {
+              if (canGenerateTests) runTestGeneration();
+            }}
+            aria-disabled={!canGenerateTests}
+            title="Generate unit tests for this file"
+          >
+            {testGenBusy ? "Generating…" : "Generate Tests"}
+          </button>
+        ) : null}
         {hasTarget && saveStatus === "conflict" ? (
           <button type="button" className="ed-reload" onClick={reload}>
             Reload
@@ -604,6 +708,11 @@ export function EditorWidget({
           </button>
         ) : null}
       </div>
+      {testGenStatusText.length > 0 ? (
+        <div className="ed-status" role="status">
+          {testGenStatusText}
+        </div>
+      ) : null}
       {hasTarget && loadState.status === "error" ? (
         <div className="ed-host">
           <div className="ed-host-loading" role="alert">

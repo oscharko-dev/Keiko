@@ -36,6 +36,9 @@ import type {
   EditorInlineCompletionWireResponse,
   EditorInlineCompletionWireTriggerKind,
   EditorInlineCompletionTelemetryReport,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationWireTarget,
   LanguageDiagnosticsResult,
   LanguageHoverResult,
   LanguageSymbolResult,
@@ -60,6 +63,7 @@ import {
   EDITOR_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -969,6 +973,35 @@ export async function reportEditorInlineCompletionTelemetry(
   await fetchJson("/api/editor/inline-completion/telemetry", {
     method: "POST",
     body: JSON.stringify(report),
+  });
+}
+
+// Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Posts the editor target (the
+// overlay buffer + scope coordinates) to the wave-2 BFF, which returns a `disabled`/`deferred` outcome
+// in v1 (no candidate; the feature ships switched off) or, once an enforced egress boundary unlocks it,
+// a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
+export interface EditorTestGenerationRequestInput {
+  readonly root: string;
+  readonly target: EditorTestGenerationWireTarget;
+  readonly contextBudgetBytes: number;
+  readonly context?: EditorCompletionContextSelectors | undefined;
+}
+
+export async function requestEditorTestGeneration(
+  input: EditorTestGenerationRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorTestGenerationWireResponse> {
+  const requestBody: EditorTestGenerationWireRequest = {
+    schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+    root: input.root,
+    target: input.target,
+    contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.context === undefined ? {} : { context: input.context }),
+  };
+  return fetchJson("/api/editor/test-generation", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
