@@ -168,4 +168,35 @@ describe("buildEditorOptions", () => {
     expect(options.tabSize).toBe(2);
     expect(options.wordWrap).toBe("off");
   });
+
+  it("engages Monaco large-file optimizations explicitly (ADR-0042 D3.6)", () => {
+    expect(options.largeFileOptimizations).toBe(true);
+  });
+});
+
+describe("buildEditorOptions large-file degraded mode (Issue #1207, ADR-0042 D3.6)", () => {
+  const normal = buildEditorOptions({ readOnly: false, ariaPath: "src/app.ts" });
+  const degraded = buildEditorOptions({ readOnly: false, ariaPath: "src/app.ts", degraded: true });
+
+  it("keeps the rich rendering features on for a normal buffer", () => {
+    expect(normal.bracketPairColorization).toEqual({ enabled: true });
+    expect(normal.matchBrackets).toBe("always");
+    expect(normal.folding).toBe(true);
+    expect(normal.occurrencesHighlight).toBe("singleFile");
+    expect(normal.renderWhitespace).toBe("selection");
+  });
+
+  it("disables the per-render/per-keystroke-expensive features in degraded mode", () => {
+    expect(degraded.bracketPairColorization).toEqual({ enabled: false });
+    expect(degraded.matchBrackets).toBe("never");
+    expect(degraded.folding).toBe(false);
+    expect(degraded.occurrencesHighlight).toBe("off");
+    expect(degraded.renderWhitespace).toBe("none");
+  });
+
+  it("keeps large-file optimizations and core affordances on in degraded mode", () => {
+    expect(degraded.largeFileOptimizations).toBe(true);
+    expect(degraded.lineNumbers).toBe("on");
+    expect(degraded.automaticLayout).toBe(true);
+  });
 });

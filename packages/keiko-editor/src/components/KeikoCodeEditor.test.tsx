@@ -51,10 +51,12 @@ const captured: {
   editor: CapturedEditor | null;
   language: string | null;
   completion: CapturedCompletionRegistration[];
+  options: Record<string, unknown> | null;
 } = {
   editor: null,
   language: null,
   completion: [],
+  options: null,
 };
 
 vi.mock("@monaco-editor/react", () => {
@@ -68,7 +70,7 @@ vi.mock("@monaco-editor/react", () => {
   interface MockProps {
     value?: string;
     language?: string;
-    options?: { ariaLabel?: string; readOnly?: boolean };
+    options?: { ariaLabel?: string; readOnly?: boolean } & Record<string, unknown>;
     onChange?: (value: string | undefined) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
   }
@@ -200,6 +202,7 @@ vi.mock("@monaco-editor/react", () => {
       ref.current = s;
     }
     captured.language = props.language ?? null;
+    captured.options = props.options ?? null;
     const state = ref.current;
     if (!state.mounted) {
       state.mounted = true;
@@ -235,6 +238,7 @@ beforeEach(() => {
   captured.editor = null;
   captured.language = null;
   captured.completion = [];
+  captured.options = null;
 });
 
 afterEach(() => {
@@ -537,21 +541,23 @@ describe("KeikoCodeEditor — completion bridge (#1199)", () => {
   });
 
   it("bridges a Monaco completion call to the host resolver and renders the returned items", async () => {
-    const provideCompletions = vi.fn().mockImplementation((query: { request: { request: unknown }; documentText: string }) =>
-      Promise.resolve({
-        request: query.request.request,
-        items: [
-          {
-            label: "render",
-            kind: "function",
-            insertText: "render()",
-            provenance: { origin: "deterministic-completion" },
-          },
-        ],
-        isIncomplete: false,
-        provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
-      }),
-    );
+    const provideCompletions = vi
+      .fn()
+      .mockImplementation((query: { request: { request: unknown }; documentText: string }) =>
+        Promise.resolve({
+          request: query.request.request,
+          items: [
+            {
+              label: "render",
+              kind: "function",
+              insertText: "render()",
+              provenance: { origin: "deterministic-completion" },
+            },
+          ],
+          isIncomplete: false,
+          provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+        }),
+      );
     render(<KeikoCodeEditor {...baseProps({ provideCompletions })} />);
     await flushMount();
     const registration = captured.completion[0];
@@ -571,5 +577,33 @@ describe("KeikoCodeEditor — completion bridge (#1199)", () => {
     const [query] = provideCompletions.mock.calls[0] as [{ documentText: string }];
     expect(query.documentText).toBe("const a = 1;\n");
     expect(list.suggestions.map((s) => s.label)).toEqual(["render"]);
+  });
+});
+
+describe("KeikoCodeEditor — large-file degraded mode (Issue #1207)", () => {
+  it("passes normal Monaco options for a small buffer", () => {
+    render(<KeikoCodeEditor {...baseProps()} />);
+    expect(captured.options?.bracketPairColorization).toEqual({ enabled: true });
+    expect(captured.options?.folding).toBe(true);
+    expect(captured.options?.largeFileOptimizations).toBe(true);
+  });
+
+  it("passes degraded Monaco options for a buffer over the 500 KB size threshold", () => {
+    const text = "x".repeat(600_000);
+    const buffer = buildBuffer({ text, sizeBytes: 600_000 });
+    render(<KeikoCodeEditor {...baseProps({ buffer })} />);
+    expect(captured.options?.bracketPairColorization).toEqual({ enabled: false });
+    expect(captured.options?.folding).toBe(false);
+    expect(captured.options?.matchBrackets).toBe("never");
+    expect(captured.options?.renderWhitespace).toBe("none");
+    expect(captured.options?.largeFileOptimizations).toBe(true);
+  });
+
+  it("passes degraded Monaco options for a buffer over the 10,000-line threshold", () => {
+    const text = "x\n".repeat(10_001);
+    const buffer = buildBuffer({ text, sizeBytes: new TextEncoder().encode(text).length });
+    render(<KeikoCodeEditor {...baseProps({ buffer })} />);
+    expect(captured.options?.folding).toBe(false);
+    expect(captured.options?.bracketPairColorization).toEqual({ enabled: false });
   });
 });

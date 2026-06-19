@@ -162,6 +162,12 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "deriveEditorStatusBar",
       "editorLanguageLabel",
       "EditorStatusBar",
+      // Large-file degraded-mode policy (#1207).
+      "deriveLargeFileMode",
+      "isLargeFileDegraded",
+      "exceedsLineCount",
+      "LARGE_FILE_DEGRADED_BYTES",
+      "LARGE_FILE_DEGRADED_LINES",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });
