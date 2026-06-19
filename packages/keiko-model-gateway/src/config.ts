@@ -16,6 +16,7 @@ import type {
   CostClass,
   FigmaConnectorConfig,
   GatewayConfig,
+  InfillingAlignment,
   LatencyClass,
   ModelCapability,
   ModelKind,
@@ -427,6 +428,7 @@ function providerCapabilityFlags(
   | "supportsDocumentInput"
   | "supportsSeeding"
   | "supportsResponseFormat"
+  | "supportsInfilling"
 > {
   return {
     toolCalling: optionalBoolean(raw.toolCalling, `${path}.toolCalling`, false),
@@ -448,6 +450,42 @@ function providerCapabilityFlags(
       `${path}.supportsResponseFormat`,
       false,
     ),
+    supportsInfilling: optionalBoolean(raw.supportsInfilling, `${path}.supportsInfilling`, false),
+  };
+}
+
+// Resolves the optional `infillingAlignment` enum and enforces the two FIM invariants (Issue #1210),
+// shared by the lenient inline parser and the strict top-level parser:
+//   1. suffix-aware completion is a chat-only capability — `supportsInfilling` must be false for any
+//      non-chat kind (defence in depth alongside the contract predicates);
+//   2. an alignment posture is meaningless without the capability — `infillingAlignment` requires
+//      `supportsInfilling: true`.
+// Returns the alignment only when declared so a capability record round-trips exactly.
+function resolveInfillingAlignment(
+  raw: Record<string, unknown>,
+  path: string,
+  supportsInfilling: boolean,
+  kind: ModelKind,
+): { infillingAlignment?: InfillingAlignment } {
+  if (supportsInfilling && kind !== "chat") {
+    throw new ConfigInvalidError(
+      `${path}.supportsInfilling must be false when ${path}.kind is not "chat"`,
+    );
+  }
+  if (raw.infillingAlignment === undefined) {
+    return {};
+  }
+  if (!supportsInfilling) {
+    throw new ConfigInvalidError(
+      `${path}.infillingAlignment requires ${path}.supportsInfilling to be true`,
+    );
+  }
+  return {
+    infillingAlignment: requireEnum<InfillingAlignment>(
+      raw.infillingAlignment,
+      `${path}.infillingAlignment`,
+      ["base", "instruct", "edit-tuned"],
+    ),
   };
 }
 
@@ -458,12 +496,14 @@ function buildProviderCapabilityBody(
   kind: ModelKind,
   workflowEligible: boolean,
 ): ModelCapability {
+  const flags = providerCapabilityFlags(raw, path);
   return {
     id,
     kind,
     contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
-    ...providerCapabilityFlags(raw, path),
+    ...flags,
+    ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     workflowEligible,
     costClass: requireEnum<CostClass>(raw.costClass ?? "medium", `${path}.costClass`, [
       "low",
@@ -540,6 +580,8 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "supportsDocumentInput",
   "supportsSeeding",
   "supportsResponseFormat",
+  "supportsInfilling",
+  "infillingAlignment",
   "workflowEligible",
   "costClass",
   "latencyClass",
@@ -590,6 +632,24 @@ function optionalDeterminismFlags(
   };
 }
 
+// Optional infilling/FIM flags for the strict list parser — preserved only when declared so a
+// capability record round-trips exactly (Issue #1210). The two FIM invariants are enforced by the
+// shared `resolveInfillingAlignment`.
+function optionalInfillingFlags(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "supportsInfilling" | "infillingAlignment">> {
+  const supportsInfilling =
+    value.supportsInfilling !== undefined
+      ? requireBoolean(value.supportsInfilling, `${path}.supportsInfilling`)
+      : undefined;
+  return {
+    ...(supportsInfilling !== undefined ? { supportsInfilling } : {}),
+    ...resolveInfillingAlignment(value, path, supportsInfilling === true, kind),
+  };
+}
+
 // Reject unknown top-level keys so an adversarial config cannot smuggle future-named fields past
 // the parser. The first offending key is reported by name; values are NEVER echoed.
 function assertKnownCapabilityKeys(value: Record<string, unknown>, path: string): void {
@@ -631,6 +691,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
       `${path}.supportsDocumentInput`,
     ),
     ...optionalDeterminismFlags(value, path),
+    ...optionalInfillingFlags(value, path, kind),
     workflowEligible,
     costClass: requireEnum<CostClass>(value.costClass, `${path}.costClass`, [
       "low",

@@ -18,6 +18,26 @@ export type CostClass = "low" | "medium" | "high";
 
 export type LatencyClass = "fast" | "standard" | "slow";
 
+// ─── Infilling (fill-in-the-middle) alignment posture (Issue #1210, ADR-0042 D5) ───
+// Editor inline completion is an infilling task: the cursor almost always has code after it, so a
+// prefix-only model duplicates code and breaks closing context (Bavarian et al. 2022,
+// arXiv:2207.14255). A model that advertises suffix-aware completion declares HOW its infilling
+// endpoint is trained, because the choice carries a security consequence, not only a quality one:
+//   - "base"       — a raw base-model FIM endpoint. Fast and capable, but re-opens a documented
+//                    prompt-injection surface (SAL benchmark: base-FIM attack-success-rate ≈99% vs
+//                    ≈13.8% for instruct/edit-tuned infilling). NEVER elected for editor ghost text.
+//   - "instruct"   — an aligned/instruct infilling variant.
+//   - "edit-tuned" — a search-and-replace / edit-tuned infilling variant.
+// Only "instruct" and "edit-tuned" are eligible for governed editor completion. An undeclared
+// alignment is treated as unsafe (fail-closed) by the predicates below.
+export type InfillingAlignment = "base" | "instruct" | "edit-tuned";
+
+export const INFILLING_ALIGNMENTS: readonly InfillingAlignment[] = [
+  "base",
+  "instruct",
+  "edit-tuned",
+] as const;
+
 // ─── Capability registry entry ────────────────────────────────────────────────
 
 export interface ModelCapability {
@@ -44,6 +64,88 @@ export interface ModelCapability {
   readonly supportsSeeding?: boolean | undefined;
   /** Whether the model supports a `responseFormat` parameter for JSON output (Epic #761). */
   readonly supportsResponseFormat?: boolean | undefined;
+  /**
+   * Whether the model supports suffix-aware (fill-in-the-middle / FIM) completion (Issue #1210).
+   * Required for Keiko editor inline completion; a prefix-only model is a documented anti-pattern
+   * for in-editor ghost text. Only meaningful for `kind: "chat"` models.
+   */
+  readonly supportsInfilling?: boolean | undefined;
+  /**
+   * Alignment posture of the model's infilling endpoint (Issue #1210). Only meaningful when
+   * `supportsInfilling` is true. Editor ghost text requires an aligned ("instruct") or edit-tuned
+   * ("edit-tuned") variant; a raw "base" FIM endpoint — or an undeclared alignment — is rejected
+   * for governed completion because base-FIM re-opens a prompt-injection surface (ADR-0042 D5).
+   */
+  readonly infillingAlignment?: InfillingAlignment | undefined;
+}
+
+// ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────
+// These are additive, optional fields: a future capability flag (e.g. `edit-prediction` for
+// next-edit prediction) is another optional member, never a structural break, so
+// CONVERSATION_CAPABILITY_CONTRACT_VERSION is intentionally NOT bumped (same precedent as the
+// Epic #761 determinism flags). The single source of truth for "does a model satisfy the editor
+// completion requirement?" lives in these pure, total predicates so the completion-model selection
+// (keiko-model-gateway) and any consuming route can never disagree on what the capability means.
+// Pure helpers live in contracts (not keiko-model-gateway) so the browser-tier `keiko-ui`/editor
+// host can value-import them without crossing ADR-0019 trust rule 3 (UI → model-gateway/src is
+// forbidden at error severity), mirroring `isConversationEligibleModel`.
+
+// Whether the model advertises suffix-aware (FIM) completion at all. Total: a non-chat model can
+// never infill, and an absent flag is treated as "no" (conservative default).
+export function modelSupportsInfilling(capability: ModelCapability): boolean {
+  return capability.kind === "chat" && capability.supportsInfilling === true;
+}
+
+// Whether the model is an aligned/instruct or edit-tuned infilling variant — the only postures
+// eligible for GOVERNED editor completion. Fail-closed: a base endpoint or an undeclared alignment
+// is rejected (the prompt-injection guardrail, ADR-0042 D5).
+export function isAlignedInfillingModel(capability: ModelCapability): boolean {
+  if (!modelSupportsInfilling(capability)) return false;
+  return (
+    capability.infillingAlignment === "instruct" || capability.infillingAlignment === "edit-tuned"
+  );
+}
+
+// Whether the model is eligible for AS-YOU-TYPE ghost text: an aligned infilling variant AND a
+// `fast` latency class. A `standard`/`slow` model is never elected for per-keystroke completion
+// (ADR-0042 D5: the as-you-type query requires BOTH the FIM capability AND `latencyClass: "fast"`).
+export function isAsYouTypeCompletionModel(capability: ModelCapability): boolean {
+  return isAlignedInfillingModel(capability) && capability.latencyClass === "fast";
+}
+
+// ─── Completion-model selection result (content-free, serialisable) ────────────
+// The stable, content-free result the completion (#1199) and inline-completion (#1200) routes
+// consume. It carries only enum literals plus a configured model id — never buffer text, prompts,
+// queries, or any customer content — so it is safe to serialise across the host/server boundary.
+
+// The interaction mode the inline-completion feature should drive:
+//   - "as-you-type"   — debounced ghost text backed by a fast, aligned FIM model.
+//   - "manual"        — manual-invoke inline suggestion backed by an aligned FIM model that is too
+//                       slow (`standard`/`slow`) for per-keystroke completion.
+//   - "deterministic" — no governed FIM model is usable; degrade to the deterministic
+//                       language-service completion path (#1198). Never a silent ungoverned model.
+export type CompletionInteractionMode = "as-you-type" | "manual" | "deterministic";
+
+// Why a model-backed mode was not chosen, present only when `mode === "deterministic"`:
+//   - "no-infilling-model"        — no configured model advertises suffix-aware completion.
+//   - "only-base-infilling-model" — infilling models exist but only as raw base / undeclared
+//                                   alignment (rejected by the injection guardrail).
+//   - "over-cost-ceiling"         — an aligned FIM model exists but every candidate exceeds the
+//                                   caller's cost ceiling (#1206).
+export type CompletionDegradeReason =
+  | "no-infilling-model"
+  | "only-base-infilling-model"
+  | "over-cost-ceiling";
+
+export interface CompletionModelSelection {
+  readonly mode: CompletionInteractionMode;
+  // The selected configured model id. Present iff `mode !== "deterministic"`.
+  readonly modelId?: string | undefined;
+  // The selected model's latency class — the effective-latency awareness the feature uses to
+  // confirm the interaction mode. Present iff a model is chosen.
+  readonly latencyClass?: LatencyClass | undefined;
+  // Present iff `mode === "deterministic"`.
+  readonly degradeReason?: CompletionDegradeReason | undefined;
 }
 
 // ─── Request / response ───────────────────────────────────────────────────────

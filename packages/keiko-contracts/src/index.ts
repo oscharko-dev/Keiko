@@ -169,7 +169,11 @@ export type {
   ModelKind,
   CostClass,
   LatencyClass,
+  InfillingAlignment,
   ModelCapability,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
   ChatMessage,
   ChatMessageContentPart,
   ChatMessageImageUrlContentPart,
@@ -184,9 +188,15 @@ export type {
   StreamDelta,
   StreamEvent,
 } from "./gateway.js";
-export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "./gateway.js";
+export { CONVERSATION_CAPABILITY_CONTRACT_VERSION, INFILLING_ALIGNMENTS } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
-export { isConversationEligibleModel, explainConversationIneligibility } from "./gateway.js";
+export {
+  isConversationEligibleModel,
+  explainConversationIneligibility,
+  modelSupportsInfilling,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
+} from "./gateway.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
