@@ -50,6 +50,10 @@ import {
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_INDEX_NAMES,
   DELETE_CAPSULE_SQL,
+  INFILLING_ALIGNMENTS,
+  modelSupportsInfilling,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./index.js";
@@ -115,6 +119,11 @@ import type {
   CapsuleRowShape,
   RedactPathOptions,
   SelectedScope,
+  ModelCapability,
+  InfillingAlignment,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -196,6 +205,47 @@ describe("keiko-contracts package surface", () => {
     pin<WorkflowHandoffRequest>();
     pin<UserApprovalTokenInput>();
     pin<ExpectedCheck>();
+  });
+
+  it("FIM completion value re-exports are reachable through the barrel (#1210)", () => {
+    const fastAligned: ModelCapability = {
+      id: "fast-instruct",
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "test",
+      preferredUseCases: ["completion"],
+      knownLimitations: [],
+      supportsInfilling: true,
+      infillingAlignment: "instruct",
+    };
+    const fastBase: ModelCapability = {
+      ...fastAligned,
+      id: "fast-base",
+      infillingAlignment: "base",
+    };
+
+    expect(INFILLING_ALIGNMENTS).toEqual(["base", "instruct", "edit-tuned"]);
+    expect(modelSupportsInfilling(fastAligned)).toBe(true);
+    expect(isAlignedInfillingModel(fastAligned)).toBe(true);
+    expect(isAlignedInfillingModel(fastBase)).toBe(false);
+    expect(isAsYouTypeCompletionModel(fastAligned)).toBe(true);
+  });
+
+  it("FIM completion type re-exports are reachable through the barrel (#1210)", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<InfillingAlignment>();
+    pin<CompletionInteractionMode>();
+    pin<CompletionDegradeReason>();
+    pin<CompletionModelSelection>();
   });
 
   it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {
