@@ -36,6 +36,13 @@ describe("canConnect — quality ↔ files (#270)", () => {
     expect(canConnect("chat", "files")).toBe(true);
     expect(canConnect("chat", "connector")).toBe(true);
   });
+
+  it("allows editor completion context to bind to files and connectors", () => {
+    expect(canConnect("editor", "files")).toBe(true);
+    expect(canConnect("files", "editor")).toBe(true);
+    expect(canConnect("editor", "connector")).toBe(true);
+    expect(canConnect("connector", "editor")).toBe(true);
+  });
 });
 
 // Epic #710, Issue #718 — a QI hub can bind to a Connector window so the connector's selected
@@ -73,6 +80,9 @@ describe("relLabel — files ↔ quality (#270)", () => {
   it("is honest when no folder is configured instead of fabricating 'src'", () => {
     expect(relLabel(snap("files"), snap("chat"))).toBe("no folder selected");
     expect(relLabel(snap("files", { root: "" }), snap("quality"))).toBe("no folder selected");
+    expect(relLabel(snap("files", { root: "/repo", activeFilePath: "src/app.ts" }), snap("editor"))).toBe(
+      "uses app.ts",
+    );
   });
 });
 

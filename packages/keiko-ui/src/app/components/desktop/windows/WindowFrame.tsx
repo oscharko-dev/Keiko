@@ -333,23 +333,23 @@ export function WindowFrame({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const zoom = win.zoom ?? 1;
-  const linkedRoot =
-    win.type === "chat" || win.type === "agents" || win.type === "quality"
-      ? api.linkedFilesRoot(win.id)
-      : null;
+  const receivesFilesContext =
+    win.type === "chat" || win.type === "agents" || win.type === "quality" || win.type === "editor";
+  const receivesFocusedFileContext =
+    win.type === "agents" || win.type === "quality" || win.type === "editor";
+  const receivesConnectorContext = win.type === "quality" || win.type === "editor";
+  const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
   const linkedFilePath =
-    win.type === "agents" || win.type === "quality"
-      ? api.linkedFilesContext(win.id)?.activeFilePath
-      : undefined;
+    receivesFocusedFileContext ? api.linkedFilesContext(win.id)?.activeFilePath : undefined;
   const linkedRoots =
     win.type === "quality"
       ? api.linkedAllFilesRoots(win.id)
       : linkedRoot !== null
         ? [linkedRoot]
         : [];
-  const linkedCapsuleIds = win.type === "quality" ? api.linkedConnectorCapsuleIds(win.id) : [];
+  const linkedCapsuleIds = receivesConnectorContext ? api.linkedConnectorCapsuleIds(win.id) : [];
   const linkedCapsuleSetIds =
-    win.type === "quality" ? api.linkedConnectorCapsuleSetIds(win.id) : [];
+    receivesConnectorContext ? api.linkedConnectorCapsuleSetIds(win.id) : [];
   const linkedFigmaSnapshotRunIds =
     win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
   const linkedFigmaSnapshotSources =

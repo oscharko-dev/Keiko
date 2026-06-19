@@ -45,7 +45,7 @@ import {
   saveFilesContent,
 } from "../../../../../lib/api";
 import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
-import type { EditorDocumentVersion } from "../../../../../lib/types";
+import type { EditorCompletionContextSelectors, EditorDocumentVersion } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -58,6 +58,10 @@ const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"
 interface EditorWidgetProps {
   readonly root?: string;
   readonly file?: string;
+  readonly linkedRoot?: string | null;
+  readonly linkedFilePath?: string | undefined;
+  readonly linkedCapsuleIds?: readonly string[] | undefined;
+  readonly linkedCapsuleSetIds?: readonly string[] | undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -91,7 +95,64 @@ function editorAriaLabel(root: string, file: string): string {
   return `Editor: ${file} in ${root}`;
 }
 
-export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
+function currentLineQueryText(text: string, line: number, character: number): string | undefined {
+  const currentLine = text.split("\n")[line] ?? "";
+  const beforeCursor = currentLine.slice(0, Math.max(0, character));
+  const query = beforeCursor
+    .replace(/[^A-Za-z0-9_.$/-]+/g, " ")
+    .trim()
+    .slice(-160)
+    .trim();
+  return query.length > 0 ? query : undefined;
+}
+
+function completionContextSelectors(input: {
+  readonly root: string;
+  readonly file: string;
+  readonly text: string;
+  readonly line: number;
+  readonly character: number;
+  readonly linkedRoot: string | null | undefined;
+  readonly linkedFilePath: string | undefined;
+  readonly linkedCapsuleIds: readonly string[] | undefined;
+  readonly linkedCapsuleSetIds: readonly string[] | undefined;
+}): EditorCompletionContextSelectors | undefined {
+  const selectors: {
+    queryText?: string;
+    changedFiles?: readonly string[];
+    capsuleId?: string;
+    capsuleSetId?: string;
+  } = {};
+  const queryText = currentLineQueryText(input.text, input.line, input.character);
+  if (queryText !== undefined) {
+    selectors.queryText = queryText;
+  }
+  if (
+    input.linkedRoot === input.root &&
+    input.linkedFilePath !== undefined &&
+    input.linkedFilePath.length > 0 &&
+    input.linkedFilePath !== input.file
+  ) {
+    selectors.changedFiles = [input.linkedFilePath];
+  }
+  const capsuleId = input.linkedCapsuleIds?.[0];
+  const capsuleSetId = input.linkedCapsuleSetIds?.[0];
+  if (capsuleId !== undefined) {
+    selectors.capsuleId = capsuleId;
+  } else if (capsuleSetId !== undefined) {
+    selectors.capsuleSetId = capsuleSetId;
+  }
+  return Object.keys(selectors).length > 0 ? selectors : undefined;
+}
+
+export function EditorWidget({
+  root,
+  file,
+  linkedRoot,
+  linkedFilePath,
+  linkedCapsuleIds,
+  linkedCapsuleSetIds,
+}: EditorWidgetProps): ReactNode {
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
 
   const [content, setContent] = useState("");
@@ -293,12 +354,23 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
             ? {}
             : { triggerCharacter: query.request.triggerCharacter }),
           contextBudgetBytes: query.request.contextBudgetBytes,
+          context: completionContextSelectors({
+            root,
+            file,
+            text: query.documentText,
+            line: query.request.position.line,
+            character: query.request.position.column,
+            linkedRoot,
+            linkedFilePath,
+            linkedCapsuleIds,
+            linkedCapsuleSetIds,
+          }),
         },
         signal,
       );
       return mapWireToEditorCompletionResponse(query.request.request, wire, Date.now());
     },
-    [hasTarget, root, file],
+    [file, hasTarget, linkedCapsuleIds, linkedCapsuleSetIds, linkedFilePath, linkedRoot, root],
   );
 
   // Completion has a governed deterministic provider only for the TS/JS source languages (#1198);

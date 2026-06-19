@@ -18,8 +18,10 @@
 
 import {
   CODING_CONTEXT_SCHEMA_VERSION,
+  CODING_CONTEXT_BUDGETS,
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   EDITOR_COMPLETION_SCHEMA_VERSION,
+  isValidScopePath,
   parseEditorCompletionRequest,
   toCodingContextWirePack,
   type CodingContextPack,
@@ -35,6 +37,7 @@ import {
   type LanguageCompletionItem,
   type LanguageCompletionResult,
   type LanguageServiceRequest,
+  type UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
 import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
@@ -44,6 +47,7 @@ import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
+import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
 import { clientAbortSignal, resolveOverlayPath, STATUS_BY_CODE } from "./languageRoutes.js";
 import { runLanguageOperation } from "./languageService.js";
 import {
@@ -58,6 +62,12 @@ const MAX_COMPLETION_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentByt
 const COMPLETION_GATEWAY_POLICY_VERSION = "editor-completion/1";
 const MAX_MODEL_ITEMS = 8;
 const MAX_MODEL_INSERT_TEXT_CHARS = 2_000;
+const MAX_CONTEXT_CHANGED_FILES = 64;
+export const COMPLETION_LANGUAGE_SERVICE_LIMITS = {
+  ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  deadlineMs: 500,
+} as const;
+const MODEL_AS_YOU_TYPE_TIMEOUT_MS = 750;
 
 /** Builds the chat function for the elected model. Injectable so tests avoid a live model call. */
 export type CompletionChatFactory = (config: GatewayConfig, modelId: string) => ModelChatFn;
@@ -78,7 +88,7 @@ function defaultChatFactory(config: GatewayConfig, modelId: string): ModelChatFn
       ],
       cancellationSignal: chatSignal,
     });
-    return response.content;
+    return { content: response.content, usage: response.usage };
   };
 }
 
@@ -97,6 +107,17 @@ interface ModelTierOutcome {
   readonly promptHash?: string | undefined;
   readonly contextSources: readonly EditorCompletionSource[];
   readonly truncated: boolean;
+}
+
+interface ElectedModelContext {
+  readonly request: EditorCompletionWireRequest;
+  readonly realRoot: string;
+  readonly signal: AbortSignal;
+  readonly deps: UiHandlerDeps;
+  readonly selection: CompletionModelSelection;
+  readonly modelId: string;
+  readonly chatFactory: CompletionChatFactory;
+  readonly config: GatewayConfig;
 }
 
 const DETERMINISTIC_OUTCOME = (
@@ -127,6 +148,77 @@ function buildContextRequest(request: EditorCompletionWireRequest): CodingContex
   };
 }
 
+function dedupeChangedFiles(paths: readonly string[]): readonly string[] {
+  return [...new Set(paths)];
+}
+
+function invalidChangedFiles(message: string): RouteResult {
+  return { status: 400, body: errorBody("INVALID_REQUEST", message) };
+}
+
+function sanitizeChangedFiles(
+  realRoot: string,
+  changedFiles: readonly string[] | undefined,
+): readonly string[] | RouteResult | undefined {
+  if (changedFiles === undefined) {
+    return undefined;
+  }
+  const deduped = dedupeChangedFiles(changedFiles);
+  if (deduped.length > MAX_CONTEXT_CHANGED_FILES) {
+    return invalidChangedFiles(
+      `context.changedFiles must contain at most ${MAX_CONTEXT_CHANGED_FILES.toString()} paths.`,
+    );
+  }
+  for (const changed of deduped) {
+    if (!isValidScopePath(changed, { mustBeRelative: true })) {
+      return invalidChangedFiles(
+        `context.changedFiles contains an invalid workspace-relative path: ${changed}`,
+      );
+    }
+    resolveOverlayPath(realRoot, changed);
+  }
+  return deduped.length > 0 ? deduped : undefined;
+}
+
+function sanitizeRequestContext(
+  request: EditorCompletionWireRequest,
+  realRoot: string,
+): EditorCompletionWireRequest | RouteResult {
+  const changedFiles = sanitizeChangedFiles(realRoot, request.context?.changedFiles);
+  if (isRouteResult(changedFiles)) {
+    return changedFiles;
+  }
+  if (request.context === undefined) {
+    return request;
+  }
+  return {
+    ...request,
+    context: {
+      ...(request.context.queryText === undefined ? {} : { queryText: request.context.queryText }),
+      ...(request.context.symbol === undefined ? {} : { symbol: request.context.symbol }),
+      ...(request.context.capsuleId === undefined ? {} : { capsuleId: request.context.capsuleId }),
+      ...(request.context.capsuleSetId === undefined
+        ? {}
+        : { capsuleSetId: request.context.capsuleSetId }),
+      ...(changedFiles === undefined ? {} : { changedFiles }),
+    },
+  };
+}
+
+function effectiveContextBudgetBytes(request: EditorCompletionWireRequest): number {
+  return Math.min(
+    CODING_CONTEXT_BUDGETS.completion.budgetBytes,
+    Math.max(0, Math.trunc(request.contextBudgetBytes)),
+  );
+}
+
+function modelSignal(selection: CompletionModelSelection, signal: AbortSignal): AbortSignal {
+  if (selection.mode !== "as-you-type") {
+    return signal;
+  }
+  return AbortSignal.any([signal, AbortSignal.timeout(MODEL_AS_YOU_TYPE_TIMEOUT_MS)]);
+}
+
 // Map the coding-context source kinds that actually contributed an excerpt to the AC7 completion
 // source vocabulary. Source kinds outside that vocabulary (QI, workflow, files-focus) are not surfaced.
 function contextSourcesFromPack(pack: CodingContextPack): readonly EditorCompletionSource[] {
@@ -148,48 +240,77 @@ function contextSourcesFromPack(pack: CodingContextPack): readonly EditorComplet
   return [...sources];
 }
 
+function recordModelEvidence(input: {
+  readonly deps: UiHandlerDeps;
+  readonly modelId: string;
+  readonly selection: CompletionModelSelection;
+  readonly promptHash: string;
+  readonly itemCount: number;
+  readonly truncated: boolean;
+  readonly usage: UsageMetadata | undefined;
+  readonly nowMs: number;
+}): void {
+  recordEditorCompletionModelEvidence(
+    input.deps.evidenceStore,
+    input.deps.redactor,
+    {
+      modelId: input.modelId,
+      modelMode: input.selection.mode,
+      latencyClass: input.selection.latencyClass,
+      gatewayPolicyVersion: COMPLETION_GATEWAY_POLICY_VERSION,
+      promptHash: input.promptHash,
+      itemCount: input.itemCount,
+      truncated: input.truncated,
+      usage: input.usage,
+    },
+    input.nowMs,
+  );
+}
+
 // Runs the elected model: assembles coding context (#1211), records content-free evidence, and calls
 // the gateway through the injected chat factory. A failure throws to the caller, which degrades.
-async function runElectedModel(
-  request: EditorCompletionWireRequest,
-  realRoot: string,
-  signal: AbortSignal,
-  deps: UiHandlerDeps,
-  selection: CompletionModelSelection,
-  modelId: string,
-  chatFactory: CompletionChatFactory,
-  config: GatewayConfig,
-): Promise<ModelTierOutcome> {
+async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutcome> {
   const nowMs = Date.now();
-  const pack = await assembleCodingContext(buildContextRequest(request), {
-    deps,
-    realRoot,
-    signal,
+  const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
+    deps: ctx.deps,
+    realRoot: ctx.realRoot,
+    signal: ctx.signal,
     nowMs,
+    budgetBytes: effectiveContextBudgetBytes(ctx.request),
   });
   recordCodingContextEvidence(
-    deps.evidenceStore,
-    deps.redactor,
+    ctx.deps.evidenceStore,
+    ctx.deps.redactor,
     toCodingContextWirePack(pack),
     nowMs,
   );
   const generated = await generateModelCompletions(
     {
-      overlayText: request.document.text,
-      position: request.position,
-      languageId: request.document.languageId,
+      overlayText: ctx.request.document.text,
+      position: ctx.request.position,
+      languageId: ctx.request.document.languageId,
       contextPack: pack,
       maxItems: MAX_MODEL_ITEMS,
       maxInsertTextChars: MAX_MODEL_INSERT_TEXT_CHARS,
     },
-    chatFactory(config, modelId),
-    signal,
+    ctx.chatFactory(ctx.config, ctx.modelId),
+    ctx.signal,
   );
+  recordModelEvidence({
+    deps: ctx.deps,
+    modelId: ctx.modelId,
+    selection: ctx.selection,
+    promptHash: generated.promptHash,
+    itemCount: generated.items.length,
+    truncated: generated.truncated,
+    usage: generated.usage,
+    nowMs,
+  });
   return {
     items: generated.items,
-    modelMode: selection.mode,
-    modelId,
-    latencyClass: selection.latencyClass,
+    modelMode: ctx.selection.mode,
+    modelId: ctx.modelId,
+    latencyClass: ctx.selection.latencyClass,
     promptHash: generated.promptHash,
     contextSources: generated.items.length > 0 ? contextSourcesFromPack(pack) : [],
     truncated: generated.truncated,
@@ -226,16 +347,16 @@ async function runModelTier(
     );
   }
   try {
-    return await runElectedModel(
+    return await runElectedModel({
       request,
       realRoot,
-      signal,
+      signal: modelSignal(selection, signal),
       deps,
       selection,
       modelId,
       chatFactory,
       config,
-    );
+    });
   } catch {
     // ADR-0042 D5 / AC4: a model or retrieval failure degrades to deterministic-only; it never breaks
     // the route or surfaces partial junk to the editor.
@@ -285,31 +406,32 @@ function deterministicWireItem(item: LanguageCompletionItem): EditorCompletionWi
 }
 
 function mergeItems(
-  model: readonly ModelCompletionItem[],
   deterministic: readonly LanguageCompletionItem[],
+  model: readonly ModelCompletionItem[],
   maxItems: number,
 ): { items: readonly EditorCompletionWireItem[]; capped: boolean } {
   const items: EditorCompletionWireItem[] = [];
   const seen = new Set<string>();
-  // Model-assisted items rank first; deterministic items follow. Duplicates by insert text are dropped.
-  for (const item of model) {
-    if (!seen.has(item.insertText)) {
-      seen.add(item.insertText);
-      items.push(wireItem(item, "model-assisted"));
-    }
-  }
   let capped = false;
-  for (const item of deterministic) {
-    const candidate = deterministicWireItem(item);
+
+  function push(candidate: EditorCompletionWireItem): void {
     if (seen.has(candidate.insertText)) {
-      continue;
+      return;
     }
     if (items.length >= maxItems) {
       capped = true;
-      break;
+      return;
     }
     seen.add(candidate.insertText);
     items.push(candidate);
+  }
+
+  // Deterministic completions remain first and win de-dupe conflicts; model items are additive.
+  for (const item of deterministic) {
+    push(deterministicWireItem(item));
+  }
+  for (const item of model) {
+    push(wireItem(item, "model-assisted"));
   }
   return { items, capped };
 }
@@ -348,11 +470,11 @@ function buildWireResponse(
   model: ModelTierOutcome,
 ): EditorCompletionWireResponse {
   const { items, capped } = mergeItems(
-    model.items,
     deterministic.items,
+    model.items,
     DEFAULT_LANGUAGE_SERVICE_LIMITS.maxCompletionItems,
   );
-  const producedModelItems = model.items.length > 0;
+  const producedModelItems = items.some((item) => item.origin === "model-assisted");
   return {
     schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
     items,
@@ -360,6 +482,37 @@ function buildWireResponse(
     truncated: deterministic.truncated || model.truncated || capped,
     provenance: buildProvenance(model, producedModelItems),
   };
+}
+
+function runDeterministicCompletion(input: {
+  readonly request: EditorCompletionWireRequest;
+  readonly realRoot: string;
+  readonly overlayAbsolutePath: string;
+  readonly signal: AbortSignal;
+}): LanguageCompletionResult | RouteResult {
+  const langRequest: LanguageServiceRequest = {
+    operation: "completion",
+    root: input.request.root,
+    document: input.request.document,
+    position: input.request.position,
+  };
+  const outcome = runLanguageOperation(langRequest, {
+    fs: nodeWorkspaceFs,
+    realRoot: input.realRoot,
+    overlayAbsolutePath: input.overlayAbsolutePath,
+    signal: input.signal,
+    limits: COMPLETION_LANGUAGE_SERVICE_LIMITS,
+  });
+  if (outcome.kind === "error") {
+    return {
+      status: STATUS_BY_CODE[outcome.code],
+      body: errorBody(outcome.code, outcome.message),
+    };
+  }
+  if (outcome.kind !== "completion") {
+    return { status: 500, body: errorBody("INTERNAL", "Unexpected language-service outcome.") };
+  }
+  return outcome.result;
 }
 
 // ─── Route ──────────────────────────────────────────────────────────────────────────────────────
@@ -381,41 +534,32 @@ export async function handleEditorCompletion(
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
+    const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
+    if (isRouteResult(sanitizedRequest)) {
+      return sanitizedRequest;
+    }
     const signal = clientAbortSignal(ctx);
 
     // Tier 1: deterministic language-service completion (always).
-    const langRequest: LanguageServiceRequest = {
-      operation: "completion",
-      root: request.root,
-      document: request.document,
-      position: request.position,
-    };
-    const outcome = runLanguageOperation(langRequest, {
-      fs: nodeWorkspaceFs,
+    const deterministic = runDeterministicCompletion({
+      request: sanitizedRequest,
       realRoot: root.realRoot,
       overlayAbsolutePath,
       signal,
     });
-    if (outcome.kind === "error") {
-      return {
-        status: STATUS_BY_CODE[outcome.code],
-        body: errorBody(outcome.code, outcome.message),
-      };
-    }
-    if (outcome.kind !== "completion") {
-      // Unreachable: the request fixes operation to "completion". Defensive, keeps the type total.
-      return { status: 500, body: errorBody("INTERNAL", "Unexpected language-service outcome.") };
+    if (isRouteResult(deterministic)) {
+      return deterministic;
     }
 
     // Tier 2: gated model-assisted completion.
     const model = await runModelTier(
-      request,
+      sanitizedRequest,
       root.realRoot,
       signal,
       deps,
       options.chatFactory ?? defaultChatFactory,
     );
 
-    return { status: 200, body: deps.redactor(buildWireResponse(outcome.result, model)) };
+    return { status: 200, body: deps.redactor(buildWireResponse(deterministic, model)) };
   });
 }

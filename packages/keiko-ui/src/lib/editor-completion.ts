@@ -14,6 +14,8 @@ import type {
 import type { LanguageCompletionItemKind } from "@oscharko-dev/keiko-contracts";
 import type { EditorCompletionWireItem, EditorCompletionWireResponse } from "./types";
 
+const PROMPT_HASH_HEX = /^[0-9a-f]{64}$/u;
+
 // The language-service item-kind set is broader than the editor's icon set; map the extra kinds onto
 // the nearest editor kind so every item still renders a sensible icon.
 const KIND_MAP: Readonly<Record<LanguageCompletionItemKind, EditorCompletionItemKind>> = {
@@ -40,16 +42,27 @@ function itemProvenance(
   wire: EditorCompletionWireResponse,
   origin: EditorCompletionWireItem["origin"],
   nowMs: number,
-): EditorOutputProvenance {
+): EditorOutputProvenance | null {
   if (origin === "deterministic") {
     return { origin: "deterministic-completion" };
+  }
+  const { modelId, gatewayPolicyVersion, promptHash } = wire.provenance;
+  if (
+    modelId === undefined ||
+    modelId.length === 0 ||
+    gatewayPolicyVersion === undefined ||
+    gatewayPolicyVersion.length === 0 ||
+    promptHash === undefined ||
+    !PROMPT_HASH_HEX.test(promptHash)
+  ) {
+    return null;
   }
   return {
     origin: "ai-completion",
     model: {
-      modelId: wire.provenance.modelId ?? "unknown",
-      gatewayPolicyVersion: wire.provenance.gatewayPolicyVersion ?? "unknown",
-      promptHash: wire.provenance.promptHash ?? "",
+      modelId,
+      gatewayPolicyVersion,
+      promptHash,
       producedAt: nowMs,
     },
   };
@@ -59,12 +72,16 @@ function mapItem(
   item: EditorCompletionWireItem,
   wire: EditorCompletionWireResponse,
   nowMs: number,
-): EditorCompletionItem {
+): EditorCompletionItem | null {
+  const provenance = itemProvenance(wire, item.origin, nowMs);
+  if (provenance === null) {
+    return null;
+  }
   return {
     label: item.label,
     kind: KIND_MAP[item.kind],
     insertText: item.insertText,
-    provenance: itemProvenance(wire, item.origin, nowMs),
+    provenance,
     ...(item.detail === undefined ? {} : { detail: item.detail }),
     ...(item.sortText === undefined ? {} : { sortText: item.sortText }),
   };
@@ -78,7 +95,9 @@ export function mapWireToEditorCompletionResponse(
 ): EditorCompletionResponse {
   return {
     request,
-    items: wire.items.map((item) => mapItem(item, wire, nowMs)),
+    items: wire.items
+      .map((item) => mapItem(item, wire, nowMs))
+      .filter((item): item is EditorCompletionItem => item !== null),
     isIncomplete: wire.isIncomplete,
     provenance: {
       sources: wire.provenance.sources,

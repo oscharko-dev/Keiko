@@ -114,7 +114,7 @@ describe("mapWireToEditorCompletionResponse", () => {
     expect(response.provenance.degradeReason).toBe("no-infilling-model");
   });
 
-  it("falls back to placeholder model identity when the rollup omits it", () => {
+  it("drops model-assisted items when the rollup omits required model provenance", () => {
     const response = mapWireToEditorCompletionResponse(
       REQUEST,
       wire({
@@ -123,9 +123,24 @@ describe("mapWireToEditorCompletionResponse", () => {
       }),
       5,
     );
-    expect(response.items[0]?.provenance).toEqual({
-      origin: "ai-completion",
-      model: { modelId: "unknown", gatewayPolicyVersion: "unknown", promptHash: "", producedAt: 5 },
-    });
+    expect(response.items).toEqual([]);
+  });
+
+  it("drops model-assisted items when the prompt hash is not a SHA-256 hex digest", () => {
+    const response = mapWireToEditorCompletionResponse(
+      REQUEST,
+      wire({
+        items: [{ label: "x", kind: "text", insertText: "x", origin: "model-assisted" }],
+        provenance: {
+          sources: ["model-assisted"],
+          modelMode: "manual",
+          modelId: "fim-1",
+          gatewayPolicyVersion: "editor-completion/1",
+          promptHash: "not-a-hash",
+        },
+      }),
+      5,
+    );
+    expect(response.items).toEqual([]);
   });
 });

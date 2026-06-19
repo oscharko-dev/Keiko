@@ -87,8 +87,24 @@ vi.mock("./cards/FilesWidget", () => ({
   ),
 }));
 vi.mock("./cards/EditorWidget", () => ({
-  EditorWidget: ({ root, file }: { readonly root?: string; readonly file?: string }) => (
-    <div data-testid="editor-widget">{`${root ?? ""}:${file ?? ""}`}</div>
+  EditorWidget: ({
+    root,
+    file,
+    linkedRoot,
+    linkedFilePath,
+    linkedCapsuleIds,
+    linkedCapsuleSetIds,
+  }: {
+    readonly root?: string;
+    readonly file?: string;
+    readonly linkedRoot?: string | null;
+    readonly linkedFilePath?: string;
+    readonly linkedCapsuleIds?: readonly string[];
+    readonly linkedCapsuleSetIds?: readonly string[];
+  }) => (
+    <div data-testid="editor-widget">
+      {`${root ?? ""}:${file ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}`}
+    </div>
   ),
 }));
 vi.mock("./cards/BrowserWidget", () => ({
@@ -328,7 +344,9 @@ describe("workspace widget renderer registry", () => {
         {WIN_TYPES.agents.render({ workflow: "verify", access: "full", keikoMode: true }, ctx)}
       </>,
     );
-    expect(screen.getByTestId("editor-widget")).toHaveTextContent("/repo:src/app.ts");
+    expect(screen.getByTestId("editor-widget")).toHaveTextContent(
+      "/repo:src/app.ts:/repo:src/app.ts:cap-1:set-1",
+    );
     expect(screen.getByTestId("browser-widget")).toHaveTextContent("https://example.test");
     expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
     expect(screen.getByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");
