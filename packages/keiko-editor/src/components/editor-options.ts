@@ -125,6 +125,14 @@ export function buildEditorOptions(
     readOnly: args.readOnly,
     domReadOnly: false,
     ariaLabel: args.ariaLabel ?? `Editor: ${args.ariaPath}`,
+    // Accessibility (Issue #1205, epic #1189 Review Addendum). `"auto"` makes Monaco detect an active
+    // screen reader and switch the editing surface into screen-reader mode (an accessible ARIA
+    // textarea) automatically; it is preferred over a hard `"on"`, which would degrade the experience
+    // for sighted keyboard users by forcing SR mode unconditionally. Monaco's accessibility-help
+    // dialog (`editor.action.accessibilityHelp`, Alt+F1 / on macOS ⌥F1) stays enabled — no option
+    // here disables it — so screen-reader users can discover the editing-surface keybindings. The
+    // editor chrome (tabs, status bar, command palette, find) holds WCAG 2.2 AA; the Monaco editing
+    // canvas inherits Monaco's documented accessibility behaviour. See the editor UX spec.
     accessibilitySupport: "auto",
     renderWhitespace: "selection",
     scrollBeyondLastLine: false,

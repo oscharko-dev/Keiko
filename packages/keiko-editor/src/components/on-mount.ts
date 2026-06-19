@@ -16,6 +16,8 @@ import type { EditorLanguageId, EditorPosition, EditorRange } from "../index.js"
 import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../index.js";
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
 import { buildSaveActionDescriptor } from "./keybindings.js";
+import { buildGenerateTestsActionDescriptor } from "./command-actions.js";
+import type { EditorDiagnosticsSummary } from "./status-bar.js";
 import {
   COMPLETION_ELIGIBLE_LANGUAGES,
   registerKeikoCompletionProvider,
@@ -69,8 +71,10 @@ import {
 /** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar;
-  readonly KeyMod: { readonly CtrlCmd: number };
-  readonly KeyCode: { readonly KeyS: number };
+  // `Alt` is needed for the #1205 Generate Tests chord (`Cmd/Ctrl+Alt+T`); `CtrlCmd` for save.
+  readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
+  // `KeyT` backs the Generate Tests chord; `KeyS` backs save.
+  readonly KeyCode: { readonly KeyS: number; readonly KeyT: number };
   // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
   // when it (or the completion args) is absent.
@@ -116,6 +120,18 @@ export interface WireEditorDiagnostics {
   readonly languages?: readonly EditorLanguageId[] | undefined;
   /** Debounce scheduler; defaults to `setTimeout`/`clearTimeout`. */
   readonly scheduler?: DiagnosticsScheduler | undefined;
+  /** Content-free diagnostic-count observer for the status bar (Issue #1205). */
+  readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+}
+
+/**
+ * Host-injected command-action wiring (Issue #1205). Each present handler registers a Keiko action
+ * into Monaco's native command palette (F1) and context menu with a keybinding. Absent handlers
+ * register nothing, so a command whose host capability is off never appears (clean degradation).
+ */
+export interface WireEditorCommands {
+  /** Run the governed test-generation flow (#1202); bound to `Cmd/Ctrl+Alt+T`. */
+  readonly generateTests?: (() => void) | undefined;
 }
 
 /** Host-injected hover wiring (Issue #1201); absent when the host supplies no resolver. */
@@ -187,6 +203,8 @@ export interface WireEditorOnMountArgs {
   readonly symbols?: WireEditorSymbols | undefined;
   /** Document-formatting wiring (Issue #1201); absent when the host supplies no formatting resolver. */
   readonly formatting?: WireEditorFormatting | undefined;
+  /** Command-action wiring (Issue #1205); registers host commands into the Monaco command palette. */
+  readonly commands?: WireEditorCommands | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -399,7 +417,30 @@ function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | nul
     streamId: diagnostics.streamId,
     newRequestId: diagnostics.newRequestId,
     ...(diagnostics.scheduler === undefined ? {} : { scheduler: diagnostics.scheduler }),
+    ...(diagnostics.onSummary === undefined ? {} : { onSummary: diagnostics.onSummary }),
   });
+}
+
+// Registers the host-owned command actions into Monaco's native command palette (Issue #1205). Each
+// `addAction` makes the command discoverable via F1 / the context menu and binds its keybinding. Only
+// host-supplied handlers register; an absent handler registers nothing. Returns the disposables.
+function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDisposable[] {
+  const commands = args.commands;
+  if (commands === undefined) {
+    return [];
+  }
+  const disposables: monaco.IDisposable[] = [];
+  if (commands.generateTests !== undefined) {
+    disposables.push(
+      args.editor.addAction(
+        buildGenerateTestsActionDescriptor({
+          keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
+          run: commands.generateTests,
+        }),
+      ),
+    );
+  }
+  return disposables;
 }
 
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
@@ -415,6 +456,7 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const hoverSub = installHoverProvider(args);
   const symbolsSub = installDocumentSymbolProvider(args);
   const formattingSub = installFormattingProvider(args);
+  const commandActions = installCommandActions(args);
   if (args.autoFocus) {
     args.editor.focus();
   }
@@ -429,5 +471,8 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     hoverSub?.dispose();
     symbolsSub?.dispose();
     formattingSub?.dispose();
+    for (const disposable of commandActions) {
+      disposable.dispose();
+    }
   };
 }

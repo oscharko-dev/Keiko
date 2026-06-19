@@ -70,8 +70,16 @@ interface FakeEditorContainer {
 // A structurally-loose stand-in for `MountEditor`: it captures the real wiring's calls while
 // emitting plain coordinate objects (not full Monaco `Position`/`Selection` instances). It is cast
 // to `MountEditor` at the `wireEditorOnMount` boundary, exactly as a real editor would be supplied.
+interface FakeActionDescriptor {
+  readonly id?: string;
+  readonly label?: string;
+  readonly keybindings?: number[];
+  readonly contextMenuGroupId?: string;
+  readonly run: (editor?: unknown) => void;
+}
+
 interface FakeEditor {
-  addAction: (descriptor: { keybindings?: number[]; run: () => void }) => FakeDisposable;
+  addAction: (descriptor: FakeActionDescriptor) => FakeDisposable;
   onDidChangeCursorPosition: (listener: (event: FakeCursorEvent) => void) => FakeDisposable;
   onDidChangeCursorSelection: (listener: (event: FakeSelectionEvent) => void) => FakeDisposable;
   focus: () => void;
@@ -89,6 +97,7 @@ interface Fakes {
   readonly selectionDisposable: FakeDisposable;
   readonly focus: ReturnType<typeof vi.fn>;
   readonly lastActionKeybindings: () => readonly number[] | undefined;
+  readonly actionDescriptors: () => readonly FakeActionDescriptor[];
   cursorListener: ((event: FakeCursorEvent) => void) | null;
   selectionListener: ((event: FakeSelectionEvent) => void) | null;
 }
@@ -138,6 +147,7 @@ function buildFakes(): Fakes {
   const selectionDisposable: FakeDisposable = { dispose: vi.fn() };
   const focus = vi.fn();
   let keybindings: readonly number[] | undefined;
+  const descriptors: FakeActionDescriptor[] = [];
   const fakes: Fakes = {
     actionDisposable,
     cursorDisposable,
@@ -146,15 +156,17 @@ function buildFakes(): Fakes {
     container: buildContainer(),
     monaco: {
       editor: { defineTheme: vi.fn() },
-      KeyMod: { CtrlCmd: 2048 },
-      KeyCode: { KeyS: 49 },
+      KeyMod: { CtrlCmd: 2048, Alt: 512 },
+      KeyCode: { KeyS: 49, KeyT: 53 },
     },
     cursorListener: null,
     selectionListener: null,
     lastActionKeybindings: (): readonly number[] | undefined => keybindings,
+    actionDescriptors: (): readonly FakeActionDescriptor[] => descriptors,
     editor: {
       addAction: (descriptor) => {
         keybindings = descriptor.keybindings;
+        descriptors.push(descriptor);
         return actionDisposable;
       },
       onDidChangeCursorPosition: (listener) => {
@@ -204,6 +216,37 @@ describe("wireEditorOnMount", () => {
     const onSave = vi.fn();
     wire(fakes, { onSave });
     expect(fakes.lastActionKeybindings()?.[0]).toBe(2048 | 49);
+  });
+
+  it("registers the Generate Tests command action when the host wires it (#1205)", () => {
+    const fakes = buildFakes();
+    const generateTests = vi.fn();
+    wire(fakes, { commands: { generateTests } });
+    const action = fakes
+      .actionDescriptors()
+      .find((descriptor) => descriptor.id === "keiko.editor.generateTests");
+    expect(action).toBeDefined();
+    // Bound to Cmd/Ctrl+Alt+T and discoverable in the context menu (mouse) and palette (F1).
+    expect(action?.keybindings?.[0]).toBe(2048 | 512 | 53);
+    expect(action?.contextMenuGroupId).toBe("1_modification");
+    action?.run(fakes.editor);
+    expect(generateTests).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers no command action when the host wires none (#1205)", () => {
+    const fakes = buildFakes();
+    wire(fakes);
+    expect(fakes.actionDescriptors().some((d) => d.id === "keiko.editor.generateTests")).toBe(
+      false,
+    );
+  });
+
+  it("disposes registered command actions on teardown (#1205)", () => {
+    const fakes = buildFakes();
+    const dispose = wire(fakes, { commands: { generateTests: vi.fn() } });
+    dispose();
+    // The shared fake disposable backs both the save action and the command action.
+    expect(fakes.actionDisposable.dispose).toHaveBeenCalled();
   });
 
   it("installs a capturing keydown backstop that prevents the browser save dialog", () => {

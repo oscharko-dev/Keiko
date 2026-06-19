@@ -4985,14 +4985,66 @@ select.dlg-input {
   font-size: 12px;
   color: var(--fg-dim);
 }
-/* Issue #1202: governed test-generation run status / failure line under the editor toolbar. */
-.ed-status {
-  padding: 6px 12px;
-  font-size: 11.5px;
-  color: var(--fg-dim);
+/* Issue #1205: the document tab strip is a tablist; the tabs stay left, actions stay right. */
+.ed-tablist {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
 }
-.ed-status[data-empty="true"] {
-  padding-block: 0;
+.ed-tab[role="tab"] {
+  cursor: default;
+}
+.ed-tab:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+/* Issue #1205: the unified, VS Code-style status bar — the single status surface for the card.
+   Fields stay on one compact row; the flexible run field truncates rather than wrapping, so the
+   layout stays stable across desktop and compact card sizes (Acceptance Criterion 6). */
+.ed-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--card);
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ed-sb-field {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The run field carries the (possibly long) governed test-generation status; let it flex + ellipsis. */
+.ed-sb-field[data-field="run"] {
+  flex: 0 1 auto;
+}
+.ed-sb-accent {
+  color: var(--accent-text);
+}
+.ed-sb-warn {
+  color: var(--warn);
+}
+.ed-sb-error {
+  color: var(--danger);
+}
+/* The single polite live region: visually hidden, announced on meaningful change (never the cursor). */
+.ed-sb-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .ed-host {
   position: relative;

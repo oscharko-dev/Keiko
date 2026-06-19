@@ -14,6 +14,7 @@ import type { KeikoCodeEditorProps } from "./types.js";
 import { applyViewState, captureViewState } from "./view-state.js";
 import { wireEditorOnMount, type MountEditor, type MountMonaco } from "./on-mount.js";
 import type {
+  WireEditorCommands,
   WireEditorCompletion,
   WireEditorDiagnostics,
   WireEditorFormatting,
@@ -179,6 +180,27 @@ function buildDiagnosticsWiring(
     debounceMs: latestProps.current.diagnosticsDebounceMs ?? DEFAULT_DIAGNOSTICS_DEBOUNCE_MS,
     streamId,
     newRequestId: createEditorRequestId,
+    // Read the live observer at call time so a later `onDiagnosticsSummary` identity is honoured
+    // without re-registering the bridge (the diagnostics provider registers once at mount).
+    onSummary: (summary): void => {
+      latestProps.current.onDiagnosticsSummary?.(summary);
+    },
+  };
+}
+
+// Builds the host command-action wiring (Issue #1205). Returns undefined when the host offers no
+// command handler, so no Keiko action is registered into Monaco's palette. Each run reads the live
+// prop so a handler swap (e.g. the host opening a different file) is honoured.
+function buildCommandsWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+): WireEditorCommands | undefined {
+  if (latestProps.current.onGenerateTests === undefined) {
+    return undefined;
+  }
+  return {
+    generateTests: (): void => {
+      latestProps.current.onGenerateTests?.();
+    },
   };
 }
 
@@ -309,6 +331,7 @@ function useMountHandler(
         hover: buildHoverWiring(latestProps, `${streamId}:hover`),
         symbols: buildSymbolsWiring(latestProps, `${streamId}:symbols`),
         formatting: buildFormattingWiring(latestProps, `${streamId}:formatting`),
+        commands: buildCommandsWiring(latestProps),
       });
     },
     [

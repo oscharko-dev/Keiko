@@ -193,10 +193,12 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
 
   it("offers a Generate Tests action for a TS file and surfaces the switched-off status", async () => {
     await renderLoaded();
+    // Issue #1205: the unified status bar carries the single polite live region; the governed
+    // test-generation run status feeds its "run" field, which is absent until a run starts.
     const status = screen.getByRole("status");
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveAttribute("aria-atomic", "true");
-    expect(status).toBeEmptyDOMElement();
+    expect(status).not.toHaveTextContent(/disabled in this build/i);
     const button = screen.getByRole("button", { name: "Generate Tests" });
     expect(button).toBeInTheDocument();
     vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce(DISABLED_RESPONSE);
@@ -312,7 +314,9 @@ describe("EditorWidget — edit and save", () => {
     });
     expect(surface.props?.buffer.content.text).toBe("const value = 2;\n");
     expect(surface.props?.fileModel.dirty).toBe(true);
-    expect(screen.getByTitle("Unsaved changes")).toBeInTheDocument();
+    // Issue #1205: the dirty state is communicated by the status bar save field (and the tab dot).
+    const statusBar = screen.getByTestId("editor-status-bar");
+    expect(statusBar.querySelector('[data-field="save"]')).toHaveTextContent("Unsaved");
   });
 
   it("saves with the version-aware token and clears dirty on success", async () => {
@@ -967,5 +971,64 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     expect(surface.props?.provideHover).toBeUndefined();
     expect(surface.props?.provideSymbols).toBeUndefined();
     expect(surface.props?.provideFormatting).toBeUndefined();
+  });
+});
+
+describe("EditorWidget — status bar and command surface (Issue #1205)", () => {
+  function statusField(id: string): Element | null {
+    return screen.getByTestId("editor-status-bar").querySelector(`[data-field="${id}"]`);
+  }
+
+  it("renders the unified status bar with accessible tab + tabpanel roles", async () => {
+    await renderLoaded();
+    // A valid single-document tablist drives an associated tabpanel (the editor host).
+    const tab = screen.getByRole("tab", { name: /app\.ts/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("aria-controls", "ed-tabpanel");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "ed-active-tab");
+    // The unified status bar is the single status surface, so the editor's own footer is suppressed.
+    expect(surface.props?.showStatusFooter).toBe(false);
+    expect(statusField("language")).toHaveTextContent("TypeScript");
+    expect(statusField("completions")).toHaveTextContent("Completions on");
+  });
+
+  it("reflects the live cursor position but never announces it", async () => {
+    await renderLoaded();
+    act(() => {
+      surface.props?.onCursorChange?.({ line: 9, column: 3 });
+    });
+    expect(statusField("cursor")).toHaveTextContent("Ln 10, Col 4");
+    // The cursor must not reach the announced live region (it changes per keystroke).
+    expect(screen.getByTestId("editor-status-bar-live")).not.toHaveTextContent("Line 10");
+  });
+
+  it("surfaces the diagnostics problem count reported by the surface", async () => {
+    await renderLoaded();
+    expect(surface.props?.onDiagnosticsSummary).toBeTypeOf("function");
+    act(() => {
+      surface.props?.onDiagnosticsSummary?.({ errors: 1, warnings: 2, infos: 0 });
+    });
+    expect(statusField("problems")).toHaveAttribute("aria-label", "Problems: 1 error, 2 warnings");
+    expect(statusField("problems")).toHaveClass("ed-sb-error");
+    expect(screen.getByTestId("editor-status-bar-live")).toHaveTextContent(
+      "Problems: 1 error, 2 warnings",
+    );
+  });
+
+  it("wires the Generate Tests command to the surface for source files", async () => {
+    await renderLoaded();
+    expect(surface.props?.onGenerateTests).toBeTypeOf("function");
+  });
+
+  it("wires no command/diagnostics surface and shows completions-off for plaintext", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
+    );
+    render(<EditorWidget root="/repo" file="notes.md" />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.onGenerateTests).toBeUndefined();
+    expect(surface.props?.onDiagnosticsSummary).toBeUndefined();
+    expect(statusField("completions")).toHaveTextContent("Completions off");
+    expect(statusField("problems")).toBeNull();
   });
 });

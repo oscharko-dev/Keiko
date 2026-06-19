@@ -17,6 +17,8 @@ const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "generateTests",
   "previewPatch",
   "applyPatchReview",
+  "formatDocument",
+  "runVerification",
 ];
 
 const EXPECTED_IDS: readonly EditorCommandId[] = [
@@ -24,10 +26,15 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.triggerCompletion",
   "editor.triggerInlineCompletion",
   "editor.acceptInlineCompletion",
+  "editor.rejectInlineCompletion",
   "editor.generateTests",
+  "editor.runVerification",
   "editor.previewPatch",
+  "editor.openDiff",
   "editor.applyPatch",
   "editor.rejectPatch",
+  "editor.format",
+  "editor.find",
   "editor.requestContext",
 ];
 
@@ -112,6 +119,49 @@ describe("isCommandAvailable state gates", () => {
     expect(isCommandAvailable(command("editor.requestContext"), ctx)).toBe(true);
   });
 
+  it("gates the #1205 UX commands on capability and state", () => {
+    // Find is editor-intrinsic: always available once mounted, even read-only with no capabilities.
+    const bare = baseContext({ readOnly: true, availableCapabilities: [] });
+    expect(isCommandAvailable(command("editor.find"), bare)).toBe(true);
+    // Format rewrites the buffer: needs the formatDocument capability and a writable document.
+    expect(isCommandAvailable(command("editor.format"), baseContext({ readOnly: true }))).toBe(
+      false,
+    );
+    expect(
+      isCommandAvailable(
+        command("editor.format"),
+        baseContext({ availableCapabilities: ["formatDocument"] }),
+      ),
+    ).toBe(true);
+    // Reject suggestion needs a visible inline completion.
+    expect(isCommandAvailable(command("editor.rejectInlineCompletion"), baseContext())).toBe(false);
+    expect(
+      isCommandAvailable(
+        command("editor.rejectInlineCompletion"),
+        baseContext({ inlineCompletionVisible: true }),
+      ),
+    ).toBe(true);
+    // Open diff maps to the previewPatch capability; run verification needs a pending patch + cap.
+    expect(
+      isCommandAvailable(
+        command("editor.openDiff"),
+        baseContext({ availableCapabilities: ["previewPatch"] }),
+      ),
+    ).toBe(true);
+    expect(
+      isCommandAvailable(
+        command("editor.runVerification"),
+        baseContext({ availableCapabilities: ["runVerification"] }),
+      ),
+    ).toBe(false);
+    expect(
+      isCommandAvailable(
+        command("editor.runVerification"),
+        baseContext({ availableCapabilities: ["runVerification"], pendingPatchId: "p1" }),
+      ),
+    ).toBe(true);
+  });
+
   it("acceptInlineCompletion needs a visible inline completion", () => {
     expect(isCommandAvailable(command("editor.acceptInlineCompletion"), baseContext())).toBe(false);
     expect(
@@ -139,17 +189,20 @@ describe("availableCommands", () => {
     expect([...ids].sort()).toEqual([...EXPECTED_IDS].sort());
   });
 
-  it("drops capability-less and state-gated commands", () => {
+  it("keeps only intrinsic always-on commands when no capability is present", () => {
+    // `editor.find` requires no capability and has no extra state gate, so it survives an empty
+    // capability set; every capability- or state-gated command is dropped.
     const ids = availableCommands(baseContext({ availableCapabilities: [] })).map(
       (entry) => entry.id,
     );
-    expect(ids).toEqual([]);
+    expect(ids).toEqual(["editor.find"]);
   });
 
   it("threads both the capability and the state gate when only one capability is present", () => {
     const ids = availableCommands(
       baseContext({ availableCapabilities: ["saveDocument"], dirty: true }),
     ).map((entry) => entry.id);
-    expect(ids).toEqual(["editor.save"]);
+    // Save (capability + dirty) plus the intrinsic, always-available Find.
+    expect([...ids].sort()).toEqual(["editor.find", "editor.save"]);
   });
 });

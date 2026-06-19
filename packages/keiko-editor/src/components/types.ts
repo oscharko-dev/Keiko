@@ -25,6 +25,7 @@ import type {
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
+import type { EditorDiagnosticsSummary } from "./status-bar.js";
 
 /**
  * The save lifecycle the host drives and the component renders.
@@ -68,6 +69,14 @@ export interface KeikoCodeEditorProps {
   readonly readOnly?: boolean | undefined;
   readonly modifiedAt?: number | undefined;
   readonly maxSizeBytes?: number | undefined;
+  /**
+   * Whether the editor renders its own accessible save/truncation status footer (Issue #1194).
+   * Defaults to `true` so standalone reuse keeps a self-contained status region. A host that renders
+   * its own unified status bar (e.g. the keiko-ui card with {@link
+   * import("./EditorStatusBar.js").EditorStatusBar}, Issue #1205) sets it to `false` to avoid two
+   * competing status surfaces and duplicate live-region announcements.
+   */
+  readonly showStatusFooter?: boolean | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
   /** Accessible name for the editor control; hosts may include workspace/root context. */
   readonly ariaLabel?: string | undefined;
@@ -129,4 +138,17 @@ export interface KeikoCodeEditorProps {
    * BFF call (ADR-0042 D4). When absent, no formatting provider is registered.
    */
   readonly provideFormatting?: EditorFormattingResolver | undefined;
+  /**
+   * Content-free diagnostic-count observer for the status bar (Issue #1205). Called with the
+   * error/warning/info tally after each analysis; the host renders the problem count. Never receives
+   * diagnostic text or ranges. Absent when the host wires no diagnostics.
+   */
+  readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  /**
+   * Host handler for the "Generate Tests" command (Issue #1205). When present, the editor registers a
+   * Keiko action into Monaco's native command palette (F1), the context menu, and the `Cmd/Ctrl+Alt+T`
+   * keybinding; the run delegates here, to the host's governed test-generation flow (#1202). Absent
+   * when the host offers no test generation (e.g. a non-source buffer), so the action never registers.
+   */
+  readonly onGenerateTests?: (() => void) | undefined;
 }

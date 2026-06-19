@@ -29,8 +29,10 @@ import {
   createEditorRequestId,
   createFileModel,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
+  deriveEditorStatusBar,
   describeTestGenerationStatus,
   editorFileModelReducer,
+  EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
   isDocumentDirty,
   isSupportedEditorLanguage,
@@ -43,16 +45,19 @@ import {
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDiagnosticsResolver,
+  type EditorDiagnosticsSummary,
   type EditorDocumentIdentity,
   type EditorFileModel,
   type EditorFormattingResolver,
   type EditorHoverResolver,
   type EditorInlineCompletionResolver,
   type EditorLanguageId,
+  type EditorPosition,
   type EditorRange,
   type EditorRequestIdentity,
   type EditorSaveRequest,
   type EditorSaveStatus,
+  type EditorStatusRun,
   type EditorSymbolsResolver,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
@@ -242,6 +247,11 @@ export function EditorWidget({
   const testGenSeqRef = useRef(0);
   const testGenAbortRef = useRef<AbortController | null>(null);
   const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
+  // Issue #1205: live cursor and diagnostic-count state backing the unified status bar.
+  const [cursor, setCursor] = useState<EditorPosition | null>(null);
+  const [diagnosticsSummary, setDiagnosticsSummary] = useState<EditorDiagnosticsSummary | null>(
+    null,
+  );
 
   // Refs the imperative save path reads so a Cmd/Ctrl+S immediately after an edit always persists
   // the latest values, independent of React state-batching timing. The version-aware
@@ -257,6 +267,8 @@ export function EditorWidget({
 
   useEffect(() => {
     setCurrentSelection(null);
+    setCursor(null);
+    setDiagnosticsSummary(null);
   }, [file, root]);
 
   useEffect(
@@ -733,17 +745,50 @@ export function EditorWidget({
         })
       : null;
 
+  // Issue #1205: derive the unified status-bar view model from host state. Diagnostics are surfaced
+  // only for governed source files (where the deterministic language service runs); the
+  // test-generation flow feeds the compact "run" field. The cursor is rendered but never announced
+  // (it changes per keystroke) — only meaningful state (save, problems, run) reaches the live region.
+  const selectedLineCount =
+    currentSelection === null
+      ? undefined
+      : currentSelection.end.line - currentSelection.start.line + 1;
+  const statusBarRun: EditorStatusRun | undefined =
+    testGenStatusText.length > 0 ? { label: testGenStatusText, busy: testGenBusy } : undefined;
+  const statusBarViewModel =
+    fileModel === null
+      ? null
+      : deriveEditorStatusBar({
+          languageId: fileModel.identity.language,
+          cursor,
+          ...(selectedLineCount === undefined ? {} : { selectedLineCount }),
+          saveStatus,
+          dirty,
+          completionsEnabled: completionEnabled,
+          diagnostics: completionEnabled ? diagnosticsSummary : null,
+          ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
+        });
+
   return (
     <div className="editor">
       <div className="ed-tabs mono">
-        <span className="ed-tab active">
-          <Icons.editor size={12} /> {file ?? "Editor"}
-          {dirty ? (
-            <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
-              ●
-            </span>
-          ) : null}
-        </span>
+        <div className="ed-tablist" role="tablist" aria-label="Open documents">
+          <span
+            className="ed-tab active"
+            role="tab"
+            id="ed-active-tab"
+            aria-selected="true"
+            aria-controls="ed-tabpanel"
+            tabIndex={0}
+          >
+            <Icons.editor size={12} /> {file ?? "Editor"}
+            {dirty ? (
+              <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
+                ●
+              </span>
+            ) : null}
+          </span>
+        </div>
         <span className="spacer" />
         {hasTarget && completionEnabled ? (
           <button
@@ -781,15 +826,6 @@ export function EditorWidget({
           </button>
         ) : null}
       </div>
-      <div
-        className="ed-status"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        data-empty={testGenStatusText.length === 0 ? "true" : undefined}
-      >
-        {testGenStatusText}
-      </div>
       {testGenerationPreview !== null ? (
         <div className="ed-host">
           <EditorDiffSurface
@@ -812,36 +848,43 @@ export function EditorWidget({
           </div>
         </div>
       ) : hasTarget && buffer !== null && fileModel !== null ? (
-        <div className="ed-host">
-          <EditorSurface
-            key={editorSurfaceKey}
-            buffer={buffer}
-            fileModel={fileModel}
-            fileLoadState={loadState}
-            saveStatus={saveStatus}
-            saveError={saveError}
-            modifiedAt={modifiedAt ?? undefined}
-            maxSizeBytes={maxBytes ?? undefined}
-            themeVariant={themeVariant}
-            ariaLabel={
-              root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
-            }
-            onContentChange={onContentChange}
-            onSaveRequested={onSaveRequested}
-            onRuntimeError={onRuntimeError}
-            provideCompletions={completionEnabled ? provideCompletions : undefined}
-            completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
-            provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
-            onInlineCompletionTelemetry={
-              completionEnabled ? onInlineCompletionTelemetry : undefined
-            }
-            provideDiagnostics={completionEnabled ? provideDiagnostics : undefined}
-            provideHover={completionEnabled ? provideHover : undefined}
-            provideSymbols={completionEnabled ? provideSymbols : undefined}
-            provideFormatting={completionEnabled ? provideFormatting : undefined}
-            onSelectionChange={setCurrentSelection}
-          />
-        </div>
+        <>
+          <div className="ed-host" id="ed-tabpanel" role="tabpanel" aria-labelledby="ed-active-tab">
+            <EditorSurface
+              key={editorSurfaceKey}
+              buffer={buffer}
+              fileModel={fileModel}
+              fileLoadState={loadState}
+              saveStatus={saveStatus}
+              saveError={saveError}
+              modifiedAt={modifiedAt ?? undefined}
+              maxSizeBytes={maxBytes ?? undefined}
+              themeVariant={themeVariant}
+              ariaLabel={
+                root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
+              }
+              onContentChange={onContentChange}
+              onSaveRequested={onSaveRequested}
+              onRuntimeError={onRuntimeError}
+              provideCompletions={completionEnabled ? provideCompletions : undefined}
+              completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
+              provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
+              onInlineCompletionTelemetry={
+                completionEnabled ? onInlineCompletionTelemetry : undefined
+              }
+              provideDiagnostics={completionEnabled ? provideDiagnostics : undefined}
+              provideHover={completionEnabled ? provideHover : undefined}
+              provideSymbols={completionEnabled ? provideSymbols : undefined}
+              provideFormatting={completionEnabled ? provideFormatting : undefined}
+              onSelectionChange={setCurrentSelection}
+              onCursorChange={setCursor}
+              onDiagnosticsSummary={completionEnabled ? setDiagnosticsSummary : undefined}
+              onGenerateTests={completionEnabled ? runTestGeneration : undefined}
+              showStatusFooter={false}
+            />
+          </div>
+          {statusBarViewModel !== null ? <EditorStatusBar viewModel={statusBarViewModel} /> : null}
+        </>
       ) : hasTarget ? (
         <div className="ed-host">
           <div className="ed-host-loading" role="status">
