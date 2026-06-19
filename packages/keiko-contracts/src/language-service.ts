@@ -192,7 +192,11 @@ export interface LanguageTextEdit {
 
 // Caller-supplied formatting preferences (Issue #1201). They mirror the editor's indentation
 // settings so the deterministic provider reflows to the active configuration; both fields are
-// optional and the provider falls back to its language default when either is absent.
+// optional and the provider falls back to its language default when either is absent. The tab-size
+// ceiling is deliberately small: Monaco's UI emits normal editor widths, while the BFF boundary must
+// reject pathological values before they can amplify provider CPU/memory work.
+export const MAX_LANGUAGE_FORMATTING_TAB_SIZE = 16 as const;
+
 export interface LanguageFormattingOptions {
   readonly tabSize?: number;
   readonly insertSpaces?: boolean;
@@ -344,10 +348,15 @@ export function isLanguageDocumentOverlay(value: unknown): value is LanguageDocu
   );
 }
 
-// A tab width is a positive integer column count; zero or fractional widths cannot describe
-// indentation, so they are rejected.
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+// A tab width is a bounded positive integer column count; zero/fractional/pathological widths cannot
+// describe a normal editor indentation setting and are rejected at the trust boundary.
+function isTabSize(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_LANGUAGE_FORMATTING_TAB_SIZE
+  );
 }
 
 // Formatting options are optional; an absent block is valid (the provider uses its default). When
@@ -357,7 +366,7 @@ export function isLanguageFormattingOptions(value: unknown): value is LanguageFo
   if (!isRecord(value)) {
     return false;
   }
-  if (value.tabSize !== undefined && !isPositiveInteger(value.tabSize)) {
+  if (value.tabSize !== undefined && !isTabSize(value.tabSize)) {
     return false;
   }
   if (value.insertSpaces !== undefined && typeof value.insertSpaces !== "boolean") {

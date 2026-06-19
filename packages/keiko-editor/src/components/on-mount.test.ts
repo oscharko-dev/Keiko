@@ -577,19 +577,19 @@ function buildFakeLangRegistrar(withMethods = true): FakeLangRegistrar {
 function hoverArg(): NonNullable<WireEditorOnMountArgs["hover"]> {
   const resolve: EditorHoverResolver = (query) =>
     Promise.resolve({ request: query.request.request, hover: { contents: null } });
-  return { resolve, streamId: "h", newRequestId: () => "hr" };
+  return { resolve, isCurrentDocument: () => true, streamId: "h", newRequestId: () => "hr" };
 }
 
 function symbolsArg(): NonNullable<WireEditorOnMountArgs["symbols"]> {
   const resolve: EditorSymbolsResolver = (query) =>
     Promise.resolve({ request: query.request.request, symbols: [] });
-  return { resolve, streamId: "sy", newRequestId: () => "syr" };
+  return { resolve, isCurrentDocument: () => true, streamId: "sy", newRequestId: () => "syr" };
 }
 
 function formattingArg(): NonNullable<WireEditorOnMountArgs["formatting"]> {
   const resolve: EditorFormattingResolver = (query) =>
     Promise.resolve({ request: query.request.request, edits: [] });
-  return { resolve, streamId: "f", newRequestId: () => "fr" };
+  return { resolve, isCurrentDocument: () => true, streamId: "f", newRequestId: () => "fr" };
 }
 
 describe("wireEditorOnMount hover/symbols/formatting providers (#1201)", () => {

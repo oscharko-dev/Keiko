@@ -113,6 +113,7 @@ function deferredResolver(): DeferredHover {
 function provider(resolve: EditorHoverResolver): MonacoHoverProvider {
   return createKeikoHoverProvider({
     resolve,
+    isCurrentDocument: (documentUri) => documentUri === "inmemory://model/1",
     documentLanguage: "typescript",
     streamId: "stream",
     newRequestId: () => "req",
@@ -140,6 +141,21 @@ describe("createKeikoHoverProvider", () => {
     };
     await provider(resolve).provideHover(model("buffer"), { lineNumber: 1, column: 1 }, token());
     expect(seenText).toBe("buffer");
+  });
+
+  it("ignores another editor model before calling the resolver", async () => {
+    let calls = 0;
+    const resolve: EditorHoverResolver = (query) => {
+      calls += 1;
+      return Promise.resolve({ request: query.request.request, hover: { contents: "x" } });
+    };
+    const hover = await provider(resolve).provideHover(
+      { getValue: () => "other", uri: { toString: () => "inmemory://model/2" } },
+      { lineNumber: 1, column: 1 },
+      token(),
+    );
+    expect(hover).toBeUndefined();
+    expect(calls).toBe(0);
   });
 
   it("returns undefined on resolver failure (never breaks editing)", async () => {
@@ -204,6 +220,7 @@ describe("registerKeikoHoverProvider", () => {
     const disposable = registerKeikoHoverProvider({
       languages: fake.registrar,
       resolve,
+      isCurrentDocument: () => true,
       documentLanguages: HOVER_ELIGIBLE_LANGUAGES,
       streamId: "s",
       newRequestId: () => "r",

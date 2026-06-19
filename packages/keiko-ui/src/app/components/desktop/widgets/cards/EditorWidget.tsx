@@ -108,9 +108,25 @@ function inferEditorLanguage(path: string): EditorLanguageId {
   return isSupportedEditorLanguage(language) ? language : "plaintext";
 }
 
-/** A stable, host-scoped Monaco model URI for a (root, file) pair. */
+function rootHash(root: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < root.length; index += 1) {
+    hash ^= root.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function encodePathSegments(path: string): string {
+  return path
+    .split(/[\\/]+/)
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+/** A stable, host-scoped Monaco model URI for a (root, file) pair, without exposing a filesystem path. */
 function documentUri(root: string, file: string): string {
-  return `${root.replace(/[/\\]+$/, "")}/${file}`;
+  return `keiko-editor://workspace/${rootHash(root)}/${encodePathSegments(file)}`;
 }
 
 function editorAriaLabel(root: string, file: string): string {

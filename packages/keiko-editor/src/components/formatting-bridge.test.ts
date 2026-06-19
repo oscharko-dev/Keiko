@@ -15,8 +15,12 @@ import {
 import type { MonacoCancellationToken } from "./completion-bridge.js";
 import type { EditorFormattingResolver, EditorTextEdit } from "../types.js";
 
-function model(text = "const x   =   1;\n"): MonacoFormattingModel {
-  return { getValue: () => text, uri: { toString: () => "inmemory://model/1" } };
+function model(text = "const x   =   1;\n", version = 1): MonacoFormattingModel {
+  return {
+    getValue: () => text,
+    getVersionId: () => version,
+    uri: { toString: () => "inmemory://model/1" },
+  };
 }
 
 const OPTIONS: MonacoFormattingOptions = { tabSize: 2, insertSpaces: true };
@@ -55,6 +59,7 @@ describe("pure mappers", () => {
 function provider(resolve: EditorFormattingResolver): MonacoDocumentFormattingEditProvider {
   return createKeikoFormattingProvider({
     resolve,
+    isCurrentDocument: (documentUri) => documentUri === "inmemory://model/1",
     documentLanguage: "typescript",
     streamId: "stream",
     newRequestId: () => "req",
@@ -77,18 +82,40 @@ describe("createKeikoFormattingProvider", () => {
   it("forwards the live buffer, content-free request, and indentation options to the resolver", async () => {
     let seenText = "";
     let seenInsertSpaces: boolean | null = null;
+    let seenVersion = 0;
     const resolve: EditorFormattingResolver = (query) => {
       seenText = query.documentText;
       seenInsertSpaces = query.request.options.insertSpaces;
+      seenVersion = query.request.document.version;
       return Promise.resolve({ request: query.request.request, edits: [] });
     };
     await provider(resolve).provideDocumentFormattingEdits(
-      model("buffer"),
+      model("buffer", 7),
       { tabSize: 4, insertSpaces: false },
       token(),
     );
     expect(seenText).toBe("buffer");
     expect(seenInsertSpaces).toBe(false);
+    expect(seenVersion).toBe(7);
+  });
+
+  it("ignores another editor model before calling the resolver", async () => {
+    let calls = 0;
+    const resolve: EditorFormattingResolver = (query) => {
+      calls += 1;
+      return Promise.resolve({ request: query.request.request, edits: [edit(" = ")] });
+    };
+    const edits = await provider(resolve).provideDocumentFormattingEdits(
+      {
+        getValue: () => "other",
+        getVersionId: () => 1,
+        uri: { toString: () => "inmemory://model/2" },
+      },
+      OPTIONS,
+      token(),
+    );
+    expect(edits).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   it("returns no edits on resolver failure (never corrupts the buffer)", async () => {
@@ -136,6 +163,26 @@ describe("createKeikoFormattingProvider", () => {
     expect(await pending).toEqual([]);
   });
 
+  it("drops edits when the model version changes while formatting is in flight", async () => {
+    let version = 1;
+    let settle: (() => void) | undefined;
+    const liveModel: MonacoFormattingModel = {
+      getValue: () => "const x=1;\n",
+      getVersionId: () => version,
+      uri: { toString: () => "inmemory://model/1" },
+    };
+    const resolve: EditorFormattingResolver = (query) =>
+      new Promise((res) => {
+        settle = (): void => {
+          res({ request: query.request.request, edits: [edit(" = ")] });
+        };
+      });
+    const pending = provider(resolve).provideDocumentFormattingEdits(liveModel, OPTIONS, token());
+    version = 2;
+    settle?.();
+    expect(await pending).toEqual([]);
+  });
+
   it("aborts the resolver signal when the token is already cancelled", async () => {
     let aborted = false;
     const resolve: EditorFormattingResolver = (query, signal) => {
@@ -177,6 +224,7 @@ describe("registerKeikoFormattingProvider", () => {
     const disposable = registerKeikoFormattingProvider({
       languages: fake.registrar,
       resolve,
+      isCurrentDocument: () => true,
       documentLanguages: FORMATTING_ELIGIBLE_LANGUAGES,
       streamId: "s",
       newRequestId: () => "r",

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   LANGUAGE_SERVICE_ERROR_CODES,
+  MAX_LANGUAGE_FORMATTING_TAB_SIZE,
   LANGUAGE_SERVICE_OPERATIONS,
   LANGUAGE_SERVICE_SCHEMA_VERSION,
   isLanguageDocumentOverlay,
@@ -272,10 +273,13 @@ describe("isLanguageFormattingOptions", () => {
     expect(isLanguageFormattingOptions({ tabSize: 8, insertSpaces: true })).toBe(true);
   });
 
-  it("rejects a non-record, a zero/fractional tab size, and a non-boolean insertSpaces", () => {
+  it("rejects a non-record, a zero/fractional/oversized tab size, and non-boolean insertSpaces", () => {
     expect(isLanguageFormattingOptions(null)).toBe(false);
     expect(isLanguageFormattingOptions({ tabSize: 0 })).toBe(false);
     expect(isLanguageFormattingOptions({ tabSize: 2.5 })).toBe(false);
+    expect(isLanguageFormattingOptions({ tabSize: MAX_LANGUAGE_FORMATTING_TAB_SIZE + 1 })).toBe(
+      false,
+    );
     expect(isLanguageFormattingOptions({ insertSpaces: "yes" })).toBe(false);
   });
 });

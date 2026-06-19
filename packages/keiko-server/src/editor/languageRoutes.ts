@@ -85,7 +85,11 @@ function outcomeToResult(outcome: LanguageServiceOutcome, deps: UiHandlerDeps): 
   if (outcome.kind === "error") {
     return { status: STATUS_BY_CODE[outcome.code], body: errorBody(outcome.code, outcome.message) };
   }
-  return { status: 200, body: deps.redactor(successBody(outcome)) };
+  const body = successBody(outcome);
+  // Formatting edits are applied to the user's buffer, not displayed. Redacting the success envelope
+  // would mutate secret-shaped string literals in valid format edits; the formatter result was
+  // already capped by `sanitizeFormatting`, and the route never logs it.
+  return { status: 200, body: outcome.kind === "formatting" ? body : deps.redactor(body) };
 }
 
 export async function handleEditorLanguage(

@@ -147,6 +147,8 @@ export function symbolsToMonaco(
 export interface KeikoDocumentSymbolProviderDeps {
   /** The host-injected resolver that actually produces symbols (BFF call lives here). */
   readonly resolve: EditorSymbolsResolver;
+  /** True when the Monaco model URI still belongs to this editor instance's current document. */
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   /** Monaco's `SymbolKind` enum, injected so the mappers stay value-import-free. */
   readonly symbolKinds: MonacoSymbolKinds;
   /** The editor language id (e.g. "typescript"); also the registration selector. */
@@ -159,7 +161,7 @@ export interface KeikoDocumentSymbolProviderDeps {
 
 function buildRequest(
   deps: KeikoDocumentSymbolProviderDeps,
-  model: MonacoDocumentSymbolModel,
+  documentUri: string,
   sequence: number,
 ): EditorSymbolsRequest {
   const identity: EditorRequestIdentity = {
@@ -169,7 +171,7 @@ function buildRequest(
   };
   return {
     request: identity,
-    document: { uri: model.uri.toString(), language: deps.documentLanguage, version: sequence },
+    document: { uri: documentUri, language: deps.documentLanguage, version: sequence },
   };
 }
 
@@ -198,8 +200,12 @@ export function createKeikoDocumentSymbolProvider(
   let sequence = 0;
   return {
     async provideDocumentSymbols(model, token): Promise<readonly MonacoDocumentSymbol[]> {
+      const documentUri = model.uri.toString();
+      if (!deps.isCurrentDocument(documentUri)) {
+        return EMPTY_SYMBOLS;
+      }
       sequence += 1;
-      const request = buildRequest(deps, model, sequence);
+      const request = buildRequest(deps, documentUri, sequence);
       const controller = controllerForToken(token);
       try {
         const query: EditorSymbolsQuery = { request, documentText: model.getValue() };
@@ -215,6 +221,7 @@ export function createKeikoDocumentSymbolProvider(
 export interface RegisterKeikoDocumentSymbolProviderArgs {
   readonly languages: MonacoDocumentSymbolRegistrar;
   readonly resolve: EditorSymbolsResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
@@ -240,6 +247,7 @@ export function registerKeikoDocumentSymbolProvider(
   const disposers = args.documentLanguages.map((documentLanguage) => {
     const provider = createKeikoDocumentSymbolProvider({
       resolve: args.resolve,
+      isCurrentDocument: args.isCurrentDocument,
       symbolKinds: args.languages.SymbolKind,
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,

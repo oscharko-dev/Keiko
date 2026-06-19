@@ -115,6 +115,7 @@ describe("editorSymbolToMonaco", () => {
 function provider(resolve: EditorSymbolsResolver): MonacoDocumentSymbolProvider {
   return createKeikoDocumentSymbolProvider({
     resolve,
+    isCurrentDocument: (documentUri) => documentUri === "inmemory://model/1",
     symbolKinds: KINDS,
     documentLanguage: "typescript",
     streamId: "stream",
@@ -141,6 +142,20 @@ describe("createKeikoDocumentSymbolProvider", () => {
     };
     await provider(resolve).provideDocumentSymbols(model("buffer"), token());
     expect(seenText).toBe("buffer");
+  });
+
+  it("ignores another editor model before calling the resolver", async () => {
+    let calls = 0;
+    const resolve: EditorSymbolsResolver = (query) => {
+      calls += 1;
+      return Promise.resolve({ request: query.request.request, symbols: [symbol()] });
+    };
+    const symbols = await provider(resolve).provideDocumentSymbols(
+      { getValue: () => "other", uri: { toString: () => "inmemory://model/2" } },
+      token(),
+    );
+    expect(symbols).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   it("returns an empty list on resolver failure (outline never breaks)", async () => {
@@ -190,6 +205,7 @@ describe("registerKeikoDocumentSymbolProvider", () => {
     const disposable = registerKeikoDocumentSymbolProvider({
       languages: fake.registrar,
       resolve,
+      isCurrentDocument: () => true,
       documentLanguages: SYMBOLS_ELIGIBLE_LANGUAGES,
       streamId: "s",
       newRequestId: () => "r",

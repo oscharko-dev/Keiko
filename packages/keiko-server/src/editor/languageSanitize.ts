@@ -123,11 +123,10 @@ export function sanitizeSymbols(
 
 // Formatting edits are APPLIED to the buffer, not rendered, so — unlike the display surfaces above —
 // their `newText` is left byte-faithful: stripping format characters would silently mutate the
-// user's own code (for example characters inside a string literal) when they format. The only bounds
-// are the edit-count cap and a defensive per-edit length ceiling (the document-size envelope); an
-// over-long edit is dropped rather than clipped, since clipping a reformat edit would corrupt the
-// buffer, and the edits are non-overlapping so dropping one leaves the rest valid. The BFF's
-// live-payload redactor still runs over the response, exactly as it does for completion insert text.
+// user's own code (for example characters inside a string literal) when they format. The bounds are
+// the edit-count cap plus defensive per-edit and aggregate byte ceilings (the document-size
+// envelope); over-budget edits are dropped rather than clipped, since clipping a reformat edit would
+// corrupt the buffer, and the edits are non-overlapping so dropping one leaves the rest valid.
 export function sanitizeFormatting(
   raw: LanguageFormattingRaw,
   limits: LanguageServiceLimits,
@@ -135,9 +134,16 @@ export function sanitizeFormatting(
   const capped = raw.edits.slice(0, limits.maxFormattingEdits);
   // Measure UTF-8 bytes so the per-edit ceiling matches the `maxDocumentBytes` byte budget rather
   // than UTF-16 code units (which would under-count multi-byte content).
-  const withinLength = capped.filter(
-    (edit) => Buffer.byteLength(edit.newText, "utf8") <= limits.maxDocumentBytes,
-  );
+  const withinLength: typeof capped = [];
+  let totalBytes = 0;
+  for (const edit of capped) {
+    const byteLength = Buffer.byteLength(edit.newText, "utf8");
+    if (byteLength > limits.maxDocumentBytes || totalBytes + byteLength > limits.maxDocumentBytes) {
+      continue;
+    }
+    withinLength.push(edit);
+    totalBytes += byteLength;
+  }
   return {
     edits: withinLength,
     truncated:

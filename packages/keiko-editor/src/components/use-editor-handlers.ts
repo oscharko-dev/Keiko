@@ -182,6 +182,12 @@ function buildDiagnosticsWiring(
   };
 }
 
+function isCurrentDocument(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+): (documentUri: string) => boolean {
+  return (documentUri): boolean => latestProps.current.fileModel.identity.uri === documentUri;
+}
+
 // Builds the hover wiring from the live props ref (Issue #1201). Returns undefined when the host
 // supplies no hover resolver, so no hover provider is registered.
 function buildHoverWiring(
@@ -192,6 +198,7 @@ function buildHoverWiring(
     return undefined;
   }
   return {
+    isCurrentDocument: isCurrentDocument(latestProps),
     resolve: (query, signal): Promise<EditorHoverResponse> => {
       const live = latestProps.current.provideHover;
       return live === undefined
@@ -213,6 +220,7 @@ function buildSymbolsWiring(
     return undefined;
   }
   return {
+    isCurrentDocument: isCurrentDocument(latestProps),
     resolve: (query, signal): Promise<EditorSymbolsResponse> => {
       const live = latestProps.current.provideSymbols;
       return live === undefined
@@ -234,6 +242,7 @@ function buildFormattingWiring(
     return undefined;
   }
   return {
+    isCurrentDocument: isCurrentDocument(latestProps),
     resolve: (query, signal): Promise<EditorFormattingResponse> => {
       const live = latestProps.current.provideFormatting;
       return live === undefined

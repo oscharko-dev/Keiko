@@ -117,6 +117,8 @@ export function hoverResponseToMonaco(response: EditorHoverResponse): MonacoHove
 export interface KeikoHoverProviderDeps {
   /** The host-injected resolver that actually produces quick info (BFF call lives here). */
   readonly resolve: EditorHoverResolver;
+  /** True when the Monaco model URI still belongs to this editor instance's current document. */
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   /** The editor language id (e.g. "typescript"); also the registration selector. */
   readonly documentLanguage: EditorLanguageId;
   /** Stream identity for this provider instance; supersession is scoped to it. */
@@ -127,7 +129,7 @@ export interface KeikoHoverProviderDeps {
 
 function buildRequest(
   deps: KeikoHoverProviderDeps,
-  model: MonacoHoverModel,
+  documentUri: string,
   position: MonacoPositionLike,
   sequence: number,
 ): EditorHoverRequest {
@@ -138,7 +140,7 @@ function buildRequest(
   };
   return {
     request: identity,
-    document: { uri: model.uri.toString(), language: deps.documentLanguage, version: sequence },
+    document: { uri: documentUri, language: deps.documentLanguage, version: sequence },
     position: monacoPositionToEditor(position),
   };
 }
@@ -167,8 +169,12 @@ export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHo
   let latest: EditorRequestIdentity | null = null;
   return {
     async provideHover(model, position, token): Promise<MonacoHover | undefined> {
+      const documentUri = model.uri.toString();
+      if (!deps.isCurrentDocument(documentUri)) {
+        return undefined;
+      }
       sequence += 1;
-      const request = buildRequest(deps, model, position, sequence);
+      const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
       const controller = controllerForToken(token);
       try {
@@ -189,6 +195,7 @@ export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHo
 export interface RegisterKeikoHoverProviderArgs {
   readonly languages: MonacoHoverRegistrar;
   readonly resolve: EditorHoverResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   /** The languages to register a provider for; one provider per language (mirrors completion). */
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
@@ -213,6 +220,7 @@ export function registerKeikoHoverProvider(args: RegisterKeikoHoverProviderArgs)
   const disposers = args.documentLanguages.map((documentLanguage) => {
     const provider = createKeikoHoverProvider({
       resolve: args.resolve,
+      isCurrentDocument: args.isCurrentDocument,
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
