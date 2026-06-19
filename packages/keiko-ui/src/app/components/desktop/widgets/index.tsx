@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { ChatWindow } from "../ChatWindow";
@@ -38,6 +38,7 @@ import {
   connectedRunSourcesCfgFromSources,
   connectedRunSourcesFromWindowCfg,
 } from "./quality-intelligence/connectedSources";
+import type { ChatMessage } from "@/lib/types";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -119,7 +120,7 @@ function ChatWindowSessionHost({
   const chatId = str(cfg, "chatId");
   const title = str(cfg, "title");
   const { updateCfg } = ctx;
-  const { activeChat, chats, loading, openChat, openNewChat } = session;
+  const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
 
@@ -148,6 +149,17 @@ function ChatWindowSessionHost({
     activeTarget?.id !== chatId &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget = session.loading || (chatId !== undefined && activeTarget?.id !== chatId);
+  const openRunResult = useCallback(
+    (message: ChatMessage): void => {
+      if (message.runId === undefined) return;
+      const cfg: Record<string, string | number | boolean> = { runId: message.runId };
+      const workflow = message.workflowId ?? message.taskType;
+      if (workflow !== undefined) cfg.workflow = workflow;
+      if (activeProject?.path !== undefined) cfg.workspaceRoot = activeProject.path;
+      ctx.openWindow("agents", cfg);
+    },
+    [activeProject?.path, ctx],
+  );
 
   return (
     <ChatSessionProvider value={session}>
@@ -167,6 +179,7 @@ function ChatWindowSessionHost({
           barCompact={ctx.barCompact === true}
           workflowCompact={ctx.workflowCompact === true}
           linkedRoot={ctx.linkedRoot}
+          onOpenRunResult={openRunResult}
         />
       )}
     </ChatSessionProvider>

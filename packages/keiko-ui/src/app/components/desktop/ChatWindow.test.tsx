@@ -7,7 +7,7 @@ import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contr
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import type { Chat, GroundedAnswer, ModelCapability } from "@/lib/types";
+import type { Chat, ChatMessage, GroundedAnswer, ModelCapability } from "@/lib/types";
 import { updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
@@ -91,10 +91,13 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
   };
 }
 
-function renderWindow(session: ChatSessionApi): void {
+function renderWindow(
+  session: ChatSessionApi,
+  props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
+): void {
   render(
     <ChatSessionProvider value={session}>
-      <ChatWindow />
+      <ChatWindow onOpenRunResult={props.onOpenRunResult} />
     </ChatSessionProvider>,
   );
 }
@@ -218,6 +221,34 @@ describe("ChatWindow cancel button", () => {
       }),
     );
     expect(screen.getByRole("button", { name: "Cancel grounded request" })).toBeInTheDocument();
+  });
+
+  it("passes run-summary result clicks to the workspace opener", async () => {
+    const user = userEvent.setup();
+    const openResult = vi.fn();
+    const runMessage: ChatMessage = {
+      id: "run-msg",
+      chatId: "chat-1",
+      role: "system",
+      content: "Launched: Generate unit tests",
+      timestamp: 1,
+      runId: "run-abc",
+      workflowId: "unit-test-generation",
+      workflowStatus: "completed",
+      shortResult: "Generated 1 test files; 3 tests proposed.",
+      taskType: undefined,
+    };
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [runMessage],
+      }),
+      { onOpenRunResult: openResult },
+    );
+
+    await user.click(screen.getByRole("button", { name: /open result/i }));
+
+    expect(openResult).toHaveBeenCalledWith(runMessage);
   });
 
   it("renders the grounded panel for a plural-only connectedScopes chat", () => {

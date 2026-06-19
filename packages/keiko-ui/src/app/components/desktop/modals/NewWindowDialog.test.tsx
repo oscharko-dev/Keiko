@@ -7,6 +7,7 @@ import {
   ApiError,
   createProject,
   fetchFilesDirectories,
+  fetchFilesTree,
   fetchModels,
   fetchProjects,
   startRun,
@@ -29,6 +30,7 @@ vi.mock("@/lib/api", () => ({
   createProject: vi.fn(),
   updateProject: vi.fn(),
   fetchFilesDirectories: vi.fn(async () => ({ entries: [] })),
+  fetchFilesTree: vi.fn(async () => ({ root: "/repo", path: "", entries: [], truncated: false })),
 }));
 
 afterEach(() => {
@@ -68,6 +70,12 @@ function mockAgentDependencies(): void {
     projects: [project()],
   });
   vi.mocked(startRun).mockResolvedValue({ runId: "run 1", fingerprint: "fp 1" });
+  vi.mocked(fetchFilesTree).mockResolvedValue({
+    root: "/repo",
+    path: "",
+    entries: [],
+    truncated: false,
+  });
 }
 
 async function chooseComboboxOption(
@@ -98,7 +106,9 @@ async function renderAgentDialog(
     />,
   );
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: /start agent/i })).not.toHaveAttribute("disabled"),
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "example-chat-model",
+    ),
   );
   return onConfirm;
 }
@@ -164,7 +174,7 @@ describe("NewWindowDialog agents: Start agent a11y attributes (FE-05/FE-03)", ()
     render(
       <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
     );
-    const btn = screen.getByRole("button", { name: /start agent/i });
+    const btn = screen.getByRole("button", { name: /start .*agent/i });
     // Not yet submitting — aria-busy must be false, not absent.
     expect(btn).toHaveAttribute("aria-busy", "false");
   });
@@ -173,7 +183,7 @@ describe("NewWindowDialog agents: Start agent a11y attributes (FE-05/FE-03)", ()
     render(
       <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
     );
-    const btn = screen.getByRole("button", { name: /start agent/i });
+    const btn = screen.getByRole("button", { name: /start .*agent/i });
     // Button is disabled (models still loading) — aria-describedby must point at
     // the validation/loading span so AT users know why it cannot be activated (FE-03).
     expect(btn).toHaveAttribute("aria-describedby", "agent-start-validation");
@@ -184,75 +194,11 @@ describe("NewWindowDialog agents: Start agent a11y attributes (FE-05/FE-03)", ()
 });
 
 describe("NewWindowDialog agents: start-run contract", () => {
-  it("starts a verify run with the connected Files window context and persists the window cfg", async () => {
+  it("starts the Unit Test Agent with the connected Files window context and persists the window cfg", async () => {
     const onConfirm = await renderAgentDialog();
 
-    const startButton = screen.getByRole("button", { name: /start agent/i });
+    const startButton = screen.getByRole("button", { name: "Start Unit Test Agent" });
     fireEvent.click(startButton);
-
-    await waitFor(() =>
-      expect(startRun).toHaveBeenCalledWith({
-        taskType: "verify",
-        modelId: "example-chat-model",
-        input: { workspaceRoot: "/repo", targetFiles: ["src/app.ts"] },
-      }),
-    );
-    expect(onConfirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workflow: "verify",
-        model: "example-chat-model",
-        runId: "run 1",
-        fingerprint: "fp 1",
-        workspaceRoot: "/repo",
-        inputJson: JSON.stringify({ workspaceRoot: "/repo", targetFiles: ["src/app.ts"] }),
-        __connectFilesId: "files-1",
-      }),
-    );
-  });
-
-  it("starts explain-plan with a normalized file path and optional question", async () => {
-    const user = userEvent.setup();
-    await renderAgentDialog();
-
-    await chooseComboboxOption(user, screen.getByRole("combobox", { name: "Workflow" }), "Explain plan");
-    fireEvent.change(screen.getByPlaceholderText("What should the plan focus on?"), {
-      target: { value: "Focus on RAG quality." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /start agent/i }));
-
-    await waitFor(() =>
-      expect(startRun).toHaveBeenCalledWith({
-        taskType: "explain-plan",
-        modelId: "example-chat-model",
-        input: {
-          workspaceRoot: "/repo",
-          filePath: "src/app.ts",
-          question: "Focus on RAG quality.",
-        },
-      }),
-    );
-  });
-
-  it("starts unit-test-generation for changed files after normalizing mixed path input", async () => {
-    const user = userEvent.setup();
-    await renderAgentDialog();
-
-    await chooseComboboxOption(
-      user,
-      screen.getByRole("combobox", { name: "Workflow" }),
-      "Generate unit tests",
-    );
-    await chooseComboboxOption(
-      user,
-      screen.getByRole("combobox", { name: "Target" }),
-      "Changed files",
-    );
-    const changedFiles = screen.getByPlaceholderText("src/file.ts, src/other.ts");
-    fireEvent.change(changedFiles, {
-      target: { value: "/repo/src/app.ts, src/other.ts" },
-    });
-    fireEvent.blur(changedFiles);
-    fireEvent.click(screen.getByRole("button", { name: /start agent/i }));
 
     await waitFor(() =>
       expect(startRun).toHaveBeenCalledWith({
@@ -260,7 +206,128 @@ describe("NewWindowDialog agents: start-run contract", () => {
         modelId: "example-chat-model",
         input: {
           workspaceRoot: "/repo",
-          target: { kind: "changedFiles", filePaths: ["src/app.ts", "src/other.ts"] },
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
+      }),
+    );
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow: "unit-test-generation",
+        model: "example-chat-model",
+        runId: "run 1",
+        fingerprint: "fp 1",
+        workspaceRoot: "/repo",
+        inputJson: JSON.stringify({
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
+        }),
+        __connectFilesId: "files-1",
+      }),
+    );
+  });
+
+  it("offers the production agents without exposing task utilities as agent choices", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog();
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+
+    expect(await screen.findByRole("option", { name: "Unit Test Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Bugfix Agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Verify" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Explain plan" })).toBeNull();
+  });
+
+  it("starts unit-test-generation for one normalized source file", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog();
+
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Agent" }),
+      "Unit Test Agent",
+    );
+    expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
+
+    const sourceFile = screen.getByLabelText("Source file");
+    fireEvent.change(sourceFile, {
+      target: { value: "/repo/src/app.ts" },
+    });
+    fireEvent.blur(sourceFile);
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "unit-test-generation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
+      }),
+    );
+  });
+
+  it("lets the Unit Test Agent source file be selected from the repository file picker", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [
+          {
+            name: "src",
+            path: "src",
+            kind: "directory",
+            sizeBytes: 0,
+            modifiedAt: 1,
+            extension: null,
+            symlink: false,
+            readable: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "src",
+        truncated: false,
+        entries: [
+          {
+            name: "app.ts",
+            path: "src/app.ts",
+            kind: "file",
+            sizeBytes: 42,
+            modifiedAt: 2,
+            extension: "ts",
+            symlink: false,
+            readable: true,
+          },
+        ],
+      });
+
+    await user.click(screen.getByRole("button", { name: "Browse source file" }));
+
+    const picker = await screen.findByRole("group", { name: "File picker" });
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+
+    await user.click(within(picker).getByRole("button", { name: "src" }));
+    await waitFor(() => expect(fetchFilesTree).toHaveBeenLastCalledWith("/repo", "src"));
+
+    await user.click(await within(picker).findByRole("button", { name: /app\.ts/i }));
+    await user.click(within(picker).getByRole("button", { name: "Use file" }));
+
+    expect(screen.getByLabelText("Source file")).toHaveValue("src/app.ts");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "unit-test-generation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
         },
       }),
     );
@@ -272,11 +339,13 @@ describe("NewWindowDialog agents: start-run contract", () => {
 
     await chooseComboboxOption(
       user,
-      screen.getByRole("combobox", { name: "Workflow" }),
-      "Investigate bug",
+      screen.getByRole("combobox", { name: "Agent" }),
+      "Bugfix Agent",
     );
-    expect(screen.getByText(/Bug investigation requires description/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /start agent/i })).toHaveAttribute("disabled");
+    expect(screen.getByText(/Bugfix Agent requires an observed behavior/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Bugfix Agent" })).toHaveAttribute(
+      "disabled",
+    );
 
     fireEvent.change(screen.getByPlaceholderText("Describe the observed bug."), {
       target: { value: "Answer ignores the attached PDF." },
@@ -293,7 +362,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
     fireEvent.change(screen.getByPlaceholderText("src/file.ts, src/other.ts"), {
       target: { value: "/repo/src/rag.ts" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /start agent/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Bugfix Agent" }));
 
     await waitFor(() =>
       expect(startRun).toHaveBeenCalledWith({
@@ -312,7 +381,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
   });
 
-  it("registers an unavailable workspace before starting a run", async () => {
+  it("registers an unavailable repository before starting a run", async () => {
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "example-chat-model" })],
     });
@@ -337,26 +406,32 @@ describe("NewWindowDialog agents: start-run contract", () => {
       />,
     );
 
-    await waitFor(() => screen.getByText("Workspace is required."));
-    fireEvent.change(screen.getByPlaceholderText("/absolute/project/path"), {
+    await waitFor(() => screen.getByText("Repository is required."));
+    fireEvent.change(screen.getByPlaceholderText("/absolute/repository/path"), {
       target: { value: "/external" },
     });
 
-    await waitFor(() => screen.getByText("Workspace is not registered."));
-    fireEvent.click(screen.getByRole("button", { name: "Register workspace" }));
+    await waitFor(() => screen.getByText("Repository is not registered."));
+    fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
 
     await waitFor(() => expect(createProject).toHaveBeenCalledWith({ path: "/external" }));
     await waitFor(() =>
-      expect(screen.queryByText("Workspace is not registered.")).not.toBeInTheDocument(),
+      expect(screen.queryByText("Repository is not registered.")).not.toBeInTheDocument(),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /start agent/i }));
+    fireEvent.change(screen.getByPlaceholderText("src/file.ts"), {
+      target: { value: "src/app.ts" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
 
     await waitFor(() =>
       expect(startRun).toHaveBeenCalledWith({
-        taskType: "verify",
+        workflowId: "unit-test-generation",
         modelId: "example-chat-model",
-        input: { workspaceRoot: "/external" },
+        input: {
+          workspaceRoot: "/external",
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
       }),
     );
     expect(onConfirm).toHaveBeenCalledWith(
@@ -364,7 +439,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
   });
 
-  it("refreshes project registration and surfaces a guarded message when start rejects an unregistered workspace", async () => {
+  it("refreshes project registration and surfaces a guarded message when start rejects an unregistered repository", async () => {
     mockAgentDependencies();
     vi.mocked(fetchProjects).mockResolvedValueOnce({
       projects: [project()],
@@ -383,12 +458,14 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /start agent/i })).not.toHaveAttribute("disabled"),
+      expect(screen.getByRole("button", { name: "Start Unit Test Agent" })).not.toHaveAttribute(
+        "disabled",
+      ),
     );
-    fireEvent.click(screen.getByRole("button", { name: /start agent/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("Workspace is not registered."),
+      expect(screen.getByRole("alert")).toHaveTextContent("Repository is not registered."),
     );
     expect(fetchProjects).toHaveBeenCalledTimes(2);
     expect(onConfirm).not.toHaveBeenCalled();
