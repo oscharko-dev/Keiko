@@ -73,7 +73,10 @@ export { lexicalRetrievalStrategy, type RankedFile, type RetrievalStrategy } fro
 export {
   buildContextPack,
   buildContextPackFromFiles,
+  selectScoredTextByByteBudget,
   type ContextPackDeps,
+  type ScoredTextBudgetResult,
+  type ScoredTextBudgetSelection,
 } from "./contextPack.js";
 
 export { buildWorkspaceSummary, summarizeForAudit } from "./summary.js";

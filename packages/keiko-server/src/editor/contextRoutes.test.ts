@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  createCapsule,
+  openKnowledgeStore,
+  resolveKnowledgeStorePath,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
@@ -30,6 +36,7 @@ function postContext(body: unknown, path = "/api/editor/context"): RouteContext 
 }
 
 let root: string;
+let stateRoot: string;
 let store: UiStore;
 
 function deps(): UiHandlerDeps {
@@ -40,8 +47,48 @@ function deps(): UiHandlerDeps {
   } as unknown as UiHandlerDeps;
 }
 
+function depsWithLocalKnowledge(): UiHandlerDeps {
+  return {
+    ...deps(),
+    uiDbPath: join(stateRoot, "keiko-ui.db"),
+  };
+}
+
+function capsuleId(value: string): KnowledgeCapsuleId {
+  return value as KnowledgeCapsuleId;
+}
+
+function seedIndexingCapsule(): KnowledgeCapsuleId {
+  const capId = capsuleId("cap-indexing");
+  const knowledgeStore = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: stateRoot }),
+  });
+  try {
+    createCapsule(knowledgeStore, {
+      id: capId,
+      displayName: "Indexing Capsule",
+      tags: ["docs"],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      embeddingModelIdentity: {
+        provider: "openai",
+        modelId: "text-embedding-3-small",
+        vectorDimensions: 1536,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "indexing",
+      storageReference: "capsules/cap-indexing",
+    });
+  } finally {
+    knowledgeStore.close();
+  }
+  return capId;
+}
+
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "keiko-cc-route-")));
+  stateRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-cc-state-")));
   await mkdir(join(root, "src"));
   await writeFile(
     join(root, "src", "a.ts"),
@@ -55,6 +102,7 @@ beforeEach(async () => {
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+  await rm(stateRoot, { recursive: true, force: true });
 });
 
 describe("POST /api/editor/context", () => {
@@ -107,6 +155,52 @@ describe("POST /api/editor/context", () => {
     expect(result.body).toMatchObject({ error: { code: "DENIED" } });
   });
 
+  it("rejects ambiguous Local Knowledge selectors", async () => {
+    const result = await handleEditorContext(
+      postContext({
+        schemaVersion: "1",
+        purpose: "completion",
+        root,
+        documentPath: "src/a.ts",
+        capsuleId: "cap-1",
+        capsuleSetId: "set-1",
+      }),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("rejects invalid changed-file path shapes before repo-search", async () => {
+    const result = await handleEditorContext(
+      postContext({
+        schemaVersion: "1",
+        purpose: "completion",
+        root,
+        documentPath: "src/a.ts",
+        changedFiles: ["src/../src/a.ts"],
+      }),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("rejects changed-file lists above the route cap", async () => {
+    const result = await handleEditorContext(
+      postContext({
+        schemaVersion: "1",
+        purpose: "completion",
+        root,
+        documentPath: "src/a.ts",
+        changedFiles: Array.from({ length: 65 }, (_, index) => `src/f${index.toString()}.ts`),
+      }),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
   it("rejects a body that is not valid JSON with 400 BAD_REQUEST", async () => {
     const result = await handleEditorContext(
       rawPostContext("{ not json", "/api/editor/context"),
@@ -150,6 +244,68 @@ describe("POST /api/editor/repo-search", () => {
     expect(result.status).toBe(403);
     expect(result.body).toMatchObject({ error: { code: "DENIED" } });
   });
+
+  it("rejects a contained but invalid search path shape", async () => {
+    const result = await handleEditorRepoSearch(
+      postContext({ root, queryText: "x", paths: ["src/../src/a.ts"] }, "/api/editor/repo-search"),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("rejects repo-search path lists above the route cap", async () => {
+    const result = await handleEditorRepoSearch(
+      postContext(
+        {
+          root,
+          queryText: "x",
+          paths: Array.from({ length: 65 }, (_, index) => `src/f${index.toString()}.ts`),
+        },
+        "/api/editor/repo-search",
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("exposes governed findFiles through the repo-search route", async () => {
+    const result = await handleEditorRepoSearch(
+      postContext(
+        { root, operation: "findFiles", queryText: "**/*.ts", paths: ["src"] },
+        "/api/editor/repo-search",
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { atoms: { provenance: { tool: string }; scopePath: string }[] };
+    expect(body.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts"]);
+    expect(body.atoms[0]?.provenance.tool).toBe("repo.findFiles");
+  });
+
+  it("exposes content-free readExcerpt provenance through the repo-search route", async () => {
+    const result = await handleEditorRepoSearch(
+      postContext(
+        {
+          root,
+          operation: "readExcerpt",
+          paths: ["src"],
+          scopePath: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          maxBytes: 64,
+        },
+        "/api/editor/repo-search",
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { atom: { provenance: { tool: string } }; atoms: unknown[] };
+    expect(body.atom.provenance.tool).toBe("repo.readExcerpt");
+    expect(body.atoms).toHaveLength(1);
+    expect(JSON.stringify(body)).not.toContain("parseConfig");
+  });
 });
 
 describe("POST /api/editor/local-knowledge/retrieve", () => {
@@ -172,5 +328,19 @@ describe("POST /api/editor/local-knowledge/retrieve", () => {
     );
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({ error: { code: "LOCAL_KNOWLEDGE_UNAVAILABLE" } });
+  });
+
+  it("rejects a not-ready capsule before query-only retrieval", async () => {
+    const capsuleId = seedIndexingCapsule();
+    const result = await handleEditorLocalKnowledgeRetrieve(
+      postContext(
+        { queryText: "q", capsuleId },
+        "/api/editor/local-knowledge/retrieve",
+      ),
+      depsWithLocalKnowledge(),
+    );
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "LOCAL_KNOWLEDGE_CONFLICT" } });
+    expect(JSON.stringify(result.body)).toContain("still being prepared");
   });
 });

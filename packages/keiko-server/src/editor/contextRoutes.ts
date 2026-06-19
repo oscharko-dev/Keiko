@@ -15,6 +15,7 @@
 import { isAbsolute, resolve } from "node:path";
 import {
   CODING_CONTEXT_SCHEMA_VERSION,
+  isValidScopePath,
   toCodingContextWirePack,
   validateCodingContextRequest,
   type CodingContextPurpose,
@@ -25,6 +26,11 @@ import {
   DEFAULT_SEARCH_LIMITS,
   containedRealPathInfo,
   detectWorkspaceAt,
+  findFiles,
+  readExcerpt,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
   searchText,
   type SearchScope,
 } from "@oscharko-dev/keiko-workspace";
@@ -44,6 +50,10 @@ import {
 
 const MAX_CONTEXT_BODY_BYTES = 64 * 1024;
 const REPO_SEARCH_MAX_RESULTS = 50;
+const MAX_CONTEXT_CHANGED_FILES = 64;
+const MAX_REPO_SEARCH_PATHS = 64;
+const DEFAULT_REPO_SEARCH_EXCERPT_BYTES = 8 * 1024;
+const MAX_REPO_SEARCH_EXCERPT_BYTES = 32 * 1024;
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
@@ -59,6 +69,33 @@ function invalidRequest(message: string): RouteResult {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function dedupePaths(paths: readonly string[]): readonly string[] {
+  return [...new Set(paths)];
+}
+
+function invalidPathShape(field: string, path: string): RouteResult {
+  return invalidRequest(`${field} contains an invalid workspace-relative path: ${path}`);
+}
+
+function validateRelativePathShape(field: string, path: string): RouteResult | undefined {
+  if (!isValidScopePath(path, { mustBeRelative: true })) {
+    return invalidPathShape(field, path);
+  }
+  return undefined;
+}
+
+function dedupeAndCapPathList(
+  field: string,
+  paths: readonly string[],
+  maxCount: number,
+): readonly string[] | RouteResult {
+  const deduped = dedupePaths(paths);
+  if (deduped.length > maxCount) {
+    return invalidRequest(`${field} must contain at most ${maxCount.toString()} paths.`);
+  }
+  return deduped;
 }
 
 function assertContained(realRoot: string, relativePath: string): void {
@@ -100,6 +137,24 @@ function buildInternalRequest(body: Record<string, unknown>): CodingContextReque
   };
 }
 
+function sanitizeCodingContextRequest(request: CodingContextRequest): CodingContextRequest | RouteResult {
+  if (request.capsuleId !== undefined && request.capsuleSetId !== undefined) {
+    return invalidRequest("At most one of capsuleId or capsuleSetId may be provided.");
+  }
+  const changedFiles = dedupeAndCapPathList(
+    "changedFiles",
+    request.changedFiles ?? [],
+    MAX_CONTEXT_CHANGED_FILES,
+  );
+  if (isRouteResult(changedFiles)) {
+    return changedFiles;
+  }
+  return {
+    ...request,
+    changedFiles: changedFiles.length > 0 ? changedFiles : undefined,
+  };
+}
+
 // ─── POST /api/editor/context ─────────────────────────────────────────────────────
 export async function handleEditorContext(
   ctx: RouteContext,
@@ -116,10 +171,21 @@ export async function handleEditorContext(
   const rootInput = rootFieldOf(body);
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, rootInput, deps.redactor);
-    const request = buildInternalRequest(body);
+    const request = sanitizeCodingContextRequest(buildInternalRequest(body));
+    if (isRouteResult(request)) {
+      return request;
+    }
     assertContained(root.realRoot, request.documentPath);
+    const invalidDocument = validateRelativePathShape("documentPath", request.documentPath);
+    if (invalidDocument !== undefined) {
+      return invalidDocument;
+    }
     for (const changed of request.changedFiles ?? []) {
       assertContained(root.realRoot, changed);
+      const invalidChanged = validateRelativePathShape("changedFiles", changed);
+      if (invalidChanged !== undefined) {
+        return invalidChanged;
+      }
     }
     const nowMs = Date.now();
     const pack = await assembleCodingContext(request, {
@@ -140,36 +206,256 @@ export async function handleEditorContext(
 }
 
 // ─── POST /api/editor/repo-search ──────────────────────────────────────────────────
-interface RepoSearchInput {
+type RepoSearchOperation = "searchText" | "findFiles" | "readExcerpt";
+
+interface RepoSearchBaseInput {
   readonly root: string | null;
-  readonly queryText: string;
   readonly symbol: string | undefined;
   readonly paths: readonly string[];
   readonly maxResults: number;
 }
+
+interface RepoSearchQueryInput extends RepoSearchBaseInput {
+  readonly operation: "searchText" | "findFiles";
+  readonly queryText: string;
+}
+
+interface RepoSearchExcerptInput extends RepoSearchBaseInput {
+  readonly operation: "readExcerpt";
+  readonly queryText: string | undefined;
+  readonly scopePath: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly maxBytes: number;
+}
+
+type RepoSearchInput = RepoSearchQueryInput | RepoSearchExcerptInput;
 
 function clampMaxResults(value: unknown): number {
   const raw = typeof value === "number" ? value : REPO_SEARCH_MAX_RESULTS;
   return Math.max(1, Math.min(REPO_SEARCH_MAX_RESULTS, Math.trunc(raw)));
 }
 
-function parseRepoSearchInput(body: Record<string, unknown>): RepoSearchInput | RouteResult {
-  if (typeof body.queryText !== "string" || body.queryText.trim().length === 0) {
-    return invalidRequest("queryText must be a non-empty string.");
+function clampMaxBytes(value: unknown): number {
+  const raw = typeof value === "number" ? value : DEFAULT_REPO_SEARCH_EXCERPT_BYTES;
+  return Math.max(0, Math.min(MAX_REPO_SEARCH_EXCERPT_BYTES, Math.trunc(raw)));
+}
+
+function parsePositiveInteger(value: unknown, field: string): number | RouteResult {
+  if (!Number.isInteger(value) || typeof value !== "number" || value < 1) {
+    return invalidRequest(`${field} must be a positive integer.`);
   }
+  return value;
+}
+
+function parseRepoSearchOperation(value: unknown): RepoSearchOperation | RouteResult {
+  if (value === undefined || value === "searchText") {
+    return "searchText";
+  }
+  if (value === "findFiles" || value === "readExcerpt") {
+    return value;
+  }
+  return invalidRequest("operation must be searchText, findFiles, or readExcerpt.");
+}
+
+function parseRepoSearchBase(
+  body: Record<string, unknown>,
+): Omit<RepoSearchBaseInput, "maxResults"> | RouteResult {
   if (body.symbol !== undefined && typeof body.symbol !== "string") {
     return invalidRequest("symbol must be a string when provided.");
   }
   if (body.paths !== undefined && !isStringArray(body.paths)) {
     return invalidRequest("paths must be an array of strings.");
   }
+  const paths = dedupeAndCapPathList(
+    "paths",
+    isStringArray(body.paths) ? body.paths : [],
+    MAX_REPO_SEARCH_PATHS,
+  );
+  if (isRouteResult(paths)) {
+    return paths;
+  }
   return {
     root: rootFieldOf(body),
-    queryText: body.queryText,
     symbol: typeof body.symbol === "string" ? body.symbol : undefined,
-    paths: isStringArray(body.paths) ? body.paths : [],
+    paths,
+  };
+}
+
+function parseRepoSearchQueryInput(
+  operation: "searchText" | "findFiles",
+  body: Record<string, unknown>,
+  base: Omit<RepoSearchBaseInput, "maxResults">,
+): RepoSearchQueryInput | RouteResult {
+  if (typeof body.queryText !== "string" || body.queryText.trim().length === 0) {
+    return invalidRequest("queryText must be a non-empty string.");
+  }
+  return {
+    ...base,
+    operation,
+    queryText: body.queryText,
     maxResults: clampMaxResults(body.maxResults),
   };
+}
+
+function parseRepoSearchExcerptInput(
+  body: Record<string, unknown>,
+  base: Omit<RepoSearchBaseInput, "maxResults">,
+): RepoSearchExcerptInput | RouteResult {
+  if (typeof body.scopePath !== "string" || body.scopePath.trim().length === 0) {
+    return invalidRequest("scopePath must be a non-empty string.");
+  }
+  const startLine = parsePositiveInteger(body.startLine, "startLine");
+  if (isRouteResult(startLine)) {
+    return startLine;
+  }
+  const endLine = parsePositiveInteger(body.endLine, "endLine");
+  if (isRouteResult(endLine)) {
+    return endLine;
+  }
+  if (endLine < startLine) {
+    return invalidRequest("endLine must be greater than or equal to startLine.");
+  }
+  return {
+    ...base,
+    operation: "readExcerpt",
+    queryText: typeof body.queryText === "string" ? body.queryText : undefined,
+    maxResults: clampMaxResults(body.maxResults),
+    scopePath: body.scopePath,
+    startLine,
+    endLine,
+    maxBytes: clampMaxBytes(body.maxBytes),
+  };
+}
+
+function parseRepoSearchInput(body: Record<string, unknown>): RepoSearchInput | RouteResult {
+  const operation = parseRepoSearchOperation(body.operation);
+  if (isRouteResult(operation)) {
+    return operation;
+  }
+  const base = parseRepoSearchBase(body);
+  if (isRouteResult(base)) {
+    return base;
+  }
+  if (operation === "readExcerpt") {
+    return parseRepoSearchExcerptInput(body, base);
+  }
+  return parseRepoSearchQueryInput(operation, body, base);
+}
+
+function repoSearchErrorResult(error: unknown): RouteResult | undefined {
+  if (error instanceof RepoSearchInvalidQueryError || error instanceof RepoSearchInvalidRangeError) {
+    return invalidRequest(error.message);
+  }
+  if (error instanceof RepoSearchUnsupportedFileError) {
+    return { status: 400, body: errorBody("UNSUPPORTED_FILE", error.message) };
+  }
+  return undefined;
+}
+
+function validateRepoSearchPaths(realRoot: string, input: RepoSearchInput): RouteResult | undefined {
+  for (const path of input.paths) {
+    assertContained(realRoot, path);
+    const invalid = validateRelativePathShape("paths", path);
+    if (invalid !== undefined) {
+      return invalid;
+    }
+  }
+  if (input.operation === "readExcerpt") {
+    assertContained(realRoot, input.scopePath);
+    return validateRelativePathShape("scopePath", input.scopePath);
+  }
+  return undefined;
+}
+
+function buildRepoSearchScope(realRoot: string, input: RepoSearchInput): SearchScope {
+  return {
+    workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
+    scopeId: "editor-repo-search",
+    relativePaths: input.paths,
+  };
+}
+
+function buildRepoSearchQuery(input: RepoSearchQueryInput, nowMs: number): RetrievalQuery {
+  return {
+    kind:
+      input.operation === "findFiles"
+        ? "file-pattern"
+        : input.symbol !== undefined
+          ? "exact-symbol"
+          : "natural-language",
+    text: input.operation === "findFiles" ? input.queryText : input.symbol ?? input.queryText,
+    caseSensitive: false,
+    maxResults: input.maxResults,
+    emittedAtMs: nowMs,
+  };
+}
+
+async function runReadExcerptOperation(
+  deps: UiHandlerDeps,
+  scope: SearchScope,
+  input: RepoSearchExcerptInput,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  const result = await readExcerpt(
+    scope,
+    {
+      scopePath: input.scopePath,
+      startLine: input.startLine,
+      endLine: input.endLine,
+      maxBytes: input.maxBytes,
+    },
+    { signal },
+  );
+  return {
+    status: 200,
+    body: deps.redactor({
+      atom: result.atom,
+      atoms: [result.atom],
+      truncated: result.truncated,
+      byteCount: new TextEncoder().encode(result.content).length,
+    }),
+  };
+}
+
+async function runQueryOperation(
+  deps: UiHandlerDeps,
+  scope: SearchScope,
+  input: RepoSearchQueryInput,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  const query = buildRepoSearchQuery(input, Date.now());
+  const result =
+    input.operation === "findFiles"
+      ? await findFiles(scope, query, DEFAULT_SEARCH_LIMITS, { signal })
+      : await searchText(scope, query, DEFAULT_SEARCH_LIMITS, { signal });
+  return {
+    status: 200,
+    body: deps.redactor({
+      atoms: result.atoms,
+      truncated: result.truncated,
+      filesScanned: result.filesScanned,
+    }),
+  };
+}
+
+async function runRepoSearchOperation(
+  deps: UiHandlerDeps,
+  scope: SearchScope,
+  input: RepoSearchInput,
+  signal: AbortSignal,
+): Promise<RouteResult> {
+  try {
+    return input.operation === "readExcerpt"
+      ? await runReadExcerptOperation(deps, scope, input, signal)
+      : await runQueryOperation(deps, scope, input, signal);
+  } catch (error) {
+    const routeError = repoSearchErrorResult(error);
+    if (routeError !== undefined) {
+      return routeError;
+    }
+    throw error;
+  }
 }
 
 export async function handleEditorRepoSearch(
@@ -186,30 +472,16 @@ export async function handleEditorRepoSearch(
   }
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, input.root, deps.redactor);
-    for (const path of input.paths) {
-      assertContained(root.realRoot, path);
+    const invalid = validateRepoSearchPaths(root.realRoot, input);
+    if (invalid !== undefined) {
+      return invalid;
     }
-    const scope: SearchScope = {
-      workspace: detectWorkspaceAt(root.realRoot, nodeWorkspaceFs),
-      scopeId: "editor-repo-search",
-      relativePaths: input.paths,
-    };
-    const query: RetrievalQuery = {
-      kind: input.symbol !== undefined ? "exact-symbol" : "natural-language",
-      text: input.symbol ?? input.queryText,
-      caseSensitive: false,
-      maxResults: input.maxResults,
-      emittedAtMs: Date.now(),
-    };
-    const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS);
-    return {
-      status: 200,
-      body: deps.redactor({
-        atoms: result.atoms,
-        truncated: result.truncated,
-        filesScanned: result.filesScanned,
-      }),
-    };
+    return await runRepoSearchOperation(
+      deps,
+      buildRepoSearchScope(root.realRoot, input),
+      input,
+      clientAbortSignal(ctx),
+    );
   });
 }
 
@@ -250,12 +522,8 @@ async function localKnowledgeRetrieveResponse(
   }
   if (outcome.kind === "not-ready") {
     return {
-      status: 200,
-      body: deps.redactor({
-        pack: assembleGroundedContext([]),
-        noEvidence: true,
-        reason: outcome.reason,
-      }),
+      status: 409,
+      body: errorBody("LOCAL_KNOWLEDGE_CONFLICT", String(deps.redactor(outcome.message))),
     };
   }
   return {

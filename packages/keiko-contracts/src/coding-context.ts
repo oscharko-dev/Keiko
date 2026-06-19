@@ -289,6 +289,10 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
     [isOptionalStringArray(value.changedFiles), "request.changedFiles invalid"],
     [isOptionalString(value.capsuleId), "request.capsuleId invalid"],
     [isOptionalString(value.capsuleSetId), "request.capsuleSetId invalid"],
+    [
+      !(typeof value.capsuleId === "string" && typeof value.capsuleSetId === "string"),
+      "request.localKnowledgeScope ambiguous",
+    ],
   ];
   const reasons = checks.filter(([ok]) => !ok).map(([, reason]) => reason);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };

@@ -196,4 +196,14 @@ describe("validateCodingContextRequest", () => {
     );
     expect(validateCodingContextRequest(validRequest({ capsuleId: 7 as never })).ok).toBe(false);
   });
+
+  it("rejects ambiguous Local Knowledge scope selectors", () => {
+    const result = validateCodingContextRequest(
+      validRequest({ capsuleId: "cap-1", capsuleSetId: "set-1" }),
+    );
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) {
+      expect(result.reasons).toContain("request.localKnowledgeScope ambiguous");
+    }
+  });
 });

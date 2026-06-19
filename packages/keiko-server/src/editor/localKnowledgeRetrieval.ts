@@ -29,7 +29,7 @@ export type EditorLocalKnowledgeOutcome =
       readonly reason: string | undefined;
     }
   | { readonly kind: "conflict"; readonly routeResult: RouteResult }
-  | { readonly kind: "not-ready"; readonly reason: string };
+  | { readonly kind: "not-ready"; readonly reason: string; readonly message: string };
 
 // Builds a typed Local Knowledge scope from plain string ids. Exactly one id must be present; the
 // connectedAtMs field is irrelevant to retrieval (it is a chat-binding timestamp) so it is zeroed.
@@ -37,13 +37,13 @@ export function buildLocalKnowledgeScope(
   capsuleId: string | undefined,
   capsuleSetId: string | undefined,
 ): ChatLocalKnowledgeScope | undefined {
+  if ((capsuleId === undefined) === (capsuleSetId === undefined)) {
+    return undefined;
+  }
   if (capsuleId !== undefined) {
     return { kind: "capsule", capsuleId: capsuleId as KnowledgeCapsuleId, connectedAtMs: 0 };
   }
-  if (capsuleSetId !== undefined) {
-    return { kind: "capsule-set", capsuleSetId: capsuleSetId as CapsuleSetId, connectedAtMs: 0 };
-  }
-  return undefined;
+  return { kind: "capsule-set", capsuleSetId: capsuleSetId as CapsuleSetId, connectedAtMs: 0 };
 }
 
 export async function retrieveEditorLocalKnowledge(
@@ -59,7 +59,7 @@ export async function retrieveEditorLocalKnowledge(
   }
   const stateFailure = scopeStateFailure(selected);
   if (stateFailure !== undefined) {
-    return { kind: "not-ready", reason: stateFailure.reason };
+    return { kind: "not-ready", reason: stateFailure.reason, message: stateFailure.message };
   }
   const adapter = createEmbeddingAdapter(deps, selected.capsules);
   if ("status" in adapter) {
