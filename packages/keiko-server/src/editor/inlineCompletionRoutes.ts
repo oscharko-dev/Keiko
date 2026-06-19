@@ -40,6 +40,7 @@ import {
   type EditorInlineCompletionWireItem,
   type EditorInlineCompletionWireRequest,
   type EditorInlineCompletionWireResponse,
+  type UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
 import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
@@ -57,6 +58,11 @@ import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
 } from "./inlineCompletionRateLimiter.js";
+import {
+  accountModelUsage,
+  sharedEditorModelTokenBudget,
+  type EditorModelTokenBudget,
+} from "./editorModelTokenBudget.js";
 
 // Body cap: the overlay buffer may be up to the document-size cap; allow 64 KiB of JSON on top. The
 // language-service document cap is reused via the coding-context completion budget's source ceiling.
@@ -85,6 +91,8 @@ export interface EditorInlineCompletionRouteOptions {
   readonly chatFactory?: InlineCompletionChatFactory | undefined;
   /** Injectable per-root rate limiter (tests supply a fresh one); defaults to a shared instance. */
   readonly rateLimiter?: InlineCompletionRateLimiter | undefined;
+  /** Injectable per-root token budget (tests supply a fresh one); defaults to a shared instance. */
+  readonly tokenBudget?: EditorModelTokenBudget | undefined;
   /** Injectable clock for the rate limiter and evidence timestamps; defaults to `Date.now`. */
   readonly now?: (() => number) | undefined;
   /** Injectable as-you-type model timeout for tests; production default is 750 ms. */
@@ -168,6 +176,9 @@ interface InlineModelOutcome {
   readonly latencyClass?: string | undefined;
   readonly promptHash?: string | undefined;
   readonly contextSources: readonly EditorCompletionSource[];
+  // Token usage of the elected model call (content-free counts), recorded into the per-root token
+  // budget by the tier; absent on every degrade/no-model path.
+  readonly usage?: UsageMetadata | undefined;
 }
 
 interface ElectedInlineModelContext {
@@ -322,6 +333,7 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
     latencyClass: ctx.selection.latencyClass,
     promptHash: generated.promptHash,
     contextSources: insertText === null ? [] : contextSourcesFromPack(pack),
+    ...(generated.usage === undefined ? {} : { usage: generated.usage }),
   };
 }
 
@@ -350,10 +362,9 @@ function decideInlineModel(
       outcome: noItemOutcome("deterministic", "no-infilling-model", undefined, undefined),
     };
   }
-  const selection: CompletionModelSelection = selectCompletionModel(
-    config,
-    { maxCostClass: effectiveMaxCostClass(request, deps.env) },
-  );
+  const selection: CompletionModelSelection = selectCompletionModel(config, {
+    maxCostClass: effectiveMaxCostClass(request, deps.env),
+  });
   const modelId = selection.modelId;
   if (
     selection.mode === "deterministic" ||
@@ -373,8 +384,19 @@ function decideInlineModel(
   return { kind: "run", selection, modelId, config };
 }
 
+// True when a server ceiling blocks the model tier: the per-root request-rate limiter (#1200) or the
+// per-root token budget (#1206 LLM10). `tryAcquire` records the request, so it is evaluated first.
+function inlineModelTierBlocked(
+  realRoot: string,
+  nowMs: number,
+  limiter: InlineCompletionRateLimiter,
+  tokenBudget: EditorModelTokenBudget,
+): boolean {
+  return !limiter.tryAcquire(realRoot, nowMs) || tokenBudget.isExhausted(realRoot, nowMs);
+}
+
 // Decides whether the gated model tier runs and, if so, runs it. Order: policy → model decision →
-// per-root rate limit → run (a model/retrieval failure degrades to zero items).
+// per-root request and token ceilings → run (a model/retrieval failure degrades to zero items).
 async function runInlineModelTier(
   request: EditorInlineCompletionWireRequest,
   realRoot: string,
@@ -392,12 +414,13 @@ async function runInlineModelTier(
   }
   const { selection, modelId, config } = decision;
   const limiter = options.rateLimiter ?? sharedRateLimiter;
-  if (!limiter.tryAcquire(realRoot, now())) {
-    // Rate-limited: skip the model and render no ghost text (degrades to the #1199 dropdown).
+  const tokenBudget = options.tokenBudget ?? sharedEditorModelTokenBudget;
+  if (inlineModelTierBlocked(realRoot, now(), limiter, tokenBudget)) {
+    // Request rate (#1200) or token ceiling (#1206 LLM10) hit: render no ghost text (degrade to #1199).
     return noItemOutcome(selection.mode, undefined, modelId, selection.latencyClass);
   }
   try {
-    return await runElectedInlineModel({
+    const outcome = await runElectedInlineModel({
       request,
       realRoot,
       signal: modelSignal(
@@ -412,6 +435,8 @@ async function runInlineModelTier(
       config,
       nowMs: now(),
     });
+    accountModelUsage(tokenBudget, realRoot, now(), outcome.usage);
+    return outcome;
   } catch {
     // ADR-0042 D5 / AC1: a model or retrieval failure renders no ghost text; it never breaks the route.
     return noItemOutcome(selection.mode, selection.degradeReason, modelId, selection.latencyClass);

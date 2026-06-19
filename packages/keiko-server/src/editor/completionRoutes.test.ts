@@ -15,7 +15,9 @@ import {
   COMPLETION_LANGUAGE_SERVICE_LIMITS,
   handleEditorCompletion,
   type CompletionChatFactory,
+  type EditorCompletionRouteOptions,
 } from "./completionRoutes.js";
+import { createEditorModelTokenBudget } from "./editorModelTokenBudget.js";
 
 function postContext(body: unknown): RouteContext {
   const req = Readable.from([
@@ -47,7 +49,10 @@ function postContextWithResponseClose(body: unknown): RouteContext {
 let root: string;
 let store: UiStore;
 
-function deps(config?: GatewayConfig, evidenceStore: EvidenceStore = createInMemoryEvidenceStore()): UiHandlerDeps {
+function deps(
+  config?: GatewayConfig,
+  evidenceStore: EvidenceStore = createInMemoryEvidenceStore(),
+): UiHandlerDeps {
   return {
     store,
     redactor: buildRedactor({}),
@@ -172,9 +177,7 @@ describe("POST /api/editor/completion — request validation", () => {
 describe("POST /api/editor/completion — deterministic tier (no gateway model)", () => {
   it("uses the completion-specific deterministic deadline budget", () => {
     expect(COMPLETION_LANGUAGE_SERVICE_LIMITS.deadlineMs).toBe(500);
-    expect(COMPLETION_LANGUAGE_SERVICE_LIMITS.maxCompletionItems).toBe(
-      256,
-    );
+    expect(COMPLETION_LANGUAGE_SERVICE_LIMITS.maxCompletionItems).toBe(256);
   });
 
   it("returns deterministic items with a deterministic-only provenance and degrade reason", async () => {
@@ -219,6 +222,58 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     expect(payload.provenance.modelId).toBe("fim-1");
     expect(payload.provenance.gatewayPolicyVersion).toBe("editor-completion/1");
     expect(payload.provenance.promptHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("skips the model tier when the per-root token budget is exhausted (LLM10)", async () => {
+    const tokenBudget = createEditorModelTokenBudget({ maxTokensPerWindow: 10, windowMs: 60_000 });
+    // Pre-exhaust the window at the injected clock time.
+    tokenBudget.record(root, 1_000, 10);
+    const result = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast")),
+      {
+        chatFactory: cannedChat,
+        tokenBudget,
+        now: () => 1_000,
+      },
+    );
+    expect(result.status).toBe(200);
+    const payload = body(result);
+    expect(payload.items.some((item) => item.origin === "model-assisted")).toBe(false);
+    expect(payload.provenance.sources).not.toContain("model-assisted");
+  });
+
+  it("records model token usage so a later request in the window degrades (LLM10)", async () => {
+    const usageChat: CompletionChatFactory = () => () =>
+      Promise.resolve({
+        content: '["value.alpha"]',
+        usage: {
+          requestId: "req-1",
+          promptTokens: 8,
+          completionTokens: 8,
+          latencyMs: 1,
+          costClass: "low",
+        },
+      });
+    const tokenBudget = createEditorModelTokenBudget({ maxTokensPerWindow: 10, windowMs: 60_000 });
+    const options: EditorCompletionRouteOptions = {
+      chatFactory: usageChat,
+      tokenBudget,
+      now: () => 1_000,
+    };
+    const first = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast")),
+      options,
+    );
+    expect(body(first).items.some((item) => item.origin === "model-assisted")).toBe(true);
+    // The first call recorded 16 tokens (> the 10 ceiling); the second must skip the model tier.
+    const second = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast")),
+      options,
+    );
+    expect(body(second).items.some((item) => item.origin === "model-assisted")).toBe(false);
   });
 
   it("records content-free Gateway usage evidence for model-assisted calls", async () => {

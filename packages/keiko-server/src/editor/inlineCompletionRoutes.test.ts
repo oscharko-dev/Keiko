@@ -24,6 +24,7 @@ import {
   type InlineCompletionChatFactory,
 } from "./inlineCompletionRoutes.js";
 import { createInlineCompletionRateLimiter } from "./inlineCompletionRateLimiter.js";
+import { createEditorModelTokenBudget } from "./editorModelTokenBudget.js";
 
 function postContext(body: unknown): RouteContext {
   const req = Readable.from([
@@ -286,6 +287,47 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     expect(wire.provenance.gatewayPolicyVersion).toBe("editor-inline-completion/1");
     expect(wire.provenance.promptHash).toMatch(/^[0-9a-f]{64}$/);
     expect(wire.provenance.sources).toContain("model-assisted");
+  });
+
+  it("skips the model tier and renders no ghost text when the token budget is exhausted (LLM10)", async () => {
+    const tokenBudget = createEditorModelTokenBudget({ maxTokensPerWindow: 10, windowMs: 60_000 });
+    tokenBudget.record(root, 1_000, 10);
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      { ...permissiveOptions(), tokenBudget },
+    );
+    expect(body(result).items).toEqual([]);
+    expect(body(result).provenance.sources).not.toContain("model-assisted");
+  });
+
+  it("records model token usage so a later request in the window degrades (LLM10)", async () => {
+    const usageChat: InlineCompletionChatFactory = () => () =>
+      Promise.resolve({
+        content: "a + b;",
+        usage: {
+          requestId: "req-1",
+          promptTokens: 8,
+          completionTokens: 8,
+          latencyMs: 1,
+          costClass: "low",
+        },
+      });
+    const tokenBudget = createEditorModelTokenBudget({ maxTokensPerWindow: 10, windowMs: 60_000 });
+    const options = { ...permissiveOptions(usageChat), tokenBudget };
+    const first = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      options,
+    );
+    expect(body(first).items).toHaveLength(1);
+    // The first call recorded 16 tokens (> the 10 ceiling); the second must skip the model tier.
+    const second = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      options,
+    );
+    expect(body(second).items).toEqual([]);
   });
 
   it("never echoes the buffer text in the response (content boundary)", async () => {
