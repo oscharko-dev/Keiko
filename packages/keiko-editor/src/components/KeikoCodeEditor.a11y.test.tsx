@@ -60,6 +60,21 @@ describe("KeikoCodeEditor accessibility", () => {
     expect(region).toHaveTextContent("worker boot failed");
   });
 
+  it("keeps a load failure visible and announced when the footer is suppressed", () => {
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          loadState: { status: "error", message: "worker boot failed" },
+          showStatusFooter: false,
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("keiko-editor-status")).toBeNull();
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveAttribute("data-testid", "keiko-editor-runtime-error");
+    expect(alert).toHaveTextContent("worker boot failed");
+  });
+
   it("labels the editor with the file path for screen readers", () => {
     render(<KeikoCodeEditor {...baseProps()} />);
     expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();

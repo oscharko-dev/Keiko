@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -121,10 +122,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function renderLoaded(): Promise<void> {
+async function renderLoaded(
+  props: Partial<Parameters<typeof EditorWidget>[0]> = {},
+): Promise<ReturnType<typeof render>> {
   vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-  render(<EditorWidget root="/repo" file="src/app.ts" />);
+  const view = render(
+    <EditorWidget windowId="editor-test" root="/repo" file="src/app.ts" {...props} />,
+  );
   await screen.findByTestId("editor-surface");
+  return view;
 }
 
 function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
@@ -261,6 +267,25 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i);
   });
 
+  it("ignores palette and shortcut Generate Tests commands while a run is busy", async () => {
+    await renderLoaded();
+    let signal: AbortSignal | undefined;
+    vi.mocked(requestEditorTestGeneration).mockImplementationOnce((_input, requestSignal) => {
+      signal = requestSignal;
+      return new Promise<EditorTestGenerationWireResponse>(() => {});
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    act(() => {
+      surface.props?.onGenerateTests?.();
+    });
+
+    expect(requestEditorTestGeneration).toHaveBeenCalledTimes(1);
+    expect(signal?.aborted).toBe(false);
+  });
+
   it("renders a generated test patch in the review diff surface with apply disabled", async () => {
     await renderLoaded();
     vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce({
@@ -289,6 +314,11 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
 
     expect(await screen.findByTestId("editor-diff-surface")).toBeInTheDocument();
+    const tab = screen.getByRole("tab", { name: /app\.ts/ });
+    const tabpanel = screen.getByRole("tabpanel");
+    expect(tabpanel).toContainElement(screen.getByTestId("editor-diff-surface"));
+    expect(tab).toHaveAttribute("aria-controls", tabpanel.id);
+    expect(tabpanel).toHaveAttribute("aria-labelledby", tab.id);
     expect(diffSurface.props?.model.files[0]?.uri).toBe("src/app.test.ts");
     expect(diffSurface.props?.actions?.canApply).toBe(false);
     expect(diffSurface.props?.actions?.canRunVerification).toBe(false);
@@ -983,13 +1013,116 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     await renderLoaded();
     // A valid single-document tablist drives an associated tabpanel (the editor host).
     const tab = screen.getByRole("tab", { name: /app\.ts/ });
+    const tabpanel = screen.getByRole("tabpanel");
     expect(tab).toHaveAttribute("aria-selected", "true");
-    expect(tab).toHaveAttribute("aria-controls", "ed-tabpanel");
-    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "ed-active-tab");
+    expect(tab.id).toBe("ed-editor-test-active-tab");
+    expect(tab).toHaveAttribute("aria-controls", tabpanel.id);
+    expect(tabpanel).toHaveAttribute("aria-labelledby", tab.id);
+    expect(tabpanel).toContainElement(screen.getByTestId("editor-surface"));
     // The unified status bar is the single status surface, so the editor's own footer is suppressed.
     expect(surface.props?.showStatusFooter).toBe(false);
     expect(statusField("language")).toHaveTextContent("TypeScript");
     expect(statusField("completions")).toHaveTextContent("Completions on");
+  });
+
+  it("derives unique tab and tabpanel IDs for multiple editor windows", async () => {
+    vi.mocked(fetchFilesContent)
+      .mockResolvedValueOnce(fileResponse({ path: "src/a.ts", name: "a.ts" }))
+      .mockResolvedValueOnce(fileResponse({ path: "src/b.ts", name: "b.ts" }));
+
+    render(
+      <>
+        <EditorWidget windowId="win/a" root="/repo" file="src/a.ts" />
+        <EditorWidget windowId="win:b" root="/repo" file="src/b.ts" />
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("editor-surface")).toHaveLength(2);
+    });
+    const tabs = screen.getAllByRole("tab");
+    const tabpanels = screen.getAllByRole("tabpanel");
+    expect(tabs).toHaveLength(2);
+    expect(tabpanels).toHaveLength(2);
+    expect(tabs[0]?.id).toBe("ed-win-a-active-tab");
+    expect(tabs[1]?.id).toBe("ed-win-b-active-tab");
+    expect(tabs[0]?.id).not.toBe(tabs[1]?.id);
+    for (const [index, tab] of tabs.entries()) {
+      const panel = tabpanels[index];
+      expect(panel).toBeDefined();
+      expect(tab).toHaveAttribute("aria-controls", panel?.id);
+      expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    }
+  });
+
+  it("keeps tabpanel wiring for loading, error, and empty editor states", async () => {
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(new Promise<FilesContentResponse>(() => {}));
+    const loading = render(
+      <EditorWidget windowId="editor-loading" root="/repo" file="src/app.ts" />,
+    );
+    const loadingTab = screen.getByRole("tab", { name: /src\/app\.ts/ });
+    const loadingPanel = screen.getByRole("tabpanel");
+    expect(loadingPanel).toHaveTextContent(/loading file/i);
+    expect(loadingTab).toHaveAttribute("aria-controls", loadingPanel.id);
+    expect(loadingPanel).toHaveAttribute("aria-labelledby", loadingTab.id);
+    loading.unmount();
+
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+      new ApiError("UNSUPPORTED_FILE", "This file cannot be edited.", 400),
+    );
+    const error = render(
+      <EditorWidget windowId="editor-error" root="/repo" file="src/app.ts" />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(/cannot be edited/i);
+    const errorTab = screen.getByRole("tab", { name: /src\/app\.ts/ });
+    const errorPanel = screen.getByRole("tabpanel");
+    expect(errorTab).toHaveAttribute("aria-controls", errorPanel.id);
+    expect(errorPanel).toHaveAttribute("aria-labelledby", errorTab.id);
+    error.unmount();
+
+    render(<EditorWidget windowId="editor-empty" />);
+    const emptyTab = screen.getByRole("tab", { name: "Editor" });
+    const emptyPanel = screen.getByRole("tabpanel");
+    expect(emptyPanel).toContainElement(screen.getByRole("note"));
+    expect(emptyTab).toHaveAttribute("aria-controls", emptyPanel.id);
+    expect(emptyPanel).toHaveAttribute("aria-labelledby", emptyTab.id);
+  });
+
+  it("preserves long path labels in the tab title and truncation wrapper", async () => {
+    const longPath = "src/very/deeply/nested/component/with-a-long-file-name-for-tabs.ts";
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: longPath, name: "with-a-long-file-name-for-tabs.ts" }),
+    );
+    render(<EditorWidget windowId="editor-long-path" root="/repo" file={longPath} />);
+    await screen.findByTestId("editor-surface");
+
+    const tab = screen.getByRole("tab", { name: longPath });
+    expect(tab).toHaveAttribute("title", longPath);
+    const label = tab.querySelector(".ed-tab-label");
+    expect(label).not.toBeNull();
+    expect(label).toHaveTextContent(longPath);
+  });
+
+  it("does not re-encode the full buffer on cursor-only status updates", async () => {
+    const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      await renderLoaded();
+      const encodeCallsAfterLoad = encodeSpy.mock.calls.length;
+
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 9, column: 3 });
+      });
+
+      expect(statusField("cursor")).toHaveTextContent("Ln 10, Col 4");
+      expect(encodeSpy.mock.calls).toHaveLength(encodeCallsAfterLoad);
+    } finally {
+      encodeSpy.mockRestore();
+    }
+  });
+
+  it("passes jest-axe for the loaded editor chrome", async () => {
+    const { container } = await renderLoaded({ windowId: "editor-axe" });
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("reflects the live cursor position but never announces it", async () => {

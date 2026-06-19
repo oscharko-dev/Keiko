@@ -4928,6 +4928,7 @@ select.dlg-input {
   align-items: center;
   padding: 6px 8px 0;
   border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
 }
 .ed-tab {
   display: flex;
@@ -4937,10 +4938,20 @@ select.dlg-input {
   font-size: 11.5px;
   color: var(--fg-faint);
   border-radius: 8px 8px 0 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .ed-tab.active {
   color: var(--fg);
   background: var(--inset);
+}
+.ed-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .ed-save {
   padding: 6px 10px;
@@ -4991,6 +5002,7 @@ select.dlg-input {
   gap: 2px;
   align-items: center;
   min-width: 0;
+  overflow: hidden;
 }
 .ed-tab[role="tab"] {
   cursor: default;

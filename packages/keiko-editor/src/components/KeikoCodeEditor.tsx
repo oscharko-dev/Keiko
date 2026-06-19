@@ -37,6 +37,26 @@ function EditorLoadingBox(): ReactElement {
   );
 }
 
+function EditorRuntimeErrorBox(props: { readonly message: string }): ReactElement {
+  return (
+    <div
+      data-testid="keiko-editor-runtime-error"
+      role="alert"
+      style={{
+        display: "flex",
+        width: "100%",
+        height: "100%",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "12px",
+        textAlign: "center",
+      }}
+    >
+      {`Editor failed to load: ${props.message}`}
+    </div>
+  );
+}
+
 /** The accessible status + max-size footer beneath the editor. */
 function EditorStatusFooter(props: {
   readonly status: EditorStatusViewModel;
@@ -118,6 +138,8 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
             onChange={handlers.onChange}
             onMount={handlers.onMount}
           />
+        ) : props.loadState.status === "error" ? (
+          <EditorRuntimeErrorBox message={props.loadState.message} />
         ) : (
           <EditorLoadingBox />
         )}
