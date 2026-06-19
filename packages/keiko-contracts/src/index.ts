@@ -422,6 +422,38 @@ export {
   validateConnectedContextPack,
 } from "./connected-context.js";
 
+// ─── Governed coding-context retrieval (Issue #1211 / Epic #1189, ADR-0042 D6) ──
+export type {
+  CodingContextPurpose,
+  CodingContextSourceKind,
+  CodingContextSourceTier,
+  CodingContextOmissionReason,
+  CodingContextOmission,
+  CodingContextCitation,
+  CodingContextExcerpt,
+  CodingContextPack,
+  CodingContextWirePack,
+  CodingContextBudget,
+  CodingContextScopeKind,
+  CodingContextRequest,
+  CodingContextValidationResult,
+} from "./coding-context.js";
+export {
+  CODING_CONTEXT_SCHEMA_VERSION,
+  CODING_CONTEXT_PURPOSES,
+  CODING_CONTEXT_SOURCE_KINDS,
+  CODING_CONTEXT_SOURCE_TIERS,
+  CODING_CONTEXT_SOURCE_TIER_BY_KIND,
+  CODING_CONTEXT_OMISSION_REASONS,
+  CODING_CONTEXT_BUDGETS,
+  isCodingContextPurpose,
+  tierForCodingContextSource,
+  embeddingProvidersAllowed,
+  isCodingContextCitation,
+  toCodingContextWirePack,
+  validateCodingContextRequest,
+} from "./coding-context.js";
+
 // ─── Workflow handoff & patch-scope (Issue #186 / Epic #177) ────────────────────
 // NOTE: `WorkflowKind` and `ValidationResult` are NOT re-exported here because both names
 // are already taken by evaluations.ts and connected-context.ts respectively. Import them
