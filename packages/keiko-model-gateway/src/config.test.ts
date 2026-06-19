@@ -450,6 +450,108 @@ describe("parseGatewayConfig", () => {
     expect(cap?.supportsResponseFormat).toBeUndefined();
   });
 
+  // Issue #1210: supportsInfilling / infillingAlignment gate Keiko editor inline completion. They
+  // must round-trip through the inline provider-capability path so a deployment can declare an
+  // aligned FIM model and have the completion-model selection actually elect it.
+  it("round-trips supportsInfilling/infillingAlignment through the inline provider capability path", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "fim-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        supportsInfilling: true,
+        infillingAlignment: "instruct",
+        costClass: "low",
+        latencyClass: "fast",
+        throughputHint: "fim endpoint",
+        preferredUseCases: ["Inline completion"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "fim-chat");
+    expect(cap?.supportsInfilling).toBe(true);
+    expect(cap?.infillingAlignment).toBe("instruct");
+  });
+
+  // Mutation guard: the inline path defaults supportsInfilling to false when omitted, so a model is
+  // never mistakenly treated as suffix-aware (which would mis-route inline completion to a model).
+  it("defaults supportsInfilling to false and omits infillingAlignment when the inline capability omits them", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "plain-inline-chat",
+      capability: { kind: "chat", contextWindow: 8_192 },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "plain-inline-chat");
+    expect(cap?.supportsInfilling).toBe(false);
+    expect(cap?.infillingAlignment).toBeUndefined();
+  });
+
+  it("round-trips supportsInfilling/infillingAlignment through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "fim-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "fim-chat",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsInfilling: true,
+          infillingAlignment: "edit-tuned",
+          workflowEligible: true,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "fim endpoint",
+          preferredUseCases: ["Inline completion"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "fim-chat");
+    expect(cap?.supportsInfilling).toBe(true);
+    expect(cap?.infillingAlignment).toBe("edit-tuned");
+  });
+
+  it("leaves supportsInfilling/infillingAlignment undefined when the strict top-level capability omits them", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "plain-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "plain-chat",
+          kind: "chat",
+          contextWindow: 8_192,
+          maxOutputTokens: 2_048,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "plain endpoint",
+          preferredUseCases: ["Chat"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "plain-chat");
+    expect(cap?.supportsInfilling).toBeUndefined();
+    expect(cap?.infillingAlignment).toBeUndefined();
+  });
+
   it("rejects custom capability metadata whose id differs from the provider modelId", () => {
     const raw = rawWithProvider((p) => ({
       ...p,
@@ -881,6 +983,52 @@ describe("parseModelCapability", () => {
     const parsed = parseModelCapability(raw, "capabilities[0]");
     expect(parsed.kind).toBe("embedding");
     expect(parsed.workflowEligible).toBe(false);
+  });
+
+  // Issue #1210: supportsInfilling / infillingAlignment are recognised strict-list keys and
+  // round-trip exactly (the strict parser rejects unknown keys, so this also proves they are
+  // allow-listed).
+  it("accepts and round-trips supportsInfilling/infillingAlignment", () => {
+    const raw = { ...validCapability(), supportsInfilling: true, infillingAlignment: "instruct" };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.supportsInfilling).toBe(true);
+    expect(parsed.infillingAlignment).toBe("instruct");
+  });
+
+  it("rejects infillingAlignment without supportsInfilling: true (invariant: alignment ⇒ infilling)", () => {
+    const raw = { ...validCapability(), infillingAlignment: "instruct" };
+    try {
+      parseModelCapability(raw, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("infillingAlignment");
+    }
+  });
+
+  it("rejects supportsInfilling: true on a non-chat kind (invariant: infilling ⇒ chat)", () => {
+    const raw = {
+      ...validCapability(),
+      kind: "embedding",
+      workflowEligible: false,
+      supportsInfilling: true,
+    };
+    try {
+      parseModelCapability(raw, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("supportsInfilling");
+    }
+  });
+
+  it("rejects an unknown infillingAlignment value", () => {
+    const raw = {
+      ...validCapability(),
+      supportsInfilling: true,
+      infillingAlignment: "raw-base-fim",
+    };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/infillingAlignment/);
   });
 
   it("accepts an ocr-vision capability whose workflowEligible is false", () => {
