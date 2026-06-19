@@ -89,6 +89,18 @@ describe("buildModelCompletionPrompt", () => {
     const prompt = buildModelCompletionPrompt(input());
     expect(prompt.user).not.toContain("Reference context");
   });
+
+  it("applies route-owned redaction to prefix and suffix before prompt assembly", () => {
+    const prompt = buildModelCompletionPrompt(
+      input({
+        overlayText: "const token = SECRET;\nconst value = \n// SECRET in suffix",
+        position: { line: 1, character: 14 },
+        redactText: (value) => value.replaceAll("SECRET", "[REDACTED]"),
+      }),
+    );
+    expect(prompt.user).not.toContain("SECRET");
+    expect(prompt.user).toContain("[REDACTED]");
+  });
 });
 
 describe("parseModelCompletionItems", () => {

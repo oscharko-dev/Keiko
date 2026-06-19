@@ -53,15 +53,20 @@ import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.j
 import { recordInlineCompletionTelemetryEvidence } from "./inlineCompletionTelemetryEvidence.js";
 import { clientAbortSignal, resolveOverlayPath } from "./languageRoutes.js";
 import type { ModelChatFn } from "./editorCompletionModel.js";
-import { generateInlineCompletion } from "./editorInlineCompletionModel.js";
+import {
+  buildInlineCompletionPrompt,
+  generateInlineCompletion,
+} from "./editorInlineCompletionModel.js";
 import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
 } from "./inlineCompletionRateLimiter.js";
 import {
-  accountModelUsage,
+  estimateEditorModelReservationTokens,
+  settleModelUsage,
   sharedEditorModelTokenBudget,
   type EditorModelTokenBudget,
+  type EditorModelTokenReservation,
 } from "./editorModelTokenBudget.js";
 
 // Body cap: the overlay buffer may be up to the document-size cap; allow 64 KiB of JSON on top. The
@@ -191,6 +196,7 @@ interface ElectedInlineModelContext {
   readonly chatFactory: InlineCompletionChatFactory;
   readonly config: GatewayConfig;
   readonly nowMs: number;
+  readonly tokenBudget: EditorModelTokenBudget;
 }
 
 function noItemOutcome(
@@ -288,6 +294,61 @@ function inlineGenerationInput(
   };
 }
 
+function maxOutputTokensForModel(config: GatewayConfig, modelId: string): number {
+  const capability = config.capabilities?.find((candidate) => candidate.id === modelId);
+  return Math.max(1, capability?.maxOutputTokens ?? Math.ceil(MAX_INLINE_INSERT_TEXT_CHARS / 4));
+}
+
+function reserveInlineCompletion(
+  ctx: ElectedInlineModelContext,
+  input: Parameters<typeof generateInlineCompletion>[0],
+): EditorModelTokenReservation | undefined {
+  const prompt = buildInlineCompletionPrompt(input);
+  return ctx.tokenBudget.tryReserve(
+    ctx.realRoot,
+    ctx.nowMs,
+    estimateEditorModelReservationTokens(prompt, maxOutputTokensForModel(ctx.config, ctx.modelId)),
+  );
+}
+
+function recordInlineModelEvidence(
+  ctx: ElectedInlineModelContext,
+  generated: Awaited<ReturnType<typeof generateInlineCompletion>>,
+): void {
+  recordEditorCompletionModelEvidence(
+    ctx.deps.evidenceStore,
+    ctx.deps.redactor,
+    {
+      modelId: ctx.modelId,
+      modelMode: ctx.selection.mode,
+      latencyClass: ctx.selection.latencyClass,
+      gatewayPolicyVersion: INLINE_COMPLETION_GATEWAY_POLICY_VERSION,
+      promptHash: generated.promptHash,
+      itemCount: generated.insertText === null ? 0 : 1,
+      truncated: generated.truncated,
+      usage: generated.usage,
+    },
+    ctx.nowMs,
+  );
+}
+
+function inlineOutcomeFromGenerated(
+  ctx: ElectedInlineModelContext,
+  pack: CodingContextPack,
+  generated: Awaited<ReturnType<typeof generateInlineCompletion>>,
+): InlineModelOutcome {
+  const insertText = generated.insertText;
+  return {
+    item: insertText === null ? null : { insertText },
+    modelMode: ctx.selection.mode,
+    modelId: ctx.modelId,
+    latencyClass: ctx.selection.latencyClass,
+    promptHash: generated.promptHash,
+    contextSources: insertText === null ? [] : contextSourcesFromPack(pack),
+    ...(generated.usage === undefined ? {} : { usage: generated.usage }),
+  };
+}
+
 // Runs the elected model: assembles coding context (#1211), records content-free evidence, calls the
 // gateway through the injected chat factory, and filters the output. A failure throws to the caller,
 // which degrades.
@@ -305,36 +366,19 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
     toCodingContextWirePack(pack),
     ctx.nowMs,
   );
+  const generationInput = inlineGenerationInput(ctx, pack);
+  const reservation = reserveInlineCompletion(ctx, generationInput);
+  if (reservation === undefined) {
+    return noItemOutcome(ctx.selection.mode, undefined, ctx.modelId, ctx.selection.latencyClass);
+  }
   const generated = await generateInlineCompletion(
-    inlineGenerationInput(ctx, pack),
+    generationInput,
     ctx.chatFactory(ctx.config, ctx.modelId),
     ctx.signal,
   );
-  const insertText = generated.insertText;
-  recordEditorCompletionModelEvidence(
-    ctx.deps.evidenceStore,
-    ctx.deps.redactor,
-    {
-      modelId: ctx.modelId,
-      modelMode: ctx.selection.mode,
-      latencyClass: ctx.selection.latencyClass,
-      gatewayPolicyVersion: INLINE_COMPLETION_GATEWAY_POLICY_VERSION,
-      promptHash: generated.promptHash,
-      itemCount: insertText === null ? 0 : 1,
-      truncated: generated.truncated,
-      usage: generated.usage,
-    },
-    ctx.nowMs,
-  );
-  return {
-    item: insertText === null ? null : { insertText },
-    modelMode: ctx.selection.mode,
-    modelId: ctx.modelId,
-    latencyClass: ctx.selection.latencyClass,
-    promptHash: generated.promptHash,
-    contextSources: insertText === null ? [] : contextSourcesFromPack(pack),
-    ...(generated.usage === undefined ? {} : { usage: generated.usage }),
-  };
+  settleModelUsage(reservation, generated.usage);
+  recordInlineModelEvidence(ctx, generated);
+  return inlineOutcomeFromGenerated(ctx, pack, generated);
 }
 
 // The model-selection decision: either skip the model tier with a content-free outcome, or run the
@@ -384,15 +428,14 @@ function decideInlineModel(
   return { kind: "run", selection, modelId, config };
 }
 
-// True when a server ceiling blocks the model tier: the per-root request-rate limiter (#1200) or the
-// per-root token budget (#1206 LLM10). `tryAcquire` records the request, so it is evaluated first.
-function inlineModelTierBlocked(
+// True when the per-root request-rate limiter (#1200) blocks the model tier. The token ceiling
+// (#1206 LLM10) reserves immediately before the provider call once the prompt is known.
+function inlineModelTierRateBlocked(
   realRoot: string,
   nowMs: number,
   limiter: InlineCompletionRateLimiter,
-  tokenBudget: EditorModelTokenBudget,
 ): boolean {
-  return !limiter.tryAcquire(realRoot, nowMs) || tokenBudget.isExhausted(realRoot, nowMs);
+  return !limiter.tryAcquire(realRoot, nowMs);
 }
 
 // Decides whether the gated model tier runs and, if so, runs it. Order: policy → model decision →
@@ -415,8 +458,8 @@ async function runInlineModelTier(
   const { selection, modelId, config } = decision;
   const limiter = options.rateLimiter ?? sharedRateLimiter;
   const tokenBudget = options.tokenBudget ?? sharedEditorModelTokenBudget;
-  if (inlineModelTierBlocked(realRoot, now(), limiter, tokenBudget)) {
-    // Request rate (#1200) or token ceiling (#1206 LLM10) hit: render no ghost text (degrade to #1199).
+  if (inlineModelTierRateBlocked(realRoot, now(), limiter)) {
+    // Request rate (#1200) hit: render no ghost text (degrade to #1199).
     return noItemOutcome(selection.mode, undefined, modelId, selection.latencyClass);
   }
   try {
@@ -434,8 +477,8 @@ async function runInlineModelTier(
       chatFactory: options.chatFactory ?? defaultChatFactory,
       config,
       nowMs: now(),
+      tokenBudget,
     });
-    accountModelUsage(tokenBudget, realRoot, now(), outcome.usage);
     return outcome;
   } catch {
     // ADR-0042 D5 / AC1: a model or retrieval failure renders no ghost text; it never breaks the route.

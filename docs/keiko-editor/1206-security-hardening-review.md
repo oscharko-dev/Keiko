@@ -5,13 +5,14 @@ Date: 2026-06-19
 Parent epic: #1189. Lead role: security reviewer.
 
 Base audited implementation: the consolidated Keiko Editor epic on `feat/keiko-editor`
-(#1191–#1205, #1210, #1211), tip `1064943a`.
+(#1191-#1205, #1210, #1211), with #1275 and the containment follow-up #1276 merged.
 
 This memo is the #1206 deliverable. It records the security review, the threat-model coverage, the
 dependency and license review, and the CSP/worker deployment notes for the editor stack. It is an
 audit-and-verification issue: the editor's trust boundaries were already built and tested per feature
 issue, so this review proves the consolidated posture, adds cross-cutting regression tests, and fixes
-the one confirmed gap (an explicit LLM10 token-window ceiling).
+the confirmed audit gaps: an explicit LLM10 token-window ceiling, reserve-before-call enforcement for
+that ceiling, and prompt redaction on both live editor model surfaces.
 
 ## 1. Method
 
@@ -22,10 +23,10 @@ patch-apply path), followed by an adversarial counterexample pass that attempted
 acceptance criterion with a concrete bypass. All citations below are `file:line` against the audited
 tree.
 
-Outcome: every boundary held except one. The adversarial pass refuted the LLM10 claim — the editor
-enforced a per-root **request-rate** ceiling but no explicit per-window **token** ceiling, which the
-epic threat model requires (max requests/window AND max tokens/window). That gap is fixed in this
-change set (§4). No other high or critical finding was confirmed.
+Outcome: the original adversarial pass refuted the LLM10 claim because the editor enforced a per-root
+**request-rate** ceiling but no explicit per-window **token** ceiling. Follow-up closure audit also
+found a check-then-record race in that ceiling and an unredacted dropdown-completion prompt path. These
+gaps are fixed in this change set (§4). No other high or critical finding was confirmed.
 
 ## 2. Trust-boundary map
 
@@ -47,10 +48,10 @@ change set (§4). No other high or critical finding was confirmed.
 | **LLM01** Indirect / cross-file prompt injection              | Workspace-derived completion, test-generation, and retrieval context is treated as untrusted: dual sanitization (`stripUnsafeFormatChars` then the redactor) on every excerpt and citation, plus a system prompt that pins context as read-only reference material.                                              | `codingContextProviders.ts:82-110,127-152`; `editorInlineCompletionModel.ts:54-62`; `editorCompletionModel.ts:65-73`           |
 | **LLM05** Improper output handling / untrusted-code execution | Editor-driven test generation/execution is feature-flagged off in v1; no v1 flow executes model-generated code. Gate A (`KEIKO_EDITOR_TEST_GENERATION`) and Gate B (`KEIKO_EDITOR_TEST_GENERATION_EXECUTION`) both default off; with Gate A off the route returns `disabled` before any retrieval or model call. | `testGenerationRoutes.ts:54-91,283-285`; ADR-0042 D7                                                                           |
 | **LLM08** Vector / embedding weaknesses                       | Retrieved RAG context carries a per-source trust tier and is redacted + byte-bounded before it reaches the model; high-trust outcomes cannot be driven by an embedded chunk.                                                                                                                                     | `codingContext.ts:62` (`tierForCodingContextSource`); `codingContextProviders.ts:341-364`; `localKnowledgeRetrieval.ts`        |
-| **LLM10** Unbounded consumption (denial-of-wallet)            | Two server-owned per-root ceilings: a request-rate limiter (max requests/window) **and** a sliding-window token budget (max tokens/window), both degrading to the deterministic gateway on exceed. The token ceiling is new in this change set (§4).                                                             | `inlineCompletionRateLimiter.ts`; `editorModelTokenBudget.ts`; wiring in `inlineCompletionRoutes.ts` and `completionRoutes.ts` |
+| **LLM10** Unbounded consumption (denial-of-wallet)            | Two server-owned per-root ceilings: a request-rate limiter (max requests/window) **and** a sliding-window token budget (max tokens/window). The token budget reserves a conservative prompt+completion estimate before provider calls, then settles to actual usage when the provider reports it.                   | `inlineCompletionRateLimiter.ts`; `editorModelTokenBudget.ts`; wiring in `inlineCompletionRoutes.ts` and `completionRoutes.ts` |
 | **FIM model-selection guardrail**                             | The infilling model must be aligned/instruct or edit-tuned; a raw base-FIM endpoint is rejected at selection time (`degradeReason = only-base-infilling-model`).                                                                                                                                                 | `keiko-model-gateway` `selectCompletionModelFromCapabilities` + `isAlignedInfillingModel` (rejects undeclared/base)            |
 
-## 4. Confirmed finding and fix — LLM10 token-window ceiling
+## 4. Confirmed findings and fixes
 
 **Finding (high, confirmed by the adversarial pass).** The editor model tier enforced a per-root
 request-rate limiter (`DEFAULT_INLINE_RATE_LIMIT` = 600 requests / 60 s) and a per-call cost-class
@@ -58,20 +59,29 @@ ceiling via `selectCompletionModel`, but no explicit per-window **token** ceilin
 therefore bounded only implicitly (requests × per-call cap); the epic threat model asks for an explicit
 maximum tokens/window in addition to the request cap.
 
-**Fix.** A new per-root sliding-window token budget governs both live model tiers:
+**Fix.** A per-root sliding-window token budget governs both live model tiers:
 
 - `packages/keiko-server/src/editor/editorModelTokenBudget.ts` — `createEditorModelTokenBudget`
   tracks `(timestamp, tokens)` per opaque workspace root over an injected clock, exposes
-  `isExhausted(root, now)` and `record(root, now, tokens)`, and ships a finite, generous default
-  (`DEFAULT_EDITOR_MODEL_TOKEN_BUDGET` = 1,000,000 tokens / 60 s, tunable by deployment policy). A
-  process-wide shared instance spans the inline and completion tiers for one root. The module holds
-  only counts and timestamps — never a prompt, buffer, or path.
-- `inlineCompletionRoutes.ts` and `completionRoutes.ts` consult the budget before the model tier runs
-  (degrading to no ghost text / deterministic-only when exhausted) and record the elected call's
-  `promptTokens + completionTokens` afterwards via the shared `accountModelUsage` helper.
+  `tryReserve(root, now, tokens)` for pre-call reservations plus compatibility inspection helpers, and
+  ships a finite, generous default (`DEFAULT_EDITOR_MODEL_TOKEN_BUDGET` = 1,000,000 tokens / 60 s,
+  tunable by deployment policy). A process-wide shared instance spans the inline and completion tiers
+  for one root. The module holds only counts and timestamps - never a prompt, buffer, or path.
+- `inlineCompletionRoutes.ts` and `completionRoutes.ts` build the redacted prompt, reserve a
+  conservative prompt+completion token estimate before invoking the Model Gateway, degrade when the
+  reservation would exceed the window, and settle to actual `promptTokens + completionTokens` when
+  provider usage metadata exists. If usage is absent, the conservative reservation remains.
 
 This makes the LLM10 control explicit and enforced for every live editor model-call surface, alongside
 the existing request-rate ceiling. It changes no wire contract; token counts are content-free.
+
+**Finding (high, confirmed by follow-up audit).** Inline completion redacted active-buffer
+prefix/suffix before prompt assembly, but dropdown completion sent the same active-buffer slices to the
+provider without applying the route redactor.
+
+**Fix.** `GenerateModelCompletionsInput` now accepts `redactText`, `buildModelCompletionPrompt` applies
+it before bounding prefix/suffix, and `completionRoutes.ts` passes the same
+`stripUnsafeFormatChars` + deployment redactor helper already used by inline completion.
 
 ## 5. Acceptance Criteria ledger
 
@@ -93,9 +103,11 @@ the existing request-rate ceiling. It changes no wire contract; token counts are
 ### Deliverables
 
 - **Security review memo** — this document.
-- **Additional tests for editor-specific trust boundaries** — `editorModelTokenBudget.test.ts` (the new
-  token governor), the LLM10 degrade/record route tests in `inlineCompletionRoutes.test.ts` and
-  `completionRoutes.test.ts`, and the consolidated cross-route containment suite
+- **Additional tests for editor-specific trust boundaries** — `editorModelTokenBudget.test.ts` (the token
+  governor and reservation settlement), the LLM10 degrade/reservation route tests in
+  `inlineCompletionRoutes.test.ts` and `completionRoutes.test.ts`, prompt-redaction coverage in
+  `editorCompletionModel.test.ts`, `inlineCompletionRoutes.test.ts`, and `completionRoutes.test.ts`,
+  and the consolidated cross-route containment suite
   `editorSecurityBoundary.test.ts`. The containment suite covers every path-accepting editor route —
   completion, inline-completion, context, repo-search, language, and test-generation (exercised with
   its feature gate enabled so its target-path containment is proven, since it is gated off in v1). A
@@ -190,13 +202,14 @@ npm ci
 npm run build:packages
 npm --workspace @oscharko-dev/keiko-server test -- src/editor/editorModelTokenBudget.test.ts \
   src/editor/editorSecurityBoundary.test.ts src/editor/inlineCompletionRoutes.test.ts \
-  src/editor/completionRoutes.test.ts
+  src/editor/completionRoutes.test.ts src/editor/editorCompletionModel.test.ts
 npm run typecheck
 npm run lint
 npm run arch:check
 npm run arch:check:negative
 npm run check:version-consistency
 npm run check:qi-supply-chain
+npm run check:workspace-supply-chain
 npm audit --audit-level=high
 ```
 
