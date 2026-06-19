@@ -38,6 +38,19 @@ describe("createInlineCompletionRateLimiter", () => {
     expect(limiter.tryAcquire("/repo", 1_100)).toBe(true);
   });
 
+  it("counts an entry at the exact window boundary against the cap (inclusive left bound)", () => {
+    const limiter = createInlineCompletionRateLimiter({
+      minIntervalMs: 0,
+      maxPerWindow: 1,
+      windowMs: 1_000,
+    });
+    expect(limiter.tryAcquire("/repo", 0)).toBe(true);
+    // At t=1000 the t=0 entry is aged EXACTLY windowMs; it must still count (deny the extra call).
+    expect(limiter.tryAcquire("/repo", 1_000)).toBe(false);
+    // Just past the window the entry ages out and a new call is allowed.
+    expect(limiter.tryAcquire("/repo", 1_001)).toBe(true);
+  });
+
   it("scopes limits per root independently", () => {
     const limiter = createInlineCompletionRateLimiter({
       minIntervalMs: 100,

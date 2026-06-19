@@ -50,9 +50,11 @@ export function createInlineCompletionRateLimiter(
   return {
     tryAcquire(root: string, nowMs: number): boolean {
       const state = byRoot.get(root) ?? { lastMs: Number.NEGATIVE_INFINITY, timestamps: [] };
-      // Drop timestamps that have aged out of the sliding window.
+      // Keep timestamps still inside the sliding window `[nowMs - windowMs, nowMs]`. The left bound
+      // is INCLUSIVE (`>=`) so an entry aged exactly `windowMs` still counts against the cap — the
+      // conservative choice that never lets one extra call slip through at the exact boundary.
       const windowStart = nowMs - options.windowMs;
-      const recent = state.timestamps.filter((ts) => ts > windowStart);
+      const recent = state.timestamps.filter((ts) => ts >= windowStart);
       if (nowMs - state.lastMs < options.minIntervalMs) {
         // Persist the pruned window without recording a new invocation.
         byRoot.set(root, { lastMs: state.lastMs, timestamps: recent });
