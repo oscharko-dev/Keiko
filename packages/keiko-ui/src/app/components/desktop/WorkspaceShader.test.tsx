@@ -166,6 +166,7 @@ describe("WorkspaceShader", () => {
     document.documentElement.style.removeProperty("--workspace-bg-brightness");
     document.documentElement.style.removeProperty("--workspace-grid-strength");
     document.documentElement.style.removeProperty("--frame-border-strength");
+    document.documentElement.style.removeProperty("--frame-inner-glow-strength");
   });
 
   it("does not initialize WebGL while reduced motion is enabled and reacts when it changes", () => {
@@ -213,6 +214,7 @@ describe("WorkspaceShader", () => {
     window.localStorage.setItem("keiko.workspace.background.brightness", "42");
     window.localStorage.setItem("keiko.workspace.grid.strength", "31");
     window.localStorage.setItem("keiko.frame.border.strength", "46");
+    window.localStorage.setItem("keiko.frame.inner.glow.strength", "28");
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
 
     render(<WorkspaceShader />);
@@ -224,6 +226,9 @@ describe("WorkspaceShader", () => {
       "31%",
     );
     expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("46%");
+    expect(document.documentElement.style.getPropertyValue("--frame-inner-glow-strength")).toBe(
+      "28%",
+    );
     expect(getContext).not.toHaveBeenCalled();
 
     fireEvent(window, new CustomEvent("keiko:workspace-background-brightness", { detail: 67 }));
@@ -241,6 +246,12 @@ describe("WorkspaceShader", () => {
     fireEvent(window, new CustomEvent("keiko:frame-border-strength", { detail: 73 }));
 
     expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("73%");
+
+    fireEvent(window, new CustomEvent("keiko:frame-inner-glow-strength", { detail: 41 }));
+
+    expect(document.documentElement.style.getPropertyValue("--frame-inner-glow-strength")).toBe(
+      "41%",
+    );
   });
 
   it("uses transparent fallback when WebGL is unavailable and keeps opacity reactive", () => {
