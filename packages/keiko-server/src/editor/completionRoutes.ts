@@ -23,6 +23,7 @@ import {
   EDITOR_COMPLETION_SCHEMA_VERSION,
   isValidScopePath,
   parseEditorCompletionRequest,
+  stripUnsafeFormatChars,
   toCodingContextWirePack,
   type CodingContextPack,
   type CodingContextRequest,
@@ -51,14 +52,18 @@ import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.j
 import { clientAbortSignal, resolveOverlayPath, STATUS_BY_CODE } from "./languageRoutes.js";
 import { runLanguageOperation } from "./languageService.js";
 import {
+  buildModelCompletionPrompt,
   generateModelCompletions,
+  type GenerateModelCompletionsInput,
   type ModelChatFn,
   type ModelCompletionItem,
 } from "./editorCompletionModel.js";
 import {
-  accountModelUsage,
+  estimateEditorModelReservationTokens,
+  settleModelUsage,
   sharedEditorModelTokenBudget,
   type EditorModelTokenBudget,
+  type EditorModelTokenReservation,
 } from "./editorModelTokenBudget.js";
 
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
@@ -105,6 +110,12 @@ function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
 }
 
+function redactPromptText(deps: UiHandlerDeps, value: string): string {
+  const stripped = stripUnsafeFormatChars(value);
+  const redacted = deps.redactor(stripped);
+  return typeof redacted === "string" ? redacted : stripped;
+}
+
 // ─── Model tier (gated) ────────────────────────────────────────────────────────────────────────
 
 interface ModelTierOutcome {
@@ -130,6 +141,8 @@ interface ElectedModelContext {
   readonly modelId: string;
   readonly chatFactory: CompletionChatFactory;
   readonly config: GatewayConfig;
+  readonly tokenBudget: EditorModelTokenBudget;
+  readonly nowMs: number;
 }
 
 const DETERMINISTIC_OUTCOME = (
@@ -279,45 +292,46 @@ function recordModelEvidence(input: {
   );
 }
 
-// Runs the elected model: assembles coding context (#1211), records content-free evidence, and calls
-// the gateway through the injected chat factory. A failure throws to the caller, which degrades.
-async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutcome> {
-  const nowMs = Date.now();
-  const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
-    deps: ctx.deps,
-    realRoot: ctx.realRoot,
-    signal: ctx.signal,
-    nowMs,
-    budgetBytes: effectiveContextBudgetBytes(ctx.request),
-  });
-  recordCodingContextEvidence(
-    ctx.deps.evidenceStore,
-    ctx.deps.redactor,
-    toCodingContextWirePack(pack),
-    nowMs,
+function completionGenerationInput(
+  ctx: ElectedModelContext,
+  pack: CodingContextPack,
+): GenerateModelCompletionsInput {
+  return {
+    overlayText: ctx.request.document.text,
+    position: ctx.request.position,
+    languageId: ctx.request.document.languageId,
+    contextPack: pack,
+    maxItems: MAX_MODEL_ITEMS,
+    maxInsertTextChars: MAX_MODEL_INSERT_TEXT_CHARS,
+    redactText: (value) => redactPromptText(ctx.deps, value),
+  };
+}
+
+function maxOutputTokensForModel(config: GatewayConfig, modelId: string): number {
+  const capability = config.capabilities?.find((candidate) => candidate.id === modelId);
+  return Math.max(
+    1,
+    capability?.maxOutputTokens ?? Math.ceil((MAX_MODEL_ITEMS * MAX_MODEL_INSERT_TEXT_CHARS) / 4),
   );
-  const generated = await generateModelCompletions(
-    {
-      overlayText: ctx.request.document.text,
-      position: ctx.request.position,
-      languageId: ctx.request.document.languageId,
-      contextPack: pack,
-      maxItems: MAX_MODEL_ITEMS,
-      maxInsertTextChars: MAX_MODEL_INSERT_TEXT_CHARS,
-    },
-    ctx.chatFactory(ctx.config, ctx.modelId),
-    ctx.signal,
+}
+
+function reserveModelCompletion(
+  ctx: ElectedModelContext,
+  input: GenerateModelCompletionsInput,
+): EditorModelTokenReservation | undefined {
+  const prompt = buildModelCompletionPrompt(input);
+  return ctx.tokenBudget.tryReserve(
+    ctx.realRoot,
+    ctx.nowMs,
+    estimateEditorModelReservationTokens(prompt, maxOutputTokensForModel(ctx.config, ctx.modelId)),
   );
-  recordModelEvidence({
-    deps: ctx.deps,
-    modelId: ctx.modelId,
-    selection: ctx.selection,
-    promptHash: generated.promptHash,
-    itemCount: generated.items.length,
-    truncated: generated.truncated,
-    usage: generated.usage,
-    nowMs,
-  });
+}
+
+function modelOutcomeFromGenerated(
+  ctx: ElectedModelContext,
+  pack: CodingContextPack,
+  generated: Awaited<ReturnType<typeof generateModelCompletions>>,
+): ModelTierOutcome {
   return {
     items: generated.items,
     modelMode: ctx.selection.mode,
@@ -328,6 +342,51 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
     truncated: generated.truncated,
     ...(generated.usage === undefined ? {} : { usage: generated.usage }),
   };
+}
+
+// Runs the elected model: assembles coding context (#1211), records content-free evidence, and calls
+// the gateway through the injected chat factory. A failure throws to the caller, which degrades.
+async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutcome> {
+  const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
+    deps: ctx.deps,
+    realRoot: ctx.realRoot,
+    signal: ctx.signal,
+    nowMs: ctx.nowMs,
+    budgetBytes: effectiveContextBudgetBytes(ctx.request),
+  });
+  recordCodingContextEvidence(
+    ctx.deps.evidenceStore,
+    ctx.deps.redactor,
+    toCodingContextWirePack(pack),
+    ctx.nowMs,
+  );
+  const generationInput = completionGenerationInput(ctx, pack);
+  const reservation = reserveModelCompletion(ctx, generationInput);
+  if (reservation === undefined) {
+    return DETERMINISTIC_OUTCOME(
+      ctx.selection.mode,
+      ctx.selection.degradeReason,
+      ctx.modelId,
+      ctx.selection.latencyClass,
+    );
+  }
+  const generated = await generateModelCompletions(
+    generationInput,
+    ctx.chatFactory(ctx.config, ctx.modelId),
+    ctx.signal,
+  );
+  settleModelUsage(reservation, generated.usage);
+  recordModelEvidence({
+    deps: ctx.deps,
+    modelId: ctx.modelId,
+    selection: ctx.selection,
+    promptHash: generated.promptHash,
+    itemCount: generated.items.length,
+    truncated: generated.truncated,
+    usage: generated.usage,
+    nowMs: ctx.nowMs,
+  });
+  return modelOutcomeFromGenerated(ctx, pack, generated);
 }
 
 // Decides whether the gated model tier runs for this request and, if so, runs it. The cost ceiling
@@ -355,12 +414,9 @@ async function runModelTier(
   const triggerEligible = request.triggerKind === "invoked" || selection.mode === "as-you-type";
   const degraded = (): ModelTierOutcome =>
     DETERMINISTIC_OUTCOME(selection.mode, selection.degradeReason, modelId, selection.latencyClass);
-  // Skip the model for an ineligible trigger, or when the per-root token ceiling is reached
-  // (#1206 LLM10 denial-of-wallet) — both degrade to deterministic-only.
+  // Skip the model for an ineligible trigger. The per-root token ceiling (#1206 LLM10) reserves
+  // immediately before the provider call once the prompt is known.
   if (selection.mode === "deterministic" || modelId === undefined || !triggerEligible) {
-    return degraded();
-  }
-  if (tokenBudget.isExhausted(realRoot, now())) {
     return degraded();
   }
   try {
@@ -373,8 +429,9 @@ async function runModelTier(
       modelId,
       chatFactory,
       config,
+      tokenBudget,
+      nowMs: now(),
     });
-    accountModelUsage(tokenBudget, realRoot, now(), outcome.usage);
     return outcome;
   } catch {
     // ADR-0042 D5 / AC4: a model or retrieval failure degrades to deterministic-only; it never breaks

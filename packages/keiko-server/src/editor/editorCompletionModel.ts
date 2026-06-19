@@ -48,6 +48,8 @@ export interface GenerateModelCompletionsInput {
   readonly contextPack?: CodingContextPack | undefined;
   readonly maxItems: number;
   readonly maxInsertTextChars: number;
+  /** Optional route-owned prompt redaction applied before prefix/suffix enter the model prompt. */
+  readonly redactText?: ((value: string) => string) | undefined;
 }
 
 export interface GenerateModelCompletionsResult {
@@ -107,8 +109,11 @@ function boundedContextExcerpts(pack: CodingContextPack | undefined): readonly s
 /** Build the aligned-infilling prompt; context excerpts are delimited as reference-only material. */
 export function buildModelCompletionPrompt(input: GenerateModelCompletionsInput): ModelChatRequest {
   const { prefix, suffix } = splitAtPosition(input.overlayText, input.position);
-  const boundedPrefix = prefix.slice(Math.max(0, prefix.length - MAX_PREFIX_CHARS));
-  const boundedSuffix = suffix.slice(0, MAX_SUFFIX_CHARS);
+  const redactText = input.redactText ?? ((value: string): string => value);
+  const redactedPrefix = redactText(prefix);
+  const redactedSuffix = redactText(suffix);
+  const boundedPrefix = redactedPrefix.slice(Math.max(0, redactedPrefix.length - MAX_PREFIX_CHARS));
+  const boundedSuffix = redactedSuffix.slice(0, MAX_SUFFIX_CHARS);
   const excerpts = boundedContextExcerpts(input.contextPack);
   const referenceBlock =
     excerpts.length === 0

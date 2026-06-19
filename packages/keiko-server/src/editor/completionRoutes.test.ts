@@ -17,7 +17,10 @@ import {
   type CompletionChatFactory,
   type EditorCompletionRouteOptions,
 } from "./completionRoutes.js";
-import { createEditorModelTokenBudget } from "./editorModelTokenBudget.js";
+import {
+  createEditorModelTokenBudget,
+  type EditorModelTokenBudget,
+} from "./editorModelTokenBudget.js";
 
 function postContext(body: unknown): RouteContext {
   const req = Readable.from([
@@ -52,11 +55,13 @@ let store: UiStore;
 function deps(
   config?: GatewayConfig,
   evidenceStore: EvidenceStore = createInMemoryEvidenceStore(),
+  env: Record<string, string | undefined> = {},
 ): UiHandlerDeps {
   return {
     store,
-    redactor: buildRedactor({}),
+    redactor: buildRedactor(env, config),
     evidenceStore,
+    env,
     ...(config === undefined ? {} : { config }),
   } as unknown as UiHandlerDeps;
 }
@@ -243,19 +248,22 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     expect(payload.provenance.sources).not.toContain("model-assisted");
   });
 
-  it("records model token usage so a later request in the window degrades (LLM10)", async () => {
+  it("settles model token usage so a later request in the window degrades (LLM10)", async () => {
     const usageChat: CompletionChatFactory = () => () =>
       Promise.resolve({
         content: '["value.alpha"]',
         usage: {
           requestId: "req-1",
-          promptTokens: 8,
-          completionTokens: 8,
+          promptTokens: 49_000,
+          completionTokens: 500,
           latencyMs: 1,
           costClass: "low",
         },
       });
-    const tokenBudget = createEditorModelTokenBudget({ maxTokensPerWindow: 10, windowMs: 60_000 });
+    const tokenBudget = createEditorModelTokenBudget({
+      maxTokensPerWindow: 50_000,
+      windowMs: 60_000,
+    });
     const options: EditorCompletionRouteOptions = {
       chatFactory: usageChat,
       tokenBudget,
@@ -267,13 +275,88 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
       options,
     );
     expect(body(first).items.some((item) => item.origin === "model-assisted")).toBe(true);
-    // The first call recorded 16 tokens (> the 10 ceiling); the second must skip the model tier.
+    // The first call settled to 49,500 tokens; the second reservation must skip the model tier.
     const second = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
       options,
     );
     expect(body(second).items.some((item) => item.origin === "model-assisted")).toBe(false);
+  });
+
+  it("reserves before provider calls so concurrent requests cannot both enter a one-call window", async () => {
+    let reserved = false;
+    const tokenBudget: EditorModelTokenBudget = {
+      isExhausted: () => reserved,
+      record: () => undefined,
+      tryReserve: () => {
+        if (reserved) {
+          return undefined;
+        }
+        reserved = true;
+        return {
+          reservedTokens: 1,
+          settle: () => undefined,
+          cancel: (): void => {
+            reserved = false;
+          },
+        };
+      },
+    };
+    let releaseFirst: ((value: string) => void) | undefined;
+    let startedFirst: (() => void) | undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      startedFirst = resolve;
+    });
+    const chat = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          startedFirst?.();
+          releaseFirst = resolve;
+        }),
+    );
+    const options: EditorCompletionRouteOptions = {
+      chatFactory: () => chat,
+      tokenBudget,
+      now: () => 1_000,
+    };
+    const first = handleEditorCompletion(postContext(completionBody()), deps(fimConfig("fast")), options);
+    await firstStarted;
+    const second = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast")),
+      options,
+    );
+    expect(body(second).items.some((item) => item.origin === "model-assisted")).toBe(false);
+    expect(chat).toHaveBeenCalledTimes(1);
+    releaseFirst?.('["value.alpha"]');
+    expect(body(await first).items.some((item) => item.origin === "model-assisted")).toBe(true);
+  });
+
+  it("redacts overlay secrets before the dropdown completion prompt is sent", async () => {
+    const secret = "example-env-token-1234567890abcd";
+    let capturedUserPrompt = "";
+    const chatFactory: CompletionChatFactory = () => (request) => {
+      capturedUserPrompt = request.user;
+      return Promise.resolve('["safeCandidate"]');
+    };
+    const result = await handleEditorCompletion(
+      postContext(
+        completionBody({
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: `const token = "${secret}";\nvalue.\n`,
+          },
+        }),
+      ),
+      deps(fimConfig("fast"), createInMemoryEvidenceStore(), { KEIKO_DEFAULT_API_KEY: secret }),
+      { chatFactory },
+    );
+    expect(result.status).toBe(200);
+    expect(body(result).items.some((item) => item.origin === "model-assisted")).toBe(true);
+    expect(capturedUserPrompt).not.toContain(secret);
+    expect(capturedUserPrompt).toContain("[REDACTED]");
   });
 
   it("records content-free Gateway usage evidence for model-assisted calls", async () => {

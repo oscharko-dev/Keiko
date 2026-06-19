@@ -17,6 +17,10 @@ import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
 import {
+  handleEditorCompletion,
+  type CompletionChatFactory,
+} from "./completionRoutes.js";
+import {
   handleEditorInlineCompletion,
   handleEditorInlineCompletionTelemetry,
   isInlineCompletionEnabledByPolicy,
@@ -109,6 +113,21 @@ function inlineBody(overrides: Record<string, unknown> = {}): Record<string, unk
     },
     position: { line: 1, character: 9 },
     triggerKind: "automatic",
+    contextBudgetBytes: 4_096,
+    ...overrides,
+  };
+}
+
+function completionBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    root,
+    document: {
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const value = { alpha: 1 };\nvalue.\n",
+    },
+    position: { line: 1, character: 6 },
+    triggerKind: "invoked",
     contextBudgetBytes: 4_096,
     ...overrides,
   };
@@ -301,19 +320,22 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     expect(body(result).provenance.sources).not.toContain("model-assisted");
   });
 
-  it("records model token usage so a later request in the window degrades (LLM10)", async () => {
+  it("settles model token usage so a later request in the window degrades (LLM10)", async () => {
     const usageChat: InlineCompletionChatFactory = () => () =>
       Promise.resolve({
         content: "a + b;",
         usage: {
           requestId: "req-1",
-          promptTokens: 8,
-          completionTokens: 8,
+          promptTokens: 49_000,
+          completionTokens: 500,
           latencyMs: 1,
           costClass: "low",
         },
       });
-    const tokenBudget = createEditorModelTokenBudget({ maxTokensPerWindow: 10, windowMs: 60_000 });
+    const tokenBudget = createEditorModelTokenBudget({
+      maxTokensPerWindow: 50_000,
+      windowMs: 60_000,
+    });
     const options = { ...permissiveOptions(usageChat), tokenBudget };
     const first = await handleEditorInlineCompletion(
       postContext(inlineBody()),
@@ -321,13 +343,49 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
       options,
     );
     expect(body(first).items).toHaveLength(1);
-    // The first call recorded 16 tokens (> the 10 ceiling); the second must skip the model tier.
+    // The first call settled to 49,500 tokens; the second reservation must skip the model tier.
     const second = await handleEditorInlineCompletion(
       postContext(inlineBody()),
       deps({ config: fimConfig("fast") }),
       options,
     );
     expect(body(second).items).toEqual([]);
+  });
+
+  it("shares the LLM10 token reservation budget with dropdown completion", async () => {
+    const completionChat: CompletionChatFactory = () => () =>
+      Promise.resolve({
+        content: '["value.alpha"]',
+        usage: {
+          requestId: "completion-req-1",
+          promptTokens: 49_000,
+          completionTokens: 500,
+          latencyMs: 1,
+          costClass: "low",
+        },
+      });
+    const inlineChat = vi.fn(() => Promise.resolve("a + b;"));
+    const tokenBudget = createEditorModelTokenBudget({
+      maxTokensPerWindow: 50_000,
+      windowMs: 60_000,
+    });
+    const completion = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps({ config: fimConfig("fast") }),
+      {
+        chatFactory: completionChat,
+        tokenBudget,
+        now: () => 1_000,
+      },
+    );
+    expect(JSON.stringify(completion.body)).toContain("model-assisted");
+    const inline = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      { ...permissiveOptions(() => inlineChat), tokenBudget },
+    );
+    expect(body(inline).items).toEqual([]);
+    expect(inlineChat).not.toHaveBeenCalled();
   });
 
   it("never echoes the buffer text in the response (content boundary)", async () => {

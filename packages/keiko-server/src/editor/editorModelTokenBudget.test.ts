@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createEditorModelTokenBudget,
   DEFAULT_EDITOR_MODEL_TOKEN_BUDGET,
+  estimateEditorModelReservationTokens,
 } from "./editorModelTokenBudget.js";
 
 describe("createEditorModelTokenBudget", () => {
@@ -49,6 +50,49 @@ describe("createEditorModelTokenBudget", () => {
     budget.record("/repo", 0, 0);
     budget.record("/repo", 1, -5);
     expect(budget.isExhausted("/repo", 10)).toBe(false);
+  });
+
+  it("counts pending reservations immediately against the ceiling", () => {
+    const budget = createEditorModelTokenBudget({ maxTokensPerWindow: 100, windowMs: 10_000 });
+    const reservation = budget.tryReserve("/repo", 0, 60);
+    expect(reservation).toBeDefined();
+    expect(budget.tryReserve("/repo", 1, 50)).toBeUndefined();
+  });
+
+  it("settles a reservation to actual usage when metadata is available", () => {
+    const budget = createEditorModelTokenBudget({ maxTokensPerWindow: 100, windowMs: 10_000 });
+    const reservation = budget.tryReserve("/repo", 0, 80);
+    expect(reservation).toBeDefined();
+    reservation?.settle({
+      requestId: "req-1",
+      promptTokens: 20,
+      completionTokens: 10,
+      latencyMs: 1,
+      costClass: "low",
+    });
+    expect(budget.tryReserve("/repo", 1, 70)).toBeDefined();
+  });
+
+  it("keeps the conservative reservation when usage metadata is absent", () => {
+    const budget = createEditorModelTokenBudget({ maxTokensPerWindow: 100, windowMs: 10_000 });
+    const reservation = budget.tryReserve("/repo", 0, 80);
+    expect(reservation).toBeDefined();
+    reservation?.settle(undefined);
+    expect(budget.tryReserve("/repo", 1, 30)).toBeUndefined();
+  });
+
+  it("can cancel a reservation before the provider is invoked", () => {
+    const budget = createEditorModelTokenBudget({ maxTokensPerWindow: 100, windowMs: 10_000 });
+    const reservation = budget.tryReserve("/repo", 0, 80);
+    expect(reservation).toBeDefined();
+    reservation?.cancel();
+    expect(budget.tryReserve("/repo", 1, 100)).toBeDefined();
+  });
+
+  it("estimates prompt and output tokens without storing prompt text", () => {
+    expect(
+      estimateEditorModelReservationTokens({ system: "abcd", user: "abcdefgh" }, 10),
+    ).toBe(13);
   });
 
   it("ships a finite, generous default ceiling and window", () => {
