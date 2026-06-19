@@ -16,6 +16,9 @@ describe("inlineCompletionTelemetryReducer", () => {
       rejected: 0,
       ignored: 0,
       partiallyAccepted: 0,
+      requestCount: 0,
+      requestLatencyMsP50: 0,
+      requestLatencyMsP95: 0,
     });
   });
 
@@ -59,6 +62,9 @@ describe("inlineCompletionTelemetryReducer", () => {
       rejected: 1,
       ignored: 0,
       partiallyAccepted: 0,
+      requestCount: 0,
+      requestLatencyMsP50: 0,
+      requestLatencyMsP95: 0,
     });
   });
 });
@@ -85,6 +91,26 @@ describe("createInlineCompletionTelemetry", () => {
       telemetry.record("ignored");
     }).not.toThrow();
     expect(telemetry.snapshot().ignored).toBe(1);
+  });
+
+  it("records content-free nearest-rank p50/p95 request latency", () => {
+    const onChange = vi.fn();
+    const telemetry = createInlineCompletionTelemetry(onChange);
+    for (const latency of [42.4, 10, 200, 60, 80]) {
+      telemetry.recordLatency(latency);
+    }
+    expect(telemetry.snapshot()).toMatchObject({
+      requestCount: 5,
+      requestLatencyMsP50: 60,
+      requestLatencyMsP95: 200,
+    });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        requestCount: 5,
+        requestLatencyMsP50: 60,
+        requestLatencyMsP95: 200,
+      }),
+    );
   });
 
   it("never exposes a content-bearing key on the snapshot", () => {

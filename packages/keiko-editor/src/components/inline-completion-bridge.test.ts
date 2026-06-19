@@ -194,6 +194,23 @@ describe("createKeikoInlineCompletionProvider", () => {
     expect(telemetry.snapshot().offered).toBe(1);
   });
 
+  it("records content-free resolver latency p50/p95", async () => {
+    const telemetry = createInlineCompletionTelemetry();
+    const ticks = [100, 148];
+    const provider = createKeikoInlineCompletionProvider(
+      providerDeps((query) => Promise.resolve(response(query.request.request, [inlineItem()])), {
+        telemetry,
+        now: () => ticks.shift() ?? 148,
+      }),
+    );
+    await provider.provideInlineCompletions(fakeModel(), position(), context(), fakeToken());
+    expect(telemetry.snapshot()).toMatchObject({
+      requestCount: 1,
+      requestLatencyMsP50: 48,
+      requestLatencyMsP95: 48,
+    });
+  });
+
   it("returns undefined and records nothing when the host yields no items", async () => {
     const telemetry = createInlineCompletionTelemetry();
     const provider = createKeikoInlineCompletionProvider(
@@ -281,6 +298,9 @@ describe("createKeikoInlineCompletionProvider", () => {
       rejected: 1,
       ignored: 1,
       partiallyAccepted: 1,
+      requestCount: 0,
+      requestLatencyMsP50: 0,
+      requestLatencyMsP95: 0,
     });
   });
 

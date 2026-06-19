@@ -185,6 +185,64 @@ async function replaceMonacoText(
   await page.keyboard.insertText(text);
 }
 
+async function stubInlineCompletionRoutes(page: Page): Promise<{
+  readonly inlineRequests: unknown[];
+  readonly telemetryReports: unknown[];
+}> {
+  const inlineRequests: unknown[] = [];
+  const telemetryReports: unknown[] = [];
+  await page.route("**/api/editor/inline-completion", async (route) => {
+    inlineRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: "1",
+        items: [{ insertText: "urn 42;" }],
+        provenance: {
+          sources: ["model-assisted"],
+          modelMode: "as-you-type",
+          modelId: "e2e-inline-fim",
+          latencyClass: "fast",
+          gatewayPolicyVersion: "editor-inline-completion/1",
+          promptHash: "a".repeat(64),
+        },
+      }),
+    });
+  });
+  await page.route("**/api/editor/inline-completion/telemetry", async (route) => {
+    telemetryReports.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true }),
+    });
+  });
+  return { inlineRequests, telemetryReports };
+}
+
+async function openSmokeEditor(
+  page: Page,
+  projectPath: string,
+  relativePath: string,
+): Promise<ReturnType<Page["getByRole"]>> {
+  await seedFilesWindow(page, projectPath);
+  await page.goto("/");
+  const filesWindow = page.getByRole("region", { name: /^Files/u });
+  await openTreePath(filesWindow, "packages");
+  await openTreePath(filesWindow, "packages/keiko-cli");
+  await openTreePath(filesWindow, "packages/keiko-cli/src");
+  await openTreePath(filesWindow, relativePath);
+  await filesWindow.getByRole("button", { name: "Open in editor" }).click();
+  const editorWindow = page.getByRole("region", {
+    name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
+  });
+  await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
+  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await expect(filesWindow).toBeHidden();
+  return editorWindow;
+}
+
 test("app start exposes the workspace shell and health endpoint @smoke", async ({
   page,
   request,
@@ -323,6 +381,37 @@ test("editor surfaces diagnostics and hover from the governed language service @
 
   await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
   await expect(editorWindow).toBeHidden();
+  assertNoPageErrors();
+});
+
+test("editor inline ghost text renders and Tab accepts it @smoke", async ({ page }) => {
+  const projectPath = createProjectFixture();
+  const relativePath = "packages/keiko-cli/src/run.ts";
+  const absolutePath = join(projectPath, relativePath);
+  writeFileSync(absolutePath, "", "utf8");
+  const { inlineRequests, telemetryReports } = await stubInlineCompletionRoutes(page);
+  const assertNoPageErrors = collectPageErrors(page);
+
+  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
+  await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret");
+  await expect.poll(() => inlineRequests.length).toBeGreaterThan(0);
+  await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();
+
+  await page.keyboard.press("Tab");
+  await expect(editorWindow.getByText("return 42;")).toBeVisible();
+  await expect
+    .poll(() =>
+      telemetryReports.some((report) => {
+        const accepted = (report as { readonly accepted?: unknown }).accepted;
+        return typeof accepted === "number" && accepted > 0;
+      }),
+    )
+    .toBe(true);
+  await editorWindow.getByRole("button", { name: "Save" }).click();
+  await expect
+    .poll(() => readFileSync(absolutePath, "utf8").replace(/\r\n/gu, "\n"))
+    .toContain("return 42;");
+
   assertNoPageErrors();
 });
 

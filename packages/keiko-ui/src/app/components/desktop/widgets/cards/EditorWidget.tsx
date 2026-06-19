@@ -539,6 +539,7 @@ export function EditorWidget({
   const completionLanguage = fileModel?.identity.language;
   const completionEnabled =
     completionLanguage === "typescript" || completionLanguage === "javascript";
+  const editorSurfaceKey = `${themeVariant ?? "dark"}:${completionEnabled ? "source" : "plain"}`;
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
@@ -599,7 +600,7 @@ export function EditorWidget({
       ) : hasTarget && buffer !== null && fileModel !== null ? (
         <div className="ed-host">
           <EditorSurface
-            key={themeVariant}
+            key={editorSurfaceKey}
             buffer={buffer}
             fileModel={fileModel}
             fileLoadState={loadState}

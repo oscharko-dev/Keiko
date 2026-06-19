@@ -60,6 +60,18 @@ describe("buildInlineCompletionPrompt", () => {
     expect(prompt.user).toContain("Reference context");
     expect(prompt.user).toContain("[repo-search] helper()");
   });
+
+  it("redacts prefix and suffix text before assembling the model prompt", () => {
+    const prompt = buildInlineCompletionPrompt(
+      input({
+        overlayText: "const token = SECRET;\nreturn ",
+        position: { line: 1, character: 7 },
+        redactText: (value) => value.replaceAll("SECRET", "[REDACTED]"),
+      }),
+    );
+    expect(prompt.user).not.toContain("SECRET");
+    expect(prompt.user).toContain("[REDACTED]");
+  });
 });
 
 describe("parseInlineContinuation — result filtering", () => {

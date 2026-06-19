@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
+import { useEffect, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorCompletionWireResponse,
@@ -42,14 +42,25 @@ vi.mock("../../../../../lib/api", async () => {
 // The real surface dynamically imports `monaco-editor`, which cannot run in jsdom. Replace
 // `next/dynamic` with a probe that captures the host-driven props and lets the test drive the
 // editor's intent callbacks — exercising the host's load/save/conflict/dirty wiring directly.
-const surface: { props: EditorSurfaceProps | null } = { props: null };
+const surface: { props: EditorSurfaceProps | null; mounts: number; unmounts: number } = {
+  props: null,
+  mounts: 0,
+  unmounts: 0,
+};
 vi.mock("next/dynamic", () => ({
-  default:
-    () =>
-    (props: EditorSurfaceProps): ReactElement => {
+  default: () => {
+    function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
+      useEffect(() => {
+        surface.mounts += 1;
+        return (): void => {
+          surface.unmounts += 1;
+        };
+      }, []);
       surface.props = props;
       return <div data-testid="editor-surface" />;
-    },
+    }
+    return EditorSurfaceProbe;
+  },
 }));
 
 // The content-free document version the loaded fixture reports; the host captures it and sends it
@@ -75,6 +86,8 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 
 afterEach(() => {
   surface.props = null;
+  surface.mounts = 0;
+  surface.unmounts = 0;
   delete document.documentElement.dataset.theme;
   vi.clearAllMocks();
 });
@@ -617,7 +630,17 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     expect(report).toBeDefined();
     if (report === undefined) return;
 
-    report({ offered: 2, shown: 2, accepted: 1, rejected: 0, ignored: 1, partiallyAccepted: 0 });
+    report({
+      offered: 2,
+      shown: 2,
+      accepted: 1,
+      rejected: 0,
+      ignored: 1,
+      partiallyAccepted: 0,
+      requestCount: 3,
+      requestLatencyMsP50: 45,
+      requestLatencyMsP95: 80,
+    });
     expect(reportEditorInlineCompletionTelemetry).toHaveBeenCalledWith({
       root: "/repo",
       offered: 2,
@@ -626,6 +649,9 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
       rejected: 0,
       ignored: 1,
       partiallyAccepted: 0,
+      requestCount: 3,
+      requestLatencyMsP50: 45,
+      requestLatencyMsP95: 80,
     });
   });
 
@@ -637,6 +663,25 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
     expect(surface.props?.onInlineCompletionTelemetry).toBeUndefined();
+  });
+
+  it("remounts the editor surface when switching from plaintext to source so providers install", async () => {
+    vi.mocked(fetchFilesContent)
+      .mockResolvedValueOnce(fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }))
+      .mockResolvedValueOnce(fileResponse());
+    const { rerender } = render(<EditorWidget root="/repo" file="notes.md" />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.fileModel.identity.language).toBe("plaintext");
+    expect(surface.props?.provideInlineCompletions).toBeUndefined();
+    expect(surface.mounts).toBe(1);
+
+    rerender(<EditorWidget root="/repo" file="src/app.ts" />);
+    await waitFor(() => {
+      expect(surface.props?.fileModel.identity.language).toBe("typescript");
+    });
+    expect(surface.props?.provideInlineCompletions).toBeDefined();
+    expect(surface.mounts).toBe(2);
+    expect(surface.unmounts).toBeGreaterThanOrEqual(1);
   });
 });
 
