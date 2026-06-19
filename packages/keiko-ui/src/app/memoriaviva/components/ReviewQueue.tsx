@@ -296,7 +296,7 @@ export function ReviewQueue({
 
   return (
     <>
-      <header className="lk-header">
+      <header className="lk-header mc-review-header">
         {/* tabIndex -1: programmatic focus target when the queue empties
             (uiux-fix F035) */}
         <h1 className="lk-title" tabIndex={-1} ref={headingRef}>
@@ -308,12 +308,21 @@ export function ReviewQueue({
           {records.length.toString()} awaiting review
         </span>
         {onBack !== undefined ? (
-          <button type="button" className="lk-btn lk-btn-ghost lk-btn-lg" onClick={onBack}>
-            Back to MemoriaViva
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            aria-label="Back to MemoriaViva"
+            onClick={onBack}
+          >
+            Back
           </button>
         ) : (
-          <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-            Back to MemoriaViva
+          <Link
+            href="/memoriaviva"
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            aria-label="Back to MemoriaViva"
+          >
+            Back
           </Link>
         )}
       </header>

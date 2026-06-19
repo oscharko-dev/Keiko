@@ -490,6 +490,11 @@ interface UseFitMaximizedArgs {
 // window entirely off-screen with no visible recovery path (audit C132).
 export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow {
   if (w.max) return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
+  if (vp.w < 520 || vp.h < 420) {
+    const x = vp.x + 8;
+    const y = vp.y + 8;
+    return x === w.x && y === w.y ? w : { ...w, x, y };
+  }
   const x = Math.max(vp.x - (w.w - 120), Math.min(vp.x + vp.w - 120, w.x));
   const y = Math.max(vp.y, Math.min(vp.y + vp.h - 38, w.y));
   return x === w.x && y === w.y ? w : { ...w, x, y };

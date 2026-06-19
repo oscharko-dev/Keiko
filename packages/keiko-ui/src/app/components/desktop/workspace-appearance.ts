@@ -19,35 +19,60 @@ export function clampPercent(value: number): number {
 
 export function readWallpaperEnabled(): boolean {
   if (typeof window === "undefined") return DEFAULT_WALLPAPER_ENABLED;
-  return window.localStorage.getItem(WALLPAPER_ENABLED_KEY) === "true";
+  try {
+    if (typeof window.localStorage?.getItem !== "function") return DEFAULT_WALLPAPER_ENABLED;
+    return window.localStorage.getItem(WALLPAPER_ENABLED_KEY) === "true";
+  } catch {
+    return DEFAULT_WALLPAPER_ENABLED;
+  }
 }
 
 export function readWallpaperOpacity(): number {
   if (typeof window === "undefined") return 100;
-  const raw = window.localStorage.getItem(WALLPAPER_OPACITY_KEY);
-  if (raw === null) return 100;
-  return clampPercent(Number.parseInt(raw, 10));
+  try {
+    if (typeof window.localStorage?.getItem !== "function") return 100;
+    const raw = window.localStorage.getItem(WALLPAPER_OPACITY_KEY);
+    if (raw === null) return 100;
+    return clampPercent(Number.parseInt(raw, 10));
+  } catch {
+    return 100;
+  }
 }
 
 export function readWorkspaceBackgroundBrightness(): number {
   if (typeof window === "undefined") return 0;
-  const raw = window.localStorage.getItem(WORKSPACE_BACKGROUND_BRIGHTNESS_KEY);
-  if (raw === null) return 0;
-  return clampPercent(Number.parseInt(raw, 10));
+  try {
+    if (typeof window.localStorage?.getItem !== "function") return 0;
+    const raw = window.localStorage.getItem(WORKSPACE_BACKGROUND_BRIGHTNESS_KEY);
+    if (raw === null) return 0;
+    return clampPercent(Number.parseInt(raw, 10));
+  } catch {
+    return 0;
+  }
 }
 
 export function readWorkspaceGridStrength(): number {
   if (typeof window === "undefined") return 28;
-  const raw = window.localStorage.getItem(WORKSPACE_GRID_STRENGTH_KEY);
-  if (raw === null) return 28;
-  return clampPercent(Number.parseInt(raw, 10));
+  try {
+    if (typeof window.localStorage?.getItem !== "function") return 28;
+    const raw = window.localStorage.getItem(WORKSPACE_GRID_STRENGTH_KEY);
+    if (raw === null) return 28;
+    return clampPercent(Number.parseInt(raw, 10));
+  } catch {
+    return 28;
+  }
 }
 
 export function readFrameBorderStrength(): number {
   if (typeof window === "undefined") return 42;
-  const raw = window.localStorage.getItem(FRAME_BORDER_STRENGTH_KEY);
-  if (raw === null) return 42;
-  return clampPercent(Number.parseInt(raw, 10));
+  try {
+    if (typeof window.localStorage?.getItem !== "function") return 42;
+    const raw = window.localStorage.getItem(FRAME_BORDER_STRENGTH_KEY);
+    if (raw === null) return 42;
+    return clampPercent(Number.parseInt(raw, 10));
+  } catch {
+    return 42;
+  }
 }
 
 export function applyWorkspaceBackgroundBrightness(value: number): void {

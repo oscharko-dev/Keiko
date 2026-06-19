@@ -42,7 +42,13 @@ const mocks = vi.hoisted(() => ({
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
-    workspaceProps: undefined as { readonly outlineOpen?: boolean } | undefined,
+    workspaceProps: undefined as
+      | {
+          readonly outlineOpen?: boolean;
+          readonly onToggleOutline?: () => void;
+          readonly renderOutlineToggle?: boolean;
+        }
+      | undefined,
     rightRailProps: undefined as
       | { readonly outlineOpen?: boolean; readonly onToggleOutline?: () => void }
       | undefined,
@@ -165,7 +171,11 @@ vi.mock("./RightRail", () => ({
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: (props: { readonly outlineOpen?: boolean }) => {
+  Workspace: (props: {
+    readonly outlineOpen?: boolean;
+    readonly onToggleOutline?: () => void;
+    readonly renderOutlineToggle?: boolean;
+  }) => {
     mocks.state.workspaceProps = props;
     return <main data-testid="workspace" data-outline-open={props.outlineOpen === true} />;
   },
@@ -311,6 +321,37 @@ describe("AppShell grounding connections", () => {
     mocks.state.workspaceOptions = undefined;
     mocks.state.workspaceProps = undefined;
     mocks.state.rightRailProps = undefined;
+    document.documentElement.removeAttribute("data-input-modality");
+  });
+
+  it("tracks pointer and keyboard modality for focus ring policy", async () => {
+    await renderMounted();
+
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+    });
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "keyboard");
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousedown"));
+    });
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
+  });
+
+  it("does not turn typed text into keyboard-focus modality after a mouse click", async () => {
+    await renderMounted();
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousedown"));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    });
+
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
   });
 
   it("persists a new Files source and records the governed reads-context relationship", async () => {
@@ -441,7 +482,29 @@ describe("AppShell grounding connections", () => {
     expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
     expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline open");
     expect(mocks.state.workspaceProps?.outlineOpen).toBe(true);
+    expect(mocks.state.workspaceProps?.renderOutlineToggle).toBe(false);
     expect(mocks.state.rightRailProps?.outlineOpen).toBe(true);
+  });
+
+  it("keeps the right rail as the only product outline toggle surface", async () => {
+    await renderMounted();
+
+    expect(mocks.state.workspaceProps?.renderOutlineToggle).toBe(false);
+    expect(mocks.state.workspaceProps?.onToggleOutline).toBeTypeOf("function");
+
+    await act(async () => {
+      mocks.state.rightRailProps?.onToggleOutline?.();
+    });
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "true");
+
+    await act(async () => {
+      mocks.state.rightRailProps?.onToggleOutline?.();
+    });
+
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-outline-open", "false");
+    expect(screen.getByTestId("right-rail")).toHaveTextContent("Outline closed");
+    expect(mocks.state.workspaceProps?.outlineOpen).toBe(false);
+    expect(mocks.state.rightRailProps?.outlineOpen).toBe(false);
   });
 
   it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {

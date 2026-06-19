@@ -86,10 +86,10 @@ export function resolveKeikoBinary(
     readonly source: KeikoBinarySource;
     readonly binPath: string | undefined;
   }[] = [
-    { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
-    { source: "local-package", binPath: localPackageLayout(cwd)?.binPath },
     { source: "env-override", binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH) },
     { source: "argv", binPath: absoluteExistingPath(argv[1]) },
+    { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
+    { source: "local-package", binPath: localPackageLayout(cwd)?.binPath },
   ];
 
   for (const candidate of checks) {

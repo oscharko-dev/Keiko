@@ -46,6 +46,48 @@ type ExportQiRunFn = (
   options?: { readonly dryRun?: boolean; readonly approvedOnly?: boolean },
 ) => Promise<QiExportResult>;
 
+const ADAPTER_LABELS = {
+  csv: "CSV",
+  json: "JSON",
+  "spreadsheet-safe-csv": "Spreadsheet-safe CSV",
+  markdown: "Markdown",
+  "plain-text": "Plain text",
+  pdf: "PDF",
+  "zip-bundle": "ZIP bundle (all formats)",
+  "traceability-csv": "Traceability matrix (CSV)",
+  "traceability-markdown": "Traceability matrix (Markdown)",
+  "jira-issues": "Jira (preview)",
+  qtest: "qTest (preview)",
+  xray: "Xray (preview)",
+  polarion: "Polarion (preview)",
+  "quality-center": "Quality Center (preview)",
+} as const;
+
+type AdapterId = keyof typeof ADAPTER_LABELS;
+
+function getExportPicker(): HTMLElement {
+  return screen.getByRole("combobox", { name: /adapter|format|export/i });
+}
+
+async function selectExportAdapter(
+  user: ReturnType<typeof userEvent.setup>,
+  adapter: string,
+): Promise<void> {
+  const label = ADAPTER_LABELS[adapter as AdapterId];
+  if (label === undefined) throw new Error(`Unknown adapter in test: ${adapter}`);
+  await user.click(getExportPicker());
+  await user.click(await screen.findByRole("option", { name: label }));
+}
+
+async function expectExportAdapterOption(adapter: string): Promise<void> {
+  const label = ADAPTER_LABELS[adapter as AdapterId];
+  if (label === undefined) throw new Error(`Unknown adapter in test: ${adapter}`);
+  const user = userEvent.setup();
+  await user.click(getExportPicker());
+  expect(await screen.findByRole("option", { name: label })).toBeInTheDocument();
+  await user.keyboard("{Escape}");
+}
+
 /**
  * A fake for a local (non-TMS) export. Returns a resolved local-download result.
  */
@@ -95,21 +137,17 @@ describe("ExportBar — adapter select options", () => {
 
   it.each(["csv", "json", "spreadsheet-safe-csv"])(
     "includes local adapter option '%s'",
-    (adapter) => {
+    async (adapter) => {
       render(<ExportBar runId="run-001" />);
-      const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
-      const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-      expect(options).toContain(adapter);
+      await expectExportAdapterOption(adapter);
     },
   );
 
   it.each(["jira-issues", "qtest", "xray", "polarion"])(
     "includes TMS adapter option '%s'",
-    (adapter) => {
+    async (adapter) => {
       render(<ExportBar runId="run-001" />);
-      const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
-      const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-      expect(options).toContain(adapter);
+      await expectExportAdapterOption(adapter);
     },
   );
 });
@@ -120,40 +158,32 @@ describe("ExportBar — adapter select options", () => {
 
 describe("ExportBar — button label by adapter type", () => {
   it("shows a 'Download' button when a local adapter (csv) is selected", async () => {
+    const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
     // csv should be the default or we select it explicitly.
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /preview/i })).not.toBeInTheDocument();
   });
 
   it("shows a 'Download' button when 'json' adapter is selected", async () => {
+    const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "json",
-    );
+    await selectExportAdapter(user, "json");
     expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
   });
 
   it("shows a 'Download' button when 'spreadsheet-safe-csv' adapter is selected", async () => {
+    const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "spreadsheet-safe-csv",
-    );
+    await selectExportAdapter(user, "spreadsheet-safe-csv");
     expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
   });
 
   it("shows a 'Preview' button when the 'jira-issues' TMS adapter is selected", async () => {
+    const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     expect(screen.getByRole("button", { name: /preview/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
   });
@@ -161,11 +191,9 @@ describe("ExportBar — button label by adapter type", () => {
   it.each(["qtest", "xray", "polarion"])(
     "shows a 'Preview' button when the '%s' TMS adapter is selected",
     async (adapter) => {
+      const user = userEvent.setup();
       render(<ExportBar runId="run-001" />);
-      await userEvent.selectOptions(
-        screen.getByRole("combobox", { name: /adapter|format|export/i }),
-        adapter,
-      );
+      await selectExportAdapter(user, adapter);
       expect(screen.getByRole("button", { name: /preview/i })).toBeInTheDocument();
     },
   );
@@ -181,10 +209,7 @@ describe("ExportBar — local adapter export", () => {
     const exportImpl = makeLocalExportFake();
     render(<ExportBar runId="run-xyz" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -204,10 +229,7 @@ describe("ExportBar — local adapter export", () => {
     const exportImpl = makeLocalExportFake();
     render(<ExportBar runId="run-json" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "json",
-    );
+    await selectExportAdapter(user, "json");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -226,10 +248,7 @@ describe("ExportBar — local adapter export", () => {
     const exportImpl = makeLocalExportFake();
     render(<ExportBar runId="run-ssc" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "spreadsheet-safe-csv",
-    );
+    await selectExportAdapter(user, "spreadsheet-safe-csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -248,10 +267,7 @@ describe("ExportBar — local adapter export", () => {
     const exportImpl = makeLocalExportFake({ body: "id,title\n1,TC-001" });
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -268,10 +284,7 @@ describe("ExportBar — local adapter export", () => {
     const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     try {
       render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
-      await user.selectOptions(
-        screen.getByRole("combobox", { name: /adapter|format|export/i }),
-        "csv",
-      );
+      await selectExportAdapter(user, "csv");
       await user.click(screen.getByRole("button", { name: /download/i }));
 
       await waitFor(() => {
@@ -349,10 +362,7 @@ describe("ExportBar — TMS adapter preview", () => {
     const exportImpl = makeTmsPreviewFake("3 candidates would be created in Jira.");
     render(<ExportBar runId="run-jira" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     await user.click(screen.getByRole("button", { name: /preview/i }));
 
     await waitFor(() => {
@@ -373,10 +383,7 @@ describe("ExportBar — TMS adapter preview", () => {
     const exportImpl = makeTmsPreviewFake(previewText);
     render(<ExportBar runId="run-jira" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     await user.click(screen.getByRole("button", { name: /preview/i }));
 
     await waitFor(() => {
@@ -390,10 +397,7 @@ describe("ExportBar — TMS adapter preview", () => {
     const exportImpl = makeTmsPreviewFake("2 test cases queued for xray.");
     render(<ExportBar runId="run-xray" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "xray",
-    );
+    await selectExportAdapter(user, "xray");
     await user.click(screen.getByRole("button", { name: /preview/i }));
 
     await waitFor(() => {
@@ -422,20 +426,14 @@ describe("ExportBar — TMS adapter preview", () => {
 
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     await user.click(screen.getByRole("button", { name: /preview/i }));
     await waitFor(() => {
       expect(screen.getByTestId("qi-export-preview")).toHaveTextContent(firstPreview);
     });
 
     // Switch adapter and click Preview again.
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "xray",
-    );
+    await selectExportAdapter(user, "xray");
     await user.click(screen.getByRole("button", { name: /preview/i }));
     await waitFor(() => {
       expect(screen.getByTestId("qi-export-preview")).toHaveTextContent(secondPreview);
@@ -455,10 +453,7 @@ describe("ExportBar — error handling", () => {
     const exportImpl = makeRejectingFake(new Error("S3 upload failed"));
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -472,10 +467,7 @@ describe("ExportBar — error handling", () => {
     const exportImpl = makeRejectingFake(new Error("Jira auth failed: 401"));
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     await user.click(screen.getByRole("button", { name: /preview/i }));
 
     await waitFor(() => {
@@ -489,10 +481,7 @@ describe("ExportBar — error handling", () => {
     const exportImpl = makeRejectingFake(new Error("network error"));
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     await user.click(screen.getByRole("button", { name: /preview/i }));
 
     await waitFor(() => {
@@ -506,10 +495,7 @@ describe("ExportBar — error handling", () => {
     const exportImpl = makeRejectingFake(new Error("timeout"));
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -533,10 +519,7 @@ describe("ExportBar — error handling", () => {
 
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -563,10 +546,7 @@ describe("ExportBar — runId forwarding", () => {
     const specificRunId = "run-deadbeef-1234";
     render(<ExportBar runId={specificRunId} exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "json",
-    );
+    await selectExportAdapter(user, "json");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -585,20 +565,17 @@ describe("ExportBar — runId forwarding", () => {
 describe("ExportBar — Epic #711 multi-format adapters", () => {
   it.each(["markdown", "plain-text", "pdf", "zip-bundle"])(
     "includes the new local format option '%s'",
-    (adapter) => {
+    async (adapter) => {
       render(<ExportBar runId="run-001" />);
-      const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
-      const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-      expect(options).toContain(adapter);
+      await expectExportAdapterOption(adapter);
     },
   );
 
   it("offers Quality Center as a disabled, preview-only (TMS) adapter", async () => {
+    const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
-    const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-    expect(options).toContain("quality-center");
-    await userEvent.selectOptions(select, "quality-center");
+    await expectExportAdapterOption("quality-center");
+    await selectExportAdapter(user, "quality-center");
     expect(screen.getByRole("button", { name: /preview/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
   });
@@ -615,10 +592,7 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
       body: btoa("%PDF-1.4 minimal"),
     }) as unknown as ExportQiRunFn;
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "pdf",
-    );
+    await selectExportAdapter(user, "pdf");
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
       expect(exportImpl).toHaveBeenCalledWith(
@@ -649,10 +623,7 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
       const user = userEvent.setup();
       const exportImpl = vi.fn().mockResolvedValue(result) as unknown as ExportQiRunFn;
       render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
-      await user.selectOptions(
-        screen.getByRole("combobox", { name: /adapter|format|export/i }),
-        adapterId,
-      );
+      await selectExportAdapter(user, adapterId);
       await user.click(screen.getByRole("button", { name: /download/i }));
       await waitFor(() => {
         expect(createSpy).toHaveBeenCalled();
@@ -697,10 +668,7 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
     const user = userEvent.setup();
     const exportImpl = makeLocalExportFake({ filename: "run-001.csv" });
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
       expect(screen.getByTestId("qi-export-success")).toBeInTheDocument();
@@ -711,10 +679,7 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
   it("surfaces a configure-connector affordance for the disabled Quality Center option", async () => {
     const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "quality-center",
-    );
+    await selectExportAdapter(user, "quality-center");
     const hint = screen.getByTestId("qi-export-connector-hint");
     expect(hint).toBeInTheDocument();
     expect(hint).toHaveTextContent(/configure a connector/i);
@@ -723,10 +688,7 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
   it("does not show the connector hint for a local format", async () => {
     const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "markdown",
-    );
+    await selectExportAdapter(user, "markdown");
     expect(screen.queryByTestId("qi-export-connector-hint")).not.toBeInTheDocument();
   });
 });
@@ -748,11 +710,9 @@ describe("ExportBar — traceability matrix export", () => {
 
   it.each(["traceability-csv", "traceability-markdown"])(
     "offers the '%s' traceability option",
-    (adapter) => {
+    async (adapter) => {
       render(<ExportBar runId="run-001" />);
-      const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
-      const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
-      expect(options).toContain(adapter);
+      await expectExportAdapterOption(adapter);
     },
   );
 
@@ -763,10 +723,7 @@ describe("ExportBar — traceability matrix export", () => {
     render(
       <ExportBar runId="run-trace" exportImpl={exportImpl} traceabilityImpl={traceabilityImpl} />,
     );
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "traceability-csv",
-    );
+    await selectExportAdapter(user, "traceability-csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
       expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "csv");
@@ -781,10 +738,7 @@ describe("ExportBar — traceability matrix export", () => {
     const user = userEvent.setup();
     const traceabilityImpl = makeTraceabilityFake();
     render(<ExportBar runId="run-trace" traceabilityImpl={traceabilityImpl} />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "traceability-markdown",
-    );
+    await selectExportAdapter(user, "traceability-markdown");
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
       expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "markdown");
@@ -866,25 +820,16 @@ describe("ExportBar — approvedOnly scope control (Issue #282 A11y-3)", () => {
   it("hides the 'Approved only' checkbox for TMS adapters", async () => {
     const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     expect(screen.queryByRole("checkbox", { name: /approved only/i })).not.toBeInTheDocument();
   });
 
   it("shows the 'Approved only' checkbox again when switching back from TMS to a local adapter", async () => {
     const user = userEvent.setup();
     render(<ExportBar runId="run-001" />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "jira-issues",
-    );
+    await selectExportAdapter(user, "jira-issues");
     expect(screen.queryByRole("checkbox", { name: /approved only/i })).not.toBeInTheDocument();
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "csv",
-    );
+    await selectExportAdapter(user, "csv");
     expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeInTheDocument();
   });
 });
@@ -920,10 +865,7 @@ describe("ExportBar — Issue #723 audit hardening", () => {
         <ExportBar runId="run-001" exportImpl={exportImpl} traceabilityImpl={traceabilityImpl} />,
       );
 
-      await user.selectOptions(
-        screen.getByRole("combobox", { name: /adapter|format|export/i }),
-        adapter,
-      );
+      await selectExportAdapter(user, adapter);
       await user.click(screen.getByRole("button", { name: /download/i }));
 
       await waitFor(() => {
@@ -948,10 +890,7 @@ describe("ExportBar — Issue #723 audit hardening", () => {
     const exportImpl = makeTmsPreviewFake("0 test cases would be written to Quality Center.");
     render(<ExportBar runId="run-qc" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "quality-center",
-    );
+    await selectExportAdapter(user, "quality-center");
     await user.click(screen.getByRole("button", { name: /preview/i }));
 
     await waitFor(() => {
@@ -979,10 +918,7 @@ describe("ExportBar — Issue #723 audit hardening", () => {
     }) as unknown as typeof import("@/lib/quality-intelligence-api").exportQiRun;
     render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "pdf",
-    );
+    await selectExportAdapter(user, "pdf");
     await user.click(screen.getByRole("button", { name: /download/i }));
 
     await waitFor(() => {
@@ -1016,10 +952,7 @@ describe("ExportBar — Issue #723 audit hardening", () => {
         body: btoa(String.fromCharCode(...raw)),
       }) as unknown as typeof import("@/lib/quality-intelligence-api").exportQiRun;
       render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
-      await user.selectOptions(
-        screen.getByRole("combobox", { name: /adapter|format|export/i }),
-        "zip-bundle",
-      );
+      await selectExportAdapter(user, "zip-bundle");
       await user.click(screen.getByRole("button", { name: /download/i }));
       await waitFor(() => {
         expect(createSpy).toHaveBeenCalled();
@@ -1043,10 +976,7 @@ describe("ExportBar — Issue #723 audit hardening", () => {
   it("has no axe violations when the disabled Quality Center option is selected", async () => {
     const user = userEvent.setup();
     const { container } = render(<ExportBar runId="run-001" />);
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /adapter|format|export/i }),
-      "quality-center",
-    );
+    await selectExportAdapter(user, "quality-center");
     // The connector hint (the aria-describedby target on the picker) is now rendered.
     expect(screen.getByTestId("qi-export-connector-hint")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();

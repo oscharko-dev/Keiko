@@ -14,6 +14,7 @@ import {
   exportQiRunTraceability,
   type QiTraceabilityFormat,
 } from "@/lib/quality-intelligence-api";
+import KeikoSelect from "../../KeikoSelect";
 import { formatError } from "./qiShared";
 
 // Traceability adapters are served by a dedicated, matrix-driven route (Epic #734, Issue #740);
@@ -137,32 +138,36 @@ export function ExportBar({
 
   return (
     <div className="qi-export" data-testid="qi-export-bar">
-      <label className="qi-field qi-field-inline">
+      <div className="qi-field qi-field-inline">
         <span className="qi-field-label">Export</span>
-        <select
-          className="qi-select"
+        <KeikoSelect
+          triggerClassName="qi-select"
           value={adapter}
+          ariaLabel="Export"
           disabled={busy}
           // Issue #723 AC2 a11y: when a TMS (preview-only) adapter such as Quality Center is
           // selected, associate the "preview only — configure a connector" note with the picker so
           // forms-mode screen-reader users hear the disabled/preview state on the control itself,
           // not only when reading sequentially. Omitted for local formats (no such note renders),
           // which keeps the reference from ever dangling.
-          aria-describedby={isTms ? "qi-export-connector-hint" : undefined}
-          onChange={(e) => {
-            setAdapter(e.target.value);
+          ariaDescribedBy={isTms ? "qi-export-connector-hint" : undefined}
+          menuTitle="Export"
+          sections={[
+            {
+              options: ADAPTERS.map((adapterOption) => ({
+                value: adapterOption.id,
+                label: adapterOption.label,
+              })),
+            },
+          ]}
+          onValueChange={(next) => {
+            setAdapter(next);
             setPreview(null);
             setError(null);
             setDownloaded(null);
           }}
-        >
-          {ADAPTERS.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        />
+      </div>
       {/* Issue #282 A11y-3 / AC3: "Approved only" scope control. Hidden for TMS adapters (TMS
           forces approvedOnly server-side; the server owns that decision — showing a checkbox that
           appears to control it would be misleading). Default unchecked = all test cases exported,

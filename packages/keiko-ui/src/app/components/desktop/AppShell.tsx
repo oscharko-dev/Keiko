@@ -610,6 +610,29 @@ function AppShellInner(): ReactNode {
   useKeyboardShortcuts({ bindings: SHELL_SHORTCUT_BINDINGS, dispatch: dispatchShortcut });
 
   useEffect(() => {
+    const root = document.documentElement;
+    const setPointerModality = (): void => {
+      root.setAttribute("data-input-modality", "pointer");
+    };
+    const setKeyboardModality = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== "Tab") return;
+      root.setAttribute("data-input-modality", "keyboard");
+    };
+
+    root.setAttribute("data-input-modality", "pointer");
+    window.addEventListener("pointerdown", setPointerModality, true);
+    window.addEventListener("mousedown", setPointerModality, true);
+    window.addEventListener("keydown", setKeyboardModality, true);
+    return () => {
+      window.removeEventListener("pointerdown", setPointerModality, true);
+      window.removeEventListener("mousedown", setPointerModality, true);
+      window.removeEventListener("keydown", setKeyboardModality, true);
+      root.removeAttribute("data-input-modality");
+    };
+  }, []);
+
+  useEffect(() => {
     const h = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
@@ -642,6 +665,7 @@ function AppShellInner(): ReactNode {
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
   ) : null;
+  const toggleOutline = (): void => setOutlineOpen((open) => !open);
 
   return (
     <ChatSessionProvider value={session}>
@@ -676,6 +700,8 @@ function AppShellInner(): ReactNode {
                 openPalette={openPalette}
                 palette={paletteNode}
                 outlineOpen={outlineOpen}
+                onToggleOutline={toggleOutline}
+                renderOutlineToggle={false}
               />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
@@ -697,7 +723,7 @@ function AppShellInner(): ReactNode {
               openTools={openTools}
               onTool={onTool}
               outlineOpen={outlineOpen}
-              onToggleOutline={() => setOutlineOpen((open) => !open)}
+              onToggleOutline={toggleOutline}
             />
           </div>
           <Footer

@@ -26,6 +26,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icons } from "./Icons";
+import KeikoSelect from "./KeikoSelect";
 import { CHAT_WORKFLOW_CATALOG, findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
@@ -627,20 +628,28 @@ function GroundedWorkflowDialog({
             <p className="wf-dialog-form-desc">{choice.description}</p>
             {workflowKind === "unit-test-generation" ? (
               <>
-                <label className="wf-dialog-field">
-                  Target mode
-                  <select
-                    className="wf-dialog-input mono"
+                <div className="wf-dialog-field">
+                  <span>Target mode</span>
+                  <KeikoSelect
+                    triggerClassName="wf-dialog-input mono"
                     value={unitTargetMode}
-                    onChange={(event) =>
-                      setUnitTargetMode(event.target.value as "file" | "module" | "changedFiles")
+                    ariaLabel="Target mode"
+                    menuTitle="Target mode"
+                    mono
+                    sections={[
+                      {
+                        options: [
+                          { value: "file", label: "File" },
+                          { value: "module", label: "Module" },
+                          { value: "changedFiles", label: "Changed files" },
+                        ],
+                      },
+                    ]}
+                    onValueChange={(next) =>
+                      setUnitTargetMode(next as "file" | "module" | "changedFiles")
                     }
-                  >
-                    <option value="file">File</option>
-                    <option value="module">Module</option>
-                    <option value="changedFiles">Changed files</option>
-                  </select>
-                </label>
+                  />
+                </div>
                 <label className="wf-dialog-field">
                   {unitTargetMode === "module"
                     ? "Module directory"

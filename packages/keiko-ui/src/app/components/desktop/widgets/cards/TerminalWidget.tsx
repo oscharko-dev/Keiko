@@ -29,6 +29,7 @@ import type {
   TerminalExecutionResult,
   TerminalPolicySummary,
 } from "../../../../../lib/types";
+import KeikoSelect from "../../KeikoSelect";
 
 interface TerminalWidgetProps {
   readonly projectPath?: string;
@@ -274,21 +275,26 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
             required
           />
         </label>
-        <label className="tm-field">
+        <div className="tm-field">
           <span>Command</span>
-          <select
+          <KeikoSelect
             value={command}
-            onChange={(e) => setCommand(e.target.value)}
+            ariaLabel="Command"
             disabled={policy === null}
-            required
-          >
-            {policy?.commands.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
+            menuTitle="Allowed commands"
+            mono
+            sections={[
+              {
+                options:
+                  policy?.commands.map((cmd) => ({
+                    value: cmd,
+                    label: cmd,
+                  })) ?? [],
+              },
+            ]}
+            onValueChange={setCommand}
+          />
+        </div>
         <label className="tm-field">
           <span>Args (space-separated)</span>
           <input

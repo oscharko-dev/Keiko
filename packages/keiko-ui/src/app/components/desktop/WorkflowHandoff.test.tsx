@@ -32,6 +32,15 @@ import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  trigger: HTMLElement,
+  optionName: string,
+): Promise<void> {
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name: optionName }));
+}
+
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
     id: "chat-1",
@@ -450,13 +459,17 @@ describe("WorkflowHandoff — dialog edge cases and grounded input matrix", () =
     await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provide a target file.");
 
-    await user.selectOptions(within(dialog).getByLabelText(/target mode/i), "module");
+    await chooseComboboxOption(user, within(dialog).getByLabelText(/target mode/i), "Module");
     await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Provide a module directory.",
     );
 
-    await user.selectOptions(within(dialog).getByLabelText(/target mode/i), "changedFiles");
+    await chooseComboboxOption(
+      user,
+      within(dialog).getByLabelText(/target mode/i),
+      "Changed files",
+    );
     await user.type(
       within(dialog).getByLabelText(/changed files \(one per line\)/i),
       "src/a.ts\nsrc/b.ts",

@@ -417,6 +417,7 @@ export function SettingsPanel(): ReactNode {
             // toggle-button pattern, same as the density buttons in
             // RelationshipListPanel (state was previously CSS-only via data-on).
             aria-pressed={tab === id}
+            onPointerDown={() => setTab(id)}
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}

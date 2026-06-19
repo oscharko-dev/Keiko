@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
 import { isAgentWorkflowModel, directoryPickerError, NewWindowDialog } from "./NewWindowDialog";
@@ -67,6 +68,15 @@ function mockAgentDependencies(): void {
     projects: [project()],
   });
   vi.mocked(startRun).mockResolvedValue({ runId: "run 1", fingerprint: "fp 1" });
+}
+
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  trigger: HTMLElement,
+  optionName: string,
+): Promise<void> {
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name: optionName }));
 }
 
 async function renderAgentDialog(
@@ -201,11 +211,10 @@ describe("NewWindowDialog agents: start-run contract", () => {
   });
 
   it("starts explain-plan with a normalized file path and optional question", async () => {
+    const user = userEvent.setup();
     await renderAgentDialog();
 
-    fireEvent.change(screen.getAllByRole("combobox")[0] as HTMLSelectElement, {
-      target: { value: "explain-plan" },
-    });
+    await chooseComboboxOption(user, screen.getByRole("combobox", { name: "Workflow" }), "Explain plan");
     fireEvent.change(screen.getByPlaceholderText("What should the plan focus on?"), {
       target: { value: "Focus on RAG quality." },
     });
@@ -225,14 +234,19 @@ describe("NewWindowDialog agents: start-run contract", () => {
   });
 
   it("starts unit-test-generation for changed files after normalizing mixed path input", async () => {
+    const user = userEvent.setup();
     await renderAgentDialog();
 
-    fireEvent.change(screen.getAllByRole("combobox")[0] as HTMLSelectElement, {
-      target: { value: "unit-test-generation" },
-    });
-    fireEvent.change(screen.getAllByRole("combobox")[2] as HTMLSelectElement, {
-      target: { value: "changedFiles" },
-    });
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Workflow" }),
+      "Generate unit tests",
+    );
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Target" }),
+      "Changed files",
+    );
     const changedFiles = screen.getByPlaceholderText("src/file.ts, src/other.ts");
     fireEvent.change(changedFiles, {
       target: { value: "/repo/src/app.ts, src/other.ts" },
@@ -253,11 +267,14 @@ describe("NewWindowDialog agents: start-run contract", () => {
   });
 
   it("keeps bug-investigation disabled until evidence exists and then starts with the full report", async () => {
+    const user = userEvent.setup();
     await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
 
-    fireEvent.change(screen.getAllByRole("combobox")[0] as HTMLSelectElement, {
-      target: { value: "bug-investigation" },
-    });
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Workflow" }),
+      "Investigate bug",
+    );
     expect(screen.getByText(/Bug investigation requires description/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start agent/i })).toHaveAttribute("disabled");
 
