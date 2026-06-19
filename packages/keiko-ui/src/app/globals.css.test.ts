@@ -259,6 +259,15 @@ describe("Workspace outline positioning", () => {
   });
 });
 
+describe("Workspace frame lighting", () => {
+  it("lets settings control an inward edge light from the workspace frame", () => {
+    const block = cssBlock(".workspace {");
+    expect(block).toContain("--frame-inner-glow-strength");
+    expect(block).toContain("inset 0 0 34px");
+    expect(block).toContain("inset 0 0 86px");
+  });
+});
+
 // ─── Fix 3: WCAG 1.4.3 — light-theme text contrast ───────────────────────────
 
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {

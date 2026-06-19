@@ -7,13 +7,16 @@ import {
   WALLPAPER_ENABLED_KEY,
   WALLPAPER_OPACITY_EVENT,
   FRAME_BORDER_STRENGTH_EVENT,
+  FRAME_INNER_GLOW_STRENGTH_EVENT,
   WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT,
   WORKSPACE_GRID_STRENGTH_EVENT,
   applyFrameBorderStrength,
+  applyFrameInnerGlowStrength,
   applyWorkspaceBackgroundBrightness,
   applyWorkspaceGridStrength,
   clampPercent,
   readFrameBorderStrength,
+  readFrameInnerGlowStrength,
   readWallpaperEnabled,
   readWallpaperOpacity,
   readWorkspaceBackgroundBrightness,
@@ -29,7 +32,6 @@ const KEIKO_FRAG = `
 precision highp float;
 uniform vec2  uRes;
 uniform float uTime;
-uniform vec2  uMouse;   // 0..1, y up
 uniform float uLight;   // 1 = light theme, 0 = dark; WebGL default 0 keeps failure mode dark
 uniform vec2  uRip[4];  // ripple origins (0..1, y up)
 uniform float uRipT[4]; // seconds since each ripple fired (large = inactive)
@@ -57,7 +59,6 @@ void main(){
   vec2 uv = gl_FragCoord.xy / uRes.xy;
   float aspect = uRes.x / uRes.y;
   vec2 p = vec2(uv.x * aspect, uv.y);
-  vec2 m = vec2(uMouse.x * aspect, uMouse.y);
 
   float t = uTime * 0.06;
 
@@ -79,10 +80,6 @@ void main(){
     fbm(p * 2.1 + vec2(0.0, t)),
     fbm(p * 2.1 + vec2(t, 4.7))
   );
-  // mouse bends the flow toward the cursor
-  vec2 toM = m - p;
-  float md = exp(-length(toM) * 2.2);
-  warp += toM * md * 0.28;
   warp += rip * 0.07;
 
   float f = fbm(p * 2.4 + warp * 1.7 + vec2(t * 0.6, 0.0));
@@ -106,9 +103,6 @@ void main(){
   // orca-green sheen on the brightest specular ridges
   float spec = smoothstep(0.80, 1.0, bands);
   col += green * spec * mix(0.16, 0.085, uLight);
-
-  // soft green glow trailing the cursor — fun to fidget with
-  col += green * md * 0.085;
 
   // ripple highlight
   vec3 ripCol = mix(vec3(1.0), green, uLight);
@@ -195,7 +189,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
 
   const uRes: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRes");
   const uTime: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uTime");
-  const uMouse: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uMouse");
   const uLight: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uLight");
   const uRip: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRip");
   const uRipT: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRipT");
@@ -204,7 +197,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   let W = 1;
   let H = 1;
   const dpr = Math.min(window.devicePixelRatio ?? 1, 1.5);
-  const mouse = { tx: 0.5, ty: 0.5, x: 0.5, y: 0.5 };
   const ripPos = new Float32Array(RN * 2);
   const ripStart: number[] = new Array(RN).fill(Number.NEGATIVE_INFINITY);
   let ripHead = 0;
@@ -225,13 +217,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   if (ro !== null) ro.observe(host);
   else window.addEventListener("resize", resize);
 
-  const onMove = (e: PointerEvent): void => {
-    const r = host.getBoundingClientRect();
-    mouse.tx = (e.clientX - r.left) / Math.max(1, r.width);
-    // y-axis is flipped: WebGL UV y=0 is bottom, pointer y=0 is top
-    mouse.ty = 1 - (e.clientY - r.top) / Math.max(1, r.height);
-  };
-
   const onDown = (e: PointerEvent): void => {
     const r = host.getBoundingClientRect();
     const nx = (e.clientX - r.left) / Math.max(1, r.width);
@@ -243,7 +228,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     ripHead = (ripHead + 1) % RN;
   };
 
-  host.addEventListener("pointermove", onMove);
   host.addEventListener("pointerdown", onDown);
 
   const t0 = performance.now();
@@ -256,9 +240,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     const now = performance.now();
     const time = (now - t0) / 1000;
 
-    mouse.x += (mouse.tx - mouse.x) * 0.06;
-    mouse.y += (mouse.ty - mouse.y) * 0.06;
-
     for (let i = 0; i < RN; i++) {
       ripT[i] = (now - (ripStart[i] ?? Number.NEGATIVE_INFINITY)) / 1000;
     }
@@ -268,7 +249,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     if (gl !== null) {
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, time);
-      gl.uniform2f(uMouse, mouse.x, mouse.y);
       gl.uniform1f(uLight, light);
       gl.uniform2fv(uRip, ripPos);
       gl.uniform1fv(uRipT, ripT);
@@ -295,7 +275,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     cancelAnimationFrame(raf);
     document.removeEventListener("visibilitychange", onVis);
     window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
-    host.removeEventListener("pointermove", onMove);
     host.removeEventListener("pointerdown", onDown);
     if (ro !== null) ro.disconnect();
     else window.removeEventListener("resize", resize);
@@ -316,6 +295,7 @@ export function WorkspaceShader(): ReactNode {
     applyWorkspaceBackgroundBrightness(readWorkspaceBackgroundBrightness());
     applyWorkspaceGridStrength(readWorkspaceGridStrength());
     applyFrameBorderStrength(readFrameBorderStrength());
+    applyFrameInnerGlowStrength(readFrameInnerGlowStrength());
     const onBrightness = (event: Event): void => {
       const detail = (event as CustomEvent<number>).detail;
       applyWorkspaceBackgroundBrightness(
@@ -330,13 +310,21 @@ export function WorkspaceShader(): ReactNode {
       const detail = (event as CustomEvent<number>).detail;
       applyFrameBorderStrength(typeof detail === "number" ? detail : readFrameBorderStrength());
     };
+    const onFrameInnerGlowStrength = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyFrameInnerGlowStrength(
+        typeof detail === "number" ? detail : readFrameInnerGlowStrength(),
+      );
+    };
     window.addEventListener(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, onBrightness);
     window.addEventListener(WORKSPACE_GRID_STRENGTH_EVENT, onGridStrength);
     window.addEventListener(FRAME_BORDER_STRENGTH_EVENT, onFrameBorderStrength);
+    window.addEventListener(FRAME_INNER_GLOW_STRENGTH_EVENT, onFrameInnerGlowStrength);
     return () => {
       window.removeEventListener(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, onBrightness);
       window.removeEventListener(WORKSPACE_GRID_STRENGTH_EVENT, onGridStrength);
       window.removeEventListener(FRAME_BORDER_STRENGTH_EVENT, onFrameBorderStrength);
+      window.removeEventListener(FRAME_INNER_GLOW_STRENGTH_EVENT, onFrameInnerGlowStrength);
     };
   }, []);
 
