@@ -31,12 +31,16 @@ import {
   type EditorChangeOrigin,
   type EditorCompletionResolver,
   type EditorContentDelta,
+  type EditorDiagnosticsResolver,
   type EditorDocumentIdentity,
   type EditorFileModel,
+  type EditorFormattingResolver,
+  type EditorHoverResolver,
   type EditorInlineCompletionResolver,
   type EditorLanguageId,
   type EditorSaveRequest,
   type EditorSaveStatus,
+  type EditorSymbolsResolver,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
@@ -45,11 +49,21 @@ import {
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
+  requestEditorDiagnostics,
+  requestEditorFormatting,
+  requestEditorHover,
   requestEditorInlineCompletion,
+  requestEditorSymbols,
   saveFilesContent,
 } from "../../../../../lib/api";
 import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
 import { mapWireToEditorInlineCompletionResponse } from "../../../../../lib/editor-inline-completion";
+import {
+  mapWireToEditorDiagnosticsResponse,
+  mapWireToEditorFormattingResponse,
+  mapWireToEditorHoverResponse,
+  mapWireToEditorSymbolsResponse,
+} from "../../../../../lib/editor-language";
 import type {
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -441,8 +455,87 @@ export function EditorWidget({
     [hasTarget, root],
   );
 
+  // Issue #1201: governed language-intelligence resolvers (diagnostics, hover, symbols, formatting).
+  // Each bridges a Monaco surface to the deterministic `POST /api/editor/language` BFF (#1198) and
+  // maps the wire result into the editor render contract. A failure rejects here and the editor bridge
+  // degrades to nothing (no markers / no hover / no outline / no edits) — it never breaks editing.
+  const provideDiagnostics = useCallback<EditorDiagnosticsResolver>(
+    async (query, signal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, diagnostics: [] };
+      }
+      const wire = await requestEditorDiagnostics(
+        { root, path: file, languageId: query.request.document.language, text: query.documentText },
+        signal,
+      );
+      return mapWireToEditorDiagnosticsResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideHover = useCallback<EditorHoverResolver>(
+    async (query, signal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, hover: { contents: null } };
+      }
+      const wire = await requestEditorHover(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      return mapWireToEditorHoverResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideSymbols = useCallback<EditorSymbolsResolver>(
+    async (query, signal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, symbols: [] };
+      }
+      const wire = await requestEditorSymbols(
+        { root, path: file, languageId: query.request.document.language, text: query.documentText },
+        signal,
+      );
+      return mapWireToEditorSymbolsResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideFormatting = useCallback<EditorFormattingResolver>(
+    async (query, signal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, edits: [] };
+      }
+      const wire = await requestEditorFormatting(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          options: {
+            tabSize: query.request.options.tabSize,
+            insertSpaces: query.request.options.insertSpaces,
+          },
+        },
+        signal,
+      );
+      return mapWireToEditorFormattingResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
   // Completion has a governed deterministic provider only for the TS/JS source languages (#1198);
-  // non-source buffers register no provider.
+  // non-source buffers register no provider. The #1201 language-intelligence surfaces share the same
+  // governed deterministic TS/JS gate.
   const completionLanguage = fileModel?.identity.language;
   const completionEnabled =
     completionLanguage === "typescript" || completionLanguage === "javascript";
@@ -527,6 +620,10 @@ export function EditorWidget({
             onInlineCompletionTelemetry={
               completionEnabled ? onInlineCompletionTelemetry : undefined
             }
+            provideDiagnostics={completionEnabled ? provideDiagnostics : undefined}
+            provideHover={completionEnabled ? provideHover : undefined}
+            provideSymbols={completionEnabled ? provideSymbols : undefined}
+            provideFormatting={completionEnabled ? provideFormatting : undefined}
           />
         </div>
       ) : hasTarget ? (

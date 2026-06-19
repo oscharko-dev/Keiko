@@ -91,6 +91,35 @@ describe("buildEditorOptions", () => {
     });
   });
 
+  it("keeps hover disabled by default and when explicitly false (#1201)", () => {
+    expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).hover).toEqual({
+      enabled: false,
+    });
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", hoverEnabled: false }).hover,
+    ).toEqual({ enabled: false });
+  });
+
+  it("enables the hover widget when a hover provider is wired (#1201)", () => {
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", hoverEnabled: true }).hover,
+    ).toEqual({ enabled: true });
+  });
+
+  it("keeps every other markdown-capable helper surface off even when hover is enabled (#1201)", () => {
+    const withHover = buildEditorOptions({
+      readOnly: false,
+      ariaPath: "a.ts",
+      hoverEnabled: true,
+    });
+    // Hover is the only markdown-rendering sink enabled; the rest stay off (ADR-0042 D3.7).
+    expect(withHover.parameterHints).toEqual({ enabled: false });
+    expect(withHover.links).toBe(false);
+    expect(withHover.codeLens).toBe(false);
+    expect(withHover.lightbulb).toEqual({ enabled: "off" });
+    expect(withHover.inlayHints).toEqual({ enabled: "off" });
+  });
+
   it("uses alt as the multi-cursor modifier", () => {
     expect(options.multiCursorModifier).toBe("alt");
   });

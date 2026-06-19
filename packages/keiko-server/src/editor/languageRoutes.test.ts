@@ -103,6 +103,22 @@ describe("POST /api/editor/language", () => {
     expect(body.result.items.map((item) => item.label)).toContain("alpha");
   });
 
+  it("returns formatting edits for a poorly spaced overlay", async () => {
+    const result = await handleEditorLanguage(
+      postContext({
+        operation: "formatting",
+        root,
+        document: { path: "src/a.ts", languageId: "typescript", text: "const x   =   1;\n" },
+        options: { tabSize: 2, insertSpaces: true },
+      }),
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ operation: "formatting" });
+    const body = result.body as { result: { edits: { newText: string }[] } };
+    expect(body.result.edits.length).toBeGreaterThan(0);
+  });
+
   it("cancels analysis when the response closes before finishing", async () => {
     const result = await handleEditorLanguage(
       postContextWithResponseClose(

@@ -5,6 +5,7 @@ import {
   LANGUAGE_SERVICE_OPERATIONS,
   LANGUAGE_SERVICE_SCHEMA_VERSION,
   isLanguageDocumentOverlay,
+  isLanguageFormattingOptions,
   isLanguagePosition,
   parseLanguageServiceRequest,
   type LanguageDocumentOverlay,
@@ -25,7 +26,13 @@ describe("language-service schema, operations, and error codes", () => {
   });
 
   it("enumerates the governed operations in a fixed order", () => {
-    expect(LANGUAGE_SERVICE_OPERATIONS).toEqual(["diagnostics", "completion", "hover", "symbols"]);
+    expect(LANGUAGE_SERVICE_OPERATIONS).toEqual([
+      "diagnostics",
+      "completion",
+      "hover",
+      "symbols",
+      "formatting",
+    ]);
   });
 
   it("enumerates the stable error codes in a fixed order", () => {
@@ -46,6 +53,7 @@ describe("language-service schema, operations, and error codes", () => {
       maxCompletionItems: 256,
       maxDiagnostics: 512,
       maxSymbols: 512,
+      maxFormattingEdits: 4_096,
       maxHoverChars: 4_096,
       maxLabelChars: 256,
       maxDetailChars: 1_024,
@@ -198,5 +206,76 @@ describe("parseLanguageServiceRequest", () => {
   it("rejects a non-object payload", () => {
     expect(parseLanguageServiceRequest(null).ok).toBe(false);
     expect(parseLanguageServiceRequest("x").ok).toBe(false);
+  });
+
+  it("parses a formatting request without options (provider default)", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "formatting",
+      root: "/repo",
+      document: overlay(),
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { operation: "formatting", root: "/repo", document: overlay() },
+    });
+  });
+
+  it("parses a formatting request and retains well-typed options", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "formatting",
+      root: "/repo",
+      document: overlay(),
+      options: { tabSize: 4, insertSpaces: true },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        operation: "formatting",
+        root: "/repo",
+        document: overlay(),
+        options: { tabSize: 4, insertSpaces: true },
+      });
+    }
+  });
+
+  it("rejects malformed formatting options", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "formatting",
+      root: "/repo",
+      document: overlay(),
+      options: { tabSize: 0 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("options must be { tabSize?, insertSpaces? }");
+    }
+  });
+
+  it("does not require a position for formatting", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "formatting",
+      root: "/repo",
+      document: overlay(),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect("position" in result.value).toBe(false);
+    }
+  });
+});
+
+describe("isLanguageFormattingOptions", () => {
+  it("accepts an empty block and partial well-typed fields", () => {
+    expect(isLanguageFormattingOptions({})).toBe(true);
+    expect(isLanguageFormattingOptions({ tabSize: 2 })).toBe(true);
+    expect(isLanguageFormattingOptions({ insertSpaces: false })).toBe(true);
+    expect(isLanguageFormattingOptions({ tabSize: 8, insertSpaces: true })).toBe(true);
+  });
+
+  it("rejects a non-record, a zero/fractional tab size, and a non-boolean insertSpaces", () => {
+    expect(isLanguageFormattingOptions(null)).toBe(false);
+    expect(isLanguageFormattingOptions({ tabSize: 0 })).toBe(false);
+    expect(isLanguageFormattingOptions({ tabSize: 2.5 })).toBe(false);
+    expect(isLanguageFormattingOptions({ insertSpaces: "yes" })).toBe(false);
   });
 });

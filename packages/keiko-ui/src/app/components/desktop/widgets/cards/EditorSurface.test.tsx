@@ -16,11 +16,19 @@ const captured: {
   completionTriggerCharacters: readonly string[] | undefined;
   provideInlineCompletions: unknown;
   onInlineCompletionTelemetry: unknown;
+  provideDiagnostics: unknown;
+  provideHover: unknown;
+  provideSymbols: unknown;
+  provideFormatting: unknown;
 } = {
   provideCompletions: undefined,
   completionTriggerCharacters: undefined,
   provideInlineCompletions: undefined,
   onInlineCompletionTelemetry: undefined,
+  provideDiagnostics: undefined,
+  provideHover: undefined,
+  provideSymbols: undefined,
+  provideFormatting: undefined,
 };
 vi.mock("@oscharko-dev/keiko-editor", () => ({
   KeikoCodeEditor: (props: {
@@ -30,11 +38,19 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
     completionTriggerCharacters?: readonly string[];
     provideInlineCompletions?: unknown;
     onInlineCompletionTelemetry?: unknown;
+    provideDiagnostics?: unknown;
+    provideHover?: unknown;
+    provideSymbols?: unknown;
+    provideFormatting?: unknown;
   }) => {
     captured.provideCompletions = props.provideCompletions;
     captured.completionTriggerCharacters = props.completionTriggerCharacters;
     captured.provideInlineCompletions = props.provideInlineCompletions;
     captured.onInlineCompletionTelemetry = props.onInlineCompletionTelemetry;
+    captured.provideDiagnostics = props.provideDiagnostics;
+    captured.provideHover = props.provideHover;
+    captured.provideSymbols = props.provideSymbols;
+    captured.provideFormatting = props.provideFormatting;
     return (
       <div
         data-testid="code-editor"
@@ -74,6 +90,10 @@ afterEach(() => {
   captured.completionTriggerCharacters = undefined;
   captured.provideInlineCompletions = undefined;
   captured.onInlineCompletionTelemetry = undefined;
+  captured.provideDiagnostics = undefined;
+  captured.provideHover = undefined;
+  captured.provideSymbols = undefined;
+  captured.provideFormatting = undefined;
 });
 
 describe("EditorSurface", () => {
@@ -123,5 +143,22 @@ describe("EditorSurface", () => {
     );
     expect(captured.provideInlineCompletions).toBe(provideInlineCompletions);
     expect(captured.onInlineCompletionTelemetry).toBe(onInlineCompletionTelemetry);
+  });
+
+  it("forwards the diagnostics, hover, symbols, and formatting resolvers to the editor (Issue #1201)", () => {
+    ensureMonacoRuntime.mockReturnValue({ supported: true });
+    const provideDiagnostics = vi.fn();
+    const provideHover = vi.fn();
+    const provideSymbols = vi.fn();
+    const provideFormatting = vi.fn();
+    render(
+      <EditorSurface
+        {...buildProps({ provideDiagnostics, provideHover, provideSymbols, provideFormatting })}
+      />,
+    );
+    expect(captured.provideDiagnostics).toBe(provideDiagnostics);
+    expect(captured.provideHover).toBe(provideHover);
+    expect(captured.provideSymbols).toBe(provideSymbols);
+    expect(captured.provideFormatting).toBe(provideFormatting);
   });
 });

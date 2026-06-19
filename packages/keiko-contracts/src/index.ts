@@ -142,6 +142,9 @@ export type {
   LanguageSymbolKind,
   LanguageDocumentSymbol,
   LanguageSymbolResult,
+  LanguageTextEdit,
+  LanguageFormattingOptions,
+  LanguageFormattingResult,
   LanguageProviderDescriptor,
   LanguageServiceCapabilities,
   LanguageServiceLimits,
@@ -149,6 +152,7 @@ export type {
   LanguageCompletionRequest,
   LanguageHoverRequest,
   LanguageSymbolsRequest,
+  LanguageFormattingRequest,
   LanguageServiceRequest,
   LanguageServiceParseOk,
   LanguageServiceParseFail,
@@ -161,6 +165,7 @@ export {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   isLanguagePosition,
   isLanguageDocumentOverlay,
+  isLanguageFormattingOptions,
   parseLanguageServiceRequest,
 } from "./language-service.js";
 

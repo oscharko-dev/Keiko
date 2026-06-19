@@ -259,6 +259,73 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   assertNoPageErrors();
 });
 
+test("editor surfaces diagnostics and hover from the governed language service @smoke", async ({
+  page,
+}) => {
+  // Issue #1201: the deterministic server language service drives Monaco markers (diagnostics) and the
+  // hover widget (quick info) for a TS/JS buffer. This proves the end-to-end browser path: edit ->
+  // governed BFF (/api/editor/language) -> Monaco surface, against the real app (no mocks). The first
+  // analysis cold-starts the TypeScript language service (lib loading) under the dev bundler, so the
+  // language-feature waits are given a generous budget beyond the global expect timeout.
+  test.setTimeout(120_000);
+  const projectPath = createProjectFixture();
+  const relativePath = "packages/keiko-cli/src/run.ts";
+  // Start from an empty buffer so the replaced content is exactly the analysed overlay.
+  writeFileSync(join(projectPath, relativePath), "", "utf8");
+  await seedFilesWindow(page, projectPath);
+  const assertNoPageErrors = collectPageErrors(page);
+
+  await page.goto("/");
+  const filesWindow = page.getByRole("region", { name: /^Files/u });
+  await expect(filesWindow).toBeVisible();
+  await openTreePath(filesWindow, "packages");
+  await openTreePath(filesWindow, "packages/keiko-cli");
+  await openTreePath(filesWindow, "packages/keiko-cli/src");
+  await openTreePath(filesWindow, relativePath);
+  await filesWindow.getByRole("button", { name: "Open in editor" }).click();
+
+  const editorWindow = page.getByRole("region", {
+    name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
+  });
+  await expect(editorWindow).toBeVisible();
+  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
+
+  // A buffer with a deliberate type error on line 1 and a hoverable symbol used on line 2.
+  await replaceMonacoText(page, editorWindow, "const greeting: string = 42;\ngreeting;\n");
+
+  // Diagnostics: the type error must surface as a Monaco error squiggle (markers set by the bridge
+  // after the governed BFF roundtrip + debounce).
+  await expect
+    .poll(() => editorWindow.locator(".squiggly-error").count(), { timeout: 60_000 })
+    .toBeGreaterThan(0);
+
+  // Hover: resting on the `greeting` identifier surfaces the governed quick-info widget. Monaco
+  // renders the governed buffer without per-token spans, so hover by coordinate. Line 2 (`greeting;`)
+  // has the identifier at column 0, so a small offset from the line start lands squarely on it.
+  await page.mouse.move(0, 0);
+  const usageLine = editorWindow.locator(".view-line", { hasText: "greeting;" });
+  await expect(usageLine).toBeVisible();
+  const box = await usageLine.boundingBox();
+  expect(box).not.toBeNull();
+  if (box !== null) {
+    // A small fixed offset from the line start lands on `greeting` (column 0, ~8 monospaced chars);
+    // a proportional offset would overshoot, since a Monaco view-line box can span the content width.
+    const target = { x: box.x + 24, y: box.y + box.height / 2 };
+    // Two moves so Monaco's hover controller registers a fresh mousemove over the identifier.
+    await page.mouse.move(target.x - 6, target.y);
+    await page.mouse.move(target.x, target.y);
+  }
+  // Two hover widgets exist (content + glyph-margin); the content/quick-info widget is first in DOM.
+  const hover = page.locator(".monaco-hover").first();
+  await expect(hover).toBeVisible({ timeout: 30_000 });
+  await expect(hover).toContainText("greeting");
+
+  await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+  await expect(editorWindow).toBeHidden();
+  assertNoPageErrors();
+});
+
 test("chat window renders a bound Files grounding source and enforces the 16-source cap @smoke", async ({
   page,
   request,

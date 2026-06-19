@@ -10,7 +10,14 @@ import type {
   MonacoInlineCompletionsProvider,
   MonacoInlineCompletionsRegistrar,
 } from "./inline-completion-bridge.js";
-import type { EditorCompletionResolver, EditorInlineCompletionResolver } from "../index.js";
+import type {
+  EditorCompletionResolver,
+  EditorDiagnosticsResolver,
+  EditorFormattingResolver,
+  EditorHoverResolver,
+  EditorInlineCompletionResolver,
+  EditorSymbolsResolver,
+} from "../index.js";
 
 interface FakeDisposable {
   readonly dispose: ReturnType<typeof vi.fn>;
@@ -497,5 +504,221 @@ describe("wireEditorOnMount inline completion (#1200)", () => {
     expect(languages.disposeCount()).toBe(0);
     dispose();
     expect(languages.disposeCount()).toBe(2);
+  });
+});
+
+// A registrar that offers the hover, document-symbol, and document-formatting registration surfaces
+// (the slice the #1201 install paths narrow the mount registry to). Records registrations/disposals.
+interface FakeLangRegistrar {
+  readonly registrar: MountMonaco["languages"];
+  readonly hovers: () => readonly (string | readonly string[])[];
+  readonly symbols: () => readonly (string | readonly string[])[];
+  readonly formatters: () => readonly (string | readonly string[])[];
+  readonly disposeCount: () => number;
+}
+
+function buildFakeLangRegistrar(withMethods = true): FakeLangRegistrar {
+  const hovers: (string | readonly string[])[] = [];
+  const symbols: (string | readonly string[])[] = [];
+  const formatters: (string | readonly string[])[] = [];
+  let disposed = 0;
+  const disposable = {
+    dispose: (): void => {
+      disposed += 1;
+    },
+  };
+  const methods = withMethods
+    ? {
+        SymbolKind: {
+          File: 0,
+          Module: 1,
+          Namespace: 2,
+          Class: 4,
+          Method: 5,
+          Property: 6,
+          Field: 7,
+          Constructor: 8,
+          Enum: 9,
+          Interface: 10,
+          Function: 11,
+          Variable: 12,
+          Constant: 13,
+          Struct: 22,
+          EnumMember: 21,
+          TypeParameter: 25,
+        },
+        registerHoverProvider: (selector: string | readonly string[]): { dispose: () => void } => {
+          hovers.push(selector);
+          return disposable;
+        },
+        registerDocumentSymbolProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          symbols.push(selector);
+          return disposable;
+        },
+        registerDocumentFormattingEditProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          formatters.push(selector);
+          return disposable;
+        },
+      }
+    : {};
+  return {
+    registrar: { ...methods } as unknown as MountMonaco["languages"],
+    hovers: () => hovers,
+    symbols: () => symbols,
+    formatters: () => formatters,
+    disposeCount: () => disposed,
+  };
+}
+
+function hoverArg(): NonNullable<WireEditorOnMountArgs["hover"]> {
+  const resolve: EditorHoverResolver = (query) =>
+    Promise.resolve({ request: query.request.request, hover: { contents: null } });
+  return { resolve, streamId: "h", newRequestId: () => "hr" };
+}
+
+function symbolsArg(): NonNullable<WireEditorOnMountArgs["symbols"]> {
+  const resolve: EditorSymbolsResolver = (query) =>
+    Promise.resolve({ request: query.request.request, symbols: [] });
+  return { resolve, streamId: "sy", newRequestId: () => "syr" };
+}
+
+function formattingArg(): NonNullable<WireEditorOnMountArgs["formatting"]> {
+  const resolve: EditorFormattingResolver = (query) =>
+    Promise.resolve({ request: query.request.request, edits: [] });
+  return { resolve, streamId: "f", newRequestId: () => "fr" };
+}
+
+describe("wireEditorOnMount hover/symbols/formatting providers (#1201)", () => {
+  it("registers each provider per governed language when a resolver and registry exist", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLangRegistrar();
+    wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      hover: hoverArg(),
+      symbols: symbolsArg(),
+      formatting: formattingArg(),
+    });
+    expect(languages.hovers()).toEqual(["typescript", "javascript"]);
+    expect(languages.symbols()).toEqual(["typescript", "javascript"]);
+    expect(languages.formatters()).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers nothing when the host supplies no resolvers", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLangRegistrar();
+    wire(fakes, { monaco: { ...fakes.monaco, languages: languages.registrar } });
+    expect(languages.hovers()).toEqual([]);
+    expect(languages.symbols()).toEqual([]);
+    expect(languages.formatters()).toEqual([]);
+  });
+
+  it("degrades cleanly when the registry exposes none of the language-feature methods", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLangRegistrar(false);
+    expect(() =>
+      wire(fakes, {
+        monaco: { ...fakes.monaco, languages: languages.registrar },
+        hover: hoverArg(),
+        symbols: symbolsArg(),
+        formatting: formattingArg(),
+      }),
+    ).not.toThrow();
+    expect(languages.hovers()).toEqual([]);
+  });
+
+  it("disposes every registration on teardown", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLangRegistrar();
+    const dispose = wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      hover: hoverArg(),
+      symbols: symbolsArg(),
+      formatting: formattingArg(),
+    });
+    expect(languages.disposeCount()).toBe(0);
+    dispose();
+    // One disposable per language per feature (2 languages × 3 features).
+    expect(languages.disposeCount()).toBe(6);
+  });
+});
+
+describe("wireEditorOnMount diagnostics (#1201)", () => {
+  // A diagnostics-capable monaco.editor (marker surface) + editor (model lifecycle), layered onto the
+  // base fakes. The diagnostics install path narrows to these structural surfaces.
+  function diagnosticsFakes(): {
+    readonly monaco: MountMonaco;
+    readonly editor: MountEditor;
+    readonly setMarkersCalls: () => number;
+    readonly modelDisposed: () => number;
+  } {
+    let modelDisposed = 0;
+    let setMarkersCalls = 0;
+    const model = {
+      getValue: (): string => "const x = 1;\n",
+      getVersionId: (): number => 1,
+      getLanguageId: (): string => "typescript",
+      onDidChangeContent: (): { dispose: () => void } => ({ dispose: (): void => undefined }),
+      uri: { toString: (): string => "inmemory://model/1" },
+    };
+    const base = buildFakes();
+    // Mirror the live namespace split: `setModelMarkers` on `monaco.editor`, `MarkerSeverity` on the
+    // top-level `monaco` namespace.
+    const monaco: MountMonaco = {
+      ...base.monaco,
+      MarkerSeverity: { Error: 8, Warning: 4, Info: 2, Hint: 1 },
+      editor: {
+        ...base.monaco.editor,
+        setModelMarkers: (): void => {
+          setMarkersCalls += 1;
+        },
+      } as unknown as MountMonaco["editor"],
+    };
+    const editor = {
+      ...base.editor,
+      getModel: (): typeof model => model,
+      onDidChangeModel: (): { dispose: () => void } => ({
+        dispose: (): void => {
+          modelDisposed += 1;
+        },
+      }),
+    } as unknown as MountEditor;
+    return {
+      monaco,
+      editor,
+      setMarkersCalls: () => setMarkersCalls,
+      modelDisposed: () => modelDisposed,
+    };
+  }
+
+  function diagnosticsArg(): NonNullable<WireEditorOnMountArgs["diagnostics"]> {
+    const resolve: EditorDiagnosticsResolver = (query) =>
+      Promise.resolve({ request: query.request.request, diagnostics: [] });
+    return { resolve, debounceMs: 100, streamId: "d", newRequestId: () => "dr" };
+  }
+
+  it("binds the diagnostics lifecycle and clears markers on dispose", () => {
+    const fakes = diagnosticsFakes();
+    const dispose = wireEditorOnMount({
+      editor: fakes.editor,
+      monaco: fakes.monaco,
+      container: buildFakes().container as unknown as HTMLElement,
+      themeVariant: "dark",
+      autoFocus: false,
+      onSave: vi.fn(),
+      diagnostics: diagnosticsArg(),
+    });
+    dispose();
+    // The clear-on-dispose write happened (markers were touched at least once).
+    expect(fakes.setMarkersCalls()).toBeGreaterThanOrEqual(1);
+    expect(fakes.modelDisposed()).toBe(1);
+  });
+
+  it("does nothing when the editor lacks the marker surface", () => {
+    const fakes = buildFakes();
+    expect(() => wire(fakes, { diagnostics: diagnosticsArg() })).not.toThrow();
   });
 });

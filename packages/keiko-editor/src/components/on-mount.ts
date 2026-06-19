@@ -28,7 +28,39 @@ import {
   type MonacoInlineCompletionsRegistrar,
 } from "./inline-completion-bridge.js";
 import type { InlineCompletionTelemetry } from "./inline-completion-telemetry.js";
-import type { EditorCompletionResolver, EditorInlineCompletionResolver } from "../types.js";
+import {
+  DEFAULT_DIAGNOSTICS_OWNER,
+  DIAGNOSTICS_ELIGIBLE_LANGUAGES,
+  registerKeikoDiagnostics,
+  type DiagnosticsScheduler,
+  type MonacoDiagnosticsEditor,
+  type MonacoMarkerData,
+  type MonacoMarkerEditorNamespace,
+  type MonacoMarkerSeverities,
+} from "./diagnostics-bridge.js";
+import {
+  HOVER_ELIGIBLE_LANGUAGES,
+  registerKeikoHoverProvider,
+  type MonacoHoverRegistrar,
+} from "./hover-bridge.js";
+import {
+  SYMBOLS_ELIGIBLE_LANGUAGES,
+  registerKeikoDocumentSymbolProvider,
+  type MonacoDocumentSymbolRegistrar,
+} from "./document-symbol-bridge.js";
+import {
+  FORMATTING_ELIGIBLE_LANGUAGES,
+  registerKeikoFormattingProvider,
+  type MonacoDocumentFormattingRegistrar,
+} from "./formatting-bridge.js";
+import type {
+  EditorCompletionResolver,
+  EditorDiagnosticsResolver,
+  EditorFormattingResolver,
+  EditorHoverResolver,
+  EditorInlineCompletionResolver,
+  EditorSymbolsResolver,
+} from "../types.js";
 import {
   monacoPositionToEditorPosition,
   monacoSelectionToEditorRange,
@@ -43,6 +75,9 @@ export interface MountMonaco {
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
   // when it (or the completion args) is absent.
   readonly languages?: MonacoLanguagesRegistrar | undefined;
+  // `MarkerSeverity` lives on the TOP-LEVEL `monaco` namespace (not `monaco.editor`); diagnostics
+  // need it to map severities. Optional so theme-only mounts need not provide it.
+  readonly MarkerSeverity?: MonacoMarkerSeverities | undefined;
 }
 
 /** Host-injected completion wiring (Issue #1199); absent when the host supplies no resolver. */
@@ -66,6 +101,44 @@ export interface WireEditorInlineCompletion {
   /** Content-free acceptance/rejection telemetry sink fed from Monaco's lifecycle callbacks. */
   readonly telemetry?: InlineCompletionTelemetry | undefined;
   /** Restrict registration to the governed inline-eligible languages (defaults to TS/JS). */
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected diagnostics wiring (Issue #1201); absent when the host supplies no resolver. */
+export interface WireEditorDiagnostics {
+  readonly resolve: EditorDiagnosticsResolver;
+  readonly debounceMs: number;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  /** Marker owner key; defaults to the Keiko language-service owner. */
+  readonly owner?: string | undefined;
+  /** Restrict analysis to the governed diagnostics-eligible languages (defaults to TS/JS). */
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+  /** Debounce scheduler; defaults to `setTimeout`/`clearTimeout`. */
+  readonly scheduler?: DiagnosticsScheduler | undefined;
+}
+
+/** Host-injected hover wiring (Issue #1201); absent when the host supplies no resolver. */
+export interface WireEditorHover {
+  readonly resolve: EditorHoverResolver;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected document-symbol wiring (Issue #1201); absent when the host supplies no resolver. */
+export interface WireEditorSymbols {
+  readonly resolve: EditorSymbolsResolver;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected document-formatting wiring (Issue #1201); absent when the host supplies no resolver. */
+export interface WireEditorFormatting {
+  readonly resolve: EditorFormattingResolver;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
   readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
@@ -103,6 +176,14 @@ export interface WireEditorOnMountArgs {
   readonly completion?: WireEditorCompletion | undefined;
   /** Inline-completion wiring (Issue #1200); absent when the host supplies no inline resolver. */
   readonly inlineCompletion?: WireEditorInlineCompletion | undefined;
+  /** Diagnostics wiring (Issue #1201); absent when the host supplies no diagnostics resolver. */
+  readonly diagnostics?: WireEditorDiagnostics | undefined;
+  /** Hover wiring (Issue #1201); absent when the host supplies no hover resolver. */
+  readonly hover?: WireEditorHover | undefined;
+  /** Document-symbol wiring (Issue #1201); absent when the host supplies no symbols resolver. */
+  readonly symbols?: WireEditorSymbols | undefined;
+  /** Document-formatting wiring (Issue #1201); absent when the host supplies no formatting resolver. */
+  readonly formatting?: WireEditorFormatting | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -206,6 +287,115 @@ function installInlineCompletionProvider(args: WireEditorOnMountArgs): MonacoDis
   });
 }
 
+// Registers the hover provider when the host supplies a resolver and the live `monaco.languages`
+// registry offers `registerHoverProvider` (Issue #1201, ADR-0042 D4). The cast is the single seam
+// where the structural mount view meets the hover registrar; the runtime guard degrades cleanly on a
+// Monaco build without hover support.
+function installHoverProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const hover = args.hover;
+  const languages = args.monaco.languages;
+  if (hover === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoHoverRegistrar;
+  if (typeof registrar.registerHoverProvider !== "function") {
+    return null;
+  }
+  return registerKeikoHoverProvider({
+    languages: registrar,
+    resolve: hover.resolve,
+    documentLanguages: hover.languages ?? HOVER_ELIGIBLE_LANGUAGES,
+    streamId: hover.streamId,
+    newRequestId: hover.newRequestId,
+  });
+}
+
+// Registers the document-symbol provider for the editor outline/navigation (Issue #1201).
+function installDocumentSymbolProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const symbols = args.symbols;
+  const languages = args.monaco.languages;
+  if (symbols === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoDocumentSymbolRegistrar;
+  if (typeof registrar.registerDocumentSymbolProvider !== "function") {
+    return null;
+  }
+  return registerKeikoDocumentSymbolProvider({
+    languages: registrar,
+    resolve: symbols.resolve,
+    documentLanguages: symbols.languages ?? SYMBOLS_ELIGIBLE_LANGUAGES,
+    streamId: symbols.streamId,
+    newRequestId: symbols.newRequestId,
+  });
+}
+
+// Registers the explicit, cancellable document-formatting provider (Issue #1201). Only the document
+// formatter is registered (no on-type formatter), so formatting runs solely on the user's command.
+function installFormattingProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const formatting = args.formatting;
+  const languages = args.monaco.languages;
+  if (formatting === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoDocumentFormattingRegistrar;
+  if (typeof registrar.registerDocumentFormattingEditProvider !== "function") {
+    return null;
+  }
+  return registerKeikoFormattingProvider({
+    languages: registrar,
+    resolve: formatting.resolve,
+    documentLanguages: formatting.languages ?? FORMATTING_ELIGIBLE_LANGUAGES,
+    streamId: formatting.streamId,
+    newRequestId: formatting.newRequestId,
+  });
+}
+
+// Registers the diagnostics marker lifecycle when the host supplies a resolver and the live editor +
+// marker surface are available (Issue #1201). Unlike the providers above, diagnostics drive markers
+// from model-change events, so the bridge binds the live editor (getModel/onDidChangeModel) and
+// writes through `monaco.editor.setModelMarkers`. The marker surface is SPLIT on the live namespace:
+// `setModelMarkers` lives on `monaco.editor` while `MarkerSeverity` lives on the TOP-LEVEL `monaco`,
+// so this seam recombines them into the bridge's `MonacoMarkerEditorNamespace`. The runtime guards
+// degrade cleanly on a build lacking either part.
+function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const diagnostics = args.diagnostics;
+  if (diagnostics === undefined) {
+    return null;
+  }
+  const editorNamespace = args.monaco.editor as unknown as {
+    setModelMarkers?: MonacoMarkerEditorNamespace["setModelMarkers"];
+  };
+  const markerSeverity = args.monaco.MarkerSeverity;
+  const diagnosticsEditor = args.editor as unknown as MonacoDiagnosticsEditor;
+  if (
+    typeof editorNamespace.setModelMarkers !== "function" ||
+    markerSeverity === undefined ||
+    typeof diagnosticsEditor.getModel !== "function" ||
+    typeof diagnosticsEditor.onDidChangeModel !== "function"
+  ) {
+    return null;
+  }
+  const setModelMarkers = editorNamespace.setModelMarkers;
+  const markers: MonacoMarkerEditorNamespace = {
+    MarkerSeverity: markerSeverity,
+    setModelMarkers: (model, owner, markerData: readonly MonacoMarkerData[]): void => {
+      setModelMarkers(model, owner, markerData);
+    },
+  };
+  return registerKeikoDiagnostics({
+    editor: diagnosticsEditor,
+    markers,
+    resolve: diagnostics.resolve,
+    documentLanguages: diagnostics.languages ?? DIAGNOSTICS_ELIGIBLE_LANGUAGES,
+    owner: diagnostics.owner ?? DEFAULT_DIAGNOSTICS_OWNER,
+    debounceMs: diagnostics.debounceMs,
+    streamId: diagnostics.streamId,
+    newRequestId: diagnostics.newRequestId,
+    ...(diagnostics.scheduler === undefined ? {} : { scheduler: diagnostics.scheduler }),
+  });
+}
+
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
 export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   registerTheme(args);
@@ -215,6 +405,10 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const selectionSub = subscribeSelection(args);
   const completionSub = installCompletionProvider(args);
   const inlineCompletionSub = installInlineCompletionProvider(args);
+  const diagnosticsSub = installDiagnostics(args);
+  const hoverSub = installHoverProvider(args);
+  const symbolsSub = installDocumentSymbolProvider(args);
+  const formattingSub = installFormattingProvider(args);
   if (args.autoFocus) {
     args.editor.focus();
   }
@@ -225,5 +419,9 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     selectionSub?.dispose();
     completionSub?.dispose();
     inlineCompletionSub?.dispose();
+    diagnosticsSub?.dispose();
+    hoverSub?.dispose();
+    symbolsSub?.dispose();
+    formattingSub?.dispose();
   };
 }

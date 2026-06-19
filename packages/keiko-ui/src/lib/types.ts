@@ -48,6 +48,24 @@ export {
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
 
+// ─── Deterministic language-service wire shapes (Issue #1198/#1201, contracts root barrel) ─────
+// The `POST /api/editor/language` route serves diagnostics, hover, document symbols, and formatting
+// for the governed languages; these are the result shapes the editor host maps into Monaco.
+export type {
+  LanguageServiceOperation,
+  LanguageRange,
+  LanguageDiagnosticSeverity,
+  LanguageDiagnostic,
+  LanguageDiagnosticsResult,
+  LanguageHoverResult,
+  LanguageSymbolKind,
+  LanguageDocumentSymbol,
+  LanguageSymbolResult,
+  LanguageTextEdit,
+  LanguageFormattingOptions,
+  LanguageFormattingResult,
+} from "@oscharko-dev/keiko-contracts";
+
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
 // trust-3, error severity); contracts is the legitimate value-import source

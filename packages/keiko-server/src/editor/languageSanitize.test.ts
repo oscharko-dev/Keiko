@@ -6,6 +6,7 @@ import {
 import {
   sanitizeCompletion,
   sanitizeDiagnostics,
+  sanitizeFormatting,
   sanitizeHover,
   sanitizeSymbols,
 } from "./languageSanitize.js";
@@ -187,6 +188,58 @@ describe("sanitizeSymbols", () => {
       { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxSymbols: 1 },
     );
     expect(result.symbols).toEqual([{ name: "a", kind: "class", range }]);
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe("sanitizeFormatting", () => {
+  it("keeps edit newText byte-faithful (no format-character stripping)", () => {
+    // A bidi/zero-width sequence inside a reformat edit must survive verbatim: the edit is APPLIED
+    // to the buffer, not displayed, so stripping it would mutate the user's own code.
+    const newText = `"a${BIDI}${ZERO_WIDTH}b"`;
+    const result = sanitizeFormatting(
+      { edits: [{ range, newText }], truncated: false },
+      tinyLimits,
+    );
+    expect(result.edits).toEqual([{ range, newText }]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("caps the edit count and sets truncated", () => {
+    const result = sanitizeFormatting(
+      {
+        edits: [
+          { range, newText: "a" },
+          { range, newText: "b" },
+        ],
+        truncated: false,
+      },
+      { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxFormattingEdits: 1 },
+    );
+    expect(result.edits).toEqual([{ range, newText: "a" }]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("drops an over-long edit rather than clipping it, and marks truncated", () => {
+    const result = sanitizeFormatting(
+      {
+        edits: [
+          { range, newText: "ok" },
+          { range, newText: "xxxxxxxxxx" },
+        ],
+        truncated: false,
+      },
+      { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxDocumentBytes: 4 },
+    );
+    expect(result.edits).toEqual([{ range, newText: "ok" }]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("propagates a provider-reported truncation", () => {
+    const result = sanitizeFormatting(
+      { edits: [{ range, newText: "ok" }], truncated: true },
+      DEFAULT_LANGUAGE_SERVICE_LIMITS,
+    );
     expect(result.truncated).toBe(true);
   });
 });

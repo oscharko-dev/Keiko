@@ -9,6 +9,7 @@ import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   type LanguageCompletionResult,
   type LanguageDiagnosticsResult,
+  type LanguageFormattingResult,
   type LanguageHoverResult,
   type LanguageServiceCapabilities,
   type LanguageServiceErrorCode,
@@ -29,6 +30,7 @@ import { createTypescriptLanguageProvider } from "./typescriptLanguageProvider.j
 import {
   sanitizeCompletion,
   sanitizeDiagnostics,
+  sanitizeFormatting,
   sanitizeHover,
   sanitizeSymbols,
 } from "./languageSanitize.js";
@@ -55,6 +57,7 @@ export type LanguageServiceOutcome =
   | { readonly kind: "completion"; readonly result: LanguageCompletionResult }
   | { readonly kind: "hover"; readonly result: LanguageHoverResult }
   | { readonly kind: "symbols"; readonly result: LanguageSymbolResult }
+  | { readonly kind: "formatting"; readonly result: LanguageFormattingResult }
   | { readonly kind: "error"; readonly code: LanguageServiceErrorCode; readonly message: string };
 
 export interface RunLanguageOperationOptions {
@@ -97,6 +100,11 @@ function runOperation(
       };
     case "symbols":
       return { kind: "symbols", result: sanitizeSymbols(provider.getSymbols(ctx), limits) };
+    case "formatting":
+      return {
+        kind: "formatting",
+        result: sanitizeFormatting(provider.getFormatting(ctx, request.options), limits),
+      };
   }
 }
 

@@ -12,11 +12,16 @@ import type {
   LanguageDiagnostic,
   LanguageDiagnosticsResult,
   LanguageDocumentSymbol,
+  LanguageFormattingResult,
   LanguageHoverResult,
   LanguageServiceLimits,
   LanguageSymbolResult,
 } from "@oscharko-dev/keiko-contracts";
-import type { LanguageDiagnosticsRaw, LanguageSymbolsRaw } from "./languageProvider.js";
+import type {
+  LanguageDiagnosticsRaw,
+  LanguageFormattingRaw,
+  LanguageSymbolsRaw,
+} from "./languageProvider.js";
 
 function clip(value: string, max: number): string {
   const safe = stripUnsafeFormatChars(value);
@@ -113,5 +118,25 @@ export function sanitizeSymbols(
   return {
     symbols: capped.map((symbol) => sanitizeSymbol(symbol, limits)),
     truncated: raw.truncated || raw.symbols.length > capped.length,
+  };
+}
+
+// Formatting edits are APPLIED to the buffer, not rendered, so — unlike the display surfaces above —
+// their `newText` is left byte-faithful: stripping format characters would silently mutate the
+// user's own code (for example characters inside a string literal) when they format. The only bounds
+// are the edit-count cap and a defensive per-edit length ceiling (the document-size envelope); an
+// over-long edit is dropped rather than clipped, since clipping a reformat edit would corrupt the
+// buffer, and the edits are non-overlapping so dropping one leaves the rest valid. The BFF's
+// live-payload redactor still runs over the response, exactly as it does for completion insert text.
+export function sanitizeFormatting(
+  raw: LanguageFormattingRaw,
+  limits: LanguageServiceLimits,
+): LanguageFormattingResult {
+  const capped = raw.edits.slice(0, limits.maxFormattingEdits);
+  const withinLength = capped.filter((edit) => edit.newText.length <= limits.maxDocumentBytes);
+  return {
+    edits: withinLength,
+    truncated:
+      raw.truncated || raw.edits.length > capped.length || withinLength.length < capped.length,
   };
 }

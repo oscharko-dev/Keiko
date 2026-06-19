@@ -12,7 +12,11 @@ import {
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
+  requestEditorDiagnostics,
+  requestEditorFormatting,
+  requestEditorHover,
   requestEditorInlineCompletion,
+  requestEditorSymbols,
   saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -28,6 +32,10 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorCompletion: vi.fn(),
     requestEditorInlineCompletion: vi.fn(),
     reportEditorInlineCompletionTelemetry: vi.fn(() => Promise.resolve()),
+    requestEditorDiagnostics: vi.fn(),
+    requestEditorHover: vi.fn(),
+    requestEditorSymbols: vi.fn(),
+    requestEditorFormatting: vi.fn(),
   };
 });
 
@@ -629,5 +637,117 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
     expect(surface.props?.onInlineCompletionTelemetry).toBeUndefined();
+  });
+});
+
+describe("EditorWidget language intelligence (Issue #1201)", () => {
+  it("wires diagnostics, hover, symbols, and formatting resolvers for a TS/JS file", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    vi.mocked(requestEditorDiagnostics).mockResolvedValueOnce({
+      diagnostics: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+          severity: "error",
+          message: "boom",
+          source: "typescript",
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(requestEditorHover).mockResolvedValueOnce({ contents: "x: number" });
+    vi.mocked(requestEditorSymbols).mockResolvedValueOnce({
+      symbols: [
+        {
+          name: "value",
+          kind: "constant",
+          range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(requestEditorFormatting).mockResolvedValueOnce({
+      edits: [
+        {
+          range: { start: { line: 0, character: 5 }, end: { line: 0, character: 8 } },
+          newText: " = ",
+        },
+      ],
+      truncated: false,
+    });
+    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    const identity = { requestId: "r", streamId: "s", sequence: 1 };
+    const document = { uri: "/repo/src/app.ts", language: "typescript" as const, version: 1 };
+
+    const diagnostics = surface.props?.provideDiagnostics;
+    expect(diagnostics).toBeDefined();
+    if (diagnostics === undefined) return;
+    const diagResponse = await diagnostics(
+      { request: { request: identity, document }, documentText: "const value = 1;\n" },
+      new AbortController().signal,
+    );
+    expect(requestEditorDiagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/repo", path: "src/app.ts", languageId: "typescript" }),
+      expect.any(AbortSignal),
+    );
+    expect(diagResponse.diagnostics[0]?.message).toBe("boom");
+
+    const hover = surface.props?.provideHover;
+    expect(hover).toBeDefined();
+    if (hover === undefined) return;
+    const hoverResponse = await hover(
+      {
+        request: { request: identity, document, position: { line: 0, column: 6 } },
+        documentText: "const value = 1;\n",
+      },
+      new AbortController().signal,
+    );
+    expect(requestEditorHover).toHaveBeenCalledWith(
+      expect.objectContaining({ position: { line: 0, character: 6 } }),
+      expect.any(AbortSignal),
+    );
+    expect(hoverResponse.hover.contents).toBe("x: number");
+
+    const symbols = surface.props?.provideSymbols;
+    expect(symbols).toBeDefined();
+    if (symbols === undefined) return;
+    const symbolResponse = await symbols(
+      { request: { request: identity, document }, documentText: "const value = 1;\n" },
+      new AbortController().signal,
+    );
+    expect(symbolResponse.symbols[0]?.name).toBe("value");
+
+    const formatting = surface.props?.provideFormatting;
+    expect(formatting).toBeDefined();
+    if (formatting === undefined) return;
+    const formatResponse = await formatting(
+      {
+        request: {
+          request: identity,
+          document,
+          options: { tabSize: 2, insertSpaces: true },
+        },
+        documentText: "const value=1;\n",
+      },
+      new AbortController().signal,
+    );
+    expect(requestEditorFormatting).toHaveBeenCalledWith(
+      expect.objectContaining({ options: { tabSize: 2, insertSpaces: true } }),
+      expect.any(AbortSignal),
+    );
+    expect(formatResponse.edits[0]?.newText).toBe(" = ");
+  });
+
+  it("registers no language-intelligence resolvers for a non-source (plaintext) file", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
+    );
+    render(<EditorWidget root="/repo" file="notes.md" />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.provideDiagnostics).toBeUndefined();
+    expect(surface.props?.provideHover).toBeUndefined();
+    expect(surface.props?.provideSymbols).toBeUndefined();
+    expect(surface.props?.provideFormatting).toBeUndefined();
   });
 });

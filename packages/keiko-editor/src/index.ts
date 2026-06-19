@@ -50,6 +50,26 @@ export type {
   EditorDiagnosticSeverity,
   EditorDiagnosticRelatedInformation,
   EditorDiagnostic,
+  EditorDiagnosticsRequest,
+  EditorDiagnosticsQuery,
+  EditorDiagnosticsResponse,
+  EditorDiagnosticsResolver,
+  EditorHover,
+  EditorHoverRequest,
+  EditorHoverQuery,
+  EditorHoverResponse,
+  EditorHoverResolver,
+  EditorSymbolKind,
+  EditorDocumentSymbol,
+  EditorSymbolsRequest,
+  EditorSymbolsQuery,
+  EditorSymbolsResponse,
+  EditorSymbolsResolver,
+  EditorFormattingOptions,
+  EditorFormattingRequest,
+  EditorFormattingQuery,
+  EditorFormattingResponse,
+  EditorFormattingResolver,
   EditorSymbolRef,
   EditorTestGenerationContext,
   EditorTestGenerationRequest,
@@ -236,6 +256,83 @@ export type {
   InlineCompletionTelemetrySnapshot,
   InlineCompletionTelemetryEvent,
 } from "./components/inline-completion-telemetry.js";
+
+// ─── Runtime: Monaco diagnostics / hover / symbols / formatting bridges (#1201) ───
+// Bridge the deterministic server language service (#1198) into Monaco's marker, hover, document-
+// symbol, and document-formatting surfaces: pure mappers plus a registration helper each. The editor
+// renders host-resolved results and computes nothing (ADR-0042 D4). Consumed by the KeikoCodeEditor
+// `provideDiagnostics`/`provideHover`/`provideSymbols`/`provideFormatting` props; the mappers and
+// registration helpers are exported for advanced hosts and tests.
+export {
+  registerKeikoDiagnostics,
+  severityToMarker,
+  editorDiagnosticToMarker,
+  diagnosticsToMarkers,
+  defaultDiagnosticsScheduler,
+  DIAGNOSTICS_ELIGIBLE_LANGUAGES,
+  DEFAULT_DIAGNOSTICS_DEBOUNCE_MS,
+  DEFAULT_DIAGNOSTICS_OWNER,
+} from "./components/diagnostics-bridge.js";
+export type {
+  RegisterKeikoDiagnosticsArgs,
+  DiagnosticsScheduler,
+  DiagnosticsTimerHandle,
+  MonacoMarkerSeverities,
+  MonacoMarkerData,
+  MonacoMarkerEditorNamespace,
+  MonacoDiagnosticsModel,
+  MonacoDiagnosticsEditor,
+} from "./components/diagnostics-bridge.js";
+export {
+  createKeikoHoverProvider,
+  registerKeikoHoverProvider,
+  hoverResponseToMonaco,
+  toInertCodeFence,
+  HOVER_ELIGIBLE_LANGUAGES,
+} from "./components/hover-bridge.js";
+export type {
+  KeikoHoverProviderDeps,
+  RegisterKeikoHoverProviderArgs,
+  MonacoHoverProvider,
+  MonacoHoverRegistrar,
+  MonacoHoverModel,
+  MonacoHover,
+  MonacoMarkdownString,
+} from "./components/hover-bridge.js";
+export {
+  createKeikoDocumentSymbolProvider,
+  registerKeikoDocumentSymbolProvider,
+  editorSymbolKindToMonaco,
+  editorSymbolToMonaco,
+  symbolsToMonaco,
+  SYMBOLS_ELIGIBLE_LANGUAGES,
+} from "./components/document-symbol-bridge.js";
+export type {
+  KeikoDocumentSymbolProviderDeps,
+  RegisterKeikoDocumentSymbolProviderArgs,
+  MonacoDocumentSymbolProvider,
+  MonacoDocumentSymbolRegistrar,
+  MonacoDocumentSymbolModel,
+  MonacoDocumentSymbol,
+  MonacoSymbolKinds,
+} from "./components/document-symbol-bridge.js";
+export {
+  createKeikoFormattingProvider,
+  registerKeikoFormattingProvider,
+  editorTextEditToMonaco,
+  editsToMonaco,
+  monacoFormattingOptionsToEditor,
+  FORMATTING_ELIGIBLE_LANGUAGES,
+} from "./components/formatting-bridge.js";
+export type {
+  KeikoFormattingProviderDeps,
+  RegisterKeikoFormattingProviderArgs,
+  MonacoDocumentFormattingEditProvider,
+  MonacoDocumentFormattingRegistrar,
+  MonacoFormattingModel,
+  MonacoFormattingOptions,
+  MonacoTextEdit,
+} from "./components/formatting-bridge.js";
 
 // ─── Runtime: KeikoCodeEditor React component (#1194) ───
 export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";

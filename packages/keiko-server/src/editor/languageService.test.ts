@@ -55,7 +55,13 @@ describe("describeLanguageCapabilities", () => {
       "javascript",
       "javascriptreact",
     ]);
-    expect(provider?.operations).toEqual(["diagnostics", "completion", "hover", "symbols"]);
+    expect(provider?.operations).toEqual([
+      "diagnostics",
+      "completion",
+      "hover",
+      "symbols",
+      "formatting",
+    ]);
   });
 });
 
@@ -360,6 +366,90 @@ describe("symbols", () => {
   });
 });
 
+describe("formatting (deterministic, explicit)", () => {
+  it("returns reformatting edits for a poorly spaced document", () => {
+    const outcome = runLanguageOperation(
+      { operation: "formatting", root, document: tsDocument("src/f.ts", "const x   =   1;\n") },
+      options("src/f.ts"),
+    );
+    expect(outcome.kind).toBe("formatting");
+    if (outcome.kind === "formatting") {
+      expect(outcome.result.edits.length).toBeGreaterThan(0);
+      // The collapsed whitespace must not survive in any replacement text.
+      expect(outcome.result.edits.every((edit) => !edit.newText.includes("   "))).toBe(true);
+    }
+  });
+
+  it("returns no edits for an already well-formatted document", () => {
+    const outcome = runLanguageOperation(
+      { operation: "formatting", root, document: tsDocument("src/f.ts", "const x = 1;\n") },
+      options("src/f.ts"),
+    );
+    expect(outcome.kind).toBe("formatting");
+    if (outcome.kind === "formatting") {
+      expect(outcome.result.edits).toEqual([]);
+      expect(outcome.result.truncated).toBe(false);
+    }
+  });
+
+  it("honours insertSpaces:false by indenting with a tab", () => {
+    const text = "function f() {\nreturn 1;\n}\n";
+    const tabbed = runLanguageOperation(
+      {
+        operation: "formatting",
+        root,
+        document: tsDocument("src/f.ts", text),
+        options: { tabSize: 2, insertSpaces: false },
+      },
+      options("src/f.ts"),
+    );
+    const spaced = runLanguageOperation(
+      {
+        operation: "formatting",
+        root,
+        document: tsDocument("src/f.ts", text),
+        options: { tabSize: 2, insertSpaces: true },
+      },
+      options("src/f.ts"),
+    );
+    expect(tabbed.kind).toBe("formatting");
+    expect(spaced.kind).toBe("formatting");
+    if (tabbed.kind === "formatting" && spaced.kind === "formatting") {
+      expect(tabbed.result.edits.some((edit) => edit.newText.includes("\t"))).toBe(true);
+      expect(spaced.result.edits.some((edit) => edit.newText.includes("\t"))).toBe(false);
+    }
+  });
+
+  it("caps formatting edits and sets truncated", () => {
+    const limits: LanguageServiceLimits = {
+      ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+      maxFormattingEdits: 1,
+    };
+    const text = "const a   =1;\nconst b   =2;\nconst c   =3;\n";
+    const outcome = runLanguageOperation(
+      { operation: "formatting", root, document: tsDocument("src/f.ts", text) },
+      options("src/f.ts", { limits }),
+    );
+    expect(outcome.kind).toBe("formatting");
+    if (outcome.kind === "formatting") {
+      expect(outcome.result.edits).toHaveLength(1);
+      expect(outcome.result.truncated).toBe(true);
+    }
+  });
+
+  it("rejects formatting for an unsupported language", () => {
+    const outcome = runLanguageOperation(
+      {
+        operation: "formatting",
+        root,
+        document: { path: "src/a.py", languageId: "python", text: "x = 1" },
+      },
+      options("src/a.py"),
+    );
+    expect(outcome).toMatchObject({ kind: "error", code: "UNSUPPORTED_LANGUAGE" });
+  });
+});
+
 describe("bounds and result caps", () => {
   it("rejects an oversized document", () => {
     const limits: LanguageServiceLimits = {
@@ -477,6 +567,7 @@ describe("provider pluggability (AC7)", () => {
       getCompletions: () => ({ items: [], isIncomplete: false, truncated: false }),
       getHover: () => ({ contents: null }),
       getSymbols: () => ({ symbols: [], truncated: false }),
+      getFormatting: () => ({ edits: [], truncated: false }),
     };
   }
 
@@ -505,6 +596,19 @@ describe("provider pluggability (AC7)", () => {
         root,
         document: { path: "src/x.fic", languageId: "fictional", text: "anything" },
         position: { line: 0, character: 0 },
+      },
+      options("src/x.fic", { registry }),
+    );
+    expect(outcome).toMatchObject({ kind: "error", code: "UNSUPPORTED_OPERATION" });
+  });
+
+  it("rejects formatting for a provider that advertises only diagnostics", () => {
+    const registry = createLanguageProviderRegistry([stubProvider()]);
+    const outcome = runLanguageOperation(
+      {
+        operation: "formatting",
+        root,
+        document: { path: "src/x.fic", languageId: "fictional", text: "anything" },
       },
       options("src/x.fic", { registry }),
     );

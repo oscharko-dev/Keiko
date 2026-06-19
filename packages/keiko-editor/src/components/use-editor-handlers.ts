@@ -13,8 +13,22 @@ import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 import { applyViewState, captureViewState } from "./view-state.js";
 import { wireEditorOnMount, type MountEditor, type MountMonaco } from "./on-mount.js";
-import type { WireEditorCompletion, WireEditorInlineCompletion } from "./on-mount.js";
-import type { EditorCompletionResponse, EditorInlineCompletionResponse } from "../index.js";
+import type {
+  WireEditorCompletion,
+  WireEditorDiagnostics,
+  WireEditorFormatting,
+  WireEditorHover,
+  WireEditorInlineCompletion,
+  WireEditorSymbols,
+} from "./on-mount.js";
+import type {
+  EditorCompletionResponse,
+  EditorDiagnosticsResponse,
+  EditorFormattingResponse,
+  EditorHoverResponse,
+  EditorInlineCompletionResponse,
+  EditorSymbolsResponse,
+} from "../index.js";
 import {
   createEditorRequestId,
   DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
@@ -24,6 +38,7 @@ import {
   DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
 } from "./inline-completion-bridge.js";
+import { DEFAULT_DIAGNOSTICS_DEBOUNCE_MS } from "./diagnostics-bridge.js";
 import {
   createInlineCompletionTelemetry,
   type InlineCompletionTelemetry,
@@ -145,6 +160,91 @@ function buildInlineCompletionWiring(
   };
 }
 
+// Builds the diagnostics wiring from the live props ref (Issue #1201), mirroring the completion
+// builders. Returns undefined when the host supplies no diagnostics resolver, so no markers run.
+function buildDiagnosticsWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorDiagnostics | undefined {
+  if (latestProps.current.provideDiagnostics === undefined) {
+    return undefined;
+  }
+  return {
+    resolve: (query, signal): Promise<EditorDiagnosticsResponse> => {
+      const live = latestProps.current.provideDiagnostics;
+      return live === undefined
+        ? Promise.reject(new Error("diagnostics resolver unavailable"))
+        : live(query, signal);
+    },
+    debounceMs: latestProps.current.diagnosticsDebounceMs ?? DEFAULT_DIAGNOSTICS_DEBOUNCE_MS,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+// Builds the hover wiring from the live props ref (Issue #1201). Returns undefined when the host
+// supplies no hover resolver, so no hover provider is registered.
+function buildHoverWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorHover | undefined {
+  if (latestProps.current.provideHover === undefined) {
+    return undefined;
+  }
+  return {
+    resolve: (query, signal): Promise<EditorHoverResponse> => {
+      const live = latestProps.current.provideHover;
+      return live === undefined
+        ? Promise.reject(new Error("hover resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+// Builds the document-symbol wiring from the live props ref (Issue #1201). Returns undefined when the
+// host supplies no symbols resolver, so no symbol provider is registered.
+function buildSymbolsWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorSymbols | undefined {
+  if (latestProps.current.provideSymbols === undefined) {
+    return undefined;
+  }
+  return {
+    resolve: (query, signal): Promise<EditorSymbolsResponse> => {
+      const live = latestProps.current.provideSymbols;
+      return live === undefined
+        ? Promise.reject(new Error("symbols resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+// Builds the document-formatting wiring from the live props ref (Issue #1201). Returns undefined when
+// the host supplies no formatting resolver, so no formatting provider is registered.
+function buildFormattingWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorFormatting | undefined {
+  if (latestProps.current.provideFormatting === undefined) {
+    return undefined;
+  }
+  return {
+    resolve: (query, signal): Promise<EditorFormattingResponse> => {
+      const live = latestProps.current.provideFormatting;
+      return live === undefined
+        ? Promise.reject(new Error("formatting resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
 // Stable per-editor-instance stream ids and the content-free telemetry accumulator. The completion
 // and inline-completion streams are distinct so inline supersession never aliases the completion
 // stream; the telemetry observer reads the live prop so a later `onInlineCompletionTelemetry`
@@ -196,6 +296,10 @@ function useMountHandler(
         onThemeError: onRuntimeError,
         completion: buildCompletionWiring(latestProps, streamId),
         inlineCompletion: buildInlineCompletionWiring(latestProps, inlineStreamId, telemetry),
+        diagnostics: buildDiagnosticsWiring(latestProps, `${streamId}:diagnostics`),
+        hover: buildHoverWiring(latestProps, `${streamId}:hover`),
+        symbols: buildSymbolsWiring(latestProps, `${streamId}:symbols`),
+        formatting: buildFormattingWiring(latestProps, `${streamId}:formatting`),
       });
     },
     [
