@@ -11,6 +11,7 @@ import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   parseLanguageServiceRequest,
   type LanguageServiceErrorCode,
+  type LanguageServiceLimits,
 } from "@oscharko-dev/keiko-contracts";
 import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -23,6 +24,13 @@ import type { LanguageServiceOutcome } from "./languageService.js";
 
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
 const MAX_LANGUAGE_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 64 * 1024;
+
+export interface EditorLanguageRouteOptions {
+  /** Test-only deterministic limits seam; production keeps the default deadline. */
+  readonly limits?: LanguageServiceLimits | undefined;
+  /** Test-only deterministic clock seam; production keeps the real clock. */
+  readonly now?: (() => number) | undefined;
+}
 
 // Exported for reuse by the completion route (#1199), which maps the same deterministic
 // language-service error codes to HTTP status.
@@ -95,6 +103,7 @@ function outcomeToResult(outcome: LanguageServiceOutcome, deps: UiHandlerDeps): 
 export async function handleEditorLanguage(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions = {},
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_LANGUAGE_BODY_BYTES);
   if (isRouteResult(body)) {
@@ -113,6 +122,8 @@ export async function handleEditorLanguage(
       realRoot: root.realRoot,
       overlayAbsolutePath,
       signal: clientAbortSignal(ctx),
+      limits: options.limits,
+      now: options.now,
     });
     return outcomeToResult(outcome, deps);
   });

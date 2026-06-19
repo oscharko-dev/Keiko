@@ -118,6 +118,10 @@ function body(result: { status: number; body: unknown }): EditorCompletionWireRe
 const cannedChat: CompletionChatFactory = () => () =>
   Promise.resolve('["value.alpha", "value.beta"]');
 
+function routeOptions(overrides: EditorCompletionRouteOptions = {}): EditorCompletionRouteOptions {
+  return { languageServiceNow: () => 0, ...overrides };
+}
+
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "keiko-completion-route-")));
   await mkdir(join(root, "src"));
@@ -186,7 +190,11 @@ describe("POST /api/editor/completion — deterministic tier (no gateway model)"
   });
 
   it("returns deterministic items with a deterministic-only provenance and degrade reason", async () => {
-    const result = await handleEditorCompletion(postContext(completionBody()), deps());
+    const result = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(),
+      routeOptions(),
+    );
     expect(result.status).toBe(200);
     const payload = body(result);
     expect(payload.schemaVersion).toBe("1");
@@ -213,7 +221,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
-      { chatFactory: cannedChat },
+      routeOptions({ chatFactory: cannedChat }),
     );
     expect(result.status).toBe(200);
     const payload = body(result);
@@ -236,11 +244,11 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
-      {
+      routeOptions({
         chatFactory: cannedChat,
         tokenBudget,
         now: () => 1_000,
-      },
+      }),
     );
     expect(result.status).toBe(200);
     const payload = body(result);
@@ -264,11 +272,11 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
       maxTokensPerWindow: 50_000,
       windowMs: 60_000,
     });
-    const options: EditorCompletionRouteOptions = {
+    const options: EditorCompletionRouteOptions = routeOptions({
       chatFactory: usageChat,
       tokenBudget,
       now: () => 1_000,
-    };
+    });
     const first = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
@@ -315,12 +323,16 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
           releaseFirst = resolve;
         }),
     );
-    const options: EditorCompletionRouteOptions = {
+    const options: EditorCompletionRouteOptions = routeOptions({
       chatFactory: () => chat,
       tokenBudget,
       now: () => 1_000,
-    };
-    const first = handleEditorCompletion(postContext(completionBody()), deps(fimConfig("fast")), options);
+    });
+    const first = handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast")),
+      options,
+    );
     await firstStarted;
     const second = await handleEditorCompletion(
       postContext(completionBody()),
@@ -351,7 +363,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
         }),
       ),
       deps(fimConfig("fast"), createInMemoryEvidenceStore(), { KEIKO_DEFAULT_API_KEY: secret }),
-      { chatFactory },
+      routeOptions({ chatFactory }),
     );
     expect(result.status).toBe(200);
     expect(body(result).items.some((item) => item.origin === "model-assisted")).toBe(true);
@@ -375,7 +387,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast"), evidenceStore),
-      { chatFactory: chat },
+      routeOptions({ chatFactory: chat }),
     );
     expect(result.status).toBe(200);
     const runId = evidenceStore.list().find((id) => id.startsWith("editor-completion-model-"));
@@ -400,7 +412,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const triggerChar = await handleEditorCompletion(
       postContext(completionBody({ triggerKind: "trigger-character", triggerCharacter: "." })),
       deps(fimConfig("standard")),
-      { chatFactory: cannedChat },
+      routeOptions({ chatFactory: cannedChat }),
     );
     const triggerPayload = body(triggerChar);
     expect(triggerPayload.items.every((item) => item.origin === "deterministic")).toBe(true);
@@ -410,7 +422,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const invoked = await handleEditorCompletion(
       postContext(completionBody({ triggerKind: "invoked" })),
       deps(fimConfig("standard")),
-      { chatFactory: cannedChat },
+      routeOptions({ chatFactory: cannedChat }),
     );
     const invokedPayload = body(invoked);
     expect(invokedPayload.items.some((item) => item.origin === "model-assisted")).toBe(true);
@@ -424,7 +436,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
-      { chatFactory: emptyChat },
+      routeOptions({ chatFactory: emptyChat }),
     );
     const payload = body(result);
     expect(payload.items.every((item) => item.origin === "deterministic")).toBe(true);
@@ -441,7 +453,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
-      { chatFactory: failingChat },
+      routeOptions({ chatFactory: failingChat }),
     );
     expect(result.status).toBe(200);
     const payload = body(result);
@@ -461,7 +473,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody({ context: { queryText: "alphaHelper" } })),
       deps(fimConfig("fast")),
-      { chatFactory: cannedChat },
+      routeOptions({ chatFactory: cannedChat }),
     );
     const payload = body(result);
     expect(payload.provenance.sources).toEqual(
@@ -474,7 +486,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const result = await handleEditorCompletion(
       postContext(completionBody({ contextBudgetBytes: 1 })),
       deps(fimConfig("fast"), evidenceStore),
-      { chatFactory: cannedChat },
+      routeOptions({ chatFactory: cannedChat }),
     );
     expect(result.status).toBe(200);
     const runId = evidenceStore.list().find((id) => id.startsWith("coding-context-"));
@@ -493,9 +505,11 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     } as unknown as GatewayConfig;
     const chat = vi.fn(() => Promise.resolve("[]"));
     const factory: CompletionChatFactory = () => chat;
-    const result = await handleEditorCompletion(postContext(completionBody()), deps(baseConfig), {
-      chatFactory: factory,
-    });
+    const result = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(baseConfig),
+      routeOptions({ chatFactory: factory }),
+    );
     const payload = body(result);
     expect(chat).not.toHaveBeenCalled();
     expect(payload.items.every((item) => item.origin === "deterministic")).toBe(true);

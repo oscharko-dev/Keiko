@@ -16,10 +16,7 @@ import type {
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
-import {
-  handleEditorCompletion,
-  type CompletionChatFactory,
-} from "./completionRoutes.js";
+import { handleEditorCompletion, type CompletionChatFactory } from "./completionRoutes.js";
 import {
   handleEditorInlineCompletion,
   handleEditorInlineCompletionTelemetry,
@@ -376,6 +373,7 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
         chatFactory: completionChat,
         tokenBudget,
         now: () => 1_000,
+        languageServiceNow: () => 0,
       },
     );
     expect(JSON.stringify(completion.body)).toContain("model-assisted");

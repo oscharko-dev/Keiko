@@ -34,6 +34,7 @@ function options(
     fs: nodeWorkspaceFs,
     realRoot: root,
     overlayAbsolutePath: join(root, relativePath),
+    now: () => 0,
     ...overrides,
   };
 }

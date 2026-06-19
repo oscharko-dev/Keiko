@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import "../../vitest.setup";
+
 import { render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useRef, type ReactElement } from "react";
@@ -52,11 +55,13 @@ const captured: {
   language: string | null;
   completion: CapturedCompletionRegistration[];
   options: Record<string, unknown> | null;
+  keepCurrentModel: boolean | null;
 } = {
   editor: null,
   language: null,
   completion: [],
   options: null,
+  keepCurrentModel: null,
 };
 
 vi.mock("@monaco-editor/react", () => {
@@ -71,6 +76,7 @@ vi.mock("@monaco-editor/react", () => {
     value?: string;
     language?: string;
     options?: { ariaLabel?: string; readOnly?: boolean } & Record<string, unknown>;
+    keepCurrentModel?: boolean;
     onChange?: (value: string | undefined) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
   }
@@ -127,87 +133,90 @@ vi.mock("@monaco-editor/react", () => {
     mounted: boolean;
     fakeEditor: FakeEditorShape;
   }
+  function createMockState(): MockState {
+    const s: MockState = {
+      container: { current: null },
+      disposed: { action: false, cursor: false, selection: false },
+      saveRun: (): void => undefined,
+      saveKeybindings: undefined,
+      cursorListener: null,
+      selectionListener: null,
+      focus: vi.fn(),
+      mounted: false,
+      fakeEditor: null as unknown as FakeEditorShape,
+    };
+    s.fakeEditor = {
+      addAction: (descriptor): { dispose: () => void } => {
+        s.saveRun = descriptor.run;
+        s.saveKeybindings = descriptor.keybindings;
+        return {
+          dispose: (): void => {
+            s.disposed.action = true;
+          },
+        };
+      },
+      onDidChangeCursorPosition: (listener): { dispose: () => void } => {
+        s.cursorListener = listener;
+        return {
+          dispose: (): void => {
+            s.disposed.cursor = true;
+          },
+        };
+      },
+      onDidChangeCursorSelection: (listener): { dispose: () => void } => {
+        s.selectionListener = listener;
+        return {
+          dispose: (): void => {
+            s.disposed.selection = true;
+          },
+        };
+      },
+      saveViewState: (): { scroll: number } => ({ scroll: 1 }),
+      restoreViewState: vi.fn(),
+      focus: s.focus,
+      getContainerDomNode: (): HTMLElement => s.container.current ?? document.createElement("div"),
+    };
+    captured.editor = {
+      emitCursor: (p): void => {
+        s.cursorListener?.({ position: p });
+      },
+      emitSelection: (sel): void => {
+        s.selectionListener?.({
+          selection: {
+            startLineNumber: sel.startLineNumber,
+            startColumn: sel.startColumn,
+            endLineNumber: sel.endLineNumber,
+            endColumn: sel.endColumn,
+            isEmpty: (): boolean => sel.empty,
+          },
+        });
+      },
+      runSaveAction: (): void => {
+        s.saveRun();
+      },
+      saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
+      focus: s.focus,
+      disposed: s.disposed,
+    };
+    return s;
+  }
+  function scheduleMountOnce(state: MockState, onMount: MockProps["onMount"]): void {
+    if (!state.mounted) {
+      state.mounted = true;
+      queueMicrotask(() => onMount?.(state.fakeEditor, fakeMonaco));
+    }
+  }
   const EditorMock = (props: MockProps): ReactElement => {
     // `@monaco-editor/react` invokes `onMount` exactly once and keeps the editor (and its registered
     // save action) across re-renders; only `onChange` is re-subscribed. Persist the fake editor
     // across renders so a save closure captured at mount stays bound — making a stale-text save
     // observable when the controlled `value` prop changes after mount.
     const ref = useRef<MockState | null>(null);
-    if (ref.current === null) {
-      const s: MockState = {
-        container: { current: null },
-        disposed: { action: false, cursor: false, selection: false },
-        saveRun: (): void => undefined,
-        saveKeybindings: undefined,
-        cursorListener: null,
-        selectionListener: null,
-        focus: vi.fn(),
-        mounted: false,
-        fakeEditor: null as unknown as FakeEditorShape,
-      };
-      s.fakeEditor = {
-        addAction: (descriptor): { dispose: () => void } => {
-          s.saveRun = descriptor.run;
-          s.saveKeybindings = descriptor.keybindings;
-          return {
-            dispose: (): void => {
-              s.disposed.action = true;
-            },
-          };
-        },
-        onDidChangeCursorPosition: (listener): { dispose: () => void } => {
-          s.cursorListener = listener;
-          return {
-            dispose: (): void => {
-              s.disposed.cursor = true;
-            },
-          };
-        },
-        onDidChangeCursorSelection: (listener): { dispose: () => void } => {
-          s.selectionListener = listener;
-          return {
-            dispose: (): void => {
-              s.disposed.selection = true;
-            },
-          };
-        },
-        saveViewState: (): { scroll: number } => ({ scroll: 1 }),
-        restoreViewState: vi.fn(),
-        focus: s.focus,
-        getContainerDomNode: (): HTMLElement =>
-          s.container.current ?? document.createElement("div"),
-      };
-      captured.editor = {
-        emitCursor: (p): void => {
-          s.cursorListener?.({ position: p });
-        },
-        emitSelection: (sel): void => {
-          s.selectionListener?.({
-            selection: {
-              startLineNumber: sel.startLineNumber,
-              startColumn: sel.startColumn,
-              endLineNumber: sel.endLineNumber,
-              endColumn: sel.endColumn,
-              isEmpty: (): boolean => sel.empty,
-            },
-          });
-        },
-        runSaveAction: (): void => {
-          s.saveRun();
-        },
-        saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
-        focus: s.focus,
-        disposed: s.disposed,
-      };
-      ref.current = s;
-    }
+    const state = (ref.current ??= createMockState());
     captured.language = props.language ?? null;
     captured.options = props.options ?? null;
-    const state = ref.current;
-    if (!state.mounted) {
-      state.mounted = true;
-      queueMicrotask(() => props.onMount?.(state.fakeEditor, fakeMonaco));
-    }
+    captured.keepCurrentModel = props.keepCurrentModel ?? null;
+    scheduleMountOnce(state, props.onMount);
     return (
       <div
         ref={(node): void => {
@@ -239,6 +248,7 @@ beforeEach(() => {
   captured.language = null;
   captured.completion = [];
   captured.options = null;
+  captured.keepCurrentModel = null;
 });
 
 afterEach(() => {
@@ -571,7 +581,7 @@ describe("KeikoCodeEditor — completion bridge (#1199)", () => {
       },
       { lineNumber: 1, column: 1 },
       { triggerKind: 0 },
-      { isCancellationRequested: false, onCancellationRequested: () => undefined },
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: vi.fn() }) },
     );
     expect(provideCompletions).toHaveBeenCalledTimes(1);
     const [query] = provideCompletions.mock.calls[0] as [{ documentText: string }];
@@ -586,6 +596,11 @@ describe("KeikoCodeEditor — large-file degraded mode (Issue #1207)", () => {
     expect(captured.options?.bracketPairColorization).toEqual({ enabled: true });
     expect(captured.options?.folding).toBe(true);
     expect(captured.options?.largeFileOptimizations).toBe(true);
+  });
+
+  it("lets @monaco-editor/react dispose the current model when the editor unmounts", () => {
+    render(<KeikoCodeEditor {...baseProps()} />);
+    expect(captured.keepCurrentModel).toBe(false);
   });
 
   it("passes degraded Monaco options for a buffer over the 500 KB size threshold", () => {

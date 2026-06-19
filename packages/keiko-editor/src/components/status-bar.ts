@@ -50,6 +50,7 @@ export interface EditorStatusBarInput {
   readonly saveStatus: EditorSaveStatus;
   readonly dirty: boolean;
   readonly completionsEnabled: boolean;
+  readonly largeFileMode?: "normal" | "degraded" | undefined;
   readonly diagnostics: EditorDiagnosticsSummary | null;
   readonly run?: EditorStatusRun | undefined;
   readonly readOnly?: boolean | undefined;
@@ -207,6 +208,20 @@ function selectionField(selectedLineCount: number | undefined): EditorStatusFiel
   };
 }
 
+function largeFileField(mode: "normal" | "degraded" | undefined): EditorStatusField | null {
+  if (mode !== "degraded") {
+    return null;
+  }
+  return {
+    id: "large-file",
+    label: "Large file mode",
+    ariaLabel: "Large file mode: completions and analysis disabled",
+    tone: "warn",
+    live: true,
+    assertive: false,
+  };
+}
+
 /**
  * Derive the status-bar view model from host state. Field order mirrors a serious editor: the
  * document identity (language, read-only) leads, then live editing signals (problems, run, save),
@@ -246,6 +261,9 @@ export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatus
     live: false,
     assertive: false,
   });
+
+  const largeFile = largeFileField(input.largeFileMode);
+  if (largeFile !== null) fields.push(largeFile);
 
   const problems = diagnosticsField(input.diagnostics);
   if (problems !== null) fields.push(problems);

@@ -148,6 +148,14 @@ describe("deriveEditorStatusBar run + language + completions + selection", () =>
     expect(field(off, "completions")?.label).toBe("Completions off");
   });
 
+  it("shows degraded large-file status as a live field", () => {
+    const view = deriveEditorStatusBar(input({ largeFileMode: "degraded" }));
+    const mode = field(view, "large-file");
+    expect(mode?.label).toBe("Large file mode");
+    expect(mode?.tone).toBe("warn");
+    expect(view.liveSummary).toContain("Large file mode: completions and analysis disabled");
+  });
+
   it("shows a read-only field and announces it", () => {
     const view = deriveEditorStatusBar(input({ readOnly: true }));
     expect(field(view, "readonly")?.tone).toBe("warn");

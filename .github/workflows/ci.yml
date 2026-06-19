@@ -56,6 +56,17 @@ jobs:
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
+      - name: Keiko Editor static-export bundle gate
+        run: |
+          npm run build:ui
+          npm run check:editor-bundle-size -- --require-static-export
+      - name: Package surface and installable smoke
+        run: |
+          npm run build
+          npm run prepare:bin
+          npm run prune:package-native-optionals
+          npm run check:package-surface
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality

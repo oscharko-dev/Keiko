@@ -43,3 +43,41 @@ if (typeof matchMediaWindow.matchMedia !== "function") {
   };
   matchMediaWindow.matchMedia = fakeMatchMedia;
 }
+
+// jsdom deliberately omits canvas rendering. Monaco-adjacent React tests only need a harmless
+// 2D-context facade so they exercise editor behavior without noisy environment warnings.
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value(this: HTMLCanvasElement, contextId: string) {
+    if (contextId !== "2d") {
+      return null;
+    }
+    return {
+      canvas: this,
+      clearRect: noop,
+      fillRect: noop,
+      getImageData: () => ({ data: new Uint8ClampedArray(0) }),
+      putImageData: noop,
+      createImageData: () => [],
+      setTransform: noop,
+      drawImage: noop,
+      save: noop,
+      fillText: noop,
+      restore: noop,
+      beginPath: noop,
+      moveTo: noop,
+      lineTo: noop,
+      closePath: noop,
+      stroke: noop,
+      translate: noop,
+      scale: noop,
+      rotate: noop,
+      arc: noop,
+      fill: noop,
+      measureText: () => ({ width: 0 }),
+      transform: noop,
+      rect: noop,
+      clip: noop,
+    } as unknown as CanvasRenderingContext2D;
+  },
+});
