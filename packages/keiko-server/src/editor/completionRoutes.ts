@@ -55,6 +55,11 @@ import {
   type ModelChatFn,
   type ModelCompletionItem,
 } from "./editorCompletionModel.js";
+import {
+  accountModelUsage,
+  sharedEditorModelTokenBudget,
+  type EditorModelTokenBudget,
+} from "./editorModelTokenBudget.js";
 
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
 const MAX_COMPLETION_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 64 * 1024;
@@ -74,6 +79,10 @@ export type CompletionChatFactory = (config: GatewayConfig, modelId: string) => 
 
 export interface EditorCompletionRouteOptions {
   readonly chatFactory?: CompletionChatFactory | undefined;
+  /** Injectable per-root token budget (tests supply a fresh one); defaults to a shared instance. */
+  readonly tokenBudget?: EditorModelTokenBudget | undefined;
+  /** Injectable clock for the token budget; defaults to `Date.now`. */
+  readonly now?: (() => number) | undefined;
 }
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
@@ -107,6 +116,9 @@ interface ModelTierOutcome {
   readonly promptHash?: string | undefined;
   readonly contextSources: readonly EditorCompletionSource[];
   readonly truncated: boolean;
+  // Token usage of the elected model call (content-free counts), recorded into the per-root token
+  // budget by the tier; absent on every deterministic/degrade path.
+  readonly usage?: UsageMetadata | undefined;
 }
 
 interface ElectedModelContext {
@@ -314,6 +326,7 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
     promptHash: generated.promptHash,
     contextSources: generated.items.length > 0 ? contextSourcesFromPack(pack) : [],
     truncated: generated.truncated,
+    ...(generated.usage === undefined ? {} : { usage: generated.usage }),
   };
 }
 
@@ -325,6 +338,8 @@ async function runModelTier(
   signal: AbortSignal,
   deps: UiHandlerDeps,
   chatFactory: CompletionChatFactory,
+  tokenBudget: EditorModelTokenBudget,
+  now: () => number,
 ): Promise<ModelTierOutcome> {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
@@ -338,16 +353,18 @@ async function runModelTier(
   // As-you-type-capable (fast) models may run on a trigger character; a manual-only model runs only on
   // an explicit invoke, bounding per-keystroke cost (ADR-0042 D5/D6).
   const triggerEligible = request.triggerKind === "invoked" || selection.mode === "as-you-type";
+  const degraded = (): ModelTierOutcome =>
+    DETERMINISTIC_OUTCOME(selection.mode, selection.degradeReason, modelId, selection.latencyClass);
+  // Skip the model for an ineligible trigger, or when the per-root token ceiling is reached
+  // (#1206 LLM10 denial-of-wallet) — both degrade to deterministic-only.
   if (selection.mode === "deterministic" || modelId === undefined || !triggerEligible) {
-    return DETERMINISTIC_OUTCOME(
-      selection.mode,
-      selection.degradeReason,
-      modelId,
-      selection.latencyClass,
-    );
+    return degraded();
+  }
+  if (tokenBudget.isExhausted(realRoot, now())) {
+    return degraded();
   }
   try {
-    return await runElectedModel({
+    const outcome = await runElectedModel({
       request,
       realRoot,
       signal: modelSignal(selection, signal),
@@ -357,15 +374,12 @@ async function runModelTier(
       chatFactory,
       config,
     });
+    accountModelUsage(tokenBudget, realRoot, now(), outcome.usage);
+    return outcome;
   } catch {
     // ADR-0042 D5 / AC4: a model or retrieval failure degrades to deterministic-only; it never breaks
     // the route or surfaces partial junk to the editor.
-    return DETERMINISTIC_OUTCOME(
-      selection.mode,
-      selection.degradeReason,
-      modelId,
-      selection.latencyClass,
-    );
+    return degraded();
   }
 }
 
@@ -558,6 +572,8 @@ export async function handleEditorCompletion(
       signal,
       deps,
       options.chatFactory ?? defaultChatFactory,
+      options.tokenBudget ?? sharedEditorModelTokenBudget,
+      options.now ?? Date.now,
     );
 
     return { status: 200, body: deps.redactor(buildWireResponse(deterministic, model)) };
