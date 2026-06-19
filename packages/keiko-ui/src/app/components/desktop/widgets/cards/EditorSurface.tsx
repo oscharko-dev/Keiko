@@ -18,6 +18,7 @@ import {
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDiagnosticsResolver,
+  type EditorDiagnosticsSummary,
   type EditorFileModel,
   type EditorFormattingResolver,
   type EditorHoverResolver,
@@ -80,6 +81,15 @@ export interface EditorSurfaceProps {
   readonly provideHover?: EditorHoverResolver | undefined;
   readonly provideSymbols?: EditorSymbolsResolver | undefined;
   readonly provideFormatting?: EditorFormattingResolver | undefined;
+  /** Content-free diagnostic-count observer for the host status bar (Issue #1205). */
+  readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  /** Host handler for the palette/keybinding "Generate Tests" command (Issue #1205). */
+  readonly onGenerateTests?: (() => void) | undefined;
+  /**
+   * Whether the editor renders its own save/truncation footer (Issue #1205). The card sets this to
+   * `false` because it renders the unified {@link EditorStatusBar} as the single status surface.
+   */
+  readonly showStatusFooter?: boolean | undefined;
 }
 
 export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
@@ -114,6 +124,9 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
       provideHover={props.provideHover}
       provideSymbols={props.provideSymbols}
       provideFormatting={props.provideFormatting}
+      onDiagnosticsSummary={props.onDiagnosticsSummary}
+      onGenerateTests={props.onGenerateTests}
+      showStatusFooter={props.showStatusFooter}
     />
   );
 }

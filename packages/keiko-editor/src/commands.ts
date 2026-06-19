@@ -35,10 +35,23 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     title: "Accept Inline Completion",
     requiredCapabilities: [],
   },
+  {
+    id: "editor.rejectInlineCompletion",
+    title: "Reject Suggestion",
+    requiredCapabilities: [],
+  },
   { id: "editor.generateTests", title: "Generate Tests", requiredCapabilities: ["generateTests"] },
+  {
+    id: "editor.runVerification",
+    title: "Run Verification",
+    requiredCapabilities: ["runVerification"],
+  },
   { id: "editor.previewPatch", title: "Preview Patch", requiredCapabilities: ["previewPatch"] },
+  { id: "editor.openDiff", title: "Open Diff", requiredCapabilities: ["previewPatch"] },
   { id: "editor.applyPatch", title: "Apply Patch", requiredCapabilities: ["applyPatchReview"] },
   { id: "editor.rejectPatch", title: "Reject Patch", requiredCapabilities: ["applyPatchReview"] },
+  { id: "editor.format", title: "Format Document", requiredCapabilities: ["formatDocument"] },
+  { id: "editor.find", title: "Find", requiredCapabilities: [] },
   {
     id: "editor.requestContext",
     title: "Request Context",
@@ -56,10 +69,17 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.triggerCompletion": (ctx) => !ctx.readOnly,
   "editor.triggerInlineCompletion": (ctx) => !ctx.readOnly,
   "editor.acceptInlineCompletion": (ctx) => !ctx.readOnly && ctx.inlineCompletionVisible,
+  "editor.rejectInlineCompletion": (ctx) => ctx.inlineCompletionVisible,
   "editor.applyPatch": (ctx) => !ctx.readOnly && ctx.pendingPatchId !== null,
   "editor.rejectPatch": (ctx) => ctx.pendingPatchId !== null,
+  "editor.runVerification": (ctx) => ctx.pendingPatchId !== null,
   "editor.generateTests": () => true,
   "editor.previewPatch": () => true,
+  "editor.openDiff": () => true,
+  // Formatting rewrites the buffer, so it is offered only on an editable document.
+  "editor.format": (ctx) => !ctx.readOnly,
+  // Find is read-only and always available once the editor is mounted.
+  "editor.find": () => true,
   "editor.requestContext": () => true,
 };
 

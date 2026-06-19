@@ -152,6 +152,16 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "testGenerationReducer",
       "buildTestGenerationPreview",
       "TEST_GENERATION_REVIEW_ACTIONS",
+      // VS Code-feeling UX: command actions + status bar (#1205).
+      "MONACO_BUILTIN_ACTION_IDS",
+      "EDITOR_COMMAND_KEYBINDINGS",
+      "EDITOR_GENERATE_TESTS_ACTION_ID",
+      "EDITOR_GENERATE_TESTS_ACTION_LABEL",
+      "buildGenerateTestsKeybinding",
+      "buildGenerateTestsActionDescriptor",
+      "deriveEditorStatusBar",
+      "editorLanguageLabel",
+      "EditorStatusBar",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

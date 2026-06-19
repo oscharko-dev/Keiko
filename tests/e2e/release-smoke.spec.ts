@@ -293,24 +293,80 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   await expect(filesWindow).toBeHidden();
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
 
+  // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar (the editor's
+  // own footer is suppressed in the card). The save field is the visible indicator; a conflict also
+  // fires the status bar's assertive alert region.
+  const saveField = editorWindow.locator('[data-field="save"]');
   const savedText = "export const e2eFixture = 'saved in browser smoke';\n";
   await replaceMonacoText(page, editorWindow, savedText);
-  await expect(editorWindow.getByText("Unsaved changes")).toBeVisible();
+  await expect(saveField).toHaveText("Unsaved");
   await editorWindow.getByRole("button", { name: "Save" }).click();
   await expect
     .poll(() => readFileSync(absolutePath, "utf8").replace(/\r\n/gu, "\n"))
     .toBe(savedText);
-  await expect(editorWindow.getByText(/Saved at/u)).toBeVisible();
+  await expect(saveField).toHaveText("Saved");
 
   const conflictDraft = "export const e2eFixture = 'conflicting browser draft';\n";
   await replaceMonacoText(page, editorWindow, conflictDraft);
   writeFileSync(absolutePath, "export const e2eFixture = 'external edit';\n", "utf8");
   await editorWindow.getByRole("button", { name: "Save" }).click();
   await expect(editorWindow.getByRole("alert")).toContainText("Save conflict");
+  await expect(saveField).toHaveText("Conflict");
 
   await editorWindow.getByRole("button", { name: "Reload" }).click();
-  await expect(editorWindow.getByText("Ready")).toBeVisible();
+  await expect(saveField).toHaveText("Saved");
   await expect(editorWindow.getByText("external edit")).toBeVisible();
+
+  await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+  await expect(editorWindow).toBeHidden();
+  assertNoPageErrors();
+});
+
+test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, command palette @smoke", async ({
+  page,
+}, testInfo) => {
+  // Issue #1205: the browser interaction smoke for the VS Code-feeling UX — the unified status bar,
+  // accessible tabs, live cursor reporting, and Monaco's native command palette carrying the Keiko
+  // Generate Tests command — against the real app path (no mocks).
+  const projectPath = createProjectFixture();
+  const relativePath = "packages/keiko-cli/src/run.ts";
+  writeFileSync(join(projectPath, relativePath), "", "utf8");
+  const assertNoPageErrors = collectPageErrors(page);
+
+  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
+
+  // The unified status bar is the single status surface (Acceptance Criterion 3).
+  const statusBar = editorWindow.getByTestId("editor-status-bar");
+  await expect(statusBar).toBeVisible();
+  await expect(statusBar.locator('[data-field="language"]')).toHaveText("TypeScript");
+  await expect(statusBar.locator('[data-field="completions"]')).toHaveText("Completions on");
+
+  // The document tab is an accessible tab driving the editor tabpanel.
+  await expect(editorWindow.getByRole("tab", { name: /run\.ts/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(editorWindow.getByRole("tabpanel")).toBeVisible();
+
+  // Typing updates the live cursor field; "const answer = 42;" is 18 chars → caret at column 19.
+  await replaceMonacoText(page, editorWindow, "const answer = 42;");
+  await expect(statusBar.locator('[data-field="cursor"]')).toHaveText("Ln 1, Col 19");
+
+  // Command palette integration: F1 opens Monaco's native palette carrying the Keiko Generate Tests
+  // command alongside the built-ins.
+  await editorWindow.locator(".monaco-editor").first().click();
+  await page.keyboard.press("F1");
+  const palette = page.locator(".quick-input-widget");
+  await expect(palette).toBeVisible();
+  await page.keyboard.type("Generate Tests");
+  await expect(palette.getByText("Generate Tests").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+
+  await testInfo.attach("editor-vscode-ux", {
+    body: await editorWindow.screenshot(),
+    contentType: "image/png",
+  });
 
   await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
   await expect(editorWindow).toBeHidden();

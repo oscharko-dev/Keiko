@@ -122,11 +122,13 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
           <EditorLoadingBox />
         )}
       </div>
-      <EditorStatusFooter
-        status={view.status}
-        overLimit={view.overLimit}
-        maxSizeBytes={view.maxSizeBytes}
-      />
+      {(props.showStatusFooter ?? true) ? (
+        <EditorStatusFooter
+          status={view.status}
+          overLimit={view.overLimit}
+          maxSizeBytes={view.maxSizeBytes}
+        />
+      ) : null}
     </div>
   );
 }

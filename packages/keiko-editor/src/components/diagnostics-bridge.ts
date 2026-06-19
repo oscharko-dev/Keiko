@@ -33,6 +33,7 @@ import type {
   EditorRequestIdentity,
 } from "../types.js";
 import type { MonacoDisposable } from "./completion-bridge.js";
+import type { EditorDiagnosticsSummary } from "./status-bar.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
 
@@ -143,6 +144,28 @@ export function diagnosticsToMarkers(
   return diagnostics.map((diagnostic) => editorDiagnosticToMarker(diagnostic, severities));
 }
 
+/**
+ * Tally diagnostics into the content-free status-bar summary (Issue #1205). `info` and `hint` both
+ * count as informational, so the status bar shows error/warning/info totals without leaking content.
+ */
+export function summarizeDiagnostics(
+  diagnostics: readonly EditorDiagnostic[],
+): EditorDiagnosticsSummary {
+  let errors = 0;
+  let warnings = 0;
+  let infos = 0;
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.severity === "error") {
+      errors += 1;
+    } else if (diagnostic.severity === "warning") {
+      warnings += 1;
+    } else {
+      infos += 1;
+    }
+  }
+  return { errors, warnings, infos };
+}
+
 // ─── Controller ─────────────────────────────────────────────────────────────────────────────────
 
 export interface RegisterKeikoDiagnosticsArgs {
@@ -164,6 +187,12 @@ export interface RegisterKeikoDiagnosticsArgs {
   readonly newRequestId: () => string;
   /** Debounce scheduler; defaults to `setTimeout`/`clearTimeout`. */
   readonly scheduler?: DiagnosticsScheduler | undefined;
+  /**
+   * Content-free diagnostic-count observer (Issue #1205). Called with the error/warning/info tally
+   * after each non-stale analysis writes markers, so the host's status bar reflects the live problem
+   * count. Never receives diagnostic text or ranges.
+   */
+  readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
 }
 
 interface DiagnosticsState {
@@ -245,6 +274,7 @@ function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): 
         rt.args.owner,
         diagnosticsToMarkers(response.diagnostics, rt.args.markers.MarkerSeverity),
       );
+      rt.args.onSummary?.(summarizeDiagnostics(response.diagnostics));
     },
     () => {
       // A failure (network, abort, host error) leaves existing markers untouched and never throws.

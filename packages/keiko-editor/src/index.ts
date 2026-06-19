@@ -407,3 +407,35 @@ export type {
   BuildTestGenerationPreviewArgs,
   TestGenerationPreview,
 } from "./test-generation-preview.js";
+
+// ─── Runtime: VS Code-feeling UX — command actions & status bar (#1205) ───
+// The command-action descriptors register host-owned commands (Generate Tests) into Monaco's native
+// command palette (F1) and context menu; `MONACO_BUILTIN_ACTION_IDS` documents the editor-intrinsic
+// commands (find, format, accept/reject suggestion, palette, accessibility help) that ship with
+// Monaco. The status-bar module is a pure view-model derivation plus a presentational, host-agnostic
+// component. No Monaco runtime value import — the host wires them through KeikoCodeEditor props and
+// renders the unified status bar (ADR-0042 D1).
+export {
+  MONACO_BUILTIN_ACTION_IDS,
+  EDITOR_COMMAND_KEYBINDINGS,
+  EDITOR_GENERATE_TESTS_ACTION_ID,
+  EDITOR_GENERATE_TESTS_ACTION_LABEL,
+  buildGenerateTestsKeybinding,
+  buildGenerateTestsActionDescriptor,
+} from "./components/command-actions.js";
+export type {
+  KeybindingDisplay,
+  CommandActionKeys,
+  GenerateTestsActionArgs,
+} from "./components/command-actions.js";
+export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";
+export type {
+  EditorDiagnosticsSummary,
+  EditorStatusTone,
+  EditorStatusRun,
+  EditorStatusBarInput,
+  EditorStatusField,
+  EditorStatusBarViewModel,
+} from "./components/status-bar.js";
+export { EditorStatusBar } from "./components/EditorStatusBar.js";
+export type { EditorStatusBarProps } from "./components/EditorStatusBar.js";

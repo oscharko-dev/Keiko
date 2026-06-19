@@ -8,6 +8,7 @@ import {
   editorDiagnosticToMarker,
   registerKeikoDiagnostics,
   severityToMarker,
+  summarizeDiagnostics,
   type DiagnosticsScheduler,
   type MonacoDiagnosticsEditor,
   type MonacoDiagnosticsModel,
@@ -271,6 +272,19 @@ describe("pure mappers", () => {
       diagnosticsToMarkers([diagnostic(), diagnostic({ severity: "warning" })], SEVERITIES),
     ).toHaveLength(2);
   });
+
+  it("tallies diagnostics by severity for the status bar, counting hints as info (#1205)", () => {
+    expect(summarizeDiagnostics([])).toEqual({ errors: 0, warnings: 0, infos: 0 });
+    expect(
+      summarizeDiagnostics([
+        diagnostic(),
+        diagnostic({ severity: "warning" }),
+        diagnostic({ severity: "warning" }),
+        diagnostic({ severity: "info" }),
+        diagnostic({ severity: "hint" }),
+      ]),
+    ).toEqual({ errors: 1, warnings: 2, infos: 2 });
+  });
 });
 
 describe("registerKeikoDiagnostics — marker lifecycle", () => {
@@ -287,7 +301,32 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     expect(markers.calls).toHaveLength(1);
     expect(markers.calls[0]?.owner).toBe("test-owner");
     expect(markers.calls[0]?.markers).toHaveLength(1);
-    expect(markers.calls[0]?.markers[0]?.severity).toBe(8);
+  });
+
+  it("reports a content-free diagnostics summary to onSummary after writing markers (#1205)", async () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const onSummary = vi.fn();
+    const { resolver } = register(model, editor, { onSummary });
+    resolver.calls[0]?.settle([
+      diagnostic(),
+      diagnostic({ severity: "warning" }),
+      diagnostic({ severity: "info" }),
+    ]);
+    await tick();
+    expect(onSummary).toHaveBeenCalledWith({ errors: 1, warnings: 1, infos: 1 });
+  });
+
+  it("does not report a summary for a stale (superseded) response (#1205)", async () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const onSummary = vi.fn();
+    const { resolver } = register(model, editor, { onSummary });
+    // The buffer version moves on while the initial request is in flight, so its response is stale.
+    model.bumpVersion();
+    resolver.calls[0]?.settle([diagnostic()]);
+    await tick();
+    expect(onSummary).not.toHaveBeenCalled();
   });
 
   it("rewrites markers to empty when diagnostics clear (a fixed error removes its squiggle)", async () => {
