@@ -1006,6 +1006,11 @@ describe("parseModelCapability", () => {
     }
   });
 
+  it("rejects infillingAlignment with an explicit supportsInfilling: false", () => {
+    const raw = { ...validCapability(), supportsInfilling: false, infillingAlignment: "instruct" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/infillingAlignment/);
+  });
+
   it("rejects supportsInfilling: true on a non-chat kind (invariant: infilling ⇒ chat)", () => {
     const raw = {
       ...validCapability(),

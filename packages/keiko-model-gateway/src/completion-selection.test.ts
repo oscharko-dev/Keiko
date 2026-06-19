@@ -242,6 +242,27 @@ describe("selectCompletionModelFromCapabilities — cost ceiling (#1206)", () =>
     expect(result).toEqual({ mode: "deterministic", degradeReason: "over-cost-ceiling" });
   });
 
+  // Mutation guard: the over-cost-ceiling reason is gated on isAlignedInfillingModel. A lone base
+  // model over the ceiling is a SECURITY rejection, not a budget problem — it must report
+  // only-base-infilling-model, not over-cost-ceiling (dropping the aligned conjunct would misreport).
+  it("reports only-base when a lone base model is over the ceiling (not over-cost-ceiling)", () => {
+    const result = selectCompletionModelFromCapabilities(
+      [infillCap("base-high", "base", "fast", "high")],
+      { maxCostClass: "low" },
+    );
+    expect(result).toEqual({ mode: "deterministic", degradeReason: "only-base-infilling-model" });
+  });
+
+  // Mutation guard: a lone non-infilling chat model over the ceiling is a capability gap, not a
+  // budget problem — it must report no-infilling-model.
+  it("reports no-infilling-model when a lone non-infilling model is over the ceiling", () => {
+    const result = selectCompletionModelFromCapabilities(
+      [chatCap("plain-high", { costClass: "high" })],
+      { maxCostClass: "low" },
+    );
+    expect(result).toEqual({ mode: "deterministic", degradeReason: "no-infilling-model" });
+  });
+
   it("treats an omitted ceiling as no budget limit", () => {
     const result = selectCompletionModelFromCapabilities([
       infillCap("fast-high", "instruct", "fast", "high"),
