@@ -39,7 +39,10 @@ export type {
   EditorCompletionItemKind,
   EditorCompletionItem,
   EditorInlineCompletionItem,
+  EditorCompletionProvenance,
   EditorCompletionResponse,
+  EditorCompletionQuery,
+  EditorCompletionResolver,
   EditorInlineCompletionResponse,
   EditorDiagnosticSeverity,
   EditorDiagnosticRelatedInformation,
@@ -152,6 +155,43 @@ export type {
   EditorRuntimeUnsupportedReason,
   MonacoLoaderLike,
 } from "./monaco/runtime.js";
+
+// ─── Runtime: Monaco completion-provider bridge (#1199) ───
+// Bridges Monaco's completion provider to the host completion resolver: pure mappers plus a provider
+// factory and registration helper. The editor renders host-resolved items and computes nothing
+// (ADR-0042 D5). Consumed by the KeikoCodeEditor `provideCompletions` prop; the factory/mappers are
+// exported for advanced hosts and tests.
+export {
+  createKeikoCompletionProvider,
+  registerKeikoCompletionProvider,
+  createEditorRequestId,
+  monacoTriggerToEditor,
+  monacoPositionToEditor,
+  editorKindToMonaco,
+  editorRangeToMonaco,
+  editorItemToMonacoSuggestion,
+  responseToCompletionList,
+  wordRangeAt,
+  DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
+  DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
+  COMPLETION_ELIGIBLE_LANGUAGES,
+} from "./components/completion-bridge.js";
+export type {
+  KeikoCompletionProviderDeps,
+  RegisterKeikoCompletionProviderArgs,
+  MonacoCompletionItemKinds,
+  MonacoCompletionTriggerKinds,
+  MonacoCompletionItemProvider,
+  MonacoLanguagesRegistrar,
+  MonacoCompletionModel,
+  MonacoCompletionContext,
+  MonacoCompletionList,
+  MonacoCompletionSuggestion,
+  MonacoCancellationToken,
+  MonacoDisposable,
+  MonacoPositionLike,
+  MonacoRange,
+} from "./components/completion-bridge.js";
 
 // ─── Runtime: KeikoCodeEditor React component (#1194) ───
 export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";

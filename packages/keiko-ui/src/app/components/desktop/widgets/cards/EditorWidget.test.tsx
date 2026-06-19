@@ -2,15 +2,25 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FilesContentResponse } from "../../../../../lib/types";
-import { ApiError, fetchFilesContent, saveFilesContent } from "../../../../../lib/api";
+import type { EditorCompletionWireResponse, FilesContentResponse } from "../../../../../lib/types";
+import {
+  ApiError,
+  fetchFilesContent,
+  requestEditorCompletion,
+  saveFilesContent,
+} from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { EditorWidget } from "./EditorWidget";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
     await vi.importActual<typeof import("../../../../../lib/api")>("../../../../../lib/api");
-  return { ...actual, fetchFilesContent: vi.fn(), saveFilesContent: vi.fn() };
+  return {
+    ...actual,
+    fetchFilesContent: vi.fn(),
+    saveFilesContent: vi.fn(),
+    requestEditorCompletion: vi.fn(),
+  };
 });
 
 // The real surface dynamically imports `monaco-editor`, which cannot run in jsdom. Replace
@@ -398,5 +408,69 @@ describe("EditorWidget — language inference", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe(language);
     expect(surface.props?.buffer.language).toBe(language);
+  });
+});
+
+describe("EditorWidget — completion wiring (Issue #1199)", () => {
+  function wireResponse(): EditorCompletionWireResponse {
+    return {
+      schemaVersion: "1",
+      items: [{ label: "value", kind: "field", insertText: "value", origin: "deterministic" }],
+      isIncomplete: false,
+      truncated: false,
+      provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+    };
+  }
+
+  function completionQuery() {
+    return {
+      request: {
+        request: { requestId: "r-1", streamId: "s-1", sequence: 1 },
+        document: { uri: "keiko://doc", language: "typescript" as const, version: 1 },
+        position: { line: 1, column: 6 },
+        triggerKind: "trigger-character" as const,
+        triggerCharacter: ".",
+        contextBudgetBytes: 4096,
+      },
+      documentText: "const value = {};\nvalue.\n",
+    };
+  }
+
+  it("wires a completion resolver for a TS/JS file and posts the overlay to the BFF", async () => {
+    vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    const resolver = surface.props?.provideCompletions;
+    expect(resolver).toBeDefined();
+    if (resolver === undefined) return;
+
+    const response = await resolver(completionQuery(), new AbortController().signal);
+    expect(requestEditorCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/repo",
+        path: "src/app.ts",
+        languageId: "typescript",
+        text: "const value = {};\nvalue.\n",
+        position: { line: 1, character: 6 },
+        triggerKind: "trigger-character",
+        triggerCharacter: ".",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(response.items[0]?.label).toBe("value");
+    expect(response.items[0]?.provenance).toEqual({ origin: "deterministic-completion" });
+    expect(surface.props?.completionTriggerCharacters).toContain(".");
+  });
+
+  it("registers no completion resolver for a non-source (plaintext) file", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
+    );
+    render(<EditorWidget root="/repo" file="notes.md" />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.fileModel.identity.language).toBe("plaintext");
+    expect(surface.props?.provideCompletions).toBeUndefined();
   });
 });

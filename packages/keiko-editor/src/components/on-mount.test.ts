@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { isSaveChord, wireEditorOnMount } from "./on-mount.js";
 import type { MountEditor, MountMonaco, WireEditorOnMountArgs } from "./on-mount.js";
+import type {
+  MonacoCompletionItemProvider,
+  MonacoLanguagesRegistrar,
+} from "./completion-bridge.js";
+import type { EditorCompletionResolver } from "../index.js";
 
 interface FakeDisposable {
   readonly dispose: ReturnType<typeof vi.fn>;
@@ -247,8 +252,122 @@ describe("wireEditorOnMount", () => {
     expect(fakes.actionDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(fakes.cursorDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(fakes.selectionDisposable.dispose).toHaveBeenCalledTimes(1);
-    expect(fakes.container.removeEventListener).toHaveBeenCalledWith("keydown", expect.any(Function), {
-      capture: true,
+    expect(fakes.container.removeEventListener).toHaveBeenCalledWith(
+      "keydown",
+      expect.any(Function),
+      {
+        capture: true,
+      },
+    );
+  });
+});
+
+interface FakeLanguages {
+  readonly registrar: MonacoLanguagesRegistrar;
+  readonly registeredLanguages: () => readonly (string | readonly string[])[];
+  readonly disposeCount: () => number;
+}
+
+function buildFakeLanguages(): FakeLanguages {
+  const languages: (string | readonly string[])[] = [];
+  let disposed = 0;
+  const registrar: MonacoLanguagesRegistrar = {
+    CompletionItemKind: {
+      Text: 1,
+      Method: 2,
+      Function: 3,
+      Constructor: 4,
+      Field: 5,
+      Variable: 6,
+      Class: 7,
+      Interface: 8,
+      Module: 9,
+      Property: 10,
+      Keyword: 11,
+      Snippet: 12,
+    },
+    CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1, TriggerForIncompleteCompletions: 2 },
+    registerCompletionItemProvider(
+      languageSelector: string | readonly string[],
+      _provider: MonacoCompletionItemProvider,
+    ) {
+      languages.push(languageSelector);
+      return {
+        dispose: (): void => {
+          disposed += 1;
+        },
+      };
+    },
+  };
+  return {
+    registrar,
+    registeredLanguages: () => languages,
+    disposeCount: () => disposed,
+  };
+}
+
+function completionArg(
+  overrides: Partial<NonNullable<WireEditorOnMountArgs["completion"]>> = {},
+): NonNullable<WireEditorOnMountArgs["completion"]> {
+  const resolve: EditorCompletionResolver = (query) =>
+    Promise.resolve({
+      request: query.request.request,
+      items: [],
+      isIncomplete: false,
+      provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
     });
+  return {
+    resolve,
+    triggerCharacters: ["."],
+    contextBudgetBytes: 4096,
+    streamId: "stream",
+    newRequestId: () => "req-1",
+    ...overrides,
+  };
+}
+
+describe("wireEditorOnMount completion (#1199)", () => {
+  it("registers a completion provider per governed language when a resolver and languages exist", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLanguages();
+    wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      completion: completionArg(),
+    });
+    expect(languages.registeredLanguages()).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers only the requested completion languages", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLanguages();
+    wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      completion: completionArg({ languages: ["typescript"] }),
+    });
+    expect(languages.registeredLanguages()).toEqual(["typescript"]);
+  });
+
+  it("registers nothing when the host supplies no completion resolver", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLanguages();
+    wire(fakes, { monaco: { ...fakes.monaco, languages: languages.registrar } });
+    expect(languages.registeredLanguages()).toEqual([]);
+  });
+
+  it("registers nothing when the live monaco namespace exposes no languages registry", () => {
+    const fakes = buildFakes();
+    expect(() => wire(fakes, { completion: completionArg() })).not.toThrow();
+  });
+
+  it("disposes every completion registration on teardown", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeLanguages();
+    const dispose = wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      completion: completionArg(),
+    });
+    expect(languages.disposeCount()).toBe(0);
+    dispose();
+    expect(languages.disposeCount()).toBe(2);
   });
 });

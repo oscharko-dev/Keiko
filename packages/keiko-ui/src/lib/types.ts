@@ -21,6 +21,19 @@ export type {
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
 
+// ─── Editor completion gateway wire shapes (Issue #1199, contracts root barrel) ─────
+export type {
+  EditorCompletionWireTriggerKind,
+  EditorCompletionItemOrigin,
+  EditorCompletionWireItem,
+  EditorCompletionSource,
+  EditorCompletionWireProvenance,
+  EditorCompletionWireResponse,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+} from "@oscharko-dev/keiko-contracts";
+export { EDITOR_COMPLETION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
 // trust-3, error severity); contracts is the legitimate value-import source

@@ -13,6 +13,13 @@ import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 import { applyViewState, captureViewState } from "./view-state.js";
 import { wireEditorOnMount, type MountEditor, type MountMonaco } from "./on-mount.js";
+import type { WireEditorCompletion } from "./on-mount.js";
+import type { EditorCompletionResponse } from "../index.js";
+import {
+  createEditorRequestId,
+  DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
+  DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
+} from "./completion-bridge.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
@@ -75,12 +82,47 @@ function useChangeHandler(
   );
 }
 
+// Builds the completion wiring from the live props ref so a resolver swap (e.g. the host opening a
+// different file in the same editor mount, #1196) is always honoured — `@monaco-editor/react`
+// captures `onMount` once, so the registered provider must read the latest resolver, not a
+// mount-time closure. Returns undefined when the host supplies no resolver, so no provider is
+// registered (no silent or placeholder completion affordance).
+function buildCompletionWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorCompletion | undefined {
+  if (latestProps.current.provideCompletions === undefined) {
+    return undefined;
+  }
+  return {
+    resolve: (query, signal): Promise<EditorCompletionResponse> => {
+      const live = latestProps.current.provideCompletions;
+      return live === undefined
+        ? Promise.reject(new Error("completion resolver unavailable"))
+        : live(query, signal);
+    },
+    triggerCharacters:
+      latestProps.current.completionTriggerCharacters ?? DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
+    contextBudgetBytes: DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
 function useMountHandler(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   emitSave: () => void,
 ): OnMount {
   const { onCursorChange, onSelectionChange, onRuntimeError, themeVariant, autoFocus } = props;
+  // Live props for the completion resolver (read at provider-call time, not mount time).
+  const latestProps = useRef(props);
+  latestProps.current = props;
+  // A stable per-editor-instance completion stream id; supersession is scoped to it. The ref keeps
+  // the value identical across renders, and the local const narrows it to a non-null string.
+  const streamIdRef = useRef<string | null>(null);
+  const streamId = streamIdRef.current ?? createEditorRequestId();
+  streamIdRef.current = streamId;
   return useCallback<OnMount>(
     (editor, monaco): void => {
       const mountEditor: MountEditor = editor;
@@ -100,9 +142,20 @@ function useMountHandler(
         onCursorChange,
         onSelectionChange,
         onThemeError: onRuntimeError,
+        completion: buildCompletionWiring(latestProps, streamId),
       });
     },
-    [refs, emitSave, themeVariant, autoFocus, onCursorChange, onSelectionChange, onRuntimeError],
+    [
+      refs,
+      emitSave,
+      themeVariant,
+      autoFocus,
+      onCursorChange,
+      onSelectionChange,
+      onRuntimeError,
+      latestProps,
+      streamId,
+    ],
   );
 }
 

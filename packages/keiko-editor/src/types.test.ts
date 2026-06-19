@@ -51,6 +51,7 @@ const modelProvenance: EditorModelProvenance = {
 const allOutputProvenance: readonly EditorOutputProvenance[] = [
   { origin: "human" },
   { origin: "deterministic-completion" },
+  { origin: "ai-completion", model: modelProvenance },
   { origin: "ai-inline-completion", model: modelProvenance },
   { origin: "generated-test", model: modelProvenance },
   { origin: "applied-patch", model: modelProvenance },
@@ -141,6 +142,11 @@ const completionResponse: EditorCompletionResponse = {
     },
   ],
   isIncomplete: false,
+  provenance: {
+    sources: ["deterministic-language-service", "model-assisted"],
+    modelMode: "manual",
+    degradeReason: undefined,
+  },
 };
 
 const inlineRequest: EditorInlineCompletionRequest = {

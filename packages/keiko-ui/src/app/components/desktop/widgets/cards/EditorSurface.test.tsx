@@ -11,18 +11,28 @@ vi.mock("./editorMonacoRuntime", () => ({
 
 // Replace the real KeikoCodeEditor with a probe that records the load state it was driven with, so
 // the surface's runtime-gating decision is observable without mounting Monaco.
+const captured: {
+  provideCompletions: unknown;
+  completionTriggerCharacters: readonly string[] | undefined;
+} = { provideCompletions: undefined, completionTriggerCharacters: undefined };
 vi.mock("@oscharko-dev/keiko-editor", () => ({
   KeikoCodeEditor: (props: {
     ariaLabel?: string;
     loadState: { status: string; message?: string };
-  }) => (
-    <div
-      data-testid="code-editor"
-      data-aria-label={props.ariaLabel ?? ""}
-      data-load-status={props.loadState.status}
-      data-load-message={props.loadState.message ?? ""}
-    />
-  ),
+    provideCompletions?: unknown;
+    completionTriggerCharacters?: readonly string[];
+  }) => {
+    captured.provideCompletions = props.provideCompletions;
+    captured.completionTriggerCharacters = props.completionTriggerCharacters;
+    return (
+      <div
+        data-testid="code-editor"
+        data-aria-label={props.ariaLabel ?? ""}
+        data-load-status={props.loadState.status}
+        data-load-message={props.loadState.message ?? ""}
+      />
+    );
+  },
 }));
 
 function buildProps(overrides?: Partial<EditorSurfaceProps>): EditorSurfaceProps {
@@ -49,6 +59,8 @@ function buildProps(overrides?: Partial<EditorSurfaceProps>): EditorSurfaceProps
 
 afterEach(() => {
   vi.clearAllMocks();
+  captured.provideCompletions = undefined;
+  captured.completionTriggerCharacters = undefined;
 });
 
 describe("EditorSurface", () => {
@@ -77,5 +89,15 @@ describe("EditorSurface", () => {
     const editor = screen.getByTestId("code-editor");
     expect(editor).toHaveAttribute("data-load-status", "error");
     expect(editor).toHaveAttribute("data-load-message", "Web Workers are unavailable.");
+  });
+
+  it("forwards the completion resolver and trigger characters to the editor (Issue #1199)", () => {
+    ensureMonacoRuntime.mockReturnValue({ supported: true });
+    const provideCompletions = vi.fn();
+    render(
+      <EditorSurface {...buildProps({ provideCompletions, completionTriggerCharacters: ["."] })} />,
+    );
+    expect(captured.provideCompletions).toBe(provideCompletions);
+    expect(captured.completionTriggerCharacters).toEqual(["."]);
   });
 });

@@ -15,7 +15,12 @@
  * Node-domain, retrieval, knowledge, memory, workflow, or workspace package. The context port is a
  * string-union plus callback seam; it never names a concrete provider.
  */
-import type { FileContent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CompletionDegradeReason,
+  CompletionInteractionMode,
+  EditorCompletionSource,
+  FileContent,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { EditorLanguageId } from "./languages.js";
 
@@ -43,6 +48,7 @@ export interface EditorTextEdit {
 export type EditorChangeOrigin =
   | "human"
   | "deterministic-completion"
+  | "ai-completion"
   | "ai-inline-completion"
   | "generated-test"
   | "applied-patch"
@@ -103,6 +109,7 @@ export interface EditorModelProvenance {
 export type EditorOutputProvenance =
   | { readonly origin: "human" }
   | { readonly origin: "deterministic-completion" }
+  | { readonly origin: "ai-completion"; readonly model: EditorModelProvenance }
   | { readonly origin: "ai-inline-completion"; readonly model: EditorModelProvenance }
   | { readonly origin: "generated-test"; readonly model: EditorModelProvenance }
   | { readonly origin: "applied-patch"; readonly model?: EditorModelProvenance | undefined }
@@ -200,11 +207,49 @@ export interface EditorInlineCompletionItem {
   readonly provenance: EditorOutputProvenance;
 }
 
+/**
+ * Content-free provenance summary for one completion response (Issue #1199, Acceptance Criterion 7).
+ * `sources` names which governed tiers/providers contributed — deterministic language intelligence,
+ * model-assisted completion, repository context, Local Knowledge, memory — never the retrieved text.
+ * `modelMode` echoes the Model Gateway completion-model selection (#1210); `degradeReason` is present
+ * only when no governed model produced items. Per-item attribution lives on each
+ * {@link EditorCompletionItem}'s `provenance`; this is the response-level rollup.
+ */
+export interface EditorCompletionProvenance {
+  readonly sources: readonly EditorCompletionSource[];
+  readonly modelMode: CompletionInteractionMode;
+  readonly degradeReason?: CompletionDegradeReason | undefined;
+}
+
 export interface EditorCompletionResponse {
   readonly request: EditorRequestIdentity;
   readonly items: readonly EditorCompletionItem[];
   readonly isIncomplete: boolean;
+  readonly provenance: EditorCompletionProvenance;
 }
+
+/**
+ * What the Monaco completion bridge passes to the host resolver (Issue #1199). `request` is the
+ * content-free {@link EditorCompletionRequest} (identity, position, trigger). `documentText` is the
+ * live editor buffer the bridge reads from the Monaco model — the user's reviewable code, exactly
+ * like {@link EditorSaveRequest} `content`, so the host can forward it to the loopback completion BFF
+ * without the editor performing any I/O itself (ADR-0042). It is intentionally NOT part of the
+ * content-free `EditorCompletionRequest` audit contract.
+ */
+export interface EditorCompletionQuery {
+  readonly request: EditorCompletionRequest;
+  readonly documentText: string;
+}
+
+/**
+ * The host-injected callback the editor calls to resolve completions. The editor computes nothing
+ * and routes no model itself; it registers the Monaco provider, hands the host this query, and
+ * renders the returned items (ADR-0042 D5). The host owns retrieval, model routing, and the BFF call.
+ */
+export type EditorCompletionResolver = (
+  query: EditorCompletionQuery,
+  signal: AbortSignal,
+) => Promise<EditorCompletionResponse>;
 
 export interface EditorInlineCompletionResponse {
   readonly request: EditorRequestIdentity;

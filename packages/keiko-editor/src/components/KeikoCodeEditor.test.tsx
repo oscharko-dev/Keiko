@@ -24,9 +24,37 @@ interface CapturedEditor {
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
-const captured: { editor: CapturedEditor | null; language: string | null } = {
+interface CapturedCompletionRegistration {
+  readonly language: string;
+  readonly provider: {
+    readonly triggerCharacters?: readonly string[];
+    provideCompletionItems: (
+      model: {
+        getValue: () => string;
+        getWordUntilPosition: () => { startColumn: number; endColumn: number };
+        uri: { toString: () => string };
+      },
+      position: { lineNumber: number; column: number },
+      context: { triggerKind: number; triggerCharacter?: string },
+      token: {
+        isCancellationRequested: boolean;
+        onCancellationRequested: (fn: () => void) => void;
+      },
+    ) => Promise<{
+      suggestions: readonly { label: string; insertText: string }[];
+      incomplete: boolean;
+    }>;
+  };
+}
+
+const captured: {
+  editor: CapturedEditor | null;
+  language: string | null;
+  completion: CapturedCompletionRegistration[];
+} = {
   editor: null,
   language: null,
+  completion: [],
 };
 
 vi.mock("@monaco-editor/react", () => {
@@ -48,6 +76,30 @@ vi.mock("@monaco-editor/react", () => {
     editor: { defineTheme: vi.fn() },
     KeyMod: { CtrlCmd: 2048 },
     KeyCode: { KeyS: 49 },
+    languages: {
+      CompletionItemKind: {
+        Text: 1,
+        Method: 2,
+        Function: 3,
+        Constructor: 4,
+        Field: 5,
+        Variable: 6,
+        Class: 7,
+        Interface: 8,
+        Module: 9,
+        Property: 10,
+        Keyword: 11,
+        Snippet: 12,
+      },
+      CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1, TriggerForIncompleteCompletions: 2 },
+      registerCompletionItemProvider: (
+        language: string,
+        provider: CapturedCompletionRegistration["provider"],
+      ): { dispose: () => void } => {
+        captured.completion.push({ language, provider });
+        return { dispose: vi.fn() };
+      },
+    },
   };
   interface FakeEditorShape {
     addAction: (descriptor: { keybindings?: number[]; run: () => void }) => { dispose: () => void };
@@ -182,6 +234,7 @@ async function flushMount(): Promise<void> {
 beforeEach(() => {
   captured.editor = null;
   captured.language = null;
+  captured.completion = [];
 });
 
 afterEach(() => {
@@ -466,5 +519,57 @@ describe("KeikoCodeEditor — layout stability", () => {
     render(<KeikoCodeEditor {...baseProps()} />);
     const shell = screen.getByTestId("keiko-code-editor");
     expect(shell).toHaveStyle({ height: "100%" });
+  });
+});
+
+describe("KeikoCodeEditor — completion bridge (#1199)", () => {
+  it("registers a completion provider per governed language when a resolver is supplied", async () => {
+    const provideCompletions = vi.fn();
+    render(<KeikoCodeEditor {...baseProps({ provideCompletions })} />);
+    await flushMount();
+    expect(captured.completion.map((r) => r.language)).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers no completion provider when the host supplies no resolver", async () => {
+    render(<KeikoCodeEditor {...baseProps()} />);
+    await flushMount();
+    expect(captured.completion).toEqual([]);
+  });
+
+  it("bridges a Monaco completion call to the host resolver and renders the returned items", async () => {
+    const provideCompletions = vi.fn().mockImplementation((query: { request: { request: unknown }; documentText: string }) =>
+      Promise.resolve({
+        request: query.request.request,
+        items: [
+          {
+            label: "render",
+            kind: "function",
+            insertText: "render()",
+            provenance: { origin: "deterministic-completion" },
+          },
+        ],
+        isIncomplete: false,
+        provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+      }),
+    );
+    render(<KeikoCodeEditor {...baseProps({ provideCompletions })} />);
+    await flushMount();
+    const registration = captured.completion[0];
+    expect(registration).toBeDefined();
+    if (registration === undefined) return;
+    const list = await registration.provider.provideCompletionItems(
+      {
+        getValue: () => "const a = 1;\n",
+        getWordUntilPosition: () => ({ startColumn: 1, endColumn: 1 }),
+        uri: { toString: () => "keiko://doc/a" },
+      },
+      { lineNumber: 1, column: 1 },
+      { triggerKind: 0 },
+      { isCancellationRequested: false, onCancellationRequested: () => undefined },
+    );
+    expect(provideCompletions).toHaveBeenCalledTimes(1);
+    const [query] = provideCompletions.mock.calls[0] as [{ documentText: string }];
+    expect(query.documentText).toBe("const a = 1;\n");
+    expect(list.suggestions.map((s) => s.label)).toEqual(["render"]);
   });
 });

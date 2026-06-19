@@ -12,13 +12,17 @@
  */
 import type * as monaco from "monaco-editor";
 
-import type { EditorPosition, EditorRange } from "../index.js";
-import {
-  registerKeikoEditorTheme,
-  resolveEditorThemeTokensFromDom,
-} from "../index.js";
+import type { EditorLanguageId, EditorPosition, EditorRange } from "../index.js";
+import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../index.js";
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
 import { buildSaveActionDescriptor } from "./keybindings.js";
+import {
+  COMPLETION_ELIGIBLE_LANGUAGES,
+  registerKeikoCompletionProvider,
+  type MonacoDisposable,
+  type MonacoLanguagesRegistrar,
+} from "./completion-bridge.js";
+import type { EditorCompletionResolver } from "../types.js";
 import {
   monacoPositionToEditorPosition,
   monacoSelectionToEditorRange,
@@ -29,6 +33,21 @@ export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar;
   readonly KeyMod: { readonly CtrlCmd: number };
   readonly KeyCode: { readonly KeyS: number };
+  // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
+  // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
+  // when it (or the completion args) is absent.
+  readonly languages?: MonacoLanguagesRegistrar | undefined;
+}
+
+/** Host-injected completion wiring (Issue #1199); absent when the host supplies no resolver. */
+export interface WireEditorCompletion {
+  readonly resolve: EditorCompletionResolver;
+  readonly triggerCharacters: readonly string[];
+  readonly contextBudgetBytes: number;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  /** Restrict registration to the governed languages eligible for completion (defaults to TS/JS). */
+  readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
 /** Minimal editor surface the mount wiring needs (the live `onMount` first arg). */
@@ -61,6 +80,8 @@ export interface WireEditorOnMountArgs {
    * system-boundary edge (DOM token resolution), so it is reported, not swallowed silently.
    */
   readonly onThemeError?: ((message: string) => void) | undefined;
+  /** Completion wiring (Issue #1199); absent when the host supplies no completion resolver. */
+  readonly completion?: WireEditorCompletion | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -119,6 +140,25 @@ function subscribeSelection(args: WireEditorOnMountArgs): monaco.IDisposable | n
   });
 }
 
+// Registers the completion provider when the host supplies a resolver and the live `monaco.languages`
+// registry is available. Returns null otherwise, so a theme-only mount stays unchanged (#1199).
+function installCompletionProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const completion = args.completion;
+  const languages = args.monaco.languages;
+  if (completion === undefined || languages === undefined) {
+    return null;
+  }
+  return registerKeikoCompletionProvider({
+    languages,
+    resolve: completion.resolve,
+    documentLanguages: completion.languages ?? COMPLETION_ELIGIBLE_LANGUAGES,
+    triggerCharacters: completion.triggerCharacters,
+    contextBudgetBytes: completion.contextBudgetBytes,
+    streamId: completion.streamId,
+    newRequestId: completion.newRequestId,
+  });
+}
+
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
 export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   registerTheme(args);
@@ -126,6 +166,7 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const removeBackstop = installKeydownBackstop(args);
   const cursorSub = subscribeCursor(args);
   const selectionSub = subscribeSelection(args);
+  const completionSub = installCompletionProvider(args);
   if (args.autoFocus) {
     args.editor.focus();
   }
@@ -134,5 +175,6 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     removeBackstop();
     cursorSub?.dispose();
     selectionSub?.dispose();
+    completionSub?.dispose();
   };
 }

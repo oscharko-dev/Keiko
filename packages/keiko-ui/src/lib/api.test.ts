@@ -11,6 +11,7 @@ import {
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  requestEditorCompletion,
   saveFilesContent,
   sendDesktopChatStream,
   startGroundedWorkflowHandoff,
@@ -24,6 +25,94 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("requestEditorCompletion (Issue #1199)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts the overlay + cursor to the completion route with the CSRF header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        items: [{ label: "alpha", kind: "field", insertText: "alpha", origin: "deterministic" }],
+        isIncomplete: false,
+        truncated: false,
+        provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await requestEditorCompletion({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const value = {};\nvalue.\n",
+      position: { line: 1, character: 6 },
+      triggerKind: "trigger-character",
+      triggerCharacter: ".",
+      contextBudgetBytes: 4_096,
+    });
+
+    expect(response.items[0]?.label).toBe("alpha");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/completion",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          root: "/repo",
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: "const value = {};\nvalue.\n",
+          },
+          position: { line: 1, character: 6 },
+          triggerKind: "trigger-character",
+          triggerCharacter: ".",
+          contextBudgetBytes: 4_096,
+        }),
+      }),
+    );
+  });
+
+  it("forwards an abort signal for superseded-request cancellation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        items: [],
+        isIncomplete: false,
+        truncated: false,
+        provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await requestEditorCompletion(
+      {
+        root: "/repo",
+        path: "src/a.ts",
+        languageId: "typescript",
+        text: "x",
+        position: { line: 0, character: 1 },
+        triggerKind: "invoked",
+        contextBudgetBytes: 1_024,
+      },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/completion",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
 
 describe("fetchWorkspaceSummary", () => {
   afterEach(() => {

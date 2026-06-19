@@ -24,7 +24,9 @@ import type { LanguageServiceOutcome } from "./languageService.js";
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
 const MAX_LANGUAGE_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 64 * 1024;
 
-const STATUS_BY_CODE: Readonly<Record<LanguageServiceErrorCode, number>> = {
+// Exported for reuse by the completion route (#1199), which maps the same deterministic
+// language-service error codes to HTTP status.
+export const STATUS_BY_CODE: Readonly<Record<LanguageServiceErrorCode, number>> = {
   INVALID_REQUEST: 400,
   UNSUPPORTED_LANGUAGE: 422,
   UNSUPPORTED_OPERATION: 422,
@@ -44,8 +46,8 @@ function isRouteResult(value: unknown): value is RouteResult {
 
 // Resolves the overlay's absolute path and proves it is contained in the workspace root. An absolute
 // or escaping path, a symlink that escapes, or a denied segment (.git/.ssh/credentials) is rejected
-// before any file is read.
-function resolveOverlayPath(realRoot: string, relativePath: string): string {
+// before any file is read. Exported for reuse by the completion route (#1199).
+export function resolveOverlayPath(realRoot: string, relativePath: string): string {
   if (isAbsolute(relativePath) || pathIsDenied(relativePath)) {
     throw denied();
   }
@@ -58,7 +60,9 @@ function resolveOverlayPath(realRoot: string, relativePath: string): string {
   return overlayAbsolute;
 }
 
-function clientAbortSignal(ctx: RouteContext): AbortSignal {
+// Exported for reuse by the completion route (#1199): aborts in-flight analysis when the client
+// disconnects.
+export function clientAbortSignal(ctx: RouteContext): AbortSignal {
   const controller = new AbortController();
   ctx.req.on("close", () => {
     controller.abort();
