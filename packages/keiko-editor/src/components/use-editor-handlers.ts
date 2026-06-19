@@ -13,13 +13,21 @@ import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 import { applyViewState, captureViewState } from "./view-state.js";
 import { wireEditorOnMount, type MountEditor, type MountMonaco } from "./on-mount.js";
-import type { WireEditorCompletion } from "./on-mount.js";
-import type { EditorCompletionResponse } from "../index.js";
+import type { WireEditorCompletion, WireEditorInlineCompletion } from "./on-mount.js";
+import type { EditorCompletionResponse, EditorInlineCompletionResponse } from "../index.js";
 import {
   createEditorRequestId,
   DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
 } from "./completion-bridge.js";
+import {
+  DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
+  DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
+} from "./inline-completion-bridge.js";
+import {
+  createInlineCompletionTelemetry,
+  type InlineCompletionTelemetry,
+} from "./inline-completion-telemetry.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
@@ -109,20 +117,64 @@ function buildCompletionWiring(
   };
 }
 
+// Builds the inline-completion (ghost-text) wiring from the live props ref (Issue #1200), mirroring
+// `buildCompletionWiring`. Returns undefined when the host supplies no inline resolver, so no inline
+// provider is registered. The telemetry accumulator is created once per mount and forwards each
+// content-free snapshot to the live `onInlineCompletionTelemetry` prop.
+function buildInlineCompletionWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+  telemetry: InlineCompletionTelemetry,
+): WireEditorInlineCompletion | undefined {
+  if (latestProps.current.provideInlineCompletions === undefined) {
+    return undefined;
+  }
+  return {
+    resolve: (query, signal): Promise<EditorInlineCompletionResponse> => {
+      const live = latestProps.current.provideInlineCompletions;
+      return live === undefined
+        ? Promise.reject(new Error("inline completion resolver unavailable"))
+        : live(query, signal);
+    },
+    contextBudgetBytes: DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
+    streamId,
+    newRequestId: createEditorRequestId,
+    debounceDelayMs:
+      latestProps.current.inlineCompletionDebounceMs ?? DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
+    telemetry,
+  };
+}
+
+// Stable per-editor-instance stream ids and the content-free telemetry accumulator. The completion
+// and inline-completion streams are distinct so inline supersession never aliases the completion
+// stream; the telemetry observer reads the live prop so a later `onInlineCompletionTelemetry`
+// identity is honoured without re-registering the provider.
+function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
+  readonly streamId: string;
+  readonly inlineStreamId: string;
+  readonly telemetry: InlineCompletionTelemetry;
+} {
+  const streamIdRef = useRef<string | null>(null);
+  const streamId = (streamIdRef.current ??= createEditorRequestId());
+  const inlineStreamIdRef = useRef<string | null>(null);
+  const inlineStreamId = (inlineStreamIdRef.current ??= `${streamId}:inline`);
+  const telemetryRef = useRef<InlineCompletionTelemetry | null>(null);
+  const telemetry = (telemetryRef.current ??= createInlineCompletionTelemetry((snapshot) => {
+    latestProps.current.onInlineCompletionTelemetry?.(snapshot);
+  }));
+  return { streamId, inlineStreamId, telemetry };
+}
+
 function useMountHandler(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   emitSave: () => void,
 ): OnMount {
   const { onCursorChange, onSelectionChange, onRuntimeError, themeVariant, autoFocus } = props;
-  // Live props for the completion resolver (read at provider-call time, not mount time).
+  // Live props for the completion resolvers (read at provider-call time, not mount time).
   const latestProps = useRef(props);
   latestProps.current = props;
-  // A stable per-editor-instance completion stream id; supersession is scoped to it. The ref keeps
-  // the value identical across renders, and the local const narrows it to a non-null string.
-  const streamIdRef = useRef<string | null>(null);
-  const streamId = streamIdRef.current ?? createEditorRequestId();
-  streamIdRef.current = streamId;
+  const { streamId, inlineStreamId, telemetry } = useMountStreams(latestProps);
   return useCallback<OnMount>(
     (editor, monaco): void => {
       const mountEditor: MountEditor = editor;
@@ -143,6 +195,7 @@ function useMountHandler(
         onSelectionChange,
         onThemeError: onRuntimeError,
         completion: buildCompletionWiring(latestProps, streamId),
+        inlineCompletion: buildInlineCompletionWiring(latestProps, inlineStreamId, telemetry),
       });
     },
     [
@@ -155,6 +208,8 @@ function useMountHandler(
       onRuntimeError,
       latestProps,
       streamId,
+      inlineStreamId,
+      telemetry,
     ],
   );
 }

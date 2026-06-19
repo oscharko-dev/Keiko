@@ -68,14 +68,16 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   // Memoise the options object: `@monaco-editor/react` calls `editor.updateOptions` whenever the
   // `options` identity changes, so a fresh object every render (on each cursor move or status
   // update) would churn the editor needlessly.
+  const inlineCompletionEnabled = props.provideInlineCompletions !== undefined;
   const options = useMemo(
     () =>
       buildEditorOptions({
         readOnly: view.readOnly,
         ariaPath: buffer.content.relativePath,
         ariaLabel: props.ariaLabel,
+        inlineCompletionEnabled,
       }),
-    [view.readOnly, buffer.content.relativePath, props.ariaLabel],
+    [view.readOnly, buffer.content.relativePath, props.ariaLabel, inlineCompletionEnabled],
   );
   const monacoLanguage = useMemo(
     () => inferMonacoLanguageId(buffer.content.relativePath),

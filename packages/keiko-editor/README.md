@@ -197,10 +197,13 @@ Notes:
   - **Runtime sink independently closed.** Monaco still bundles a **vendored** DOMPurify copy
     (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is
     reached only through Markdown-rendering surfaces (hover tooltips, suggest-widget docs, parameter
-    hints, other `IMarkdownString` sinks). The mounted editor disables every one of those surfaces in
-    `buildEditorOptions` (`hover`, `suggest`, `parameterHints`, `inlineSuggest`, `codeLens`,
-    `lightbulb`, `inlayHints`, and `links` are all off, and #1196 wires no completion/diagnostics
-    provider). The #1196 host bootstrap also disables Monaco's built-in TypeScript/JavaScript
+    hints, the inline-suggest toolbar, other `IMarkdownString` sinks). The mounted editor disables
+    those surfaces in `buildEditorOptions` (`hover`, `suggest`, `parameterHints`, `codeLens`,
+    `lightbulb`, `inlayHints`, and `links` are all off). **Inline suggest** (`inlineSuggest.enabled`)
+    is enabled only when a governed inline-completion provider is wired (#1200); even then it keeps
+    `showToolbar: "never"` and `syntaxHighlightingEnabled: false`, and ghost text renders as plain
+    text, so no Markdown sink is reached. The #1196 host bootstrap also disables Monaco's built-in
+    TypeScript/JavaScript
     `modeConfiguration` providers for completion, hover, diagnostics, formatting, symbols, code
     actions, rename, references, and inlay hints, so Monaco cannot re-enable productive local
     language-service flows behind the host's back. Runtime exposure is therefore nil — the same

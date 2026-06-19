@@ -1,0 +1,351 @@
+import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  EditorInlineCompletionWireResponse,
+  LatencyClass,
+} from "@oscharko-dev/keiko-contracts";
+import { buildRedactor, createInMemoryUiStore } from "../index.js";
+import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { UiStore } from "../store/index.js";
+import {
+  handleEditorInlineCompletion,
+  handleEditorInlineCompletionTelemetry,
+  isInlineCompletionEnabledByPolicy,
+  type EditorInlineCompletionRouteOptions,
+  type InlineCompletionChatFactory,
+} from "./inlineCompletionRoutes.js";
+import { createInlineCompletionRateLimiter } from "./inlineCompletionRateLimiter.js";
+
+function postContext(body: unknown): RouteContext {
+  const req = Readable.from([
+    Buffer.from(JSON.stringify(body), "utf8"),
+  ]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "POST";
+  return {
+    req,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL("http://localhost/api/editor/inline-completion"),
+  };
+}
+
+let root: string;
+let store: UiStore;
+
+function deps(
+  input: {
+    config?: GatewayConfig;
+    env?: Record<string, string | undefined>;
+    evidenceStore?: EvidenceStore;
+  } = {},
+): UiHandlerDeps {
+  return {
+    store,
+    redactor: buildRedactor({}),
+    evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
+    env: input.env ?? {},
+    ...(input.config === undefined ? {} : { config: input.config }),
+  } as unknown as UiHandlerDeps;
+}
+
+function fimCapability(latencyClass: LatencyClass): ModelCapability {
+  return {
+    id: "fim-1",
+    kind: "chat",
+    contextWindow: 8_192,
+    maxOutputTokens: 1_024,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass,
+    throughputHint: "test",
+    preferredUseCases: [],
+    knownLimitations: [],
+    supportsInfilling: true,
+    infillingAlignment: "instruct",
+  };
+}
+
+function fimConfig(latencyClass: LatencyClass): GatewayConfig {
+  return {
+    providers: [{ modelId: "fim-1", baseUrl: "http://localhost", apiKey: "x" }],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+    capabilities: [fimCapability(latencyClass)],
+  } as unknown as GatewayConfig;
+}
+
+function inlineBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    root,
+    document: {
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "function add(a, b) {\n  return \n}\n",
+    },
+    position: { line: 1, character: 9 },
+    triggerKind: "automatic",
+    contextBudgetBytes: 4_096,
+    ...overrides,
+  };
+}
+
+function body(result: { status: number; body: unknown }): EditorInlineCompletionWireResponse {
+  return result.body as EditorInlineCompletionWireResponse;
+}
+
+// A chat factory that returns a fixed continuation; never reaches a live gateway.
+const cannedChat: InlineCompletionChatFactory = () => () => Promise.resolve("a + b;");
+
+// A permissive limiter so model-running tests are not affected by the process-wide cooldown.
+function permissiveOptions(
+  chatFactory: InlineCompletionChatFactory = cannedChat,
+): EditorInlineCompletionRouteOptions {
+  return {
+    chatFactory,
+    rateLimiter: createInlineCompletionRateLimiter({
+      minIntervalMs: 0,
+      maxPerWindow: 1_000,
+      windowMs: 60_000,
+    }),
+    now: () => 1_000,
+  };
+}
+
+beforeEach(async () => {
+  root = await realpath(await mkdtemp(join(tmpdir(), "keiko-inline-route-")));
+  await mkdir(join(root, "src"));
+  store = createInMemoryUiStore();
+  store.createProject(root, "fixture");
+});
+
+afterEach(async () => {
+  store.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+describe("isInlineCompletionEnabledByPolicy", () => {
+  it("defaults to enabled and tolerates a missing env", () => {
+    expect(isInlineCompletionEnabledByPolicy(undefined)).toBe(true);
+    expect(isInlineCompletionEnabledByPolicy({})).toBe(true);
+  });
+
+  it("disables on a falsy token (case-insensitive)", () => {
+    for (const token of ["0", "false", "off", "no", "disabled", "OFF", " Off "]) {
+      expect(isInlineCompletionEnabledByPolicy({ KEIKO_EDITOR_INLINE_COMPLETION: token })).toBe(
+        false,
+      );
+    }
+  });
+
+  it("stays enabled for any other value", () => {
+    expect(isInlineCompletionEnabledByPolicy({ KEIKO_EDITOR_INLINE_COMPLETION: "on" })).toBe(true);
+  });
+});
+
+describe("POST /api/editor/inline-completion — validation & containment", () => {
+  it("rejects a malformed request with 400 INVALID_REQUEST", async () => {
+    const result = await handleEditorInlineCompletion(postContext({ root }), deps());
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("rejects an overlay path that escapes the workspace", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(
+        inlineBody({
+          document: { path: "../escape.ts", languageId: "typescript", text: "const a = 1;\n" },
+        }),
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(403);
+  });
+});
+
+describe("POST /api/editor/inline-completion — degradation (model-only)", () => {
+  it("returns zero items with a degrade reason when no gateway is configured", async () => {
+    const result = await handleEditorInlineCompletion(postContext(inlineBody()), deps());
+    expect(result.status).toBe(200);
+    const wire = body(result);
+    expect(wire.items).toEqual([]);
+    expect(wire.provenance.modelMode).toBe("deterministic");
+    expect(wire.provenance.degradeReason).toBe("no-infilling-model");
+  });
+
+  it("returns zero items when disabled by policy, even with a fast FIM model configured", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast"), env: { KEIKO_EDITOR_INLINE_COMPLETION: "off" } }),
+      permissiveOptions(),
+    );
+    expect(result.status).toBe(200);
+    const wire = body(result);
+    expect(wire.items).toEqual([]);
+    expect(wire.provenance.modelMode).toBe("deterministic");
+  });
+
+  it("does not run the model on an automatic trigger when only a manual (standard) FIM model exists", async () => {
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody({ triggerKind: "automatic" })),
+      deps({ config: fimConfig("standard") }),
+      permissiveOptions(() => chat),
+    );
+    expect(body(result).items).toEqual([]);
+    expect(chat).not.toHaveBeenCalled();
+    expect(body(result).provenance.modelMode).toBe("manual");
+  });
+
+  it("runs a manual (standard) FIM model on an explicit trigger", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody({ triggerKind: "explicit" })),
+      deps({ config: fimConfig("standard") }),
+      permissiveOptions(),
+    );
+    const wire = body(result);
+    expect(wire.items).toHaveLength(1);
+    expect(wire.items[0]?.insertText).toBe("a + b;");
+    expect(wire.provenance.modelMode).toBe("manual");
+  });
+});
+
+describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-type)", () => {
+  it("produces ghost text with content-free model provenance", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      permissiveOptions(),
+    );
+    const wire = body(result);
+    expect(wire.items).toHaveLength(1);
+    expect(wire.items[0]?.insertText).toBe("a + b;");
+    expect(wire.provenance.modelMode).toBe("as-you-type");
+    expect(wire.provenance.modelId).toBe("fim-1");
+    expect(wire.provenance.gatewayPolicyVersion).toBe("editor-inline-completion/1");
+    expect(wire.provenance.promptHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(wire.provenance.sources).toContain("model-assisted");
+  });
+
+  it("never echoes the buffer text in the response (content boundary)", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      permissiveOptions(),
+    );
+    expect(JSON.stringify(result.body)).not.toContain("function add");
+  });
+
+  it("records content-free model evidence without prompt or buffer text", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast"), evidenceStore }),
+      permissiveOptions(),
+    );
+    const records = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
+    const modelRecord = records.find((value) => value.includes("editor-inline-completion/1"));
+    expect(modelRecord).toBeDefined();
+    expect(modelRecord).not.toContain("function add");
+    expect(modelRecord).not.toContain("a + b;");
+  });
+
+  it("degrades to zero items when the model call fails (never breaks the route)", async () => {
+    const failing: InlineCompletionChatFactory = () => () => Promise.reject(new Error("boom"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      permissiveOptions(failing),
+    );
+    expect(result.status).toBe(200);
+    expect(body(result).items).toEqual([]);
+  });
+
+  it("bounds output length by maxOutputTokens (≈4 chars/token)", async () => {
+    const long: InlineCompletionChatFactory = () => () => Promise.resolve("x".repeat(500));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody({ maxOutputTokens: 4 })),
+      deps({ config: fimConfig("fast") }),
+      permissiveOptions(long),
+    );
+    expect(body(result).items[0]?.insertText).toHaveLength(16);
+  });
+});
+
+describe("POST /api/editor/inline-completion — rate limiting", () => {
+  it("skips the model and returns zero items once the per-root cooldown is hit", async () => {
+    const rateLimiter = createInlineCompletionRateLimiter({
+      minIntervalMs: 1_000,
+      maxPerWindow: 10,
+      windowMs: 60_000,
+    });
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const options: EditorInlineCompletionRouteOptions = {
+      chatFactory: () => chat,
+      rateLimiter,
+      now: () => 5_000,
+    };
+    const first = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      options,
+    );
+    const second = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast") }),
+      options,
+    );
+    expect(body(first).items).toHaveLength(1);
+    expect(body(second).items).toEqual([]);
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/editor/inline-completion/telemetry", () => {
+  function telemetryReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      root,
+      offered: 5,
+      shown: 4,
+      accepted: 2,
+      rejected: 1,
+      ignored: 1,
+      partiallyAccepted: 0,
+      ...overrides,
+    };
+  }
+
+  it("rejects a malformed report with 400", async () => {
+    const result = await handleEditorInlineCompletionTelemetry(
+      postContext({ root, offered: -1 }),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+  });
+
+  it("records content-free acceptance evidence (no path, no code) and returns 200", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleEditorInlineCompletionTelemetry(
+      postContext(telemetryReport()),
+      deps({ evidenceStore }),
+      { now: () => 9_000 },
+    );
+    expect(result.status).toBe(200);
+    const records = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
+    const record = records.find((value) => value.includes("editor-inline-completion-telemetry"));
+    expect(record).toBeDefined();
+    expect(record).toContain('"accepted":2');
+    // The raw workspace root path is never persisted (only a hash).
+    expect(record).not.toContain(root);
+  });
+});

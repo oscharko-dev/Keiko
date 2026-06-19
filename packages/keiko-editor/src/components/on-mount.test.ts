@@ -6,7 +6,11 @@ import type {
   MonacoCompletionItemProvider,
   MonacoLanguagesRegistrar,
 } from "./completion-bridge.js";
-import type { EditorCompletionResolver } from "../index.js";
+import type {
+  MonacoInlineCompletionsProvider,
+  MonacoInlineCompletionsRegistrar,
+} from "./inline-completion-bridge.js";
+import type { EditorCompletionResolver, EditorInlineCompletionResolver } from "../index.js";
 
 interface FakeDisposable {
   readonly dispose: ReturnType<typeof vi.fn>;
@@ -365,6 +369,130 @@ describe("wireEditorOnMount completion (#1199)", () => {
     const dispose = wire(fakes, {
       monaco: { ...fakes.monaco, languages: languages.registrar },
       completion: completionArg(),
+    });
+    expect(languages.disposeCount()).toBe(0);
+    dispose();
+    expect(languages.disposeCount()).toBe(2);
+  });
+});
+
+interface FakeInlineLanguages {
+  readonly registrar: MonacoInlineCompletionsRegistrar;
+  readonly registeredLanguages: () => readonly (string | readonly string[])[];
+  readonly disposeCount: () => number;
+}
+
+// A registrar that offers BOTH the completion and inline-completion surfaces, like the live
+// `monaco.languages` namespace. The inline install path narrows the mount registry to the inline
+// registrar; this fake satisfies that narrowing and records inline registrations.
+function buildFakeInlineLanguages(withInline = true): FakeInlineLanguages {
+  const languages: (string | readonly string[])[] = [];
+  let disposed = 0;
+  const completion = buildFakeLanguages().registrar;
+  const registerInlineCompletionsProvider = (
+    languageSelector: string | readonly string[],
+    _provider: MonacoInlineCompletionsProvider,
+  ): { dispose: () => void } => {
+    languages.push(languageSelector);
+    return {
+      dispose: (): void => {
+        disposed += 1;
+      },
+    };
+  };
+  // Construct via object spread (not property assignment) so the readonly inline members type-check.
+  const inlineMembers = withInline
+    ? {
+        InlineCompletionTriggerKind: { Automatic: 0, Explicit: 1 },
+        InlineCompletionEndOfLifeReasonKind: { Accepted: 0, Rejected: 1, Ignored: 2 },
+        registerInlineCompletionsProvider,
+      }
+    : {};
+  return {
+    registrar: { ...completion, ...inlineMembers } as unknown as MonacoInlineCompletionsRegistrar,
+    registeredLanguages: () => languages,
+    disposeCount: () => disposed,
+  };
+}
+
+function inlineCompletionArg(
+  overrides: Partial<NonNullable<WireEditorOnMountArgs["inlineCompletion"]>> = {},
+): NonNullable<WireEditorOnMountArgs["inlineCompletion"]> {
+  const resolve: EditorInlineCompletionResolver = (query) =>
+    Promise.resolve({ request: query.request.request, items: [] });
+  return {
+    resolve,
+    contextBudgetBytes: 8192,
+    streamId: "inline-stream",
+    newRequestId: () => "ireq-1",
+    debounceDelayMs: 75,
+    ...overrides,
+  };
+}
+
+describe("wireEditorOnMount inline completion (#1200)", () => {
+  it("registers an inline provider per governed language when a resolver and registry exist", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeInlineLanguages();
+    wire(fakes, {
+      monaco: {
+        ...fakes.monaco,
+        languages: languages.registrar as unknown as MountMonaco["languages"],
+      },
+      inlineCompletion: inlineCompletionArg(),
+    });
+    expect(languages.registeredLanguages()).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers only the requested inline languages", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeInlineLanguages();
+    wire(fakes, {
+      monaco: {
+        ...fakes.monaco,
+        languages: languages.registrar as unknown as MountMonaco["languages"],
+      },
+      inlineCompletion: inlineCompletionArg({ languages: ["typescript"] }),
+    });
+    expect(languages.registeredLanguages()).toEqual(["typescript"]);
+  });
+
+  it("registers nothing when the host supplies no inline resolver", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeInlineLanguages();
+    wire(fakes, {
+      monaco: {
+        ...fakes.monaco,
+        languages: languages.registrar as unknown as MountMonaco["languages"],
+      },
+    });
+    expect(languages.registeredLanguages()).toEqual([]);
+  });
+
+  it("degrades cleanly when the monaco registry exposes no inline-completion support", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeInlineLanguages(false);
+    expect(() =>
+      wire(fakes, {
+        monaco: {
+          ...fakes.monaco,
+          languages: languages.registrar as unknown as MountMonaco["languages"],
+        },
+        inlineCompletion: inlineCompletionArg(),
+      }),
+    ).not.toThrow();
+    expect(languages.registeredLanguages()).toEqual([]);
+  });
+
+  it("disposes every inline registration on teardown", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeInlineLanguages();
+    const dispose = wire(fakes, {
+      monaco: {
+        ...fakes.monaco,
+        languages: languages.registrar as unknown as MountMonaco["languages"],
+      },
+      inlineCompletion: inlineCompletionArg(),
     });
     expect(languages.disposeCount()).toBe(0);
     dispose();

@@ -14,11 +14,13 @@ import type {
   EditorChangeOrigin,
   EditorCompletionResolver,
   EditorFileModel,
+  EditorInlineCompletionResolver,
   EditorPosition,
   EditorRange,
   EditorSaveRequest,
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
+import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
 
 /**
  * The save lifecycle the host drives and the component renders.
@@ -79,4 +81,22 @@ export interface KeikoCodeEditorProps {
   readonly provideCompletions?: EditorCompletionResolver | undefined;
   /** Trigger characters for the completion provider; defaults to the TS/JS set when omitted. */
   readonly completionTriggerCharacters?: readonly string[] | undefined;
+  /**
+   * Host-injected inline-completion (ghost-text) resolver (Issue #1200). When present, the editor
+   * registers a Monaco inline-completion provider for the governed languages that bridges to this
+   * resolver and enables Monaco's inline-suggest UI; the host owns the BFF call, retrieval, model
+   * routing, and the policy gate (ADR-0042 D5). When absent, no inline provider is registered and
+   * inline suggestions stay disabled.
+   */
+  readonly provideInlineCompletions?: EditorInlineCompletionResolver | undefined;
+  /** Per-keystroke debounce (ms) for inline completion; defaults to ~75 ms when omitted. */
+  readonly inlineCompletionDebounceMs?: number | undefined;
+  /**
+   * Observer for the content-free inline-completion acceptance/rejection telemetry snapshot
+   * (Acceptance Criterion 6). Called with cumulative counts after each lifecycle event; the host
+   * forwards them to the governed telemetry route. Never receives buffer text or ghost text.
+   */
+  readonly onInlineCompletionTelemetry?:
+    | ((snapshot: InlineCompletionTelemetrySnapshot) => void)
+    | undefined;
 }

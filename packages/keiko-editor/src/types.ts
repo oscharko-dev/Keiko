@@ -251,10 +251,49 @@ export type EditorCompletionResolver = (
   signal: AbortSignal,
 ) => Promise<EditorCompletionResponse>;
 
+/**
+ * Content-free provenance summary for one inline-completion response (Issue #1200). `sources` names
+ * which governed tiers/providers contributed; `modelMode` echoes the Model Gateway completion-model
+ * selection (#1210); `degradeReason` is present only when no governed FIM model produced ghost text.
+ * Per-item attribution lives on each {@link EditorInlineCompletionItem}'s `provenance`; this is the
+ * response-level rollup. Mirrors {@link EditorCompletionProvenance}.
+ */
+export interface EditorInlineCompletionProvenance {
+  readonly sources: readonly EditorCompletionSource[];
+  readonly modelMode: CompletionInteractionMode;
+  readonly degradeReason?: CompletionDegradeReason | undefined;
+}
+
 export interface EditorInlineCompletionResponse {
   readonly request: EditorRequestIdentity;
   readonly items: readonly EditorInlineCompletionItem[];
+  /** Optional response-level rollup; absent when the host does not surface a provenance summary. */
+  readonly provenance?: EditorInlineCompletionProvenance | undefined;
 }
+
+/**
+ * What the Monaco inline-completion bridge passes to the host resolver (Issue #1200). `request` is
+ * the content-free {@link EditorInlineCompletionRequest} (identity, position, automatic/explicit
+ * trigger). `documentText` is the live editor buffer the bridge reads from the Monaco model — the
+ * user's reviewable code, exactly like {@link EditorCompletionQuery} `documentText`, so the host can
+ * forward it to the loopback inline-completion BFF without the editor performing any I/O itself
+ * (ADR-0042). It is intentionally NOT part of the content-free `EditorInlineCompletionRequest`.
+ */
+export interface EditorInlineCompletionQuery {
+  readonly request: EditorInlineCompletionRequest;
+  readonly documentText: string;
+}
+
+/**
+ * The host-injected callback the editor calls to resolve inline (ghost-text) completions. The editor
+ * computes nothing and routes no model itself; it registers the Monaco inline-completion provider,
+ * hands the host this query, and renders the returned ghost text (ADR-0042 D5). The host owns
+ * retrieval, model routing, and the BFF call.
+ */
+export type EditorInlineCompletionResolver = (
+  query: EditorInlineCompletionQuery,
+  signal: AbortSignal,
+) => Promise<EditorInlineCompletionResponse>;
 
 // ─── Diagnostics (deterministic; no model provenance) ────────────────────────────
 

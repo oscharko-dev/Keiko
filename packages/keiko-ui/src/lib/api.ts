@@ -32,6 +32,10 @@ import type {
   EditorCompletionWireRequest,
   EditorCompletionWireResponse,
   EditorCompletionWireTriggerKind,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionTelemetryReport,
   CostClass,
   GroundingLimits,
   MessageResponse,
@@ -46,7 +50,12 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
-import { DEFAULT_GROUNDING_LIMITS, EDITOR_COMPLETION_SCHEMA_VERSION } from "./types";
+import {
+  DEFAULT_GROUNDING_LIMITS,
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -879,6 +888,76 @@ export async function requestEditorCompletion(
     method: "POST",
     body: JSON.stringify(requestBody),
     ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1200 — governed editor inline completion (ghost text). Posts the overlay buffer + cursor to
+// the BFF, which runs a gated aligned suffix-aware (FIM) model over coding context and returns a
+// single ghost-text continuation (or zero items when degraded/disabled/rate-limited). The browser
+// never reaches a model directly. `signal` lets the editor cancel a superseded request.
+export interface EditorInlineCompletionRequestInput {
+  readonly root: string;
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+  readonly position: { readonly line: number; readonly character: number };
+  readonly triggerKind: EditorInlineCompletionWireTriggerKind;
+  readonly contextBudgetBytes: number;
+  readonly context?: EditorCompletionContextSelectors | undefined;
+  readonly maxCostClass?: CostClass | undefined;
+  readonly maxOutputTokens?: number | undefined;
+}
+
+export async function requestEditorInlineCompletion(
+  input: EditorInlineCompletionRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorInlineCompletionWireResponse> {
+  const requestBody: EditorInlineCompletionWireRequest = {
+    schemaVersion: EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+    root: input.root,
+    document: { path: input.path, languageId: input.languageId, text: input.text },
+    position: input.position,
+    triggerKind: input.triggerKind,
+    contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.context === undefined ? {} : { context: input.context }),
+    ...(input.maxCostClass === undefined ? {} : { maxCostClass: input.maxCostClass }),
+    ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }),
+  };
+  return fetchJson("/api/editor/inline-completion", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1200 — content-free inline-completion acceptance/rejection telemetry. Best-effort, fire and
+// forget: the editor reports cumulative counts (no code content) which the BFF records as evidence.
+export interface EditorInlineCompletionTelemetryInput {
+  readonly root: string;
+  readonly offered: number;
+  readonly shown: number;
+  readonly accepted: number;
+  readonly rejected: number;
+  readonly ignored: number;
+  readonly partiallyAccepted: number;
+}
+
+export async function reportEditorInlineCompletionTelemetry(
+  input: EditorInlineCompletionTelemetryInput,
+): Promise<void> {
+  const report: EditorInlineCompletionTelemetryReport = {
+    schemaVersion: EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+    root: input.root,
+    offered: input.offered,
+    shown: input.shown,
+    accepted: input.accepted,
+    rejected: input.rejected,
+    ignored: input.ignored,
+    partiallyAccepted: input.partiallyAccepted,
+  };
+  await fetchJson("/api/editor/inline-completion/telemetry", {
+    method: "POST",
+    body: JSON.stringify(report),
   });
 }
 

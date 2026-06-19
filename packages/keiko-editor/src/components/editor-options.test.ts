@@ -67,6 +67,30 @@ describe("buildEditorOptions", () => {
     expect(options.inlayHints).toEqual({ enabled: "off" });
   });
 
+  it("keeps inline suggest disabled by default and when explicitly false (#1200)", () => {
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", inlineCompletionEnabled: false })
+        .inlineSuggest,
+    ).toEqual({
+      enabled: false,
+      showToolbar: "never",
+      syntaxHighlightingEnabled: false,
+      suppressSuggestions: true,
+    });
+  });
+
+  it("enables inline suggest with no toolbar/markdown sink when a provider is wired (#1200)", () => {
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", inlineCompletionEnabled: true })
+        .inlineSuggest,
+    ).toEqual({
+      enabled: true,
+      showToolbar: "never",
+      syntaxHighlightingEnabled: false,
+      suppressSuggestions: false,
+    });
+  });
+
   it("uses alt as the multi-cursor modifier", () => {
     expect(options.multiCursorModifier).toBe("alt");
   });

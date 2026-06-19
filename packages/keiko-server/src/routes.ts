@@ -90,6 +90,10 @@ import {
 } from "./editor/contextRoutes.js";
 import { handleEditorCompletion } from "./editor/completionRoutes.js";
 import {
+  handleEditorInlineCompletion,
+  handleEditorInlineCompletionTelemetry,
+} from "./editor/inlineCompletionRoutes.js";
+import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
   handleBrowserEvents,
@@ -276,6 +280,20 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // completion (#1198) always, plus gated model-assisted completion (#1210) over coding context
   // (#1211). Content-free response apart from reviewable insertText; the browser never reaches a model.
   { method: "POST", pattern: "/api/editor/completion", handler: handleEditorCompletion },
+  // Issue #1200 — governed inline completion (ghost text, ADR-0042 D5/D6). Model-only, gated on an
+  // aligned FIM model (#1210) over coding context (#1211, purpose:inline); degrades to zero items
+  // (falling back to #1199) when unavailable, disabled by policy, or rate-limited. The telemetry
+  // route records content-free acceptance/rejection counts. The browser never reaches a model.
+  {
+    method: "POST",
+    pattern: "/api/editor/inline-completion",
+    handler: handleEditorInlineCompletion,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/inline-completion/telemetry",
+    handler: handleEditorInlineCompletionTelemetry,
+  },
   {
     method: "POST",
     pattern: "/api/editor/local-knowledge/retrieve",

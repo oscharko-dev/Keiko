@@ -33,19 +33,27 @@ import {
   type EditorContentDelta,
   type EditorDocumentIdentity,
   type EditorFileModel,
+  type EditorInlineCompletionResolver,
   type EditorLanguageId,
   type EditorSaveRequest,
   type EditorSaveStatus,
+  type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
 import {
   ApiError,
   fetchFilesContent,
+  reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
+  requestEditorInlineCompletion,
   saveFilesContent,
 } from "../../../../../lib/api";
 import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
-import type { EditorCompletionContextSelectors, EditorDocumentVersion } from "../../../../../lib/types";
+import { mapWireToEditorInlineCompletionResponse } from "../../../../../lib/editor-inline-completion";
+import type {
+  EditorCompletionContextSelectors,
+  EditorDocumentVersion,
+} from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -373,6 +381,66 @@ export function EditorWidget({
     [file, hasTarget, linkedCapsuleIds, linkedCapsuleSetIds, linkedFilePath, linkedRoot, root],
   );
 
+  // Issue #1200: the governed inline-completion (ghost-text) resolver. The Monaco inline bridge calls
+  // this with the live buffer and a content-free request; the host posts to
+  // `/api/editor/inline-completion` and adapts the wire response. A failure rejects here and the editor
+  // bridge renders nothing (AC1) — it never breaks editing. The server is authoritative for the
+  // policy/cost/rate gates and returns zero items when the feature is degraded or disabled.
+  const provideInlineCompletions = useCallback<EditorInlineCompletionResolver>(
+    async (query, signal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, items: [] };
+      }
+      const wire = await requestEditorInlineCompletion(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+          triggerKind: query.request.triggerKind,
+          contextBudgetBytes: query.request.contextBudgetBytes,
+          context: completionContextSelectors({
+            root,
+            file,
+            text: query.documentText,
+            line: query.request.position.line,
+            character: query.request.position.column,
+            linkedRoot,
+            linkedFilePath,
+            linkedCapsuleIds,
+            linkedCapsuleSetIds,
+          }),
+        },
+        signal,
+      );
+      return mapWireToEditorInlineCompletionResponse(
+        query.request.request,
+        query.request.position,
+        wire,
+        Date.now(),
+      );
+    },
+    [file, hasTarget, linkedCapsuleIds, linkedCapsuleSetIds, linkedFilePath, linkedRoot, root],
+  );
+
+  // Issue #1200 (AC6): forward content-free acceptance/rejection counts to the governed telemetry
+  // route. Best-effort and fire-and-forget; a telemetry failure must never affect editing.
+  const onInlineCompletionTelemetry = useCallback(
+    (snapshot: InlineCompletionTelemetrySnapshot): void => {
+      if (!hasTarget || root === undefined) {
+        return;
+      }
+      void reportEditorInlineCompletionTelemetry({ root, ...snapshot }).catch(() => {
+        // Telemetry is best-effort; swallow transport errors.
+      });
+    },
+    [hasTarget, root],
+  );
+
   // Completion has a governed deterministic provider only for the TS/JS source languages (#1198);
   // non-source buffers register no provider.
   const completionLanguage = fileModel?.identity.language;
@@ -455,6 +523,10 @@ export function EditorWidget({
             onRuntimeError={onRuntimeError}
             provideCompletions={completionEnabled ? provideCompletions : undefined}
             completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
+            provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
+            onInlineCompletionTelemetry={
+              completionEnabled ? onInlineCompletionTelemetry : undefined
+            }
           />
         </div>
       ) : hasTarget ? (

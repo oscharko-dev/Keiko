@@ -2,11 +2,17 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EditorCompletionWireResponse, FilesContentResponse } from "../../../../../lib/types";
+import type {
+  EditorCompletionWireResponse,
+  EditorInlineCompletionWireResponse,
+  FilesContentResponse,
+} from "../../../../../lib/types";
 import {
   ApiError,
   fetchFilesContent,
+  reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
+  requestEditorInlineCompletion,
   saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -20,6 +26,8 @@ vi.mock("../../../../../lib/api", async () => {
     fetchFilesContent: vi.fn(),
     saveFilesContent: vi.fn(),
     requestEditorCompletion: vi.fn(),
+    requestEditorInlineCompletion: vi.fn(),
+    reportEditorInlineCompletionTelemetry: vi.fn(() => Promise.resolve()),
   };
 });
 
@@ -535,5 +543,91 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe("plaintext");
     expect(surface.props?.provideCompletions).toBeUndefined();
+  });
+});
+
+describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
+  function inlineWireResponse(): EditorInlineCompletionWireResponse {
+    return {
+      schemaVersion: "1",
+      items: [{ insertText: "a + b;" }],
+      provenance: {
+        sources: ["model-assisted"],
+        modelMode: "as-you-type",
+        modelId: "fim-1",
+        gatewayPolicyVersion: "editor-inline-completion/1",
+        promptHash: "a".repeat(64),
+      },
+    };
+  }
+
+  function inlineQuery() {
+    return {
+      request: {
+        request: { requestId: "r-1", streamId: "s-1:inline", sequence: 1 },
+        document: { uri: "keiko://doc", language: "typescript" as const, version: 1 },
+        position: { line: 1, column: 9 },
+        triggerKind: "automatic" as const,
+        contextBudgetBytes: 8192,
+      },
+      documentText: "function add(a, b) {\n  return \n}\n",
+    };
+  }
+
+  it("wires an inline resolver for a TS/JS file and posts the overlay to the inline BFF", async () => {
+    vi.mocked(requestEditorInlineCompletion).mockResolvedValueOnce(inlineWireResponse());
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    const resolver = surface.props?.provideInlineCompletions;
+    expect(resolver).toBeDefined();
+    if (resolver === undefined) return;
+
+    const response = await resolver(inlineQuery(), new AbortController().signal);
+    expect(requestEditorInlineCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/repo",
+        path: "src/app.ts",
+        languageId: "typescript",
+        text: "function add(a, b) {\n  return \n}\n",
+        position: { line: 1, character: 9 },
+        triggerKind: "automatic",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(response.items[0]?.insertText).toBe("a + b;");
+    expect(response.items[0]?.provenance.origin).toBe("ai-inline-completion");
+  });
+
+  it("forwards content-free telemetry snapshots to the telemetry route", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(<EditorWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    const report = surface.props?.onInlineCompletionTelemetry;
+    expect(report).toBeDefined();
+    if (report === undefined) return;
+
+    report({ offered: 2, shown: 2, accepted: 1, rejected: 0, ignored: 1, partiallyAccepted: 0 });
+    expect(reportEditorInlineCompletionTelemetry).toHaveBeenCalledWith({
+      root: "/repo",
+      offered: 2,
+      shown: 2,
+      accepted: 1,
+      rejected: 0,
+      ignored: 1,
+      partiallyAccepted: 0,
+    });
+  });
+
+  it("registers no inline resolver for a non-source (plaintext) file", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
+    );
+    render(<EditorWidget root="/repo" file="notes.md" />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.provideInlineCompletions).toBeUndefined();
+    expect(surface.props?.onInlineCompletionTelemetry).toBeUndefined();
   });
 });

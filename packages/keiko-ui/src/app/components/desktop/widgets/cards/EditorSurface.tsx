@@ -18,11 +18,13 @@ import {
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorFileModel,
+  type EditorInlineCompletionResolver,
   type EditorPosition,
   type EditorRange,
   type EditorSaveRequest,
   type EditorSaveStatus,
   type EditorThemeVariant,
+  type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
 
@@ -54,6 +56,16 @@ export interface EditorSurfaceProps {
    */
   readonly provideCompletions?: EditorCompletionResolver | undefined;
   readonly completionTriggerCharacters?: readonly string[] | undefined;
+  /**
+   * Host inline-completion (ghost-text) resolver (Issue #1200). When present, the editor registers a
+   * Monaco inline-completion provider and enables inline suggest; the host owns the BFF call. Absent
+   * for non-source buffers.
+   */
+  readonly provideInlineCompletions?: EditorInlineCompletionResolver | undefined;
+  /** Observer for content-free inline-completion acceptance/rejection telemetry counts. */
+  readonly onInlineCompletionTelemetry?:
+    | ((snapshot: InlineCompletionTelemetrySnapshot) => void)
+    | undefined;
 }
 
 export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
@@ -82,6 +94,8 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
       onRuntimeError={props.onRuntimeError}
       provideCompletions={props.provideCompletions}
       completionTriggerCharacters={props.completionTriggerCharacters}
+      provideInlineCompletions={props.provideInlineCompletions}
+      onInlineCompletionTelemetry={props.onInlineCompletionTelemetry}
     />
   );
 }
