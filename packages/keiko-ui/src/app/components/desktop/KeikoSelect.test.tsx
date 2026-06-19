@@ -46,7 +46,7 @@ describe("KeikoSelect menu geometry", () => {
       top: "141px",
       width: "240px",
     });
-    expect(menu?.getAttribute("style")).toContain("--ksel-option-height: 42px");
+    expect(menu?.getAttribute("style")).toContain("--ksel-option-height: 30px");
     expect(menu).toHaveClass("ksel-menu-open-down");
     expect(trigger).toHaveClass("ksel-trigger-open-down");
   });

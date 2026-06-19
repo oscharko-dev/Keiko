@@ -244,14 +244,32 @@ describe("RunLauncher — initial render", () => {
     }
   });
 
+  it("moves source-type selection on pointer down so the rail outline does not flicker", () => {
+    render(<RunLauncher />);
+
+    fireEvent.pointerDown(sourceTypeRadio("Folder"), { button: 0 });
+
+    expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "false");
+    expect(sourceTypeRadio("Folder")).toHaveAttribute("aria-checked", "true");
+  });
+
   it("renders a requirements textarea (default source type)", () => {
     render(<RunLauncher />);
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
   });
 
-  it("renders a policy-profile select", () => {
+  it("renders a policy-profile select with the compact policy menu", async () => {
+    const user = userEvent.setup();
     render(<RunLauncher />);
-    expect(screen.getByRole("combobox", { name: /policy profile/i })).toBeInTheDocument();
+    const select = screen.getByRole("combobox", { name: /policy profile/i });
+    expect(select).toBeInTheDocument();
+    expect(select.closest(".qi-policy-profile-field")).not.toBeNull();
+
+    await user.click(select);
+    expect(document.querySelector(".qi-policy-profile-menu")).not.toBeNull();
+    expect(document.querySelector(".qi-policy-profile-menu .ksel-menu-title")).toHaveTextContent(
+      "Policy",
+    );
   });
 
   it("renders an optional seed input", () => {

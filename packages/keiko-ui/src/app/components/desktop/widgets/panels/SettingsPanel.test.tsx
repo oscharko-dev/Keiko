@@ -233,7 +233,7 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
     expect(modelsTab).toHaveAttribute("aria-pressed", "true");
     const generalTab = screen.getByRole("button", { name: "General" });
     expect(generalTab).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(generalTab);
+    fireEvent.pointerDown(generalTab);
     expect(generalTab).toHaveAttribute("aria-pressed", "true");
     expect(modelsTab).toHaveAttribute("aria-pressed", "false");
     await waitFor(() => {

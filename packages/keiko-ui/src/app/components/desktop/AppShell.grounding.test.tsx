@@ -321,6 +321,37 @@ describe("AppShell grounding connections", () => {
     mocks.state.workspaceOptions = undefined;
     mocks.state.workspaceProps = undefined;
     mocks.state.rightRailProps = undefined;
+    document.documentElement.removeAttribute("data-input-modality");
+  });
+
+  it("tracks pointer and keyboard modality for focus ring policy", async () => {
+    await renderMounted();
+
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+    });
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "keyboard");
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousedown"));
+    });
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
+  });
+
+  it("does not turn typed text into keyboard-focus modality after a mouse click", async () => {
+    await renderMounted();
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousedown"));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    });
+
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
   });
 
   it("persists a new Files source and records the governed reads-context relationship", async () => {

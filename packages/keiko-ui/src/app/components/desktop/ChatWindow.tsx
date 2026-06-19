@@ -363,7 +363,7 @@ function ComposerBar({
             }
             menuTitle="Models"
             menuClassName="cmp-model-menu"
-            menuMinWidth={controlsNarrow ? 184 : 280}
+            menuMinWidth={controlsNarrow ? 118 : 280}
             mono
             sections={[
               {
@@ -1545,7 +1545,7 @@ export function ChatWindow({
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   const effectiveMinimal = minimalChat;
   const effectiveCompact = compact || mini;
-  const effectiveControlsNarrow = controlsNarrow || mini;
+  const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
   const effectiveBarCompact = barCompact || effectiveMinimal;
   const effectiveWorkflowCompact = workflowCompact || mini || effectiveMinimal;
   useEffect(() => {

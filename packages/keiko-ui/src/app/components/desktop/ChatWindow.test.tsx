@@ -857,6 +857,59 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     );
   });
 
+  it("keeps model and workflow controls in the same compact state", () => {
+    const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+        })}
+      >
+        <ChatWindow compact barCompact workflowCompact />
+      </ChatSessionProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Launch workflow" })).toHaveClass(
+      "cmp-mode-compact",
+    );
+    expect(container.querySelector(".cmp-model")).toHaveClass("cmp-model-compact");
+  });
+
+  it("opens the compact model picker with the same menu width as the compact full model button", async () => {
+    const user = userEvent.setup();
+    const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
+    render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+        })}
+      >
+        <ChatWindow compact controlsNarrow barCompact workflowCompact />
+      </ChatSessionProvider>,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Models" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      bottom: 82,
+      height: 34,
+      left: 24,
+      right: 58,
+      top: 48,
+      width: 34,
+      x: 24,
+      y: 48,
+      toJSON: () => ({}),
+    });
+
+    await user.click(trigger);
+
+    expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
+  });
+
   it("uses the compact no-memory disclosure icon and hides budget in minimal mode", () => {
     const { container } = render(
       <ChatSessionProvider

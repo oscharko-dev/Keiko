@@ -610,6 +610,29 @@ function AppShellInner(): ReactNode {
   useKeyboardShortcuts({ bindings: SHELL_SHORTCUT_BINDINGS, dispatch: dispatchShortcut });
 
   useEffect(() => {
+    const root = document.documentElement;
+    const setPointerModality = (): void => {
+      root.setAttribute("data-input-modality", "pointer");
+    };
+    const setKeyboardModality = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== "Tab") return;
+      root.setAttribute("data-input-modality", "keyboard");
+    };
+
+    root.setAttribute("data-input-modality", "pointer");
+    window.addEventListener("pointerdown", setPointerModality, true);
+    window.addEventListener("mousedown", setPointerModality, true);
+    window.addEventListener("keydown", setKeyboardModality, true);
+    return () => {
+      window.removeEventListener("pointerdown", setPointerModality, true);
+      window.removeEventListener("mousedown", setPointerModality, true);
+      window.removeEventListener("keydown", setKeyboardModality, true);
+      root.removeAttribute("data-input-modality");
+    };
+  }, []);
+
+  useEffect(() => {
     const h = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
         e.preventDefault();

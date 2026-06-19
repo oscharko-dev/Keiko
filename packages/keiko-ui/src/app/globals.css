@@ -106,6 +106,19 @@ button {
   border: none;
   background: none;
 }
+:root[data-input-modality="pointer"]
+  :where(button, a, input, textarea, select, [role="button"], [tabindex]:not([tabindex="-1"])):focus {
+  outline: none !important;
+}
+:root[data-input-modality="pointer"]
+  :where(button, a, input, textarea, select, [role="button"], [tabindex]:not([tabindex="-1"])):focus:not(
+    [data-on="true"],
+    [aria-pressed="true"],
+    [aria-selected="true"],
+    [aria-checked="true"]
+  ) {
+  box-shadow: none !important;
+}
 ::selection {
   background: var(--accent-glow);
 }
@@ -290,28 +303,33 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 6px;
+  min-height: 26px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in oklch, var(--surface) 92%, transparent);
 }
 
 .ksel-menu-title {
-  font-size: 0.82em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.68em;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.045em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .ksel-menu-note {
+  flex: none;
   color: var(--fg-dim);
-  font-size: 0.82em;
+  font-size: 0.68em;
 }
 
 .ksel-menu-scroll {
   overflow-y: auto;
-  padding: 6px;
+  padding: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
@@ -356,20 +374,23 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: var(--ksel-option-height, 38px);
-  padding: 8px 10px;
+  gap: 8px;
+  min-height: var(--ksel-option-height, 30px);
+  padding: 4px 7px;
   border: 1px solid transparent;
   border-radius: calc(var(--radius-sm) - 2px);
   background: transparent;
   text-align: left;
   color: inherit;
-  font: inherit;
-  line-height: inherit;
+  font-family: inherit;
+  font-size: 0.86em;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  line-height: 1.2;
 }
 
 .ksel-option + .ksel-option {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .ksel-option:hover:not([data-disabled="true"]),
@@ -394,7 +415,10 @@ button {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
   line-height: inherit;
 }
 
@@ -403,7 +427,9 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
   line-height: inherit;
   letter-spacing: inherit;
 }
@@ -433,7 +459,7 @@ button {
 
 .ksel-option-desc {
   color: var(--fg-dim);
-  font-size: 0.92em;
+  font-size: 0.82em;
   line-height: 1.35;
 }
 
@@ -2044,12 +2070,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: var(--radius-lg);
   padding: 14px 14px 10px;
   box-shadow: var(--shadow-card);
-}
-.cmp-box:focus-within {
-  border-color: var(--accent-line);
-  box-shadow:
-    0 0 0 3px var(--accent-glow),
-    var(--shadow-card);
 }
 :root[data-input-modality="keyboard"] .cmp-box:has(.cmp-input:focus) {
   border-color: var(--accent-line);
@@ -5450,6 +5470,8 @@ select.dlg-input {
   padding: 4px 8px;
 }
 .chatw-compact .scope-grounding-select {
+  width: 180px;
+  min-width: 180px;
   max-width: 180px;
 }
 .chatw-compact .cmp-box {
@@ -5492,7 +5514,9 @@ select.dlg-input {
   padding: 3px 7px;
 }
 .chatw-minimal .scope-grounding-select {
-  max-width: 136px;
+  width: 180px;
+  min-width: 180px;
+  max-width: 180px;
 }
 .chatw-minimal .cmp-box {
   padding: 6px;
@@ -10116,6 +10140,43 @@ select.dlg-input {
   align-items: center;
   gap: 8px;
 }
+.qi-policy-profile-field {
+  flex: 1 1 300px;
+  min-width: 0;
+  max-width: 300px;
+  justify-content: space-between;
+}
+.qi-policy-profile-field > .qi-field-label {
+  flex: 0 0 56px;
+  width: 56px;
+  min-width: 0;
+  max-width: 56px;
+}
+.qi-policy-profile-field .qi-select {
+  width: min(236px, 100%);
+  min-width: 0;
+  max-width: 236px;
+}
+.qi-policy-profile-menu .ksel-menu-head {
+  min-height: 24px;
+  padding: 4px 8px;
+}
+.qi-policy-profile-menu .ksel-menu-title {
+  font-size: 0.62em;
+  letter-spacing: 0.035em;
+}
+.qi-policy-profile-menu .ksel-menu-note {
+  font-size: 0.62em;
+}
+.qi-policy-profile-menu .ksel-menu-scroll {
+  padding: 4px;
+}
+.qi-policy-profile-menu .ksel-option {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 0.74em;
+  line-height: 1.15;
+}
 .qi-launcher-row {
   display: flex;
   gap: 12px;
@@ -10140,17 +10201,19 @@ select.dlg-input {
 .qi-source-kind-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
+  gap: 2px;
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--card);
+  height: 34px;
+  box-sizing: border-box;
 }
 .qi-source-kind-option {
   position: relative;
   min-width: 0;
   min-height: 0;
-  height: 25px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10187,29 +10250,29 @@ select.dlg-input {
   height: 15px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2.4;
+  stroke-width: 3.1;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .qi-source-kind-icon svg {
-  stroke-width: 2.4;
+  stroke-width: 3.1;
 }
 .qi-source-kind-option:hover:not(:disabled) {
   background: transparent;
-  border-color: var(--accent-line);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
   color: var(--fg);
 }
 .qi-source-kind-option[aria-checked="true"] {
-  background: color-mix(in oklab, var(--accent) 16%, var(--card));
-  border-color: var(--accent-line);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option[aria-checked="true"]:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--accent) 16%, var(--card));
-  border-color: var(--accent-line);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option[aria-checked="true"] .qi-source-kind-label {
   color: var(--fg);
@@ -10267,7 +10330,7 @@ select.dlg-input {
   border-color: var(--line) !important;
   box-shadow: none !important;
 }
-.qi-select {
+select.qi-select {
   appearance: none;
   background-image:
     linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
@@ -10288,40 +10351,49 @@ select.dlg-input {
 .qi-source-kind-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  min-width: min(100%, 440px);
-}
-.qi-source-kind-option {
-  min-width: 0;
-  min-height: 44px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
   gap: 2px;
-  padding: 7px 8px;
+  min-width: min(100%, 440px);
+  height: 34px;
+  padding: 3px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--card);
+  box-sizing: border-box;
+}
+.qi-source-kind-option {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   color: var(--fg);
   font: inherit;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition:
-    background 0.12s,
     border-color 0.12s,
+    box-shadow 0.12s,
     color 0.12s;
 }
 .qi-source-kind-option:hover:not(:disabled) {
-  border-color: var(--line-strong);
-  background: var(--card-2);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 .qi-source-kind-option[aria-checked="true"] {
-  border-color: color-mix(in oklch, var(--accent) 70%, var(--line));
-  background: color-mix(in oklab, var(--accent) 18%, var(--card));
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
   color: var(--fg);
 }
 .qi-source-kind-option:disabled {
@@ -10416,7 +10488,7 @@ select.dlg-input {
   }
 
   .qi-source-kind-option {
-    height: 25px;
+    height: 100%;
   }
 
   .qi-textarea {
@@ -10431,6 +10503,18 @@ select.dlg-input {
   .qi-launcher-controls .qi-field-inline {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .qi-policy-profile-field {
+    flex: 1 1 300px;
+    min-width: 0;
+    max-width: 300px;
+  }
+
+  .qi-policy-profile-field .qi-select {
+    width: min(236px, 100%);
+    min-width: 0;
+    max-width: 236px;
   }
 
   .qi-launcher-controls .qi-btn {
@@ -11016,6 +11100,10 @@ select.dlg-input {
 }
 .figma-snapshot-input:focus-visible {
   outline: 2px solid var(--accent-text);
+}
+:root[data-input-modality="pointer"] .figma-snapshot-input:focus {
+  outline: none !important;
+  box-shadow: none !important;
 }
 .figma-snapshot-input[aria-invalid="true"] {
   border-color: var(--danger);
@@ -13355,6 +13443,11 @@ button.figma-view-preview {
   color: var(--fg);
   background: var(--inset);
 }
+.set-tab:active {
+  color: var(--fg);
+  background: var(--inset);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 .set-tab:focus-visible,
 .set-add:focus-visible {
   outline: 2px solid var(--accent-text);
@@ -14545,6 +14638,8 @@ ul.integ {
   padding: 4px 8px;
   font-size: 12px;
   font-family: inherit;
+  width: 180px;
+  min-width: 180px;
   max-width: 260px;
   cursor: pointer;
 }

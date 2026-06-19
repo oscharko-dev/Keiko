@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type WheelEvent,
 } from "react";
 import type { ReactNode } from "react";
@@ -405,6 +406,14 @@ export function RunLauncher({
     setConnectorError(null);
   }, []);
 
+  const onSourceKindPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, next: ManualSourceKind): void => {
+      if (running || event.button !== 0) return;
+      chooseSourceKind(next);
+    },
+    [chooseSourceKind, running],
+  );
+
   // APG radiogroup keyboard model (WCAG 2.1.1): arrow keys move the selection and roving focus
   // across the source-type radios — the native <select> this replaced had this for free.
   // The handler lives on each radio (which is a natively focusable <button>), not on the group
@@ -789,6 +798,9 @@ export function RunLauncher({
                   aria-checked={sourceKind === option.id}
                   tabIndex={sourceKind === option.id ? 0 : -1}
                   disabled={running}
+                  onPointerDown={(event) => {
+                    onSourceKindPointerDown(event, option.id);
+                  }}
                   onClick={() => chooseSourceKind(option.id)}
                   onKeyDown={onSourceKindKeyDown}
                 >
@@ -808,14 +820,15 @@ export function RunLauncher({
           </p>
         ) : null}
         <div className="qi-launcher-controls">
-          <div className="qi-field qi-field-inline">
+          <div className="qi-field qi-field-inline qi-policy-profile-field">
             <span className="qi-field-label">Policy profile</span>
             <KeikoSelect
               triggerClassName="qi-select"
               value={profileId}
               ariaLabel="Policy profile"
               disabled={running}
-              menuTitle="Policy profile"
+              menuTitle="Policy"
+              menuClassName="qi-policy-profile-menu"
               sections={[
                 {
                   options: PROFILES.map((profile) => ({

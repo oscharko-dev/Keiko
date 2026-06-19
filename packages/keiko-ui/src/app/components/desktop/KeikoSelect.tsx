@@ -298,7 +298,7 @@ export default function KeikoSelect({
         top: openUp
           ? Math.max(viewportPadding, rect.top - totalMenuHeight - menuGap)
           : Math.min(rect.bottom + menuGap, window.innerHeight - viewportPadding - totalMenuHeight),
-        optionHeight: Math.max(32, rect.height),
+        optionHeight: Math.max(28, Math.min(rect.height, 30)),
         maxHeight,
         openUp,
         attached: menuAttached,
