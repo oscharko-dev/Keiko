@@ -28,9 +28,21 @@ describe("deriveLargeFileMode (Issue #1207, ADR-0042 D3.6)", () => {
     expect(deriveLargeFileMode({ sizeBytes: overLimit.length, text: overLimit })).toBe("degraded");
   });
 
+  it("stays normal just under the byte threshold", () => {
+    expect(deriveLargeFileMode({ sizeBytes: LARGE_FILE_DEGRADED_BYTES - 1, text: "x" })).toBe(
+      "normal",
+    );
+  });
+
   it("degrades on the byte threshold without scanning lines (short text, large size)", () => {
     // A small text but a reported size over the byte ceiling (e.g. multi-byte UTF-8) still degrades.
     expect(deriveLargeFileMode({ sizeBytes: 600_000, text: "short" })).toBe("degraded");
+  });
+
+  it("degrades on line count even when the byte size is well under the threshold", () => {
+    const text = "x\n".repeat(LARGE_FILE_DEGRADED_LINES + 5);
+    // sizeBytes is far below 500 KB, so only the line scan can trigger degraded mode here.
+    expect(deriveLargeFileMode({ sizeBytes: 1_000, text })).toBe("degraded");
   });
 
   it("counts the published thresholds at the documented ADR-0042 values", () => {

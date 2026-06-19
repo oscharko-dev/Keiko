@@ -185,7 +185,7 @@ function checkFirstLoadIsolation(repoRoot, allowlist, fail) {
   }
 }
 
-export function runEditorBundleSizeCheck({ repoRoot, fail, log } = {}) {
+export function runEditorBundleSizeCheck({ repoRoot, fail, log, budget: budgetOverride } = {}) {
   const root = repoRoot ?? process.cwd();
   const onFail =
     fail ??
@@ -195,9 +195,11 @@ export function runEditorBundleSizeCheck({ repoRoot, fail, log } = {}) {
     });
   const onLog = log ?? ((message) => console.log(message));
 
-  const budget = JSON.parse(
-    readFileSync(join(root, "scripts", "editor-bundle-size.budget.json"), "utf8"),
-  );
+  // `budget` is normally read from the committed budget file; tests may inject an override to exercise
+  // the failure paths (over-ceiling, version-pin drift, stale allow-list) without mutating the repo.
+  const budget =
+    budgetOverride ??
+    JSON.parse(readFileSync(join(root, "scripts", "editor-bundle-size.budget.json"), "utf8"));
 
   const ownCode = measureOwnCode(root, budget.editorOwnCodeGzipBytesCeiling);
   if (!ownCode.ok) {

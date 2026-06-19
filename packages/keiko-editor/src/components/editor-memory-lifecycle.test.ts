@@ -220,20 +220,42 @@ describe("editor memory lifecycle — multi-card no-leak (Issue #1207)", () => {
 
   it("holds N cards open simultaneously and frees everything only when all close (no cross-card leak)", () => {
     const registry = createRegistry();
-    const cards = 8;
-    const [firstDispose, ...remainingDisposers] = Array.from({ length: cards }, () =>
-      mountCard(registry),
-    );
-    const perCard = registry.live / cards;
-    expect(Number.isInteger(perCard)).toBe(true);
+    // Establish the per-card registration count from one isolated mount, then prove the live count
+    // grows by EXACTLY that amount per card and shrinks by exactly that amount per close. Deriving
+    // perCard independently (not by dividing the multi-card total) means a shared/module-global leak —
+    // which would add a fixed cost once rather than per card — could not be hidden by the accounting.
+    const probe = mountCard(registry);
+    const perCard = registry.live;
     expect(perCard).toBeGreaterThan(0);
-    // Closing one card frees exactly that card's registrations; the others keep working.
-    firstDispose?.();
-    expect(registry.live).toBe(perCard * (cards - 1));
-    for (const disposeCard of remainingDisposers) {
-      disposeCard();
-    }
+    probe();
     expect(registry.live).toBe(0);
+
+    const cards = 8;
+    const disposers = Array.from({ length: cards }, (_unused, index) => {
+      const dispose = mountCard(registry);
+      // Live count must be exactly proportional after each mount (no shared residual).
+      expect(registry.live).toBe(perCard * (index + 1));
+      return dispose;
+    });
     expect(registry.peak).toBe(perCard * cards);
+
+    // Closing each card frees exactly that card's registrations; the others keep working.
+    disposers.forEach((dispose, index) => {
+      dispose();
+      expect(registry.live).toBe(perCard * (cards - index - 1));
+    });
+    expect(registry.live).toBe(0);
+  });
+
+  it("treats a double-dispose as a defect (the registry would catch an over-count)", () => {
+    const registry = createRegistry();
+    const dispose = mountCard(registry);
+    dispose();
+    expect(registry.live).toBe(0);
+    // A disposer that fired twice would under-count live disposables and mask a leak; the
+    // instrumented registry throws on the second dispose, so the no-leak proof cannot be gamed.
+    expect(() => {
+      dispose();
+    }).toThrow("disposed twice");
   });
 });

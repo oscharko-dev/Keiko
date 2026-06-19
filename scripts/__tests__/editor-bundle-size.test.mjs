@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -92,6 +93,21 @@ describe("extractValueImportSpecifiers", () => {
     const source = "// monaco-editor is bundled into a browser-only chunk\nconst a = 1;";
     expect(extractValueImportSpecifiers(source)).toEqual([]);
   });
+
+  it("catches value re-exports (`export * from` / `export { x } from`)", () => {
+    const source = [
+      'export * from "monaco-editor";',
+      'export { loader } from "@monaco-editor/react";',
+    ].join("\n");
+    const specifiers = extractValueImportSpecifiers(source);
+    expect(specifiers).toContain("monaco-editor");
+    expect(specifiers).toContain("@monaco-editor/react");
+  });
+
+  it("catches a multi-line value import statement", () => {
+    const source = 'import {\n  Editor,\n  DiffEditor,\n} from "@monaco-editor/react";';
+    expect(extractValueImportSpecifiers(source)).toContain("@monaco-editor/react");
+  });
 });
 
 describe("findUnexpectedMonacoImporters", () => {
@@ -119,16 +135,52 @@ describe("findUnexpectedMonacoImporters", () => {
 });
 
 describe("runEditorBundleSizeCheck (integration against the real repo state)", () => {
-  it("passes for the committed editor dist, Monaco pin, and first-load isolation", () => {
-    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const committedBudget = JSON.parse(
+    readFileSync(resolve(repoRoot, "scripts", "editor-bundle-size.budget.json"), "utf8"),
+  );
+  const run = (budget) => {
     const failures = [];
     const result = runEditorBundleSizeCheck({
       repoRoot,
+      budget,
       fail: (message) => failures.push(message),
       log: () => undefined,
     });
+    return { failures, result };
+  };
+
+  it("passes for the committed editor dist, Monaco pin, and first-load isolation", () => {
+    const { failures, result } = run(undefined);
     expect(failures).toEqual([]);
     expect(result.ok).toBe(true);
     expect(result.totalGzipBytes).toBeGreaterThan(0);
+  });
+
+  it("fails when the editor own-code gzip ceiling is exceeded", () => {
+    const { failures } = run({ ...committedBudget, editorOwnCodeGzipBytesCeiling: 1 });
+    expect(failures.some((m) => m.includes("exceeds the ceiling"))).toBe(true);
+  });
+
+  it("fails when the Monaco version pin drifts from package.json", () => {
+    const { failures } = run({
+      ...committedBudget,
+      monacoEditorPinnedVersion: "0.0.0-not-installed",
+    });
+    expect(failures.some((m) => m.includes("monaco-editor is pinned at"))).toBe(true);
+  });
+
+  it("fails when an allow-listed Monaco importer no longer imports Monaco (stale allow-list)", () => {
+    const { failures } = run({
+      ...committedBudget,
+      monacoFirstLoadValueImporters: ["packages/keiko-ui/src/lib/api.ts"],
+    });
+    expect(failures.some((m) => m.includes("no longer imports Monaco"))).toBe(true);
+  });
+
+  it("fails when a module value-imports Monaco outside the allow-list (first-load leak)", () => {
+    // With an empty allow-list, the real Monaco runtime module becomes an unexpected first-load importer.
+    const { failures } = run({ ...committedBudget, monacoFirstLoadValueImporters: [] });
+    expect(failures.some((m) => m.includes("value-imported outside the allow-listed"))).toBe(true);
   });
 });
