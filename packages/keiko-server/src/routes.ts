@@ -88,6 +88,7 @@ import {
   handleEditorLocalKnowledgeRetrieve,
   handleEditorRepoSearch,
 } from "./editor/contextRoutes.js";
+import { handleEditorCompletion } from "./editor/completionRoutes.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -271,6 +272,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // retrieval references). No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
   { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  // Issue #1199 — governed completion gateway (ADR-0042 D4/D5/D6). Deterministic language-service
+  // completion (#1198) always, plus gated model-assisted completion (#1210) over coding context
+  // (#1211). Content-free response apart from reviewable insertText; the browser never reaches a model.
+  { method: "POST", pattern: "/api/editor/completion", handler: handleEditorCompletion },
   {
     method: "POST",
     pattern: "/api/editor/local-knowledge/retrieve",

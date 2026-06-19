@@ -12,6 +12,7 @@
 import type {
   EditorBuffer,
   EditorChangeOrigin,
+  EditorCompletionResolver,
   EditorFileModel,
   EditorPosition,
   EditorRange,
@@ -70,4 +71,12 @@ export interface KeikoCodeEditorProps {
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
+  /**
+   * Host-injected completion resolver (Issue #1199). When present, the editor registers a Monaco
+   * completion provider for the governed languages that bridges to this resolver; the host owns the
+   * BFF call, retrieval, and model routing (ADR-0042 D5). When absent, no provider is registered.
+   */
+  readonly provideCompletions?: EditorCompletionResolver | undefined;
+  /** Trigger characters for the completion provider; defaults to the TS/JS set when omitted. */
+  readonly completionTriggerCharacters?: readonly string[] | undefined;
 }

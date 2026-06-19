@@ -15,6 +15,7 @@ import {
   KeikoCodeEditor,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorFileModel,
   type EditorPosition,
@@ -46,6 +47,13 @@ export interface EditorSurfaceProps {
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
+  /**
+   * Host completion resolver (Issue #1199). When present, the editor registers a Monaco completion
+   * provider that bridges to it; the host (EditorWidget) owns the BFF call. Absent for non-source
+   * buffers, where no governed deterministic provider exists.
+   */
+  readonly provideCompletions?: EditorCompletionResolver | undefined;
+  readonly completionTriggerCharacters?: readonly string[] | undefined;
 }
 
 export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
@@ -72,6 +80,8 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
       onSelectionChange={props.onSelectionChange}
       onCursorChange={props.onCursorChange}
       onRuntimeError={props.onRuntimeError}
+      provideCompletions={props.provideCompletions}
+      completionTriggerCharacters={props.completionTriggerCharacters}
     />
   );
 }

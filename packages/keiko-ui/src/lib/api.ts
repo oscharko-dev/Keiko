@@ -28,6 +28,11 @@ import type {
   FilesPreviewResponse,
   FilesTreeResponse,
   EditorDocumentVersion,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+  EditorCompletionWireResponse,
+  EditorCompletionWireTriggerKind,
+  CostClass,
   GroundingLimits,
   MessageResponse,
   MessagesResponse,
@@ -41,7 +46,7 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
-import { DEFAULT_GROUNDING_LIMITS } from "./types";
+import { DEFAULT_GROUNDING_LIMITS, EDITOR_COMPLETION_SCHEMA_VERSION } from "./types";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -835,6 +840,45 @@ export async function saveFilesContent(input: {
   return fetchJson("/api/files/content", {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+// Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,
+// which runs deterministic language-service completion and (when a governed model is configured)
+// gated model-assisted completion. The browser never reaches a model directly. `signal` lets the
+// editor cancel a superseded request.
+export interface EditorCompletionRequestInput {
+  readonly root: string;
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+  readonly position: { readonly line: number; readonly character: number };
+  readonly triggerKind: EditorCompletionWireTriggerKind;
+  readonly triggerCharacter?: string | undefined;
+  readonly contextBudgetBytes: number;
+  readonly context?: EditorCompletionContextSelectors | undefined;
+  readonly maxCostClass?: CostClass | undefined;
+}
+
+export async function requestEditorCompletion(
+  input: EditorCompletionRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorCompletionWireResponse> {
+  const requestBody: EditorCompletionWireRequest = {
+    schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
+    root: input.root,
+    document: { path: input.path, languageId: input.languageId, text: input.text },
+    position: input.position,
+    triggerKind: input.triggerKind,
+    ...(input.triggerCharacter === undefined ? {} : { triggerCharacter: input.triggerCharacter }),
+    contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.context === undefined ? {} : { context: input.context }),
+    ...(input.maxCostClass === undefined ? {} : { maxCostClass: input.maxCostClass }),
+  };
+  return fetchJson("/api/editor/completion", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 

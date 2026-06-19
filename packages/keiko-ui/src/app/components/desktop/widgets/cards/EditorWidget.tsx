@@ -12,21 +12,24 @@
  * `next/dynamic(..., { ssr: false })` so `monaco-editor` is never evaluated during the Next
  * static-export prerender.
  *
- * Completion and test-generation are deliberately not wired here: their server features are
- * out of scope for this issue (#1199/#1200). The host-integration seam for them is the editor
- * package's typed `EditorHostPort`; this card wires only the `loadBuffer`/`saveDocument` equivalents
- * through the existing workspace Files API, leaving no disabled or placeholder affordances behind.
+ * Completion is wired here (Issue #1199): the host builds the `provideCompletions` resolver that
+ * posts to the governed `/api/editor/completion` BFF and adapts the content-free wire response into
+ * the editor render contract. The editor package owns only Monaco provider registration and
+ * rendering; all retrieval, model routing, and the BFF call stay in this host (ADR-0042 D5).
+ * Test-generation remains out of scope (its wave-2 server features are not yet enabled).
  */
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   createFileModel,
+  DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
   editorFileModelReducer,
   isDocumentDirty,
   isSupportedEditorLanguage,
   saveStatusReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDocumentIdentity,
   type EditorFileModel,
@@ -35,7 +38,13 @@ import {
   type EditorSaveStatus,
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
-import { ApiError, fetchFilesContent, saveFilesContent } from "../../../../../lib/api";
+import {
+  ApiError,
+  fetchFilesContent,
+  requestEditorCompletion,
+  saveFilesContent,
+} from "../../../../../lib/api";
+import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
 import type { EditorDocumentVersion } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
@@ -255,6 +264,49 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
     console.warn(`Keiko editor runtime notice: ${message}`);
   }, []);
 
+  // Issue #1199: the governed completion resolver. The Monaco bridge calls this with the live buffer
+  // text and a content-free request; the host posts to `/api/editor/completion` and adapts the wire
+  // response. A completion failure rejects here and the editor bridge renders nothing (AC4) — it
+  // never breaks editing.
+  const provideCompletions = useCallback<EditorCompletionResolver>(
+    async (query, signal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return {
+          request: query.request.request,
+          items: [],
+          isIncomplete: false,
+          provenance: { sources: [], modelMode: "deterministic" },
+        };
+      }
+      const wire = await requestEditorCompletion(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+          triggerKind: query.request.triggerKind,
+          ...(query.request.triggerCharacter === undefined
+            ? {}
+            : { triggerCharacter: query.request.triggerCharacter }),
+          contextBudgetBytes: query.request.contextBudgetBytes,
+        },
+        signal,
+      );
+      return mapWireToEditorCompletionResponse(query.request.request, wire, Date.now());
+    },
+    [hasTarget, root, file],
+  );
+
+  // Completion has a governed deterministic provider only for the TS/JS source languages (#1198);
+  // non-source buffers register no provider.
+  const completionLanguage = fileModel?.identity.language;
+  const completionEnabled =
+    completionLanguage === "typescript" || completionLanguage === "javascript";
+
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
 
@@ -329,6 +381,8 @@ export function EditorWidget({ root, file }: EditorWidgetProps): ReactNode {
             onContentChange={onContentChange}
             onSaveRequested={onSaveRequested}
             onRuntimeError={onRuntimeError}
+            provideCompletions={completionEnabled ? provideCompletions : undefined}
+            completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
           />
         </div>
       ) : hasTarget ? (

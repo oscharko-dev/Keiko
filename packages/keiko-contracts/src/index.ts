@@ -164,6 +164,31 @@ export {
   parseLanguageServiceRequest,
 } from "./language-service.js";
 
+// ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
+// Wire request/response for the governed `POST /api/editor/completion` route: deterministic
+// language-service completion (#1198) merged with gated model-assisted completion (#1210) over
+// coding context (#1211). Content-free apart from reviewable `insertText` (ADR-0042 D4/D5/D6).
+export type {
+  EditorCompletionWireTriggerKind,
+  EditorCompletionItemOrigin,
+  EditorCompletionWireItem,
+  EditorCompletionSource,
+  EditorCompletionWireProvenance,
+  EditorCompletionWireResponse,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+  EditorCompletionParseOk,
+  EditorCompletionParseFail,
+  EditorCompletionParse,
+} from "./editor-completion.js";
+export {
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  EDITOR_COMPLETION_WIRE_TRIGGER_KINDS,
+  EDITOR_COMPLETION_ITEM_ORIGINS,
+  EDITOR_COMPLETION_SOURCES,
+  parseEditorCompletionRequest,
+} from "./editor-completion.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,

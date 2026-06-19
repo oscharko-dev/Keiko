@@ -12,6 +12,7 @@
  * user-reviewable text.
  */
 import type {
+  EditorCompletionProvenance,
   EditorCompletionRequest,
   EditorContextEntry,
   EditorContextOmission,
@@ -61,6 +62,7 @@ type ForbiddenKeyPaths<T> = T extends Primitive
 type AssertNoForbiddenKeys<T> = [ForbiddenKeyPaths<T>] extends [never] ? true : false;
 
 const _modelProvenanceIsContentFree: AssertNoForbiddenKeys<EditorModelProvenance> = true;
+const _completionProvenanceIsContentFree: AssertNoForbiddenKeys<EditorCompletionProvenance> = true;
 const _completionRequestIsContentFree: AssertNoForbiddenKeys<EditorCompletionRequest> = true;
 const _inlineCompletionRequestIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionRequest> = true;
 const _testGenerationRequestIsContentFree: AssertNoForbiddenKeys<EditorTestGenerationRequest> = true;
@@ -72,6 +74,7 @@ const _contextPackIsContentFree: AssertNoForbiddenKeys<EditorContextPack> = true
 const _contextOmissionIsContentFree: AssertNoForbiddenKeys<EditorContextOmission> = true;
 
 void _modelProvenanceIsContentFree;
+void _completionProvenanceIsContentFree;
 void _completionRequestIsContentFree;
 void _inlineCompletionRequestIsContentFree;
 void _testGenerationRequestIsContentFree;
