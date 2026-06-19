@@ -96,7 +96,12 @@ the existing request-rate ceiling. It changes no wire contract; token counts are
 - **Additional tests for editor-specific trust boundaries** — `editorModelTokenBudget.test.ts` (the new
   token governor), the LLM10 degrade/record route tests in `inlineCompletionRoutes.test.ts` and
   `completionRoutes.test.ts`, and the consolidated cross-route containment suite
-  `editorSecurityBoundary.test.ts`.
+  `editorSecurityBoundary.test.ts`. The containment suite covers every path-accepting editor route —
+  completion, inline-completion, context, repo-search, language, and test-generation (exercised with
+  its feature gate enabled so its target-path containment is proven, since it is gated off in v1). A
+  deny-listed path is rejected uniformly as `403 DENIED`; an out-of-root path is rejected as
+  `403 DENIED` by the containment-first routes and as `400 INVALID_REQUEST` by test-generation, which
+  shape-checks `mustBeRelative` before containment.
 - **Dependency and license review notes** — §6.
 - **CSP / worker deployment notes** — §7.
 
