@@ -40,6 +40,7 @@ export interface AssembleCodingContextDeps {
   readonly realRoot: string;
   readonly signal: AbortSignal;
   readonly nowMs: number;
+  readonly budgetBytes?: number | undefined;
 }
 
 // Greedy byte-budget packer: highest score first, ties broken by id for determinism, dropped when the
@@ -72,11 +73,27 @@ function packExcerpts(
   };
 }
 
+function effectiveCodingContextBudget(
+  purpose: CodingContextRequest["purpose"],
+  requestedBudgetBytes: number | undefined,
+): typeof CODING_CONTEXT_BUDGETS[CodingContextRequest["purpose"]] {
+  const baseBudget = CODING_CONTEXT_BUDGETS[purpose];
+  const effectiveBudgetBytes =
+    requestedBudgetBytes === undefined
+      ? baseBudget.budgetBytes
+      : Math.min(baseBudget.budgetBytes, Math.max(0, Math.trunc(requestedBudgetBytes)));
+  return {
+    ...baseBudget,
+    budgetBytes: effectiveBudgetBytes,
+    maxBytesPerSource: Math.min(baseBudget.maxBytesPerSource, effectiveBudgetBytes),
+  };
+}
+
 export async function assembleCodingContext(
   request: CodingContextRequest,
   context: AssembleCodingContextDeps,
 ): Promise<CodingContextPack> {
-  const budget = CODING_CONTEXT_BUDGETS[request.purpose];
+  const budget = effectiveCodingContextBudget(request.purpose, context.budgetBytes);
   const providerCtx: ProviderContext = {
     deps: context.deps,
     realRoot: context.realRoot,

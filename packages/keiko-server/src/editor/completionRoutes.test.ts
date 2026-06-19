@@ -5,12 +5,17 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
 import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EditorCompletionWireResponse, LatencyClass } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
-import { handleEditorCompletion, type CompletionChatFactory } from "./completionRoutes.js";
+import {
+  COMPLETION_LANGUAGE_SERVICE_LIMITS,
+  handleEditorCompletion,
+  type CompletionChatFactory,
+} from "./completionRoutes.js";
 
 function postContext(body: unknown): RouteContext {
   const req = Readable.from([
@@ -42,11 +47,11 @@ function postContextWithResponseClose(body: unknown): RouteContext {
 let root: string;
 let store: UiStore;
 
-function deps(config?: GatewayConfig): UiHandlerDeps {
+function deps(config?: GatewayConfig, evidenceStore: EvidenceStore = createInMemoryEvidenceStore()): UiHandlerDeps {
   return {
     store,
     redactor: buildRedactor({}),
-    evidenceStore: createInMemoryEvidenceStore(),
+    evidenceStore,
     ...(config === undefined ? {} : { config }),
   } as unknown as UiHandlerDeps;
 }
@@ -143,9 +148,35 @@ describe("POST /api/editor/completion — request validation", () => {
     );
     expect(result.status).toBe(403);
   });
+
+  it("rejects invalid changed-file context selectors before retrieval", async () => {
+    const result = await handleEditorCompletion(
+      postContext(completionBody({ context: { changedFiles: ["src/../package.json"] } })),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("caps changed-file context selectors to the shared editor-context route limit", async () => {
+    const changedFiles = Array.from({ length: 65 }, (_, index) => `src/f${index.toString()}.ts`);
+    const result = await handleEditorCompletion(
+      postContext(completionBody({ context: { changedFiles } })),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
 });
 
 describe("POST /api/editor/completion — deterministic tier (no gateway model)", () => {
+  it("uses the completion-specific deterministic deadline budget", () => {
+    expect(COMPLETION_LANGUAGE_SERVICE_LIMITS.deadlineMs).toBe(500);
+    expect(COMPLETION_LANGUAGE_SERVICE_LIMITS.maxCompletionItems).toBe(
+      256,
+    );
+  });
+
   it("returns deterministic items with a deterministic-only provenance and degrade reason", async () => {
     const result = await handleEditorCompletion(postContext(completionBody()), deps());
     expect(result.status).toBe(200);
@@ -170,7 +201,7 @@ describe("POST /api/editor/completion — deterministic tier (no gateway model)"
 });
 
 describe("POST /api/editor/completion — gated model-assisted tier", () => {
-  it("merges model-assisted items first and reports model + deterministic provenance (AC7)", async () => {
+  it("keeps deterministic items first and reports model + deterministic provenance (AC7)", async () => {
     const result = await handleEditorCompletion(
       postContext(completionBody()),
       deps(fimConfig("fast")),
@@ -180,7 +211,7 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     const payload = body(result);
     const modelItems = payload.items.filter((item) => item.origin === "model-assisted");
     expect(modelItems.map((item) => item.insertText)).toEqual(["value.alpha", "value.beta"]);
-    expect(payload.items[0]?.origin).toBe("model-assisted");
+    expect(payload.items[0]?.origin).toBe("deterministic");
     expect(payload.provenance.sources).toEqual(
       expect.arrayContaining(["deterministic-language-service", "model-assisted"]),
     );
@@ -188,6 +219,43 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     expect(payload.provenance.modelId).toBe("fim-1");
     expect(payload.provenance.gatewayPolicyVersion).toBe("editor-completion/1");
     expect(payload.provenance.promptHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("records content-free Gateway usage evidence for model-assisted calls", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const chat: CompletionChatFactory = () => () =>
+      Promise.resolve({
+        content: '["value.alpha"]',
+        usage: {
+          requestId: "gateway-request-1",
+          promptTokens: 10,
+          completionTokens: 2,
+          latencyMs: 123,
+          costClass: "low",
+        },
+      });
+    const result = await handleEditorCompletion(
+      postContext(completionBody()),
+      deps(fimConfig("fast"), evidenceStore),
+      { chatFactory: chat },
+    );
+    expect(result.status).toBe(200);
+    const runId = evidenceStore.list().find((id) => id.startsWith("editor-completion-model-"));
+    expect(runId).toBeDefined();
+    const manifest = JSON.parse(evidenceStore.get(runId ?? "") ?? "{}") as {
+      readonly editorCompletionModelSchemaVersion?: string;
+      readonly modelId?: string;
+      readonly gatewayPolicyVersion?: string;
+      readonly promptHash?: string;
+      readonly itemCount?: number;
+      readonly usage?: { readonly requestId?: string; readonly promptTokens?: number };
+    };
+    expect(manifest.editorCompletionModelSchemaVersion).toBe("1");
+    expect(manifest.modelId).toBe("fim-1");
+    expect(manifest.gatewayPolicyVersion).toBe("editor-completion/1");
+    expect(manifest.promptHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.itemCount).toBe(1);
+    expect(manifest.usage).toMatchObject({ requestId: "gateway-request-1", promptTokens: 10 });
   });
 
   it("does not run a manual-only model on a trigger character, but does on an explicit invoke", async () => {
@@ -261,6 +329,22 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
     expect(payload.provenance.sources).toEqual(
       expect.arrayContaining(["model-assisted", "repository-context"]),
     );
+  });
+
+  it("honors the host-supplied context budget in the recorded context evidence", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleEditorCompletion(
+      postContext(completionBody({ contextBudgetBytes: 1 })),
+      deps(fimConfig("fast"), evidenceStore),
+      { chatFactory: cannedChat },
+    );
+    expect(result.status).toBe(200);
+    const runId = evidenceStore.list().find((id) => id.startsWith("coding-context-"));
+    expect(runId).toBeDefined();
+    const manifest = JSON.parse(evidenceStore.get(runId ?? "") ?? "{}") as {
+      readonly budgetBytes?: number;
+    };
+    expect(manifest.budgetBytes).toBe(1);
   });
 
   it("never lets a base-FIM model be elected (only aligned models run)", async () => {

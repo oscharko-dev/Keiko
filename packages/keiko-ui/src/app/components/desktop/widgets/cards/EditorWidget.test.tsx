@@ -456,12 +456,75 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
         position: { line: 1, character: 6 },
         triggerKind: "trigger-character",
         triggerCharacter: ".",
+        context: { queryText: "value." },
       }),
       expect.any(AbortSignal),
     );
     expect(response.items[0]?.label).toBe("value");
     expect(response.items[0]?.provenance).toEqual({ origin: "deterministic-completion" });
     expect(surface.props?.completionTriggerCharacters).toContain(".");
+  });
+
+  it("forwards connected Files and Local Knowledge context selectors to completion", async () => {
+    vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/app.ts"
+        linkedRoot="/repo"
+        linkedFilePath="src/related.ts"
+        linkedCapsuleIds={["cap-1"]}
+        linkedCapsuleSetIds={["set-1"]}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    const resolver = surface.props?.provideCompletions;
+    expect(resolver).toBeDefined();
+    if (resolver === undefined) return;
+
+    await resolver(completionQuery(), new AbortController().signal);
+    expect(requestEditorCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: {
+          queryText: "value.",
+          changedFiles: ["src/related.ts"],
+          capsuleId: "cap-1",
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("does not forward a focused Files path from a different root", async () => {
+    vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/app.ts"
+        linkedRoot="/other"
+        linkedFilePath="src/other.ts"
+        linkedCapsuleSetIds={["set-1"]}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    const resolver = surface.props?.provideCompletions;
+    expect(resolver).toBeDefined();
+    if (resolver === undefined) return;
+
+    await resolver(completionQuery(), new AbortController().signal);
+    expect(requestEditorCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: {
+          queryText: "value.",
+          capsuleSetId: "set-1",
+        },
+      }),
+      expect.any(AbortSignal),
+    );
   });
 
   it("registers no completion resolver for a non-source (plaintext) file", async () => {

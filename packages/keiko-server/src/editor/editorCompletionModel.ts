@@ -16,6 +16,7 @@ import type {
   CodingContextPack,
   LanguageCompletionItemKind,
   LanguagePosition,
+  UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
 
 export interface ModelCompletionItem {
@@ -29,8 +30,16 @@ export interface ModelChatRequest {
   readonly user: string;
 }
 
-/** The server-side chat seam (the Model Gateway). Returns the model's raw text content. */
-export type ModelChatFn = (request: ModelChatRequest, signal: AbortSignal) => Promise<string>;
+export interface ModelChatResult {
+  readonly content: string;
+  readonly usage?: UsageMetadata | undefined;
+}
+
+/** The server-side chat seam (the Model Gateway). Returns raw text plus optional usage metadata. */
+export type ModelChatFn = (
+  request: ModelChatRequest,
+  signal: AbortSignal,
+) => Promise<string | ModelChatResult>;
 
 export interface GenerateModelCompletionsInput {
   readonly overlayText: string;
@@ -45,6 +54,7 @@ export interface GenerateModelCompletionsResult {
   readonly items: readonly ModelCompletionItem[];
   readonly promptHash: string;
   readonly truncated: boolean;
+  readonly usage?: UsageMetadata | undefined;
 }
 
 const MAX_PREFIX_CHARS = 4_000;
@@ -149,6 +159,14 @@ function candidateString(entry: unknown): string | undefined {
   return undefined;
 }
 
+function chatResultContent(result: string | ModelChatResult): string {
+  return typeof result === "string" ? result : result.content;
+}
+
+function chatResultUsage(result: string | ModelChatResult): UsageMetadata | undefined {
+  return typeof result === "string" ? undefined : result.usage;
+}
+
 function firstLineLabel(insertText: string, maxChars: number): string {
   const firstLine = insertText.split("\n")[0] ?? insertText;
   return firstLine.length > maxChars ? `${firstLine.slice(0, maxChars)}…` : firstLine;
@@ -199,7 +217,8 @@ export async function generateModelCompletions(
 ): Promise<GenerateModelCompletionsResult> {
   const prompt = buildModelCompletionPrompt(input);
   const promptHash = sha256Hex(`${prompt.system}\n${prompt.user}`);
-  const content = await chat(prompt, signal);
+  const result = await chat(prompt, signal);
+  const content = chatResultContent(result);
   const parsed = parseModelCompletionItems(content, input.maxItems, input.maxInsertTextChars);
-  return { items: parsed.items, promptHash, truncated: parsed.truncated };
+  return { items: parsed.items, promptHash, truncated: parsed.truncated, usage: chatResultUsage(result) };
 }

@@ -36,11 +36,11 @@ describe("buildEditorOptions", () => {
     });
   });
 
-  it("disables Monaco hover, suggest, and markdown-capable helper surfaces", () => {
+  it("disables Monaco hover, ambient suggestions, and markdown-capable helper surfaces", () => {
     expect(options.hover).toEqual({ enabled: false });
     expect(options.quickSuggestions).toBe(false);
     expect(options.quickSuggestionsDelay).toBe(0);
-    expect(options.suggestOnTriggerCharacters).toBe(false);
+    expect(options.suggestOnTriggerCharacters).toBe(true);
     expect(options.parameterHints).toEqual({ enabled: false });
     expect(options.wordBasedSuggestions).toBe("off");
     expect(options.inlineSuggest).toEqual({
@@ -53,12 +53,12 @@ describe("buildEditorOptions", () => {
       showStatusBar: false,
       preview: false,
       showInlineDetails: false,
-      showIcons: false,
-      showMethods: false,
-      showFunctions: false,
-      showKeywords: false,
+      showIcons: true,
+      showMethods: true,
+      showFunctions: true,
+      showKeywords: true,
       showWords: false,
-      showSnippets: false,
+      showSnippets: true,
     });
     expect(options.links).toBe(false);
     expect(options.colorDecorators).toBe(false);
