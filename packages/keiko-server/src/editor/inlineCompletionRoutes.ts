@@ -28,12 +28,14 @@ import {
   isValidScopePath,
   parseEditorInlineCompletionRequest,
   parseEditorInlineCompletionTelemetry,
+  stripUnsafeFormatChars,
   toCodingContextWirePack,
   type CodingContextPack,
   type CodingContextRequest,
   type CompletionDegradeReason,
   type CompletionInteractionMode,
   type CompletionModelSelection,
+  type CostClass,
   type EditorCompletionSource,
   type EditorInlineCompletionWireItem,
   type EditorInlineCompletionWireRequest,
@@ -71,6 +73,9 @@ const MODEL_AS_YOU_TYPE_TIMEOUT_MS = 750;
 // Policy/configuration gate (Acceptance Criterion 7). The feature is ENABLED by default; a deployment
 // disables it by setting this env var to a falsy token.
 const INLINE_COMPLETION_POLICY_ENV = "KEIKO_EDITOR_INLINE_COMPLETION";
+const INLINE_COMPLETION_MAX_COST_CLASS_ENV = "KEIKO_EDITOR_INLINE_COMPLETION_MAX_COST_CLASS";
+const DEFAULT_INLINE_COMPLETION_MAX_COST_CLASS: CostClass = "low";
+const COST_CLASS_RANK: Readonly<Record<CostClass, number>> = { low: 0, medium: 1, high: 2 };
 const DISABLE_TOKENS: ReadonlySet<string> = new Set(["0", "false", "off", "no", "disabled"]);
 
 /** Builds the chat function for the elected model. Injectable so tests avoid a live model call. */
@@ -82,6 +87,8 @@ export interface EditorInlineCompletionRouteOptions {
   readonly rateLimiter?: InlineCompletionRateLimiter | undefined;
   /** Injectable clock for the rate limiter and evidence timestamps; defaults to `Date.now`. */
   readonly now?: (() => number) | undefined;
+  /** Injectable as-you-type model timeout for tests; production default is 750 ms. */
+  readonly asYouTypeTimeoutMs?: number | undefined;
 }
 
 // Process-wide default limiter: shared so pacing spans requests within a server lifetime.
@@ -110,6 +117,41 @@ export function isInlineCompletionEnabledByPolicy(env: EnvSource | undefined): b
     return true;
   }
   return !DISABLE_TOKENS.has(raw.trim().toLowerCase());
+}
+
+function parseCostClass(value: string | undefined): CostClass | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (trimmed === "low" || trimmed === "medium" || trimmed === "high") {
+    return trimmed;
+  }
+  return undefined;
+}
+
+function stricterCostClass(left: CostClass, right: CostClass): CostClass {
+  return COST_CLASS_RANK[left] <= COST_CLASS_RANK[right] ? left : right;
+}
+
+export function inlineCompletionMaxCostClassFromPolicy(env: EnvSource | undefined): CostClass {
+  return (
+    parseCostClass(env?.[INLINE_COMPLETION_MAX_COST_CLASS_ENV]) ??
+    DEFAULT_INLINE_COMPLETION_MAX_COST_CLASS
+  );
+}
+
+function effectiveMaxCostClass(
+  request: EditorInlineCompletionWireRequest,
+  env: EnvSource | undefined,
+): CostClass {
+  const serverCeiling = inlineCompletionMaxCostClassFromPolicy(env);
+  return request.maxCostClass === undefined
+    ? serverCeiling
+    : stricterCostClass(serverCeiling, request.maxCostClass);
+}
+
+function redactPromptText(deps: UiHandlerDeps, value: string): string {
+  const stripped = stripUnsafeFormatChars(value);
+  const redacted = deps.redactor(stripped);
+  return typeof redacted === "string" ? redacted : stripped;
 }
 
 function isRouteResult(value: unknown): value is RouteResult {
@@ -177,11 +219,15 @@ function effectiveMaxInsertTextChars(request: EditorInlineCompletionWireRequest)
   return Math.min(MAX_INLINE_INSERT_TEXT_CHARS, fromTokens);
 }
 
-function modelSignal(selection: CompletionModelSelection, signal: AbortSignal): AbortSignal {
+function modelSignal(
+  selection: CompletionModelSelection,
+  signal: AbortSignal,
+  timeoutMs: number,
+): AbortSignal {
   if (selection.mode !== "as-you-type") {
     return signal;
   }
-  return AbortSignal.any([signal, AbortSignal.timeout(MODEL_AS_YOU_TYPE_TIMEOUT_MS)]);
+  return AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
 }
 
 // Whether the elected interaction mode is eligible for THIS trigger: as-you-type runs on either
@@ -217,6 +263,20 @@ function contextSourcesFromPack(pack: CodingContextPack): readonly EditorComplet
   return [...sources];
 }
 
+function inlineGenerationInput(
+  ctx: ElectedInlineModelContext,
+  pack: CodingContextPack,
+): Parameters<typeof generateInlineCompletion>[0] {
+  return {
+    overlayText: ctx.request.document.text,
+    position: ctx.request.position,
+    languageId: ctx.request.document.languageId,
+    contextPack: pack,
+    maxInsertTextChars: effectiveMaxInsertTextChars(ctx.request),
+    redactText: (value) => redactPromptText(ctx.deps, value),
+  };
+}
+
 // Runs the elected model: assembles coding context (#1211), records content-free evidence, calls the
 // gateway through the injected chat factory, and filters the output. A failure throws to the caller,
 // which degrades.
@@ -235,13 +295,7 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
     ctx.nowMs,
   );
   const generated = await generateInlineCompletion(
-    {
-      overlayText: ctx.request.document.text,
-      position: ctx.request.position,
-      languageId: ctx.request.document.languageId,
-      contextPack: pack,
-      maxInsertTextChars: effectiveMaxInsertTextChars(ctx.request),
-    },
+    inlineGenerationInput(ctx, pack),
     ctx.chatFactory(ctx.config, ctx.modelId),
     ctx.signal,
   );
@@ -298,7 +352,7 @@ function decideInlineModel(
   }
   const selection: CompletionModelSelection = selectCompletionModel(
     config,
-    request.maxCostClass === undefined ? {} : { maxCostClass: request.maxCostClass },
+    { maxCostClass: effectiveMaxCostClass(request, deps.env) },
   );
   const modelId = selection.modelId;
   if (
@@ -338,7 +392,7 @@ async function runInlineModelTier(
   }
   const { selection, modelId, config } = decision;
   const limiter = options.rateLimiter ?? sharedRateLimiter;
-  if (!limiter.tryAcquire(request.root, now())) {
+  if (!limiter.tryAcquire(realRoot, now())) {
     // Rate-limited: skip the model and render no ghost text (degrades to the #1199 dropdown).
     return noItemOutcome(selection.mode, undefined, modelId, selection.latencyClass);
   }
@@ -346,7 +400,11 @@ async function runInlineModelTier(
     return await runElectedInlineModel({
       request,
       realRoot,
-      signal: modelSignal(selection, signal),
+      signal: modelSignal(
+        selection,
+        signal,
+        options.asYouTypeTimeoutMs ?? MODEL_AS_YOU_TYPE_TIMEOUT_MS,
+      ),
       deps,
       selection,
       modelId,
@@ -500,7 +558,15 @@ export async function handleEditorInlineCompletionTelemetry(
   if (!parsed.ok) {
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
-  const now = options.now ?? Date.now;
-  recordInlineCompletionTelemetryEvidence(deps.evidenceStore, deps.redactor, parsed.value, now());
-  return { status: 200, body: deps.redactor({ ok: true }) };
+  return runFilesHandler(async () => {
+    const root = await resolveRoot(deps.store, parsed.value.root, deps.redactor);
+    const now = options.now ?? Date.now;
+    recordInlineCompletionTelemetryEvidence(
+      deps.evidenceStore,
+      deps.redactor,
+      { ...parsed.value, root: root.realRoot },
+      now(),
+    );
+    return { status: 200, body: deps.redactor({ ok: true }) };
+  });
 }

@@ -26,6 +26,9 @@ function baseTelemetry(): Record<string, unknown> {
     rejected: 1,
     ignored: 1,
     partiallyAccepted: 1,
+    requestCount: 6,
+    requestLatencyMsP50: 42,
+    requestLatencyMsP95: 120,
   };
 }
 
@@ -163,6 +166,22 @@ describe("parseEditorInlineCompletionTelemetry", () => {
     expect(parsed.value.accepted).toBe(2);
     expect(parsed.value.rejected).toBe(1);
     expect(parsed.value.shown).toBe(4);
+    expect(parsed.value.requestCount).toBe(6);
+    expect(parsed.value.requestLatencyMsP50).toBe(42);
+    expect(parsed.value.requestLatencyMsP95).toBe(120);
+  });
+
+  it("defaults omitted latency fields for older rollout snapshots", () => {
+    const telemetry = baseTelemetry();
+    delete telemetry.requestCount;
+    delete telemetry.requestLatencyMsP50;
+    delete telemetry.requestLatencyMsP95;
+    const parsed = parseEditorInlineCompletionTelemetry(telemetry);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.requestCount).toBe(0);
+    expect(parsed.value.requestLatencyMsP50).toBe(0);
+    expect(parsed.value.requestLatencyMsP95).toBe(0);
   });
 
   it("rejects a missing root", () => {
@@ -178,6 +197,19 @@ describe("parseEditorInlineCompletionTelemetry", () => {
     expect(parseEditorInlineCompletionTelemetry({ ...baseTelemetry(), shown: 2.5 })).toMatchObject({
       ok: false,
     });
+    expect(
+      parseEditorInlineCompletionTelemetry({ ...baseTelemetry(), requestLatencyMsP95: -1 }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("rejects inverted latency percentiles", () => {
+    expect(
+      parseEditorInlineCompletionTelemetry({
+        ...baseTelemetry(),
+        requestLatencyMsP50: 100,
+        requestLatencyMsP95: 80,
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it("rejects a non-object payload", () => {

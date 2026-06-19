@@ -174,6 +174,8 @@ export interface KeikoInlineCompletionProviderDeps {
   readonly debounceDelayMs: number;
   /** Optional content-free telemetry accumulator fed from Monaco's lifecycle callbacks. */
   readonly telemetry?: InlineCompletionTelemetry | undefined;
+  /** Injectable clock for content-free latency telemetry; defaults to `Date.now`. */
+  readonly now?: (() => number) | undefined;
 }
 
 function buildRequest(
@@ -232,6 +234,8 @@ async function provideInline(
   const request = buildRequest(deps, model, position, context, state.sequence);
   state.latest = request.request;
   const controller = controllerForToken(token);
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
   try {
     const response = await deps.resolve(
       { request, documentText: model.getValue() },
@@ -253,6 +257,8 @@ async function provideInline(
     // Acceptance Criterion 1: an inline-completion failure (network, abort, host error) must never
     // break typing — render no ghost text.
     return undefined;
+  } finally {
+    deps.telemetry?.recordLatency(now() - startedAt);
   }
 }
 

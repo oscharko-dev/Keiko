@@ -34,6 +34,8 @@ export interface GenerateInlineCompletionInput {
   readonly contextPack?: CodingContextPack | undefined;
   /** Hard upper bound on the returned ghost-text length (output characters). */
   readonly maxInsertTextChars: number;
+  /** Optional trust-boundary scrubber applied before overlay text reaches the model prompt. */
+  readonly redactText?: ((value: string) => string) | undefined;
 }
 
 export interface GenerateInlineCompletionResult {
@@ -80,8 +82,11 @@ export function buildInlineCompletionPrompt(
   input: GenerateInlineCompletionInput,
 ): ModelChatRequest {
   const { prefix, suffix } = splitAtPosition(input.overlayText, input.position);
-  const boundedPrefix = prefix.slice(Math.max(0, prefix.length - MAX_PREFIX_CHARS));
-  const boundedSuffix = suffix.slice(0, MAX_SUFFIX_CHARS);
+  const redactText = input.redactText ?? ((value: string): string => value);
+  const redactedPrefix = redactText(prefix);
+  const redactedSuffix = redactText(suffix);
+  const boundedPrefix = redactedPrefix.slice(Math.max(0, redactedPrefix.length - MAX_PREFIX_CHARS));
+  const boundedSuffix = redactedSuffix.slice(0, MAX_SUFFIX_CHARS);
   const excerpts = boundedContextExcerpts(input.contextPack);
   const referenceBlock =
     excerpts.length === 0
