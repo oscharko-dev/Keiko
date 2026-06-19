@@ -142,6 +142,19 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(undo?.label).toBe("Undo: Toggle project panel");
   });
 
+  it("renders the typed action label when the redo stack has an entry", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack({ canRedo: true, redoLabel: "Restore quality panel" }),
+    );
+    const redo = commands.find((c) => c.id === "redo");
+    expect(redo?.label).toBe("Redo: Restore quality panel");
+  });
+
   it("running the Undo command delegates to the undo stack", () => {
     const stack = fakeUndoStack();
     const commands = buildAppShellCommands(fakeApi(), vi.fn(), vi.fn(), "dark", vi.fn(), stack);
@@ -156,6 +169,79 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     const redo = commands.find((c) => c.id === "redo");
     redo?.run();
     expect(stack.redo).toHaveBeenCalledTimes(1);
+  });
+
+  it("running layout commands delegates to the workspace API", () => {
+    const api = fakeApi();
+    const commands = buildAppShellCommands(api, vi.fn(), vi.fn(), "dark", vi.fn(), fakeUndoStack());
+
+    commands.find((c) => c.id === "tile")?.run();
+    commands.find((c) => c.id === "split")?.run();
+    commands.find((c) => c.id === "cascade")?.run();
+
+    expect(api.tileAll).toHaveBeenCalledTimes(1);
+    expect(api.splitFront).toHaveBeenCalledTimes(1);
+    expect(api.cascade).toHaveBeenCalledTimes(1);
+  });
+
+  it("running the theme command delegates to the theme toggle", () => {
+    const toggleTheme = vi.fn();
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      toggleTheme,
+      fakeUndoStack(),
+    );
+
+    commands.find((c) => c.id === "theme")?.run();
+
+    expect(toggleTheme).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the moon icon for the light theme toggle path", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "light",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+
+    expect(commands.find((c) => c.id === "theme")?.icon).toBe("moon");
+  });
+
+  it("uses the sun icon for the dark theme toggle path", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+
+    expect(commands.find((c) => c.id === "theme")?.icon).toBe("sun");
+  });
+
+  it("running card create commands delegates to the palette picker", () => {
+    const openPalettePick = vi.fn();
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      openPalettePick,
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+
+    commands.find((c) => c.id === "new-chat")?.run();
+    commands.find((c) => c.id === "new-files")?.run();
+
+    expect(openPalettePick).toHaveBeenCalledWith("chat");
+    expect(openPalettePick).toHaveBeenCalledWith("files");
   });
 
   it("Edit group commands (undo/redo) are categorised under 'Edit'", () => {

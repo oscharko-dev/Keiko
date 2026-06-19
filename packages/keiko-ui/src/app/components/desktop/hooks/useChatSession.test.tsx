@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import {
   GROUNDED_ATTACHMENT_NOTICE,
+  MAX_ATTACHMENT_BYTES,
   isBudgetExceeded,
   isInFlight,
   notifyChatDeleted,
@@ -269,6 +270,90 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+  });
+});
+
+describe("useChatSession pending attachment validation", () => {
+  async function setupAttachmentSession(
+    models: readonly ModelCapability[] = [model({ id: "chat-a" })],
+  ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
+    vi.mocked(fetchModels).mockResolvedValue({ models });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("rejects empty attachments before MIME or model-capability checks", async () => {
+    const { result } = await setupAttachmentSession();
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File([], "empty.txt", { type: "text/plain" }),
+      );
+      expect(outcome).toEqual({ ok: false, reason: "empty" });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  it("rejects oversized attachments before MIME or model-capability checks", async () => {
+    const { result } = await setupAttachmentSession();
+    const file = new File(["x"], "large.txt", { type: "text/plain" });
+    Object.defineProperty(file, "size", { value: MAX_ATTACHMENT_BYTES + 1 });
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(file);
+      expect(outcome).toEqual({ ok: false, reason: "oversized" });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  it("rejects unsupported attachment MIME types", async () => {
+    const { result } = await setupAttachmentSession();
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["payload"], "payload.bin", { type: "application/octet-stream" }),
+      );
+      expect(outcome).toEqual({ ok: false, reason: "unsupported-type" });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  it("rejects image attachments when the selected model is text-only", async () => {
+    const { result } = await setupAttachmentSession([
+      model({ id: "chat-a", supportsImageInput: false }),
+    ]);
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["image"], "screen.png", { type: "image/png" }),
+      );
+      expect(outcome).toEqual({ ok: false, reason: "text-only-model" });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  it("rejects document attachments when the selected model cannot read documents", async () => {
+    const { result } = await setupAttachmentSession([
+      model({ id: "chat-a", supportsDocumentInput: false }),
+    ]);
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["{}"], "context.json", { type: "application/json" }),
+      );
+      expect(outcome).toEqual({ ok: false, reason: "text-only-model" });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(0);
   });
 });
 
