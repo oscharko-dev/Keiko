@@ -74,6 +74,11 @@ export type {
   EditorTestGenerationContext,
   EditorTestGenerationRequest,
   EditorTestGenerationResult,
+  EditorTestGenerationStatus,
+  EditorTestGenerationAssurance,
+  EditorTestGenerationGateState,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationOutcome,
   EditorPatchStatus,
   EditorPatchFileChange,
   EditorVerificationOutcome,
@@ -365,3 +370,40 @@ export type {
 // ─── Runtime: KeikoDiffEditor React component (#1195) ───
 export { KeikoDiffEditor } from "./components/KeikoDiffEditor.js";
 export type { DiffActionAvailability, KeikoDiffEditorProps } from "./components/diff-types.js";
+
+// ─── Runtime: governed test-generation flow (#1202) ───
+// Pure, browser-safe controllers for the editor "Generate Tests" action: target/mode selection (the
+// editor half of the workflow request adapter), the flow reducer (run status, stale-response discard,
+// failure/cancel keeping the editor usable), and the diff-review projection (reuses #1195
+// buildPatchPreview + KeikoDiffEditor with apply disabled — wave 2/#1204 per ADR-0042 D7). No Monaco,
+// no I/O, no model: the host owns the gated BFF call to /api/editor/test-generation.
+export {
+  buildTestGenerationContext,
+  buildTestGenerationRequest,
+  testGenerationMode,
+} from "./test-generation-context.js";
+export type {
+  BuildTestGenerationRequestArgs,
+  TestGenerationComponentTarget,
+  TestGenerationMode,
+  TestGenerationTargetInput,
+} from "./test-generation-context.js";
+export {
+  IDLE_TEST_GENERATION_STATE,
+  describeTestGenerationStatus,
+  isTestGenerationBusy,
+  isTestGenerationPreviewing,
+  testGenerationReducer,
+} from "./test-generation-status.js";
+export type {
+  TestGenerationFlowAction,
+  TestGenerationFlowState,
+} from "./test-generation-status.js";
+export {
+  buildTestGenerationPreview,
+  TEST_GENERATION_REVIEW_ACTIONS,
+} from "./test-generation-preview.js";
+export type {
+  BuildTestGenerationPreviewArgs,
+  TestGenerationPreview,
+} from "./test-generation-preview.js";

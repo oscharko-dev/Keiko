@@ -222,6 +222,42 @@ export {
   parseEditorInlineCompletionTelemetry,
 } from "./editor-inline-completion.js";
 
+// ─── Editor test generation (Issue #1202) ─────────────────────────────────────────
+// Wire request/response for the governed `POST /api/editor/test-generation` route. Wave-2 surface,
+// shipped switched off (ADR-0042 D7): generation/execution/verification execute untrusted model code
+// and are deferred behind a default-off flag enabled only once a deny-by-default egress boundary is
+// enforced. Content-free apart from reviewable patch `newText`; the assured pre-filter funnel is
+// always reported and is `not-run` in v1.
+export type {
+  EditorTestGenerationTargetKind,
+  EditorTestGenerationWireSymbol,
+  EditorTestGenerationWireTarget,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationStatus,
+  EditorTestGenerationAssurance,
+  EditorTestGenerationGateState,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWireChangeKind,
+  EditorTestGenerationWireEdit,
+  EditorTestGenerationWireFileChange,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireProvenance,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationParseOk,
+  EditorTestGenerationParseFail,
+  EditorTestGenerationParse,
+} from "./editor-test-generation.js";
+export {
+  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+  EDITOR_TEST_GENERATION_STABILITY_RUNS,
+  EDITOR_TEST_GENERATION_TARGET_KINDS,
+  EDITOR_TEST_GENERATION_STATUSES,
+  EDITOR_TEST_GENERATION_ASSURANCES,
+  EDITOR_TEST_GENERATION_GATE_STATES,
+  notRunTestGenerationFunnel,
+  parseEditorTestGenerationRequest,
+} from "./editor-test-generation.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,

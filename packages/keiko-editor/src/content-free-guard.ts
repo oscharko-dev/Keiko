@@ -23,6 +23,7 @@ import type {
   EditorModelProvenance,
   EditorRecentEditContext,
   EditorRecentEditSummary,
+  EditorTestGenerationFunnel,
   EditorTestGenerationRequest,
 } from "./types.js";
 
@@ -68,6 +69,9 @@ const _completionRequestIsContentFree: AssertNoForbiddenKeys<EditorCompletionReq
 const _inlineCompletionRequestIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionRequest> = true;
 const _inlineCompletionProvenanceIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionProvenance> = true;
 const _testGenerationRequestIsContentFree: AssertNoForbiddenKeys<EditorTestGenerationRequest> = true;
+// The assured pre-filter funnel is content-free (counts + enum states); the generated patch it
+// accompanies is a reviewable artifact and is intentionally NOT asserted here.
+const _testGenerationFunnelIsContentFree: AssertNoForbiddenKeys<EditorTestGenerationFunnel> = true;
 const _recentEditContextIsContentFree: AssertNoForbiddenKeys<EditorRecentEditContext> = true;
 const _recentEditSummaryIsContentFree: AssertNoForbiddenKeys<EditorRecentEditSummary> = true;
 const _contextRequestIsContentFree: AssertNoForbiddenKeys<EditorContextRequest> = true;
@@ -81,6 +85,7 @@ void _completionRequestIsContentFree;
 void _inlineCompletionRequestIsContentFree;
 void _inlineCompletionProvenanceIsContentFree;
 void _testGenerationRequestIsContentFree;
+void _testGenerationFunnelIsContentFree;
 void _recentEditContextIsContentFree;
 void _recentEditSummaryIsContentFree;
 void _contextRequestIsContentFree;

@@ -17,6 +17,7 @@ import {
   requestEditorHover,
   requestEditorInlineCompletion,
   requestEditorSymbols,
+  requestEditorTestGeneration,
   saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -36,6 +37,7 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorHover: vi.fn(),
     requestEditorSymbols: vi.fn(),
     requestEditorFormatting: vi.fn(),
+    requestEditorTestGeneration: vi.fn(),
   };
 });
 
@@ -138,6 +140,45 @@ describe("EditorWidget — load", () => {
     render(<EditorWidget root="/repo" file="big.bin" />);
     expect(await screen.findByText(/this file is too large to edit here/i)).toBeInTheDocument();
     expect(screen.queryByTestId("editor-surface")).toBeNull();
+  });
+});
+
+describe("EditorWidget — test generation (Issue #1202)", () => {
+  const NOT_RUN_FUNNEL = {
+    executionEnabled: false,
+    candidatesGenerated: 0,
+    candidatesSurfaced: 0,
+    stabilityRunsRequired: 5,
+    build: "not-run",
+    pass: "not-run",
+    stability: "not-run",
+    coverage: "not-run",
+    mutation: "not-run",
+    antiTautology: "not-run",
+  } as const;
+
+  it("offers a Generate Tests action for a TS file and surfaces the switched-off status", async () => {
+    await renderLoaded();
+    const button = screen.getByRole("button", { name: "Generate Tests" });
+    expect(button).toBeInTheDocument();
+    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce({
+      schemaVersion: "1",
+      status: "disabled",
+      reason: "Editor-driven test generation is disabled in this build.",
+      funnel: NOT_RUN_FUNNEL,
+    });
+
+    await userEvent.click(button);
+
+    expect(requestEditorTestGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/repo",
+        target: expect.objectContaining({ kind: "file" }),
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(/disabled in this build/i);
+    // The editor surface stays mounted and usable after the run resolves.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
   });
 });
 

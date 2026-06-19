@@ -141,6 +141,17 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "editsToMonaco",
       "monacoFormattingOptionsToEditor",
       "FORMATTING_ELIGIBLE_LANGUAGES",
+      // Governed test-generation flow controllers (#1202).
+      "buildTestGenerationContext",
+      "buildTestGenerationRequest",
+      "testGenerationMode",
+      "IDLE_TEST_GENERATION_STATE",
+      "describeTestGenerationStatus",
+      "isTestGenerationBusy",
+      "isTestGenerationPreviewing",
+      "testGenerationReducer",
+      "buildTestGenerationPreview",
+      "TEST_GENERATION_REVIEW_ACTIONS",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

@@ -93,6 +93,7 @@ import {
   handleEditorInlineCompletion,
   handleEditorInlineCompletionTelemetry,
 } from "./editor/inlineCompletionRoutes.js";
+import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -293,6 +294,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/editor/inline-completion/telemetry",
     handler: handleEditorInlineCompletionTelemetry,
+  },
+  // Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Wave-2 surface shipped
+  // switched OFF: default → `disabled` (no retrieval/model/execution); enabled → `deferred` (governed
+  // #1211 discovery for provenance, but NO model call) until an enforced egress boundary unlocks
+  // candidate generation. No v1 flow executes model-generated code; the browser never reaches a model.
+  {
+    method: "POST",
+    pattern: "/api/editor/test-generation",
+    handler: handleEditorTestGeneration,
   },
   {
     method: "POST",

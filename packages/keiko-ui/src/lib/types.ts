@@ -48,6 +48,20 @@ export {
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
 
+// ─── Editor test-generation wire shapes (Issue #1202, contracts root barrel) ───────────────────
+export type {
+  EditorTestGenerationWireTarget,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationStatus,
+  EditorTestGenerationAssurance,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireFileChange,
+  EditorTestGenerationWireProvenance,
+} from "@oscharko-dev/keiko-contracts";
+export { EDITOR_TEST_GENERATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+
 // ─── Deterministic language-service wire shapes (Issue #1198/#1201, contracts root barrel) ─────
 // The `POST /api/editor/language` route serves diagnostics, hover, document symbols, and formatting
 // for the governed languages; these are the result shapes the editor host maps into Monaco.
