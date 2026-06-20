@@ -22,6 +22,7 @@ import {
   type PromptCriticDimension,
   type PromptEnhancementProfileId,
   type PromptOptimizationBounds,
+  type PromptSafetyAssessment,
   type PromptTaskAnalysis,
   type RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
@@ -31,8 +32,9 @@ import {
   reserveBudget,
   type QualityIntelligenceBudgetState,
 } from "../qualityIntelligence/budget.js";
-import { generatePromptCandidates, type PromptCandidate } from "./candidates.js";
+import { generatePromptCandidates } from "./candidates.js";
 import { estimatePromptTokens, scorePromptCandidate } from "./critic.js";
+import { screenCandidatesForSafety, type ScreenedPromptCandidate } from "./validate.js";
 
 // Default and limiting bounds. `candidateCount` cannot exceed the number of distinct generation
 // profiles (the slate size). The defaults give the "at least three candidates" behaviour out of the box.
@@ -126,25 +128,24 @@ export function rankedLoserReason(
 
 interface EvaluationOutcome {
   readonly scored: readonly PromptCandidateScorecard[];
+  readonly scoredSafetyAssessments: readonly PromptSafetyAssessment[];
   readonly budgetSkipped: readonly PromptCandidateRejection[];
-  readonly iterations: number;
   readonly tokensConsumed: number;
 }
 
 // Evaluate generated candidates in priority order. A candidate is scored only when its deterministic
 // token estimate fits the remaining budget; otherwise it is rejected before scoring.
 function evaluateCandidates(
-  candidates: readonly PromptCandidate[],
+  screenedCandidates: readonly ScreenedPromptCandidate[],
   analysis: PromptTaskAnalysis,
   tokenBudget: number,
 ): EvaluationOutcome {
   const scored: PromptCandidateScorecard[] = [];
+  const scoredSafetyAssessments: PromptSafetyAssessment[] = [];
   const budgetSkipped: PromptCandidateRejection[] = [];
   let budget: QualityIntelligenceBudgetState = createBudget(tokenBudget);
-  let iterations = 0;
 
-  candidates.forEach((candidate) => {
-    iterations += 1;
+  screenedCandidates.forEach(({ candidate, assessment }) => {
     const estimatedTokens = estimatePromptTokens(candidate.prompt);
     if (estimatedTokens > remainingBudget(budget)) {
       budgetSkipped.push({
@@ -163,10 +164,61 @@ function evaluateCandidates(
       analysis,
     });
     scored.push(card);
+    scoredSafetyAssessments.push(assessment);
     budget = reserveBudget(budget, card.estimatedTokens);
   });
 
-  return { scored, budgetSkipped, iterations, tokensConsumed: budget.consumed };
+  return { scored, scoredSafetyAssessments, budgetSkipped, tokensConsumed: budget.consumed };
+}
+
+function loserRejections(
+  winner: PromptCandidateScorecard,
+  ranked: readonly PromptCandidateScorecard[],
+): readonly PromptCandidateRejection[] {
+  return ranked.slice(1).map((card) => ({
+    candidateId: card.candidateId,
+    profile: card.profile,
+    aggregateScore: card.aggregateScore,
+    reason: rankedLoserReason(winner, card),
+  }));
+}
+
+function generationRejections(
+  rejected: ReturnType<typeof generatePromptCandidates>["rejected"],
+): readonly PromptCandidateRejection[] {
+  return rejected.map((entry) => ({
+    candidateId: entry.candidateId,
+    profile: entry.profile,
+    aggregateScore: null,
+    reason: entry.reason,
+  }));
+}
+
+function safetyRejections(
+  rejected: readonly ScreenedPromptCandidate[],
+): readonly PromptCandidateRejection[] {
+  return rejected.map(({ candidate }) => ({
+    candidateId: candidate.candidateId,
+    profile: candidate.profile,
+    aggregateScore: null,
+    reason: "safety-validation-failed",
+  }));
+}
+
+function rankedSafetyAssessmentsFor(
+  ranked: readonly PromptCandidateScorecard[],
+  assessments: readonly PromptSafetyAssessment[],
+): readonly PromptSafetyAssessment[] {
+  const safetyByCandidateId = new Map<string, PromptSafetyAssessment>(
+    assessments.map((assessment) => [assessment.promptId, assessment]),
+  );
+  return ranked.map((card) => {
+    const assessment = safetyByCandidateId.get(card.candidateId);
+    if (assessment === undefined) {
+      throw new Error("Prompt candidate optimization lost safety assessment for ranked candidate.");
+    }
+    return assessment;
+  });
 }
 
 /**
@@ -188,9 +240,10 @@ export function optimizePromptCandidates(
     candidateCount: generationCount,
     profilePreference: args.profilePreference,
   });
+  const safetyScreen = screenCandidatesForSafety(candidates, args.analysis, args.input);
 
-  const { scored, budgetSkipped, iterations, tokensConsumed } = evaluateCandidates(
-    candidates,
+  const { scored, scoredSafetyAssessments, budgetSkipped, tokensConsumed } = evaluateCandidates(
+    safetyScreen.safe,
     args.analysis,
     bounds.tokenBudget,
   );
@@ -201,28 +254,26 @@ export function optimizePromptCandidates(
     throw new Error("Prompt candidate optimization produced no scored candidate.");
   }
 
-  const losers: readonly PromptCandidateRejection[] = ranked.slice(1).map((card) => ({
-    candidateId: card.candidateId,
-    profile: card.profile,
-    aggregateScore: card.aggregateScore,
-    reason: rankedLoserReason(winner, card),
-  }));
-  const generationRejections: readonly PromptCandidateRejection[] = generationRejected.map(
-    (entry) => ({
-      candidateId: entry.candidateId,
-      profile: entry.profile,
-      aggregateScore: null,
-      reason: entry.reason,
-    }),
-  );
+  const rankedSafetyAssessments = rankedSafetyAssessmentsFor(ranked, scoredSafetyAssessments);
+  const [winnerSafetyAssessment] = rankedSafetyAssessments;
+  if (winnerSafetyAssessment === undefined) {
+    throw new Error("Prompt candidate optimization produced no safety assessment.");
+  }
 
   return {
     schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
     winner,
     ranked,
-    rejected: [...losers, ...budgetSkipped, ...generationRejections],
+    winnerSafetyAssessment,
+    rankedSafetyAssessments,
+    rejected: [
+      ...loserRejections(winner, ranked),
+      ...budgetSkipped,
+      ...safetyRejections(safetyScreen.rejected),
+      ...generationRejections(generationRejected),
+    ],
     bounds,
-    iterations,
+    iterations: candidates.length,
     candidatesConsidered: scored.length,
     tokensConsumed,
   };

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
@@ -84,7 +85,10 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
   it("captures every AC4 field and redacts secret material", () => {
     const { manifest } = buildPromptEnhancementEvidenceManifest(recordInput());
     // Original input: fingerprint present, excerpt redacted (no raw secret).
-    expect(manifest.inputFingerprintSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.inputRedactedFingerprintSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.inputRedactedFingerprintSha256).not.toBe(
+      sha256Hex(recordInput().originalInput),
+    );
     expect(manifest.inputExcerptRedacted).not.toContain(SECRET);
     expect(manifest.inputExcerptRedacted).toContain("[REDACTED]");
     // Enhanced output redacted.
@@ -115,13 +119,21 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
     expect(manifest.peEvidenceSchemaVersion).toBe(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION);
   });
 
-  it("fingerprints the original input deterministically and independently of the excerpt cap", () => {
+  it("fingerprints the redacted input deterministically and independently of the excerpt cap", () => {
     const a = buildPromptEnhancementEvidenceManifest(recordInput()).manifest;
     const b = buildPromptEnhancementEvidenceManifest(
       recordInput({ inputExcerptMaxChars: 5 }),
     ).manifest;
-    expect(a.inputFingerprintSha256).toBe(b.inputFingerprintSha256);
+    expect(a.inputRedactedFingerprintSha256).toBe(b.inputRedactedFingerprintSha256);
     expect(b.inputExcerptRedacted.length).toBeLessThanOrEqual(5);
+  });
+
+  it("redacts model metadata before hashing and persistence", () => {
+    const { manifest } = buildPromptEnhancementEvidenceManifest(
+      recordInput({ modelMetadata: { deterministic: false, modelId: SECRET, profile: "precise" } }),
+    );
+    expect(manifest.modelMetadata.modelId).toBe("[REDACTED]");
+    expect(manifest.integrityHashes.record).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("scrubs caller-supplied literal secrets via the redaction option", () => {
@@ -147,6 +159,27 @@ describe("createInMemoryPromptEnhancementLocalStore", () => {
 
   it("requires a store or evidenceDir", () => {
     expect(() => recordPromptEnhancementRun(recordInput())).toThrow(/requires/);
+  });
+
+  it("redacts and rehashes caller-supplied manifests at the store boundary", () => {
+    const store = createInMemoryPromptEnhancementLocalStore();
+    const { manifest } = buildPromptEnhancementEvidenceManifest(recordInput());
+    const unsafeManifest = {
+      ...manifest,
+      enhancedPromptTextRedacted: `raw secret ${SECRET}`,
+      modelMetadata: { deterministic: false, modelId: SECRET },
+      integrityHashes: {
+        ...manifest.integrityHashes,
+        enhancedOutput: "0".repeat(64),
+        record: "0".repeat(64),
+      },
+    };
+    store.record(unsafeManifest);
+    const loaded = store.load("pe-run-1");
+    expect(loaded?.enhancedPromptTextRedacted).not.toContain(SECRET);
+    expect(loaded?.modelMetadata.modelId).toBe("[REDACTED]");
+    expect(loaded?.integrityHashes.enhancedOutput).not.toBe("0".repeat(64));
+    expect(loaded?.integrityHashes.record).not.toBe("0".repeat(64));
   });
 });
 
@@ -174,6 +207,26 @@ describe("createNodePromptEnhancementLocalStore", () => {
     const { location } = recordPromptEnhancementRun(recordInput(), { evidenceDir });
     const onDisk = JSON.parse(readFileSync(location, "utf8")) as Record<string, unknown>;
     onDisk.enhancedPromptTextRedacted = "tampered output";
+    writeFileSync(location, JSON.stringify(onDisk));
+    expect(() => loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toThrow(/integrity/);
+  });
+
+  it("fails closed on a tampered safety/status field covered by the record hash", () => {
+    const evidenceDir = tempEvidenceDir();
+    const { location } = recordPromptEnhancementRun(recordInput(), { evidenceDir });
+    const onDisk = JSON.parse(readFileSync(location, "utf8")) as Record<string, unknown>;
+    onDisk.status = "requires-human-review";
+    writeFileSync(location, JSON.stringify(onDisk));
+    expect(() => loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toThrow(
+      /schema invalid|integrity/,
+    );
+  });
+
+  it("fails closed on tampered model metadata covered by the record hash", () => {
+    const evidenceDir = tempEvidenceDir();
+    const { location } = recordPromptEnhancementRun(recordInput(), { evidenceDir });
+    const onDisk = JSON.parse(readFileSync(location, "utf8")) as Record<string, unknown>;
+    onDisk.modelMetadata = { deterministic: false, modelId: "changed-model" };
     writeFileSync(location, JSON.stringify(onDisk));
     expect(() => loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toThrow(/integrity/);
   });
