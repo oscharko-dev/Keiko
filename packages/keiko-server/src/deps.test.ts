@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function tmp(prefix: string): string {
-  const d = mkdtempSync(join(tmpdir(), prefix));
+  const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
 }
@@ -259,7 +259,7 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     store.close();
   });
 
-  it("includes Figma env and config tokens in current redaction secrets", () => {
+  it("includes Figma env tokens and migrates config tokens out of current redaction secrets", () => {
     const store = createInMemoryUiStore();
     const evidenceDir = tmp("ev-figma-redaction-");
     const configPath = join(evidenceDir, "keiko.config.json");
@@ -289,7 +289,8 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     });
 
     expect(currentRedactionSecrets(deps)).toContain("figd_env-redaction-token");
-    expect(currentRedactionSecrets(deps)).toContain("figd_config-redaction-token");
+    expect(currentRedactionSecrets(deps)).not.toContain("figd_config-redaction-token");
+    expect(readFileSync(configPath, "utf8")).not.toContain("figd_config-redaction-token");
     store.close();
   });
 });
