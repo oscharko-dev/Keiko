@@ -176,11 +176,13 @@ describe("runPromptEnhancerCli", () => {
     const manifestStart = out.indexOf("{", out.indexOf("Redacted evidence manifest"));
     const manifest = JSON.parse(out.slice(manifestStart)) as {
       peEvidenceSchemaVersion: number;
-      inputFingerprintSha256: string;
+      inputRedactedFingerprintSha256: string;
       integrityHashes: { enhancedOutput: string };
     };
-    expect(manifest.peEvidenceSchemaVersion).toBe(1);
-    expect(manifest.inputFingerprintSha256).toMatch(/^[0-9a-f]{64}$/);
+    // The shipped v2 manifest carries peEvidenceSchemaVersion 2 and the field
+    // `inputRedactedFingerprintSha256`; these assertions were stale against the v1 shape.
+    expect(manifest.peEvidenceSchemaVersion).toBe(2);
+    expect(manifest.inputRedactedFingerprintSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(manifest.integrityHashes.enhancedOutput).toMatch(/^[0-9a-f]{64}$/);
   });
 

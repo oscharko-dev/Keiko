@@ -198,6 +198,22 @@ Safety guardrails for prompt injection, indirect injection, sensitive-data discl
 output handling, excessive agency, and unsafe tool use are encoded as enhancer validation rules and
 safety annotations and proved by fixtures.
 
+**Implementation note (#1315).** The evaluation suite is implemented as a parallel prompt-quality
+sub-module — `keiko-evaluations` `PromptEnhancerEval` (`src/promptEnhancer/`) — rather than by adding
+the eight prompt-quality dimensions to the agent-trajectory `EVALUATION_DIMENSIONS`/`SCORERS` and
+running them through `runEvaluationSuite`. The agent-trajectory harness scores a *workflow run* driven
+by a scripted `ModelPort` on dimensions such as task-completion and patch-correctness; the Prompt
+Enhancer is a *deterministic prompt transformer* with no workflow or model dispatch to drive, and its
+quality dimensions (clarity, completeness, groundedness, faithfulness, format adherence, safety, task
+success, token efficiency) are a different domain. Conflating the two enums would give every
+agent-trajectory fixture eight not-applicable dimensions and vice versa. The sub-module therefore
+*reuses* the host package (no new package, no new graph edge — `keiko-evaluations` already depends on
+`contracts`, `model-gateway`, `security`, and `evidence`), the deterministic-fixture authoring style,
+the scorecard aggregation/renderer shape, and the offline Go/No-Go gate principle, while keeping the
+prompt-quality taxonomy distinct. It runs the deterministic pipeline
+(`analyzePrompt` → `planPromptEnhancement` → `generateEnhancedPrompt` → `scorePromptCandidate` →
+`assessPromptSafety`) with no live model, so it provides reproducible CI coverage as required.
+
 ## Consequences
 
 ### Positive
