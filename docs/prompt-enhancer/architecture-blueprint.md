@@ -42,10 +42,10 @@ frozen constant arrays, and discriminated-union validators returning `Ok | Fail`
   (`keiko-contracts/src/gateway.ts`) only at dispatch time.
 - **`PromptCandidate`** and **`CandidateScorecard`** — a generated candidate plus its scores across
   the dimensions in §6.
-- **`RetrievalPlan`** — scope + source policy + query strategy the enhancer emits for grounded tasks
-  (§5). It is a plan, not an execution; the server binds it to existing retrieval. It carries an
-  explicit `readiness` flag (`ready | unready`) plus a machine-readable `unreadyReason` so the server
-  can refuse to execute a plan whose scope is not retrievable (§5, R1).
+- **`GroundingPlan`** — source policy, retrieval-mode hints, citation discipline, contradiction
+  policy, no-answer conditions, and RAG evaluation hints the enhancer emits for grounded tasks (§5).
+  It is a plan, not execution; it does not carry runtime scope readiness. Server-side binding to
+  concrete retrieval scopes and readiness checks remain #1314 work (R1).
 - **`SafetyAnnotation`** — machine-readable, server-enforceable metadata attached to an Enhanced
   Prompt. The MVP shape is a frozen record:
   `{ restrictedTools: readonly string[]; deniedOutputPatterns: readonly string[];
@@ -85,15 +85,16 @@ The default placement is the no-new-package distribution from ADR-0044 §1. Deta
   `pe:critic`, `pe:safety-check`) paralleling `QUALITY_INTELLIGENCE_TASK_PROFILES`. No provider SDK
   is imported here or anywhere else (`adr-0019-trust-1`).
 
-### Grounding — `keiko-local-knowledge` + `keiko-server` (reuse + additive extend)
+### Grounding — contracts/model gateway now, server binding later (reuse + additive extend)
 
 - **Reuse**: `runLocalKnowledgeRetrieval`, `assembleGroundedContext`, `validateAnswerGrounding`,
   `buildComposedRetrievalScope`/`describeRetrievalScope`, capsule/capsule-set lifecycle, and the
   server hybrid path `runHybridGroundedAsk` (RRF, ADR-0036). Citation, budget, and source-skip
   semantics are inherited unchanged.
-- **Extend additively**: a `describeRetrievalPlan(scope, store)` helper and exported query-strategy
-  profiling so the enhancer can emit a deterministic `RetrievalPlan`; an optional `retrievalPlan`
-  field reserved on `RetrievalResult`. The enhancer never executes retrieval (epic #1311).
+- **Extend additively**: #1311 adds a deterministic `GroundingPlan` contract, planner, and rendered
+  source-policy instructions. #1314 binds that plan to existing Local Knowledge / repository-context
+  retrieval paths and performs concrete scope-readiness checks. The enhancer never executes
+  retrieval.
 
 ### Evaluation — `keiko-evaluations` + `keiko-contracts` (reuse + extend)
 
@@ -142,8 +143,8 @@ provider` (offline scripted vs live), `scoreFixture`, `aggregateScorecard`, `sum
 
 - **Server**: register `/api/prompt-enhancer/*` in `API_ROUTES`; reuse `UiHandlerDeps`
   (`modelPortFactory`, `redactor`), `readBody`/`parseBody` validation, `mappedGatewayError`, and SSE
-  helpers; a server orchestrator binds the workflow run + `RetrievalPlan` → existing retrieval +
-  evidence write (paralleling `grounded-orchestrator.ts`).
+  helpers; #1314's server orchestrator binds the workflow run + `GroundingPlan` source policy to
+  existing retrieval + evidence writes (paralleling `grounded-orchestrator.ts`).
 - **CLI**: a new command reusing existing command-registration and evidence-dir conventions.
 - **UI**: a `PromptEnhancerPanel` sibling of `GroundedAnswerPanel` inside `ChatWindow`; reuse
   `KeikoSelect` (profile selection), `SafeMarkdown` (render), `CitationReference`/`MetricRow`
@@ -156,12 +157,11 @@ provider` (offline scripted vs live), `scoreFixture`, `aggregateScorecard`, `sum
 - **Workflow authority** → `keiko-workflows`. `runPromptEnhancer` owns stage sequencing,
   cancellation, and budget; the enhancer emits artefacts and never self-authorizes downstream action.
 - **Grounding execution** → `keiko-local-knowledge` via `keiko-server`. The enhancer emits a
-  `RetrievalPlan`; the server binds it. No second retrieval engine. **Scope-readiness ownership**: the
-  enhancer's grounding planner sets the plan's `readiness` flag from `buildComposedRetrievalScope`
-  (capsules exist, at least one has vectors, embedding identity matches); the server re-checks
-  `readiness` before binding and refuses to execute an `unready` plan, returning a user-facing
-  insufficient-evidence notice rather than fabricating grounded claims (R1). Neither side silently
-  proceeds on an unready scope.
+  `GroundingPlan` source policy; the server binding remains #1314. No second retrieval engine.
+  **Scope-readiness ownership**: #1314 computes readiness from concrete retrieval scopes
+  (`buildComposedRetrievalScope`, capsule/vector availability, embedding identity) before execution
+  and refuses unready scopes with a user-facing insufficient-evidence notice rather than fabricating
+  grounded claims (R1).
 - **Persistence** → `keiko-evidence` via the `EvidenceStore` port, redacted and hashed.
 - **Surfaces** → `keiko-server` BFF is the only network boundary; CLI and UI call the server; UI
   never configures providers or reaches gateway internals (`adr-0019-trust-2`/`trust-3`).
@@ -260,10 +260,10 @@ agents edit the same file scope.
 | --------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | **#1309** | Enhanced Prompt contracts, taxonomy, deterministic analyzer | `keiko-contracts`                                                                                    | `memory-barrel`/`connected-context`/`workflow-handoff` patterns, validators                                                | `prompt-enhancer.ts` shapes + taxonomy + analyzer; no model call by default               | `packages/keiko-contracts/**` + tests                          |
 | **#1310** | Planner profiles + structured generator                     | `keiko-model-gateway/src/promptEnhancer/`, `keiko-workflows/src/promptEnhancer/`                     | `buildPromptSegments`, harness system/user/context convention, QI profiles                                                 | `pe:*` profiles, generator, profile catalog                                               | enhancer sub-modules + tests                                   |
-| **#1311** | Grounding + retrieval planning                              | `keiko-local-knowledge`, `keiko-server`, `keiko-contracts`                                           | `runLocalKnowledgeRetrieval`, `buildComposedRetrievalScope`, `runHybridGroundedAsk`                                        | `RetrievalPlan` shape, `describeRetrievalPlan`, server binding                            | LK additive exports, server binder, contract shape, tests      |
+| **#1311** | Grounding + retrieval planning                              | `keiko-contracts`, `keiko-model-gateway/src/promptEnhancer/`                                        | ADR-0034/0036 grounding vocabulary, source priority, citation, uncertainty, and no-answer semantics                         | `GroundingPlan` contract, deterministic planner, validation, and rendered source policy    | contract/model-gateway grounding modules + tests               |
 | **#1312** | Candidate generation, critic scoring, optimization loop     | `keiko-evaluations`, `keiko-model-gateway/src/promptEnhancer/`, `keiko-contracts/src/evaluations.ts` | `scoreFixture`, `aggregateScorecard`, `EVALUATION_DIMENSIONS`, gateway critic dispatch                                     | enhancer dimensions + scorers, bounded candidate/critic loop                              | enhancer scorers, evaluations extension, tests                 |
 | **#1313** | Safety guardrails, validation, audit evidence               | `keiko-security`, `keiko-evidence/src/promptEnhancement/`, enhancer validate stage                   | redaction/hashing/secretbox, `EvidenceStore`, QI store template, governed handoff                                          | injection patterns, `PromptEnhancementError`, evidence manifest + store, validation rules | security extension, evidence sub-module, validate stage, tests |
-| **#1314** | Governed API, CLI, UI                                       | `keiko-server`, `keiko-cli`, `keiko-ui`                                                              | `API_ROUTES`/`UiHandlerDeps`/`mappedGatewayError`, CLI command pattern, `ChatWindow`/`KeikoSelect`/`SafeMarkdown`/`useSSE` | `/api/prompt-enhancer/*`, CLI command, `PromptEnhancerPanel`                              | server routes, cli command, ui panel, integration tests        |
+| **#1314** | Governed API, CLI, UI                                       | `keiko-server`, `keiko-cli`, `keiko-ui`                                                              | `API_ROUTES`/`UiHandlerDeps`/`mappedGatewayError`, CLI command pattern, `ChatWindow`/`KeikoSelect`/`SafeMarkdown`/`useSSE`, existing Local Knowledge retrieval paths | `/api/prompt-enhancer/*`, CLI command, `PromptEnhancerPanel`, grounding-plan binding + readiness checks | server routes, cli command, ui panel, integration tests        |
 | **#1315** | Evaluation suite, docs, closure evidence                    | `keiko-evaluations`, `docs/**`                                                                       | `runEvaluationSuite`, scorecard renderer, fixtures, release-doc + ADR patterns                                             | enhancer fixtures, threshold gates, runbook, closure evidence                             | evaluations fixtures, docs, README updates                     |
 
 **#1312 vs #1315 ownership (both touch `keiko-evaluations`).** To keep write ownership disjoint:
@@ -288,7 +288,8 @@ listed is reuse or additive extension (§3). No new package is required for the 
 - `keiko-model-gateway/src/promptEnhancer/`: enhancer task profiles and candidate/critic dispatch
   wrappers over existing QI primitives.
 - `keiko-workflows/src/promptEnhancer/`: descriptor + `runPromptEnhancer` lifecycle.
-- `keiko-local-knowledge`: `describeRetrievalPlan` and exported query-strategy profiling (additive).
+- `keiko-local-knowledge`: no #1311 write path; #1314 may add retrieval-plan binding helpers
+  additively when concrete server execution is implemented.
 - `keiko-evaluations`: enhancer scorers, fixtures, thresholds.
 - `keiko-security`: injection `BUILTIN_PATTERNS`, user-context secret detector,
   `PromptEnhancementError`.
@@ -299,7 +300,7 @@ listed is reuse or additive extension (§3). No new package is required for the 
 
 **Real capability gaps (confirmed absent):** raw-input normalization + structured-prompt construction
 as a first-class artefact; structured prompt validation (does this prompt illegally grant authority?);
-a machine-readable safety-annotation schema; a `RetrievalPlan` contract; enhancer evaluation
+a machine-readable safety-annotation schema; a `GroundingPlan` source-policy contract; enhancer evaluation
 dimensions and fixtures; prompt-injection redaction patterns; a prompt-enhancement evidence manifest.
 None of these is satisfiable by an existing module unchanged, but each lands additively in the
 owning package above.
@@ -317,7 +318,7 @@ architecture-gate files; it is taken only with a documented ownership/coverage j
 
 | #   | Risk                                                                                                                                 | Area              | Likelihood × Impact | Mitigation                                                                                                                                                                                 | Owner issue  |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
-| R1  | Grounding plan diverges from what the server can execute (scope/embedding mismatch), producing prompts that ask for ungrounded facts | Grounding         | M × H               | Emit `RetrievalPlan` from the same `buildComposedRetrievalScope` the server uses; add pre-execution scope-readiness validation; degrade to "insufficient evidence" notice, never fabricate | #1311        |
+| R1  | Grounding plan diverges from what the server can execute (scope/embedding mismatch), producing prompts that ask for ungrounded facts | Grounding         | M × H               | #1311 emits only a non-executing source policy; #1314 binds it to concrete scopes, performs pre-execution readiness validation, and degrades to "insufficient evidence" instead of fabricating | #1314        |
 | R2  | Evaluation gives false confidence (overfit fixtures, offline ≠ live)                                                                 | Evaluation        | M × M               | Reuse offline-threshold + human-reviewed-live pilot pattern; checked-in deterministic fixtures; thresholds gate Go/No-Go; surface offline-vs-live deltas                                   | #1312, #1315 |
 | R3  | Prompt-injection / indirect injection escapes into a generated prompt                                                                | Safety            | M × H               | Untrusted segregation via `buildPromptSegments`; injection redaction patterns; validate-stage rejection; safety annotations honoured by server; fixtures                                   | #1313        |
 | R4  | Secret or customer data leaks into evidence or surfaced output                                                                       | Audit evidence    | L × H               | Redact-by-construction before every write; user-context secret detector; hashed manifests; safe-error taxonomy; no raw input persisted                                                     | #1313        |

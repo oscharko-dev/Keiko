@@ -87,7 +87,7 @@ function isGroundingRequired(
 }
 
 // ─── Source priority + allowed retrieval modes ─────────────────────────────────────
-const SOURCE_PRIORITY_BY_STRATEGY: Readonly<
+export const SOURCE_PRIORITY_BY_STRATEGY: Readonly<
   Record<GroundingStrategy, readonly GroundingSourceKind[]>
 > = {
   "no-grounding": ["model-parametric-knowledge"],
@@ -107,7 +107,9 @@ const SOURCE_PRIORITY_BY_STRATEGY: Readonly<
   ],
 };
 
-const RETRIEVAL_MODES_BY_STRATEGY: Readonly<Record<GroundingStrategy, readonly RetrievalMode[]>> = {
+export const RETRIEVAL_MODES_BY_STRATEGY: Readonly<
+  Record<GroundingStrategy, readonly RetrievalMode[]>
+> = {
   "no-grounding": ["none"],
   "supplied-context-only": ["supplied-context"],
   "local-knowledge": ["local-knowledge-retrieval", "supplied-context"],
@@ -116,7 +118,7 @@ const RETRIEVAL_MODES_BY_STRATEGY: Readonly<Record<GroundingStrategy, readonly R
   "external-research-required": ["external-research", "supplied-context"],
 };
 
-function buildSourcePriority(
+export function buildSourcePriority(
   strategy: GroundingStrategy,
   required: boolean,
 ): readonly GroundingSourcePolicy[] {
@@ -183,20 +185,20 @@ function selectContradictionPolicy(
 }
 
 // ─── No-answer conditions + directives ──────────────────────────────────────────────
-const MULTI_SOURCE_STRATEGIES: ReadonlySet<GroundingStrategy> = new Set([
+export const MULTI_SOURCE_STRATEGIES: ReadonlySet<GroundingStrategy> = new Set([
   "local-knowledge",
   "repository-context",
   "hybrid",
   "external-research-required",
 ]);
 
-const SCOPED_EVIDENCE_STRATEGIES: ReadonlySet<GroundingStrategy> = new Set([
+export const SCOPED_EVIDENCE_STRATEGIES: ReadonlySet<GroundingStrategy> = new Set([
   "supplied-context-only",
   "local-knowledge",
   "repository-context",
 ]);
 
-function buildNoAnswerConditions(
+export function buildNoAnswerConditions(
   strategy: GroundingStrategy,
   analysis: PromptTaskAnalysis,
 ): readonly NoAnswerCondition[] {
@@ -216,7 +218,7 @@ function buildNoAnswerConditions(
   return conditions;
 }
 
-function buildDirectives(
+export function buildDirectives(
   strategy: GroundingStrategy,
   required: boolean,
 ): readonly GroundingDirective[] {
@@ -257,7 +259,7 @@ function isRagFocused(analysis: PromptTaskAnalysis, strategy: GroundingStrategy)
   );
 }
 
-const RAG_HINT_TEMPLATES: Readonly<Record<RagEvaluationDimension, string>> = {
+export const RAG_HINT_TEMPLATES: Readonly<Record<RagEvaluationDimension, string>> = {
   "context-precision":
     "Context precision: rank the most relevant evidence first and ignore retrieved passages that do not bear on the question.",
   "context-recall":

@@ -89,6 +89,16 @@ describe("rendered grounding rules — source priority and citation (AC2)", () =
     }
   });
 
+  it("states source prioritization for optional grounded hybrid plans", () => {
+    const fixture = GROUNDING_FIXTURES.find(
+      (item) => item.expectedStrategy === "hybrid" && !item.expectedRequired,
+    );
+    if (fixture === undefined) throw new Error("missing optional hybrid fixture");
+    const prompt = generateFor(fixture.request);
+    expect(prompt.groundingPlan.required).toBe(false);
+    expect(prompt.groundingRules.join("\n")).toMatch(/Prioritize evidence sources in this order/i);
+  });
+
   it("orders the structured source priority with the primary source first", () => {
     const prompt = generateFor(fixtureFor("local-knowledge").request);
     expect(prompt.groundingPlan.sourcePriority[0]?.source).toBe("local-knowledge");
