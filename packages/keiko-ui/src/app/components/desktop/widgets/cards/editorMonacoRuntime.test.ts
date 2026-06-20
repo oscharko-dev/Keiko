@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // loader's CDN config must not run for real. The keiko-editor helpers stay real — they are pure and
 // node-safe — so this exercises the host's actual wiring decisions.
 const config = vi.fn();
-const getLanguages = vi.fn(() => []);
+interface MonacoLanguageSummary {
+  readonly id: string;
+}
+
+const getLanguages = vi.fn<() => MonacoLanguageSummary[]>(() => []);
 const registerLanguage = vi.fn();
 vi.mock("@monaco-editor/react", () => ({ loader: { config } }));
 vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({
