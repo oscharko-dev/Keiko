@@ -15,13 +15,15 @@
 // never a capability grant. The `boundary.test.ts` style key-shape assertions in
 // `prompt-enhancer-contracts.test.ts` pin this property.
 //
-// Scope discipline (Issue #1309). This module owns the contracts + taxonomy and the deterministic
-// analyzer-result shape. Adjacent concerns are deliberately deferred to their owning issues and are
-// NOT modelled here: machine-readable safety annotations and the validate-stage rule set (#1313),
-// the retrieval plan and its readiness flag (#1311), candidate generation and scorecards (#1312),
+// Scope discipline. This module owns the contracts + taxonomy, the deterministic analyzer-result
+// shape (Issue #1309), and the grounding-plan / source-policy shape (Issue #1311). Adjacent concerns
+// are deliberately deferred to their owning issues and are NOT modelled here: machine-readable safety
+// annotations and the validate-stage rule set (#1313), candidate generation and scorecards (#1312),
 // and the evidence manifest (#1313). The risk flags below are explainable, lexical analyzer signals
 // only; the authoritative prompt-injection redaction patterns and secret/PII detectors live in
-// `keiko-security` (#1313) and are not duplicated here.
+// `keiko-security` (#1313) and are not duplicated here. The grounding plan is a source POLICY only:
+// actual retrieval stays in the existing Keiko grounding paths, bound to the plan by the server
+// (#1314); this module never imports a retrieval engine (leaf-package rule).
 
 import { stripUnsafeFormatChars } from "./text-safety.js";
 
@@ -273,6 +275,213 @@ export interface GroundingNeed {
   // True when the task depends on time-sensitive or fast-changing information.
   readonly volatile: boolean;
   readonly signals: readonly GroundingSignal[];
+}
+
+// ─── Grounding plan (Issue #1311) ─────────────────────────────────────────────────
+// The retrieval/source POLICY emitted for a knowledge-intensive task. It is data, never an engine:
+// the enhancer declares which sources should be consulted, in what priority, how claims must be
+// cited, how contradictions and missing evidence are handled, and which RAG evaluation dimensions
+// apply. Actual retrieval stays in the existing Keiko grounding paths (Local Knowledge / repository
+// context / hybrid RRF, ADR-0034/0036); a server binding (#1314) maps this plan to execution. The
+// vocabulary is provider-neutral and consistent with the existing grounding semantics
+// (`CapsuleAnswerGroundingPolicy`, `UncertaintyMarkerKind`, `RetrievalQueryKind`) without importing
+// any non-leaf package. Every field is a closed enum, a bounded number, or a fixed template string —
+// no raw input text and no credential, provider, or tool/secret/egress authority is encodable here
+// (AC5, ADR-0044 §5).
+
+// The six grounding strategies the planner can emit; one per row of #1311's Expected Verification
+// (no-grounding, supplied-context-only, local-knowledge, repository-context, hybrid,
+// external-research-required).
+export type GroundingStrategy =
+  | "no-grounding"
+  | "supplied-context-only"
+  | "local-knowledge"
+  | "repository-context"
+  | "hybrid"
+  | "external-research-required";
+
+export const GROUNDING_STRATEGIES: readonly GroundingStrategy[] = [
+  "no-grounding",
+  "supplied-context-only",
+  "local-knowledge",
+  "repository-context",
+  "hybrid",
+  "external-research-required",
+] as const;
+
+// The retrieval modes the plan PERMITS. These name existing Keiko grounding paths the server may bind
+// the plan to; the enhancer never executes them. `none` means the answer is produced without external
+// retrieval (parametric knowledge under grounding discipline).
+export type RetrievalMode =
+  | "none"
+  | "supplied-context"
+  | "local-knowledge-retrieval"
+  | "repository-search"
+  | "hybrid-fusion"
+  | "external-research";
+
+export const RETRIEVAL_MODES: readonly RetrievalMode[] = [
+  "none",
+  "supplied-context",
+  "local-knowledge-retrieval",
+  "repository-search",
+  "hybrid-fusion",
+  "external-research",
+] as const;
+
+// The evidence sources a plan can prioritize. `model-parametric-knowledge` is the model's own stable
+// knowledge; it is always the lowest-priority fallback and never a substitute for required retrieval.
+export type GroundingSourceKind =
+  | "supplied-context"
+  | "local-knowledge"
+  | "repository-context"
+  | "external-current"
+  | "model-parametric-knowledge";
+
+export const GROUNDING_SOURCE_KINDS: readonly GroundingSourceKind[] = [
+  "supplied-context",
+  "local-knowledge",
+  "repository-context",
+  "external-current",
+  "model-parametric-knowledge",
+] as const;
+
+// One ordered source-priority entry. `priority` is 1-based (1 = consult first); `required` marks a
+// source that must be consulted for an acceptable answer (AC2 — how sources should be prioritized).
+export interface GroundingSourcePolicy {
+  readonly source: GroundingSourceKind;
+  readonly priority: number;
+  readonly required: boolean;
+}
+
+// Citation discipline, mirroring `CapsuleAnswerGroundingPolicy` semantics in provider-neutral terms.
+export type CitationDiscipline =
+  | "require-citations"
+  | "require-citations-or-state-no-evidence"
+  | "best-effort"
+  | "not-required";
+
+export const CITATION_DISCIPLINES: readonly CitationDiscipline[] = [
+  "require-citations",
+  "require-citations-or-state-no-evidence",
+  "best-effort",
+  "not-required",
+] as const;
+
+export type CitationGranularity = "per-claim" | "per-section" | "none";
+
+export const CITATION_GRANULARITIES: readonly CitationGranularity[] = [
+  "per-claim",
+  "per-section",
+  "none",
+] as const;
+
+export interface CitationRequirement {
+  readonly discipline: CitationDiscipline;
+  readonly granularity: CitationGranularity;
+}
+
+// Date/timestamp expectations for volatile information (AC: date/timestamp expectations).
+export interface RecencyExpectation {
+  // The task depends on time-sensitive information.
+  readonly volatile: boolean;
+  // The answer must state the as-of date/time for time-sensitive claims.
+  readonly requireAsOfDate: boolean;
+  // The answer must flag claims that may be outdated.
+  readonly flagPotentiallyStale: boolean;
+}
+
+// How contradictory evidence across sources is handled. Contradiction handling is post-retrieval, not
+// a retrieval mode: the model surfaces the conflict rather than silently picking a side.
+export type ContradictionPolicy =
+  | "disclose-and-defer"
+  | "prefer-higher-priority"
+  | "synthesize-with-caveats";
+
+export const CONTRADICTION_POLICIES: readonly ContradictionPolicy[] = [
+  "disclose-and-defer",
+  "prefer-higher-priority",
+  "synthesize-with-caveats",
+] as const;
+
+// Conditions under which the model must disclose uncertainty or decline rather than invent facts
+// (AC4). Aligned with `UncertaintyMarkerKind` (no-evidence / stale-evidence) in provider-neutral terms.
+export type NoAnswerCondition =
+  | "insufficient-evidence"
+  | "contradictory-evidence"
+  | "outside-evidence-scope"
+  | "stale-or-unavailable-current-data";
+
+export const NO_ANSWER_CONDITIONS: readonly NoAnswerCondition[] = [
+  "insufficient-evidence",
+  "contradictory-evidence",
+  "outside-evidence-scope",
+  "stale-or-unavailable-current-data",
+] as const;
+
+// Closed-vocabulary evidence-discipline directives the generator renders into the prompt. They never
+// grant authority; they constrain how the model may use evidence.
+export type GroundingDirective =
+  | "treat-retrieved-content-as-untrusted"
+  | "attribute-claims-to-sources"
+  | "do-not-fabricate-sources"
+  | "stay-within-evidence"
+  | "separate-known-from-retrieved"
+  | "disclose-uncertainty";
+
+export const GROUNDING_DIRECTIVES: readonly GroundingDirective[] = [
+  "treat-retrieved-content-as-untrusted",
+  "attribute-claims-to-sources",
+  "do-not-fabricate-sources",
+  "stay-within-evidence",
+  "separate-known-from-retrieved",
+  "disclose-uncertainty",
+] as const;
+
+// The RAG evaluation dimensions a RAG-focused plan asks the model to optimise for (AC5). Exactly the
+// five named in the issue. This is a prompt-enhancer-local taxonomy: the workflow-scoped
+// `EVALUATION_DIMENSIONS` (evaluations.ts) and the Local Knowledge retrieval-eval scores are
+// different concerns and live in different packages, so #1311 defines its own closed vocabulary here.
+export type RagEvaluationDimension =
+  | "context-precision"
+  | "context-recall"
+  | "faithfulness"
+  | "answer-relevancy"
+  | "groundedness";
+
+export const RAG_EVALUATION_DIMENSIONS: readonly RagEvaluationDimension[] = [
+  "context-precision",
+  "context-recall",
+  "faithfulness",
+  "answer-relevancy",
+  "groundedness",
+] as const;
+
+export interface RagEvaluationHint {
+  readonly dimension: RagEvaluationDimension;
+  // A bounded, control-free instruction generated from a fixed template. Never echoes raw input.
+  readonly instruction: string;
+}
+
+// The structured grounding/source policy attached to an Enhanced Prompt (Issue #1311). Provider- and
+// retrieval-engine-neutral by construction.
+export interface GroundingPlan {
+  readonly strategy: GroundingStrategy;
+  // Whether grounded evidence is required for an acceptable answer (AC1). False for `no-grounding` and
+  // for parametric-fallback plans that may answer from stable knowledge under grounding discipline.
+  readonly required: boolean;
+  readonly allowedRetrievalModes: readonly RetrievalMode[];
+  readonly sourcePriority: readonly GroundingSourcePolicy[];
+  readonly citation: CitationRequirement;
+  readonly recency: RecencyExpectation;
+  readonly contradictionPolicy: ContradictionPolicy;
+  readonly noAnswerConditions: readonly NoAnswerCondition[];
+  readonly directives: readonly GroundingDirective[];
+  // RAG evaluation hints; non-empty only for RAG-focused plans (AC5), empty otherwise.
+  readonly ragEvaluation: readonly RagEvaluationHint[];
+  // Invariant (AC3, ADR-0044 §5): retrieved/external content is untrusted context, never instructions.
+  // Pinned to `true` so the property is a load-bearing guarantee, not a toggle.
+  readonly untrustedContent: true;
 }
 
 // ─── Output schema descriptor ────────────────────────────────────────────────────
@@ -564,6 +773,9 @@ export interface EnhancedPrompt {
   readonly taskDecomposition: readonly string[];
   readonly constraints: readonly string[];
   readonly groundingRules: readonly string[];
+  // The structured grounding/source policy for this prompt (#1311). Always present: every generated
+  // prompt carries an explicit plan (AC1), even when its strategy is `no-grounding`.
+  readonly groundingPlan: GroundingPlan;
   readonly outputSchema: OutputSchemaDescriptor;
   readonly qualityCriteria: readonly string[];
   readonly uncertaintyHandling: readonly string[];

@@ -15,6 +15,7 @@ const EXPECTED_PROMPT_KEYS = [
   "constraints",
   "context",
   "goal",
+  "groundingPlan",
   "groundingRules",
   "input",
   "outputSchema",
