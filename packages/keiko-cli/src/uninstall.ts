@@ -38,10 +38,12 @@ import { localPackageRoot } from "./install-layout.js";
 import {
   classifyPid,
   defaultIsProcessAlive,
+  inspectStateRoot,
   isInsidePath,
   resolveStateDir,
   scanRuntimeState,
   type RuntimeStateScan,
+  type StateRootInspection,
 } from "./state-paths.js";
 
 const USAGE = `Usage:
@@ -309,7 +311,11 @@ function removeOwnedFiles(scan: RuntimeStateScan, io: CliIo, dryRun: boolean): v
 function reportRetained(scan: RuntimeStateScan, io: CliIo): void {
   for (const entry of scan.retained) {
     const why =
-      entry.reason === "symlink" ? "symlink — not followed" : "not a recognized Keiko artifact";
+      entry.reason === "symlink"
+        ? "symlink — not followed"
+        : entry.reason === "hardlink"
+          ? "hardlink — not modified or removed"
+          : "not a recognized Keiko artifact";
     io.out(`kept: ${entry.absPath} (${why})\n`);
   }
 }
@@ -365,6 +371,19 @@ function removeStateStep(opts: UninstallOptions, io: CliIo, stateDir: string): v
   finalizeStateDir(scan, stateDir, io, opts.dryRun);
 }
 
+function refuseUnsafeStateRoot(opts: UninstallOptions, io: CliIo, root: StateRootInspection): boolean {
+  if (!opts.scopes.state && !opts.scopes.launchers) return false;
+  if (root.status === "symlink") {
+    io.err(`keiko uninstall: refusing to use symlinked state directory: ${root.absPath}\n`);
+    return true;
+  }
+  if (root.status === "not-directory") {
+    io.err(`keiko uninstall: refusing to use non-directory state path: ${root.absPath}\n`);
+    return true;
+  }
+  return false;
+}
+
 function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
   const localInstalled = existsSync(localPackageRoot(deps.cwd));
   io.out("\nKeiko runtime artifacts processed. To remove the package itself, run:\n");
@@ -395,6 +414,8 @@ export function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
+  const stateRoot = inspectStateRoot(stateDir);
+  if (refuseUnsafeStateRoot(opts, io, stateRoot)) return 1;
   try {
     if (ensureServerStoppable(opts, io, resolved, stateDir) === "refused") return 1;
     const launcherRefused = removeLaunchersStep(opts, io, resolved, stateDir);
