@@ -425,11 +425,7 @@ describe("createLiveCspSource", () => {
     try {
       await mkdir(staticRoot, { recursive: true });
       const html = "<html><body><script>window.__TEST__='new';</script></body></html>";
-      await writeFile(
-        join(staticRoot, "index.html"),
-        html,
-        "utf8",
-      );
+      await writeFile(join(staticRoot, "index.html"), html, "utf8");
       const [expectedHash] = extractInlineScriptHashes([html]);
       await writeFile(hashesFile, JSON.stringify(["'sha256-old'"]), "utf8");
       const runtime = await createLiveCspSource(staticRoot, hashesFile, io);
@@ -462,7 +458,11 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
 
   it("re-execs and propagates the child exit code when sqlite is unavailable", async () => {
     const { io } = captureIo();
-    const spawnCalls: { command: string; args: readonly string[] }[] = [];
+    const spawnCalls: {
+      command: string;
+      args: readonly string[];
+      opts: import("node:child_process").SpawnOptions;
+    }[] = [];
     const code = await runUiCli(
       [],
       io,
@@ -470,8 +470,8 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       {
         currentExecArgv: () => [],
         sqliteProbe: () => false,
-        spawnFn: (cmd: string, args: readonly string[]) => {
-          spawnCalls.push({ command: cmd, args });
+        spawnFn: (cmd: string, args: readonly string[], opts) => {
+          spawnCalls.push({ command: cmd, args, opts });
           return fakeChild(7) as unknown as import("node:child_process").ChildProcess;
         },
       },
@@ -479,6 +479,7 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     expect(code).toBe(7);
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]?.args[0]).toBe("--experimental-sqlite");
+    expect(spawnCalls[0]?.opts.argv0).toBe("Keiko");
   });
 
   it("does not re-exec when sqlite is already importable", async () => {
