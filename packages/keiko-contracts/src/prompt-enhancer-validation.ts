@@ -11,12 +11,20 @@ import { stripUnsafeFormatChars } from "./text-safety.js";
 import {
   type ClarificationOrAssumption,
   type EnhancedPrompt,
+  type GroundingPlan,
   type PromptEnhancementRequest,
   type PromptTaskAnalysis,
+  CITATION_DISCIPLINES,
+  CITATION_GRANULARITIES,
+  CONTRADICTION_POLICIES,
+  GROUNDING_DIRECTIVES,
   GROUNDING_NEED_KINDS,
   GROUNDING_SIGNALS,
+  GROUNDING_SOURCE_KINDS,
+  GROUNDING_STRATEGIES,
   MISSING_CONTEXT_TOPICS,
   MISSING_INFORMATION_STRATEGIES,
+  NO_ANSWER_CONDITIONS,
   OUTPUT_FORMAT_HINTS,
   PROMPT_ANALYSIS_MAX_SCAN_CHARS,
   PROMPT_CRITICALITIES,
@@ -28,6 +36,8 @@ import {
   PROMPT_SIGNAL_DIMENSIONS,
   PROMPT_SIGNAL_STRENGTHS,
   PROMPT_TASK_CLASSES,
+  RAG_EVALUATION_DIMENSIONS,
+  RETRIEVAL_MODES,
   validatePromptEnhancerIdString,
 } from "./prompt-enhancer.js";
 
@@ -96,11 +106,34 @@ const ENHANCED_PROMPT_KEYS: ReadonlySet<string> = new Set([
   "taskDecomposition",
   "constraints",
   "groundingRules",
+  "groundingPlan",
   "outputSchema",
   "qualityCriteria",
   "uncertaintyHandling",
   "safetyRules",
 ]);
+const GROUNDING_PLAN_KEYS: ReadonlySet<string> = new Set([
+  "strategy",
+  "required",
+  "allowedRetrievalModes",
+  "sourcePriority",
+  "citation",
+  "recency",
+  "contradictionPolicy",
+  "noAnswerConditions",
+  "directives",
+  "ragEvaluation",
+  "untrustedContent",
+]);
+const SOURCE_POLICY_KEYS: ReadonlySet<string> = new Set(["source", "priority", "required"]);
+const CITATION_KEYS: ReadonlySet<string> = new Set(["discipline", "granularity"]);
+const RECENCY_KEYS: ReadonlySet<string> = new Set([
+  "volatile",
+  "requireAsOfDate",
+  "flagPotentiallyStale",
+]);
+const RAG_HINT_KEYS: ReadonlySet<string> = new Set(["dimension", "instruction"]);
+const RAG_HINT_INSTRUCTION_MAX_CHARS = 400;
 
 const CLARIFICATION_TEMPLATES: Readonly<Record<string, string>> = {
   subject: "What specific subject or task should this prompt address?",
@@ -128,6 +161,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isMember = <T extends string>(value: unknown, allowed: readonly T[]): value is T =>
   typeof value === "string" && (allowed as readonly string[]).includes(value);
+
+// A bounded array whose every entry is a member of the allowed closed set.
+const isMemberArray = (value: unknown, allowed: readonly string[]): boolean =>
+  Array.isArray(value) && value.every((item) => isMember(item, allowed));
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -301,7 +338,8 @@ function isValidSignal(signal: Record<string, unknown>): boolean {
   ) {
     return false;
   }
-  return SIGNAL_CODE_VALIDATORS[signal.dimension]?.(signal.code) ?? false;
+  const validator = SIGNAL_CODE_VALIDATORS[signal.dimension];
+  return validator?.(signal.code) === true;
 }
 
 // ─── Analysis validator ──────────────────────────────────────────────────────────
@@ -349,6 +387,122 @@ export function validatePromptTaskAnalysis(
   return { ok: true, value: input as unknown as PromptTaskAnalysis };
 }
 
+// ─── Grounding plan validator (Issue #1311) ────────────────────────────────────────
+function validateGroundingPlanScalars(value: Record<string, unknown>, errors: string[]): void {
+  if (!isMember(value.strategy, GROUNDING_STRATEGIES)) {
+    errors.push(`groundingPlan.strategy must be one of ${GROUNDING_STRATEGIES.join("|")}`);
+  }
+  if (typeof value.required !== "boolean") {
+    errors.push("groundingPlan.required must be a boolean");
+  }
+  if (!isMember(value.contradictionPolicy, CONTRADICTION_POLICIES)) {
+    errors.push(
+      `groundingPlan.contradictionPolicy must be one of ${CONTRADICTION_POLICIES.join("|")}`,
+    );
+  }
+  if (value.untrustedContent !== true) {
+    errors.push("groundingPlan.untrustedContent must be true");
+  }
+}
+
+function validateGroundingPlanLists(value: Record<string, unknown>, errors: string[]): void {
+  if (!isMemberArray(value.allowedRetrievalModes, RETRIEVAL_MODES)) {
+    errors.push("groundingPlan.allowedRetrievalModes must be an array of known retrieval modes");
+  }
+  if (!isMemberArray(value.noAnswerConditions, NO_ANSWER_CONDITIONS)) {
+    errors.push("groundingPlan.noAnswerConditions must be an array of known no-answer conditions");
+  }
+  if (!isMemberArray(value.directives, GROUNDING_DIRECTIVES)) {
+    errors.push("groundingPlan.directives must be an array of known grounding directives");
+  }
+}
+
+function isValidSourcePolicy(entry: unknown): boolean {
+  return (
+    isRecord(entry) &&
+    Object.keys(entry).every((key) => SOURCE_POLICY_KEYS.has(key)) &&
+    isMember(entry.source, GROUNDING_SOURCE_KINDS) &&
+    isNonNegativeInteger(entry.priority) &&
+    typeof entry.required === "boolean"
+  );
+}
+
+function validateSourcePriority(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value) || value.some((entry) => !isValidSourcePolicy(entry))) {
+    errors.push("groundingPlan.sourcePriority must be an array of {source, priority, required}");
+  }
+}
+
+function validateCitation(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("groundingPlan.citation must be an object");
+    return;
+  }
+  validateExactKeys(value, CITATION_KEYS, "groundingPlan.citation", errors);
+  if (!isMember(value.discipline, CITATION_DISCIPLINES)) {
+    errors.push(
+      `groundingPlan.citation.discipline must be one of ${CITATION_DISCIPLINES.join("|")}`,
+    );
+  }
+  if (!isMember(value.granularity, CITATION_GRANULARITIES)) {
+    errors.push(
+      `groundingPlan.citation.granularity must be one of ${CITATION_GRANULARITIES.join("|")}`,
+    );
+  }
+}
+
+function validateRecency(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("groundingPlan.recency must be an object");
+    return;
+  }
+  validateExactKeys(value, RECENCY_KEYS, "groundingPlan.recency", errors);
+  if (typeof value.volatile !== "boolean")
+    errors.push("groundingPlan.recency.volatile must be a boolean");
+  if (typeof value.requireAsOfDate !== "boolean") {
+    errors.push("groundingPlan.recency.requireAsOfDate must be a boolean");
+  }
+  if (typeof value.flagPotentiallyStale !== "boolean") {
+    errors.push("groundingPlan.recency.flagPotentiallyStale must be a boolean");
+  }
+}
+
+function isValidRagHint(entry: unknown): boolean {
+  return (
+    isRecord(entry) &&
+    Object.keys(entry).every((key) => RAG_HINT_KEYS.has(key)) &&
+    isMember(entry.dimension, RAG_EVALUATION_DIMENSIONS) &&
+    isBoundedSafeText(entry.instruction, RAG_HINT_INSTRUCTION_MAX_CHARS)
+  );
+}
+
+function validateRagEvaluation(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value) || value.some((entry) => !isValidRagHint(entry))) {
+    errors.push("groundingPlan.ragEvaluation must be an array of {dimension, instruction}");
+  }
+}
+
+function collectGroundingPlanErrors(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("groundingPlan must be an object");
+    return;
+  }
+  validateExactKeys(value, GROUNDING_PLAN_KEYS, "groundingPlan", errors);
+  validateGroundingPlanScalars(value, errors);
+  validateGroundingPlanLists(value, errors);
+  validateSourcePriority(value.sourcePriority, errors);
+  validateCitation(value.citation, errors);
+  validateRecency(value.recency, errors);
+  validateRagEvaluation(value.ragEvaluation, errors);
+}
+
+export function validateGroundingPlan(input: unknown): PromptEnhancerValidation<GroundingPlan> {
+  const errors: string[] = [];
+  collectGroundingPlanErrors(input, errors);
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: input as GroundingPlan };
+}
+
 // ─── Enhanced Prompt validator ───────────────────────────────────────────────────
 function isBoundedStringList(value: unknown): boolean {
   return (
@@ -390,6 +544,7 @@ export function validateEnhancedPrompt(input: unknown): PromptEnhancerValidation
     }
   }
   validateOutputSchema(input.outputSchema, errors);
+  collectGroundingPlanErrors(input.groundingPlan, errors);
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: input as unknown as EnhancedPrompt };
 }
