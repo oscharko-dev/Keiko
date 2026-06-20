@@ -81,15 +81,25 @@ describe("ASSURED_COMMAND_RULES", () => {
     expect(planGateCommands("vitest")).toEqual(planGateCommands());
   });
 
-  it("builds Playwright gate commands for a browser-smoke candidate (Issue #1203)", () => {
+  it("builds hardened Playwright gate commands for a browser-smoke candidate (Issue #1203)", () => {
     const cmds = planGateCommands("playwright");
-    expect(cmds.build).toEqual({ command: "npx", args: ["tsc", "--noEmit"] });
-    expect(cmds.test).toEqual({ command: "npx", args: ["playwright", "test"] });
+    // Same hardened, no-install toolchain as the vitest path.
+    expect(cmds.build).toEqual({ command: "npx", args: ["--no-install", "tsc", "--noEmit"] });
+    expect(cmds.test).toEqual({ command: "npx", args: ["--no-install", "playwright", "test"] });
     // No vitest coverage flags and no Stryker: an end-to-end smoke has no coverage/mutation oracle, so
     // those gates emit no report and the candidate stays unverified (never assured).
     expect(cmds.coverage.args).not.toContain("--coverage");
-    expect(cmds.mutation).not.toEqual({ command: "npx", args: ["stryker", "run"] });
-    expect(cmds.test.command).toBe("npx");
+    expect(cmds.mutation).not.toEqual({ command: "npx", args: ["--no-install", "stryker", "run"] });
+  });
+
+  it("allows the hardened no-install playwright command through the assured command rules", () => {
+    expect(
+      isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--no-install", "playwright", "test"]),
+    ).toMatchObject({ allowed: true });
+    // A bare playwright invocation that would auto-install is still denied by the install flag rule.
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--yes", "playwright"])).toMatchObject({
+      allowed: false,
+    });
   });
 });
 
