@@ -79,6 +79,7 @@ at line 188) and `keiko-evidence/src/side-file.ts` (`ensureDir` at lines 56 and 
 in `qualityIntelligence/store.ts:104,193` and `companionStore.ts:48,98`.
 
 The pattern, copied verbatim from `qualityIntelligence/store.ts`, is:
+
 - `mkdirSync(dir, {recursive: true, mode: 0o700})`. No separate post-mkdir
   `chmodSync(dir, 0o700)` is added: a directory mode is only masked by `umask`, and `0o700`
   sets no group/other bits, so `umask` cannot loosen it. A pre-existing directory created by
@@ -165,6 +166,7 @@ Retention policy IDs on existing manifests are not migrated; unknown IDs are ret
 ### D6 — keiko repair: no new code needed (AC5)
 
 `checkRuntimeStateArtifacts` in `repair.ts:219` already:
+
 1. Calls `scanRuntimeState(stateDir)` which walks `evidence/` (via `evidenceSubtree`)
    and `evidence/qi/` (via `qiSubtree`) including `figma-snapshots/` (via
    `figmaSnapshotsSubtree`).
@@ -179,6 +181,7 @@ currently enforced, so repair may find and fix them at first run post-#1323.
 ### D7 — Documentation (AC6)
 
 We extend `docs/local-runtime-state-contract.md` with:
+
 - An explicit artifact classification table (the four classes from D1).
 - A statement that evidence artifacts are local machine state, not a hosted compliance
   archive: retention is local-only, no remote sync, no disaster-recovery guarantee.
@@ -216,7 +219,7 @@ We extend `docs/local-runtime-state-contract.md` with:
   therefore deterministic but not yet attested in an audit trail. The injectable sink is the
   single wiring point; wiring it to a persistent ledger is a tracked follow-up, not a blocker
   for this issue (the user-initiated DELETE route has the same limitation today).
-- The fail-safe (retain-on-uncertainty) guarantee covers only *uncertainty* — an unknown
+- The fail-safe (retain-on-uncertainty) guarantee covers only _uncertainty_ — an unknown
   policy id, a newest-N slot, an unreadable/tamper-failing manifest, or a missing timestamp.
   It does NOT add an "always keep the newest run regardless of age" floor: a store whose runs
   all carry a short policy (`qi:short-30d`) and that is left idle past `retainedDays` will have
@@ -281,6 +284,27 @@ process.
   write seam. Adds process complexity; tests must mock timers.
 - **Why rejected**: Startup-time enforcement (D5) is simpler, deterministic, and
   consistent with `sweepOrphanedSideDirs` (already lazy-once-per-instance).
+
+## Threat model and limitations
+
+**Defeats:** casual disk inspection of evidence and QI artifacts (owner-only `0o600`/`0o700`
+modes), secret leakage into persisted records (redaction before persist), undetected modification of
+QI manifests (SHA-256 integrity hashes verified on read), and unbounded accumulation
+(deterministic, fail-safe retention purge).
+
+**Does not defeat (honest limitations):**
+
+- Customer-reconstructive evidence (`<runId>.candidates.json`, Figma snapshot JSON/PNG) is **not yet
+  encrypted at rest** (D3). On a copied or synced `.keiko`, or on a machine an attacker can read as
+  the same user, the compensating controls are owner-only permissions, redaction, and bounded
+  retention only — not confidentiality of the content itself. Encryption remains the documented next
+  step; the atomic write boundary is preserved as the seam to introduce a cipher.
+- Integrity hashes are tamper-**evident**, not tamper-**proof**: an attacker who can rewrite both the
+  artifact and its hash is not stopped, only detected on a faithful read.
+- Startup retention purges are deterministic but not yet attested in a persistent audit ledger
+  (keiko-server has none today).
+- These controls protect data at rest; they do not protect against a live compromised process or
+  malware running as the same user.
 
 ## Related
 

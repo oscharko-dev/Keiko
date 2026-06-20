@@ -43,6 +43,55 @@ or compatibility playbook.
 | Lifecycle state | `--state-dir` → `KEIKO_STATE_DIR` → `.keiko/`                                     |
 | Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/` |
 
+## Confidentiality classes and controls
+
+Local at-rest confidentiality is enforced by **five distinct controls**. They are independent: one
+does not substitute for another, and the contract does not claim a control where it is not applied.
+
+- **File permissions** — owner-only POSIX modes (`0o600` files, `0o700` directories) set at write
+  time and re-normalized by `keiko repair`. On Windows (NTFS) and filesystems without POSIX modes
+  the `chmod` is a no-op and access is governed by platform ACLs.
+- **Redaction** — secret-shaped substrings are scrubbed before a record is persisted. Redaction
+  reduces secret leakage at persistence time; it is not encryption and does not protect the
+  non-secret remainder of an artifact.
+- **Encryption at rest** — AES-256-GCM sealing of reconstructive content columns/files with a key
+  resolved outside the data (env → OS keychain → co-located keyfile). Encryption protects content
+  on a copied or synced store; it does not protect metadata kept cleartext for indexing, and it does
+  not defeat a live process or a host where the key is already unlocked (see
+  [Limitations](#limitations-honest-threat-model)).
+- **Retention** — deterministic, fail-safe purge of bounded artifacts (QI manifests by stamped
+  policy; Figma snapshots by count cap). Retention reduces how long content persists; it is not a
+  confidentiality control for content that is still within its retention window.
+- **Tamper evidence** — SHA-256 integrity hashes (QI manifests) and AES-256-GCM authentication
+  (sealed columns, vaults, key-verification probes) make undetected modification fail closed.
+  Tamper evidence detects modification; it does not prevent it and is not encryption.
+
+The following matrix records, per durable surface, which controls apply (`yes`), do not apply
+(`n/a`), or are an explicitly documented deferral (`deferred`). It is the consolidated, audited view
+of the local-at-rest posture; the deterministic auditor in
+[Local-state verification audit](#local-state-verification-audit) checks these expectations against a
+real `.keiko` tree.
+
+| Surface (file)                                                   | File permissions | Redaction          | Encryption at rest               | Retention     | Tamper evidence               | Governing decision                                                                                      |
+| ---------------------------------------------------------------- | ---------------- | ------------------ | -------------------------------- | ------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Gateway config (`keiko.config.json`)                             | yes              | n/a                | n/a (secret refs only)           | n/a           | n/a                           | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
+| Provider credential vault (`*.vault` + `*.key`)                  | yes              | n/a                | yes (AES-256-GCM)                | n/a           | yes (GCM auth)                | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
+| Figma PAT vault (`figma-token.vault` + key)                      | yes              | n/a                | yes (AES-256-GCM)                | n/a           | yes (GCM auth)                | [ADR-0037](adr/ADR-0037-figma-snapshot-boundary.md), [ADR-0046](adr/ADR-0046-local-credential-vault.md) |
+| Memory vault (`keiko-memory.db`)                                 | yes              | yes (audit events) | yes (content columns)            | n/a           | yes (GCM auth)                | [ADR-0035](adr/ADR-0035-memory-vault-encryption-at-rest.md)                                             |
+| Local Knowledge (`capsules.db`)                                  | yes              | n/a                | yes (content columns)            | n/a           | yes (GCM auth + sealed probe) | [ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)                                          |
+| UI database (`keiko-ui.db`)                                      | yes              | n/a                | n/a (UI state, no model content) | n/a           | n/a                           | this contract                                                                                           |
+| Evidence run manifests (`<runId>.json`)                          | yes              | yes                | deferred                         | n/a           | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| QI manifests (`<runId>.qi.json`)                                 | yes              | yes                | deferred                         | yes           | yes (SHA-256)                 | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| QI candidates (`<runId>.candidates.json`)                        | yes              | yes                | deferred                         | yes           | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Figma snapshots (JSON / PNG side-files)                          | yes              | yes                | deferred                         | yes (cap 500) | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Lifecycle / launcher (`ui.pid`, `ui.log`, `launcher-state.json`) | yes              | n/a                | n/a (content-free)               | n/a           | yes (launcher content hash)   | this contract                                                                                           |
+
+`deferred` is a documented, bounded decision — not an oversight. Customer-reconstructive evidence
+artifacts are not encrypted at rest in `0.2.0`; the compensating controls are owner-only permissions,
+redaction-before-persist, and deterministic bounded retention. See
+[ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md) and
+[Evidence artifact confidentiality](#evidence-artifact-confidentiality).
+
 ## Confidentiality enforcement (`keiko repair` / `keiko uninstall`)
 
 `keiko repair` and `keiko uninstall --state` operate on an allowlisted manifest of the
@@ -106,6 +155,51 @@ credentials ([ADR-0046](adr/ADR-0046-local-credential-vault.md)) and Local Knowl
 and vectors ([ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)) are sealed with
 AES-256-GCM, because those stores hold reconstructive content with no redaction or short-retention
 mitigation available.
+
+## Local-state verification audit
+
+A deterministic, read-only auditor (`scripts/check-local-state.mjs`) verifies that a real `.keiko`
+tree matches the [confidentiality classes and controls](#confidentiality-classes-and-controls) above.
+It imports only `node:fs` and `node:sqlite`, never decrypts content (every encryption check reads the
+on-disk sealed markers the product itself writes, so no vault key is required), and never mutates the
+tree.
+
+- `npm run audit:local-state -- --state-dir <path>` — audit an existing `.keiko` tree (default
+  `<cwd>/.keiko`). Maintainer-facing; exit `0` when the posture is healthy, `1` on any finding.
+- `npm run check:local-state` — the CI gate. It generates a genuinely-encrypted healthy fixture and a
+  deliberately drifted one, then asserts the auditor passes the former and detects the drift in the
+  latter. A `vitest` regression (`scripts/__tests__/check-local-state.test.mjs`) runs the same proof
+  under the required `ci` check, alongside a `keiko repair --dry-run` healthy/drifted comparison.
+
+The audit covers five classes: no plaintext credentials in the gateway config; owner-only file and
+directory modes for Keiko-owned artifacts; sealed Memory Vault content (`kv1.` text envelopes, binary
+embedding envelopes); sealed Local Knowledge content (the `content_encryption=aes-256-gcm/v1` marker
+plus a sealed key-verification probe, and any populated content columns); and protected Evidence/QI
+artifacts (owner-only, redacted, integrity-hashed).
+
+## Limitations (honest threat model)
+
+These controls protect data **at rest** on a single-user machine. They are deliberately scoped, and
+the product does not overstate them:
+
+- Local encryption does **not** protect against malware running as the same user, a live compromised
+  Keiko process, or a stolen machine on which the OS keychain is already unlocked. While a store is
+  open, its content is decrypted in process memory by necessity (retrieval and the UI consume
+  plaintext records).
+- The **keyfile** key tier stores the key next to the ciphertext; an attacker who can read the state
+  directory has both halves. For regulated deployments prefer the environment-variable tier (injected
+  from a secrets manager) or the OS keychain tier. See the per-store key-resolution sections in
+  [ADR-0035](adr/ADR-0035-memory-vault-encryption-at-rest.md),
+  [ADR-0046](adr/ADR-0046-local-credential-vault.md), and
+  [ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md).
+- **Cleartext metadata** (scopes, types, timestamps, identifiers, offsets, hashes, embedding identity)
+  is retained by design so deterministic retrieval works; it leaks the _shape_ of stored data (how
+  much, which scopes, when), not its content.
+- Local evidence and memory are **local machine state, not a hosted compliance archive**: there is no
+  remote replication, backup, disaster-recovery guarantee, or remote audit ledger. Startup retention
+  purges are deterministic but not yet attested in a persistent audit trail.
+- Filesystem unlinking (`keiko uninstall --state`) does not guarantee secure erasure of SSD-backed
+  data; full-disk encryption remains the host's responsibility.
 
 ## Boundary notes
 
