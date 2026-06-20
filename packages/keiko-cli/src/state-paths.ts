@@ -14,6 +14,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { assertValidRunId } from "@oscharko-dev/keiko-security";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
 
@@ -127,6 +128,27 @@ const FIGMA_VAULT_SUBDIR = "figma"; // keiko-server figmaTokenStore.ts (Figma PA
 const QI_SUBDIR = "qi"; // keiko-evidence/src/qualityIntelligence/store.ts (QI_SUBDIR)
 const FIGMA_SNAPSHOTS_SUBDIR = "figma-snapshots"; // keiko-evidence figmaSnapshot/store.ts (SIDE_FILE_SUBDIR)
 
+const PROVIDER_CREDENTIALS_VAULT = "provider-credentials.vault"; // keiko-server/src/credentialVault.ts
+const PROVIDER_CREDENTIALS_KEYFILE = "provider-credentials-vault.key"; // keiko-server/src/credentialVault.ts
+const FIGMA_TOKEN_VAULT = "figma-token.vault"; // keiko-server figmaTokenStore.ts
+const FIGMA_TOKEN_KEYFILE = "figma-vault.key"; // keiko-server figmaTokenStore.ts
+
+const EVIDENCE_MANIFEST_SUFFIX = ".json"; // keiko-evidence/src/store.ts
+const EVIDENCE_LOCK_SUFFIX = ".lock"; // keiko-evidence/src/store.ts
+const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<random>.tmp`)
+const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
+const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9][0-9]*\.[0-9a-f]{16}\.tmp$/u;
+const QI_OWNED_SUFFIXES = [
+  ".qi.json", // keiko-evidence/src/qualityIntelligence/store.ts
+  ".candidates.json", // keiko-evidence/src/qualityIntelligence/candidatesArtifact.ts
+  ".review.json", // keiko-server/src/qualityIntelligence/reviewStore.ts
+  ".figma-codegen.json", // keiko-server/src/qualityIntelligence/retentionRoutes.ts
+  ".figma-audit.json", // keiko-server/src/qualityIntelligence/retentionRoutes.ts
+  ".figma-consent.json", // keiko-server/src/qualityIntelligence/retentionRoutes.ts
+  ".figma-snapshot.json", // keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts
+  ".figma-snapshot.management.json", // keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts
+] as const;
+
 export type RuntimeStateCategory =
   | "lifecycle"
   | "launcher"
@@ -157,18 +179,70 @@ function isSqliteFamily(base: string, name: string): boolean {
   );
 }
 
-// Evidence / Quality-Intelligence records and their lock sidecars are all `*.json` /
-// `*.lock` (`<runId>.json`, `<runId>.candidates.json`, `<runId>.qi.json`, `<runId>.lock`,
-// `<runId>.figma-snapshot.json`, …). Matching by the store's file vocabulary keeps a
-// stray non-`.json` user file in these dirs classified as `retained`.
+// Evidence and Quality-Intelligence records are run-id-derived artifacts, never arbitrary
+// suffix matches. Matching by the producer suffix vocabulary prevents a customer lookalike
+// such as `manual export.json` or `backup.key` from being chmod-ed or deleted.
+function isValidRunId(value: string): boolean {
+  if (value.length === 0) return false;
+  try {
+    assertValidRunId(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasRunIdSuffix(name: string, suffix: string): boolean {
+  if (!name.endsWith(suffix)) return false;
+  return isValidRunId(name.slice(0, -suffix.length));
+}
+
+function hasRunIdProducerTempSuffix(name: string, suffix: string): boolean {
+  if (!name.endsWith(PRODUCER_TEMP_SUFFIX)) return false;
+  const withoutTmp = name.slice(0, -PRODUCER_TEMP_SUFFIX.length);
+  const marker = `${suffix}.`;
+  const markerIndex = withoutTmp.lastIndexOf(marker);
+  if (markerIndex < 0) return false;
+  const runId = withoutTmp.slice(0, markerIndex);
+  const token = withoutTmp.slice(runId.length + marker.length);
+  return PRODUCER_TEMP_TOKEN.test(token) && isValidRunId(runId);
+}
+
+function hasRunIdArtifactSuffix(name: string, suffix: string): boolean {
+  return hasRunIdSuffix(name, suffix) || hasRunIdProducerTempSuffix(name, suffix);
+}
+
 function isEvidenceRecord(name: string): boolean {
-  return name.endsWith(".json") || name.endsWith(".lock");
+  return (
+    hasRunIdArtifactSuffix(name, EVIDENCE_MANIFEST_SUFFIX) ||
+    hasRunIdArtifactSuffix(name, EVIDENCE_LOCK_SUFFIX)
+  );
+}
+
+function isQiRecord(name: string): boolean {
+  return QI_OWNED_SUFFIXES.some((suffix) => hasRunIdArtifactSuffix(name, suffix));
 }
 
 // Sealed credential material: the AES-256-GCM `*.vault` ciphertext and the `*.key` keyfile
 // (the env/keychain-tier fallback). Both must stay owner-only (ADR-0046).
-function isVaultFile(name: string): boolean {
-  return name.endsWith(".vault") || name.endsWith(".key");
+function isProviderCredentialVaultFile(name: string): boolean {
+  return (
+    name === PROVIDER_CREDENTIALS_VAULT ||
+    name === PROVIDER_CREDENTIALS_KEYFILE ||
+    SECRET_VAULT_TEMP_FILE.test(name)
+  );
+}
+
+function isFigmaVaultFile(name: string): boolean {
+  return name === FIGMA_TOKEN_VAULT || name === FIGMA_TOKEN_KEYFILE;
+}
+
+function dirHasSqliteFamilyArtifact(absDir: string, base: string): boolean {
+  try {
+    return readdirSync(absDir).some((name) => isSqliteFamily(base, name));
+  } catch {
+    return false;
+  }
 }
 
 const NO_CHILD = (): OwnedSubtree | undefined => undefined;
@@ -183,20 +257,27 @@ interface OwnedSubtree {
   readonly category: RuntimeStateCategory;
   readonly whole: boolean;
   readonly ownsFile: (name: string) => boolean;
-  readonly childSubtree: (name: string) => OwnedSubtree | undefined;
+  readonly childSubtree: (name: string, absPath: string) => OwnedSubtree | undefined;
 }
 
-const figmaSnapshotsSubtree: OwnedSubtree = {
+const figmaSnapshotRunSubtree: OwnedSubtree = {
   category: "quality-intelligence",
   whole: true,
   ownsFile: OWNS_NO_FILE,
   childSubtree: NO_CHILD,
 };
 
+const figmaSnapshotsSubtree: OwnedSubtree = {
+  category: "quality-intelligence",
+  whole: false,
+  ownsFile: OWNS_NO_FILE,
+  childSubtree: (name) => (isValidRunId(name) ? figmaSnapshotRunSubtree : undefined),
+};
+
 const qiSubtree: OwnedSubtree = {
   category: "quality-intelligence",
   whole: false,
-  ownsFile: isEvidenceRecord,
+  ownsFile: isQiRecord,
   childSubtree: (name) => (name === FIGMA_SNAPSHOTS_SUBDIR ? figmaSnapshotsSubtree : undefined),
 };
 
@@ -204,7 +285,7 @@ const qiSubtree: OwnedSubtree = {
 const figmaVaultSubtree: OwnedSubtree = {
   category: "credential-vault",
   whole: false,
-  ownsFile: isVaultFile,
+  ownsFile: isFigmaVaultFile,
   childSubtree: NO_CHILD,
 };
 
@@ -225,7 +306,7 @@ const evidenceSubtree: OwnedSubtree = {
 const credentialsSubtree: OwnedSubtree = {
   category: "credential-vault",
   whole: false,
-  ownsFile: isVaultFile,
+  ownsFile: isProviderCredentialVaultFile,
   childSubtree: NO_CHILD,
 };
 
@@ -249,7 +330,8 @@ const localKnowledgeSubtree: OwnedSubtree = {
   category: "local-knowledge",
   whole: false,
   ownsFile: OWNS_NO_FILE,
-  childSubtree: () => knowledgeNamespaceSubtree,
+  childSubtree: (_name, absPath) =>
+    dirHasSqliteFamilyArtifact(absPath, CAPSULES_DB_FILENAME) ? knowledgeNamespaceSubtree : undefined,
 };
 
 const launcherTmpSubtree: OwnedSubtree = {
@@ -283,23 +365,44 @@ export interface RuntimeStateNode {
   readonly category: RuntimeStateCategory;
 }
 
-// An entry the manifest does NOT remove or chmod: a customer file (`reason: "unknown"`)
-// or a symlink that is never followed (`reason: "symlink"`). `owned` is true when the entry
-// sits in a slot the manifest WOULD own (e.g. a `keiko-ui.db` that is actually a symlink) —
-// `repair` flags those as an action item, while a customer symlink (`owned: false`) is left
-// silently in place. Both kinds keep their containing directory from being removed.
+// An entry the manifest does NOT remove or chmod: a customer file (`reason: "unknown"`),
+// a symlink that is never followed, or an owned-looking hardlink whose chmod/unlink could
+// affect another path outside `.keiko`. `owned` is true when the entry sits in a slot the
+// manifest WOULD own (e.g. a `keiko-ui.db` symlink); repair flags those as an action item.
+// All retained entries keep their containing directory from being removed.
 export interface RetainedNode {
   readonly relPath: string;
   readonly absPath: string;
-  readonly reason: "unknown" | "symlink";
+  readonly reason: "unknown" | "symlink" | "hardlink";
   readonly owned: boolean;
 }
 
 export interface RuntimeStateScan {
+  readonly root: StateRootInspection;
   readonly present: boolean;
   readonly files: readonly RuntimeStateNode[]; // owned files
   readonly directories: readonly RuntimeStateNode[]; // owned directories, shallowest first
   readonly retained: readonly RetainedNode[]; // unrecognized entries + refused symlinks, any depth
+}
+
+export type StateRootStatus = "absent" | "directory" | "symlink" | "not-directory";
+
+export interface StateRootInspection {
+  readonly status: StateRootStatus;
+  readonly absPath: string;
+}
+
+export function inspectStateRoot(stateDir: string): StateRootInspection {
+  try {
+    const stat = lstatSync(stateDir);
+    if (stat.isSymbolicLink()) return { status: "symlink", absPath: stateDir };
+    if (stat.isDirectory()) return { status: "directory", absPath: stateDir };
+    return { status: "not-directory", absPath: stateDir };
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return { status: "absent", absPath: stateDir };
+    throw error;
+  }
 }
 
 interface ScanAccumulator {
@@ -322,10 +425,10 @@ function ownedFileCategory(scope: ScanScope, name: string): RuntimeStateCategory
   return scope.ownsFile(name) ? scope.category : undefined;
 }
 
-function ownedChildSubtree(scope: ScanScope, name: string): OwnedSubtree | undefined {
+function ownedChildSubtree(scope: ScanScope, name: string, absPath: string): OwnedSubtree | undefined {
   if (scope === "root") return topLevelChildSubtree(name);
   if (scope.whole) return scope; // a whole subtree owns all of its descendant directories
-  return scope.childSubtree(name);
+  return scope.childSubtree(name, absPath);
 }
 
 function classifyEntry(
@@ -342,12 +445,13 @@ function classifyEntry(
     // Never follow a symlink in any position: chmod-through and delete-through a symlink can
     // escape `.keiko`. Flag it when it occupies a slot the manifest would otherwise own.
     const owned =
-      ownedFileCategory(scope, name) !== undefined || ownedChildSubtree(scope, name) !== undefined;
+      ownedFileCategory(scope, name) !== undefined ||
+      ownedChildSubtree(scope, name, absPath) !== undefined;
     acc.retained.push({ relPath, absPath, reason: "symlink", owned });
     return;
   }
   if (stat.isDirectory()) {
-    const child = ownedChildSubtree(scope, name);
+    const child = ownedChildSubtree(scope, name, absPath);
     if (child === undefined) {
       acc.retained.push({ relPath, absPath, reason: "unknown", owned: false });
       return;
@@ -358,9 +462,13 @@ function classifyEntry(
   }
   if (stat.isFile()) {
     const category = ownedFileCategory(scope, name);
-    if (category === undefined)
+    if (category === undefined) {
       acc.retained.push({ relPath, absPath, reason: "unknown", owned: false });
-    else acc.files.push({ relPath, absPath, category });
+    } else if (stat.nlink > 1) {
+      acc.retained.push({ relPath, absPath, reason: "hardlink", owned: true });
+    } else {
+      acc.files.push({ relPath, absPath, category });
+    }
     return;
   }
   // Sockets, FIFOs, devices: not a Keiko artifact — retain untouched.
@@ -382,12 +490,16 @@ function walkOwnedDir(
 // read-only traversal (lstat-based, never follows symlinks); the directories list is
 // ordered shallowest-first so callers can reverse it to remove leaves before parents.
 export function scanRuntimeState(stateDir: string): RuntimeStateScan {
-  if (!existsSync(stateDir)) {
-    return { present: false, files: [], directories: [], retained: [] };
+  const root = inspectStateRoot(stateDir);
+  if (root.status === "absent") {
+    return { root, present: false, files: [], directories: [], retained: [] };
+  }
+  if (root.status !== "directory") {
+    return { root, present: true, files: [], directories: [], retained: [] };
   }
   const acc: ScanAccumulator = { files: [], directories: [], retained: [] };
   walkOwnedDir(stateDir, "", "root", acc);
-  return { present: true, files: acc.files, directories: acc.directories, retained: acc.retained };
+  return { root, present: true, files: acc.files, directories: acc.directories, retained: acc.retained };
 }
 
 // True when `descendant` lies inside `ancestor` (used to decide whether an owned directory
