@@ -75,6 +75,18 @@ describe("ASSURED_COMMAND_RULES", () => {
     expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--yes", "vitest"])).toMatchObject({
       allowed: false,
     });
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["tsc", "--noEmit"])).toMatchObject({
+      allowed: false,
+    });
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["vitest", "run"])).toMatchObject({
+      allowed: false,
+    });
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["playwright", "test"])).toMatchObject({
+      allowed: false,
+    });
+    expect(
+      isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["playwright", "--no-install", "test"]),
+    ).toMatchObject({ allowed: false });
   });
 
   it("returns the identical vitest command set when 'vitest' is passed explicitly", () => {

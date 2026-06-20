@@ -86,13 +86,13 @@ const PROOF_SNIPPET = [
 ].join("");
 
 // Command rules for the assured toolchain: only the deterministic node test toolchain, no network
-// tools. `playwright` is allowed for Issue #1203 browser-smoke verification; like the other tools it
-// runs `--no-install` (no package fetch) inside the `network: "none"` sandbox, so adding it keeps every
-// existing safety property (no-install, no network, fixed allowlist, denied install/call flags).
+// tools. Policy requires `npx --no-install <tool>` before every allowed tool, so the no-fetch invariant
+// is enforced by the sandbox allowlist in addition to the command builders.
 export const ASSURED_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "npx",
     allowedSubcommands: Object.freeze(["tsc", "vitest", "stryker", "playwright"]),
+    requiredLeadingFlags: Object.freeze(["--no-install"]),
     denyFlags: Object.freeze(["-c", "--call", "-y", "--yes"]),
   },
 ]);

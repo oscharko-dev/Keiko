@@ -117,6 +117,9 @@ export interface CommandRule {
   // The subcommand resolver skips both the flag and its value so a value cannot masquerade as the
   // subcommand (S-H2): `npm --prefix /x publish` resolves to `publish`, not `/x`.
   readonly valueFlags?: readonly string[] | undefined;
+  // Flags that must appear at the start of the argument vector, before the resolved subcommand. This
+  // lets callers require invariants such as `npx --no-install <tool>` as policy, not convention.
+  readonly requiredLeadingFlags?: readonly string[] | undefined;
   // Flags that are themselves denied because they execute a transitive shell or arbitrary command
   // (e.g. npm/npx `-c`/`--call`). Presence of any of these anywhere in args denies the invocation.
   readonly denyFlags?: readonly string[] | undefined;

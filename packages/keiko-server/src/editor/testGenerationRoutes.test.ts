@@ -116,6 +116,25 @@ const candidateRunner: TestGenerationRunner = () =>
     verification: "vitest",
   });
 
+const playwrightCandidateRunner: TestGenerationRunner = async (args) => {
+  const candidate = await candidateRunner(args);
+  return candidate === undefined ? undefined : { ...candidate, verification: "playwright" };
+};
+
+const unsupportedCandidateRunner: TestGenerationRunner = async (args) => {
+  const candidate = await candidateRunner(args);
+  if (candidate === undefined) {
+    return undefined;
+  }
+  const { verification: _verification, ...rest } = candidate;
+  void _verification;
+  return {
+    ...rest,
+    unsupportedVerificationReason:
+      "The generated candidate uses a test runner that is not supported by the assured pre-filter.",
+  };
+};
+
 const PASSED_FUNNEL: EditorTestGenerationFunnel = {
   executionEnabled: true,
   candidatesGenerated: 1,
@@ -277,6 +296,21 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     expect(body.context?.purpose).toBe("test-generation");
   });
 
+  it("forwards Playwright verification to the assured pre-filter", async () => {
+    let verification: unknown;
+    const preFilter: AssuredPreFilterPort = (args) => {
+      verification = args.verification;
+      return assuredPreFilter(args);
+    };
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody()),
+      deps({ env: EXECUTION }),
+      execOptions(playwrightCandidateRunner, preFilter),
+    );
+    expect(wire(result).status).toBe("generated");
+    expect(verification).toBe("playwright");
+  });
+
   it("surfaces a rejected candidate as unverified with a reason (untrusted evidence only)", async () => {
     const result = await handleEditorTestGeneration(
       postContext(fileBody()),
@@ -289,6 +323,25 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     expect(body.funnel.coverage).toBe("failed");
     expect(body.reason).toContain("coverage");
     // The patch is still returned for review, but it is not apply-ready.
+    expect(body.patch?.files[0]?.path).toBe("src/a.test.ts");
+  });
+
+  it("surfaces unsupported verification candidates as unverified without running the pre-filter", async () => {
+    let called = false;
+    const preFilter: AssuredPreFilterPort = () => {
+      called = true;
+      return Promise.resolve({ funnel: PASSED_FUNNEL, assurance: "assured", surfaced: true });
+    };
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody()),
+      deps({ env: EXECUTION }),
+      execOptions(unsupportedCandidateRunner, preFilter),
+    );
+    const body = wire(result);
+    expect(called).toBe(false);
+    expect(body.status).toBe("generated");
+    expect(body.assurance).toBe("unverified");
+    expect(body.reason).toContain("not supported by the assured pre-filter");
     expect(body.patch?.files[0]?.path).toBe("src/a.test.ts");
   });
 
