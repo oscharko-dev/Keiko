@@ -28,8 +28,10 @@ import { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 import {
   DEFAULT_PATCH_LIMITS,
   type PatchApplyResult,
+  type PatchChangeKind,
   type PatchConflict,
   type PatchFileChange,
+  type PatchHunk,
   type PatchLimits,
   type PatchRejection,
   type PatchValidation,
@@ -236,11 +238,12 @@ function collectConflicts(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
   files: readonly PatchFileChange[],
+  allowOverwrite: boolean,
 ): PatchConflict[] {
   const conflicts: PatchConflict[] = [];
   for (const file of files) {
     const current = readCurrent(workspace, fs, file.path);
-    const outcome = computeFileContent(file, current);
+    const outcome = computeFileContent(file, current, allowOverwrite);
     for (const conflict of outcome.conflicts) {
       conflicts.push({ path: file.path, hunkIndex: conflict.hunkIndex, reason: conflict.reason });
     }
@@ -318,6 +321,9 @@ function renderParsedPatch(files: readonly PatchFileChange[]): string {
 export interface ValidateDeps {
   readonly fs?: WorkspaceFs | undefined;
   readonly limits?: PatchLimits | undefined;
+  // When true (set only after explicit user confirmation), a create whose target already exists is a
+  // replacement rather than a conflict (Issue #1204 AC7/AC14). Default false = no-silent-overwrite.
+  readonly allowOverwrite?: boolean | undefined;
 }
 
 interface ParsedDiff {
@@ -363,6 +369,7 @@ function completeValidation(
   limits: PatchLimits,
   diff: string,
   parsed: ParsedDiff,
+  allowOverwrite: boolean,
 ): PatchValidation {
   const files = parsed.files;
   const totalBytes = Buffer.byteLength(parsed.effectiveDiff, "utf8");
@@ -376,7 +383,8 @@ function completeValidation(
   const aligned = alignedFiles.some((file, index) => file !== files[index]);
   const effectiveDiff = parsed.normalized || aligned ? renderParsedPatch(alignedFiles) : diff;
   const reasons = [...pathAndSizeReasons, ...unanchoredModifyReasons(alignedFiles)];
-  const conflicts = reasons.length === 0 ? collectConflicts(workspace, fs, alignedFiles) : [];
+  const conflicts =
+    reasons.length === 0 ? collectConflicts(workspace, fs, alignedFiles, allowOverwrite) : [];
   return {
     ok: reasons.length === 0 && conflicts.length === 0,
     files: alignedFiles,
@@ -396,7 +404,14 @@ export function validatePatch(
   const fs = deps.fs ?? nodeWorkspaceFs;
   const limits = deps.limits ?? DEFAULT_PATCH_LIMITS;
   try {
-    return completeValidation(workspace, fs, limits, diff, parseDiffForValidation(diff));
+    return completeValidation(
+      workspace,
+      fs,
+      limits,
+      diff,
+      parseDiffForValidation(diff),
+      deps.allowOverwrite ?? false,
+    );
   } catch (error) {
     return malformedValidation(diff, error);
   }
@@ -422,12 +437,64 @@ export function renderDryRun(validation: PatchValidation): string {
   return [header, ...fileLines, ...reasonLines, ...conflictLines].join("\n");
 }
 
+// ─── Inverse patch (guarded revert proposal — Issue #1204) ──────────────────────────────────────
+// Produces the unified diff that exactly undoes `diff`, for a guarded revert proposal the user reviews
+// and re-applies after a failed post-apply verification. The transformation is pure and lossless: a
+// create becomes a delete (and vice-versa), and a modify swaps its old/new line ranges and its +/-
+// markers. Applied to the post-apply content, the inverse restores the pre-apply state. Throws
+// PatchParseError on an unparseable diff (the caller already validated/applied the forward diff).
+
+function invertHunkLine(line: string): string {
+  const marker = line.charAt(0);
+  if (marker === "+") {
+    return `-${line.slice(1)}`;
+  }
+  if (marker === "-") {
+    return `+${line.slice(1)}`;
+  }
+  return line;
+}
+
+function invertHunk(hunk: PatchHunk): PatchHunk {
+  return {
+    oldStart: hunk.newStart,
+    oldLines: hunk.newLines,
+    newStart: hunk.oldStart,
+    newLines: hunk.oldLines,
+    lines: hunk.lines.map(invertHunkLine),
+  };
+}
+
+const INVERSE_KIND: Readonly<Record<PatchChangeKind, PatchChangeKind>> = {
+  create: "delete",
+  delete: "create",
+  modify: "modify",
+};
+
+function invertFileChange(file: PatchFileChange): PatchFileChange {
+  return {
+    path: file.path,
+    kind: INVERSE_KIND[file.kind],
+    hunks: file.hunks.map(invertHunk),
+    addedLines: file.removedLines,
+    removedLines: file.addedLines,
+  };
+}
+
+export function invertPatch(diff: string): string {
+  const parsed = parseUnifiedDiff(diff);
+  return renderParsedPatch(parsed.files.map(invertFileChange));
+}
+
 export interface ApplyDeps {
   readonly applyEnabled: boolean;
   readonly signal: AbortSignal;
   readonly fs?: WorkspaceFs | undefined;
   readonly writer?: WorkspaceWriter | undefined;
   readonly limits?: PatchLimits | undefined;
+  // When true (set only after explicit user confirmation), a create whose target already exists is a
+  // replacement rather than a conflict (Issue #1204 AC7/AC14). Default false = no-silent-overwrite.
+  readonly allowOverwrite?: boolean | undefined;
 }
 
 interface PlannedWrite {
@@ -443,6 +510,7 @@ function planWrites(
   fs: WorkspaceFs,
   signal: AbortSignal,
   files: readonly PatchFileChange[],
+  allowOverwrite: boolean,
 ): readonly PlannedWrite[] {
   const plans: PlannedWrite[] = [];
   for (const file of files) {
@@ -451,7 +519,7 @@ function planWrites(
     }
     const absolute = enforcePath(workspace, fs, file.path);
     const original = readCurrent(workspace, fs, file.path);
-    const outcome = computeFileContent(file, original);
+    const outcome = computeFileContent(file, original, allowOverwrite);
     plans.push({
       path: file.path,
       absolute,
@@ -533,8 +601,10 @@ export function applyPatch(
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const writer = deps.writer ?? nodeWorkspaceWriter;
+  const allowOverwrite = deps.allowOverwrite ?? false;
   const validation = validatePatch(workspace, diff, {
     fs,
+    allowOverwrite,
     ...(deps.limits ? { limits: deps.limits } : {}),
   });
   if (!validation.ok) {
@@ -547,7 +617,7 @@ export function applyPatch(
   if (deps.signal.aborted) {
     throw new CommandCancelledError("apply cancelled before write phase");
   }
-  const plans = planWrites(workspace, fs, deps.signal, validation.files);
+  const plans = planWrites(workspace, fs, deps.signal, validation.files, allowOverwrite);
   commit(writer, plans, deps.signal);
   return summarize(plans);
 }

@@ -115,3 +115,41 @@ owner-gated merge for the editor integration line, scoped to this change.
 - Architecture boundaries are extended, not relaxed: keiko-tools and keiko-server may depend on
   keiko-sandbox (dependency-cruiser rules + package-graph allowlist updated); keiko-sandbox may depend
   only on keiko-contracts.
+
+## Amendment — Issue #1204 realises D6 (2026-06-20)
+
+Authored for Issue [#1204](https://github.com/oscharko-dev/Keiko/issues/1204) under an explicit owner
+decision to build the editor patch-apply + post-apply verification surface on the enforced boundary this
+ADR introduced. It records the consuming decisions; it relaxes nothing in D1–D7.
+
+### D8 — Backend-aware enforced verification (the realisation of D6)
+
+D2 left `keiko-verification`'s `policyForStep` hardcoded to `network:"inherit"` with a comment that
+"enforced verification isolation is owned by #1204". #1204 makes the orchestrator **backend-aware**:
+`VerificationDeps` gains a `networkEnforcement` mode (`"inherit"` | `"enforce-or-degrade"` |
+`"enforce-or-fail-closed"`, default `"inherit"`) and an injected `enforcedNetworkAvailable` flag, and
+`policyForStep` honours the resolved per-step network. The default mode preserves the historical
+behaviour byte-for-byte for every existing caller (the harness, the CLI, the run engine); only an
+explicit enforce mode on a `network:"none"` step requests enforcement. The honest `enforced` flag in
+`appliedLimits` is now derived from the run's `SandboxAttestation` (D4) rather than left `false`.
+
+keiko-verification stays free of a keiko-sandbox dependency: the caller (keiko-server, which already
+depends on keiko-sandbox) probes once via `probeNetworkIsolation` and injects the boolean. The editor
+post-apply path runs `"enforce-or-fail-closed"` — it executes the applied test under an enforced
+`network:"none"` boundary or not at all.
+
+### D9 — Network-only isolation for in-place post-apply verification
+
+The assured pre-filter (#1202) runs in a disposable execution-root copy (`filesystem:"execution-root"`).
+Post-apply verification (#1204) is a different operation: it re-confirms an already-assured candidate
+**in place**, against the real workspace the user explicitly applied the patch to, so it enforces
+**network egress only** (`filesystem` inherited). A `network:"none"` run is enforceable on more backends
+(macOS Seatbelt, Linux bubblewrap/`unshare`) than the execution-root boundary, widening coverage while
+keeping the data-exfiltration threat (OWASP LLM05) blocked.
+
+### D10 — Merge governance for this delivery
+
+By explicit owner decision for this delivery (mirroring D7), the #1204 PR may be merged autonomously into
+the epic integration branch `feat/keiko-editor` once the required `ci` check is green and review has
+settled. This is the same scoped departure from ADR-0042 D8's owner-gated merge for the editor
+integration line; it does not authorise autonomous merge into the protected release line.

@@ -305,6 +305,7 @@ async function produceOutcome(
       context: discovery.wire,
       patch: produced.patch,
       provenance: produced.provenance,
+      applyableDiff: produced.proposedDiff,
       ...(assured.rejectionReason === undefined ? {} : { reason: assured.rejectionReason }),
     };
   } catch {
