@@ -102,10 +102,15 @@ export type {
   FigmaSnapshotStructuralScreenRow,
   FigmaSnapshotValidationResult,
 } from "./figmaSnapshot/schema.js";
-export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
+export {
+  createNodeFigmaSnapshotStore,
+  enforceFigmaSnapshotRetention,
+  DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS,
+} from "./figmaSnapshot/store.js";
 export type {
   DeleteFigmaSnapshotResult,
   FigmaSnapshotImageBytes,
+  FigmaSnapshotRetentionProfile,
   FigmaSnapshotStore,
   FigmaSnapshotStoreOptions,
   FigmaSnapshotUserMetadata,
@@ -120,6 +125,7 @@ export type {
 export {
   applyQualityIntelligenceRetention,
   deleteQualityIntelligenceRun,
+  enforceQualityIntelligenceRetentionPolicy,
   quarantineCorruptQualityIntelligenceManifest,
   snapshotQualityIntelligenceRunsForRecovery,
 } from "./retention.js";
@@ -132,6 +138,8 @@ export type {
   QualityIntelligenceRecoverySnapshot,
   QualityIntelligenceRetentionDecision,
   QualityIntelligenceRetentionDecisionInput,
+  QualityIntelligenceRetentionEnforcementOptions,
+  QualityIntelligenceRetentionEnforcementResult,
   QualityIntelligenceRetentionResult,
   QualityIntelligenceRunDeletedEvent,
   QualityIntelligenceRunSnapshotEntry,

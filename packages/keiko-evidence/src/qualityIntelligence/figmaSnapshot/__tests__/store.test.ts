@@ -972,3 +972,75 @@ describe("enforceFigmaSnapshotRetention", () => {
     }).not.toThrow();
   });
 });
+
+// Issue #1323 AC4 — retention is now OPERATIONAL: `enforceFigmaSnapshotRetention` runs once per
+// store instance from the `ensureSwept` seam. Figma snapshot records carry no retention policy id;
+// retention is count-based on `maxRecords`, configurable via store options. The default is a
+// generous 500 (matches the QI `qi:standard-90d` profile's maxRunArtifacts) so a normal local
+// fixture set is NEVER silently purged; deployments raise/lower it explicitly.
+describe("figma snapshot store-init retention (Issue #1323 AC4)", () => {
+  // Seed N records directly on disk (one store instance, whose own ensureSwept has already fired)
+  // so a FRESH store instance is what triggers the retention pass under test.
+  const seedRecords = (count: number, startEpochMs: number): void => {
+    const writer = createNodeFigmaSnapshotStore(dir);
+    for (let i = 0; i < count; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      writer.record({
+        ...baseInput(),
+        runId,
+        provenance: {
+          ...baseInput().provenance,
+          fetchedAt: new Date(startEpochMs + i * 1000).toISOString(),
+        },
+      });
+    }
+  };
+
+  it("runs retention on a fresh store instance and evicts the oldest beyond an explicit cap", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    // A fresh instance with an explicit small cap must evict the two oldest on first touch.
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent(); // any op fires ensureSwept once
+
+    const oldest = "00000000-0000-4000-8000-000000000000";
+    const middle = "00000000-0000-4000-8000-000000000001";
+    const newest = "00000000-0000-4000-8000-000000000002";
+    expect(store.load(oldest)).toBeUndefined();
+    expect(store.load(middle)).toBeUndefined();
+    expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("the conservative DEFAULT cap (500) does NOT delete a small fixture set", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    const store = createNodeFigmaSnapshotStore(dir); // no retention option → default 500
+    store.listRecent();
+
+    // All three survive under the generous default.
+    for (let i = 0; i < 3; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      expect(loadOrThrow(store, runId).runId).toBe(runId);
+    }
+  });
+
+  it("runs retention only once per store instance (idempotent ensureSwept)", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+    const newest = "00000000-0000-4000-8000-000000000001";
+    // A second op on the SAME instance does not re-run retention (no throw, newest intact).
+    store.listRecent();
+    expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("a non-positive configured cap disables retention (no deletion)", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 0 } });
+    store.listRecent();
+    for (let i = 0; i < 2; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      expect(loadOrThrow(store, runId).runId).toBe(runId);
+    }
+  });
+});

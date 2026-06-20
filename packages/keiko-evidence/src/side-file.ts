@@ -5,7 +5,7 @@
 // stays "1" (additive manifest field consumed by callers).
 
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SideFileWriteResult } from "@oscharko-dev/keiko-contracts";
 import {
@@ -55,7 +55,8 @@ function isAllowedNameChar(code: number): boolean {
 
 function ensureDir(absolute: string): void {
   try {
-    mkdirSync(absolute, { recursive: true });
+    // owner-only: evidence artifacts are local regulated-use machine state, ADR-0048 D2
+    mkdirSync(absolute, { recursive: true, mode: 0o700 });
   } catch (error) {
     throw new EvidenceWriteError(
       `cannot create evidence subdirectory: ${error instanceof Error ? error.message : "unknown"}`,
@@ -76,6 +77,13 @@ function atomicWriteBytes(target: string, data: Buffer, randomSuffix: () => stri
     // O_EXCL ("wx") refuses to open through a pre-planted symlink at the temp path. The randomUUID
     // suffix never collides so "wx" never spuriously fails.
     writeFileSync(temp, data, { flag: "wx" });
+    // Best-effort 0o600 on the temp file (the rename preserves the mode). Failure is non-fatal:
+    // POSIX-default umask handles the common case; not all filesystems support chmod (e.g. Windows).
+    try {
+      chmodSync(temp, 0o600);
+    } catch {
+      // ignore; not all filesystems support chmod (e.g. Windows)
+    }
     renameSync(temp, target);
   } catch (error) {
     rmSync(temp, { force: true });

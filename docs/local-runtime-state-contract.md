@@ -14,7 +14,9 @@ or compatibility playbook.
   transient and are never written back. See [ADR-0046](adr/ADR-0046-local-credential-vault.md).
 - UI database and memory-vault configured paths use fail-closed validation; path escapes and
   symlink-based bypasses are rejected.
-- Evidence and memory remain local machine state; neither is a hosted service.
+- Evidence and memory remain local machine state, not a hosted compliance archive; neither is
+  a hosted service. See [Evidence artifact confidentiality](#evidence-artifact-confidentiality)
+  and [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md).
 
 ## Inventory
 
@@ -58,6 +60,52 @@ Quality-Intelligence records, the gateway config, and the sealed credential vaul
   only once no unrecognized customer file or symlink remains beneath it. It never follows a
   symlink out of `.keiko` and never recursively deletes an arbitrary directory. Filesystem
   unlinking does not guarantee secure erasure of SSD-backed data.
+
+## Evidence artifact confidentiality
+
+Local evidence is **local machine state, not a hosted compliance archive**. Keiko does not sync,
+replicate, back up, or export evidence to any remote service; there is no disaster-recovery
+guarantee and no remote audit ledger. Redaction reduces secret leakage at persistence time;
+permissions, retention, and (where applied) encryption reduce local at-rest exposure. The two are
+distinct controls and one does not substitute for the other. The governing decision is
+[ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md).
+
+Evidence artifacts are classified into four confidentiality tiers:
+
+| Class                   | Example artifacts                                                                                                     | Controls                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Customer-reconstructive | `<runId>.candidates.json` (generated test-case bodies), Figma snapshot JSON (`irJson`/`tokens`), Figma PNG side-files | `0o600` file / `0o700` dir, redaction, deterministic bounded retention. Encryption-at-rest deferred (see below). |
+| Customer-metadata       | QI run manifests (`<runId>.qi.json`), Prompt Enhancement manifests (`<runId>.pe.json`)                                | Redacted-by-construction, integrity-hashed (tamper-evident reads), `0o600`/`0o700`.                              |
+| Process evidence        | Run manifests (`<runId>.json` under `evidence/`)                                                                      | Redacted workflow summaries, `0o600`/`0o700`.                                                                    |
+| Operational             | Atomic `*.tmp` write files, lock/sidecar files                                                                        | Transient; `0o600`/`0o700`; never contain customer content.                                                      |
+
+**Write-time permissions.** All evidence, Quality Intelligence, Prompt Enhancement, companion,
+figma-snapshot, and binary side-file writers create directories with mode `0o700` and files with
+mode `0o600` at write time on POSIX filesystems. The mode is best-effort: on Windows (NTFS) and
+filesystems without POSIX modes the `chmod` is a no-op and access is governed by platform ACLs.
+`keiko repair` detects and remediates permission drift on supported filesystems without reading
+file content (see [Confidentiality enforcement](#confidentiality-enforcement-keiko-repair--keiko-uninstall)).
+
+**Retention enforcement.** Retention policy identifiers are operational, not passive metadata.
+Quality Intelligence run manifests are purged deterministically per their stamped retention
+profile (`qi:short-30d` / `qi:standard-90d` / `qi:long-365d`) once per server instance at startup;
+the purge is **fail-safe** — a run is retained on any uncertainty (unknown policy id, a newest-N
+slot, an unreadable or tamper-failing manifest, or a missing/unparseable timestamp) and every
+deletion routes through the realpath-contained, symlink-refusing deletion primitive. Figma
+snapshots are bounded by a configurable count cap (default `500`, oldest-by-`fetchedAt` evicted)
+enforced once per snapshot-store instance. Startup-purge receipts are not yet written to a
+persistent audit ledger (keiko-server has none today); the purge is deterministic but, like the
+user-initiated delete route, not yet attested in an audit trail.
+
+**Encryption scope.** In `0.2.0`, customer-reconstructive evidence artifacts are **not** encrypted
+at rest. The compensating controls are owner-only `0o600` permissions, deterministic bounded
+retention, and redaction-before-persist. This deferral is explicit and documented in
+[ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md); the atomic write boundary in every
+evidence writer is preserved as the seam to introduce a cipher later. By contrast, local
+credentials ([ADR-0046](adr/ADR-0046-local-credential-vault.md)) and Local Knowledge extracted text
+and vectors ([ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)) are sealed with
+AES-256-GCM, because those stores hold reconstructive content with no redaction or short-retention
+mitigation available.
 
 ## Boundary notes
 

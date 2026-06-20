@@ -10,6 +10,7 @@
 // only real `<runId>.json` files and never follows a symlink (lstat skip).
 
 import {
+  chmodSync,
   closeSync,
   readdirSync,
   readFileSync,
@@ -106,7 +107,8 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
 // returned path is the canonical (symlink-followed) base every child path is checked against.
 function prepareBaseDir(baseDir: string, fs: WorkspaceFs): string {
   try {
-    mkdirSync(baseDir, { recursive: true });
+    // owner-only: evidence artifacts are local regulated-use machine state, ADR-0048 D2
+    mkdirSync(baseDir, { recursive: true, mode: 0o700 });
     return fs.realPath(baseDir);
   } catch (error) {
     throw new EvidenceWriteError(
@@ -192,6 +194,13 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
     // temp-vs-final containment asymmetry (the final target is realpath-contained, the temp was
     // not). A randomUUID suffix never collides, so "wx" never spuriously fails.
     writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
+    // Best-effort 0o600 on the temp file (the rename preserves the mode). Failure is non-fatal:
+    // POSIX-default umask handles the common case; not all filesystems support chmod (e.g. Windows).
+    try {
+      chmodSync(temp, 0o600);
+    } catch {
+      // ignore; not all filesystems support chmod (e.g. Windows)
+    }
     renameSync(temp, target);
   } catch (error) {
     rmSync(temp, { force: true });
