@@ -641,17 +641,13 @@ function loadRuntimeGatewayConfig(
   runtimeConfigPath: string,
   resolvedEvidenceDir: string,
 ): { config: GatewayConfig | undefined; configPresent: boolean } {
-  // Migration and resolution operate on the SAME config path (the explicit `--config` when given,
-  // otherwise the local runtime config) so the credential vault is migrated to, and resolved from,
-  // the directory co-located with the config actually loaded — never a divergent location.
-  const loadedConfigPath = options.configPath ?? runtimeConfigPath;
   migrateLocalConfigCredentials({
-    configPath: loadedConfigPath,
+    configPath: runtimeConfigPath,
     env: options.env,
     evidenceDir: resolvedEvidenceDir,
   });
   const secretResolver = createProviderSecretResolver({
-    configPath: loadedConfigPath,
+    configPath: options.configPath ?? runtimeConfigPath,
     env: options.env,
   });
   return resolveConfig(options.configPath, options.env, runtimeConfigPath, secretResolver);
