@@ -33,6 +33,7 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+const KEIKO_PROCESS_TITLE = "Keiko";
 const SQLITE_FLAG = "--experimental-sqlite";
 // Deliberately a closed allowlist: repo-local .env discovery must not import KEIKO_*
 // runtime configuration because the UI may be launched from an untrusted project root.
@@ -367,7 +368,10 @@ export async function reExecWithSqliteFlag(
   const entry = resolvePreferredInstallLayout(cwd)?.binPath ?? process.argv[1];
   if (entry === undefined) return 1;
   const childArgs: string[] = [SQLITE_FLAG, ...process.execArgv, entry, ...process.argv.slice(2)];
-  const child = spawnFn(process.execPath, childArgs, { stdio: "inherit" });
+  const child = spawnFn(process.execPath, childArgs, {
+    argv0: KEIKO_PROCESS_TITLE,
+    stdio: "inherit",
+  });
   const forwardSigint = (): void => {
     child.kill("SIGINT");
   };

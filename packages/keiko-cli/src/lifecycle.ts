@@ -27,6 +27,7 @@ type LifecycleFlag = "--port" | "--host" | "--state-dir" | "--start-timeout" | "
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+const KEIKO_PROCESS_TITLE = "Keiko";
 const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter>> = {
   "--port": (raw, value) => {
     raw.portRaw = value;
@@ -398,6 +399,7 @@ function spawnUiProcess(
         process.execPath,
         [cliEntryPath(cwd), "ui", "--port", String(options.port), "--host", options.host],
         {
+          argv0: KEIKO_PROCESS_TITLE,
           cwd,
           detached: true,
           env: uiEnv,
