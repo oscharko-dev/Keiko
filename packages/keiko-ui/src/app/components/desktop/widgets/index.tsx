@@ -7,6 +7,7 @@ import { useChatSession } from "../hooks/useChatSession";
 import { ProjectPanel } from "./panels/ProjectPanel";
 import { ChatHistoryPanel } from "./panels/ChatHistoryPanel";
 import { SearchPanel } from "./panels/SearchPanel";
+import { PromptEnhancerPanel } from "./panels/PromptEnhancerPanel";
 import { PluginsPanel } from "./panels/PluginsPanel";
 import { AutomationsPanel } from "./panels/AutomationsPanel";
 import { MobilePanel } from "./panels/MobilePanel";
@@ -200,6 +201,7 @@ registerWindowRender("chatHistory", (_cfg, ctx) => (
   />
 ));
 registerWindowRender("project", () => <ProjectPanel />);
+registerWindowRender("promptEnhancer", () => <PromptEnhancerPanel />);
 registerWindowRender("search", () => <SearchPanel />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);

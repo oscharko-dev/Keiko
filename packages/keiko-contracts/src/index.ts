@@ -983,3 +983,23 @@ export {
   assessEnhancedPromptStructuralSafety,
   validatePromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
+// Prompt Enhancer BFF wire surface (#1314; ADR-0044 §1 "BFF /api/prompt-enhancer/* routes"). The
+// request/response envelope the governed API, CLI, and UI surfaces exchange, plus the pure request
+// validator. Also re-exported from `./bff-wire.js` for the `@oscharko-dev/keiko-contracts/bff-wire`
+// subpath the UI imports.
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementModelRouting,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementWireResponse,
+} from "./prompt-enhancer-bff.js";
+export {
+  PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS,
+  PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS,
+  PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES,
+  validatePromptEnhancementWireRequest,
+} from "./prompt-enhancer-bff.js";

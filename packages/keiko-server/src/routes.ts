@@ -146,6 +146,7 @@ import {
   handleFigmaUpdateSnapshotMetadata,
 } from "./qualityIntelligence/figmaSnapshotRoutes.js";
 import { handleFigmaGenerateCode } from "./qualityIntelligence/figmaCodegenRoutes.js";
+import { handlePromptEnhancement } from "./promptEnhancer/index.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -421,6 +422,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/quality-intelligence/sources/capabilities",
     handler: handleQiCapabilities,
   },
+  // Epic #1307 / Issue #1314 — Prompt Enhancer governed BFF route (additive). Composes the
+  // deterministic enhancer core (#1309–#1313) through the Model Gateway; never dispatches a model.
+  { method: "POST", pattern: "/api/prompt-enhancement", handler: handlePromptEnhancement },
   // Issue #280 (Epic #270) — Quality Intelligence UI read routes (additive). Composed from
   // keiko-evidence UNCHANGED (ADR-0023 D8).
   { method: "GET", pattern: "/api/quality-intelligence/runs", handler: handleListQiRuns },
