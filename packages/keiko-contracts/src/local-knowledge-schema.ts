@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 11 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 12 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -412,6 +412,31 @@ const CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX =
 const CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX =
   "CREATE INDEX idx_extraction_checkpoints_job ON extraction_checkpoints(capsule_id, job_id);";
 
+// document_text_windows — bounded per-window extracted text for the progressive large-document
+// ingestion path (Epic #1160, Issue #1286). Small files keep a single document_texts row; a
+// progressively-extracted document instead persists its normalized text as one bounded row per
+// extraction window so the JS working set never holds the whole document text and the on-disk text
+// is stored exactly once (linear storage). Every chunk lies inside one page → inside one window, so
+// a chunk's document-relative span maps to exactly one window row; the unified text-span reader
+// resolves it via the (character_start, character_end) bounds. capsule_id cascades on capsule
+// deletion; document_id is a lineage column (no FK) so windows can be written before the document
+// row is finalized during progressive extraction.
+const CREATE_DOCUMENT_TEXT_WINDOWS = `
+CREATE TABLE document_text_windows (
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  window_index INTEGER NOT NULL,
+  character_start INTEGER NOT NULL,
+  character_end INTEGER NOT NULL,
+  normalized_text TEXT NOT NULL,
+  PRIMARY KEY (capsule_id, document_id, window_index),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX =
+  "CREATE INDEX idx_document_text_windows_span ON document_text_windows(capsule_id, document_id, character_start);";
+
 // Statements must be applied in this exact order: PRAGMA first (so child-table NOT NULL
 // foreign-key constraints are enforced as the rows arrive), then parents before children.
 export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
@@ -433,6 +458,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULE_MEMBERSHIP_CHANGES,
   CREATE_CAPSULE_AUDIT_EVENTS,
   CREATE_EXTRACTION_CHECKPOINTS,
+  CREATE_DOCUMENT_TEXT_WINDOWS,
 ] as const;
 
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
@@ -461,6 +487,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
   CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX,
   CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
+  CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX,
 ] as const;
 
 // Runtime deletion primitive (#193 uses this inside a transaction). The cascade chain in
@@ -672,6 +699,13 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
     ],
   },
+  {
+    version: 12,
+    reason:
+      "Persist bounded per-window extracted text so progressive large-document extraction never " +
+      "holds the whole document text in memory and stores it once with linear growth (Epic #1160, Issue #1286).",
+    up: [CREATE_DOCUMENT_TEXT_WINDOWS, CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -703,6 +737,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "capsule_membership_changes",
   "capsule_audit_events",
   "extraction_checkpoints",
+  "document_text_windows",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
@@ -730,4 +765,5 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_capsule_audit_events_capsule_time",
   "idx_extraction_checkpoints_capsule_phase",
   "idx_extraction_checkpoints_job",
+  "idx_document_text_windows_span",
 ] as const;
