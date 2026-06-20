@@ -192,8 +192,12 @@ describe("GroundedAnswer", () => {
       ],
     });
     render(<GroundedAnswer answer={a} busy={false} />);
-    expect(screen.getByText("DOCX")).toBeInTheDocument();
-    expect(screen.getByText("docs/report.docx:1-4")).toBeInTheDocument();
+    const badge = screen.getByText("DOCX");
+    const range = screen.getByText("docs/report.docx:1-4");
+    expect(badge).toBeInTheDocument();
+    expect(badge).not.toHaveAttribute("aria-hidden");
+    expect(screen.getByText(/document evidence extracted text/)).toHaveClass("sr-only");
+    expect(range).toHaveClass("grounded-citation-range");
   });
 
   it("does not warn about coverage when omissions are only relevance or noise filtering", () => {

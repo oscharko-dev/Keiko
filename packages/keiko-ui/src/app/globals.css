@@ -13379,7 +13379,7 @@ button.figma-view-preview {
 .grounded-citation {
   max-width: 100%;
 }
-.grounded-citation > span:first-child {
+.grounded-citation-range {
   min-width: 0;
   max-width: 32ch;
   overflow: hidden;

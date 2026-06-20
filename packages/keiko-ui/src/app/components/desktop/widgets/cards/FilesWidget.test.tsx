@@ -578,6 +578,29 @@ describe("FilePreview", () => {
     ).toBeInTheDocument();
   });
 
+  it("explains that text-layer PDF is searchable via bounded extraction (Issue #1285)", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "docs/manual.pdf",
+      name: "manual.pdf",
+      sizeBytes: 24_000,
+      modifiedAt: 1,
+      extension: "pdf",
+      mime: "application/pdf",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    render(<FilePreview root="/repo" path="docs/manual.pdf" onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        /PDF files up to 2 MB are searchable in Repository Search via bounded text extraction/,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders a generic safety alert when the BFF returns 403 DENIED", async () => {
     // The BFF message must NOT be rendered verbatim — it is replaced by a
     // generic, non-probing safety message. The matched server-side pattern is

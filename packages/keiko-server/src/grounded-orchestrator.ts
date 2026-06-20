@@ -1935,11 +1935,13 @@ async function prepareGroundedAssembly(
   const hasDocumentEvidence =
     documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0;
   const cacheIdentity =
-    deps.microIndex === undefined
+    deps.microIndex === undefined || hasDocumentEvidence
       ? undefined
       : fileStateCacheIdentity(prepared.keptPaths, searchScope, fs);
   const assembleOptions =
-    deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
+    deps.microIndex === undefined || hasDocumentEvidence
+      ? { nowMs }
+      : { nowMs, microIndex: deps.microIndex };
   // The micro-index cache key does not model request-local document evidence, so a scope that
   // carried documents this run must not be served from (or written to) the shared cache.
   const cached = hasDocumentEvidence

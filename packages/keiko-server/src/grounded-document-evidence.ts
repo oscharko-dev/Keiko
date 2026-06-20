@@ -33,6 +33,7 @@ import {
   type SelectedScope,
   type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   containedRealPathInfo,
@@ -106,6 +107,23 @@ function extensionOf(scopePath: string): string {
 
 function documentBindingForPath(scopePath: string): FormatBinding | undefined {
   return EXTENSION_BINDINGS.get(extensionOf(scopePath));
+}
+
+function normalizeScopePath(scopePath: string): string {
+  return scopePath.replace(/\\/gu, "/");
+}
+
+function isWithinSelectedScope(searchScope: SearchScope, realRelativePath: string): boolean {
+  if (searchScope.relativePaths.length === 0) {
+    return true;
+  }
+  return searchScope.relativePaths.some((selectedPath) => {
+    const normalizedSelectedPath = normalizeScopePath(selectedPath);
+    return (
+      realRelativePath === normalizedSelectedPath ||
+      realRelativePath.startsWith(`${normalizedSelectedPath}/`)
+    );
+  });
 }
 
 // True when `scopePath` is any document the bounded-extraction path owns — either a supported small
@@ -330,23 +348,36 @@ function resolveDocument(
   inputs: DocumentEvidenceInputs,
   scopePath: string,
 ): ResolvedDocument | "denied" | "unreadable" {
+  const normalizedScopePath = normalizeScopePath(scopePath);
+  if (isDenied(normalizedScopePath)) {
+    return "denied";
+  }
+  let contained: ReturnType<typeof containedRealPathInfo>;
   try {
-    const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, scopePath);
-    const contained = containedRealPathInfo(inputs.fs, inputs.searchScope.workspace.root, absolute);
-    if (isDenied(contained.realRelative)) {
-      return "denied";
-    }
+    const absolute = resolveWithinWorkspace(inputs.searchScope.workspace.root, normalizedScopePath);
+    contained = containedRealPathInfo(inputs.fs, inputs.searchScope.workspace.root, absolute);
+  } catch {
+    return "denied";
+  }
+  const realRelative = normalizeScopePath(contained.realRelative);
+  if (isDenied(realRelative) || !isWithinSelectedScope(inputs.searchScope, realRelative)) {
+    return "denied";
+  }
+  try {
     const stat = inputs.fs.stat(contained.path);
     if (!stat.isFile) {
       return "unreadable";
     }
+    if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
+      return "denied";
+    }
     return {
       absolutePath: contained.path,
-      realRelative: contained.realRelative,
+      realRelative,
       sizeBytes: stat.size,
     };
   } catch {
-    return "denied";
+    return "unreadable";
   }
 }
 
@@ -400,7 +431,7 @@ function recordExtractedDocument(
 ): void {
   // The Local Knowledge extractor is pure and does NOT redact; the document text is redacted here,
   // before it enters any excerpt window, prompt, or citation surface (Issue #1285 trust boundary).
-  const windows = windowExtractedText(redact(extraction.text));
+  const windows = windowExtractedText(redact(stripUnsafeFormatChars(extraction.text)));
   if (windows.length === 0) {
     // All extracted text was redaction-stripped — disclose the document was reachable but unusable.
     omit(acc, scopePath, "redacted-only", nowMs);
@@ -500,11 +531,16 @@ async function processConnectedEntry(
   }
   seen.add(scopePath);
   const binding = documentBindingForPath(scopePath);
+  const knownUnsupportedDocument = UNSUPPORTED_DOCUMENT_EXTENSIONS.has(extensionOf(scopePath));
+  if ((binding !== undefined || knownUnsupportedDocument) && isDenied(scopePath)) {
+    omit(acc, scopePath, "outside-scope", inputs.nowMs());
+    return;
+  }
   if (binding !== undefined) {
     await processDocument(inputs, scopePath, binding, queryFingerprint, acc);
     return;
   }
-  if (UNSUPPORTED_DOCUMENT_EXTENSIONS.has(extensionOf(scopePath))) {
+  if (knownUnsupportedDocument) {
     // A known-but-unsupported document container (e.g. legacy .doc): emit a stable diagnostic.
     omit(acc, scopePath, "unsupported-format", inputs.nowMs());
   }

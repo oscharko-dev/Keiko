@@ -22,6 +22,7 @@ import {
   type GroundedAnswerer,
   type OrchestratorInput,
 } from "./grounded-orchestrator.js";
+import type { MicroIndex } from "@oscharko-dev/keiko-workflows";
 
 const DOCX_SIMPLE_BASE64 =
   "UEsDBBQAAAAIAC28xFzXeYTq8QAAALgBAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH2QzU7DMBCE730Ky9cqccoBIZSkB36OwKE8wMreJFb9J69b2rdn00KREOVozXwz62nXB+/EHjPZGDq5qhspMOhobBg7+b55ru6koALBgIsBO3lEkut+0W6OCUkwHKiTUynpXinSE3qgOiYMrAwxeyj8zKNKoLcworppmlulYygYSlXmDNkvhGgfcYCdK+LpwMr5loyOpHg4e+e6TkJKzmoorKt9ML+Kqq+SmsmThyabaMkGqa6VzOL1jh/0lSfK1qB4g1xewLNRfcRslIl65xmu/0/649o4DFbjhZ/TUo4aiXh77+qL4sGG71+06jR8/wlQSwMEFAAAAAgALbzEXCAbhuqyAAAALgEAAAsAAABfcmVscy8ucmVsc43Puw6CMBQG4J2naM4uBQdjDIXFmLAafICmPZRGeklbL7y9HRzEODie23fyN93TzOSOIWpnGdRlBQStcFJbxeAynDZ7IDFxK/nsLDJYMELXFs0ZZ57yTZy0jyQjNjKYUvIHSqOY0PBYOo82T0YXDE+5DIp6Lq5cId1W1Y6GTwPagpAVS3rJIPSyBjIsHv/h3ThqgUcnbgZt+vHlayPLPChMDB4uSCrf7TKzQHNKuorZvgBQSwMEFAAAAAgALbzEXGJ/vc/pAAAA5wEAABEAAAB3b3JkL2RvY3VtZW50LnhtbJWRwU7DMAyG73uKKPc13Q4IVU2mgTRxnAQ8QEjNWimxoySs9O1JWtAmDhOc8lv+f/uT0+4+nWVnCHEglHxT1ZwBGuoGPEn++nJY33MWk8ZOW0KQfILId2rVjk1H5sMBJpYnYGxGyfuUfCNEND04HSvygLn3TsHplMtwEiOFzgcyEGNe4KzY1vWdcHpArlaM5alv1E1FzoVf1KKPQZXnOU0W2NictZX8CXQh3XChWrF4LonZn9SR7GCm0k6z6dsy+682XQJ763vNCkh1nfod+Bva9hbaI2EKZOM/4B4g3WIrYjlhUT9fpL4AUEsBAhQDFAAAAAgALbzEXNd5hOrxAAAAuAEAABMAAAAAAAAAAAAAAIABAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAMUAAAACAAtvMRcIBuG6rIAAAAuAQAACwAAAAAAAAAAAAAAgAEiAQAAX3JlbHMvLnJlbHNQSwECFAMUAAAACAAtvMRcYn+9z+kAAADnAQAAEQAAAAAAAAAAAAAAgAH9AQAAd29yZC9kb2N1bWVudC54bWxQSwUGAAAAAAMAAwC5AAAAFQMAAAAA";
@@ -111,6 +112,33 @@ function input(): OrchestratorInput {
   return { scope: scope(), query: query(), workspaceRoot: ROOT };
 }
 
+function recordingMicroIndex(): { index: MicroIndex; gets: () => number; sets: () => number } {
+  const entries = new Map<string, ConnectedContextPack>();
+  let getCalls = 0;
+  let setCalls = 0;
+  return {
+    index: {
+      get: (key): ConnectedContextPack | undefined => {
+        getCalls += 1;
+        return entries.get(key);
+      },
+      set: (key, pack): void => {
+        setCalls += 1;
+        entries.set(key, pack);
+      },
+      delete: (key): void => {
+        entries.delete(key);
+      },
+      clear: (): void => {
+        entries.clear();
+      },
+      size: (): number => entries.size,
+    },
+    gets: () => getCalls,
+    sets: () => setCalls,
+  };
+}
+
 beforeEach(() => {
   ROOT = mkdtempSync(join(tmpdir(), "keiko-grounded-doc-"));
   mkdirSync(join(ROOT, "docs"), { recursive: true });
@@ -173,5 +201,31 @@ describe("grounded exploration with connected documents", () => {
     expect(codeFile?.excerpts.every((e) => e.atom.provenance.kind !== "document-extract")).toBe(
       true,
     );
+  });
+
+  it("bypasses the micro-index cache when document evidence or omissions are present", async () => {
+    const microIndex = recordingMicroIndex();
+    const first = await runGroundedExploration(input(), {
+      answerer: recordingAnswerer,
+      nowMs: () => 1_000,
+      detectWorkspace: () => fakeWorkspace(),
+      microIndex: microIndex.index,
+    });
+    const second = await runGroundedExploration(input(), {
+      answerer: recordingAnswerer,
+      nowMs: () => 2_000,
+      detectWorkspace: () => fakeWorkspace(),
+      microIndex: microIndex.index,
+    });
+
+    expect(first.pack.files.some((file) => file.scopePath === "docs/report.docx")).toBe(true);
+    expect(first.pack.omitted).toContainEqual({
+      scopePath: "docs/legacy.doc",
+      reason: "unsupported-format",
+      omittedAtMs: 1_000,
+    });
+    expect(second.pack.files.some((file) => file.scopePath === "docs/report.docx")).toBe(true);
+    expect(microIndex.gets()).toBe(0);
+    expect(microIndex.sets()).toBe(0);
   });
 });
