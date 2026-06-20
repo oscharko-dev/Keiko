@@ -44,6 +44,19 @@ jobs:
           node-version: "22.x"
           cache: "npm"
       - run: npm ci
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
+          # unshare fallback) need them to create the network namespace. Relax it for the runner so
+          # the enforced-egress proof below actually exercises the isolation boundary (ADR-0043).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Enforced sandbox egress proof (ADR-0043 / #1202)
+        # NOT gated by the feat/keiko-editor branch skip: the assured pre-filter executes untrusted
+        # model-generated code, so the deny-by-default egress boundary must be proven on every run.
+        # The egress test fails the job if an outbound connection from inside network:"none" succeeds.
+        run: npm --workspace @oscharko-dev/keiko-sandbox test
       - name: Verify Keiko Editor package
         run: |
           npm --workspace @oscharko-dev/keiko-editor run build

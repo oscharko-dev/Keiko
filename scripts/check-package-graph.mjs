@@ -27,6 +27,10 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     ],
   ],
   ["@oscharko-dev/keiko-contracts", []],
+  // Reusable OS/container egress-isolation strategy (ADR-0043). A near-leaf: its only workspace
+  // dependency is keiko-contracts (for the SandboxPolicy/attestation types). Spawning stays in
+  // keiko-tools, which depends on this package to apply the wrapper at the single exec boundary.
+  ["@oscharko-dev/keiko-sandbox", ["@oscharko-dev/keiko-contracts"]],
   // Browser-tier editor package (ADR-0042). Like keiko-ui it lives in the browser tier; its only
   // permitted workspace dependency is keiko-contracts (type-only where possible). The browser-tier
   // value-import boundary is enforced separately by adr-0042-editor-not-node-domain-values in

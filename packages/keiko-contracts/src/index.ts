@@ -296,6 +296,8 @@ export {
 export type {
   NetworkPolicy,
   SandboxPolicy,
+  SandboxBackend,
+  SandboxAttestation,
   CommandRule,
   CommandRunInput,
   CommandResult,
@@ -318,6 +320,7 @@ export type {
 export {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,
+  SANDBOX_BACKENDS,
   DEFAULT_COMMAND_RULES,
   DEFAULT_PATCH_LIMITS,
   DEFAULT_TOOL_HOST_CONFIG,
