@@ -926,6 +926,7 @@ export {
 } from "./prompt-enhancer.js";
 export { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 export { planGrounding } from "./prompt-enhancer-grounding.js";
+export type { PlanGroundingOptions } from "./prompt-enhancer-grounding.js";
 export type {
   ValidationOk as PromptEnhancerValidationOk,
   ValidationFail as PromptEnhancerValidationFail,

@@ -27,6 +27,7 @@ import {
   type PromptTaskAnalysis,
   type RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { generateEnhancedPrompt } from "./generator.js";
 import { planPromptEnhancement, type PromptEnhancementPlan } from "./planner.js";
 
@@ -67,9 +68,8 @@ export interface GeneratePromptCandidatesArgs {
 }
 
 function candidateId(analysis: PromptTaskAnalysis, profile: PromptEnhancementProfileId): string {
-  // `requestId` is already a valid branded id; appending `-${profile}` keeps it valid (no forbidden
-  // path fragment, no control characters) and content-free.
-  return `${analysis.requestId}-${profile}`;
+  const digest = sha256Hex(canonicalise({ profile, requestId: analysis.requestId }));
+  return `pe-candidate-${profile}-${digest}`;
 }
 
 // The candidate-preference slate: the baseline profile first, then every other catalog profile in its

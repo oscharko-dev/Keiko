@@ -11,7 +11,10 @@ import {
   type PromptCandidateSelection,
 } from "./index.js";
 
-function validScorecard(candidateId = "req-1-technical"): PromptCandidateScorecard {
+function validScorecard(
+  candidateId = "req-1-technical",
+  aggregateScore = 0.8,
+): PromptCandidateScorecard {
   return {
     schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
     candidateId,
@@ -21,7 +24,7 @@ function validScorecard(candidateId = "req-1-technical"): PromptCandidateScoreca
       score: 0.8,
       rationale: `score for ${dimension}`,
     })),
-    aggregateScore: 0.8,
+    aggregateScore,
     estimatedTokens: 120,
   };
 }
@@ -71,6 +74,7 @@ describe("prompt-enhancer-critic constants and guards", () => {
     for (const reason of PROMPT_CANDIDATE_REJECTION_REASONS) {
       expect(isPromptCandidateRejectionReason(reason)).toBe(true);
     }
+    expect(PROMPT_CANDIDATE_REJECTION_REASONS).toContain("lower-tie-break-rank");
     expect(isPromptCandidateRejectionReason("unknown")).toBe(false);
   });
 });
@@ -152,6 +156,12 @@ describe("validatePromptCandidateSelection", () => {
       }).ok,
     ).toBe(false);
     expect(validatePromptCandidateSelection({ ...selection, iterations: -1 }).ok).toBe(false);
+    expect(
+      validatePromptCandidateSelection({
+        ...selection,
+        bounds: { candidateCount: 0, tokenBudget: 8_000, maxIterations: 3 },
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects a rejection entry with an unknown reason", () => {
@@ -162,5 +172,60 @@ describe("validatePromptCandidateSelection", () => {
     expect(validatePromptCandidateSelection({ ...selection, rejected: badRejected }).ok).toBe(
       false,
     );
+  });
+
+  it("accepts the tie-break rejection reason", () => {
+    const selection = validSelection();
+    const rejected = [
+      {
+        candidateId: "req-1-precise",
+        profile: "precise",
+        aggregateScore: 0.8,
+        reason: "lower-tie-break-rank",
+      },
+    ];
+    expect(validatePromptCandidateSelection({ ...selection, rejected }).ok).toBe(true);
+  });
+
+  it("rejects totals that exceed declared bounds", () => {
+    const selection = validSelection();
+    expect(validatePromptCandidateSelection({ ...selection, iterations: 4 }).ok).toBe(false);
+    expect(validatePromptCandidateSelection({ ...selection, candidatesConsidered: 4 }).ok).toBe(
+      false,
+    );
+    expect(validatePromptCandidateSelection({ ...selection, tokensConsumed: 8_001 }).ok).toBe(
+      false,
+    );
+  });
+
+  it("rejects when the winner only matches the first ranked candidate by id", () => {
+    const winner = validScorecard("req-1-technical", 0.8);
+    const altered = { ...winner, aggregateScore: 0.7 };
+    expect(
+      validatePromptCandidateSelection({
+        ...validSelection(),
+        winner,
+        ranked: [altered],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects ranked lists outside deterministic rank order", () => {
+    const lower = validScorecard("req-1-fast", 0.4);
+    const higher = validScorecard("req-1-technical", 0.9);
+    expect(
+      validatePromptCandidateSelection({
+        ...validSelection(),
+        winner: lower,
+        ranked: [lower, higher],
+        candidatesConsidered: 2,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects a candidatesConsidered total that does not match ranked candidates", () => {
+    expect(
+      validatePromptCandidateSelection({ ...validSelection(), candidatesConsidered: 2 }).ok,
+    ).toBe(false);
   });
 });

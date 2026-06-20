@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateEnhancedPrompt, type RawPromptInput } from "@oscharko-dev/keiko-contracts";
+import {
+  validateEnhancedPrompt,
+  validatePromptEnhancerIdString,
+  type RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
 import { generatePromptCandidates } from "../candidates.js";
 import { makeAnalysis, type AnalysisOverrides } from "./_support.js";
 
@@ -36,6 +40,20 @@ describe("generatePromptCandidates", () => {
   it("respects the candidateCount upper bound", () => {
     const { candidates } = candidatesFor({ recommendedProfile: "technical" }, 2);
     expect(candidates).toHaveLength(2);
+  });
+
+  it("keeps candidate ids bounded when the request id is already at max length", () => {
+    const { candidates } = candidatesFor(
+      { recommendedProfile: "technical", requestId: "a".repeat(256) },
+      3,
+    );
+    expect(candidates).toHaveLength(3);
+    for (const candidate of candidates) {
+      expect(validatePromptEnhancerIdString(candidate.candidateId, "EnhancedPromptId").ok).toBe(
+        true,
+      );
+      expect(candidate.candidateId.length).toBeLessThanOrEqual(256);
+    }
   });
 
   it("is deterministic for identical inputs", () => {
