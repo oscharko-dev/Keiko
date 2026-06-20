@@ -13,6 +13,7 @@ import {
   hasPlaintextGatewayCredentials,
   isEnvProvidedApiKey,
   openProviderCredentialVault,
+  prepareSealedProviderApiKeys,
   providerSecretRef,
   sealProviderApiKeys,
 } from "./credentialVault.js";
@@ -50,9 +51,17 @@ describe("providerSecretRef / credentialVaultDir", () => {
 });
 
 describe("isEnvProvidedApiKey", () => {
-  it("is true when a per-model env key is set, regardless of value", () => {
-    const env: EnvSource = { KEIKO_MODEL_GPT_X_API_KEY: "anything" };
-    expect(isEnvProvidedApiKey("gpt-x", "stored-value", env)).toBe(true);
+  it("is true only when the per-model env key equals the effective value", () => {
+    expect(
+      isEnvProvidedApiKey("gpt-x", "stored-value", {
+        KEIKO_MODEL_GPT_X_API_KEY: "stored-value",
+      }),
+    ).toBe(true);
+    expect(
+      isEnvProvidedApiKey("gpt-x", "stored-value", {
+        KEIKO_MODEL_GPT_X_API_KEY: "temporary-override",
+      }),
+    ).toBe(false);
   });
 
   it("is true only when the default env key equals the effective value", () => {
@@ -144,6 +153,27 @@ describe("sealProviderApiKeys", () => {
     );
   });
 
+  it("vaults a durable file credential when a per-model env override has a different value", () => {
+    const configPath = tempConfigPath();
+    const env: EnvSource = {
+      ...envWith(KEY1),
+      KEIKO_MODEL_GPT_X_API_KEY: "temporary-env-key",
+    };
+    const providers = sealProviderApiKeys({
+      raw: {
+        providers: [{ modelId: "gpt-x", baseUrl: "https://gw", apiKey: "durable-file-key" }],
+      },
+      env,
+      configPath,
+    });
+    expect(providers).toEqual([
+      { modelId: "gpt-x", baseUrl: "https://gw", apiKeySecretRef: "cred:gpt-x" },
+    ]);
+    expect(openProviderCredentialVault({ configPath, env }).get("cred:gpt-x")).toBe(
+      "durable-file-key",
+    );
+  });
+
   it("removes a stale store when no providers need vaulting", () => {
     const configPath = tempConfigPath();
     const env = envWith(KEY1);
@@ -157,6 +187,48 @@ describe("sealProviderApiKeys", () => {
     expect(existsSync(join(credentialVaultDir(configPath), "provider-credentials.vault"))).toBe(
       false,
     );
+  });
+
+  it("preserves active reference-only credentials while pruning stale refs after sealing", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set("cred:m1", "active-secret");
+    vault.set("cred:stale", "stale-secret");
+
+    const providers = sealProviderApiKeys({
+      raw: {
+        providers: [{ modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" }],
+      },
+      env,
+      configPath,
+    });
+
+    expect(providers).toEqual([
+      { modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" },
+    ]);
+    expect(vault.get("cred:m1")).toBe("active-secret");
+    expect(vault.get("cred:stale")).toBeUndefined();
+  });
+
+  it("does not prune stale refs during prepare before the config rewrite succeeds", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set("cred:m1", "active-secret");
+    vault.set("cred:stale", "stale-secret");
+
+    const prepared = prepareSealedProviderApiKeys({
+      raw: {
+        providers: [{ modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" }],
+      },
+      env,
+      configPath,
+    });
+
+    expect(prepared.activeSecretRefs).toEqual(["cred:m1"]);
+    expect(vault.get("cred:m1")).toBe("active-secret");
+    expect(vault.get("cred:stale")).toBe("stale-secret");
   });
 });
 

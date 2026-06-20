@@ -13,7 +13,6 @@ import {
   Gateway,
   GatewayError,
   assertConfiguredModel,
-  loadConfigFromFile,
   redact,
   resolveCostClass,
   selectConfiguredModel,
@@ -33,7 +32,7 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { AuditError } from "@oscharko-dev/keiko-evidence";
-import { createProviderSecretResolver } from "@oscharko-dev/keiko-server/credential-vault";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
@@ -250,7 +249,7 @@ function configuredModelId(flags: EvidenceFlags, env: EnvSource): string | undef
   if (path === undefined) {
     return flags.model;
   }
-  const config = loadConfigFromFile(path, env);
+  const config = loadGatewayConfigFromFile(path, env);
   if (flags.model !== undefined) {
     assertConfiguredModel(config, flags.model);
     return flags.model;
@@ -277,11 +276,7 @@ function resolveModel(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    // Resolve any vaulted credential references (Issue #1320) so a migrated, credential-free config
-    // still yields working providers; env-only and legacy plaintext configs are unaffected.
-    const config = loadConfigFromFile(path, env, {
-      secretResolver: createProviderSecretResolver({ configPath: path, env }),
-    });
+    const config = loadGatewayConfigFromFile(path, env);
     if (flags.model !== undefined) {
       assertConfiguredModel(config, flags.model);
     }

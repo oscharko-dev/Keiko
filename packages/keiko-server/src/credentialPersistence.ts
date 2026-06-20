@@ -16,7 +16,11 @@ import { existsSync, readFileSync } from "node:fs";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { LocalVaultKeychainAccess } from "@oscharko-dev/keiko-security/secret-vault";
 import { savePrivateJson } from "./private-json.js";
-import { hasPlaintextGatewayCredentials, sealProviderApiKeys } from "./credentialVault.js";
+import {
+  hasPlaintextGatewayCredentials,
+  prepareSealedProviderApiKeys,
+  pruneProviderCredentialVault,
+} from "./credentialVault.js";
 import { figmaTokenStoreFor } from "./qualityIntelligence/figmaSnapshotOrchestration.js";
 import type { FigmaKeychainAccess } from "./qualityIntelligence/figma/index.js";
 
@@ -68,15 +72,23 @@ export function persistSealedGatewayConfig(
   raw: Record<string, unknown>,
   ctx: SealGatewayConfigContext,
 ): void {
-  const sealedProviders = sealProviderApiKeys({
+  const sealedProviders = prepareSealedProviderApiKeys({
     raw,
     env: ctx.env,
     configPath: ctx.storagePath,
     ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
   });
-  const withSealedProviders = { ...raw, providers: sealedProviders };
+  const withSealedProviders = { ...raw, providers: sealedProviders.providers };
   const sealed = stripAndStoreFigmaToken(withSealedProviders, ctx);
   savePrivateJson(ctx.storagePath, sealed);
+  pruneProviderCredentialVault(
+    {
+      env: ctx.env,
+      configPath: ctx.storagePath,
+      ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
+    },
+    sealedProviders.activeSecretRefs,
+  );
 }
 
 export interface MigrateCredentialsOptions {

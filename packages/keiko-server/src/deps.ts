@@ -640,30 +640,32 @@ function loadRuntimeGatewayConfig(
   options: BuildHandlerDepsOptions,
   runtimeConfigPath: string,
   resolvedEvidenceDir: string,
-): { config: GatewayConfig | undefined; configPresent: boolean } {
+): { config: GatewayConfig | undefined; configPresent: boolean; storagePath: string } {
+  const effectiveConfigPath = options.configPath ?? runtimeConfigPath;
   migrateLocalConfigCredentials({
-    configPath: runtimeConfigPath,
+    configPath: effectiveConfigPath,
     env: options.env,
     evidenceDir: resolvedEvidenceDir,
   });
   const secretResolver = createProviderSecretResolver({
-    configPath: options.configPath ?? runtimeConfigPath,
+    configPath: effectiveConfigPath,
     env: options.env,
   });
-  return resolveConfig(options.configPath, options.env, runtimeConfigPath, secretResolver);
+  const resolved = resolveConfig(options.configPath, options.env, runtimeConfigPath, secretResolver);
+  return { ...resolved, storagePath: effectiveConfigPath };
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
   const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
   const resolvedEvidenceDir = resolveEvidenceDir(options.evidenceDir, options.env);
-  const { config, configPresent } = loadRuntimeGatewayConfig(
+  const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
     options,
     runtimeConfigPath,
     resolvedEvidenceDir,
   );
   const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
-  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, runtimeConfigPath);
+  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath);
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);

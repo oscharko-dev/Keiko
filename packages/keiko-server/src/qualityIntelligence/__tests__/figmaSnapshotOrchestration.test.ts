@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -82,6 +82,7 @@ const BOARD = {
 
 const URL_OK = "https://www.figma.com/design/KEY123/Board?node-id=0-1";
 const TOKEN = "figd_env-test-token";
+const REAL_TMPDIR = realpathSync(tmpdir());
 
 const isFigmaApiRequest = (raw: string): boolean => {
   try {
@@ -168,7 +169,7 @@ const renderPort: FigmaRenderPort = () =>
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "keiko-figma-orch-"));
+  dir = mkdtempSync(join(REAL_TMPDIR, "keiko-figma-orch-"));
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });

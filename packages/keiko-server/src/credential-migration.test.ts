@@ -10,8 +10,10 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadConfigFromFile } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, currentGatewayConfig } from "./deps.js";
 import type { BuildHandlerDepsOptions } from "./deps.js";
+import { createProviderSecretResolver, openProviderCredentialVault } from "./credentialVault.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 
@@ -104,6 +106,31 @@ describe("local credential migration (#1320)", () => {
       // The running gateway still resolves the real credential from the vault.
       expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("legacy-secret-key");
       expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe("https://gw.example.com");
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("migrates an explicit config path instead of only the default local config", () => {
+    const l = layout();
+    const explicitDir = tempDir("keiko-mig-explicit-");
+    const explicitConfigPath = join(explicitDir, "custom-keiko.config.json");
+    const explicitStorePath = join(explicitDir, "credentials", "provider-credentials.vault");
+    writeConfig(explicitConfigPath, legacyConfig());
+
+    const deps = buildUiHandlerDeps({
+      ...l.options({ ...VAULT_ENV }),
+      configPath: explicitConfigPath,
+    });
+
+    try {
+      const explicitDisk = readFileSync(explicitConfigPath, "utf8");
+      expect(explicitDisk).not.toContain("legacy-secret-key");
+      expect(explicitDisk).toContain("apiKeySecretRef");
+      expect(existsSync(explicitStorePath)).toBe(true);
+      expect(existsSync(l.credentialStorePath)).toBe(false);
+      expect(deps.gatewayConfig?.storagePath).toBe(explicitConfigPath);
+      expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("legacy-secret-key");
     } finally {
       deps.store.close();
     }
@@ -205,6 +232,42 @@ describe("local credential migration (#1320)", () => {
       expect(existsSync(l.credentialStorePath)).toBe(false);
       // The runtime still resolves the credential — transiently, from the environment.
       expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("env-default-key");
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("preserves a different durable file credential when a per-model env override is present", () => {
+    const l = layout();
+    writeConfig(l.configPath, legacyConfig());
+    const envWithOverride = {
+      ...VAULT_ENV,
+      KEIKO_MODEL_GPT_X_API_KEY: "temporary-env-key",
+    };
+
+    const deps = buildUiHandlerDeps(l.options(envWithOverride));
+    try {
+      const onDisk = readFileSync(l.configPath, "utf8");
+      expect(onDisk).not.toContain("legacy-secret-key");
+      expect(onDisk).toContain("apiKeySecretRef");
+      const vault = openProviderCredentialVault({ configPath: l.configPath, env: envWithOverride });
+      expect(vault.get("cred:gpt-x")).toBe("legacy-secret-key");
+
+      // While the override is present, runtime behavior still honors the env value.
+      expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("temporary-env-key");
+
+      // After the override is removed, the durable file credential still resolves from the vault.
+      const withoutOverride = loadConfigFromFile(
+        l.configPath,
+        { ...VAULT_ENV },
+        {
+          secretResolver: createProviderSecretResolver({
+            configPath: l.configPath,
+            env: VAULT_ENV,
+          }),
+        },
+      );
+      expect(withoutOverride.providers[0]?.apiKey).toBe("legacy-secret-key");
     } finally {
       deps.store.close();
     }

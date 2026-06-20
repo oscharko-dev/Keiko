@@ -4,13 +4,12 @@
 // the UNVERIFIED model hypothesis; --json emits the full BugInvestigationReport. Failing output and
 // stack traces may be read from files (--output-file / --stack-file) to avoid huge argv. Evidence
 // files are read through the workspace boundary, never raw node:fs. The gateway ModelPort is built
-// from config (loadConfigFromFile); tests inject deps.model directly so no live gateway is needed.
+// from config (loadGatewayConfigFromFile); tests inject deps.model directly so no live gateway is needed.
 // Exit 0 on fix-applied/fix-proposed/investigation-only, 1 on
 // rejected/cancelled/failed/runtime, 2 on usage. Mirrors runGenTestsCli's structure.
 
 import {
   Gateway,
-  loadConfigFromFile,
   type EnvSource,
   ConfigInvalidError,
   GatewayError,
@@ -27,6 +26,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { investigateBug, renderBugMarkdownReport } from "@oscharko-dev/keiko-workflows";
 import type { BugInvestigationReport, BugReportInput } from "@oscharko-dev/keiko-workflows";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -174,7 +174,7 @@ function buildModel(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    const config = loadConfigFromFile(path, env);
+    const config = loadGatewayConfigFromFile(path, env);
     if (parsed.model !== undefined) {
       assertConfiguredModel(config, parsed.model);
     }
@@ -207,7 +207,7 @@ function resolveConfiguredModelId(parsed: InvestigateArgs, env: EnvSource): stri
   if (path === undefined) {
     return parsed.model ?? "default";
   }
-  const config = loadConfigFromFile(path, env);
+  const config = loadGatewayConfigFromFile(path, env);
   if (parsed.model !== undefined) {
     assertConfiguredModel(config, parsed.model);
     return parsed.model;

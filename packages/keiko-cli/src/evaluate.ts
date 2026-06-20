@@ -13,7 +13,6 @@ import {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
-  loadConfigFromFile,
   redact,
   type EnvSource,
   type GatewayConfig,
@@ -33,6 +32,7 @@ import {
   type EvaluationFixture,
 } from "@oscharko-dev/keiko-evaluations";
 import { runGenTestsCli } from "./gen-tests.js";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import { runInvestigateCli } from "./investigate.js";
 import type { CliIo } from "./runner.js";
 
@@ -242,6 +242,7 @@ async function runSuite(
       {
         env,
         now: Date.now,
+        configLoader: loadGatewayConfigFromFile,
         surfaceParity: {
           runGenTestsCli,
           runInvestigateCli,
@@ -274,7 +275,7 @@ function resolveLiveModelId(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    const config = loadConfigFromFile(path, env);
+    const config = loadGatewayConfigFromFile(path, env);
     if (parsed.model !== undefined) {
       assertLiveEvaluationModel(config, parsed.model);
       return parsed.model;

@@ -183,8 +183,10 @@ function generateKeychainKey(
 }
 
 function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
-  ensureDirHardened(vaultDir);
-  const keyfile = join(vaultDir, keyfileName);
+  const keyfile = resolve(vaultDir, keyfileName);
+  assertNoSymlinkedPathSegments(keyfile);
+  ensureDirHardened(dirname(keyfile));
+  assertNoSymlinkedPathSegments(keyfile);
   if (existsSync(keyfile)) {
     return decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
   }
@@ -240,10 +242,12 @@ function isStoreFile(value: unknown): value is StoreFile {
 }
 
 function readStore(storePath: string): Record<string, string> {
-  if (!existsSync(storePath)) return {};
+  const resolvedPath = resolve(storePath);
+  assertNoSymlinkedPathSegments(resolvedPath);
+  if (!existsSync(resolvedPath)) return {};
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(storePath, "utf8"));
+    parsed = JSON.parse(readFileSync(resolvedPath, "utf8"));
   } catch {
     // A non-JSON store is treated as empty so a corrupt index never crashes resolution; the entries
     // it would have held simply resolve to undefined and surface as an honest "missing credential".
@@ -257,6 +261,7 @@ function readStore(storePath: string): Record<string, string> {
 function writeStore(storePath: string, entries: Record<string, string>): void {
   const resolvedPath = resolve(storePath);
   const dir = dirname(resolvedPath);
+  assertNoSymlinkedPathSegments(resolvedPath);
   ensureDirHardened(dir);
   assertNoSymlinkedPathSegments(resolvedPath);
   const payload: StoreFile = { version: STORE_VERSION, entries };
@@ -286,17 +291,18 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
 
 export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretVault {
   const { key, storePath } = deps;
+  const resolvedStorePath = resolve(storePath);
 
   const get = (reference: string): string | undefined => {
-    const envelope = readStore(storePath)[reference];
+    const envelope = readStore(resolvedStorePath)[reference];
     if (envelope === undefined || !isSealed(envelope)) return undefined;
     return openString(key, envelope);
   };
 
   const set = (reference: string, secret: string): void => {
-    const entries = readStore(storePath);
+    const entries = readStore(resolvedStorePath);
     entries[reference] = sealString(key, secret);
-    writeStore(storePath, entries);
+    writeStore(resolvedStorePath, entries);
   };
 
   const replaceAll = (next: ReadonlyMap<string, string>): void => {
@@ -305,14 +311,15 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       entries[reference] = sealString(key, secret);
     }
     if (Object.keys(entries).length === 0) {
-      rmSync(storePath, { force: true });
+      assertNoSymlinkedPathSegments(resolvedStorePath);
+      rmSync(resolvedStorePath, { force: true });
       return;
     }
-    writeStore(storePath, entries);
+    writeStore(resolvedStorePath, entries);
   };
 
   const remove = (reference: string): void => {
-    const entries = readStore(storePath);
+    const entries = readStore(resolvedStorePath);
     if (!(reference in entries)) return;
     const next: Record<string, string> = {};
     for (const [storedRef, sealed] of Object.entries(entries)) {
@@ -321,15 +328,16 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
       }
     }
     if (Object.keys(next).length === 0) {
-      rmSync(storePath, { force: true });
+      assertNoSymlinkedPathSegments(resolvedStorePath);
+      rmSync(resolvedStorePath, { force: true });
       return;
     }
-    writeStore(storePath, next);
+    writeStore(resolvedStorePath, next);
   };
 
-  const has = (reference: string): boolean => reference in readStore(storePath);
+  const has = (reference: string): boolean => reference in readStore(resolvedStorePath);
 
-  const list = (): readonly string[] => Object.keys(readStore(storePath));
+  const list = (): readonly string[] => Object.keys(readStore(resolvedStorePath));
 
   return { get, set, replaceAll, delete: remove, has, list };
 }
