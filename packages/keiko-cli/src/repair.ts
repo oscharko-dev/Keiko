@@ -31,7 +31,16 @@ import {
   type LauncherState,
   type LauncherStateEntry,
 } from "./launcher-state.js";
-import { classifyPid, defaultIsProcessAlive, resolveStateDir } from "./state-paths.js";
+import {
+  RUNTIME_STATE_DIR_MODE,
+  RUNTIME_STATE_FILE_MODE,
+  classifyPid,
+  defaultIsProcessAlive,
+  resolveStateDir,
+  scanRuntimeState,
+  type RuntimeStateCategory,
+  type RuntimeStateNode,
+} from "./state-paths.js";
 import { hasPlaintextGatewayCredentials } from "@oscharko-dev/keiko-server/credential-vault";
 
 const USAGE = `Usage:
@@ -40,9 +49,12 @@ const USAGE = `Usage:
 Runs an offline diagnostic-and-repair pass over the local Keiko install:
   - removes a stale UI pid file left by an unclean shutdown
   - tightens the .keiko state directory permissions to 0o700
+  - tightens known Keiko-owned runtime artifacts (DBs, Evidence/QI, credential
+    vaults, sidecars) to owner-only 0o700/0o600 without touching customer files
   - prunes launcher records whose shortcut files were deleted
   - verifies the built CLI/UI assets and the launch path
   - validates a configured model-gateway config file
+  - flags lingering plaintext credentials in the config
 
 Options:
   --state-dir PATH  inspect this state directory instead of <cwd>/.keiko.
@@ -134,6 +146,101 @@ function checkStateDirPerms(stateDir: string, dryRun: boolean): CheckResult {
   if (dryRun) return fixable("State directory", `permissions ${observed} (expected 0o700)`);
   chmodSync(stateDir, 0o700);
   return fixed("State directory", `tightened permissions ${observed} -> 0o700`);
+}
+
+// Issue #1321: audit and tighten the permissions of EVERY Keiko-owned artifact under the
+// state directory — UI/Memory/Knowledge DBs and their WAL/SHM sidecars, Evidence/QI records,
+// the sealed credential vaults, config, and lifecycle/launcher files — not just the state
+// directory itself. The set is the allowlisted manifest in `state-paths.ts`; an unrecognized
+// customer file is never chmod-ed. Content-free: reports relative paths and octal modes only.
+const RUNTIME_STATE_LABEL: Readonly<Record<RuntimeStateCategory, string>> = {
+  lifecycle: "lifecycle files",
+  launcher: "launcher state",
+  "ui-database": "UI database",
+  "gateway-config": "gateway config",
+  "credential-vault": "credential vault",
+  "memory-vault": "memory vault",
+  "local-knowledge": "Local Knowledge store",
+  evidence: "Evidence store",
+  "quality-intelligence": "Quality Intelligence store",
+};
+
+interface LoosePermFinding {
+  readonly category: RuntimeStateCategory;
+  readonly relPath: string;
+  readonly observed: string;
+}
+
+// Records every node not already at `targetMode`, applying the fix unless this is a dry-run.
+function tightenNodes(
+  nodes: readonly RuntimeStateNode[],
+  targetMode: number,
+  dryRun: boolean,
+  findings: LoosePermFinding[],
+): void {
+  for (const node of nodes) {
+    const mode = statSync(node.absPath).mode & 0o777;
+    if (mode === targetMode) continue;
+    findings.push({
+      category: node.category,
+      relPath: node.relPath,
+      observed: `0o${mode.toString(8)}`,
+    });
+    if (!dryRun) chmodSync(node.absPath, targetMode);
+  }
+}
+
+function summarizeLooseCategory(
+  category: RuntimeStateCategory,
+  findings: readonly LoosePermFinding[],
+  dryRun: boolean,
+): CheckResult {
+  const matches = findings.filter((f) => f.category === category);
+  const example = matches[0];
+  const detail = `${String(matches.length)} ${RUNTIME_STATE_LABEL[category]} artifact(s) group/world-readable (e.g. ${example?.relPath ?? "?"} ${example?.observed ?? "?"})`;
+  const name = "Runtime state artifacts";
+  return dryRun ? fixable(name, detail) : fixed(name, detail);
+}
+
+function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckResult[] {
+  if (process.platform === "win32") {
+    return [
+      ok(
+        "Runtime state artifacts",
+        "POSIX permission normalization not applicable on Windows (NTFS ACLs govern access)",
+      ),
+    ];
+  }
+  const scan = scanRuntimeState(stateDir);
+  if (!scan.present) return [ok("Runtime state artifacts", "state directory not present")];
+  const ownedCount = scan.files.length + scan.directories.length;
+  if (ownedCount === 0) return [ok("Runtime state artifacts", "no Keiko-owned artifacts present")];
+
+  const findings: LoosePermFinding[] = [];
+  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings);
+  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings);
+
+  const results: CheckResult[] = [];
+  for (const category of new Set(findings.map((f) => f.category))) {
+    results.push(summarizeLooseCategory(category, findings, dryRun));
+  }
+  for (const link of scan.retained.filter((r) => r.reason === "symlink" && r.owned)) {
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `symlink occupies a Keiko-owned path and was left untouched: ${link.relPath}`,
+      ),
+    );
+  }
+  if (results.length === 0) {
+    results.push(
+      ok(
+        "Runtime state artifacts",
+        `${String(ownedCount)} artifact(s) have owner-only permissions`,
+      ),
+    );
+  }
+  return results;
 }
 
 type EntryHealth = "missing" | "modified" | "ok";
@@ -320,6 +427,7 @@ export function runRepairCli(
   const results: CheckResult[] = [
     checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
     checkStateDirPerms(stateDir, parsed.dryRun),
+    ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
     checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),

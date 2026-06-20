@@ -41,6 +41,24 @@ or compatibility playbook.
 | Lifecycle state | `--state-dir` → `KEIKO_STATE_DIR` → `.keiko/`                                     |
 | Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/` |
 
+## Confidentiality enforcement (`keiko repair` / `keiko uninstall`)
+
+`keiko repair` and `keiko uninstall --state` operate on an allowlisted manifest of the
+Keiko-owned artifacts above, resolved relative to the configured state directory
+(`packages/keiko-cli/src/state-paths.ts`). The manifest covers lifecycle and launcher files,
+the UI / Memory / Local-Knowledge databases and their `-wal`/`-shm` sidecars, Evidence and
+Quality-Intelligence records, the gateway config, and the sealed credential vaults
+(`credentials/*.vault` + keyfile, `evidence/figma/*.vault` + keyfile).
+
+- **Repair** normalizes POSIX permissions to `0o700` for Keiko-owned directories and `0o600`
+  for Keiko-owned files, reports lingering plaintext credentials, and is content-free
+  (paths and categories only). It never deletes a store and never chmods an unrecognized
+  customer file. On Windows it reports that NTFS ACLs govern access instead of applying modes.
+- **Uninstall `--state`** removes the manifest artifacts and then the state directory, but
+  only once no unrecognized customer file or symlink remains beneath it. It never follows a
+  symlink out of `.keiko` and never recursively deletes an arbitrary directory. Filesystem
+  unlinking does not guarantee secure erasure of SSD-backed data.
+
 ## Boundary notes
 
 - Environment-variable values remain customer-owned configuration. Keiko reads them; it does not
