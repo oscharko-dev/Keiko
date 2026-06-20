@@ -62,3 +62,11 @@ export {
   MAX_CANDIDATE_COUNT,
   optimizePromptCandidates,
 } from "./optimize.js";
+
+// ─── Validate stage (#1313) ─────────────────────────────────────────────────────
+export type {
+  AssessPromptSafetyArgs,
+  CandidateSafetyScreen,
+  ScreenedPromptCandidate,
+} from "./validate.js";
+export { assessPromptSafety, screenCandidatesForSafety } from "./validate.js";
