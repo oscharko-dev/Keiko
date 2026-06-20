@@ -1620,7 +1620,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   .window {
     max-width: max(220px, calc(100vw - 88px));
   }
-
 }
 .tw-title {
   font-size: 13px;
@@ -7578,6 +7577,18 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   margin-left: 6px;
   color: var(--fg);
   font-size: 10px;
+}
+/* Issue #1285 — distinguishes a document-evidence citation (DOCX/XLSX/PDF extracted text) from a
+   code/text citation with a small leading format badge. */
+.grounded-citation-doc-badge {
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent-line);
+  color: var(--fg);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 .grounded-uncertainty {
   font-size: 11px;

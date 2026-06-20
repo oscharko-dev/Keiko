@@ -31,12 +31,14 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   validateConnectedContextPack,
   type ConnectedContextPack,
+  type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   buildGroundedAnswerContextPackSummary,
   type GroundedAnswer,
+  type GroundedCitationDocumentFormat,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -522,6 +524,27 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
   ].join("; ");
 }
 
+// Bounded document extraction (Issue #1285): a citation derived from a `document-extract` atom
+// refers to a connected DOCX/XLSX/PDF rather than a code/text file. The format token is derived
+// from the (already-redacted) scopePath suffix so prompt framing and browser citations can label
+// document evidence distinctly without re-deriving it in the UI.
+function documentFormatForAtom(atom: EvidenceAtom): GroundedCitationDocumentFormat | undefined {
+  if (atom.provenance.kind !== "document-extract") {
+    return undefined;
+  }
+  const path = atom.scopePath.toLowerCase();
+  if (path.endsWith(".docx")) {
+    return "docx";
+  }
+  if (path.endsWith(".xlsx")) {
+    return "xlsx";
+  }
+  if (path.endsWith(".pdf")) {
+    return "pdf";
+  }
+  return undefined;
+}
+
 export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): readonly string[] {
   const lines: string[] = [];
   for (const file of pack.files) {
@@ -537,8 +560,13 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
         score: excerpt.atom.score,
         stableId: excerpt.atom.stableId,
       });
+      const documentFormat = documentFormatForAtom(excerpt.atom);
+      const label =
+        documentFormat === undefined
+          ? "Evidence"
+          : `Document evidence (${documentFormat.toUpperCase()}, extracted text)`;
       lines.push(
-        `- Evidence ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
+        `- ${label} ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
       );
       lines.push("```");
       lines.push(promptSafeExcerptText(redactedString(redactor, excerpt.content)));
@@ -670,11 +698,13 @@ export function buildCitations(
   const citations: GroundedEvidenceCitation[] = [];
   for (const file of pack.files) {
     for (const excerpt of file.excerpts) {
+      const documentFormat = documentFormatForAtom(excerpt.atom);
       citations.push({
         scopePath: redactString(redactor, excerpt.atom.scopePath),
         lineRange: excerpt.atom.lineRange,
         score: excerpt.atom.score,
         stableId: redactString(redactor, excerpt.atom.stableId),
+        ...(documentFormat === undefined ? {} : { documentFormat }),
       });
     }
   }

@@ -102,6 +102,42 @@ a { color: inherit; }
 .theme-toggle .tspace { flex: 1; }
 [data-theme="light"] .theme-toggle .ti-moon, [data-theme="dark"] .theme-toggle .ti-sun { display: none; }
 
+/* ── appearance + contrast control (upgraded, JS-built) ─────── */
+.theme-control { display: flex; flex-direction: column; gap: 9px; margin: 14px 0 4px; }
+.tc-row { display: flex; align-items: center; gap: 10px; }
+.tc-label {
+  flex: none; width: 66px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.tc-seg {
+  display: flex; flex: 1; gap: 3px; padding: 3px;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+.tc-opt {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 26px; padding: 4px 6px;
+  border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-muted);
+  font: 600 11.5px/1 var(--font-ui); cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease, box-shadow 0.13s ease;
+}
+.tc-opt svg { width: 13px; height: 13px; flex: none; }
+.tc-opt:hover { color: var(--fg); }
+.tc-opt[aria-checked="true"] {
+  background: var(--card); color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 0 1px var(--line-soft);
+}
+.tc-opt[aria-checked="true"] svg { color: var(--accent-text); }
+/* when Contrast=Auto currently resolves to High via the OS, mark the High pill */
+.tc-opt[data-os-resolved="true"]::after {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent-text); margin-left: 1px;
+}
+@media (prefers-reduced-motion: reduce) { .tc-opt { transition: none; } }
+
 /* ── page layout ────────────────────────────────────────────── */
 .main { max-width: 1080px; margin: 0 auto; padding: 0 48px 140px; }
 
