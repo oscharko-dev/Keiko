@@ -799,6 +799,23 @@ describe("planGrounding — directive and condition guards", () => {
     expect(plan.directives).not.toContain("attribute-claims-to-sources");
   });
 
+  it("honors a candidate profile override when grounding is mandatory for that profile", () => {
+    const analysis = mk({
+      taskClass: "decision-support",
+      recommendedProfile: "precise",
+      groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+    });
+    expect(planGrounding(analysis).required).toBe(false);
+
+    const research = planGrounding(analysis, { profile: "research" });
+    expect(research.required).toBe(true);
+    expect(research.directives).toContain("attribute-claims-to-sources");
+
+    const safetyCritical = planGrounding(analysis, { profile: "safety-critical" });
+    expect(safetyCritical.required).toBe(true);
+    expect(safetyCritical.directives).toContain("attribute-claims-to-sources");
+  });
+
   it("keeps RAG hints for a research task even when it grounds on the repository", () => {
     // A research task on software grounds via repository-context, but a research synthesis is still
     // RAG-focused, so the RAGAS hints apply. Pins this intentional behaviour.

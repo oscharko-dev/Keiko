@@ -526,7 +526,7 @@ export function generateEnhancedPrompt(args: GenerateEnhancedPromptArgs): Enhanc
   assertValidGenerationInputs(analysis, plan);
   // Deterministic source policy for this prompt (Issue #1311). Derived purely from the analysis; it
   // emits a plan and never performs or authorizes retrieval.
-  const groundingPlan = planGrounding(analysis);
+  const groundingPlan = planGrounding(analysis, { profile: plan.selectedProfile });
   return {
     schemaVersion: analysis.schemaVersion,
     promptId,

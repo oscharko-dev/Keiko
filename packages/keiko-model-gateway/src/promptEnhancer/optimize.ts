@@ -32,7 +32,7 @@ import {
   type QualityIntelligenceBudgetState,
 } from "../qualityIntelligence/budget.js";
 import { generatePromptCandidates, type PromptCandidate } from "./candidates.js";
-import { scorePromptCandidate } from "./critic.js";
+import { estimatePromptTokens, scorePromptCandidate } from "./critic.js";
 
 // Default and limiting bounds. `candidateCount` cannot exceed the number of distinct generation
 // profiles (the slate size). The defaults give the "at least three candidates" behaviour out of the box.
@@ -115,6 +115,15 @@ export function rankCandidates(
   return [...scorecards].sort(compareCandidates);
 }
 
+export function rankedLoserReason(
+  winner: PromptCandidateScorecard,
+  loser: PromptCandidateScorecard,
+): Extract<PromptCandidateRejection["reason"], "lower-aggregate-score" | "lower-tie-break-rank"> {
+  return loser.aggregateScore < winner.aggregateScore
+    ? "lower-aggregate-score"
+    : "lower-tie-break-rank";
+}
+
 interface EvaluationOutcome {
   readonly scored: readonly PromptCandidateScorecard[];
   readonly budgetSkipped: readonly PromptCandidateRejection[];
@@ -122,9 +131,8 @@ interface EvaluationOutcome {
   readonly tokensConsumed: number;
 }
 
-// Evaluate the generated candidates in priority order within the token budget. The highest-priority
-// (baseline) candidate is always scored so a selection always exists; each later candidate is admitted
-// only while it fits the remaining budget. Every evaluated candidate counts as one iteration.
+// Evaluate generated candidates in priority order. A candidate is scored only when its deterministic
+// token estimate fits the remaining budget; otherwise it is rejected before scoring.
 function evaluateCandidates(
   candidates: readonly PromptCandidate[],
   analysis: PromptTaskAnalysis,
@@ -135,8 +143,18 @@ function evaluateCandidates(
   let budget: QualityIntelligenceBudgetState = createBudget(tokenBudget);
   let iterations = 0;
 
-  candidates.forEach((candidate, index) => {
+  candidates.forEach((candidate) => {
     iterations += 1;
+    const estimatedTokens = estimatePromptTokens(candidate.prompt);
+    if (estimatedTokens > remainingBudget(budget)) {
+      budgetSkipped.push({
+        candidateId: candidate.candidateId,
+        profile: candidate.profile,
+        aggregateScore: null,
+        reason: "exceeded-token-budget",
+      });
+      return;
+    }
     const card = scorePromptCandidate({
       candidateId: candidate.candidateId,
       profile: candidate.profile,
@@ -144,18 +162,8 @@ function evaluateCandidates(
       plan: candidate.plan,
       analysis,
     });
-    const isBaseline = index === 0;
-    if (isBaseline || card.estimatedTokens <= remainingBudget(budget)) {
-      scored.push(card);
-      budget = reserveBudget(budget, card.estimatedTokens);
-      return;
-    }
-    budgetSkipped.push({
-      candidateId: card.candidateId,
-      profile: card.profile,
-      aggregateScore: null,
-      reason: "exceeded-token-budget",
-    });
+    scored.push(card);
+    budget = reserveBudget(budget, card.estimatedTokens);
   });
 
   return { scored, budgetSkipped, iterations, tokensConsumed: budget.consumed };
@@ -181,8 +189,6 @@ export function optimizePromptCandidates(
     profilePreference: args.profilePreference,
   });
 
-  // The baseline candidate is always present (the baseline plan trivially preserves its own floor), so
-  // `candidates` is non-empty and a winner always exists.
   const { scored, budgetSkipped, iterations, tokensConsumed } = evaluateCandidates(
     candidates,
     args.analysis,
@@ -199,7 +205,7 @@ export function optimizePromptCandidates(
     candidateId: card.candidateId,
     profile: card.profile,
     aggregateScore: card.aggregateScore,
-    reason: "lower-aggregate-score" as const,
+    reason: rankedLoserReason(winner, card),
   }));
   const generationRejections: readonly PromptCandidateRejection[] = generationRejected.map(
     (entry) => ({

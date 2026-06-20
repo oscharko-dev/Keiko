@@ -15,6 +15,7 @@ import {
   DEFAULT_TOKEN_BUDGET,
   optimizePromptCandidates,
   rankCandidates,
+  rankedLoserReason,
 } from "../optimize.js";
 import { makeAnalysis, type AnalysisOverrides } from "./_support.js";
 
@@ -119,22 +120,36 @@ describe("optimizePromptCandidates", () => {
     expect(selection.ranked.length).toBe(1);
   });
 
-  it("bounds scoring by the token budget while always evaluating the baseline (AC4)", () => {
+  it("rejects candidates before scoring when they exceed the token budget (AC4)", () => {
+    const baselineOnly = optimizeFor({ recommendedProfile: "technical" }, { candidateCount: 1 });
     const selection = optimizeFor(
       { recommendedProfile: "technical" },
       {
         candidateCount: 3,
         maxIterations: 3,
-        tokenBudget: 1,
+        tokenBudget: baselineOnly.winner.estimatedTokens,
       },
     );
     expect(selection.candidatesConsidered).toBe(1);
-    expect(selection.tokensConsumed).toBeLessThanOrEqual(1);
+    expect(selection.tokensConsumed).toBe(baselineOnly.winner.estimatedTokens);
     const skipped = selection.rejected.filter((entry) => entry.reason === "exceeded-token-budget");
     expect(skipped.length).toBe(2);
     for (const entry of skipped) {
       expect(entry.aggregateScore).toBeNull();
     }
+  });
+
+  it("fails closed when no candidate fits the configured token budget", () => {
+    expect(() =>
+      optimizeFor(
+        { recommendedProfile: "technical" },
+        {
+          candidateCount: 3,
+          maxIterations: 3,
+          tokenBudget: 1,
+        },
+      ),
+    ).toThrow("Prompt candidate optimization produced no scored candidate.");
   });
 
   it("clamps candidateCount to the slate size and out-of-range bounds to safe values", () => {
@@ -143,12 +158,11 @@ describe("optimizePromptCandidates", () => {
       {
         candidateCount: 999,
         maxIterations: 0,
-        tokenBudget: -5,
       },
     );
     expect(selection.bounds.candidateCount).toBe(7);
     expect(selection.bounds.maxIterations).toBe(1);
-    expect(selection.bounds.tokenBudget).toBe(1);
+    expect(selection.bounds.tokenBudget).toBe(DEFAULT_TOKEN_BUDGET);
   });
 
   it("surfaces safety-floor rejections from candidate generation as auditable alternatives (AC3/AC5)", () => {
@@ -194,11 +208,17 @@ describe("optimizePromptCandidates", () => {
 
 describe("rankCandidates tie-breaking", () => {
   it("breaks an aggregate tie toward the safer candidate", () => {
-    const ranked = rankCandidates([
-      card("fast", 0.7, { safety: 0.6 }),
-      card("precise", 0.7, { safety: 0.9 }),
-    ]);
+    const loser = card("fast", 0.7, { safety: 0.6 });
+    const winner = card("precise", 0.7, { safety: 0.9 });
+    const ranked = rankCandidates([loser, winner]);
     expect(ranked[0]?.profile).toBe("precise");
+    expect(rankedLoserReason(winner, loser)).toBe("lower-tie-break-rank");
+  });
+
+  it("classifies lower aggregate losers separately from tie-break losers", () => {
+    expect(rankedLoserReason(card("precise", 0.8), card("fast", 0.7))).toBe(
+      "lower-aggregate-score",
+    );
   });
 
   it("breaks a safety tie toward the more complete candidate", () => {

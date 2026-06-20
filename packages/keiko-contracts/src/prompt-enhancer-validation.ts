@@ -59,6 +59,8 @@ import {
   isPromptCandidateRejectionReason,
   type PromptCandidateScorecard,
   type PromptCandidateSelection,
+  type PromptCriticDimension,
+  type PromptCriticDimensionScore,
 } from "./prompt-enhancer-critic.js";
 
 // ─── Result types ────────────────────────────────────────────────────────────────
@@ -935,10 +937,66 @@ function collectBoundsErrors(value: unknown, errors: string[]): void {
   }
   validateExactKeys(value, BOUNDS_KEYS, "selection.bounds", errors);
   for (const field of ["candidateCount", "tokenBudget", "maxIterations"] as const) {
-    if (!isNonNegativeInteger(value[field])) {
-      errors.push(`selection.bounds.${field} must be a non-negative integer`);
+    if (!isPositiveInteger(value[field])) {
+      errors.push(`selection.bounds.${field} must be a positive integer`);
     }
   }
+}
+
+function getDimensionScore(
+  card: PromptCandidateScorecard,
+  dimension: PromptCriticDimension,
+): number {
+  return card.dimensionScores.find((entry) => entry.dimension === dimension)?.score ?? 0;
+}
+
+function getProfileRank(card: PromptCandidateScorecard): number {
+  const index = PROMPT_ENHANCEMENT_PROFILE_IDS.indexOf(card.profile);
+  return index < 0 ? PROMPT_ENHANCEMENT_PROFILE_IDS.length : index;
+}
+
+function compareRankedScorecards(a: PromptCandidateScorecard, b: PromptCandidateScorecard): number {
+  const keys: readonly number[] = [
+    b.aggregateScore - a.aggregateScore,
+    getDimensionScore(b, "safety") - getDimensionScore(a, "safety"),
+    getDimensionScore(b, "completeness") - getDimensionScore(a, "completeness"),
+    getDimensionScore(b, "token-efficiency") - getDimensionScore(a, "token-efficiency"),
+    getProfileRank(a) - getProfileRank(b),
+  ];
+  for (const key of keys) {
+    if (key !== 0) return key < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+function sameDimensionScore(
+  left: PromptCriticDimensionScore,
+  right: PromptCriticDimensionScore,
+): boolean {
+  return (
+    left.dimension === right.dimension &&
+    left.score === right.score &&
+    left.rationale === right.rationale
+  );
+}
+
+function sameScorecard(left: PromptCandidateScorecard, right: PromptCandidateScorecard): boolean {
+  return (
+    left.candidateId === right.candidateId &&
+    left.profile === right.profile &&
+    left.aggregateScore === right.aggregateScore &&
+    left.estimatedTokens === right.estimatedTokens &&
+    left.dimensionScores.length === right.dimensionScores.length &&
+    left.dimensionScores.every((entry, index) => {
+      const other = right.dimensionScores[index];
+      return other !== undefined && sameDimensionScore(entry, other);
+    })
+  );
+}
+
+function toValidScorecard(value: unknown): PromptCandidateScorecard | undefined {
+  const result = validatePromptCandidateScorecard(value);
+  return result.ok ? result.value : undefined;
 }
 
 function collectRankedErrors(ranked: unknown, winner: unknown, errors: string[]): void {
@@ -958,6 +1016,22 @@ function collectRankedErrors(ranked: unknown, winner: unknown, errors: string[])
   if (isRecord(firstRanked) && firstRanked.candidateId !== winnerId) {
     errors.push("selection.winner must be the first ranked candidate");
   }
+  const firstScorecard = toValidScorecard(firstRanked);
+  const winnerScorecard = toValidScorecard(winner);
+  if (
+    firstScorecard !== undefined &&
+    winnerScorecard !== undefined &&
+    !sameScorecard(winnerScorecard, firstScorecard)
+  ) {
+    errors.push("selection.winner must exactly match the first ranked candidate");
+  }
+  const scorecards = ranked.map((entry: unknown) => toValidScorecard(entry));
+  scorecards.forEach((entry, index) => {
+    const next = scorecards[index + 1];
+    if (entry !== undefined && next !== undefined && compareRankedScorecards(entry, next) > 0) {
+      errors.push("selection.ranked must be sorted in deterministic rank order");
+    }
+  });
 }
 
 function collectRejectedListErrors(rejected: unknown, errors: string[]): void {
@@ -970,6 +1044,57 @@ function collectRejectedListErrors(rejected: unknown, errors: string[]): void {
   rejected.forEach((entry: unknown, index) => {
     collectRejectionErrors(entry, index, errors);
   });
+}
+
+function collectSelectionCounterErrors(input: Record<string, unknown>, errors: string[]): void {
+  for (const field of ["iterations", "candidatesConsidered", "tokensConsumed"] as const) {
+    if (!isNonNegativeInteger(input[field])) {
+      errors.push(`selection.${field} must be a non-negative integer`);
+    }
+  }
+}
+
+function collectExceededBoundError(
+  value: unknown,
+  bound: unknown,
+  message: string,
+  errors: string[],
+): void {
+  if (isNonNegativeInteger(value) && isPositiveInteger(bound) && value > bound) {
+    errors.push(message);
+  }
+}
+
+function collectSelectionBoundUsageErrors(input: Record<string, unknown>, errors: string[]): void {
+  if (!isRecord(input.bounds)) return;
+  collectExceededBoundError(
+    input.iterations,
+    input.bounds.maxIterations,
+    "selection.iterations must not exceed selection.bounds.maxIterations",
+    errors,
+  );
+  collectExceededBoundError(
+    input.candidatesConsidered,
+    input.bounds.candidateCount,
+    "selection.candidatesConsidered must not exceed selection.bounds.candidateCount",
+    errors,
+  );
+  collectExceededBoundError(
+    input.tokensConsumed,
+    input.bounds.tokenBudget,
+    "selection.tokensConsumed must not exceed selection.bounds.tokenBudget",
+    errors,
+  );
+}
+
+function collectCandidatesConsideredErrors(input: Record<string, unknown>, errors: string[]): void {
+  if (
+    Array.isArray(input.ranked) &&
+    isNonNegativeInteger(input.candidatesConsidered) &&
+    input.candidatesConsidered !== input.ranked.length
+  ) {
+    errors.push("selection.candidatesConsidered must equal selection.ranked.length");
+  }
 }
 
 /**
@@ -993,11 +1118,9 @@ export function validatePromptCandidateSelection(
   collectRankedErrors(input.ranked, input.winner, errors);
   collectRejectedListErrors(input.rejected, errors);
   collectBoundsErrors(input.bounds, errors);
-  for (const field of ["iterations", "candidatesConsidered", "tokensConsumed"] as const) {
-    if (!isNonNegativeInteger(input[field])) {
-      errors.push(`selection.${field} must be a non-negative integer`);
-    }
-  }
+  collectSelectionCounterErrors(input, errors);
+  collectSelectionBoundUsageErrors(input, errors);
+  collectCandidatesConsideredErrors(input, errors);
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: input as unknown as PromptCandidateSelection };
 }

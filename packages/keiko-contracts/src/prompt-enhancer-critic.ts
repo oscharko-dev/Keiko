@@ -75,6 +75,8 @@ export interface PromptCandidateScorecard {
 export type PromptCandidateRejectionReason =
   // A scored candidate ranked below the winner.
   | "lower-aggregate-score"
+  // A scored candidate tied the aggregate but lost a deterministic tie-break.
+  | "lower-tie-break-rank"
   // The candidate's token estimate would exceed the remaining optimization token budget; never scored.
   | "exceeded-token-budget"
   // Structurally identical to an already-considered, higher-ranked candidate.
@@ -85,6 +87,7 @@ export type PromptCandidateRejectionReason =
 
 export const PROMPT_CANDIDATE_REJECTION_REASONS: readonly PromptCandidateRejectionReason[] = [
   "lower-aggregate-score",
+  "lower-tie-break-rank",
   "exceeded-token-budget",
   "duplicate-candidate",
   "safety-floor-not-preserved",

@@ -21,6 +21,7 @@ import {
   type GroundingSourcePolicy,
   type GroundingStrategy,
   type NoAnswerCondition,
+  type PromptEnhancementProfileId,
   type PromptTaskAnalysis,
   type PromptTaskClass,
   type RagEvaluationDimension,
@@ -286,13 +287,22 @@ function buildRagEvaluation(
 }
 
 // ─── Public entry point ─────────────────────────────────────────────────────────────
+export interface PlanGroundingOptions {
+  // Defaults to the analyzer recommendation. Candidate generation passes the selected candidate profile
+  // so profile-mandated grounding cannot be weakened by the original recommendation.
+  readonly profile?: PromptEnhancementProfileId | undefined;
+}
+
 /**
- * Build a deterministic `GroundingPlan` from a `PromptTaskAnalysis`. Pure: identical analyses always
- * produce an identical plan. The plan is a provider-neutral source policy; it never performs or
+ * Build a deterministic `GroundingPlan` from a `PromptTaskAnalysis`. Pure: identical analyses/options
+ * always produce an identical plan. The plan is a provider-neutral source policy; it never performs or
  * authorizes retrieval.
  */
-export function planGrounding(analysis: PromptTaskAnalysis): GroundingPlan {
-  const profile = PROMPT_ENHANCEMENT_PROFILES[analysis.recommendedProfile];
+export function planGrounding(
+  analysis: PromptTaskAnalysis,
+  options: PlanGroundingOptions = {},
+): GroundingPlan {
+  const profile = PROMPT_ENHANCEMENT_PROFILES[options.profile ?? analysis.recommendedProfile];
   const connected = analysis.groundingNeed.signals.includes("supplied-context-reference");
   const strategy = selectStrategy(analysis);
   const required = isGroundingRequired(strategy, profile.groundingMandatory, connected);

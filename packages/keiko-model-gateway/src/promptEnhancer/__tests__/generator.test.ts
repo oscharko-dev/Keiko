@@ -299,6 +299,22 @@ describe("generateEnhancedPrompt — grounding and uncertainty", () => {
     ).toBe(true);
   });
 
+  it("derives grounding from the selected candidate profile, not only the recommendation", () => {
+    const prompt = generateFor(
+      {
+        taskClass: "decision-support",
+        recommendedProfile: "precise",
+        groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+      },
+      { text: "Compare deployment options." },
+      { profilePreference: "research" },
+    );
+    expect(prompt.groundingPlan.required).toBe(true);
+    expect(
+      prompt.groundingRules.some((r) => /attribute each material factual claim/i.test(r)),
+    ).toBe(true);
+  });
+
   it("surfaces clarification questions under the clarify strategy", () => {
     const prompt = generateFor(
       {
