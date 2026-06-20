@@ -105,6 +105,16 @@ function compareCandidates(a: PromptCandidateScorecard, b: PromptCandidateScorec
   return 0;
 }
 
+/**
+ * Rank scored candidates by the deterministic total order (winner first). Pure; does not mutate the
+ * input. Exposed so callers (and tests) can rank a scorecard set without re-running the loop.
+ */
+export function rankCandidates(
+  scorecards: readonly PromptCandidateScorecard[],
+): readonly PromptCandidateScorecard[] {
+  return [...scorecards].sort(compareCandidates);
+}
+
 interface EvaluationOutcome {
   readonly scored: readonly PromptCandidateScorecard[];
   readonly budgetSkipped: readonly PromptCandidateRejection[];
@@ -179,7 +189,7 @@ export function optimizePromptCandidates(
     bounds.tokenBudget,
   );
 
-  const ranked = [...scored].sort(compareCandidates);
+  const ranked = rankCandidates(scored);
   const [winner] = ranked;
   if (winner === undefined) {
     throw new Error("Prompt candidate optimization produced no scored candidate.");

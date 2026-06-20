@@ -55,6 +55,14 @@ describe("scorePromptCandidate", () => {
     }
   });
 
+  it("uses dimension weights that sum to exactly 1 so the aggregate stays within [0, 1]", () => {
+    const total = PROMPT_CRITIC_DIMENSIONS.reduce(
+      (sum, dimension) => sum + PROMPT_CRITIC_DIMENSION_WEIGHTS[dimension],
+      0,
+    );
+    expect(total).toBeCloseTo(1, 10);
+  });
+
   it("aggregate equals the weighted sum of the dimension scores (rounded to 4 dp)", () => {
     const card = scorePromptCandidate(contextFor({ recommendedProfile: "research" }));
     const expected = card.dimensionScores.reduce(
