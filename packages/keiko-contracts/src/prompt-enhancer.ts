@@ -95,6 +95,9 @@ export const validatePromptEnhancerIdString = (
   if (hasControlCharacter(value)) {
     return { ok: false, reason: `${kind} contains control characters` };
   }
+  if (stripUnsafeFormatChars(value) !== value) {
+    return { ok: false, reason: `${kind} contains unsafe format characters` };
+  }
   if (PROMPT_ENHANCER_ID_FORBIDDEN_FRAGMENTS.some((fragment) => value.includes(fragment))) {
     return { ok: false, reason: `${kind} contains a forbidden path fragment` };
   }

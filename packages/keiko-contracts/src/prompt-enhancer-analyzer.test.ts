@@ -194,6 +194,17 @@ describe("analyzePrompt grounding need (AC3)", () => {
     expect(grounding.signals).toContain("supplied-context-reference");
   });
 
+  it("routes attached references to supplied-context grounding", () => {
+    const request = makeRequest("Summarize the report.");
+    const grounding = analyzePrompt({
+      ...request,
+      input: { text: request.input.text, attachmentCount: 1 },
+    }).groundingNeed;
+    expect(grounding.kind).toBe("supplied-context");
+    expect(grounding.volatile).toBe(false);
+    expect(grounding.signals).toContain("supplied-context-reference");
+  });
+
   it("detects supplied context from an explicit attachment phrase", () => {
     expect(analyze("Based on the attached file, answer the question.").groundingNeed.kind).toBe(
       "supplied-context",
@@ -299,6 +310,14 @@ describe("analyzePrompt criticality and risk flags", () => {
   it("still escalates an explicit advice request in a safety-critical domain", () => {
     const analysis = analyze("What dose of medication should I take for my symptoms?");
     expect(analysis.taskClass).toBe("safety-critical");
+    expect(analysis.criticality).toBe("critical");
+    expect(analysis.riskFlags).toContain("safety-critical-advice");
+  });
+
+  it("keeps the safety-critical advice flag for consequential finance decisions", () => {
+    const analysis = analyze("Help me decide whether to refinance my mortgage.");
+    expect(analysis.taskClass).toBe("safety-critical");
+    expect(analysis.domain).toBe("finance");
     expect(analysis.criticality).toBe("critical");
     expect(analysis.riskFlags).toContain("safety-critical-advice");
   });

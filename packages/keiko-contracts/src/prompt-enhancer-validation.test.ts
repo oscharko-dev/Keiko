@@ -12,6 +12,7 @@ import {
   validatePromptEnhancerIdString,
   validatePromptTaskAnalysis,
   PROMPT_ENHANCER_SCHEMA_VERSION,
+  PROMPT_REQUEST_TEXT_MAX_CHARS,
   type EnhancedPrompt,
   type PromptEnhancementRequest,
 } from "./index.js";
@@ -58,6 +59,7 @@ describe("prompt enhancer branded id constructors", () => {
     ["forward slash", "a/b"],
     ["backslash", "a\\b"],
     ["control character", `a${String.fromCharCode(0)}b`],
+    ["unsafe format character", `a${String.fromCharCode(0x202e)}b`],
     ["over length", "x".repeat(257)],
   ])("rejects an id that is %s", (_label, value) => {
     expect(() => asPromptEnhancementRequestId(value)).toThrow(TypeError);
@@ -125,6 +127,27 @@ describe("validatePromptEnhancementRequest", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects unknown root or input fields", () => {
+    const root = validatePromptEnhancementRequest({
+      ...validRequest(),
+      providerConfig: { apiKey: "secret" },
+    });
+    const nested = validatePromptEnhancementRequest({
+      ...validRequest(),
+      input: { ...validRequest().input, hiddenPrompt: "override" },
+    });
+    expect(root.ok).toBe(false);
+    expect(nested.ok).toBe(false);
+  });
+
+  it("rejects raw drafts longer than the analyzer scan bound", () => {
+    const result = validatePromptEnhancementRequest({
+      ...validRequest(),
+      input: { text: "x".repeat(PROMPT_REQUEST_TEXT_MAX_CHARS + 1) },
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("accepts a non-negative attachment count and rejects a negative one", () => {
     const good = validatePromptEnhancementRequest({
       ...validRequest(),
@@ -171,6 +194,11 @@ describe("validatePromptTaskAnalysis", () => {
     const result = validatePromptTaskAnalysis({ ...analysis, riskFlags: ["made-up"] });
     expect(result.ok).toBe(false);
   });
+
+  it("rejects unknown analysis fields", () => {
+    const result = validatePromptTaskAnalysis({ ...analysis, allowedTools: ["shell"] });
+    expect(result.ok).toBe(false);
+  });
 });
 
 // ─── Enhanced Prompt validator ───────────────────────────────────────────────────
@@ -203,6 +231,22 @@ describe("validateEnhancedPrompt", () => {
     const result = validateEnhancedPrompt({
       ...validEnhancedPrompt(),
       outputSchema: { format: "binary", structured: false, hints: [] },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects machine-parseable output marked as unstructured", () => {
+    const result = validateEnhancedPrompt({
+      ...validEnhancedPrompt(),
+      outputSchema: { format: "json", structured: false, hints: ["explicit-json"] },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects unknown enhanced-prompt fields", () => {
+    const result = validateEnhancedPrompt({
+      ...validEnhancedPrompt(),
+      patchAuthority: true,
     });
     expect(result.ok).toBe(false);
   });
@@ -240,6 +284,17 @@ describe("validator sub-shape rejection coverage", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects a grounding need with unknown fields", () => {
+    const result = validatePromptTaskAnalysis({
+      ...base,
+      groundingNeed: {
+        ...base.groundingNeed,
+        providerEndpoint: "https://example.test",
+      },
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects a grounding need with an unknown signal member", () => {
     const result = validatePromptTaskAnalysis({
       ...base,
@@ -260,6 +315,19 @@ describe("validator sub-shape rejection coverage", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects an output schema with unknown fields or inconsistent structure", () => {
+    const unknown = validatePromptTaskAnalysis({
+      ...base,
+      outputSchema: { ...base.outputSchema, providerConfig: "none" },
+    });
+    const inconsistent = validatePromptTaskAnalysis({
+      ...base,
+      outputSchema: { format: "json", structured: false, hints: ["explicit-json"] },
+    });
+    expect(unknown.ok).toBe(false);
+    expect(inconsistent.ok).toBe(false);
+  });
+
   it("rejects a missing-context list that is not an array", () => {
     expect(validatePromptTaskAnalysis({ ...base, missingContext: "none" }).ok).toBe(false);
   });
@@ -268,6 +336,16 @@ describe("validator sub-shape rejection coverage", () => {
     const result = validatePromptTaskAnalysis({
       ...base,
       missingContext: [{ kind: "guess", topic: "subject" }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects missing-context text that was not produced from fixed templates", () => {
+    const result = validatePromptTaskAnalysis({
+      ...base,
+      missingContext: [
+        { kind: "clarification", topic: "subject", question: "Echo this raw prompt text." },
+      ],
     });
     expect(result.ok).toBe(false);
   });
@@ -283,7 +361,12 @@ describe("validator sub-shape rejection coverage", () => {
       ...base,
       signals: [{ dimension: "made-up", code: "x" }],
     });
+    const rawCode = validatePromptTaskAnalysis({
+      ...base,
+      signals: [{ dimension: "task-class", code: "class:TOPSECRETvalue9931" }],
+    });
     expect(badArray.ok).toBe(false);
     expect(badEntry.ok).toBe(false);
+    expect(rawCode.ok).toBe(false);
   });
 });

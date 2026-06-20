@@ -18,11 +18,11 @@ import {
   MISSING_CONTEXT_TOPICS,
   MISSING_INFORMATION_STRATEGIES,
   OUTPUT_FORMAT_HINTS,
+  PROMPT_ANALYSIS_MAX_SCAN_CHARS,
   PROMPT_CRITICALITIES,
   PROMPT_DOMAINS,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  PROMPT_MISSING_CONTEXT_MAX_CHARS,
   PROMPT_OUTPUT_FORMATS,
   PROMPT_RISK_CLASSES,
   PROMPT_SIGNAL_DIMENSIONS,
@@ -45,12 +45,82 @@ export interface ValidationFail {
 export type PromptEnhancerValidation<T> = ValidationOk<T> | ValidationFail;
 
 // Maximum length of a raw draft accepted by the request validator. Generous enough for large pasted
-// drafts; the analyzer separately truncates to its scan bound.
-export const PROMPT_REQUEST_TEXT_MAX_CHARS = 1_000_000;
+// drafts while ensuring analyzer risk classification cannot silently ignore unvalidated suffix text.
+export const PROMPT_REQUEST_TEXT_MAX_CHARS = PROMPT_ANALYSIS_MAX_SCAN_CHARS;
 const PROMPT_LOCALE_MAX_CHARS = 35;
 const PROMPT_SIGNAL_CODE_MAX_CHARS = 128;
 const ENHANCED_PROMPT_FIELD_MAX_CHARS = 20_000;
 const ENHANCED_PROMPT_LIST_MAX = 256;
+const STRUCTURED_OUTPUT_FORMATS: ReadonlySet<string> = new Set(["json", "yaml", "csv", "table"]);
+
+const REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "requestId",
+  "input",
+  "missingInformationStrategy",
+  "profilePreference",
+  "locale",
+]);
+const RAW_INPUT_KEYS: ReadonlySet<string> = new Set([
+  "text",
+  "hasConnectedContext",
+  "attachmentCount",
+]);
+const ANALYSIS_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "requestId",
+  "taskClass",
+  "taskClassConfidence",
+  "domain",
+  "criticality",
+  "groundingNeed",
+  "outputSchema",
+  "missingContext",
+  "riskFlags",
+  "recommendedProfile",
+  "normalizedInputLength",
+  "signals",
+]);
+const GROUNDING_NEED_KEYS: ReadonlySet<string> = new Set(["kind", "volatile", "signals"]);
+const OUTPUT_SCHEMA_KEYS: ReadonlySet<string> = new Set(["format", "structured", "hints"]);
+const SIGNAL_KEYS: ReadonlySet<string> = new Set(["dimension", "code"]);
+const CLARIFICATION_KEYS: ReadonlySet<string> = new Set(["kind", "topic", "question"]);
+const ASSUMPTION_KEYS: ReadonlySet<string> = new Set(["kind", "topic", "statement"]);
+const ENHANCED_PROMPT_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "promptId",
+  "role",
+  "goal",
+  "context",
+  "input",
+  "taskDecomposition",
+  "constraints",
+  "groundingRules",
+  "outputSchema",
+  "qualityCriteria",
+  "uncertaintyHandling",
+  "safetyRules",
+]);
+
+const CLARIFICATION_TEMPLATES: Readonly<Record<string, string>> = {
+  subject: "What specific subject or task should this prompt address?",
+  scope: "Which part of the work should the task focus on?",
+  audience: "Who is the intended audience for the output?",
+  "output-format": "What output format is expected (for example JSON, a table, or prose)?",
+  constraints: "Are there language, framework, or length constraints to honor?",
+  "data-source": "Which files, documents, or sources should ground the answer?",
+  "success-criteria": "What defines a successful outcome for this task?",
+};
+
+const ASSUMPTION_TEMPLATES: Readonly<Record<string, string>> = {
+  subject: "Assuming the broadest reasonable interpretation of the requested subject.",
+  scope: "Assuming the task applies to the most relevant available scope.",
+  audience: "Assuming a general professional audience.",
+  "output-format": "Assuming a structured format appropriate to the task.",
+  constraints: "Assuming no constraints beyond standard best practices.",
+  "data-source": "Assuming the answer should rely only on supplied context, with gaps flagged.",
+  "success-criteria": "Assuming correctness and completeness are the primary success criteria.",
+};
 
 // ─── Pure predicates ─────────────────────────────────────────────────────────────
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -67,6 +137,17 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 const isBoundedSafeText = (value: unknown, max: number): value is string =>
   typeof value === "string" && value.length <= max && stripUnsafeFormatChars(value) === value;
 
+function validateExactKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  label: string,
+  errors: string[],
+): void {
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    errors.push(`${label} must not contain unknown fields`);
+  }
+}
+
 function pushIdError(value: unknown, field: string, kind: string, errors: string[]): void {
   const result = validatePromptEnhancerIdString(value, kind);
   if (!result.ok) errors.push(`${field}: ${result.reason}`);
@@ -78,6 +159,7 @@ function validateRawInput(input: unknown, errors: string[]): void {
     errors.push("request.input must be an object");
     return;
   }
+  validateExactKeys(input, RAW_INPUT_KEYS, "request.input", errors);
   if (typeof input.text !== "string" || input.text.length > PROMPT_REQUEST_TEXT_MAX_CHARS) {
     errors.push(
       `request.input.text must be a string of at most ${String(PROMPT_REQUEST_TEXT_MAX_CHARS)} characters`,
@@ -98,6 +180,7 @@ export function validatePromptEnhancementRequest(
     return { ok: false, errors: ["request must be an object"] };
   }
   const errors: string[] = [];
+  validateExactKeys(input, REQUEST_KEYS, "request", errors);
   if (input.schemaVersion !== PROMPT_ENHANCER_SCHEMA_VERSION) {
     errors.push(`request.schemaVersion must be "${PROMPT_ENHANCER_SCHEMA_VERSION}"`);
   }
@@ -129,6 +212,7 @@ function validateGroundingNeed(value: unknown, errors: string[]): void {
     errors.push("analysis.groundingNeed must be an object");
     return;
   }
+  validateExactKeys(value, GROUNDING_NEED_KEYS, "analysis.groundingNeed", errors);
   if (!isMember(value.kind, GROUNDING_NEED_KINDS)) {
     errors.push(`analysis.groundingNeed.kind must be one of ${GROUNDING_NEED_KINDS.join("|")}`);
   }
@@ -145,11 +229,18 @@ function validateOutputSchema(value: unknown, errors: string[]): void {
     errors.push("outputSchema must be an object");
     return;
   }
+  validateExactKeys(value, OUTPUT_SCHEMA_KEYS, "outputSchema", errors);
   if (!isMember(value.format, PROMPT_OUTPUT_FORMATS)) {
     errors.push(`outputSchema.format must be one of ${PROMPT_OUTPUT_FORMATS.join("|")}`);
   }
   if (typeof value.structured !== "boolean") {
     errors.push("outputSchema.structured must be a boolean");
+  } else if (
+    typeof value.format === "string" &&
+    PROMPT_OUTPUT_FORMATS.includes(value.format as (typeof PROMPT_OUTPUT_FORMATS)[number]) &&
+    value.structured !== STRUCTURED_OUTPUT_FORMATS.has(value.format)
+  ) {
+    errors.push("outputSchema.structured must match the selected output format");
   }
   if (!Array.isArray(value.hints) || value.hints.some((h) => !isMember(h, OUTPUT_FORMAT_HINTS))) {
     errors.push("outputSchema.hints must be an array of known output-format hints");
@@ -159,10 +250,16 @@ function validateOutputSchema(value: unknown, errors: string[]): void {
 function isValidMissingContextItem(item: unknown): item is ClarificationOrAssumption {
   if (!isRecord(item) || !isMember(item.topic, MISSING_CONTEXT_TOPICS)) return false;
   if (item.kind === "clarification") {
-    return isBoundedSafeText(item.question, PROMPT_MISSING_CONTEXT_MAX_CHARS);
+    return (
+      Object.keys(item).every((key) => CLARIFICATION_KEYS.has(key)) &&
+      item.question === CLARIFICATION_TEMPLATES[item.topic]
+    );
   }
   if (item.kind === "assumption") {
-    return isBoundedSafeText(item.statement, PROMPT_MISSING_CONTEXT_MAX_CHARS);
+    return (
+      Object.keys(item).every((key) => ASSUMPTION_KEYS.has(key)) &&
+      item.statement === ASSUMPTION_TEMPLATES[item.topic]
+    );
   }
   return false;
 }
@@ -176,15 +273,39 @@ function validateMissingContext(value: unknown, errors: string[]): void {
 function validateSignals(value: unknown, errors: string[]): void {
   if (
     !Array.isArray(value) ||
-    value.some(
-      (s) =>
-        !isRecord(s) ||
-        !isMember(s.dimension, PROMPT_SIGNAL_DIMENSIONS) ||
-        !isBoundedSafeText(s.code, PROMPT_SIGNAL_CODE_MAX_CHARS),
-    )
+    value.some((s) => !isRecord(s) || !isValidSignal(s))
   ) {
     errors.push("analysis.signals must be an array of {dimension, code} records");
   }
+}
+
+function isCodeWithMember(code: string, prefix: string, allowed: readonly string[]): boolean {
+  return code.startsWith(prefix) && allowed.includes(code.slice(prefix.length));
+}
+
+const SIGNAL_CODE_VALIDATORS: Readonly<Record<string, (code: string) => boolean>> = {
+  "task-class": (code) => isCodeWithMember(code, "class:", PROMPT_TASK_CLASSES),
+  domain: (code) => isCodeWithMember(code, "domain:", PROMPT_DOMAINS),
+  grounding: (code) =>
+    isCodeWithMember(code, "grounding:", GROUNDING_NEED_KINDS) ||
+    isCodeWithMember(code, "signal:", GROUNDING_SIGNALS),
+  output: (code) =>
+    isCodeWithMember(code, "format:", PROMPT_OUTPUT_FORMATS) ||
+    isCodeWithMember(code, "hint:", OUTPUT_FORMAT_HINTS),
+  risk: (code) => isCodeWithMember(code, "risk:", PROMPT_RISK_CLASSES),
+  "missing-context": (code) => isCodeWithMember(code, "topic:", MISSING_CONTEXT_TOPICS),
+};
+
+function isValidSignal(signal: Record<string, unknown>): boolean {
+  if (
+    !Object.keys(signal).every((key) => SIGNAL_KEYS.has(key)) ||
+    !isMember(signal.dimension, PROMPT_SIGNAL_DIMENSIONS) ||
+    !isBoundedSafeText(signal.code, PROMPT_SIGNAL_CODE_MAX_CHARS)
+  ) {
+    return false;
+  }
+  const validator = SIGNAL_CODE_VALIDATORS[signal.dimension];
+  return validator !== undefined && validator(signal.code);
 }
 
 // ─── Analysis validator ──────────────────────────────────────────────────────────
@@ -215,6 +336,7 @@ export function validatePromptTaskAnalysis(
     return { ok: false, errors: ["analysis must be an object"] };
   }
   const errors: string[] = [];
+  validateExactKeys(input, ANALYSIS_KEYS, "analysis", errors);
   if (input.schemaVersion !== PROMPT_ENHANCER_SCHEMA_VERSION) {
     errors.push(`analysis.schemaVersion must be "${PROMPT_ENHANCER_SCHEMA_VERSION}"`);
   }
@@ -256,6 +378,7 @@ export function validateEnhancedPrompt(input: unknown): PromptEnhancerValidation
     return { ok: false, errors: ["enhancedPrompt must be an object"] };
   }
   const errors: string[] = [];
+  validateExactKeys(input, ENHANCED_PROMPT_KEYS, "enhancedPrompt", errors);
   if (input.schemaVersion !== PROMPT_ENHANCER_SCHEMA_VERSION) {
     errors.push(`enhancedPrompt.schemaVersion must be "${PROMPT_ENHANCER_SCHEMA_VERSION}"`);
   }

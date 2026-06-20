@@ -86,7 +86,8 @@ function buildView(normalized: string, request: PromptEnhancementRequest): Analy
   return {
     normalizedLength: normalized.length,
     lower,
-    hasConnectedContext: request.input.hasConnectedContext === true,
+    hasConnectedContext:
+      request.input.hasConnectedContext === true || (request.input.attachmentCount ?? 0) > 0,
     meaningfulTokenCount: countMeaningfulTokens(lower),
   };
 }
@@ -500,7 +501,7 @@ function classify(view: AnalysisView): Classification {
     isSafetyCriticalDomain(domain) && isAdviceSeeking(base.taskClass, view.lower);
   const taskClass: PromptTaskClass = safetyOverride ? "safety-critical" : base.taskClass;
   const confidence: PromptSignalStrength = safetyOverride ? "strong" : base.confidence;
-  const riskFlags = detectRiskFlags(view.lower, domain, taskClass);
+  const riskFlags = detectRiskFlags(view.lower, domain, base.taskClass);
   const criticality = deriveCriticality(domain, taskClass, riskFlags);
   return { taskClass, confidence, domain, criticality, riskFlags };
 }
