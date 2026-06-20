@@ -245,7 +245,7 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
   };
 }
 
-async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
+export async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
   // pdfjs-dist imports browser geometry constructors even for text-layer extraction.
   // Keiko does not render PDFs here, so minimal no-op constructors are sufficient.
   installPdfTextExtractionDomPolyfills();
@@ -284,7 +284,7 @@ function pageUnit(page: PageRecord): ParsedUnit {
       };
 }
 
-interface PageTextReadState {
+export interface PageTextReadState {
   readonly input: ParserSelectionInput;
   readonly options: ParserOptions;
   readonly startedAt: number;
@@ -292,7 +292,7 @@ interface PageTextReadState {
   readonly scannedObjects: number;
 }
 
-interface PageTextReadResult {
+export interface PageTextReadResult {
   readonly text: string;
   readonly scannedObjects: number;
   readonly diagnostic?: ParserDiagnostic;
@@ -338,7 +338,7 @@ function appendPdfTextItems(
   return { state: next };
 }
 
-async function readPageText(
+export async function readPageText(
   page: PdfPageLike,
   state: PageTextReadState,
 ): Promise<PageTextReadResult> {
