@@ -18,6 +18,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
+import { sectionPathHash } from "../section-path-hash.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
 const INSERT_DOCUMENT_SQL = [
@@ -50,9 +51,9 @@ const INSERT_PAGE_SQL = [
 
 const INSERT_SECTION_SQL = [
   "INSERT INTO sections (",
-  "  capsule_id, document_id, section_path_json, character_start, character_end",
+  "  capsule_id, document_id, section_path_json, section_path_hash, character_start, character_end",
   ") VALUES (",
-  "  :capsule_id, :document_id, :section_path_json, :character_start, :character_end",
+  "  :capsule_id, :document_id, :section_path_json, :section_path_hash, :character_start, :character_end",
   ")",
 ].join(" ");
 
@@ -429,13 +430,16 @@ export function insertPageRow(
 
 export function insertSectionRow(
   db: DatabaseSync,
+  cipher: StoreContentCipher,
   capsuleId: KnowledgeCapsuleId,
   section: SectionRecord,
 ): void {
+  const sectionPathJson = JSON.stringify(section.sectionPath);
   statements(db).insertSection.run({
     capsule_id: capsuleId,
     document_id: section.documentId,
-    section_path_json: JSON.stringify(section.sectionPath),
+    section_path_json: cipher.sealText(sectionPathJson),
+    section_path_hash: sectionPathHash(section.sectionPath),
     character_start: section.characterStart,
     character_end: section.characterEnd,
   });
@@ -446,6 +450,7 @@ export function insertSectionRow(
 type ParsedUnitParams = Record<string, string | number | null>;
 
 function parsedUnitParams(
+  cipher: StoreContentCipher,
   capsuleId: KnowledgeCapsuleId,
   unitId: string,
   unit: ParsedUnit,
@@ -466,10 +471,14 @@ function parsedUnitParams(
     character_start: null,
     character_end: null,
   };
-  return populateUnitFields(base, unit);
+  return populateUnitFields(base, unit, cipher);
 }
 
-function populateUnitFields(base: ParsedUnitParams, unit: ParsedUnit): ParsedUnitParams {
+function populateUnitFields(
+  base: ParsedUnitParams,
+  unit: ParsedUnit,
+  cipher: StoreContentCipher,
+): ParsedUnitParams {
   if (unit.kind === "page") {
     return {
       ...base,
@@ -482,7 +491,7 @@ function populateUnitFields(base: ParsedUnitParams, unit: ParsedUnit): ParsedUni
   if (unit.kind === "section") {
     return {
       ...base,
-      section_path_json: JSON.stringify(unit.sectionPath),
+      section_path_json: cipher.sealText(JSON.stringify(unit.sectionPath)),
       character_start: unit.characterStart,
       character_end: unit.characterEnd,
     };
@@ -507,7 +516,8 @@ function populateUnitFields(base: ParsedUnitParams, unit: ParsedUnit): ParsedUni
   if (unit.kind === "html-block") {
     return {
       ...base,
-      heading_path_json: unit.headingPath !== undefined ? JSON.stringify(unit.headingPath) : null,
+      heading_path_json:
+        unit.headingPath !== undefined ? cipher.sealText(JSON.stringify(unit.headingPath)) : null,
       character_start: unit.characterStart,
       character_end: unit.characterEnd,
     };
@@ -517,11 +527,12 @@ function populateUnitFields(base: ParsedUnitParams, unit: ParsedUnit): ParsedUni
 
 export function insertParsedUnitRow(
   db: DatabaseSync,
+  cipher: StoreContentCipher,
   capsuleId: KnowledgeCapsuleId,
   unitId: string,
   unit: ParsedUnit,
 ): void {
-  statements(db).insertParsedUnit.run(parsedUnitParams(capsuleId, unitId, unit));
+  statements(db).insertParsedUnit.run(parsedUnitParams(cipher, capsuleId, unitId, unit));
 }
 
 export function insertDiagnosticRow(

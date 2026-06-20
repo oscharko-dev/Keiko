@@ -191,8 +191,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 12 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(12);
+  it("is the integer 13 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(13);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -268,6 +268,22 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       const byName = new Map(columns.map((c) => [c.name ?? "", c]));
       expect(byName.get("chunking_strategy_version")?.type).toBe("TEXT");
       expect(byName.has("chunking_strategy_version")).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists section_path_hash for duplicate-section identity under encrypted labels", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('sections')").all() as {
+        name?: string;
+        type?: string;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("section_path_hash")?.type).toBe("TEXT");
+      const indexes = listSqliteMaster(db, "index");
+      expect(indexes).toContain("idx_sections_document_section_path_hash");
     } finally {
       db.close();
     }

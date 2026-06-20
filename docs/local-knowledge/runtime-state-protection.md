@@ -18,25 +18,32 @@ its **reconstructive content columns** with AES-256-GCM at rest, using the share
 
 ### Sealed content columns
 
-| Table                   | Column            | Why it is content                                                      |
-| ----------------------- | ----------------- | ---------------------------------------------------------------------- |
-| `document_texts`        | `normalized_text` | Full extracted text of a small document.                               |
-| `document_text_windows` | `normalized_text` | One bounded window of a progressively extracted large document.        |
-| `vectors`               | `embedding`       | Packed Float32 embedding bytes of a chunk (reconstructive of content). |
+| Table                   | Column              | Why it is content                                                      |
+| ----------------------- | ------------------- | ---------------------------------------------------------------------- |
+| `document_texts`        | `normalized_text`   | Full extracted text of a small document.                               |
+| `document_text_windows` | `normalized_text`   | One bounded window of a progressively extracted large document.        |
+| `vectors`               | `embedding`         | Packed Float32 embedding bytes of a chunk (reconstructive of content). |
+| `sections`              | `section_path_json` | Document-derived section labels.                                       |
+| `parsed_units`          | `section_path_json` | Parsed-unit section labels used for chunking/citations.                |
+| `parsed_units`          | `heading_path_json` | Parsed-unit heading labels used for HTML citations.                    |
 
 ### Cleartext metadata (and why it is safe)
 
 Everything else stays cleartext because deterministic retrieval depends on it and it cannot
 reconstruct document content:
 
-- **Identifiers** — `capsule_id`, `document_id`, `chunk_id`, `source_id`, `id`.
-- **Offsets and structure** — `character_start` / `character_end`, page numbers/labels, section paths.
-  These are integers and JSON pointers, not content; they index into the (sealed) text.
-- **Hashes** — `content_hash`, `safe_excerpt_hash` (one-way digests, already non-reversible).
+- **Identifiers** — `capsule_id`, `document_id`, `chunk_id`, `source_id`, `id`, storage references,
+  and safe display names.
+- **Offsets and structure keys** — `character_start` / `character_end`, page numbers/labels,
+  JSON pointers, table names, and row indexes. These index into the sealed text but do not carry
+  section or heading label content.
+- **Hashes** — `content_hash`, `safe_excerpt_hash`, and `section_path_hash` (one-way digests,
+  already non-reversible). `section_path_hash` preserves duplicate-section uniqueness after
+  randomized encryption seals the actual section path JSON.
 - **Embedding identity** — `embedding_model_provider`, `embedding_model_id`, `vector_dimensions`,
-  `vector_metric`. Retrieval dispatch and stale-vector detection scan these without a join; the
-  cleartext `vector_dimensions` is also how the store distinguishes a legacy plaintext blob from a
-  sealed envelope during migration.
+  `vector_metric`. Retrieval dispatch and stale-vector detection scan these without a join; during
+  migration only, the cleartext `vector_dimensions` tells the sweep the expected plaintext vector
+  length before the row is sealed.
 - **Lifecycle** — `status`, `lifecycle_state`, timestamps, indexing-job counters, audit metadata.
 
 This split mirrors the Memory Vault's content-vs-metadata model (ADR-0035).
@@ -68,16 +75,20 @@ machine or a corporate laptop with full-disk encryption.
 Opening a legacy plaintext store with a key provider performs a one-time, crash-aware, idempotent
 forward migration before any content read:
 
-1. Every not-yet-sealed content row is sealed inside a single transaction (text rows are detected by
-   the `kv1.` envelope marker; vector rows by exact `dimensions * 4` plaintext byte length).
+1. Every not-yet-sealed content row is sealed inside a single transaction: small-document text,
+   large-document text windows, vectors, section paths, parsed-unit section paths, and parsed-unit
+   heading paths. Text rows are skipped only when they authenticate with the current key; a legacy
+   plaintext value that merely starts with `kv1.` is still sealed and later reads back unchanged.
+   Vector plaintext-length tolerance is used only during this migration.
 2. A sealed key-verification probe is written so a later open with a wrong or missing key fails
    clearly.
 3. `PRAGMA wal_checkpoint(TRUNCATE)` then `VACUUM` rewrite the file so plaintext that lingered in the
    WAL or on freed pages does not remain on disk.
 
-An interrupted migration simply re-runs on the next open (already-sealed rows are skipped). User-
-visible capsule behavior is unchanged; retrieval, grounding, diagnostics, and incremental refresh
-keep working through the existing public APIs.
+If a sealed probe exists without the completion marker, the store treats it as an incomplete
+encrypted migration: no-key opens fail, wrong-key opens fail before any mutation, and same-key opens
+finish the idempotent sweep. User-visible capsule behavior is unchanged; retrieval, grounding,
+diagnostics, and incremental refresh keep working through the existing public APIs.
 
 ## Failure diagnostics (fail-closed)
 
@@ -87,6 +98,8 @@ keep working through the existing public APIs.
 - Opening an **encrypted** store with **no key provider** throws
   ("this Local Knowledge store is encrypted; a key provider is required to open it").
 - A tampered or missing key-verification probe throws ("corrupt store or incomplete migration").
+- A plaintext or tampered content row injected into an already marked encrypted store throws on
+  read/retrieval; strict encrypted reads never return unsealed text or plaintext-length vectors.
 
 ## Performance guardrails
 
@@ -95,8 +108,9 @@ local:
 
 - **Steady state** — one `seal`/`open` per content row touched. A 2 KiB text seal+open round trip
   stays well under 200 µs on CI-class hardware (asserted by a regression test); embedding seal/open is
-  a single GCM pass over `dimensions * 4` bytes (≤ ~6 KiB for the largest in-scope model). Retrieval
-  decrypts only the candidate rows it already loads, so the hybrid-search working set is unchanged.
+  a single GCM pass over `dimensions * 4` bytes (≤ ~6 KiB for the largest in-scope model) with a direct
+  regression guard. Retrieval keeps ciphertext vector rows in the normal row set and decrypts each row
+  only while scoring, so it does not retain a second decrypted vector array.
 - **Bounded memory preserved** — the Issue #1286 large-document guarantee holds: a citation span read
   decrypts exactly one bounded unit (a small-document row or a single ~16-page window), never a whole
   large document. The plaintext path keeps its in-SQL `SUBSTR`; only the encrypted path decrypts a

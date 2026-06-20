@@ -152,7 +152,13 @@ async function streamBounded(
         try {
           for (const page of window.pages) insertPageRow(db, capsuleId, page);
           for (const unit of window.units) {
-            insertParsedUnitRow(db, capsuleId, `${String(docId)}#u${String(unitIndex)}`, unit);
+            insertParsedUnitRow(
+              db,
+              store._internal.contentCipher,
+              capsuleId,
+              `${String(docId)}#u${String(unitIndex)}`,
+              unit,
+            );
             unitIndex += 1;
           }
           insertDocumentTextWindowRow(db, store._internal.contentCipher, {

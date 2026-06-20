@@ -328,9 +328,17 @@ function persistDependentRows(
     );
   }
   for (const page of parserResult.pages) insertPageRow(db, capsuleId, page);
-  for (const section of parserResult.sections) insertSectionRow(db, capsuleId, section);
+  for (const section of parserResult.sections) {
+    insertSectionRow(db, deps.store._internal.contentCipher, capsuleId, section);
+  }
   parserResult.units.forEach((unit, index) => {
-    insertParsedUnitRow(db, capsuleId, `${String(documentId)}#u${String(index)}`, unit);
+    insertParsedUnitRow(
+      db,
+      deps.store._internal.contentCipher,
+      capsuleId,
+      `${String(documentId)}#u${String(index)}`,
+      unit,
+    );
   });
   parserResult.diagnostics.forEach((diagnostic, index) => {
     insertDiagnosticRow(db, {
