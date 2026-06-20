@@ -321,3 +321,185 @@ describe("runRepairCli — state dir argument", () => {
     expect(existsSync(join(custom, "ui.pid"))).toBe(false);
   });
 });
+
+// ─── checkCredentialStorage ───────────────────────────────────────────────────
+//
+// Each case passes a dedicated temp config file via `--config <path>` so the
+// credential-storage check resolves deterministically, independently of any
+// ambient KEIKO_CONFIG_FILE in the test environment. `seedInstalledLayout` and
+// `healthyDeps` keep the OTHER repair checks quiet (Install layout stays ok,
+// stale-pid/state-dir/launcher/launch-path never produce action items) so we
+// can assert on the "[action] Credential storage" / "[ok] Credential storage"
+// output line unambiguously.
+
+describe("runRepairCli — credential storage", () => {
+  it("reports action-required when a provider has a plaintext apiKey", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "plaintext-key.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "gpt-4o", apiKey: "sk-live-verysecret" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("plaintext credentials present");
+  });
+
+  it("reports action-required when figma.accessToken is a non-empty string", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "figma-token.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "claude-3", apiKeySecretRef: "cred:claude-3" }],
+        figma: { accessToken: "figd_very_secret" },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("plaintext credentials present");
+  });
+
+  it("reports ok when providers use apiKeySecretRef and there is no figma block", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "migrated.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "claude-3", apiKeySecretRef: "cred:claude-3" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("no plaintext credentials");
+  });
+
+  it("reports ok when no --config flag and no KEIKO_CONFIG_FILE env variable are set", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    // Deliberately: no --config arg and no KEIKO_CONFIG_FILE in the empty env object.
+    const c = makeIo();
+    runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("no config file to inspect");
+  });
+
+  it("reports ok when the configured config file does not exist on disk", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const absent = join(root, "does-not-exist.json");
+    // File is intentionally NOT written.
+
+    const c = makeIo();
+    runRepairCli(["--config", absent], c.io, {}, healthyDeps(root));
+
+    // checkGatewayConfig will flag the missing file as [action], but
+    // checkCredentialStorage must independently report ok "no config file to inspect".
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("no config file to inspect");
+  });
+
+  it("reports ok (not a duplicate action) when the config file contains invalid JSON", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "broken.json");
+    writeFileSync(cfg, "{this is: not json!", "utf8");
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    // The gateway-config check already flags the parse error as [action];
+    // checkCredentialStorage must NOT add a second action item — it returns ok.
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("config not parseable");
+  });
+
+  it("reports ok when providers array is empty and figma block is absent", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "empty-providers.json");
+    writeFileSync(cfg, JSON.stringify({ providers: [] }), "utf8");
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("no plaintext credentials");
+  });
+
+  it("reports ok when figma.accessToken is a whitespace-only string", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "figma-empty.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [],
+        figma: { accessToken: "   " },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("no plaintext credentials");
+  });
+
+  it("exits 0 for a fully migrated config with only apiKeySecretRef references", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "fully-migrated.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "gpt-4o", apiKeySecretRef: "cred:gpt-4o" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("[ok] Credential storage");
+  });
+
+  it("exits 1 when a plaintext apiKey is the only action item in an otherwise healthy system", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "plaintext-only.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "gemini", apiKey: "AIzasecret" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+  });
+});

@@ -32,6 +32,7 @@ import {
   type LauncherStateEntry,
 } from "./launcher-state.js";
 import { classifyPid, defaultIsProcessAlive, resolveStateDir } from "./state-paths.js";
+import { hasPlaintextGatewayCredentials } from "@oscharko-dev/keiko-server/credential-vault";
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -237,6 +238,31 @@ function checkGatewayConfig(args: readonly string[], env: EnvSource): CheckResul
   return ok("Gateway config", `valid JSON at ${resolution.path}`);
 }
 
+// Issue #1320: detect an unmigrated or partially migrated config — one that still holds a plaintext
+// provider apiKey or Figma accessToken. Credentials must live in encrypted local storage, with only
+// non-secret references in the JSON file; `keiko ui` performs the one-time, crash-aware migration, so
+// lingering plaintext here is the signal that a migration never ran or was interrupted.
+function checkCredentialStorage(args: readonly string[], env: EnvSource): CheckResult {
+  const resolution = resolveConfigPathFromArgs(args, env);
+  if (resolution.kind !== "path" || !existsSync(resolution.path)) {
+    return ok("Credential storage", "no config file to inspect");
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(resolution.path, "utf8"));
+  } catch {
+    // Invalid JSON is already reported by the gateway-config check; avoid a duplicate action item.
+    return ok("Credential storage", "config not parseable (reported above)");
+  }
+  if (hasPlaintextGatewayCredentials(raw)) {
+    return action(
+      "Credential storage",
+      "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
+    );
+  }
+  return ok("Credential storage", "no plaintext credentials in config");
+}
+
 interface ResolvedRepairDeps {
   readonly cwd: string;
   readonly argv: readonly string[];
@@ -298,6 +324,7 @@ export function runRepairCli(
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
+    checkCredentialStorage(args, env),
   ];
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);

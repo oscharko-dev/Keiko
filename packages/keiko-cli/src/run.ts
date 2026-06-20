@@ -33,6 +33,7 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { AuditError } from "@oscharko-dev/keiko-evidence";
+import { createProviderSecretResolver } from "@oscharko-dev/keiko-server/credential-vault";
 import type { CliIo } from "./runner.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
@@ -155,9 +156,7 @@ function redactEventForNonRetainingSink(event: HarnessEvent): HarnessEvent {
   return event;
 }
 
-function redactRunFailedEvent(
-  event: Extract<HarnessEvent, { type: "run:failed" }>,
-): HarnessEvent {
+function redactRunFailedEvent(event: Extract<HarnessEvent, { type: "run:failed" }>): HarnessEvent {
   return {
     ...event,
     failure: {
@@ -278,7 +277,11 @@ function resolveModel(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    const config = loadConfigFromFile(path, env);
+    // Resolve any vaulted credential references (Issue #1320) so a migrated, credential-free config
+    // still yields working providers; env-only and legacy plaintext configs are unaffected.
+    const config = loadConfigFromFile(path, env, {
+      secretResolver: createProviderSecretResolver({ configPath: path, env }),
+    });
     if (flags.model !== undefined) {
       assertConfiguredModel(config, flags.model);
     }
