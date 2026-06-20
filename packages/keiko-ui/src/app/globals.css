@@ -1742,7 +1742,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 60;
+  /* Keep the notice above the workspace canvas so the dismiss button always wins
+     hit testing instead of falling behind ports, windows, or drag layers. */
+  z-index: 9100;
   display: flex;
   align-items: center;
   gap: 10px;
