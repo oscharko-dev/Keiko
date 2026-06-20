@@ -9,6 +9,21 @@ export { embedChunkBatch } from "./embedding-batcher.js";
 
 export { findResumableJob } from "./job-resume.js";
 
+// Bounded large-document ingestion checkpoints + resume (Epic #1160, Issue #1286).
+export {
+  upsertExtractionCheckpoint,
+  selectExtractionCheckpoint,
+  listExtractionCheckpoints,
+  deleteExtractionCheckpoint,
+} from "./checkpoint-persist.js";
+export {
+  resolveExtractionResume,
+  isResumableCheckpoint,
+  checkpointToProgress,
+  listResumableDocuments,
+  type CheckpointResumeDecision,
+} from "./checkpoint-resume.js";
+
 export {
   DEFAULT_INDEXING_BATCH_SIZE,
   DEFAULT_INDEXING_CONCURRENCY,
