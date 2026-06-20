@@ -161,6 +161,10 @@ function faithfulnessRequiredChecks(obs: EnhancementObservation): readonly Check
   ];
 }
 
+// Faithfulness is intentionally a STRUCTURAL gate (anti-fabrication apparatus present or absent), not a
+// graded critic floor: the deterministic critic exposes no faithfulness score, and "does the prompt
+// forbid fabrication and require staying within / disclosing the evidence boundary" is a present/absent
+// property rather than a continuous one. Hence it takes no `min*Score` oracle.
 function scoreFaithfulness(obs: EnhancementObservation): PromptQualityDimensionResult {
   const checks: readonly Check[] = obs.prompt.groundingPlan.required
     ? faithfulnessRequiredChecks(obs)

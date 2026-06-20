@@ -104,15 +104,18 @@ capabilities:
 
 ## 5. Extension points
 
-- **Add a task class** — extend `PromptTaskClass` / `PROMPT_TASK_CLASSES`, add a `TaskClassRule`
-  (strong/weak lexical cues) in `prompt-enhancer-analyzer.ts`, a role/goal template in
-  `generator.ts`, and a `DEFAULT_FORMAT_BY_CLASS` / profile recommendation entry. The exhaustiveness
-  helper `assertNeverTaskClass` forces every switch to handle the new member at compile time.
+- **Add a task class** — extend `PromptTaskClass` / `PROMPT_TASK_CLASSES` (`prompt-enhancer.ts`); add
+  a `TaskClassRule` (strong/weak lexical cues), a `DEFAULT_FORMAT_BY_CLASS` entry, and a
+  `recommendProfile` / `PROFILE_BY_TASK_CLASS` mapping in `prompt-enhancer-analyzer.ts`; and a role/goal
+  template in `generator.ts`. The exhaustiveness helper `assertNeverTaskClass` forces every switch to
+  handle the new member at compile time.
 - **Add a generation profile** — extend the profile id union and add an entry to
-  `PROMPT_ENHANCER_EXECUTION_PROFILES` (token budget, reasoning strategy/depth, section caps,
-  `groundingMandatory`). The planner and generator read profile metadata; they do not hard-code caps.
+  `PROMPT_ENHANCER_EXECUTION_PROFILES` (`profiles.ts`: token budget, reasoning strategy/depth, section
+  caps, `groundingMandatory`). The planner and generator read profile metadata; they do not hard-code
+  caps.
 - **Add a grounding strategy / directive** — extend the grounding vocabularies in
-  `prompt-enhancer.ts` and the `SOURCE_PRIORITY_BY_STRATEGY` / `RETRIEVAL_MODES_BY_STRATEGY` tables.
+  `prompt-enhancer.ts` and the `SOURCE_PRIORITY_BY_STRATEGY` / `RETRIEVAL_MODES_BY_STRATEGY` tables in
+  `prompt-enhancer-grounding.ts`.
 - **Add an evaluation fixture** — see §6.
 - **Add an evaluation dimension** — extend `PROMPT_QUALITY_DIMENSIONS` and add a scorer arm in
   `keiko-evaluations/src/promptEnhancer/scorer.ts`; the aggregation and renderer iterate the constant,
