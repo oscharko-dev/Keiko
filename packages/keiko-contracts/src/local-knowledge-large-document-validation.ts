@@ -143,22 +143,15 @@ function isCoverage(value: unknown): value is CoverageQuality {
   return typeof value === "string" && (COVERAGE_QUALITIES as readonly string[]).includes(value);
 }
 
-export function validateExtractionCheckpointRecord(
-  input: unknown,
-): LocalKnowledgeValidation<ExtractionCheckpointRecord> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["checkpoint must be an object"] };
+function validateCheckpointIdentity(errors: string[], input: Record<string, unknown>): void {
+  for (const field of ["capsuleId", "documentId", "jobId"] as const) {
+    if (!isNonEmptyTrimmedString(input[field])) {
+      errors.push(`checkpoint.${field} must be a non-empty string`);
+    }
   }
-  const errors: string[] = [];
-  if (!isNonEmptyTrimmedString(input.capsuleId)) {
-    errors.push("checkpoint.capsuleId must be a non-empty string");
-  }
-  if (!isNonEmptyTrimmedString(input.documentId)) {
-    errors.push("checkpoint.documentId must be a non-empty string");
-  }
-  if (!isNonEmptyTrimmedString(input.jobId)) {
-    errors.push("checkpoint.jobId must be a non-empty string");
-  }
+}
+
+function validateCheckpointEnums(errors: string[], input: Record<string, unknown>): void {
   if (!isStrategy(input.strategy)) {
     errors.push("checkpoint.strategy must be a known extraction strategy");
   }
@@ -168,6 +161,9 @@ export function validateExtractionCheckpointRecord(
   if (!isCoverage(input.coverage)) {
     errors.push("checkpoint.coverage must be a known coverage quality");
   }
+}
+
+function validateCheckpointCursors(errors: string[], input: Record<string, unknown>): void {
   for (const field of NON_NEGATIVE_CURSOR_FIELDS) {
     if (!isFiniteNonNegativeInteger(input[field])) {
       errors.push(`checkpoint.${field} must be a non-negative integer`);
@@ -182,6 +178,18 @@ export function validateExtractionCheckpointRecord(
   if (!Array.isArray(input.terminalDiagnostics)) {
     errors.push("checkpoint.terminalDiagnostics must be an array");
   }
+}
+
+export function validateExtractionCheckpointRecord(
+  input: unknown,
+): LocalKnowledgeValidation<ExtractionCheckpointRecord> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["checkpoint must be an object"] };
+  }
+  const errors: string[] = [];
+  validateCheckpointIdentity(errors, input);
+  validateCheckpointEnums(errors, input);
+  validateCheckpointCursors(errors, input);
   validateFingerprint(errors, input.fingerprint);
   if (errors.length > 0) {
     return { ok: false, errors };

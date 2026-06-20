@@ -135,19 +135,20 @@ describe("checkpointCompatibility", () => {
     });
   });
 
-  it.each([
-    ["source-hash", (f: CheckpointFingerprint) => ({ ...f, sourceContentHash: "deadbeef" })],
-    ["parser-version", (f: CheckpointFingerprint) => ({ ...f, parserVersion: "x@2" })],
-    ["resource-policy", (f: CheckpointFingerprint) => ({ ...f, policyFingerprint: "ldp1:0" })],
-    ["chunking-strategy", (f: CheckpointFingerprint) => ({ ...f, chunkingStrategyVersion: "z@9" })],
+  const mutations: readonly [string, (f: CheckpointFingerprint) => CheckpointFingerprint][] = [
+    ["source-hash", (f): CheckpointFingerprint => ({ ...f, sourceContentHash: "deadbeef" })],
+    ["parser-version", (f): CheckpointFingerprint => ({ ...f, parserVersion: "x@2" })],
+    ["resource-policy", (f): CheckpointFingerprint => ({ ...f, policyFingerprint: "ldp1:0" })],
+    ["chunking-strategy", (f): CheckpointFingerprint => ({ ...f, chunkingStrategyVersion: "z@9" })],
     [
       "embedding-identity",
-      (f: CheckpointFingerprint) => ({
+      (f): CheckpointFingerprint => ({
         ...f,
         embeddingIdentity: { ...IDENTITY, vectorDimensions: 3072 },
       }),
     ],
-  ] as const)("refuses on a %s mismatch", (reason, mutate) => {
+  ];
+  it.each(mutations)("refuses on a %s mismatch", (reason, mutate) => {
     const result = checkpointCompatibility(baseFingerprint(), mutate(baseFingerprint()));
     expect(result.compatible).toBe(false);
     if (!result.compatible) {
@@ -184,7 +185,8 @@ describe("validateExtractionCheckpointRecord", () => {
   });
 
   it("accepts a checkpoint without lastEmbeddedChunkId", () => {
-    const { lastEmbeddedChunkId: _omit, ...rest } = baseCheckpoint();
+    const rest: Record<string, unknown> = { ...baseCheckpoint() };
+    delete rest.lastEmbeddedChunkId;
     expect(validateExtractionCheckpointRecord(rest).ok).toBe(true);
   });
 
