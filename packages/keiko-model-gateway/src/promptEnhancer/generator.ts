@@ -18,8 +18,10 @@
 // construction stays deterministic. Output always satisfies `validateEnhancedPrompt` (#1309).
 
 import {
+  PROMPT_ENHANCEMENT_PROFILES,
   normalizePromptDraft,
   planGrounding,
+  validatePromptTaskAnalysis,
   type CitationDiscipline,
   type ContradictionPolicy,
   type EnhancedPrompt,
@@ -28,20 +30,25 @@ import {
   type GroundingPlan,
   type GroundingSourceKind,
   type GroundingSourcePolicy,
+  type OutputSchemaDescriptor,
   type PromptClarification,
   type PromptDomain,
+  type PromptEnhancementProfileId,
+  type PromptRiskClass,
   type PromptTaskAnalysis,
   type PromptTaskClass,
   type RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
 import type { PromptEnhancementPlan } from "./planner.js";
-import type { ReasoningStrategy } from "./profiles.js";
+import { getPromptEnhancerExecutionProfile } from "./profiles.js";
+import type { PromptEnhancerExecutionProfile, ReasoningStrategy } from "./profiles.js";
 
 // Upper bound on the `input` section length. The Enhanced Prompt validator caps each string field at
 // 20,000 characters; we stay safely below that and append a marker when the user draft is longer so
 // large inputs still produce a valid artefact rather than failing validation.
 export const GENERATED_INPUT_MAX_CHARS = 16_000;
 const INPUT_TRUNCATION_MARKER = "\n… [input truncated]";
+const INVALID_GENERATION_INPUT_ERROR = "Invalid Prompt Enhancer generation inputs.";
 
 // ─── Fixed, provider-neutral templates ─────────────────────────────────────────────
 const ROLE_BY_TASK_CLASS: Readonly<Record<PromptTaskClass, string>> = {
@@ -369,6 +376,132 @@ function buildSafetyRules(plan: PromptEnhancementPlan): string[] {
   return rules;
 }
 
+function rejectInvalidGenerationInput(): never {
+  throw new Error(INVALID_GENERATION_INPUT_ERROR);
+}
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function sameOutputSchema(a: OutputSchemaDescriptor, b: OutputSchemaDescriptor): boolean {
+  return (
+    a.format === b.format && a.structured === b.structured && sameStringArray(a.hints, b.hints)
+  );
+}
+
+function sameGroundingNeed(a: GroundingNeed, b: GroundingNeed): boolean {
+  return a.kind === b.kind && a.volatile === b.volatile && sameStringArray(a.signals, b.signals);
+}
+
+function requiresHumanApprovalFor(
+  selectedProfile: PromptEnhancementProfileId,
+  riskFlags: readonly PromptRiskClass[],
+): boolean {
+  return (
+    selectedProfile === "agentic" ||
+    riskFlags.includes("tool-authority-requested") ||
+    riskFlags.includes("egress-requested")
+  );
+}
+
+function isProfileSelectionBound(
+  analysis: PromptTaskAnalysis,
+  plan: PromptEnhancementPlan,
+): boolean {
+  if (analysis.criticality === "critical") {
+    return (
+      plan.selectedProfile === "safety-critical" && plan.profileSource === "criticality-escalated"
+    );
+  }
+  if (plan.profileSource === "recommended") {
+    return plan.selectedProfile === analysis.recommendedProfile;
+  }
+  return plan.profileSource === "preference-honored";
+}
+
+function isPlanCoreBound(analysis: PromptTaskAnalysis, plan: PromptEnhancementPlan): boolean {
+  return [
+    plan.requestId === analysis.requestId,
+    sameOutputSchema(plan.outputSchema, analysis.outputSchema),
+    sameGroundingNeed(plan.groundingNeed, analysis.groundingNeed),
+    isProfileSelectionBound(analysis, plan),
+  ].every(Boolean);
+}
+
+function getCatalogProfile(
+  selectedProfile: PromptEnhancementProfileId,
+): PromptEnhancerExecutionProfile | undefined {
+  try {
+    return getPromptEnhancerExecutionProfile(selectedProfile);
+  } catch {
+    return undefined;
+  }
+}
+
+function isExecutionProfileBound(
+  plan: PromptEnhancementPlan,
+  executionProfile: PromptEnhancerExecutionProfile,
+): boolean {
+  const actual = plan.executionProfile;
+  const planFields = [
+    plan.reasoningStrategy === executionProfile.reasoningStrategy,
+    plan.reasoningDepth === executionProfile.reasoningDepth,
+    plan.tokenBudget === executionProfile.tokenBudget,
+  ];
+  const profileFields = [
+    actual.id === executionProfile.id,
+    actual.reasoningStrategy === executionProfile.reasoningStrategy,
+    actual.reasoningDepth === executionProfile.reasoningDepth,
+    actual.tokenBudget === executionProfile.tokenBudget,
+    actual.maxTaskDecompositionSteps === executionProfile.maxTaskDecompositionSteps,
+    actual.maxQualityCriteria === executionProfile.maxQualityCriteria,
+    actual.maxConstraints === executionProfile.maxConstraints,
+    actual.emphasizeGrounding === executionProfile.emphasizeGrounding,
+  ];
+  return planFields.every(Boolean) && profileFields.every(Boolean);
+}
+
+function isProfileMetadataBound(plan: PromptEnhancementPlan): boolean {
+  const metadata = PROMPT_ENHANCEMENT_PROFILES[plan.selectedProfile];
+  return (
+    plan.groundingMandatory === metadata.groundingMandatory &&
+    plan.maxClarifications === metadata.maxClarifications
+  );
+}
+
+function hasAuthorityRestriction(plan: PromptEnhancementPlan): boolean {
+  return (
+    (plan.safetyPosture as { readonly restrictsAuthority?: unknown }).restrictsAuthority === true
+  );
+}
+
+function isSafetyPostureBound(analysis: PromptTaskAnalysis, plan: PromptEnhancementPlan): boolean {
+  const expectedSafetyCritical =
+    plan.selectedProfile === "safety-critical" || analysis.criticality === "critical";
+  const expectedHumanApproval = requiresHumanApprovalFor(plan.selectedProfile, analysis.riskFlags);
+  return (
+    hasAuthorityRestriction(plan) &&
+    plan.safetyPosture.safetyCritical === expectedSafetyCritical &&
+    plan.safetyPosture.requiresHumanApproval === expectedHumanApproval
+  );
+}
+
+function assertValidGenerationInputs(
+  analysis: PromptTaskAnalysis,
+  plan: PromptEnhancementPlan,
+): void {
+  if (!validatePromptTaskAnalysis(analysis).ok) rejectInvalidGenerationInput();
+  if (!isPlanCoreBound(analysis, plan)) rejectInvalidGenerationInput();
+  const executionProfile = getCatalogProfile(plan.selectedProfile);
+  if (executionProfile === undefined) rejectInvalidGenerationInput();
+  if (!isExecutionProfileBound(plan, executionProfile)) rejectInvalidGenerationInput();
+  if (!isProfileMetadataBound(plan)) rejectInvalidGenerationInput();
+  if (!isSafetyPostureBound(analysis, plan)) {
+    rejectInvalidGenerationInput();
+  }
+}
+
 export interface GenerateEnhancedPromptArgs {
   readonly promptId: EnhancedPromptId;
   readonly analysis: PromptTaskAnalysis;
@@ -382,6 +515,9 @@ export interface GenerateEnhancedPromptArgs {
  */
 export function generateEnhancedPrompt(args: GenerateEnhancedPromptArgs): EnhancedPrompt {
   const { promptId, analysis, plan, input } = args;
+  // Trust-boundary guard (Issue #1310 hardening): reject invalid analyzer output or a stale/forged
+  // plan before any generation, so untrusted or mismatched inputs cannot reach the trusted sections.
+  assertValidGenerationInputs(analysis, plan);
   // Deterministic source policy for this prompt (Issue #1311). Derived purely from the analysis; it
   // emits a plan and never performs or authorizes retrieval.
   const groundingPlan = planGrounding(analysis);
