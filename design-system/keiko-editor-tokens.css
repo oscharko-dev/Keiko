@@ -56,6 +56,13 @@
   --ed-indent-guide-active: var(--line-strong);
   --ed-whitespace:       color-mix(in oklch, var(--fg) 22%, transparent);
 
+  /* ---- focus ring / keyboard-visible chrome ---- *
+     Two-tone ring (matches the base :focus-visible model): an inner separator
+     in the editor well + the accent ring outside it, so it stays ≥3:1 visible
+     on ANY editor surface — including over the green selection/active line. */
+  --ed-focus:            var(--accent-text);
+  --ed-focus-inner:      var(--ed-bg);
+
   /* ---- diff (patch-review surface) ---- */
   --ed-diff-ins-line: color-mix(in oklch, oklch(0.72 0.16 150) 15%, transparent);
   --ed-diff-ins-text: color-mix(in oklch, oklch(0.72 0.16 150) 30%, transparent);
@@ -63,6 +70,11 @@
   --ed-diff-rem-text: color-mix(in oklch, var(--danger) 30%, transparent);
   --ed-diff-ins-gutter: oklch(0.72 0.13 150);
   --ed-diff-rem-gutter: var(--danger);
+  /* changed / modified line (3-way merge + word-diff middle state) — info hue,
+     kept distinct from the green/red ins/rem pair */
+  --ed-diff-chg-line:   color-mix(in oklch, var(--info) 13%, transparent);
+  --ed-diff-chg-text:   color-mix(in oklch, var(--info) 26%, transparent);
+  --ed-diff-chg-gutter: var(--info);
 
   /* ---- diagnostics (map straight onto the status palette) ---- */
   --ed-error: var(--danger);
@@ -121,6 +133,11 @@
 
   --ed-whitespace: color-mix(in oklch, var(--fg) 28%, transparent);
   --ed-minimap-slider: color-mix(in oklch, var(--fg) 12%, transparent);
+
+  /* ghost text needs darkening on the near-white well: --fg-dim alone lands
+     at ~3:1, below the 4.5 code-readability floor. Held just past 4.5 so it
+     still reads clearly secondary to live code. */
+  --ed-ghost: oklch(0.55 0.02 160);
 }
 
 /* ===== HIGH-CONTRAST — every coloured token ≥ 7:1 on a near-black /
