@@ -46,6 +46,7 @@
     "test:coverage:quality": "npm run test:coverage:packages && npm run test:coverage:ui && npm run check:coverage && npm run check:coverage:release-targets && npm run check:coverage:branches",
     "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",
     "test:e2e:local-knowledge": "playwright test --config playwright.local-knowledge-regression.config.ts",
+    "test:e2e:editor-perf": "playwright test --config playwright.editor-performance.config.ts --project=chromium --grep @release-evidence",
     "test:release:smoke": "npm run test:e2e:smoke",
     "dev:start": "node scripts/dev-start.mjs",
     "dev:stop": "node scripts/dev-stop.mjs",
@@ -53,6 +54,8 @@
     "build:ui": "node scripts/build-ui.mjs",
     "prune:package-native-optionals": "node scripts/prune-package-native-optionals.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
+    "check:editor-bundle-size": "node scripts/editor-bundle-size.mjs",
+    "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
@@ -77,7 +80,10 @@
   "overrides": {
     "undici": "7.28.0",
     "postcss": "8.5.15",
-    "sharp": "npm:empty-npm-package@1.0.0"
+    "sharp": "npm:empty-npm-package@1.0.0",
+    "@monaco-editor/loader": "1.7.0",
+    "undici": "7.28.0",
+    "dompurify": "3.4.11"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -89,7 +95,6 @@
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.0.0",
-    "typescript": "^6.0.3",
     "typescript-eslint": "^8.0.0",
     "vitest": "^4.1.7"
   },
@@ -107,6 +112,7 @@
     "@oscharko-dev/keiko-memory-vault": "*",
     "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-quality-intelligence": "*",
+    "@oscharko-dev/keiko-sandbox": "*",
     "@oscharko-dev/keiko-sdk": "*",
     "@oscharko-dev/keiko-security": "*",
     "@oscharko-dev/keiko-server": "*",
@@ -114,6 +120,7 @@
     "@oscharko-dev/keiko-verification": "*",
     "@oscharko-dev/keiko-workflows": "*",
     "@oscharko-dev/keiko-workspace": "*",
+    "typescript": "^6.0.3",
     "ws": "^8.21.0"
   },
   "bundleDependencies": [
@@ -121,6 +128,7 @@
     "@oscharko-dev/keiko-security",
     "@oscharko-dev/keiko-model-gateway",
     "@oscharko-dev/keiko-workspace",
+    "@oscharko-dev/keiko-sandbox",
     "@oscharko-dev/keiko-tools",
     "@oscharko-dev/keiko-verification",
     "@oscharko-dev/keiko-evidence",

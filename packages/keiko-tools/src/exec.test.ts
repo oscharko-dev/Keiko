@@ -604,3 +604,129 @@ describe("runCommand — real node integration", () => {
     expect(result.stdout).toContain("[REDACTED]");
   });
 });
+
+describe("runCommand — enforced network egress (ADR-0043, network:'none')", () => {
+  const NO_BACKENDS = {
+    bubblewrap: false,
+    unshare: false,
+    seatbelt: false,
+    docker: false,
+    podman: false,
+  } as const;
+
+  // Inject a deterministic resolver so the inner executable AND the isolation wrapper resolve to
+  // stable absolute paths regardless of which backend binaries the test host happens to have.
+  const absResolver: RunCommandDeps["resolveExecutable"] = (command) => `/abs/${command}`;
+
+  it("wraps the spawn in the enforcing backend and attests enforcement", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+      platform: "linux",
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    const call = spawn.calls()[0];
+    expect(call?.command).toBe("/abs/bwrap");
+    expect(call?.args).toContain("--unshare-net");
+    // The inner executable (absolute) is nested inside the wrapper argv after the `--` separator.
+    expect(call?.args).toContain("/abs/node");
+    expect(result.attestation).toEqual({
+      backend: "bubblewrap",
+      networkEnforced: true,
+      filesystemEnforced: false,
+      platform: "linux",
+    });
+  });
+
+  it("requests execution-root isolation when the policy requires filesystem containment", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+      platform: "linux",
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    const call = spawn.calls()[0];
+    expect(call?.args).toEqual(expect.arrayContaining(["--bind", root, root]));
+    expect(call?.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
+    expect(result.attestation).toMatchObject({
+      networkEnforced: true,
+      filesystemEnforced: true,
+    });
+  });
+
+  it("fails closed (never spawns) when no enforcing backend is available", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: NO_BACKENDS,
+      platform: "linux",
+    };
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: [],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it("leaves an inherited-network run unwrapped and unattested", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+      platform: "linux",
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(spawn.calls()[0]?.command).toBe("/abs/node");
+    expect(result.attestation).toBeUndefined();
+  });
+});

@@ -103,12 +103,202 @@ export {
   DEFAULT_CONTEXT_REQUEST,
 } from "./workspace.js";
 
+// ─── Editor session (Issue #1197) ─────────────────────────────────────────────────
+// Content-free editor-session/file-state correlation metadata + stable error codes. Owned by
+// #1197, disjoint from the language-service namespace (#1198).
+export type {
+  EditorDocumentVersion,
+  EditorSessionAiProvenance,
+  EditorDocumentSession,
+  EditorSessionErrorCode,
+  EditorSessionValidation,
+  EditorSessionValidationOk,
+  EditorSessionValidationFail,
+} from "./editor-session.js";
+export {
+  EDITOR_SESSION_SCHEMA_VERSION,
+  EDITOR_SESSION_ERROR_CODES,
+  isEditorDocumentVersion,
+  parseEditorDocumentVersion,
+} from "./editor-session.js";
+
+// ─── Language service (Issue #1198) ───────────────────────────────────────────────
+// Provider-pluggable, language-agnostic deterministic language-intelligence contracts
+// (completion, diagnostics, hover, document symbols). Owned by #1198, disjoint from the
+// editor-session namespace (#1197). The TS/JS provider is first; the LSP expansion is staged (#1213).
+export type {
+  LanguageServiceOperation,
+  LanguageServiceErrorCode,
+  LanguagePosition,
+  LanguageRange,
+  LanguageDocumentOverlay,
+  LanguageDiagnosticSeverity,
+  LanguageDiagnostic,
+  LanguageDiagnosticsResult,
+  LanguageCompletionItemKind,
+  LanguageCompletionItem,
+  LanguageCompletionResult,
+  LanguageHoverResult,
+  LanguageSymbolKind,
+  LanguageDocumentSymbol,
+  LanguageSymbolResult,
+  LanguageTextEdit,
+  LanguageFormattingOptions,
+  LanguageFormattingResult,
+  LanguageProviderDescriptor,
+  LanguageServiceCapabilities,
+  LanguageServiceLimits,
+  LanguageDiagnosticsRequest,
+  LanguageCompletionRequest,
+  LanguageHoverRequest,
+  LanguageSymbolsRequest,
+  LanguageFormattingRequest,
+  LanguageServiceRequest,
+  LanguageServiceParseOk,
+  LanguageServiceParseFail,
+  LanguageServiceParse,
+} from "./language-service.js";
+export {
+  LANGUAGE_SERVICE_SCHEMA_VERSION,
+  LANGUAGE_SERVICE_OPERATIONS,
+  LANGUAGE_SERVICE_ERROR_CODES,
+  MAX_LANGUAGE_FORMATTING_TAB_SIZE,
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  isLanguagePosition,
+  isLanguageDocumentOverlay,
+  isLanguageFormattingOptions,
+  parseLanguageServiceRequest,
+} from "./language-service.js";
+
+// ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
+// Wire request/response for the governed `POST /api/editor/completion` route: deterministic
+// language-service completion (#1198) merged with gated model-assisted completion (#1210) over
+// coding context (#1211). Content-free apart from reviewable `insertText` (ADR-0042 D4/D5/D6).
+export type {
+  EditorCompletionWireTriggerKind,
+  EditorCompletionItemOrigin,
+  EditorCompletionWireItem,
+  EditorCompletionSource,
+  EditorCompletionWireProvenance,
+  EditorCompletionWireResponse,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+  EditorCompletionParseOk,
+  EditorCompletionParseFail,
+  EditorCompletionParse,
+} from "./editor-completion.js";
+export {
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  EDITOR_COMPLETION_WIRE_TRIGGER_KINDS,
+  EDITOR_COMPLETION_ITEM_ORIGINS,
+  EDITOR_COMPLETION_SOURCES,
+  parseEditorCompletionRequest,
+} from "./editor-completion.js";
+
+// ─── Editor inline completion (ghost text) (Issue #1200) ───────────────────────────
+// Wire request/response for the governed `POST /api/editor/inline-completion` route (model-only,
+// suffix-aware FIM via #1210 over coding context #1211) plus the content-free acceptance/rejection
+// telemetry report for `POST /api/editor/inline-completion/telemetry`. Content-free apart from
+// reviewable `insertText` (ADR-0042 D5/D6).
+export type {
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireProvenance,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionTelemetryReport,
+  EditorInlineCompletionParseOk,
+  EditorInlineCompletionParseFail,
+  EditorInlineCompletionParse,
+  EditorInlineCompletionTelemetryParseOk,
+  EditorInlineCompletionTelemetryParseFail,
+  EditorInlineCompletionTelemetryParse,
+} from "./editor-inline-completion.js";
+export {
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+  parseEditorInlineCompletionRequest,
+  parseEditorInlineCompletionTelemetry,
+} from "./editor-inline-completion.js";
+
+// ─── Editor test generation (Issue #1202) ─────────────────────────────────────────
+// Wire request/response for the governed `POST /api/editor/test-generation` route. Wave-2 surface,
+// shipped switched off (ADR-0042 D7): generation/execution/verification execute untrusted model code
+// and are deferred behind a default-off flag enabled only once a deny-by-default egress boundary is
+// enforced. Content-free apart from reviewable patch `newText`; the assured pre-filter funnel is
+// always reported and is `not-run` in v1.
+export type {
+  EditorTestGenerationTargetKind,
+  EditorTestGenerationWireSymbol,
+  EditorTestGenerationWireTarget,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationStatus,
+  EditorTestGenerationAssurance,
+  EditorTestGenerationGateState,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWireChangeKind,
+  EditorTestGenerationWireEdit,
+  EditorTestGenerationWireFileChange,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireProvenance,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationParseOk,
+  EditorTestGenerationParseFail,
+  EditorTestGenerationParse,
+} from "./editor-test-generation.js";
+export {
+  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+  EDITOR_TEST_GENERATION_STABILITY_RUNS,
+  EDITOR_TEST_GENERATION_TARGET_KINDS,
+  EDITOR_TEST_GENERATION_STATUSES,
+  EDITOR_TEST_GENERATION_ASSURANCES,
+  EDITOR_TEST_GENERATION_GATE_STATES,
+  notRunTestGenerationFunnel,
+  parseEditorTestGenerationRequest,
+} from "./editor-test-generation.js";
+
+// ─── Editor patch apply + post-apply verification (Issue #1204) ───────────────────
+// Wire request/response for the governed `POST /api/editor/patch-apply` route. Wave-2 surface, shipped
+// switched off (ADR-0042 D7): patch apply and the verification that follows execute untrusted model
+// code in an enforced, deny-by-default egress boundary (ADR-0043). Content-free apart from the
+// reviewable diff the user explicitly applies and a guarded revert proposal's inverse diff.
+export type {
+  EditorPatchApplyDecision,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyStatus,
+  EditorPatchRejectionReason,
+  EditorPatchApplyRejection,
+  EditorPatchApplyChangeCounts,
+  EditorPatchVerificationOutcome,
+  EditorPatchVerificationBounds,
+  EditorPatchVerificationSummary,
+  EditorPatchRevertProposal,
+  EditorPatchApplyEvidenceRefs,
+  EditorPatchApplyWireResponse,
+  EditorPatchApplyParseOk,
+  EditorPatchApplyParseFail,
+  EditorPatchApplyParse,
+} from "./editor-patch-apply.js";
+export {
+  EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+  EDITOR_PATCH_APPLY_DECISIONS,
+  EDITOR_PATCH_APPLY_STATUSES,
+  EDITOR_PATCH_REJECTION_REASONS,
+  EDITOR_PATCH_VERIFICATION_OUTCOMES,
+  parseEditorPatchApplyRequest,
+} from "./editor-patch-apply.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,
   CostClass,
   LatencyClass,
+  InfillingAlignment,
   ModelCapability,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
   ChatMessage,
   ChatMessageContentPart,
   ChatMessageImageUrlContentPart,
@@ -123,14 +313,23 @@ export type {
   StreamDelta,
   StreamEvent,
 } from "./gateway.js";
-export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "./gateway.js";
+export { CONVERSATION_CAPABILITY_CONTRACT_VERSION, INFILLING_ALIGNMENTS } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
-export { isConversationEligibleModel, explainConversationIneligibility } from "./gateway.js";
+export {
+  isConversationEligibleModel,
+  explainConversationIneligibility,
+  modelSupportsInfilling,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
+} from "./gateway.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
+  FilesystemPolicy,
   SandboxPolicy,
+  SandboxBackend,
+  SandboxAttestation,
   CommandRule,
   CommandRunInput,
   CommandResult,
@@ -153,6 +352,7 @@ export type {
 export {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,
+  SANDBOX_BACKENDS,
   DEFAULT_COMMAND_RULES,
   DEFAULT_PATCH_LIMITS,
   DEFAULT_TOOL_HOST_CONFIG,
@@ -350,6 +550,38 @@ export {
   validateRetrievalQuery,
   validateConnectedContextPack,
 } from "./connected-context.js";
+
+// ─── Governed coding-context retrieval (Issue #1211 / Epic #1189, ADR-0042 D6) ──
+export type {
+  CodingContextPurpose,
+  CodingContextSourceKind,
+  CodingContextSourceTier,
+  CodingContextOmissionReason,
+  CodingContextOmission,
+  CodingContextCitation,
+  CodingContextExcerpt,
+  CodingContextPack,
+  CodingContextWirePack,
+  CodingContextBudget,
+  CodingContextScopeKind,
+  CodingContextRequest,
+  CodingContextValidationResult,
+} from "./coding-context.js";
+export {
+  CODING_CONTEXT_SCHEMA_VERSION,
+  CODING_CONTEXT_PURPOSES,
+  CODING_CONTEXT_SOURCE_KINDS,
+  CODING_CONTEXT_SOURCE_TIERS,
+  CODING_CONTEXT_SOURCE_TIER_BY_KIND,
+  CODING_CONTEXT_OMISSION_REASONS,
+  CODING_CONTEXT_BUDGETS,
+  isCodingContextPurpose,
+  tierForCodingContextSource,
+  embeddingProvidersAllowed,
+  isCodingContextCitation,
+  toCodingContextWirePack,
+  validateCodingContextRequest,
+} from "./coding-context.js";
 
 // ─── Workflow handoff & patch-scope (Issue #186 / Epic #177) ────────────────────
 // NOTE: `WorkflowKind` and `ValidationResult` are NOT re-exported here because both names

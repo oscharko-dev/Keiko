@@ -123,12 +123,17 @@ function verifyDeletePreImage(change: PatchFileChange, current: string): ApplyOu
 }
 
 // Computes the post-image for one file change against its current content (undefined = absent).
+// `allowOverwrite` (default false) governs only the create-over-existing case: when false a create
+// whose target already exists is a conflict (the default no-silent-overwrite guardrail, Issue #1204
+// AC7/AC14); when true — set only after explicit user confirmation — the existing file is replaced with
+// the created content.
 export function computeFileContent(
   change: PatchFileChange,
   current: string | undefined,
+  allowOverwrite = false,
 ): ApplyOutcome {
   if (change.kind === "create") {
-    if (current !== undefined) {
+    if (current !== undefined && !allowOverwrite) {
       return {
         content: null,
         conflicts: [{ hunkIndex: 0, reason: "create target already exists" }],

@@ -3,7 +3,18 @@
 // never by hard-coding a model name.
 
 import { CAPABILITY_DATA } from "./capabilities.data.js";
-import type { CostClass, ModelCapability, ModelKind } from "./types.js";
+import {
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
+  modelSupportsInfilling,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  CompletionDegradeReason,
+  CompletionModelSelection,
+  CostClass,
+  ModelCapability,
+  ModelKind,
+} from "./types.js";
 
 // Issue #144 / Epic #142: conversation eligibility helpers and reason type.
 // The canonical definitions live in `@oscharko-dev/keiko-contracts/gateway`
@@ -16,6 +27,23 @@ export {
   explainConversationIneligibility,
 } from "@oscharko-dev/keiko-contracts";
 export type { ConversationIneligibilityReason } from "@oscharko-dev/keiko-contracts";
+
+// Issue #1210 / ADR-0042 D5: infilling (FIM) capability helpers and the content-free
+// completion-model selection result. The pure predicates live in `@oscharko-dev/keiko-contracts`
+// (browser-importable, single source of truth) and are re-exported here for server-tier consumers
+// that already depend on the model-gateway barrel, mirroring the conversation-eligibility helpers.
+export {
+  modelSupportsInfilling,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
+  INFILLING_ALIGNMENTS,
+} from "@oscharko-dev/keiko-contracts";
+export type {
+  InfillingAlignment,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
+} from "@oscharko-dev/keiko-contracts";
 
 export const CAPABILITY_REGISTRY: readonly ModelCapability[] = CAPABILITY_DATA;
 
@@ -146,4 +174,77 @@ export function selectCheapest(query: CapabilityQuery): ModelCapability | undefi
     }
   }
   return best;
+}
+
+// ─── Completion-model selection (Issue #1210, ADR-0042 D5) ─────────────────────
+
+// Options for completion-model selection.
+export interface CompletionSelectionOptions {
+  // The maximum cost class the inline-completion feature is allowed to spend on a per-call basis
+  // (#1206 server-side cost ceiling). A candidate above this ceiling is excluded; if excluding it
+  // leaves no eligible model, selection degrades deterministically with reason "over-cost-ceiling".
+  // Omitted means no ceiling — the caller (#1206) supplies the deployment policy, so this layer
+  // invents no default budget.
+  readonly maxCostClass?: CostClass | undefined;
+}
+
+// Lowest-cost capability among the candidates, breaking cost ties by input order (first wins) —
+// the same deterministic discipline as `selectCheapest` / `selectConfiguredModel`.
+function cheapest(candidates: readonly ModelCapability[]): ModelCapability | undefined {
+  let best: ModelCapability | undefined;
+  for (const cap of candidates) {
+    if (best === undefined || COST_RANK[cap.costClass] < COST_RANK[best.costClass]) {
+      best = cap;
+    }
+  }
+  return best;
+}
+
+function withinCostCeiling(cap: ModelCapability, ceiling: CostClass | undefined): boolean {
+  return ceiling === undefined || COST_RANK[cap.costClass] <= COST_RANK[ceiling];
+}
+
+// Classifies WHY no model-backed mode was chosen, in strict precedence so the reason is the most
+// specific true cause: an over-ceiling aligned model (the model exists, the budget does not) is a
+// different operator signal than only-base (a security rejection) or no-infilling (a capability gap).
+function degradeReasonFor(
+  capabilities: readonly ModelCapability[],
+  ceiling: CostClass | undefined,
+): CompletionDegradeReason {
+  if (
+    capabilities.some((cap) => isAlignedInfillingModel(cap) && !withinCostCeiling(cap, ceiling))
+  ) {
+    return "over-cost-ceiling";
+  }
+  if (capabilities.some((cap) => modelSupportsInfilling(cap))) {
+    return "only-base-infilling-model";
+  }
+  return "no-infilling-model";
+}
+
+// Selects the completion-model interaction mode from a set of capabilities, applying ADR-0042 D5:
+// prefer a fast, aligned FIM model for as-you-type ghost text; otherwise a slower aligned FIM model
+// for manual-invoke suggestion; otherwise degrade to deterministic language-service completion
+// (#1198). The result is content-free and serialisable across the host/server boundary. This is the
+// pure core; `selectCompletionModel` (model-selection.ts) binds it to a GatewayConfig.
+export function selectCompletionModelFromCapabilities(
+  capabilities: readonly ModelCapability[],
+  options: CompletionSelectionOptions = {},
+): CompletionModelSelection {
+  const ceiling = options.maxCostClass;
+  const alignedWithinCeiling = capabilities.filter(
+    (cap) => isAlignedInfillingModel(cap) && withinCostCeiling(cap, ceiling),
+  );
+
+  const asYouType = cheapest(alignedWithinCeiling.filter(isAsYouTypeCompletionModel));
+  if (asYouType !== undefined) {
+    return { mode: "as-you-type", modelId: asYouType.id, latencyClass: asYouType.latencyClass };
+  }
+
+  const manual = cheapest(alignedWithinCeiling);
+  if (manual !== undefined) {
+    return { mode: "manual", modelId: manual.id, latencyClass: manual.latencyClass };
+  }
+
+  return { mode: "deterministic", degradeReason: degradeReasonFor(capabilities, ceiling) };
 }

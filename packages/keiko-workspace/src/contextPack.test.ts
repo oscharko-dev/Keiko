@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildContextPack } from "./contextPack.js";
+import { buildContextPack, selectScoredTextByByteBudget } from "./contextPack.js";
 import { lexicalRetrievalStrategy } from "./retrieval.js";
 import type { ContextPack, ContextRequest, WorkspaceInfo } from "./types.js";
 import { memFs } from "./_memfs.js";
@@ -160,5 +160,26 @@ describe("buildContextPack", () => {
     );
     expect(result.selected.length).toBe(1);
     expect(result.droppedForBudget).toBe(2);
+  });
+});
+
+describe("selectScoredTextByByteBudget", () => {
+  it("selects by score with deterministic id tie-breaks and counts budget drops", () => {
+    const result = selectScoredTextByByteBudget(
+      [
+        { id: "b", score: 1, text: "bbbb" },
+        { id: "a", score: 1, text: "aaaa" },
+        { id: "c", score: 0.5, text: "cccc" },
+      ],
+      8,
+      {
+        id: (candidate) => candidate.id,
+        score: (candidate) => candidate.score,
+        text: (candidate) => candidate.text,
+      },
+    );
+    expect(result.selected.map((entry) => entry.item.id)).toEqual(["a", "b"]);
+    expect(result.usedBytes).toBe(8);
+    expect(result.droppedForBudget).toBe(1);
   });
 });

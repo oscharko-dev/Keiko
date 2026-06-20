@@ -3,6 +3,10 @@ coverage/
 node_modules/
 package-lock.json
 .playwright-mcp/
+test-results/
+playwright-report/
+docs/release/1209-bundle-evidence.json
+docs/release/1209-perf-evidence.json
 .github/ISSUE_TEMPLATE/
 .github/workflows/
 docs/adr/

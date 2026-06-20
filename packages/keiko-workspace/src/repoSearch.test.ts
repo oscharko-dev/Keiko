@@ -114,6 +114,20 @@ describe("searchText (memFs)", () => {
     expect(atom?.score).toBeLessThanOrEqual(1);
   });
 
+  it("honors an already-aborted signal before scanning files", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { scope, fs } = memScope({ "src/a.ts": "hello world\n" });
+    const result = await searchText(scope, nlq("hello"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      signal: controller.signal,
+    });
+    expect(result.atoms).toHaveLength(0);
+    expect(result.filesScanned).toBe(0);
+    expect(result.truncated).toBe(true);
+  });
+
   it("scans files in sorted relative-path order", async () => {
     const { scope, fs } = memScope({
       "src/b.ts": "match\n",
@@ -716,6 +730,20 @@ describe("findFiles (memFs)", () => {
     expect(r.atoms[0]?.provenance.kind).toBe("file-listing");
     expect(r.atoms[0]?.lineRange).toBeUndefined();
     expect(r.atoms[0]?.score).toBe(1);
+  });
+
+  it("honors an already-aborted signal before listing files", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { scope, fs } = memScope({ "src/a.ts": "x" });
+    const r = await findFiles(scope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      signal: controller.signal,
+    });
+    expect(r.atoms).toHaveLength(0);
+    expect(r.filesScanned).toBe(0);
+    expect(r.truncated).toBe(true);
   });
 
   it("rejects non-file-pattern queries", async () => {

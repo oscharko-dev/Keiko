@@ -13,11 +13,20 @@ import ts from "typescript";
 // this script audits the packed UI bundle against the same set.
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import { findForbiddenPaths } from "./package-surface-rules.mjs";
+// Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). The editor package is bundle-excluded
+// from this published tarball (see EXPECTED_BUNDLE_EXCLUSIONS below), so its footprint is enforced
+// against its built `dist/` directly here — the prepack chain has already run `npm run build`.
+import { runEditorBundleSizeCheck } from "./editor-bundle-size.mjs";
 
 const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
   [
     "@oscharko-dev/keiko-ui",
     "build-time-only workspace whose runtime artifact is copied into dist/ui/static",
+  ],
+  [
+    "@oscharko-dev/keiko-editor",
+    "browser-tier editor package developed independently of the published product bundle; not yet " +
+      "consumed by keiko-ui or the CLI product (Issue #1191; integration tracked under Epic #1189)",
   ],
 ]);
 
@@ -323,5 +332,9 @@ assertRootWorkspaceContract();
 assertBundledPayload(paths);
 assertWorkflowHandoffSubpath(paths);
 assertLocalKnowledgeDistPath(paths);
+
+// Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). Enforced here so it runs inside the
+// `ci` prepack chain (via `smoke:install`), as well as standalone via `npm run check:editor-bundle-size`.
+runEditorBundleSizeCheck();
 
 console.log(`package-surface check passed: ${String(paths.length)} files, dist/ui/static present.`);

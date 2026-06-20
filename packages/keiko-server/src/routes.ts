@@ -82,6 +82,19 @@ import {
   handleFilesPreview,
   handleFilesTree,
 } from "./files.js";
+import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
+import {
+  handleEditorContext,
+  handleEditorLocalKnowledgeRetrieve,
+  handleEditorRepoSearch,
+} from "./editor/contextRoutes.js";
+import { handleEditorCompletion } from "./editor/completionRoutes.js";
+import {
+  handleEditorInlineCompletion,
+  handleEditorInlineCompletionTelemetry,
+} from "./editor/inlineCompletionRoutes.js";
+import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
+import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -252,6 +265,68 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
+  // Issue #1198 — deterministic, model-free language intelligence (completion, diagnostics, hover,
+  // symbols) over an editor overlay (ADR-0042 D4). Capabilities advertises the registered providers.
+  {
+    method: "GET",
+    pattern: "/api/editor/language/capabilities",
+    handler: handleEditorLanguageCapabilities,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/language",
+    handler: (ctx, deps) => handleEditorLanguage(ctx, deps, deps.editorLanguageRouteOptions),
+  },
+  // Issue #1211 — governed coding-context retrieval (ADR-0042 D6). The context route assembles a
+  // bounded, redacted pack (repo-search always; Local Knowledge + memory only for explicit,
+  // embedding-eligible purposes) and returns the content-free wire pack; the repo-search and
+  // local-knowledge routes expose the governed building blocks (EvidenceAtom[] and query-only
+  // retrieval references). No browser-side retrieval, embedding, or model access.
+  { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
+  { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  // Issue #1199 — governed completion gateway (ADR-0042 D4/D5/D6). Deterministic language-service
+  // completion (#1198) always, plus gated model-assisted completion (#1210) over coding context
+  // (#1211). Content-free response apart from reviewable insertText; the browser never reaches a model.
+  { method: "POST", pattern: "/api/editor/completion", handler: handleEditorCompletion },
+  // Issue #1200 — governed inline completion (ghost text, ADR-0042 D5/D6). Model-only, gated on an
+  // aligned FIM model (#1210) over coding context (#1211, purpose:inline); degrades to zero items
+  // (falling back to #1199) when unavailable, disabled by policy, or rate-limited. The telemetry
+  // route records content-free acceptance/rejection counts. The browser never reaches a model.
+  {
+    method: "POST",
+    pattern: "/api/editor/inline-completion",
+    handler: handleEditorInlineCompletion,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/inline-completion/telemetry",
+    handler: handleEditorInlineCompletionTelemetry,
+  },
+  // Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Wave-2 surface shipped
+  // switched OFF: default → `disabled` (no retrieval/model/execution); enabled → `deferred` (governed
+  // #1211 discovery for provenance, but NO model call) until an enforced egress boundary unlocks
+  // candidate generation. No v1 flow executes model-generated code; the browser never reaches a model.
+  {
+    method: "POST",
+    pattern: "/api/editor/test-generation",
+    handler: handleEditorTestGeneration,
+  },
+  // Issue #1204 — governed editor-driven patch apply + post-apply verification (ADR-0042 D7, ADR-0043).
+  // Wave-2 surface shipped switched OFF: default → `disabled` (no validation/write/execution). When
+  // enabled, a reviewed candidate patch is applied only on an explicit user decision and only after
+  // keiko-tools validation (scope, conflict, no-silent-overwrite, limits); post-apply verification then
+  // re-confirms the applied test under an enforced, deny-by-default egress boundary (keiko-sandbox), and
+  // a failed verification surfaces a guarded revert proposal (never a silent rollback).
+  {
+    method: "POST",
+    pattern: "/api/editor/patch-apply",
+    handler: handleEditorPatchApply,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/local-knowledge/retrieve",
+    handler: handleEditorLocalKnowledgeRetrieve,
+  },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
     method: "GET",

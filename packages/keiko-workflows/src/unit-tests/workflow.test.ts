@@ -273,6 +273,93 @@ describe("generateUnitTests — apply mode verification", () => {
   });
 });
 
+describe("generateUnitTests — frontend test-style selection (Issue #1203)", () => {
+  it("selects unit style for a plain TS/JS library file (AC1)", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(input(), deps(model.port));
+    expect(report.status).toBe("dry-run");
+    expect(report.testStyle).toBe("unit");
+    expect(report.verification).toBe("vitest");
+  });
+
+  it("selects component style for a React component with @testing-library/react (AC2)", async () => {
+    const fs = memFs(ROOT, {
+      "package.json": JSON.stringify({
+        name: "web",
+        dependencies: { react: "18" },
+        devDependencies: { vitest: "^4", "@testing-library/react": "16", jsdom: "24" },
+      }),
+      "src/Button.tsx": "export const Button = (): null => null;",
+    });
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "src/Button.tsx" } }),
+      deps(model.port, { fs }),
+    );
+    expect(report.status).toBe("dry-run");
+    expect(report.testStyle).toBe("component");
+  });
+
+  it("upgrades to interaction style when @testing-library/user-event is present (AC2)", async () => {
+    const fs = memFs(ROOT, {
+      "package.json": JSON.stringify({
+        name: "web",
+        dependencies: { react: "18" },
+        devDependencies: {
+          vitest: "^4",
+          "@testing-library/react": "16",
+          "@testing-library/user-event": "14",
+        },
+      }),
+      "src/Button.tsx": "export const Button = (): null => null;",
+    });
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "src/Button.tsx" } }),
+      deps(model.port, { fs }),
+    );
+    expect(report.testStyle).toBe("interaction");
+  });
+
+  it("reports a clear limitation and makes NO model call for an unsupported component (AC5)", async () => {
+    const fs = memFs(ROOT, {
+      "package.json": JSON.stringify({ name: "web", devDependencies: { vitest: "^4" } }),
+      "src/Button.tsx": "export const Button = (): null => null;",
+    });
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "src/Button.tsx" } }),
+      deps(model.port, { fs }),
+    );
+    expect(report.status).toBe("rejected");
+    expect(report.testStyle).toBe("unsupported");
+    expect(report.limitation).toContain("@testing-library/react");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+    expect(report.addedTestFiles).toHaveLength(0);
+    expect(report.proposedDiff).toBeUndefined();
+  });
+
+  it("selects Playwright browser-smoke for an app entry point in a Playwright project (AC3)", async () => {
+    const fs = memFs(ROOT, {
+      "package.json": JSON.stringify({
+        name: "web",
+        dependencies: { react: "18" },
+        devDependencies: { vitest: "^4", "@playwright/test": "1" },
+      }),
+      "playwright.config.ts": "export default {};",
+      "app/page.tsx": "export default function Page(): null { return null; }",
+    });
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "app/page.tsx" } }),
+      deps(model.port, { fs }),
+    );
+    expect(report.testStyle).toBe("browser-smoke");
+    expect(report.verification).toBe("playwright");
+  });
+});
+
 describe("generateUnitTests — target workspace containment (issue #641)", () => {
   it("fails closed on an escaped target file path with modelCallCount=0 and no diff", async () => {
     const model = scriptedModel([response({ content: FENCED_VALID })]);

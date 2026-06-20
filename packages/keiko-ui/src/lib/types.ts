@@ -21,6 +21,80 @@ export type {
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
 
+// ─── Editor completion gateway wire shapes (Issue #1199, contracts root barrel) ─────
+export type {
+  EditorCompletionWireTriggerKind,
+  EditorCompletionItemOrigin,
+  EditorCompletionWireItem,
+  EditorCompletionSource,
+  EditorCompletionWireProvenance,
+  EditorCompletionWireResponse,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+} from "@oscharko-dev/keiko-contracts";
+export { EDITOR_COMPLETION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+
+// ─── Editor inline-completion (ghost text) wire shapes (Issue #1200, contracts root barrel) ─────
+export type {
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireProvenance,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionTelemetryReport,
+} from "@oscharko-dev/keiko-contracts";
+export {
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts";
+
+// ─── Editor test-generation wire shapes (Issue #1202, contracts root barrel) ───────────────────
+export type {
+  EditorTestGenerationWireTarget,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationStatus,
+  EditorTestGenerationAssurance,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireFileChange,
+  EditorTestGenerationWireProvenance,
+} from "@oscharko-dev/keiko-contracts";
+export { EDITOR_TEST_GENERATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+
+// ─── Editor patch-apply + post-apply verification wire shapes (Issue #1204, contracts root barrel) ──
+export type {
+  EditorPatchApplyDecision,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyWireResponse,
+  EditorPatchApplyStatus,
+  EditorPatchApplyChangeCounts,
+  EditorPatchApplyRejection,
+  EditorPatchRejectionReason,
+  EditorPatchVerificationOutcome,
+  EditorPatchVerificationSummary,
+  EditorPatchRevertProposal,
+} from "@oscharko-dev/keiko-contracts";
+export { EDITOR_PATCH_APPLY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+
+// ─── Deterministic language-service wire shapes (Issue #1198/#1201, contracts root barrel) ─────
+// The `POST /api/editor/language` route serves diagnostics, hover, document symbols, and formatting
+// for the governed languages; these are the result shapes the editor host maps into Monaco.
+export type {
+  LanguageServiceOperation,
+  LanguageRange,
+  LanguageDiagnosticSeverity,
+  LanguageDiagnostic,
+  LanguageDiagnosticsResult,
+  LanguageHoverResult,
+  LanguageSymbolKind,
+  LanguageDocumentSymbol,
+  LanguageSymbolResult,
+  LanguageTextEdit,
+  LanguageFormattingOptions,
+  LanguageFormattingResult,
+} from "@oscharko-dev/keiko-contracts";
+
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
 // trust-3, error severity); contracts is the legitimate value-import source
@@ -160,6 +234,9 @@ export type {
   FilesPreviewResponse,
   FilesContentResponse,
   FilesWriteRequest,
+  EditorDocumentSession,
+  EditorDocumentVersion,
+  EditorSessionErrorCode,
   BrowserViewportPx,
   CdpReachability,
   BrowserSessionMeta,

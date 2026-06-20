@@ -38,14 +38,17 @@ function gatherCandidateIds(
   vault: MemoryVaultStore,
   scopes: readonly MemoryScope[],
   nowMs: number,
+  signal?: AbortSignal,
 ): readonly MemoryId[] {
   const ids: MemoryId[] = [];
   const seen = new Set<string>();
   for (const scope of scopes) {
+    throwIfAborted(signal);
     for (const record of vault.listMemoriesByScope(scope, {
       includeExpired: true,
       limit: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
     })) {
+      throwIfAborted(signal);
       if (!isSemanticRetrievalCandidate(record, nowMs)) continue;
       if (seen.has(record.id)) continue;
       seen.add(record.id);
@@ -65,11 +68,15 @@ async function semanticScoresFrom(
   queryText: string,
   candidateIds: readonly MemoryId[],
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+  signal?: AbortSignal,
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
+  throwIfAborted(signal);
   const queryEmbedding = await embedMemoryText(deps, queryText);
   if (queryEmbedding === null) return undefined;
+  throwIfAborted(signal);
   const scores = new Map<MemoryId, number>();
   for (const id of candidateIds) {
+    throwIfAborted(signal);
     const stored = embeddings.get(id);
     if (stored === undefined) continue;
     scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
@@ -93,6 +100,12 @@ export interface ConversationRetrievalSignals {
   readonly embeddingById: ReadonlyMap<MemoryId, Float32Array>;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted === true) {
+    throw new Error("memory retrieval aborted");
+  }
+}
+
 export async function buildConversationRetrievalSignals(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -100,18 +113,26 @@ export async function buildConversationRetrievalSignals(
   scopes: readonly MemoryScope[],
   nowMs: number,
   safeForSecondaryModel: boolean,
+  signal?: AbortSignal,
 ): Promise<ConversationRetrievalSignals> {
+  throwIfAborted(signal);
   const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
-  const candidateIds = gatherCandidateIds(vault, scopes, nowMs);
+  throwIfAborted(signal);
+  const candidateIds = gatherCandidateIds(vault, scopes, nowMs, signal);
+  throwIfAborted(signal);
   const embeddings =
     candidateIds.length > 0
       ? vault.getEmbeddings(candidateIds)
       : new Map<MemoryId, MemoryEmbeddingRow>();
+  throwIfAborted(signal);
   const embeddingById = new Map<MemoryId, Float32Array>();
-  for (const [id, row] of embeddings) embeddingById.set(id, row.vector);
+  for (const [id, row] of embeddings) {
+    throwIfAborted(signal);
+    embeddingById.set(id, row.vector);
+  }
   const semanticById =
     safeForSecondaryModel && queryText !== undefined && queryText.length > 0 && embeddings.size > 0
-      ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings)
+      ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings, signal)
       : undefined;
   return {
     strengthById,

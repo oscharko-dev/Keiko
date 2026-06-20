@@ -33,8 +33,52 @@ interface BudgetState {
   droppedForBudget: number;
 }
 
+export interface ScoredTextBudgetSelection<T> {
+  readonly item: T;
+  readonly byteCount: number;
+}
+
+export interface ScoredTextBudgetResult<T> {
+  readonly selected: readonly ScoredTextBudgetSelection<T>[];
+  readonly usedBytes: number;
+  readonly droppedForBudget: number;
+}
+
 function utf8Bytes(value: string): number {
   return Buffer.byteLength(value, "utf8");
+}
+
+// Shared deterministic score/id/byte-budget selection for retrieved-context packers that already
+// hold redacted excerpt text. Highest score wins; id breaks ties so equal-score packs are stable.
+export function selectScoredTextByByteBudget<T>(
+  candidates: readonly T[],
+  budgetBytes: number,
+  accessors: {
+    readonly id: (candidate: T) => string;
+    readonly score: (candidate: T) => number;
+    readonly text: (candidate: T) => string;
+  },
+): ScoredTextBudgetResult<T> {
+  const ordered = [...candidates].sort((a, b) => {
+    const score = accessors.score(b) - accessors.score(a);
+    if (score !== 0) {
+      return score;
+    }
+    return accessors.id(a).localeCompare(accessors.id(b));
+  });
+  const selected: ScoredTextBudgetSelection<T>[] = [];
+  let usedBytes = 0;
+  let droppedForBudget = 0;
+  for (const candidate of ordered) {
+    const byteCount = utf8Bytes(accessors.text(candidate));
+    if (usedBytes + byteCount > budgetBytes) {
+      droppedForBudget += 1;
+      continue;
+    }
+    selected.push({ item: candidate, byteCount });
+    usedBytes += byteCount;
+  }
+  return { selected, usedBytes, droppedForBudget };
 }
 
 // Clamps a string to at most `maxBytes` UTF-8 bytes without splitting a multi-byte char.
