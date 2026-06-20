@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  CODING_CONTEXT_SCHEMA_VERSION,
   notRunTestGenerationFunnel,
+  type CodingContextCitation,
+  type CodingContextSourceKind,
+  type CodingContextWirePack,
   type EditorTestGenerationWireResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { Redactor } from "../deps.js";
@@ -11,6 +15,31 @@ import {
 } from "./testGenerationEvidence.js";
 
 const REDACTOR: Redactor = (value) => value;
+
+function citation(sourceKind: CodingContextSourceKind, id: string): CodingContextCitation {
+  return {
+    sourceKind,
+    sourceTier: "first-party-workspace",
+    id,
+    score: 1,
+    rank: 0,
+    citationRef: undefined,
+    byteCount: 10,
+    truncated: false,
+  };
+}
+
+function contextPack(entries: readonly CodingContextCitation[]): CodingContextWirePack {
+  return {
+    schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
+    purpose: "test-generation",
+    entries,
+    usedBytes: 10,
+    budgetBytes: 100,
+    droppedForBudget: 0,
+    omissions: [],
+  };
+}
 
 function disabled(): EditorTestGenerationWireResponse {
   return {
@@ -74,5 +103,37 @@ describe("recordTestGenerationEvidence", () => {
       testGenerationEvidenceRunId(disabled(), 1_000),
     );
     expect(testGenerationEvidenceRunId(disabled(), 1_000)).toMatch(/^editor-test-generation-/);
+  });
+
+  it("records which evidence source classes contributed to the context (Issue #1203 AC6)", () => {
+    const store = createInMemoryEvidenceStore();
+    const response: EditorTestGenerationWireResponse = {
+      schemaVersion: "1",
+      status: "deferred",
+      reason: "deferred",
+      funnel: notRunTestGenerationFunnel(),
+      context: contextPack([
+        citation("repo-search", "r1"),
+        citation("repo-search", "r2"),
+        citation("local-knowledge", "lk1"),
+        citation("quality-intelligence", "qi1"),
+      ]),
+    };
+    const runId = recordTestGenerationEvidence(store, REDACTOR, response, 1_000);
+    const manifest = JSON.parse(store.get(runId) ?? "{}") as Record<string, unknown>;
+    expect(manifest.contextCitationCount).toBe(4);
+    const kinds = manifest.contextSourceKinds as Record<string, number>;
+    expect(kinds["repo-search"]).toBe(2);
+    expect(kinds["local-knowledge"]).toBe(1);
+    expect(kinds["quality-intelligence"]).toBe(1);
+    expect(kinds.memory).toBe(0);
+  });
+
+  it("omits context source fields when no governed discovery ran (disabled)", () => {
+    const store = createInMemoryEvidenceStore();
+    const runId = recordTestGenerationEvidence(store, REDACTOR, disabled(), 1_000);
+    const manifest = JSON.parse(store.get(runId) ?? "{}") as Record<string, unknown>;
+    expect(manifest.contextSourceKinds).toBeUndefined();
+    expect(manifest.contextCitationCount).toBeUndefined();
   });
 });

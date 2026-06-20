@@ -32,11 +32,20 @@ import {
   type DisposableExecutionPorts,
 } from "./disposableAssuredExecution.js";
 
+// The verification toolchain the gate runner executes for a candidate. The vitest toolchain (tsc +
+// vitest + Stryker) is the #1202 default; the playwright toolchain (Issue #1203) verifies a browser
+// smoke (tsc + `playwright test`). A browser smoke has no vitest coverage/mutation oracle, so its
+// coverage/mutation gates produce no report and the candidate stays `unverified` (never `assured`),
+// consistent with the owner decision that frontend tests are not labelled assured without those gates.
+export type AssuredVerificationKind = "vitest" | "playwright";
+
 export interface AssuredPreFilterArgs {
   readonly patch: EditorTestGenerationWirePatch;
   readonly request: EditorTestGenerationWireRequest;
   readonly realRoot: string;
   readonly signal: AbortSignal;
+  // The toolchain to verify under; defaults to "vitest" (the #1202 behaviour) when absent.
+  readonly verification?: AssuredVerificationKind | undefined;
 }
 
 export type AssuredPreFilterPort = (args: AssuredPreFilterArgs) => Promise<AssuredPreFilterOutcome>;
@@ -66,16 +75,18 @@ export function targetSourceRelPath(target: EditorTestGenerationWireTarget): str
     : target.document.path;
 }
 
-// The gate commands for the TS/JS stack, all writing JSON reports under ASSURED_DIR so they can be read
-// back deterministically. Baseline coverage runs the existing suite before the candidate is applied;
-// the patched coverage run includes the candidate.
-export function planGateCommands(): {
+interface GateCommands {
   readonly build: SandboxedCommand;
   readonly test: SandboxedCommand;
   readonly baseline: SandboxedCommand;
   readonly coverage: SandboxedCommand;
   readonly mutation: SandboxedCommand;
-} {
+}
+
+// The vitest gate commands (the #1202 default), all writing JSON reports under ASSURED_DIR so they can
+// be read back deterministically. Baseline coverage runs the existing suite before the candidate is
+// applied; the patched coverage run includes the candidate.
+function vitestGateCommands(): GateCommands {
   return {
     build: npx(["tsc", "--noEmit"]),
     test: npx(["vitest", "run"]),
@@ -95,6 +106,27 @@ export function planGateCommands(): {
     ]),
     mutation: npx(["stryker", "run"]),
   };
+}
+
+// The Playwright gate commands (Issue #1203 browser-smoke). The candidate is type-checked and executed
+// as a Playwright suite; there is no vitest coverage/mutation oracle for an end-to-end smoke, so the
+// coverage/baseline/mutation slots run the same suite and emit no JSON report — those gates therefore
+// cannot pass and the candidate stays `unverified`, never `assured`.
+function playwrightGateCommands(): GateCommands {
+  const run = npx(["playwright", "test"]);
+  return {
+    build: npx(["tsc", "--noEmit"]),
+    test: run,
+    baseline: run,
+    coverage: run,
+    mutation: run,
+  };
+}
+
+// Selects the gate commands for the verification toolchain. Defaults to vitest, so callers that do not
+// pass a kind keep the exact #1202 command set.
+export function planGateCommands(kind: AssuredVerificationKind = "vitest"): GateCommands {
+  return kind === "playwright" ? playwrightGateCommands() : vitestGateCommands();
 }
 
 // Normalises a vitest coverage summary's absolute file keys to project-relative paths so the covered
@@ -176,7 +208,7 @@ function applyCandidateInto(root: string, patch: EditorTestGenerationWirePatch):
 }
 
 function nodePorts(args: AssuredPreFilterArgs, enforced: boolean): DisposableExecutionPorts {
-  const cmds = planGateCommands();
+  const cmds = planGateCommands(args.verification);
   return {
     enforced,
     makeRoot: (): Promise<string> => {
