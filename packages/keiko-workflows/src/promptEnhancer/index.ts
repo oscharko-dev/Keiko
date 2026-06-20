@@ -14,11 +14,13 @@
 
 import {
   analyzePrompt,
+  asEnhancedPromptId,
   asPromptEnhancementRequestId,
   normalizePromptDraft,
   validatePromptEnhancementRequest,
   PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
   PROMPT_ENHANCER_SCHEMA_VERSION,
+  type PromptCandidateSelection,
   type PromptEnhancementGroundingReadiness,
   type PromptEnhancementModelRouting,
   type PromptEnhancementRequest,
@@ -171,6 +173,9 @@ const NOT_RECORDED_EVIDENCE = {
   reason: "evidence-store-not-configured",
 } as const;
 
+const NO_SCORED_CANDIDATE_ERROR_MESSAGE =
+  "Prompt candidate optimization produced no scored candidate.";
+
 /**
  * Run the governed, deterministic prompt enhancement pipeline and assemble the BFF wire response.
  * Pure apart from SHA-256 hashing. Throws `PromptEnhancementInputError` on domain-validation failure and
@@ -228,21 +233,83 @@ function prepareEnhancement(request: PromptEnhancementWireRequest): PreparedEnha
   return { analysis: analyzePrompt(validation.value), input, inputFingerprintSha256 };
 }
 
+type WorkflowPromptCandidateSelection = Pick<
+  PromptCandidateSelection,
+  "winner" | "ranked" | "rankedPrompts" | "winnerSafetyAssessment" | "rejected"
+>;
+
+const isNoScoredCandidateError = (error: unknown): boolean =>
+  error instanceof Error && error.message === NO_SCORED_CANDIDATE_ERROR_MESSAGE;
+
+function buildRejectedFailSafeSelection(
+  prepared: PreparedEnhancement,
+  request: PromptEnhancementWireRequest,
+  originalError: unknown,
+): WorkflowPromptCandidateSelection {
+  const { analysis, input } = prepared;
+  const plan = PromptEnhancer.planPromptEnhancement(analysis, {
+    ...(request.profilePreference === undefined
+      ? {}
+      : { profilePreference: request.profilePreference }),
+  });
+  const candidateId = asEnhancedPromptId(`${analysis.requestId}-safety-fail-safe`);
+  const prompt = PromptEnhancer.generateEnhancedPrompt({
+    promptId: candidateId,
+    analysis,
+    plan,
+    input,
+  });
+  const scorecard = PromptEnhancer.scorePromptCandidate({
+    candidateId,
+    profile: plan.selectedProfile,
+    prompt,
+    plan,
+    analysis,
+  });
+  const safety = PromptEnhancer.assessPromptSafety({ prompt, analysis, input });
+  if (safety.decision !== "rejected") {
+    throw originalError;
+  }
+  return {
+    winner: scorecard,
+    ranked: [scorecard],
+    rankedPrompts: [prompt],
+    winnerSafetyAssessment: safety,
+    rejected: [],
+  };
+}
+
+function selectPromptCandidate(
+  prepared: PreparedEnhancement,
+  request: PromptEnhancementWireRequest,
+): WorkflowPromptCandidateSelection {
+  const { analysis, input } = prepared;
+  try {
+    return PromptEnhancer.optimizePromptCandidates({
+      analysis,
+      input,
+      bounds: { candidateCount: clampCandidateCount(request.candidateCount) },
+      ...(request.profilePreference === undefined
+        ? {}
+        : { profilePreference: request.profilePreference }),
+    });
+  } catch (error) {
+    if (!isNoScoredCandidateError(error)) {
+      throw error;
+    }
+    return buildRejectedFailSafeSelection(prepared, request, error);
+  }
+}
+
 export function runPromptEnhancement(
   request: PromptEnhancementWireRequest,
   deps: RunPromptEnhancementDeps,
 ): PromptEnhancementWireResponse {
   throwIfCancelled(deps.signal);
-  const { analysis, input, inputFingerprintSha256 } = prepareEnhancement(request);
+  const prepared = prepareEnhancement(request);
+  const { analysis, inputFingerprintSha256 } = prepared;
   throwIfCancelled(deps.signal);
-  const selection = PromptEnhancer.optimizePromptCandidates({
-    analysis,
-    input,
-    bounds: { candidateCount: clampCandidateCount(request.candidateCount) },
-    ...(request.profilePreference === undefined
-      ? {}
-      : { profilePreference: request.profilePreference }),
-  });
+  const selection = selectPromptCandidate(prepared, request);
   throwIfCancelled(deps.signal);
   const enhancedPrompt = selection.rankedPrompts[0];
   if (enhancedPrompt === undefined) {

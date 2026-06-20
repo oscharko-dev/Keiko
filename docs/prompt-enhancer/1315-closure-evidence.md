@@ -12,7 +12,7 @@ metrics, operator guidance, and a precise statement of remaining limitations.
 
 - Delivered the Prompt Enhancer **evaluation suite** as the `keiko-evaluations` `PromptEnhancerEval`
   sub-module: 26 deterministic fixtures across five categories, an eight-dimension prompt-quality
-  scorer, a Go/No-Go scorecard with renderer, and 37 tests including the AC2 regression gates.
+  scorer, a Go/No-Go scorecard with renderer, and 42 tests including the AC2 regression gates.
 - Delivered **developer documentation** ([developer-guide.md](./developer-guide.md)) and **end-user
   documentation** ([user-guide.md](./user-guide.md)).
 - Recorded the **reuse-and-gap rationale** for the parallel evaluation taxonomy in ADR-0044 §6.
@@ -94,7 +94,7 @@ triggers on `feat/prompt-enhancer-1307`.
 | Architecture (negative)           | `npm run arch:check:negative`       | PASS                                 |
 | Quality-Intelligence supply chain | `npm run check:qi-supply-chain`     | PASS                                 |
 | Coverage quality gate             | `npm run test:coverage:quality`     | PASS (572 test files, 9634 tests)    |
-| Prompt Enhancer eval suite        | `npm run eval:prompt-enhancer`      | PASS (6 files, 37 tests; GO verdict) |
+| Prompt Enhancer eval suite        | `npm run eval:prompt-enhancer`      | PASS (6 files, 42 tests; GO verdict) |
 
 **Evaluation scorecard (offline, deterministic).** 26 fixtures, 26 fully passed; all eight dimensions
 at a 100% pass rate; 15 task classes covered; safety gate PASS; verdict **GO**.
@@ -109,10 +109,10 @@ schema v1 (`peEvidenceSchemaVersion` 1, field `inputFingerprintSha256`), but #13
 manifest (`PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 2`, field `inputRedactedFingerprintSha256`).
 The assertions were aligned to the shipped v2 shape. This is a test-correctness fix that strengthens
 `ci`; it changes no production behaviour. The v1→v2 manifest change (schema bump plus the
-`inputFingerprintSha256` → `inputRedactedFingerprintSha256` rename, reflecting that the input is stored
-as a redacted, truncated fingerprint) shipped in #1314; the store, schema validator, and
-`keiko-evidence` store tests already assert against the v2 constant, so only the CLI smoke test was
-stale. Recorded here for transparency.
+`inputFingerprintSha256` → `inputRedactedFingerprintSha256` rename, reflecting that the input is
+fingerprinted after redaction and stored with a redacted, truncated excerpt) shipped in #1314; the
+store, schema validator, and `keiko-evidence` store tests already assert against the v2 constant, so
+only the CLI smoke test was stale. Recorded here for transparency.
 
 ## Known limitations
 
@@ -122,9 +122,10 @@ stale. Recorded here for transparency.
   human-approval rule + least-privilege constraint in the generated prompt, but the planner sets
   `requiresHumanApproval` only for agentic/tool/egress tasks, so the generator emits a
   professional-advice disclaimer rather than the human-approval rule, and the assessment returns
-  `decision: rejected` / `verificationStatus: failed`. This is a **fail-safe** outcome (the enhancer
-  declines rather than auto-producing a high-stakes prompt) and the evaluation pins it so it cannot
-  regress silently. The intended longer-term behaviour is `requires-human-review`. See follow-ups.
+  `decision: rejected` / `verificationStatus: failed`. The workflow now returns this as an inspectable
+  rejected fail-safe response instead of an internal error; surfaces must not treat the generated review
+  artefact as an approved prompt to run. The evaluation pins the rejected outcome so it cannot regress
+  silently. The intended longer-term behaviour is `requires-human-review`. See follow-ups.
 - **Deterministic MVP only.** The critic and candidate scoring are deterministic; a model-assisted
   LLM-as-judge stage and a full calibration study are explicitly out of scope (issue _Out of Scope_).
 - **Heuristic token estimate.** Token counts use a coarse `CHARS_PER_TOKEN = 4` heuristic, not a
@@ -135,10 +136,10 @@ stale. Recorded here for transparency.
 ## Follow-up candidates
 
 - Route safety-critical advice prompts to `requires-human-review` (emit the human-approval rule +
-  least-privilege constraint for critical criticality in the planner/generator) instead of outright
-  rejection — `keiko-model-gateway` planner `deriveSafetyPosture` / generator safety-rule construction.
-  Generator changes belong to a #1310/#1313 follow-up; the eval only pins the current behaviour so it
-  cannot regress silently.
+  least-privilege constraint for critical criticality in the planner/generator) instead of a rejected
+  fail-safe response — `keiko-model-gateway` planner `deriveSafetyPosture` / generator safety-rule
+  construction. Generator changes belong to a #1310/#1313 follow-up; the eval pins the current rejected
+  behaviour so it cannot regress silently.
 - Critic grounding-readiness directive check (observation surfaced by the eval review). The #1312
   critic's `scoreGroundingReadiness` checks only for the `stay-within-evidence` directive, so
   open-evidence plans (hybrid / external-research, which emit `separate-known-from-retrieved`) cap at

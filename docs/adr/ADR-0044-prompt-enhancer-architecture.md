@@ -60,7 +60,7 @@ The relevant subsystems and their reuse anchors, confirmed by reading the curren
 | Productive model calls, capability metadata, provider neutrality     | `keiko-model-gateway`: `Gateway`, `CAPABILITY_REGISTRY`, `selectConfiguredModel`, `ProviderAdapter`; QI dispatch primitives                                                               |
 | Trusted-instruction / untrusted-evidence separation                  | `keiko-model-gateway/src/qualityIntelligence/promptSegmentation.ts`: `buildPromptSegments`                                                                                                |
 | Grounding, retrieval, hybrid RRF, citation, budgets, scopes          | `keiko-local-knowledge`: `runLocalKnowledgeRetrieval`, `assembleGroundedContext`, `validateAnswerGrounding`, `buildComposedRetrievalScope`; server `runHybridGroundedAsk` (ADR-0034/0036) |
-| Candidate scoring, scorecards, offline/live modes, safety gate       | `keiko-evaluations`: `scoreFixture`, `aggregateScorecard`, `runEvaluationSuite`, `createEvaluationModelProvider`; `keiko-contracts` `EVALUATION_DIMENSIONS`                               |
+| Candidate scoring, scorecards, offline/live modes, safety gate       | `keiko-model-gateway/src/promptEnhancer/` critic + `keiko-evaluations` `PromptEnhancerEval` fixtures, scorecard aggregation, and GO/NO-GO rendering                                          |
 | Redaction, hashing, sealed-at-rest, safe-error taxonomy              | `keiko-security`: `redact`, `createAuditRedactor`, `canonicalise`/`sha256Hex`, `sealString`, gateway/tools/audit error codes                                                              |
 | Evidence manifests, run ledger, redaction-on-write                   | `keiko-evidence`: `EvidenceStore` port, `buildEvidenceManifest`, `persistEvidence`; QI store template                                                                                     |
 | Governed multi-stage execution, human-review handoff                 | `keiko-workflows`: `WorkflowDescriptor`, `withStage`, `GovernorState`, `createScopedWriter`/`governedPatchRejectionCode`                                                                  |
@@ -102,7 +102,7 @@ changes to the architecture-gate registration files.**
 | Model-bound analyze / candidate / critic dispatch + enhancer task profiles                                                                                               | `keiko-model-gateway` new `src/promptEnhancer/`                                                    | reuse `buildPromptSegments`, `assertProfileCompatibleWithModel`, `*SafeError*`, budget, cancellation, replay cache; add profiles paralleling `QUALITY_INTELLIGENCE_TASK_PROFILES` | #1310, #1312 |
 | Governed `analyze → plan → generate → score → validate` lifecycle + human-review handoff                                                                                 | `keiko-workflows` new `src/promptEnhancer/`                                                        | reuse `withStage`, `GovernorState`, `createScopedWriter`, descriptor pattern                                                                                                      | #1310, #1313 |
 | Grounding plan + source policy emission                                                                                                                                  | `keiko-contracts` `GroundingPlan` contract/planner + `keiko-model-gateway` rendering               | reuse existing grounding vocabulary and ADR-0034/0036 source semantics; **emit a source policy, never execute retrieval**                                                          | #1311        |
-| Candidate critic scoring + offline/live evaluation suite                                                                                                                 | `keiko-evaluations` + `keiko-contracts` `evaluations.ts`                                           | extend `SCORERS` map and `EVALUATION_DIMENSIONS`; reuse `runEvaluationSuite`, `createEvaluationModelProvider`, scorecard aggregation                                              | #1312, #1315 |
+| Candidate critic scoring + offline/live evaluation suite                                                                                                                 | `keiko-model-gateway/src/promptEnhancer/` + `keiko-evaluations` `PromptEnhancerEval`               | reuse deterministic scorecard shape, evaluation package conventions, checked-in fixtures, and GO/NO-GO rendering while keeping prompt-quality metrics separate from agent trajectories | #1312, #1315 |
 | Injection-pattern redaction, prompt-enhancement error taxonomy, fingerprinting                                                                                           | `keiko-security`                                                                                   | extend `BUILTIN_PATTERNS`; add a `PromptEnhancementError` code set; reuse `canonicalise`/`sha256Hex`, `sealString`                                                                | #1313        |
 | Audit evidence (prompt version, applied rules, candidate scores, eval results)                                                                                           | `keiko-evidence` new `src/promptEnhancement/`                                                      | reuse `EvidenceStore` port + the QI store template (record → redact → hash → validate → write)                                                                                    | #1313        |
 | BFF `/api/prompt-enhancer/*` routes                                                                                                                                      | `keiko-server`                                                                                     | reuse `API_ROUTES`, `UiHandlerDeps`, `readBody`/`parseBody`, `mappedGatewayError`, SSE helpers; bind Prompt Enhancer grounding plans to executable retrieval/readiness checks     | #1314        |
@@ -112,11 +112,11 @@ changes to the architecture-gate registration files.**
 No edits to `scripts/check-package-graph.mjs`, `.dependency-cruiser.cjs`,
 `tsconfig.packages.json`, or root `package.json` `bundleDependencies` are required for this default.
 
-The runtime `score` stage of the workflow calls the `pe:critic` model profile through the gateway
-and aggregates the result; it does **not** call `runEvaluationSuite`, so it introduces no
-`keiko-workflows → keiko-evaluations` edge. `runEvaluationSuite` and the `keiko-evaluations` package
-are the **offline regression-testing** infrastructure (issue #1315, run from `keiko-cli`, which
-already depends on `keiko-evaluations`), not a runtime dependency of the enhancer workflow.
+The runtime scoring path uses the prompt-enhancer critic under `keiko-model-gateway` and aggregates the
+result; it does **not** call `runEvaluationSuite`, so it introduces no `keiko-workflows →
+keiko-evaluations` edge. `PromptEnhancerEval` in `keiko-evaluations` is the **offline
+regression-testing** infrastructure (issue #1315, run from `keiko-cli`, which already depends on
+`keiko-evaluations`), not a runtime dependency of the enhancer workflow.
 
 ### 2. Documented alternative: a dedicated `@oscharko-dev/keiko-prompt-enhancer` leaf package
 
@@ -178,8 +178,10 @@ generated prompt is data, not a capability grant.
   ever interprets a prompt as a capability token or secret.
 - **Redaction before persistence.** Every Enhanced Prompt artefact and evidence row is passed
   through `keiko-security` `createAuditRedactor` / `deepRedactStrings` before it is written, reusing
-  the `keiko-evidence` redact-by-construction path. Raw secrets, customer data, private runtime logs,
-  and hidden system prompts are never persisted.
+  the `keiko-evidence` redact-by-construction path. Known secrets and configured topology are removed
+  before persistence; the manifest stores a stable fingerprint plus a redacted, truncated excerpt, so
+  operators must still avoid putting customer data, private runtime logs, or hidden system prompts into
+  durable evidence examples.
 - **Safe errors.** Enhancer errors adopt a `qi/*`-style safe-error taxonomy: no error carries
   secrets, raw user input, untrusted-evidence text, or provider/deployment endpoints.
 - **Evidence integrity.** Prompt version, applied rules, candidate scores, and evaluation results are
@@ -191,12 +193,12 @@ generated prompt is data, not a capability grant.
 ### 6. Evaluation and safety are first-class and regression-guarded
 
 Candidate scoring covers clarity, completeness, grounding readiness, safety, output controllability,
-and token efficiency, expressed as additional `EVALUATION_DIMENSIONS` and `SCORERS`. The MVP eval
-suite (#1315) reuses `runEvaluationSuite` with checked-in deterministic fixtures and an offline
-threshold gate, plus human-reviewed live runs, so prompt quality and safety cannot regress silently.
-Safety guardrails for prompt injection, indirect injection, sensitive-data disclosure, insecure
-output handling, excessive agency, and unsafe tool use are encoded as enhancer validation rules and
-safety annotations and proved by fixtures.
+and token efficiency in the prompt-enhancer critic. The MVP eval suite (#1315) uses the dedicated
+`PromptEnhancerEval` sub-module with checked-in deterministic fixtures and an offline threshold gate,
+plus human-reviewed evidence, so prompt quality and safety cannot regress silently. Safety guardrails
+for prompt injection, indirect injection, sensitive-data disclosure, insecure output handling,
+excessive agency, and unsafe tool use are encoded as enhancer validation rules and safety annotations
+and proved by fixtures.
 
 **Implementation note (#1315).** The evaluation suite is implemented as a parallel prompt-quality
 sub-module — `keiko-evaluations` `PromptEnhancerEval` (`src/promptEnhancer/`) — rather than by adding

@@ -5,7 +5,7 @@ Epic: [#1307](https://github.com/oscharko-dev/Keiko/issues/1307)
 The Prompt Enhancer takes a short, rough prompt and rewrites it into a well-structured instruction set
 that produces more reliable answers. It runs locally and deterministically — the same draft always
 produces the same enhanced prompt — and it is built to be safe by default: it treats your draft as
-data, never grants itself tools or access, and routes high-stakes requests to human review.
+data, never grants itself tools or access, and fails closed for safety-critical advice.
 
 This guide explains what the enhancer produces, the profiles it uses, how it handles missing
 information and grounding, and its safety model and limitations. For the contracts and internals, see
@@ -94,20 +94,23 @@ The enhancer is safe by construction:
   they are flagged for review.
 - **No self-granted authority.** The enhanced prompt never grants tool execution, file writes, network
   egress, or secret access. Least privilege is the default.
-- **Human review for risky requests.** Agentic tasks, requests for tool/egress authority, and
-  high-stakes (critical) requests are escalated to human review before any side-effecting action.
+- **Human review for risky requests.** Agentic tasks and requests for tool/egress authority are
+  escalated to human review before any side-effecting action. High-stakes consequential advice is
+  returned as a rejected fail-safe result rather than a ready-to-use prompt.
 - **No secret disclosure.** The prompt forbids revealing secrets, credentials, or system instructions,
-  and the evidence record stores only a redacted fingerprint of your draft — never raw text or secrets.
+  and the evidence record stores only a stable redacted fingerprint plus a redacted, truncated excerpt
+  of your draft — never an unredacted draft or known secret.
 - **Injection detection.** Drafts containing prompt-injection, secret-exfiltration, or
-  authority-escalation attempts are detected and the request is escalated to human review.
+  authority-escalation attempts are detected and surfaced for review or rejection.
 
 ### Known safety limitation
 
 A request that seeks **consequential advice in a safety-critical domain** (legal, medical, finance,
-security) is currently **rejected** by the safety stage as a fail-safe outcome: the MVP declines to
-auto-produce such a prompt and the enhancement is not returned. This is intentionally conservative.
-The intended longer-term behaviour is to route these to human review (with a professional-advice
-disclaimer) rather than reject outright; this refinement is tracked as a follow-up and recorded in the
+security) is currently returned with `safety.decision: rejected` as a fail-safe outcome. The surface can
+show the generated review artefact and safety findings, but the result is not an approved prompt to run.
+This is intentionally conservative. The intended longer-term behaviour is to route these to
+`requires-human-review` (with a professional-advice disclaimer) rather than reject outright; this
+refinement is tracked as a follow-up and recorded in the
 [closure evidence](./1315-closure-evidence.md). Until then, treat safety-critical advice prompts as
 requiring human handling.
 
