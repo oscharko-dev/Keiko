@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -57,9 +58,10 @@ function makeIo(): Captured {
 }
 
 const tempRoots: string[] = [];
+const REAL_TMPDIR = realpathSync(tmpdir());
 
 function makeRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-repair-"));
+  const root = mkdtempSync(join(REAL_TMPDIR, "keiko-repair-"));
   tempRoots.push(root);
   return root;
 }
@@ -434,12 +436,54 @@ describe("runRepairCli — credential storage", () => {
   it("reports ok when no --config flag and no KEIKO_CONFIG_FILE env variable are set", () => {
     const root = makeRoot();
     seedInstalledLayout(root);
-    // Deliberately: no --config arg and no KEIKO_CONFIG_FILE in the empty env object.
+    // Deliberately: no --config arg, no KEIKO_CONFIG_FILE, and no default local config file.
     const c = makeIo();
     runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no config file to inspect");
+  });
+
+  it("inspects the default local config when no explicit config is set", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const localDir = join(root, ".keiko");
+    mkdirSync(localDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(localDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [{ modelId: "gpt-4o", apiKey: "sk-default-local-secret" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("plaintext credentials present");
+  });
+
+  it("inspects KEIKO_UI_DATA_DIR/keiko.config.json when no explicit config is set", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const dataDir = join(root, "ui-data");
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(dataDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [{ modelId: "gpt-4o", apiKey: "sk-ui-data-secret" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, { KEIKO_UI_DATA_DIR: dataDir }, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("plaintext credentials present");
   });
 
   it("reports ok when the configured config file does not exist on disk", () => {

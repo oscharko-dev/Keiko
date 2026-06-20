@@ -1,4 +1,9 @@
-import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  loadConfigFromFile,
+  type EnvSource,
+  type GatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
+import { createProviderSecretResolver } from "@oscharko-dev/keiko-server/credential-vault";
 
 export type ConfigPathResolution =
   | { readonly kind: "path"; readonly path: string }
@@ -19,4 +24,10 @@ export function resolveConfigPathFromArgs(
   return env.KEIKO_CONFIG_FILE === undefined
     ? { kind: "not-configured" }
     : { kind: "path", path: env.KEIKO_CONFIG_FILE };
+}
+
+export function loadGatewayConfigFromFile(path: string, env: EnvSource): GatewayConfig {
+  return loadConfigFromFile(path, env, {
+    secretResolver: createProviderSecretResolver({ configPath: path, env }),
+  });
 }

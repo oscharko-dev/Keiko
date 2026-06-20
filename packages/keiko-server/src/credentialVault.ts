@@ -100,15 +100,13 @@ function envModelToken(modelId: string): string {
   return modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
 }
 
-// True when the environment already supplies this provider's apiKey, so it must NOT be persisted
-// (env credentials stay transient and are never written back to disk). The two cases mirror the
-// gateway's resolution precedence exactly:
-//   - a per-model env override always wins at load, regardless of what the config stores;
-//   - the default env key only governs when it equals the effective value (otherwise a distinct
-//     setup-submitted key must be vaulted so it is not silently shadowed by the default env key).
+// True when the environment supplies the exact same effective apiKey, so it must NOT be persisted
+// (env credentials stay transient and are never written back to disk). If an env override differs
+// from the file value, the file value is still a durable configured credential and must be vaulted so
+// behavior survives after the temporary env override is removed.
 export function isEnvProvidedApiKey(modelId: string, apiKey: string, env: EnvSource): boolean {
   const perModel = env[`KEIKO_MODEL_${envModelToken(modelId)}_API_KEY`];
-  if (perModel !== undefined && perModel.length > 0) {
+  if (perModel !== undefined && perModel.length > 0 && perModel === apiKey) {
     return true;
   }
   const defaultKey = env.KEIKO_DEFAULT_API_KEY;
@@ -132,9 +130,58 @@ export interface SealProviderApiKeysOptions {
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
 }
 
-function existingRef(provider: Record<string, unknown>): string | undefined {
-  const ref = provider.apiKeySecretRef;
-  return typeof ref === "string" && ref.length > 0 ? ref : undefined;
+export interface SealedProviderApiKeys {
+  readonly providers: readonly unknown[];
+  readonly activeSecretRefs: readonly string[];
+}
+
+function existingSecretRef(provider: Record<string, unknown>): string | undefined {
+  const value = provider.apiKeySecretRef;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+interface PlannedProviderCredential {
+  readonly provider: unknown;
+  readonly activeSecretRef?: string | undefined;
+}
+
+function providerWithSecretRef(
+  cleaned: Record<string, unknown>,
+  reference: string,
+): PlannedProviderCredential {
+  return { provider: { ...cleaned, apiKeySecretRef: reference }, activeSecretRef: reference };
+}
+
+function planPlaintextProviderCredential(
+  modelId: string,
+  apiKey: string,
+  cleaned: Record<string, unknown>,
+  configuredRef: string | undefined,
+  env: EnvSource,
+  vaultedRefs: ReadonlySet<string>,
+  toSeal: Map<string, string>,
+): PlannedProviderCredential {
+  const reference = providerSecretRef(modelId);
+  if (!isEnvProvidedApiKey(modelId, apiKey, env)) {
+    toSeal.set(reference, apiKey);
+    return providerWithSecretRef(cleaned, reference);
+  }
+  // Env override: preserve the durable vaulted credential + its reference if one already exists.
+  const durableRef = configuredRef ?? reference;
+  return vaultedRefs.has(durableRef) ? providerWithSecretRef(cleaned, durableRef) : { provider: cleaned };
+}
+
+function planReferenceOnlyProviderCredential(
+  modelId: string,
+  cleaned: Record<string, unknown>,
+  configuredRef: string | undefined,
+  vaultedRefs: ReadonlySet<string>,
+): PlannedProviderCredential {
+  // No plaintext: keep an explicit reference as-is. If the config omitted a reference but a durable
+  // vault entry for the model already exists, preserve that entry through a re-save.
+  const reference = providerSecretRef(modelId);
+  const ref = configuredRef ?? (vaultedRefs.has(reference) ? reference : undefined);
+  return ref === undefined ? { provider: cleaned } : providerWithSecretRef(cleaned, ref);
 }
 
 // Decides how a single provider is persisted, given the references already present in the vault:
@@ -144,57 +191,95 @@ function existingRef(provider: Record<string, unknown>): string | undefined {
 //     vault entry must survive an env var being later unset — Issue #1320 / review blocker);
 //   - a reference-bearing provider with no plaintext (an already-migrated entry) keeps its reference;
 //   - a pure-env or referenceless provider is stripped (env stays transient, nothing persists).
-// `toSeal` is populated only with NEW non-env values; the vault is merged (never wholesale-replaced),
-// so no previously-vaulted credential is ever deleted by a re-save.
+// `toSeal` is populated only with new non-env values. Stale refs are pruned only after the config
+// rewrite succeeds, so an already reference-only config is never left pointing at deleted vault
+// material after a crash.
 function planProviderCredential(
   provider: Record<string, unknown>,
   env: EnvSource,
   vaultedRefs: ReadonlySet<string>,
   toSeal: Map<string, string>,
-): unknown {
+): PlannedProviderCredential {
   const modelId = typeof provider.modelId === "string" ? provider.modelId : "";
   const apiKey = typeof provider.apiKey === "string" ? provider.apiKey : "";
   const cleaned = stripCredentialFields(provider);
   if (modelId.length === 0) {
-    return cleaned;
+    return { provider: cleaned };
   }
-  const reference = providerSecretRef(modelId);
+  const configuredRef = existingSecretRef(provider);
   if (apiKey.length > 0) {
-    if (!isEnvProvidedApiKey(modelId, apiKey, env)) {
-      toSeal.set(reference, apiKey);
-      return { ...cleaned, apiKeySecretRef: reference };
-    }
-    // Env override: preserve the durable vaulted credential + its reference if one already exists.
-    return vaultedRefs.has(reference) ? { ...cleaned, apiKeySecretRef: reference } : cleaned;
+    return planPlaintextProviderCredential(
+      modelId,
+      apiKey,
+      cleaned,
+      configuredRef,
+      env,
+      vaultedRefs,
+      toSeal,
+    );
   }
-  // No plaintext: keep a reference only if it resolves to a real vaulted entry.
-  const ref = existingRef(provider) ?? reference;
-  return vaultedRefs.has(ref) ? { ...cleaned, apiKeySecretRef: ref } : cleaned;
+  return planReferenceOnlyProviderCredential(modelId, cleaned, configuredRef, vaultedRefs);
 }
 
 // Seals each persistable provider apiKey into the credential vault and returns the providers array
 // rewritten to carry an `apiKeySecretRef` instead of the plaintext `apiKey`. Vault writes happen
 // FIRST (before the caller rewrites the config) so a crash leaves the old plaintext config in place
-// and the next migration re-runs idempotently. The vault is MERGED, never wholesale-replaced: a
-// re-save updates the providers it owns and leaves every other (incl. env-overridden) entry intact.
-export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readonly unknown[] {
+// and the next migration re-runs idempotently. Pure env credentials are dropped entirely (no
+// reference, no vault entry), while env overrides layered over an existing durable vault entry keep
+// that reference. Stale refs are pruned only after the config rewrite succeeds, so an already
+// reference-only config is never left pointing at deleted vault material after a crash.
+export function prepareSealedProviderApiKeys(
+  options: SealProviderApiKeysOptions,
+): SealedProviderApiKeys {
   const providersRaw: readonly unknown[] = Array.isArray(options.raw.providers)
     ? (options.raw.providers as readonly unknown[])
     : [];
   const vaultedRefs = new Set(readLocalVaultReferences(credentialStorePath(options.configPath)));
-  const toSeal = new Map<string, string>();
-  const sealedProviders = providersRaw.map((provider) =>
-    isRecord(provider)
-      ? planProviderCredential(provider, options.env, vaultedRefs, toSeal)
-      : provider,
-  );
-  if (toSeal.size > 0) {
-    const vault = openProviderCredentialVault(options);
-    for (const [reference, secret] of toSeal) {
-      vault.set(reference, secret);
+  const vaultEntries = new Map<string, string>();
+  const activeSecretRefs = new Set<string>();
+  const sealedProviders = providersRaw.map((provider) => {
+    if (!isRecord(provider)) {
+      return provider;
+    }
+    const planned = planProviderCredential(provider, options.env, vaultedRefs, vaultEntries);
+    if (planned.activeSecretRef !== undefined) {
+      activeSecretRefs.add(planned.activeSecretRef);
+    }
+    return planned.provider;
+  });
+  persistVaultEntries(options, vaultEntries);
+  return { providers: sealedProviders, activeSecretRefs: [...activeSecretRefs] };
+}
+
+function persistVaultEntries(
+  options: SealProviderApiKeysOptions,
+  entries: ReadonlyMap<string, string>,
+): void {
+  if (entries.size === 0) return;
+  const vault = openProviderCredentialVault(options);
+  for (const [reference, secret] of entries) {
+    vault.set(reference, secret);
+  }
+}
+
+export function pruneProviderCredentialVault(
+  options: OpenCredentialVaultOptions,
+  activeSecretRefs: readonly string[],
+): void {
+  const storePath = credentialStorePath(options.configPath);
+  if (!existsSync(storePath)) return;
+  const active = new Set(activeSecretRefs);
+  const vault = openProviderCredentialVault(options);
+  for (const reference of vault.list()) {
+    if (!active.has(reference)) {
+      vault.delete(reference);
     }
   }
-  return sealedProviders;
+}
+
+export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readonly unknown[] {
+  const sealed = prepareSealedProviderApiKeys(options);
+  return sealed.providers;
 }
 
 // Structural detector for an UNMIGRATED or partially migrated config: any provider still carrying a

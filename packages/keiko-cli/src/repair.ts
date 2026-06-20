@@ -17,7 +17,7 @@
 
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
@@ -353,14 +353,41 @@ function checkGatewayConfig(args: readonly string[], env: EnvSource): CheckResul
 // provider apiKey or Figma accessToken. Credentials must live in encrypted local storage, with only
 // non-secret references in the JSON file; `keiko ui` performs the one-time, crash-aware migration, so
 // lingering plaintext here is the signal that a migration never ran or was interrupted.
-function checkCredentialStorage(args: readonly string[], env: EnvSource): CheckResult {
+function defaultLocalGatewayConfigPath(env: EnvSource, homedir: string): string {
+  const dataDir = env.KEIKO_UI_DATA_DIR;
+  if (dataDir !== undefined && dataDir.length > 0 && isAbsolute(dataDir)) {
+    return join(dataDir, "keiko.config.json");
+  }
+  return join(homedir, ".keiko", "keiko.config.json");
+}
+
+function credentialConfigPath(
+  args: readonly string[],
+  env: EnvSource,
+  defaultConfigPath: string,
+): string | undefined {
   const resolution = resolveConfigPathFromArgs(args, env);
-  if (resolution.kind !== "path" || !existsSync(resolution.path)) {
+  if (resolution.kind === "path") {
+    return resolution.path;
+  }
+  if (resolution.kind === "not-configured") {
+    return defaultConfigPath;
+  }
+  return undefined;
+}
+
+function checkCredentialStorage(
+  args: readonly string[],
+  env: EnvSource,
+  defaultConfigPath: string,
+): CheckResult {
+  const configPath = credentialConfigPath(args, env, defaultConfigPath);
+  if (configPath === undefined || !existsSync(configPath)) {
     return ok("Credential storage", "no config file to inspect");
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(resolution.path, "utf8"));
+    raw = JSON.parse(readFileSync(configPath, "utf8"));
   } catch {
     // Invalid JSON is already reported by the gateway-config check; avoid a duplicate action item.
     return ok("Credential storage", "config not parseable (reported above)");
@@ -371,7 +398,7 @@ function checkCredentialStorage(args: readonly string[], env: EnvSource): CheckR
       "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
     );
   }
-  const orphaned = orphanedSecretRefs(raw, resolution.path);
+  const orphaned = orphanedSecretRefs(raw, configPath);
   if (orphaned > 0) {
     return action(
       "Credential storage",
@@ -454,6 +481,7 @@ export function runRepairCli(
   }
   const resolved = resolveDeps(deps);
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
+  const defaultConfigPath = defaultLocalGatewayConfigPath(env, resolved.homedir());
   const results: CheckResult[] = [
     checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
     checkStateDirPerms(stateDir, parsed.dryRun),
@@ -462,7 +490,7 @@ export function runRepairCli(
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
-    checkCredentialStorage(args, env),
+    checkCredentialStorage(args, env, defaultConfigPath),
   ];
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);

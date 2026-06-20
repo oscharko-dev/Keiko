@@ -8,7 +8,7 @@ export type { EvalRunnerDeps, EvalRunOptions } from "./runner.js";
 export { createScriptedModelPort } from "./scripted-model.js";
 export type { ScriptedModelPort } from "./scripted-model.js";
 export { createEvaluationModelProvider } from "./model-provider.js";
-export type { EvaluationModelProviderDeps } from "./model-provider.js";
+export type { EvaluationConfigLoader, EvaluationModelProviderDeps } from "./model-provider.js";
 export { scoreFixture, aggregateScorecard, summarizeScorecard } from "./scorer.js";
 export type { ScoringInput } from "./scorer.js";
 export { checkSurfaceParity } from "./surface-parity.js";

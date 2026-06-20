@@ -143,6 +143,42 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
     const second = resolveLocalVaultKey(opts);
     expect(first.key.equals(second.key)).toBe(true);
   });
+
+  it("rejects a keyfile path through a symlinked directory segment", () => {
+    if (process.platform === "win32") return;
+    const realSub = join(dir, "real-key-dir");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-key-dir");
+    symlinkSync(realSub, linkSub);
+
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: linkSub,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      }),
+    ).toThrow("symlinked path");
+  });
+
+  it("rejects a final keyfile path that is itself a symlink", () => {
+    if (process.platform === "win32") return;
+    writeFileSync(join(dir, "real-test-vault.key"), Buffer.alloc(32, 4).toString("base64"));
+    symlinkSync(join(dir, "real-test-vault.key"), join(dir, "test-vault.key"));
+
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: dir,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      }),
+    ).toThrow("symlinked path");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -328,6 +364,7 @@ describe("createLocalSecretVault — corrupt store", () => {
 
 describe("createLocalSecretVault — symlink guard", () => {
   it("throws when the storePath contains a symlinked directory segment", () => {
+    if (process.platform === "win32") return;
     // Build a real sub-directory and a symlink to it.
     const realSub = join(dir, "real-sub");
     mkdirSync(realSub);
@@ -340,6 +377,55 @@ describe("createLocalSecretVault — symlink guard", () => {
     });
     expect(() => {
       vault.set("cred:a", "value");
+    }).toThrow("symlinked path");
+  });
+
+  it("throws on read paths through a symlinked directory segment", () => {
+    if (process.platform === "win32") return;
+    const realSub = join(dir, "real-read-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-read-sub");
+    symlinkSync(realSub, linkSub);
+
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+    });
+
+    expect(() => vault.get("cred:a")).toThrow("symlinked path");
+    expect(() => vault.has("cred:a")).toThrow("symlinked path");
+    expect(() => vault.list()).toThrow("symlinked path");
+  });
+
+  it("throws when the final store file path is itself a symlink", () => {
+    if (process.platform === "win32") return;
+    const realStore = join(dir, "real-vault.enc.json");
+    vaultAt(realStore).set("cred:a", "secret-A");
+    const linkStore = join(dir, "link-vault.enc.json");
+    symlinkSync(realStore, linkStore);
+
+    const vault = createLocalSecretVault({ key: KEY, storePath: linkStore });
+
+    expect(() => vault.list()).toThrow("symlinked path");
+    expect(() => {
+      vault.set("cred:b", "secret-B");
+    }).toThrow("symlinked path");
+  });
+
+  it("throws before deleting an empty replacement through a symlinked directory segment", () => {
+    if (process.platform === "win32") return;
+    const realSub = join(dir, "real-delete-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-delete-sub");
+    symlinkSync(realSub, linkSub);
+
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+    });
+
+    expect(() => {
+      vault.replaceAll(new Map());
     }).toThrow("symlinked path");
   });
 });
