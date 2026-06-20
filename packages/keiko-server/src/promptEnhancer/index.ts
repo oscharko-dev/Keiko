@@ -2,10 +2,11 @@
 // Exposes the BFF route handler and the reusable, deterministic orchestration the CLI surface also
 // drives (so both surfaces produce byte-identical enhancements — AC1).
 
-export { handlePromptEnhancement } from "./routes.js";
+export { handlePromptEnhancement, handlePromptEnhancementEvidence } from "./routes.js";
 export {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
+  buildPromptEnhancementRecordInput,
   runPromptEnhancement,
   type RunPromptEnhancementDeps,
 } from "./orchestrate.js";

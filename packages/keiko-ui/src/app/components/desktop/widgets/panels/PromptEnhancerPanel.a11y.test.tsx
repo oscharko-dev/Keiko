@@ -83,6 +83,15 @@ function response(): PromptEnhancementWireResponse {
     },
     renderedPrompt: "## Role\nYou are a precise assistant.",
     modelRouting: { availability: "not-requested", reason: "no-model-requested" },
+    groundingReadiness: { status: "not-required", reason: "no-grounding-required" },
+    evidence: {
+      status: "recorded",
+      reason: "evidence-recorded",
+      runId: "pe-run-a11y",
+      manifestUrl: "/api/prompt-enhancement/evidence/pe-run-a11y",
+      peEvidenceSchemaVersion: 2,
+      recordIntegritySha256: "b".repeat(64),
+    },
   } as unknown as PromptEnhancementWireResponse;
 }
 

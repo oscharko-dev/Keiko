@@ -1,13 +1,14 @@
-import { describe, expect, it } from "vitest";
-import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { describe, expect, it, vi } from "vitest";
+import { PromptEnhancer, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { PromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts";
 import {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
+  buildPromptEnhancementRecordInput,
   runPromptEnhancement,
-} from "./orchestrate.js";
+} from "./index.js";
 
-function configWithProvider(modelId: string): GatewayConfig {
+function configWithProvider(modelId: string, kind: "chat" | "embedding" = "chat"): GatewayConfig {
   return {
     providers: [
       {
@@ -23,12 +24,12 @@ function configWithProvider(modelId: string): GatewayConfig {
     capabilities: [
       {
         id: modelId,
-        kind: "chat",
+        kind,
         contextWindow: 64_000,
         maxOutputTokens: 4_096,
-        toolCalling: true,
-        structuredOutput: true,
-        streaming: true,
+        toolCalling: kind === "chat",
+        structuredOutput: kind === "chat",
+        streaming: kind === "chat",
         supportsImageInput: false,
         supportsDocumentInput: false,
         workflowEligible: false,
@@ -68,6 +69,11 @@ describe("runPromptEnhancement", () => {
     expect(p.groundingPlan.untrustedContent).toBe(true);
     expect(result.renderedPrompt).toContain("## Role");
     expect(result.renderedPrompt.length).toBeGreaterThan(0);
+    expect(result.evidence).toEqual({
+      status: "not-recorded",
+      reason: "evidence-store-not-configured",
+    });
+    expect(result.groundingReadiness.status).toBeDefined();
   });
 
   it("is deterministic: identical requests produce identical results", () => {
@@ -142,6 +148,15 @@ describe("runPromptEnhancement", () => {
       expect(result.modelRouting.costClass).toBe("medium");
     });
 
+    it("reports unavailable when the named provider is not chat-capable", () => {
+      const result = run(
+        { text: "Hello.", modelId: "embedding-model" },
+        configWithProvider("embedding-model", "embedding"),
+      );
+      expect(result.modelRouting.availability).toBe("unavailable");
+      expect(result.modelRouting.reason).toBe("model-not-chat-capable");
+    });
+
     it("still produces an enhanced prompt even when the model is unavailable (graceful)", () => {
       const result = run(
         { text: "Plan a migration.", modelId: "ghost" },
@@ -186,11 +201,51 @@ describe("runPromptEnhancement", () => {
     expect(() => run({ text: controlOnly })).toThrow(PromptEnhancementInputError);
   });
 
+  it("rejects a request that fails domain validation after wire shaping", () => {
+    expect(() =>
+      runPromptEnhancement(
+        {
+          text: "Hello.",
+          profilePreference: "not-a-profile",
+        } as unknown as PromptEnhancementWireRequest,
+        NO_GATEWAY,
+      ),
+    ).toThrow(PromptEnhancementInputError);
+  });
+
+  it("throws when the optimizer produces no ranked prompt", () => {
+    const optimizeSpy = vi.spyOn(PromptEnhancer, "optimizePromptCandidates").mockReturnValueOnce({
+      rankedPrompts: [],
+    } as unknown as ReturnType<typeof PromptEnhancer.optimizePromptCandidates>);
+    try {
+      expect(() => run({ text: "Summarize the issue." })).toThrow(
+        "Prompt enhancement optimization produced no prompt.",
+      );
+    } finally {
+      optimizeSpy.mockRestore();
+    }
+  });
+
   it("derives distinct request ids for inputs that share a space-joined concatenation", () => {
     // Guards the NUL-delimited id derivation against the "a b"+strategy vs "a"+"b strategy" collision.
     const a = run({ text: "alpha beta" });
     const b = run({ text: "alpha" });
     expect(a.promptId).not.toBe(b.promptId);
+  });
+
+  it("derives distinct request ids when connected-context metadata differs", () => {
+    const a = run({ text: "Summarize this repository.", hasConnectedContext: false });
+    const b = run({ text: "Summarize this repository.", hasConnectedContext: true });
+    expect(a.analysis.requestId).not.toBe(b.analysis.requestId);
+    expect(a.promptId).not.toBe(b.promptId);
+  });
+
+  it("fails closed when required grounding has no concrete connected scope", () => {
+    const result = run({ text: "Research current pricing and cite sources." });
+    if (result.enhancedPrompt.groundingPlan.required) {
+      expect(result.groundingReadiness.status).toBe("unavailable");
+      expect(result.groundingReadiness.reason).toBe("missing-concrete-scope");
+    }
   });
 
   it("throws PromptEnhancementCancelledError when the signal is already aborted", () => {
@@ -213,5 +268,76 @@ describe("runPromptEnhancement", () => {
   it("never depends on a live model: NO_GATEWAY deps still enhance", () => {
     const result = runPromptEnhancement({ text: "Compose a status update." }, NO_GATEWAY);
     expect(result.enhancedPrompt.safetyRules.length).toBeGreaterThan(0);
+  });
+
+  it("builds evidence records with selected candidates, assumptions, and model metadata", () => {
+    const rawInput = "Build something useful.";
+    const result = run(
+      { text: rawInput, missingInformationStrategy: "assume", modelId: "example-chat-model" },
+      configWithProvider("example-chat-model"),
+    );
+    const accepted = {
+      ...result,
+      analysis: {
+        ...result.analysis,
+        missingContext: [
+          {
+            kind: "assumption",
+            topic: "scope",
+            statement: "Assume the prompt applies to the current project scope.",
+          },
+          {
+            kind: "clarification",
+            topic: "audience",
+            question: "Who is the target audience?",
+          },
+        ] as const,
+      },
+      safety: { ...result.safety, decision: "accepted" as const },
+    };
+    const record = buildPromptEnhancementRecordInput({
+      rawInput,
+      result: accepted,
+      recordedAt: "2026-06-20T18:00:00.000Z",
+    });
+    expect(record.status).toBe("validated");
+    expect(record.modelMetadata).toMatchObject({
+      deterministic: true,
+      modelId: "example-chat-model",
+      profile: result.candidates.scorecards[0]?.profile,
+    });
+    expect(record.candidateScores.some((row) => row.selected)).toBe(true);
+    expect(record.assumptions.length).toBeGreaterThan(0);
+  });
+
+  it("maps rejected evidence records", () => {
+    const result = run({ text: "Summarize this text." });
+    const rejected = {
+      ...result,
+      safety: { ...result.safety, decision: "rejected" as const },
+    };
+    const record = buildPromptEnhancementRecordInput({
+      rawInput: "Summarize this text.",
+      result: rejected,
+      recordedAt: "2026-06-20T18:01:00.000Z",
+    });
+    expect(record.status).toBe("rejected");
+  });
+
+  it("omits optional model metadata when no model or winner profile is available", () => {
+    const result = run({ text: "Hello." });
+    const review = {
+      ...result,
+      candidates: { ...result.candidates, winnerCandidateId: "missing-candidate" },
+      safety: { ...result.safety, decision: "requires-human-review" as const },
+    };
+    const record = buildPromptEnhancementRecordInput({
+      rawInput: "Hello.",
+      result: review,
+      recordedAt: "2026-06-20T18:02:00.000Z",
+    });
+    expect(record.status).toBe("requires-human-review");
+    expect(record.modelMetadata).toEqual({ deterministic: true });
+    expect(record.candidateScores.every((row) => !row.selected)).toBe(true);
   });
 });

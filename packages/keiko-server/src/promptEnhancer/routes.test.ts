@@ -146,6 +146,35 @@ describe("POST /api/prompt-enhancement", () => {
     expect(body.candidates.scorecards.length).toBeGreaterThanOrEqual(1);
     expect(body.safety.decision).toBeDefined();
     expect(body.renderedPrompt).toContain("## Role");
+    expect(body.groundingReadiness.status).toBeDefined();
+    expect(body.evidence.status).toBe("not-recorded");
+  });
+
+  it("records and serves PE evidence when an evidence directory is configured", async () => {
+    const evidenceDir = mkdtempSync(join(tmpdir(), "keiko-pe-evidence-"));
+    await closeServer();
+    await startBound({ evidenceDir });
+    try {
+      const res = await post({ text: "Design a REST API for invoices." });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as PromptEnhancementWireResponse;
+      expect(body.evidence.status).toBe("recorded");
+      expect(body.evidence.runId).toMatch(/^pe-run-/u);
+      expect(body.evidence.manifestUrl).toBe(
+        `/api/prompt-enhancement/evidence/${body.evidence.runId ?? ""}`,
+      );
+      expect(body.evidence.recordIntegritySha256).toMatch(/^[0-9a-f]{64}$/u);
+
+      const manifestRes = await fetch(url(body.evidence.manifestUrl ?? ""));
+      expect(manifestRes.status).toBe(200);
+      const served = (await manifestRes.json()) as {
+        manifest: { readonly runId: string; readonly requestId: string };
+      };
+      expect(served.manifest.runId).toBe(body.evidence.runId);
+      expect(served.manifest.requestId).toBe(body.analysis.requestId);
+    } finally {
+      rmSync(evidenceDir, { recursive: true, force: true });
+    }
   });
 
   it("resolves model routing as available for a configured provider", async () => {
@@ -201,6 +230,18 @@ describe("POST /api/prompt-enhancement", () => {
     const rawText = await res.text();
     expect(rawText).not.toContain(secret);
     expect(rawText).toContain("[REDACTED]");
+  });
+
+  it("returns 400 for an invalid PE evidence run id", async () => {
+    const evidenceDir = mkdtempSync(join(tmpdir(), "keiko-pe-evidence-bad-id-"));
+    await closeServer();
+    await startBound({ evidenceDir });
+    try {
+      const res = await fetch(url("/api/prompt-enhancement/evidence/%2e%2e%2Fescape"));
+      expect(res.status).toBe(400);
+    } finally {
+      rmSync(evidenceDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects an unknown route method with 404/405 (no GET handler)", async () => {

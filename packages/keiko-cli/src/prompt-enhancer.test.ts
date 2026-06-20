@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConfigInvalidError, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import { runPromptEnhancerCli } from "./prompt-enhancer.js";
 import type { CliIo } from "./runner.js";
 
@@ -119,6 +120,13 @@ describe("runPromptEnhancerCli", () => {
     expect(out).toContain("## Role");
   });
 
+  it("accepts raw prompt input that starts with --", () => {
+    const c = makeIo();
+    const code = runPromptEnhancerCli(["--input", "-- compare these options"], c.io, {});
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Enhanced prompt");
+  });
+
   it("emits valid JSON with --json", () => {
     const c = makeIo();
     const code = runPromptEnhancerCli(["--input", "Write a haiku.", "--json"], c.io, {});
@@ -179,11 +187,51 @@ describe("runPromptEnhancerCli", () => {
       inputRedactedFingerprintSha256: string;
       integrityHashes: { enhancedOutput: string };
     };
-    // The shipped v2 manifest carries peEvidenceSchemaVersion 2 and the field
-    // `inputRedactedFingerprintSha256`; these assertions were stale against the v1 shape.
-    expect(manifest.peEvidenceSchemaVersion).toBe(2);
+    expect(manifest.peEvidenceSchemaVersion).toBe(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION);
     expect(manifest.inputRedactedFingerprintSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(manifest.integrityHashes.enhancedOutput).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("redacts loaded config secrets and topology from result and evidence output", () => {
+    const c = makeIo();
+    const apiKey = "config-only-secret-literal";
+    const baseUrl = "https://private-provider.example/v1";
+    const baseConfig = configWithProvider("m");
+    const provider = baseConfig.providers[0];
+    if (provider === undefined) {
+      throw new Error("test fixture expected one provider");
+    }
+    const config: GatewayConfig = {
+      ...baseConfig,
+      providers: [{ ...provider, apiKey, baseUrl }],
+      egress: {
+        httpProxy: "http://proxy-secret.local:8080",
+        httpsProxy: "https://proxy-secret.local:8443",
+        caBundlePath: "/private/ca-bundle.pem",
+      },
+      figma: { accessToken: "figma-config-secret" },
+    };
+    const code = runPromptEnhancerCli(
+      [
+        "--input",
+        `Use ${apiKey} at ${baseUrl} through http://proxy-secret.local:8080.`,
+        "--model",
+        "m",
+        "--config",
+        "/cfg",
+        "--json",
+        "--evidence",
+      ],
+      c.io,
+      {},
+      { loadConfig: () => config },
+    );
+    expect(code).toBe(0);
+    const out = c.out();
+    expect(out).not.toContain(apiKey);
+    expect(out).not.toContain(baseUrl);
+    expect(out).not.toContain("http://proxy-secret.local:8080");
+    expect(out).toContain("[REDACTED]");
   });
 
   it("redacts secret-shaped substrings from all output (AC4)", () => {

@@ -99,6 +99,15 @@ function makeResponse(overrides: Record<string, unknown> = {}): PromptEnhancemen
     renderedPrompt:
       "## Role\nYou are a precise assistant.\n## Objective\nProduce an accurate answer.",
     modelRouting: { availability: "not-requested", reason: "no-model-requested" },
+    groundingReadiness: { status: "not-required", reason: "no-grounding-required" },
+    evidence: {
+      status: "recorded",
+      reason: "evidence-recorded",
+      runId: "pe-run-1",
+      manifestUrl: "/api/prompt-enhancement/evidence/pe-run-1",
+      peEvidenceSchemaVersion: 2,
+      recordIntegritySha256: "b".repeat(64),
+    },
   };
   return { ...base, ...overrides } as unknown as PromptEnhancementWireResponse;
 }
@@ -215,6 +224,36 @@ describe("PromptEnhancerPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");
     expect(screen.getByTestId("pe-model-routing")).toHaveTextContent(/Model ready: m1/);
+    expect(screen.getByTestId("pe-model-routing")).toHaveAttribute("role", "status");
+  });
+
+  it("surfaces grounding readiness and evidence access", async () => {
+    const base = makeResponse();
+    const response = makeResponse({
+      enhancedPrompt: {
+        ...base.enhancedPrompt,
+        groundingPlan: { ...base.enhancedPrompt.groundingPlan, required: true },
+      },
+      groundingReadiness: {
+        status: "unavailable",
+        reason: "missing-concrete-scope",
+        notice: "No connected scope was supplied.",
+      },
+    });
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(response)}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(/unavailable/);
+    expect(screen.getByRole("link", { name: /pe-run-1/ })).toHaveAttribute(
+      "href",
+      "/api/prompt-enhancement/evidence/pe-run-1",
+    );
   });
 
   it("warns when human review is required (AC2 safety warnings)", async () => {
@@ -277,6 +316,8 @@ describe("PromptEnhancerPanel", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(makeResponse().renderedPrompt);
     });
+    expect(screen.getByRole("button", { name: /Copy rendered prompt/ })).toBeInTheDocument();
+    expect(screen.getByText("Rendered prompt copied to clipboard.")).toBeInTheDocument();
   });
 
   it("populates the readiness model picker from the gateway (chat models only)", async () => {
@@ -376,6 +417,24 @@ describe("PromptEnhancerPanel", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/Could not copy/);
     });
+  });
+
+  it("does not report copy success when the Clipboard API is unavailable", async () => {
+    Object.assign(navigator, { clipboard: undefined });
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    fireEvent.click(screen.getByRole("button", { name: /Copy rendered prompt/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/Clipboard is not available/);
+    });
+    expect(screen.queryByText("Rendered prompt copied to clipboard.")).not.toBeInTheDocument();
   });
 
   it("reports a cancelled request distinctly", async () => {

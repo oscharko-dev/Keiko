@@ -63,6 +63,8 @@ test.describe("Prompt Enhancer @smoke", () => {
       candidates: { scorecards: unknown[] };
       safety: { decision: string };
       modelRouting: { availability: string };
+      groundingReadiness: { status: string };
+      evidence: { status: string; manifestUrl?: string };
       renderedPrompt: string;
     };
     expect(body.schemaVersion).toBe("1");
@@ -71,6 +73,9 @@ test.describe("Prompt Enhancer @smoke", () => {
     expect(body.candidates.scorecards.length).toBeGreaterThan(0);
     expect(["accepted", "requires-human-review", "rejected"]).toContain(body.safety.decision);
     expect(body.modelRouting.availability).toBe("not-requested");
+    expect(body.groundingReadiness.status).toBeTruthy();
+    expect(body.evidence.status).toBe("recorded");
+    expect(body.evidence.manifestUrl).toContain("/api/prompt-enhancement/evidence/");
     expect(body.renderedPrompt).toContain("## Role");
   });
 
@@ -92,8 +97,26 @@ test.describe("Prompt Enhancer @smoke", () => {
 
     // Every required governed section renders for review, with a visible safety decision.
     await assertGovernedSections(page);
+    await expect(page.getByTestId("pe-grounding-readiness")).toBeVisible();
+    await expect(page.getByTestId("pe-evidence")).toContainText(/Manifest:/u);
     await captureEvidence(page, testInfo);
 
+    assertNoPageErrors();
+  });
+});
+
+test.describe("Prompt Enhancer large prompt @smoke", () => {
+  test("UI workflow handles a large prompt without page errors", async ({ page }) => {
+    const assertNoPageErrors = collectPageErrors(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Prompt Enhancer", exact: true }).click();
+    const draft = page.getByRole("textbox", { name: "Raw prompt" });
+    await draft.fill(
+      `Summarize this implementation plan.\n${"Scope and constraints. ".repeat(1800)}`,
+    );
+    await page.getByRole("button", { name: /Enhance prompt/u }).click();
+    await assertGovernedSections(page);
+    await expect(page.getByTestId("pe-evidence")).toBeVisible();
     assertNoPageErrors();
   });
 });

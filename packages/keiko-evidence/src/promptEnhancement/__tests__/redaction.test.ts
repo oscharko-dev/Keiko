@@ -42,4 +42,15 @@ describe("redactPromptEnhancementEvidence", () => {
     );
     expect(redacted.v).not.toContain("super-secret-literal");
   });
+
+  it("replaces every string leaf with a fixed marker when full redaction is requested", () => {
+    const { redacted, summary } = redactPromptEnhancementEvidence(
+      { v: "value config-only-api-key here", safe: "still hidden", count: 2 },
+      { redactAllStrings: true },
+    );
+    expect(redacted.v).toBe("[REDACTED]");
+    expect(redacted.safe).toBe("[REDACTED]");
+    expect(redacted.count).toBe(2);
+    expect(summary.patternsMatched["opaque-secret"]).toBe(2);
+  });
 });

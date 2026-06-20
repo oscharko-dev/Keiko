@@ -152,6 +152,7 @@ export {
 // byte-identical enhancements (AC1). Routed through the Model Gateway; never dispatches a model.
 export {
   handlePromptEnhancement,
+  buildPromptEnhancementRecordInput,
   runPromptEnhancement,
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,

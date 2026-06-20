@@ -1,6 +1,6 @@
 // `keiko prompt-enhancer` — the developer-facing surface for the Prompt Enhancer (Epic #1307, Issue
-// #1314; ADR-0044 §1 "CLI command"). It drives the EXACT SAME deterministic orchestration as the BFF
-// route (`runPromptEnhancement` from keiko-server), so the product and developer surfaces produce
+// #1314; ADR-0044 §1 "CLI command"). It drives the EXACT SAME deterministic workflow as the BFF
+// route (`runPromptEnhancement` from keiko-workflows), so the product and developer surfaces produce
 // byte-identical enhancements (AC1). The command never dispatches a model: enhancement is deterministic
 // and provider-neutral; an optional `--model` only resolves dispatch readiness through the Model
 // Gateway (AC3). All printed output is redacted (AC4); `--evidence` emits a redact-by-construction
@@ -14,7 +14,11 @@ import {
   type EnvSource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
-import { PromptEnhancementInputError, runPromptEnhancement } from "@oscharko-dev/keiko-server";
+import {
+  PromptEnhancementInputError,
+  buildPromptEnhancementRecordInput,
+  runPromptEnhancement,
+} from "@oscharko-dev/keiko-workflows";
 import {
   validatePromptEnhancementWireRequest,
   type PromptEnhancementWireRequest,
@@ -24,7 +28,6 @@ import {
   buildPromptEnhancementEvidenceManifest,
   createAuditRedactor,
   deepRedactStrings,
-  type PromptEnhancementRecordInput,
 } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import type { CliIo } from "./runner.js";
@@ -94,7 +97,7 @@ function parseArgs(args: readonly string[]): ParseResult {
     if (arg === undefined) continue;
     if (isValueFlag(arg)) {
       const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined || (arg !== "--input" && value.startsWith("--"))) {
         return { ok: false, error: `missing value for ${arg}` };
       }
       values[arg] = value;
@@ -170,73 +173,88 @@ function resolveGatewayConfig(
   }
 }
 
-function evidenceStatus(
-  decision: PromptEnhancementWireResponse["safety"]["decision"],
-): PromptEnhancementRecordInput["status"] {
-  if (decision === "accepted") return "validated";
-  if (decision === "rejected") return "rejected";
-  return "requires-human-review";
-}
-
-function evidenceCandidateRows(
-  candidates: PromptEnhancementWireResponse["candidates"],
-): PromptEnhancementRecordInput["candidateScores"] {
-  return candidates.scorecards.map((scorecard) => ({
-    candidateId: scorecard.candidateId,
-    profile: scorecard.profile,
-    aggregateScore: scorecard.aggregateScore,
-    estimatedTokens: scorecard.estimatedTokens,
-    selected: scorecard.candidateId === candidates.winnerCandidateId,
-  }));
-}
-
-function evidenceModelMetadata(
-  routing: PromptEnhancementWireResponse["modelRouting"],
-  winnerProfile: string | undefined,
-): PromptEnhancementRecordInput["modelMetadata"] {
-  return {
-    deterministic: true,
-    ...(routing.resolvedModelId === undefined ? {} : { modelId: routing.resolvedModelId }),
-    ...(winnerProfile === undefined ? {} : { profile: winnerProfile }),
-  };
-}
-
 function buildEvidenceManifest(
   rawInput: string,
   result: PromptEnhancementWireResponse,
   env: EnvSource,
+  config: GatewayConfig | undefined,
 ): unknown {
-  const winnerProfile = result.candidates.scorecards.find(
-    (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
-  )?.profile;
-  const record: PromptEnhancementRecordInput = {
-    runId: `pe-run-${result.inputFingerprintSha256.slice(0, 32)}`,
+  const record = buildPromptEnhancementRecordInput({
+    rawInput,
+    result,
     recordedAt: new Date().toISOString(),
-    requestId: result.analysis.requestId,
-    status: evidenceStatus(result.safety.decision),
-    originalInput: rawInput,
-    enhancedPromptId: result.promptId,
-    enhancedPromptText: result.renderedPrompt,
-    appliedSafetyRules: result.enhancedPrompt.safetyRules,
-    appliedGroundingDirectives: result.enhancedPrompt.groundingPlan.directives,
-    assumptions: result.analysis.missingContext.flatMap((item) =>
-      item.kind === "assumption" ? [item.statement] : [],
-    ),
-    candidateScores: evidenceCandidateRows(result.candidates),
-    safety: {
-      decision: result.safety.decision,
-      verificationStatus: result.safety.verificationStatus,
-      requiresHumanReview: result.safety.requiresHumanReview,
-      findingCodes: result.safety.findings.map((finding) => finding.code),
-      leastPrivilege: result.safety.leastPrivilege,
-    },
-    modelMetadata: evidenceModelMetadata(result.modelRouting, winnerProfile),
-  };
+  });
   // The builder fingerprints + redacts by construction, so the returned manifest carries no raw secret.
-  // Pass the extra env-derived API-key literals so any configured secret is scrubbed too.
+  // Topology values are literal-redacted; configured credentials only trigger full string redaction so
+  // the raw credential values never approach the evidence hashing boundary.
   return buildPromptEnhancementEvidenceManifest(record, {
-    additionalSecrets: keikoApiKeySecretValues(env),
+    additionalSecrets: promptEnhancerTopologyRedactionSecrets(config),
+    redactAllStrings: promptEnhancerHasOpaqueRedactionSecret(env, config),
   }).manifest;
+}
+
+function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] {
+  if (egress === undefined) return [];
+  return [egress.httpProxy, egress.httpsProxy, egress.caBundlePath].filter(
+    (value): value is string => value !== undefined && value.length > 0,
+  );
+}
+
+function configTopologyValues(config: GatewayConfig | undefined): readonly string[] {
+  if (config === undefined) return [];
+  const out: string[] = [...egressSecretValues(config.egress)];
+  for (const provider of config.providers) {
+    out.push(provider.baseUrl, ...egressSecretValues(provider.egress));
+  }
+  return out;
+}
+
+function configOpaqueSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  if (config === undefined) return [];
+  const out: string[] = [];
+  if (config.figma?.accessToken !== undefined) {
+    out.push(config.figma.accessToken);
+  }
+  for (const provider of config.providers) {
+    out.push(provider.apiKey);
+  }
+  return out;
+}
+
+function figmaEnvSecretValues(env: EnvSource): readonly string[] {
+  const token = env.FIGMA_ACCESS_TOKEN;
+  return token !== undefined && token.length > 0 ? [token] : [];
+}
+
+function promptEnhancerRedactionSecrets(
+  env: EnvSource,
+  config: GatewayConfig | undefined,
+): readonly string[] {
+  return Array.from(
+    new Set([
+      ...keikoApiKeySecretValues(env),
+      ...figmaEnvSecretValues(env),
+      ...configTopologyValues(config),
+      ...configOpaqueSecretValues(config),
+    ]),
+  );
+}
+
+function promptEnhancerTopologyRedactionSecrets(
+  config: GatewayConfig | undefined,
+): readonly string[] {
+  return Array.from(new Set(configTopologyValues(config)));
+}
+
+function promptEnhancerHasOpaqueRedactionSecret(
+  env: EnvSource,
+  config: GatewayConfig | undefined,
+): boolean {
+  return (
+    keikoApiKeySecretValues(env).length > 0 ||
+    figmaEnvSecretValues(env).length > 0 ||
+    configOpaqueSecretValues(config).length > 0
+  );
 }
 
 function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
@@ -317,7 +335,7 @@ export function runPromptEnhancerCli(
     throw error;
   }
 
-  emitResult(parsed.flags, result, rawInput, env, io);
+  emitResult(parsed.flags, result, rawInput, env, config.config, io);
   return 0;
 }
 
@@ -330,9 +348,13 @@ function emitResult(
   result: PromptEnhancementWireResponse,
   rawInput: string,
   env: EnvSource,
+  config: GatewayConfig | undefined,
   io: CliIo,
 ): void {
-  const redactFn = createAuditRedactor({ additionalSecrets: keikoApiKeySecretValues(env) }, env);
+  const redactFn = createAuditRedactor(
+    { additionalSecrets: promptEnhancerRedactionSecrets(env, config) },
+    env,
+  );
   const redactedResult = deepRedactStrings(result, redactFn) as PromptEnhancementWireResponse;
   if (flags.json) {
     io.out(`${JSON.stringify(redactedResult, null, 2)}\n`);
@@ -340,7 +362,7 @@ function emitResult(
     renderHuman(redactedResult, io);
   }
   if (flags.evidence) {
-    const manifest = buildEvidenceManifest(rawInput, result, env);
+    const manifest = buildEvidenceManifest(rawInput, result, env, config);
     io.out(`\n--- Redacted evidence manifest ---\n${JSON.stringify(manifest, null, 2)}\n`);
   }
 }
