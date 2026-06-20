@@ -271,10 +271,7 @@ function validateMissingContext(value: unknown, errors: string[]): void {
 }
 
 function validateSignals(value: unknown, errors: string[]): void {
-  if (
-    !Array.isArray(value) ||
-    value.some((s) => !isRecord(s) || !isValidSignal(s))
-  ) {
+  if (!Array.isArray(value) || value.some((s) => !isRecord(s) || !isValidSignal(s))) {
     errors.push("analysis.signals must be an array of {dimension, code} records");
   }
 }
@@ -304,8 +301,7 @@ function isValidSignal(signal: Record<string, unknown>): boolean {
   ) {
     return false;
   }
-  const validator = SIGNAL_CODE_VALIDATORS[signal.dimension];
-  return validator !== undefined && validator(signal.code);
+  return SIGNAL_CODE_VALIDATORS[signal.dimension]?.(signal.code) ?? false;
 }
 
 // ─── Analysis validator ──────────────────────────────────────────────────────────
