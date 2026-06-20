@@ -240,11 +240,13 @@ export class WorkspaceToolHost implements ToolPort {
           timeoutMs: timeoutMs ?? this.config.sandbox.defaultTimeoutMs,
           terminationGraceMs: this.config.sandbox.terminationGraceMs,
           cwdRequested: cwd !== undefined,
+          filesystem: this.config.sandbox.filesystem,
           // ADR-0043: record how (and whether) egress was enforced for a network:"none" run.
           ...(result.attestation === undefined
             ? {}
             : {
                 networkEnforced: result.attestation.networkEnforced,
+                filesystemEnforced: result.attestation.filesystemEnforced,
                 backend: result.attestation.backend,
               }),
         },

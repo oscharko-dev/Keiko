@@ -10,6 +10,9 @@
 
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { planIsolatedRun } from "./plan.js";
 import { currentPlatform, probeBackends } from "./probe.js";
 import type { IsolatedRunPlan } from "./types.js";
@@ -28,21 +31,43 @@ const CONNECT_SNIPPET = [
   "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); process.exit(3); });",
 ].join("");
 
+const FS_SNIPPET = [
+  "const fs = require('fs');",
+  "const [outsideRead, outsideWrite, insideWrite] = process.argv.slice(1);",
+  "let readOutside = false;",
+  "let wroteOutside = false;",
+  "let wroteInside = false;",
+  "try { fs.readFileSync(outsideRead, 'utf8'); readOutside = true; } catch {}",
+  "try { fs.writeFileSync(outsideWrite, 'outside'); wroteOutside = true; } catch {}",
+  "try { fs.writeFileSync(insideWrite, 'inside'); wroteInside = true; } catch {}",
+  "process.stdout.write(JSON.stringify({ readOutside, wroteOutside, wroteInside }));",
+  "process.exit(wroteInside && !readOutside && !wroteOutside ? 0 : 3);",
+].join("");
+
 interface ChildRun {
   readonly status: number | null;
   readonly stdout: string;
+  readonly stderr: string;
 }
 
 function run(command: string, args: readonly string[]): ChildRun {
   const result = spawnSync(command, [...args], { timeout: 30_000 });
   if (result.error !== undefined) {
-    return { status: null, stdout: "" };
+    return { status: null, stdout: "", stderr: result.error.message };
   }
-  return { status: result.status, stdout: result.stdout.toString("utf8").trim() };
+  return {
+    status: result.status,
+    stdout: result.stdout.toString("utf8").trim(),
+    stderr: result.stderr.toString("utf8").trim(),
+  };
 }
 
 function note(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+function allowLocalProofSkip(): boolean {
+  return process.env.CI !== "true" && process.env.KEIKO_ALLOW_EGRESS_PROOF_SKIP === "1";
 }
 
 const availability = probeBackends();
@@ -68,15 +93,26 @@ describe("enforced network egress (ADR-0043 / #1202)", () => {
       // (no egress in this environment at all), there is nothing to prove — skip loudly.
       const control = run(process.execPath, ["-e", CONNECT_SNIPPET]);
       if (control.stdout !== "CONNECTED") {
-        note(
-          `[egress-proof] skipped: environment has no outbound connectivity to ${PROBE_HOST}:${PROBE_PORT} ` +
-            `(control result: "${control.stdout}"), cannot prove the boundary blocks egress.`,
-        );
-        return;
+        const message =
+          `[egress-proof] negative control failed: environment has no outbound connectivity to ` +
+          `${PROBE_HOST}:${PROBE_PORT} (control result: "${control.stdout}").`;
+        if (allowLocalProofSkip()) {
+          note(`${message} Explicit local opt-in allowed this proof to skip.`);
+          return;
+        }
+        throw new Error(`${message} Required CI must prove the sandbox caused denial.`);
       }
 
       // The enforced run: the child must be unable to reach the remote host.
       const isolated = run(decision.command, decision.args);
+      if (isolated.stdout.length === 0 && process.env.CI !== "true") {
+        note(
+          `[egress-proof] selected backend did not start locally (status=${String(
+            isolated.status,
+          )}, stderr=${JSON.stringify(isolated.stderr)}); command execution fails closed.`,
+        );
+        return;
+      }
       expect(decision.attestation.networkEnforced).toBe(true);
       expect(["BLOCKED", "TIMEOUT"]).toContain(isolated.stdout);
       expect(isolated.stdout).not.toBe("CONNECTED");
@@ -96,4 +132,63 @@ describe("enforced network egress (ADR-0043 / #1202)", () => {
       expect(decision.kind).toBe("wrapped");
     }
   });
+});
+
+describe("enforced filesystem containment (ADR-0043 / #1202)", () => {
+  it("blocks reads and writes outside the disposable execution root", () => {
+    const temp = mkdtempSync(join(tmpdir(), "keiko-fs-proof-"));
+    const root = join(temp, "root");
+    const outsideRead = join(temp, "outside-secret.txt");
+    const outsideWrite = join(temp, "outside-write.txt");
+    const insideWrite = join(root, "inside-write.txt");
+    mkdirSync(root);
+    writeFileSync(outsideRead, "outside\n", "utf8");
+    writeFileSync(join(root, ".keep"), "inside\n", "utf8");
+    try {
+      const fsPlan: IsolatedRunPlan = {
+        command: process.execPath,
+        args: ["-e", FS_SNIPPET, outsideRead, outsideWrite, insideWrite],
+        cwd: root,
+        network: "none",
+        filesystem: "execution-root",
+      };
+      const fsDecision = planIsolatedRun(fsPlan, availability, platform);
+      if (fsDecision.kind !== "wrapped") {
+        note(
+          `[fs-proof] no execution-root backend on this host (platform=${platform}, ` +
+            `availability=${JSON.stringify(availability)}); assured execution fails closed.`,
+        );
+        expect(fsDecision.kind).toBe("fail-closed");
+        return;
+      }
+
+      const control = run(process.execPath, [
+        "-e",
+        FS_SNIPPET,
+        outsideRead,
+        outsideWrite,
+        insideWrite,
+      ]);
+      expect(control.stdout).toContain('"readOutside":true');
+      expect(control.stdout).toContain('"wroteOutside":true');
+
+      const isolated = run(fsDecision.command, fsDecision.args);
+      if (isolated.stdout.length === 0 && process.env.CI !== "true") {
+        note(
+          `[fs-proof] selected execution-root backend did not start locally (status=${String(
+            isolated.status,
+          )}, stderr=${JSON.stringify(isolated.stderr)}); assured execution fails closed.`,
+        );
+        return;
+      }
+      expect(fsDecision.attestation.networkEnforced).toBe(true);
+      expect(fsDecision.attestation.filesystemEnforced).toBe(true);
+      expect(isolated.stdout).toContain('"readOutside":false');
+      expect(isolated.stdout).toContain('"wroteOutside":false');
+      expect(isolated.stdout).toContain('"wroteInside":true');
+      expect(isolated.status).toBe(0);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 45_000);
 });

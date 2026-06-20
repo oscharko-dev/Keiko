@@ -23,7 +23,7 @@ function expectWrapped(command: WrappedCommand | undefined): WrappedCommand {
 }
 
 describe("buildWrappedCommand", () => {
-  it("bubblewrap unshares the network, binds the fs, chdirs, and appends the command", () => {
+  it("bubblewrap preserves compatibility mode for network-only runs", () => {
     const wrapped = expectWrapped(buildWrappedCommand("bubblewrap", plan));
     expect(wrapped.command).toBe("bwrap");
     expect(wrapped.args).toContain("--unshare-net");
@@ -34,6 +34,20 @@ describe("buildWrappedCommand", () => {
     const sep = wrapped.args.indexOf("--");
     expect(sep).toBeGreaterThan(0);
     expect(wrapped.args.slice(sep + 1)).toEqual(["node", "-e", "process.exit(0)"]);
+  });
+
+  it("bubblewrap execution-root mode avoids a broad host-root bind", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("bubblewrap", { ...plan, filesystem: "execution-root" }),
+    );
+    expect(wrapped.command).toBe("bwrap");
+    expect(wrapped.args).toContain("--unshare-net");
+    expect(wrapped.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--bind", "/work/root", "/work/root"]));
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--dir", "/work"]));
+    expect(wrapped.args).not.toContain("/home");
+    expect(wrapped.args).not.toContain("/run");
+    expect(wrapped.args).not.toContain("/var/run");
   });
 
   it("unshare maps root and creates a fresh network namespace", () => {
@@ -72,6 +86,17 @@ describe("buildWrappedCommand", () => {
       const imageIndex = wrapped.args.indexOf(DEFAULT_CONTAINER_IMAGE);
       expect(wrapped.args.slice(imageIndex + 1)).toEqual(["node", "-e", "process.exit(0)"]);
     }
+  });
+
+  it("container execution-root mode uses a read-only image root plus private tmp", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("container-docker", { ...plan, filesystem: "execution-root" }),
+    );
+    expect(wrapped.args).toContain("--read-only");
+    expect(wrapped.args).toEqual(
+      expect.arrayContaining(["--tmpfs", "/tmp:rw,nosuid,nodev,size=256m"]),
+    );
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--volume", "/work/root:/work/root:rw"]));
   });
 
   it("returns undefined for the 'none' backend (no enforcing wrapper)", () => {

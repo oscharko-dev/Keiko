@@ -15,6 +15,7 @@ import type {
   CommandRunInput,
   ExecutableResolver,
   ExecutableResolverDeps,
+  FilesystemPolicy,
   HomeProvider,
   HunkConflict,
   NetworkPolicy,
@@ -132,6 +133,7 @@ describe("keiko-tools public surface", () => {
     pin<CommandRunInput>();
     pin<ExecutableResolver>();
     pin<ExecutableResolverDeps>();
+    pin<FilesystemPolicy>();
     pin<HomeProvider>();
     pin<HunkConflict>();
     pin<NetworkPolicy>();

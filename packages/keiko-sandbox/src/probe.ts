@@ -4,9 +4,9 @@
 // fail-closed command error — never a silent unprotected run. Platform-dependent logic is factored
 // into pure, parameterised helpers so the selection weight is carried by deterministic unit tests.
 
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { platform as osPlatform } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join, parse } from "node:path";
 import type { BackendAvailability } from "./types.js";
 
 // The executable suffixes to try for a bare binary name. POSIX has none; Windows uses PATHEXT.
@@ -32,14 +32,43 @@ export function isExecutableOnPath(
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       try {
-        accessSync(join(dir, binary + ext), constants.X_OK);
-        return true;
+        const candidate = join(dir, binary + ext);
+        accessSync(candidate, constants.X_OK);
+        if (isTrustedExecutablePath(candidate, platform)) {
+          return true;
+        }
       } catch {
         // Not in this directory; keep scanning.
       }
     }
   }
   return false;
+}
+
+function modeWritableByGroupOrOther(mode: number): boolean {
+  return (mode & 0o022) !== 0;
+}
+
+function isTrustedExecutablePath(candidate: string, platform: NodeJS.Platform): boolean {
+  if (platform === "win32") {
+    return true;
+  }
+  const file = statSync(candidate);
+  if (!file.isFile() || modeWritableByGroupOrOther(file.mode)) {
+    return false;
+  }
+  const root = parse(candidate).root;
+  let current = dirname(candidate);
+  for (;;) {
+    const stat = statSync(current);
+    if (!stat.isDirectory() || modeWritableByGroupOrOther(stat.mode)) {
+      return false;
+    }
+    if (current === root) {
+      return true;
+    }
+    current = dirname(current);
+  }
 }
 
 export function probeBackends(

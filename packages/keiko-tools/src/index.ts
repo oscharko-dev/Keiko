@@ -10,6 +10,7 @@ export type {
   CommandResult,
   CommandRule,
   CommandRunInput,
+  FilesystemPolicy,
   NetworkPolicy,
   PatchApplyResult,
   PatchChangeKind,

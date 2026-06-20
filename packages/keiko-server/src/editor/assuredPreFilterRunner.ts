@@ -11,11 +11,21 @@
 // The command/coverage-key builders are pure and unit-tested; the filesystem copy and sandboxed spawn
 // are thin node effects exercised when the feature is enabled on a host with a sandbox backend.
 
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import {
   DEFAULT_SANDBOX_POLICY,
+  isValidScopePath,
   type CommandRule,
   type EditorTestGenerationWirePatch,
   type EditorTestGenerationWireRequest,
@@ -23,12 +33,18 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { runCommand } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  containedRealPathInfo,
+  isDenied,
+  resolveWithinWorkspace,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { AssuredPreFilterOutcome } from "./assuredPreFilter.js";
 import type { SandboxedCommand, SandboxedRunResult } from "./assuredGateRunner.js";
 import {
   runDisposableAssuredPreFilter,
-  sandboxEnforcesEgress,
+  sandboxEnforcesAssuredIsolation,
   type DisposableExecutionPorts,
 } from "./disposableAssuredExecution.js";
 
@@ -45,12 +61,31 @@ const ASSURED_DIR = ".keiko-assured";
 const BASELINE_SUMMARY = `${ASSURED_DIR}/baseline/coverage-summary.json`;
 const PATCHED_SUMMARY = `${ASSURED_DIR}/patched/coverage-summary.json`;
 const MUTATION_REPORT = `${ASSURED_DIR}/mutation/mutation.json`;
+const MUTATION_CONFIG = `${ASSURED_DIR}/mutation/stryker.conf.json`;
+const PROOF_SNIPPET = [
+  "const fs = require('fs');",
+  "const path = require('path');",
+  "const [outsideRead, outsideWrite, insideWrite] = process.argv.slice(1);",
+  "let readOutside = false;",
+  "let wroteOutside = false;",
+  "let wroteInside = false;",
+  "try { fs.readFileSync(outsideRead, 'utf8'); readOutside = true; } catch {}",
+  "try { fs.writeFileSync(outsideWrite, 'outside'); wroteOutside = true; } catch {}",
+  "try { fs.mkdirSync(path.dirname(insideWrite), { recursive: true });",
+  "  fs.writeFileSync(insideWrite, 'inside'); wroteInside = true; } catch {}",
+  "process.stdout.write(JSON.stringify({ readOutside, wroteOutside, wroteInside }));",
+].join("");
 
 // Command rules for the assured toolchain: only the deterministic node test toolchain, no network tools.
-const ASSURED_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
-  { executable: "npx", denyFlags: Object.freeze(["-c", "--call"]) },
-  { executable: "node" },
+export const ASSURED_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  {
+    executable: "npx",
+    allowedSubcommands: Object.freeze(["tsc", "vitest", "stryker"]),
+    denyFlags: Object.freeze(["-c", "--call", "-y", "--yes"]),
+  },
 ]);
+const ASSURED_PROOF_RULES: readonly CommandRule[] = Object.freeze([{ executable: "node" }]);
+let assuredIsolationProof: Promise<boolean> | undefined;
 
 function npx(args: readonly string[]): SandboxedCommand {
   return { command: "npx", args };
@@ -77,9 +112,10 @@ export function planGateCommands(): {
   readonly mutation: SandboxedCommand;
 } {
   return {
-    build: npx(["tsc", "--noEmit"]),
-    test: npx(["vitest", "run"]),
+    build: npx(["--no-install", "tsc", "--noEmit"]),
+    test: npx(["--no-install", "vitest", "run"]),
     baseline: npx([
+      "--no-install",
       "vitest",
       "run",
       "--coverage",
@@ -87,13 +123,14 @@ export function planGateCommands(): {
       `--coverage.reportsDirectory=${ASSURED_DIR}/baseline`,
     ]),
     coverage: npx([
+      "--no-install",
       "vitest",
       "run",
       "--coverage",
       "--coverage.reporter=json-summary",
       `--coverage.reportsDirectory=${ASSURED_DIR}/patched`,
     ]),
-    mutation: npx(["stryker", "run"]),
+    mutation: npx(["--no-install", "stryker", "run", MUTATION_CONFIG]),
   };
 }
 
@@ -138,18 +175,75 @@ async function runSandboxed(
   cmd: SandboxedCommand,
   signal: AbortSignal,
 ): Promise<SandboxedRunResult> {
+  const proof = (assuredIsolationProof ??= proveAssuredIsolation(root, signal));
+  if (!(await proof)) {
+    return { exitCode: 1, networkEnforced: false, filesystemEnforced: false };
+  }
   const result = await runCommand(
     { command: cmd.command, args: cmd.args, cwd: undefined, timeoutMs: undefined, signal },
     {
       workspace: disposableWorkspace(root),
-      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none" },
+      policy: {
+        ...DEFAULT_SANDBOX_POLICY,
+        network: "none",
+        filesystem: "execution-root",
+      },
       commandRules: ASSURED_COMMAND_RULES,
       spawn: nodeSpawnFn,
       processEnv: process.env,
       now: () => Date.now(),
     },
   );
-  return { exitCode: result.exitCode };
+  return {
+    exitCode: result.exitCode,
+    networkEnforced: result.attestation?.networkEnforced === true,
+    filesystemEnforced: result.attestation?.filesystemEnforced === true,
+  };
+}
+
+async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise<boolean> {
+  const outsideRead = `${root}.outside-read-proof`;
+  const outsideWrite = `${root}.outside-write-proof`;
+  const insideWrite = join(root, ASSURED_DIR, "proof", "inside.txt");
+  writeFileSync(outsideRead, "outside\n", "utf8");
+  try {
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", PROOF_SNIPPET, outsideRead, outsideWrite, insideWrite],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal,
+      },
+      {
+        workspace: disposableWorkspace(root),
+        policy: {
+          ...DEFAULT_SANDBOX_POLICY,
+          network: "none",
+          filesystem: "execution-root",
+        },
+        commandRules: ASSURED_PROOF_RULES,
+        spawn: nodeSpawnFn,
+        processEnv: process.env,
+        now: () => Date.now(),
+      },
+    );
+    const { attestation } = result;
+    return (
+      result.exitCode === 0 &&
+      attestation !== undefined &&
+      attestation.networkEnforced &&
+      attestation.filesystemEnforced &&
+      result.stdout.includes('"readOutside":false') &&
+      result.stdout.includes('"wroteOutside":false') &&
+      result.stdout.includes('"wroteInside":true')
+    );
+  } catch {
+    return false;
+  } finally {
+    rmSync(outsideRead, { force: true });
+    rmSync(outsideWrite, { force: true });
+  }
 }
 
 function readJsonReport(root: string, relativePath: string): unknown {
@@ -161,18 +255,75 @@ function readJsonReport(root: string, relativePath: string): unknown {
 }
 
 function isExcludedFromCopy(src: string): boolean {
-  return src.includes("node_modules") || src.includes(".git") || src.includes(ASSURED_DIR);
+  return (
+    src.includes(`${sep}.git${sep}`) || src.endsWith(`${sep}.git`) || src.includes(ASSURED_DIR)
+  );
 }
 
-function applyCandidateInto(root: string, patch: EditorTestGenerationWirePatch): void {
+function isUnsafeRelativePath(path: string): boolean {
+  return (
+    path.length === 0 ||
+    path.includes("\u0000") ||
+    path.includes("\\") ||
+    path.startsWith("/") ||
+    /^[A-Za-z]:/.test(path) ||
+    !isValidScopePath(path, { mustBeRelative: true }) ||
+    isDenied(path)
+  );
+}
+
+function assertExistingParentContained(root: string, absolute: string): void {
+  let parent = dirname(absolute);
+  while (!existsSync(parent)) {
+    const next = dirname(parent);
+    if (next === parent) {
+      break;
+    }
+    parent = next;
+  }
+  const rootReal = realpathSync(root);
+  const parentInfo = containedRealPathInfo(nodeWorkspaceFs, rootReal, parent);
+  if (isDenied(parentInfo.realRelative)) {
+    throw new Error("candidate patch parent path is denied");
+  }
+}
+
+export function candidateWritePath(root: string, path: string): string {
+  if (isUnsafeRelativePath(path)) {
+    throw new Error("candidate patch path is unsafe");
+  }
+  const rootReal = realpathSync(root);
+  const absolute = resolveWithinWorkspace(rootReal, path);
+  const lexicalRelative = relative(rootReal, resolve(rootReal, path));
+  if (lexicalRelative.startsWith("..") || lexicalRelative === "" || isDenied(lexicalRelative)) {
+    throw new Error("candidate patch path escapes the disposable root");
+  }
+  assertExistingParentContained(rootReal, absolute);
+  return absolute;
+}
+
+export function writeCandidateInto(root: string, patch: EditorTestGenerationWirePatch): void {
   for (const file of patch.files) {
     if (file.changeKind === "deleted") {
       continue;
     }
-    const absolute = join(root, file.path);
+    const absolute = candidateWritePath(root, file.path);
     mkdirSync(dirname(absolute), { recursive: true });
     writeFileSync(absolute, candidateFileText(file.edits), "utf8");
   }
+}
+
+function writeMutationConfig(root: string, target: EditorTestGenerationWireTarget): void {
+  const configPath = resolve(root, MUTATION_CONFIG);
+  mkdirSync(dirname(configPath), { recursive: true });
+  const config = {
+    reporters: ["json"],
+    jsonReporter: { fileName: MUTATION_REPORT },
+    testRunner: "vitest",
+    packageManager: "npm",
+    mutate: [targetSourceRelPath(target)],
+  };
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 function nodePorts(args: AssuredPreFilterArgs, enforced: boolean): DisposableExecutionPorts {
@@ -182,12 +333,13 @@ function nodePorts(args: AssuredPreFilterArgs, enforced: boolean): DisposableExe
     makeRoot: (): Promise<string> => {
       const root = mkdtempSync(join(tmpdir(), "keiko-assured-"));
       cpSync(args.realRoot, root, { recursive: true, filter: (src) => !isExcludedFromCopy(src) });
+      writeMutationConfig(root, args.request.target);
       return Promise.resolve(root);
     },
     measureBaseline: (root): Promise<void> =>
       runSandboxed(root, cmds.baseline, args.signal).then(() => undefined),
     applyCandidate: (root): Promise<void> => {
-      applyCandidateInto(root, args.patch);
+      writeCandidateInto(root, args.patch);
       return Promise.resolve();
     },
     run: (root, cmd): Promise<SandboxedRunResult> => runSandboxed(root, cmd, args.signal),
@@ -213,4 +365,4 @@ function nodePorts(args: AssuredPreFilterArgs, enforced: boolean): DisposableExe
 // The route's default pre-filter: decide enforcement, then run the assured funnel against a disposable
 // execution root (or fail closed when egress cannot be enforced on this host).
 export const defaultAssuredPreFilter: AssuredPreFilterPort = (args) =>
-  runDisposableAssuredPreFilter(nodePorts(args, sandboxEnforcesEgress(args.realRoot)));
+  runDisposableAssuredPreFilter(nodePorts(args, sandboxEnforcesAssuredIsolation(args.realRoot)));

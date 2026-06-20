@@ -58,6 +58,20 @@ describe("isExecutableOnPath", () => {
     );
   });
 
+  it("rejects executables from writable PATH directories on POSIX", () => {
+    const unsafeDir = mkdtempSync(join(tmpdir(), "keiko-sandbox-unsafe-path-"));
+    const file = join(unsafeDir, "unsafe-tool");
+    writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    chmodSync(file, 0o755);
+    chmodSync(unsafeDir, 0o777);
+    try {
+      expect(isExecutableOnPath("unsafe-tool", { PATH: unsafeDir }, "linux")).toBe(false);
+    } finally {
+      chmodSync(unsafeDir, 0o700);
+      rmSync(unsafeDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns false when PATH is empty or unset", () => {
     expect(isExecutableOnPath(binary, { PATH: "" }, "linux")).toBe(false);
     expect(isExecutableOnPath(binary, {}, "linux")).toBe(false);

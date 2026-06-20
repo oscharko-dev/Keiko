@@ -4,15 +4,13 @@
 // (apply=false; the workflow fail-closes any patch write) to produce a reviewable candidate test patch,
 // then translates its proposed unified diff into the content-free wire patch. This is the WAVE-2
 // enablement seam: it is reached only when Gate B (KEIKO_EDITOR_TEST_GENERATION_EXECUTION) is set, which
-// only an enforced deny-by-default egress boundary justifies. In v1 the route returns `deferred` BEFORE
-// this runner is ever called (testGenerationRoutes.ts), so no model-generated code is produced or
-// executed; the seam is proven by tests.
+// only an enforced deny-by-default egress boundary justifies. When the route produces a candidate, it
+// immediately sends that candidate through the assured pre-filter before deciding whether the patch is
+// apply-ready (`assured`) or untrusted evidence (`unverified`); the seam is proven by tests.
 //
 // Dry-run generation is a governed model call that produces a diff — it does NOT execute the generated
-// tests (the workflow runs verification only in apply mode). The assured pre-filter that would EXECUTE
-// a candidate (build → pass → stability → coverage → mutation) is shared with #1204/#1206 and stays
-// out of this route, so a candidate surfaced here is always `unverified` (the funnel gates stay
-// `not-run`).
+// tests (the workflow runs verification only in apply mode). The route owns the subsequent assured
+// pre-filter execution step, so this runner only reports that one candidate was generated.
 
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -39,8 +37,8 @@ export interface TestGenerationRunnerArgs {
   readonly realRoot: string;
   readonly signal: AbortSignal;
   readonly nowMs: number;
-  // Governed discovery context (#1211), reserved for prompt enrichment when wave 2 wires the assured
-  // pre-filter; the existing workflow assembles its own ContextPack today, so v1 does not read this.
+  // Governed discovery context (#1211). The existing workflow assembles its own ContextPack today, so
+  // this runner does not read the route-level pack directly.
   readonly contextPack: CodingContextPack;
 }
 

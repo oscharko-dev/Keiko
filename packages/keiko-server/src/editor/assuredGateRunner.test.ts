@@ -5,10 +5,16 @@ import {
   strykerKilled,
   type ReportReader,
   type SandboxedCommand,
+  type SandboxedRunResult,
   type SandboxedGateRunnerSpec,
 } from "./assuredGateRunner.js";
 
 const TARGET = "src/widget.ts";
+const ENFORCED_RUN: SandboxedRunResult = {
+  exitCode: 0,
+  networkEnforced: true,
+  filesystemEnforced: true,
+};
 
 describe("coveredDelta", () => {
   it("computes the strict increase in covered lines/branches for the target", () => {
@@ -70,7 +76,7 @@ describe("createSandboxedGateRunner", () => {
     const cmd = (command: string): SandboxedCommand => ({ command, args: [] });
     return {
       enforced: true,
-      run: () => Promise.resolve({ exitCode: 0 }),
+      run: () => Promise.resolve(ENFORCED_RUN),
       readReport,
       buildCommand: cmd("build"),
       testCommand: cmd("test"),
@@ -92,7 +98,23 @@ describe("createSandboxedGateRunner", () => {
   });
 
   it("fails build/test gates on a non-zero exit", async () => {
-    const runner = createSandboxedGateRunner(spec({ run: () => Promise.resolve({ exitCode: 1 }) }));
+    const runner = createSandboxedGateRunner(
+      spec({ run: () => Promise.resolve({ ...ENFORCED_RUN, exitCode: 1 }) }),
+    );
+    expect(await runner.build()).toEqual({ ok: false });
+  });
+
+  it("fails gates when the command exits zero without sandbox enforcement attestation", async () => {
+    const runner = createSandboxedGateRunner(
+      spec({
+        run: () =>
+          Promise.resolve({
+            exitCode: 0,
+            networkEnforced: true,
+            filesystemEnforced: false,
+          }),
+      }),
+    );
     expect(await runner.build()).toEqual({ ok: false });
   });
 
@@ -102,7 +124,9 @@ describe("createSandboxedGateRunner", () => {
   });
 
   it("fails the coverage gate when the coverage command errors", async () => {
-    const runner = createSandboxedGateRunner(spec({ run: () => Promise.resolve({ exitCode: 2 }) }));
+    const runner = createSandboxedGateRunner(
+      spec({ run: () => Promise.resolve({ ...ENFORCED_RUN, exitCode: 2 }) }),
+    );
     expect(await runner.coverage()).toEqual({ ok: false, lineDelta: 0, branchDelta: 0 });
   });
 

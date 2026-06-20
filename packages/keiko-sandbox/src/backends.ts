@@ -2,7 +2,7 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import type { IsolatedRunPlan, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -24,8 +24,58 @@ export const SEATBELT_DENY_EGRESS_PROFILE: string =
 // pinned, widely cached slim image keeps the fallback deterministic. Egress is removed by
 // --network=none regardless of image contents.
 export const DEFAULT_CONTAINER_IMAGE = "node:22-slim";
+const EXECUTION_ROOT_READONLY_BINDS: readonly string[] = Object.freeze([
+  "/usr",
+  "/bin",
+  "/lib",
+  "/lib64",
+  "/opt",
+  "/nix/store",
+]);
+
+function roBindTryArgs(paths: readonly string[]): readonly string[] {
+  return paths.flatMap((path) => ["--ro-bind-try", path, path]);
+}
+
+function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
+  // Execution-root mode is for untrusted generated tests. It exposes the disposable root read-write,
+  // enough read-only system/toolchain paths to execute Node tooling, and private /tmp + /dev + /proc.
+  // It deliberately does not bind /home, /run, /var/run, or the host root as a writable filesystem.
+  const commandDir = dirname(plan.command);
+  return [
+    "--unshare-net",
+    "--die-with-parent",
+    "--new-session",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp",
+    "--setenv",
+    "HOME",
+    "/tmp",
+    "--setenv",
+    "USERPROFILE",
+    "/tmp",
+    ...roBindTryArgs([...EXECUTION_ROOT_READONLY_BINDS, commandDir]),
+    "--dir",
+    dirname(plan.cwd),
+    "--bind",
+    plan.cwd,
+    plan.cwd,
+    "--chdir",
+    plan.cwd,
+    "--",
+    plan.command,
+    ...plan.args,
+  ];
+}
 
 function bubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
+  if (plan.filesystem === "execution-root") {
+    return strictBubblewrapArgs(plan);
+  }
   // --unshare-net puts the child in a fresh network namespace (loopback-only, no route out).
   // --dev-bind / / keeps the host filesystem usable (FS containment is enforced upstream by the
   // workspace gate + the disposable execution root). --die-with-parent prevents orphaned sandboxes.
@@ -62,6 +112,9 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
     "run",
     "--rm",
     "--network=none",
+    ...(plan.filesystem === "execution-root"
+      ? ["--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m"]
+      : []),
     "--volume",
     `${plan.cwd}:${plan.cwd}:rw`,
     "--workdir",

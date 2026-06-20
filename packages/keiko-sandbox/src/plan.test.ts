@@ -29,6 +29,7 @@ describe("planIsolatedRun", () => {
     expect(decision.attestation).toEqual({
       backend: "none",
       networkEnforced: false,
+      filesystemEnforced: false,
       platform: "linux",
     });
   });
@@ -44,6 +45,7 @@ describe("planIsolatedRun", () => {
     expect(decision.attestation).toEqual({
       backend: "bubblewrap",
       networkEnforced: true,
+      filesystemEnforced: false,
       platform: "linux",
     });
   });
@@ -56,7 +58,35 @@ describe("planIsolatedRun", () => {
     }
     expect(decision.reason).toContain('network: "none"');
     expect(decision.attestation.networkEnforced).toBe(false);
+    expect(decision.attestation.filesystemEnforced).toBe(false);
     expect(decision.attestation.backend).toBe("none");
+  });
+
+  it("requires a filesystem-capable backend for execution-root isolation", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, filesystem: "execution-root" },
+      { ...NONE, unshare: true, seatbelt: true },
+      "linux",
+    );
+    expect(decision.kind).toBe("fail-closed");
+  });
+
+  it("attests filesystem enforcement for strict bubblewrap execution-root runs", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, filesystem: "execution-root" },
+      { ...NONE, bubblewrap: true },
+      "linux",
+    );
+    expect(decision.kind).toBe("wrapped");
+    if (decision.kind !== "wrapped") {
+      throw new Error("expected wrapped");
+    }
+    expect(decision.attestation).toEqual({
+      backend: "bubblewrap",
+      networkEnforced: true,
+      filesystemEnforced: true,
+      platform: "linux",
+    });
   });
 
   it("selects the container fallback on a platform without a native primitive", () => {
@@ -68,5 +98,6 @@ describe("planIsolatedRun", () => {
     expect(decision.command).toBe("docker");
     expect(decision.attestation.backend).toBe("container-docker");
     expect(decision.attestation.networkEnforced).toBe(true);
+    expect(decision.attestation.filesystemEnforced).toBe(false);
   });
 });

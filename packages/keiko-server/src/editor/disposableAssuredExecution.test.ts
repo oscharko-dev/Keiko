@@ -5,6 +5,12 @@ import {
 } from "./disposableAssuredExecution.js";
 import type { SandboxedCommand } from "./assuredGateRunner.js";
 
+const ENFORCED_RUN = {
+  exitCode: 0,
+  networkEnforced: true,
+  filesystemEnforced: true,
+} as const;
+
 const REPORTS: Record<string, unknown> = {
   "coverage/baseline.json": {
     "src/widget.ts": { lines: { covered: 2 }, branches: { covered: 0 } },
@@ -37,7 +43,7 @@ function ports(overrides: Partial<DisposableExecutionPorts> = {}): {
     },
     run: (_root, c) => {
       trace.push(`run:${c.command}`);
-      return Promise.resolve({ exitCode: 0 });
+      return Promise.resolve(ENFORCED_RUN);
     },
     readReport: (_root, rel) => REPORTS[rel],
     dispose: () => {

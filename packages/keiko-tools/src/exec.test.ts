@@ -647,7 +647,38 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     expect(result.attestation).toEqual({
       backend: "bubblewrap",
       networkEnforced: true,
+      filesystemEnforced: false,
       platform: "linux",
+    });
+  });
+
+  it("requests execution-root isolation when the policy requires filesystem containment", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+      platform: "linux",
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    const call = spawn.calls()[0];
+    expect(call?.args).toEqual(expect.arrayContaining(["--bind", root, root]));
+    expect(call?.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
+    expect(result.attestation).toMatchObject({
+      networkEnforced: true,
+      filesystemEnforced: true,
     });
   });
 

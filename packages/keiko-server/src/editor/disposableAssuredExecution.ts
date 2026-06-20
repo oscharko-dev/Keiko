@@ -25,14 +25,19 @@ import {
   type SandboxedRunResult,
 } from "./assuredGateRunner.js";
 
-// Whether keiko-sandbox can enforce egress for a network:"none" run on this host (no command is run).
-export function sandboxEnforcesEgress(cwd: string): boolean {
+// Whether keiko-sandbox can enforce the full assured boundary for a network:"none" execution-root
+// run on this host (no untrusted command is run during this planning check).
+export function sandboxEnforcesAssuredIsolation(cwd: string): boolean {
   const decision = planIsolatedRun(
-    { command: "node", args: [], cwd, network: "none" },
+    { command: "node", args: [], cwd, network: "none", filesystem: "execution-root" },
     probeBackends(),
     currentPlatform(),
   );
-  return decision.kind === "wrapped";
+  return (
+    decision.kind === "wrapped" &&
+    decision.attestation.networkEnforced &&
+    decision.attestation.filesystemEnforced
+  );
 }
 
 // A gate runner whose gates must never be invoked (used on the fail-closed path; runAssuredPreFilter

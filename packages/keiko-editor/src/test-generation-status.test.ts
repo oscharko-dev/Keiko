@@ -28,6 +28,22 @@ const FUNNEL: EditorTestGenerationFunnel = {
   mutation: "not-run",
   antiTautology: "not-run",
 };
+const EXECUTED_FUNNEL: EditorTestGenerationFunnel = {
+  executionEnabled: true,
+  candidatesGenerated: 2,
+  candidatesSurfaced: 1,
+  stabilityRunsRequired: 5,
+  build: "passed",
+  pass: "passed",
+  stability: "passed",
+  coverage: "passed",
+  mutation: "passed",
+  antiTautology: "passed",
+  coverageLineDelta: 3,
+  coverageBranchDelta: 1,
+  mutantsKilled: 2,
+  mutantsTotal: 2,
+};
 const PROVENANCE: EditorOutputProvenance = {
   origin: "generated-test",
   model: { modelId: "m", gatewayPolicyVersion: "p", promptHash: "h", producedAt: 1 },
@@ -145,17 +161,19 @@ describe("status helpers", () => {
   });
 
   it("describes an assured vs unverified preview distinctly (ADR-0043)", () => {
-    const base = { kind: "preview", result: RESULT, funnel: FUNNEL } as const;
-    expect(describeTestGenerationStatus({ ...base, assurance: "assured" })).toContain(
-      "assured pre-filter",
-    );
+    const base = { kind: "preview", result: RESULT, funnel: EXECUTED_FUNNEL } as const;
+    const assured = describeTestGenerationStatus({ ...base, assurance: "assured" });
+    expect(assured).toContain("assured pre-filter");
+    expect(assured).toContain("2 generated, 1 surfaced");
+    expect(assured).toContain("coverage delta lines 3, branches 1");
+    expect(assured).toContain("mutation 2/2 killed");
     expect(
       describeTestGenerationStatus({
         ...base,
         assurance: "unverified",
         reason: "coverage did not increase",
       }),
-    ).toBe("coverage did not increase");
+    ).toContain("coverage did not increase");
     expect(describeTestGenerationStatus({ ...base, assurance: "unverified" })).toContain(
       "not apply-ready",
     );
