@@ -19,9 +19,9 @@ backend/workflow responsibilities reached only through host-injected ports. The 
 outside `keiko-ui` and must not import `keiko-ui` internals (ADR-0019 browser-tier direction rule 8;
 ADR-0042 D1/D2).
 
-### Current status (#1191-#1201)
+### Current status (#1191-#1207)
 
-The package now ships the browser-tier editor surface and is mounted by `keiko-ui` in the Workspace
+The package ships the browser-tier editor surface and is mounted by `keiko-ui` in the Workspace
 card/window model (#1196). The public surface includes:
 
 - `KEIKO_EDITOR_PACKAGE` — the package's stable identity.
@@ -39,12 +39,258 @@ card/window model (#1196). The public surface includes:
   (`registerKeikoFormattingProvider`). Every bridge is pure wiring: it maps a Monaco call to a
   content-free request, hands the host resolver the live buffer, and renders host-resolved results.
   The editor computes nothing and calls no model (ADR-0042 D4/D5).
+- `deriveLargeFileMode` and the `LARGE_FILE_DEGRADED_BYTES` / `LARGE_FILE_DEGRADED_LINES` thresholds —
+  the pure large-file degraded-mode policy (#1207) a host can reuse to keep its own large-file
+  affordances consistent with the editor's Monaco-option degradation.
+- The pure, browser-safe test-generation controllers (`buildTestGenerationContext`,
+  `buildTestGenerationRequest`, the flow reducer, and the diff-review projection) for the host's
+  governed "Generate Tests" action. The action's server endpoint ships **switched off** (see
+  [Governed test generation](#governed-test-generation-wave-2-switched-off)).
 
-**Still out of scope** (tracked under the epic): test-generation/execution endpoints and any
-model-producing editor feature behind the wave-2 egress gate (ADR-0042 D7). `keiko-ui` depends on
-this package only for browser-tier editor rendering and host-injected intent callbacks; workspace
+**Still out of scope** (tracked under the epic): editor-driven test execution/verification and any
+model-producing editor feature behind the wave-2 egress gate (ADR-0042 D7). `keiko-ui` depends on this
+package only for browser-tier editor rendering and host-injected intent callbacks; workspace
 authority, file I/O, model access, the language-service computation itself, patch application,
 evidence, and verification remain outside this package.
+
+### Documentation map
+
+This README is the package-level entry point and standalone integration reference. Deeper,
+deployment-facing material lives in the editor documentation set:
+
+- [Keiko Editor architecture and operations runbook](../../docs/keiko-editor/runbook.md) — the
+  consolidated guide for maintainers, host integrators, reviewers, and regulated deployment teams:
+  architecture, the `keiko-ui` host-integration guide, the completion architecture, the
+  test-generation flow, and security/privacy notes.
+- [Keiko Editor troubleshooting](../../docs/keiko-editor/troubleshooting.md) — Monaco workers, CSP,
+  unsupported files, completion failures, and verification failures.
+- [Keiko Editor release note (draft)](../../docs/release/keiko-editor-0.2.0-release-note.md) — the
+  user-facing summary of the delivered editor, grounded in implemented behaviour.
+- Feature deep-dives: [deterministic language service](../../docs/editor-language-service.md),
+  [inline completion](../../docs/editor-inline-completion.md),
+  [completion model capability and degradation](../../docs/editor-completion-model-capability.md),
+  and [VS Code-feeling UX](../../docs/editor-vscode-ux.md).
+
+## Embedding the editor without `keiko-ui`
+
+`@oscharko-dev/keiko-editor` is reusable outside `keiko-ui` (ADR-0042 D1): it owns editor rendering
+only and reaches every governed capability through host-injected callbacks, so any React 18 host can
+embed it. A standalone host performs three steps — install the local Monaco runtime once, implement
+the host port, and render the controlled `KeikoCodeEditor`.
+
+The package declares `react` and `react-dom` (`^18.3.1`) as **peer** dependencies and pins
+`monaco-editor` (`0.55.1`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
+a browser-only module that imports CSS, so the editor surface must be loaded behind a client-only
+boundary (for example `next/dynamic(..., { ssr: false })` or an equivalent lazy import) — never during
+a server render. There is no CDN fallback by design (ADR-0042 D3).
+
+**1. Install the local, no-CDN Monaco runtime once, before the first mount.** This points
+`@monaco-editor/react`'s loader at the locally installed package, installs the same-origin ESM worker
+factories, registers the Keiko theme from the live design tokens, and disables Monaco's built-in
+TypeScript/JavaScript language services so the governed server language service is the single source
+of truth (ADR-0042 D4).
+
+```ts
+import { loader } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
+import {
+  configureMonacoLoader,
+  createMonacoEnvironment,
+  defaultMonacoWorkerFactories,
+  detectEditorRuntimeSupport,
+  installMonacoEnvironment,
+  probeEditorRuntime,
+  registerKeikoEditorTheme,
+  resolveEditorThemeTokensFromDom,
+  type MonacoGlobalScope,
+} from "@oscharko-dev/keiko-editor";
+
+export function installKeikoMonacoRuntime(): boolean {
+  const status = detectEditorRuntimeSupport(probeEditorRuntime(self));
+  if (!status.supported) {
+    return false; // No Web Worker / URL support: render the editor's controlled load-error state.
+  }
+  installMonacoEnvironment(
+    self as unknown as MonacoGlobalScope,
+    createMonacoEnvironment(defaultMonacoWorkerFactories),
+  );
+  configureMonacoLoader(loader, monaco);
+  // Disable Monaco's in-browser TS/JS worker for governed features (completion, hover, diagnostics,
+  // symbols, formatting); it stays only for local tokenisation/bracket matching.
+  const off = {
+    completionItems: false,
+    hovers: false,
+    documentSymbols: false,
+    definitions: false,
+    references: false,
+    documentHighlights: false,
+    rename: false,
+    diagnostics: false,
+    documentRangeFormattingEdits: false,
+    signatureHelp: false,
+    onTypeFormattingEdits: false,
+    codeActions: false,
+    inlayHints: false,
+  } satisfies monaco.typescript.ModeConfiguration;
+  monaco.typescript.typescriptDefaults.setModeConfiguration(off);
+  monaco.typescript.javascriptDefaults.setModeConfiguration(off);
+  // Re-call resolveEditorThemeTokensFromDom + registerKeikoEditorTheme on theme/contrast switch.
+  registerKeikoEditorTheme(
+    monaco.editor,
+    "dark",
+    resolveEditorThemeTokensFromDom(document.documentElement),
+  );
+  return true;
+}
+```
+
+**2. Implement the host port.** The editor never reads files, calls a model, or performs retrieval;
+it asks the host. A minimal host provides `loadBuffer` and `saveDocument`; richer hosts add the
+governed completion / inline-completion / diagnostics / hover / symbols / formatting resolvers, each
+of which the host backs with its own server call. Every resolver is optional — the editor registers a
+Monaco provider only for the resolvers the host supplies, so a read-only viewer can pass none.
+
+```ts
+import type { EditorHostPort } from "@oscharko-dev/keiko-editor";
+
+const hostPort: EditorHostPort = {
+  loadBuffer: async (uri) => ({
+    language: "typescript",
+    content: await myWorkspace.readFile(uri), // FileContent contract, already redacted at the IO boundary
+    readOnly: false,
+  }),
+  saveDocument: async (request) => myWorkspace.write(request),
+  // Optional governed capabilities — omit any the host does not back:
+  provideCompletions: (request, signal) => myServer.editorCompletion(request, signal),
+  provideDiagnostics: (document, signal) => myServer.editorDiagnostics(document, signal),
+};
+```
+
+**3. Render the controlled `KeikoCodeEditor`.** The component is fully controlled: the host owns the
+buffer, the dirty/version bookkeeping (`fileModel`), the Monaco load state, and the save lifecycle.
+The component emits intent (`onContentChange`, `onSaveRequested`, `onSelectionChange`,
+`onCursorChange`) and renders host-computed state; it mutates nothing itself. The `provide*` props are
+the resolvers from the host port. While `loadState.status` is not `"ready"` the editor is read-only.
+
+```tsx
+import { KeikoCodeEditor, createFileModel, type EditorBuffer } from "@oscharko-dev/keiko-editor";
+
+function StandaloneEditor({ buffer }: { buffer: EditorBuffer }): JSX.Element {
+  const [text, setText] = useState(buffer.content.text);
+  return (
+    <KeikoCodeEditor
+      buffer={{ ...buffer, content: { ...buffer.content, text } }}
+      fileModel={createFileModel({ uri: "file://example.ts", version: 1 })}
+      loadState={{ status: "ready" }}
+      saveStatus="idle"
+      ariaLabel="Example editor"
+      onContentChange={(next) => setText(next.text)}
+      onSaveRequested={(request) => hostPort.saveDocument?.(request)}
+      provideCompletions={hostPort.provideCompletions}
+      provideDiagnostics={hostPort.provideDiagnostics}
+    />
+  );
+}
+```
+
+To review a generated change instead of editing, render `KeikoDiffEditor` over a `PatchPreviewModel`
+built by `buildPatchPreview({ patch, originals })` (a pure, in-memory projection — it parses no
+unified diff and writes nothing; apply/reject are host-owned intents). See
+[Diff editor and patch preview](#diff-editor-and-patch-preview-issue-1195).
+
+## Completion and model boundaries
+
+The editor computes no completions and calls no model. It registers Monaco providers that bridge to
+host resolvers; the host calls governed `keiko-server` BFF routes, which are the only place a model is
+reached (always through the Model Gateway, never the browser). The boundaries are precise and
+deterministic-first:
+
+| Surface                             | Route (`keiko-server`)                                                  | Model boundary                                                                                                                                                                                                                                                                                      |
+| ----------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Diagnostics, hover, symbols, format | `POST /api/editor/language`                                             | **Deterministic, model-free** TypeScript/JavaScript language service (#1198, ADR-0042 D4). Identical input → identical output. No Gateway, no network.                                                                                                                                              |
+| Completion                          | `POST /api/editor/completion`                                           | **Two-tier** (#1199): Tier 1 deterministic language-service completion (always available); Tier 2 model-assisted via the Model Gateway, run only when the completion-model selection (#1210) elects an aligned, in-budget infilling model. Degrades to Tier 1 — never a silent ungoverned fallback. |
+| Inline completion (ghost text)      | `POST /api/editor/inline-completion`                                    | **Model-only and gated** (#1200): runs only when a fast, aligned, suffix-aware (FIM) model is elected in budget and policy/rate limits allow; otherwise returns zero items and the editor falls back to the deterministic completion gateway.                                                       |
+| Coding context                      | `POST /api/editor/context`, `/repo-search`, `/local-knowledge/retrieve` | **Query-only retrieval** (#1211) reusing existing workspace search, Local Knowledge, and memory. Returns content-free citations; excerpt text never leaves the process.                                                                                                                             |
+
+Governing rules that the documentation and the code both hold to:
+
+- **Aligned models only.** Model-assisted completion uses aligned (`instruct` / `edit-tuned`) models,
+  never raw base-model FIM (prompt-injection risk; ADR-0042 D5).
+- **Cost ceilings are server-owned.** A per-root request **rate limiter**
+  (`inlineCompletionRateLimiter`: cooldown + sliding-window cap) and a per-root **token budget**
+  (`editorModelTokenBudget`: a sliding-window prompt+completion token ceiling, OWASP LLM10:2025) bound
+  how often and how much the model tier may run. On exceed, the route skips the model tier and degrades
+  to deterministic completion; it never queues or blocks typing.
+- **Content-free wire.** Completion/inline/diagnostics/context responses carry only the reviewable
+  insert text plus a content-free provenance rollup (source ids, a SHA-256 prompt hash, byte counts,
+  omissions). The prompt, the buffer, retrieved excerpts, queries, workspace roots, and secrets never
+  cross to the browser, into telemetry, or into evidence (ADR-0042 D6; #1206).
+
+## Governed test generation (wave 2, switched off)
+
+The editor exposes a "Generate Tests" action and ships the pure, browser-safe controllers for it
+(target/mode selection, the run-flow reducer, and the diff-review projection that reuses
+`buildPatchPreview` with apply disabled). The server endpoint `POST /api/editor/test-generation`
+(#1202) is **shipped switched off** behind two independent, default-off gates (ADR-0042 D7), because
+executing model-generated tests is untrusted-code execution and Keiko does not yet OS-enforce
+network egress:
+
+| Gate                                                 | Default | Behaviour when off                                                                                                          |
+| ---------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `KEIKO_EDITOR_TEST_GENERATION` (feature)             | off     | `disabled`: no request parsing, no retrieval, no model, no execution. This is the v1 behaviour.                             |
+| `KEIKO_EDITOR_TEST_GENERATION_EXECUTION` (candidate) | off     | `deferred`: governed discovery (#1211) runs for provenance, but **no model call** is made and **no candidate** is produced. |
+
+No v1 flow executes model-generated code. A candidate this route could ever surface (only once both
+gates are enabled on a deployment with an enforced egress boundary) is `unverified`; the assured
+pre-filter that would execute and elevate it stays `not-run`. See the runbook's
+[test-generation flow](../../docs/keiko-editor/runbook.md#governed-test-generation-flow).
+
+## Verification and operational limitations
+
+Deterministic, offline commands a maintainer or regulated operator can run to verify this package and
+its boundaries (no model credentials required):
+
+```bash
+# Package build, typecheck, and unit/component tests (jsdom).
+npm --workspace @oscharko-dev/keiko-editor run build
+npm --workspace @oscharko-dev/keiko-editor run typecheck
+npm --workspace @oscharko-dev/keiko-editor test
+
+# Editor bundle-size budget: own-code gzip ceiling, the Monaco 0.55.1 pin, and first-load isolation
+# (Monaco/editor value-imported only behind a client-only dynamic boundary). Add --require-static-export
+# after `npm run build:ui` to also scan the static export's first-load JavaScript.
+npm run check:editor-bundle-size
+
+# Browser-tier dependency-direction boundary (the editor must not value-import Node-domain packages)
+# and its negative fixture.
+npm run arch:check
+npm run arch:check:negative
+
+# Supply chain: no high/critical advisories; the keiko-ui audit closure that includes Monaco is
+# moderate-clean; SBOM + license gate.
+npm audit --audit-level=high
+npm run check:workspace-supply-chain
+
+# Documentation: relative links and anchors in the editor doc set resolve.
+npm run check:editor-doc-links
+```
+
+Operational limitations to plan around:
+
+- **Deterministic language intelligence is TypeScript/JavaScript only.** Other languages get Monaco
+  syntax highlighting/editing and language-agnostic AI completion, but no deterministic diagnostics,
+  hover, symbols, or formatting until their provider lands (#1213).
+- **AI completion needs a capable model.** Inline ghost text requires a fast, aligned, suffix-aware
+  (FIM) model; absent one, the editor uses manual-invoke and deterministic completion only
+  (ADR-0042 D5). There is no silent ungoverned fallback.
+- **Large-file degraded mode.** Files **> 500 KB or > 10,000 lines** open in read-only/degraded mode
+  (expensive Monaco features off, `largeFileOptimizations` on); files **> 1,000,000 bytes** are
+  rejected server-side and never instantiate Monaco (ADR-0042 D3.6, `deriveLargeFileMode`).
+- **No editor-driven test execution in v1.** See
+  [Governed test generation](#governed-test-generation-wave-2-switched-off).
+- **No CDN, no browser egress.** Monaco core and workers are served same-origin; the editor issues no
+  direct browser network calls to model/retrieval/analytics endpoints, and the server CSP is not
+  widened for Monaco (ADR-0042 D3.4).
 
 ## Monaco runtime and worker strategy (Issue #1193)
 
