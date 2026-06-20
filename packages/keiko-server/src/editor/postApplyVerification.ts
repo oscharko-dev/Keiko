@@ -110,11 +110,13 @@ export function probeNetworkIsolation(cwd: string): NetworkIsolationProbe {
   };
 }
 
+// Statuses that count as an actual test failure. `denied` is deliberately excluded: a denied step was
+// never executed (egress could not be enforced), so it is surfaced via the distinct `denied` outcome,
+// not as a failed test.
 const FAILED_STATUSES: ReadonlySet<VerificationResult["status"]> = new Set([
   "failed",
   "timed-out",
   "resource-exceeded",
-  "denied",
 ]);
 
 function networkEnforcedFromReport(results: readonly VerificationResult[]): boolean {
