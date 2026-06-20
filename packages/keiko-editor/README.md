@@ -36,8 +36,9 @@ card/window model (#1196). The public surface includes:
   completion (#1200), and — added by #1201 — diagnostics markers (`registerKeikoDiagnostics`), hover
   / quick info (`registerKeikoHoverProvider`), document symbols / outline
   (`registerKeikoDocumentSymbolProvider`), and explicit, cancellable document formatting
-  (`registerKeikoFormattingProvider`). Every bridge is pure wiring: it maps a Monaco call to a
-  content-free request, hands the host resolver the live buffer, and renders host-resolved results.
+  (`registerKeikoFormattingProvider`). Every bridge is pure wiring: it maps a Monaco call to a host
+  request, hands the host resolver the live buffer, and renders host-resolved results with content-free
+  provenance.
   The editor computes nothing and calls no model (ADR-0042 D4/D5).
 - `deriveLargeFileMode` and the `LARGE_FILE_DEGRADED_BYTES` / `LARGE_FILE_DEGRADED_LINES` thresholds —
   the pure large-file degraded-mode policy (#1207) a host can reuse to keep its own large-file
@@ -176,6 +177,7 @@ The component emits intent (`onContentChange`, `onSaveRequested`, `onSelectionCh
 the resolvers from the host port. While `loadState.status` is not `"ready"` the editor is read-only.
 
 ```tsx
+import { useState } from "react";
 import { KeikoCodeEditor, createFileModel, type EditorBuffer } from "@oscharko-dev/keiko-editor";
 
 function StandaloneEditor({ buffer }: { buffer: EditorBuffer }): JSX.Element {
@@ -224,10 +226,12 @@ Governing rules that the documentation and the code both hold to:
   (`editorModelTokenBudget`: a sliding-window prompt+completion token ceiling, OWASP LLM10:2025) bound
   how often and how much the model tier may run. On exceed, the route skips the model tier and degrades
   to deterministic completion; it never queues or blocks typing.
-- **Content-free wire.** Completion/inline/diagnostics/context responses carry only the reviewable
-  insert text plus a content-free provenance rollup (source ids, a SHA-256 prompt hash, byte counts,
-  omissions). The prompt, the buffer, retrieved excerpts, queries, workspace roots, and secrets never
-  cross to the browser, into telemetry, or into evidence (ADR-0042 D6; #1206).
+- **Content-free provenance and evidence.** The browser receives the opened buffer by design and sends
+  live editor text plus request context to same-origin BFF routes through host resolvers. The
+  content-free guarantee applies to derived metadata: prompts, retrieved excerpts, workspace roots,
+  secrets, telemetry, and evidence do not expose those raw payloads back to the browser or persisted
+  artifacts. Completion/inline/context responses expose reviewable insert text plus source labels,
+  hashes, byte counts, ids, and omission reasons (ADR-0042 D6; #1206).
 
 ## Governed test generation (wave 2, switched off)
 
@@ -280,9 +284,9 @@ npm run check:editor-doc-links
 
 Operational limitations to plan around:
 
-- **Deterministic language intelligence is TypeScript/JavaScript only.** Other languages get Monaco
-  syntax highlighting/editing and language-agnostic AI completion, but no deterministic diagnostics,
-  hover, symbols, or formatting until their provider lands (#1213).
+- **Governed language intelligence is TypeScript/JavaScript only.** Other languages get Monaco syntax
+  highlighting/editing only; completion, inline completion, diagnostics, hover, symbols, and formatting
+  are absent until their provider lands (#1213).
 - **AI completion needs a capable model.** Inline ghost text requires a fast, aligned, suffix-aware
   (FIM) model; absent one, the editor uses manual-invoke and deterministic completion only
   (ADR-0042 D5). There is no silent ungoverned fallback.
@@ -291,9 +295,9 @@ Operational limitations to plan around:
   rejected server-side and never instantiate Monaco (ADR-0042 D3.6, `deriveLargeFileMode`).
 - **No editor-driven test execution in v1.** See
   [Governed test generation](#governed-test-generation-wave-2-switched-off).
-- **No CDN, no browser egress.** Monaco core and workers are served same-origin; the editor issues no
-  direct browser network calls to model/retrieval/analytics endpoints, and the server CSP is not
-  widened for Monaco (ADR-0042 D3.4).
+- **No CDN, no direct browser provider egress.** Monaco core and workers are served same-origin; the
+  editor issues no direct browser network calls to model/retrieval/analytics endpoints, and the server
+  CSP is not widened for Monaco (ADR-0042 D3.4).
 
 ## Monaco runtime and worker strategy (Issue #1193)
 
