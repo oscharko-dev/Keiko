@@ -226,18 +226,23 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 
 ### Repair and uninstall
 
-`keiko repair` runs an offline, deterministic pass that fixes a broken or half-installed local state without a full reinstall. It removes a stale `ui.pid` left by an unclean shutdown, tightens the `.keiko` state-directory permissions to `0o700`, prunes launcher records whose shortcut files were deleted, and verifies the built CLI/UI assets, the launch path, and any configured model-gateway file. Items it cannot fix automatically are listed as `action`. Add `--dry-run` to report without changing anything.
+`keiko repair` runs an offline, deterministic pass that fixes a broken or half-installed local state without a full reinstall. It removes a stale `ui.pid` left by an unclean shutdown, tightens the `.keiko` state-directory permissions to `0o700`, and normalizes the permissions of every known Keiko-owned runtime artifact under it — the UI, Memory, and Local-Knowledge databases and their `-wal`/`-shm` sidecars, Evidence and Quality-Intelligence records, and the sealed credential vaults — to owner-only `0o700`/`0o600` on POSIX. It also prunes launcher records whose shortcut files were deleted, verifies the built CLI/UI assets, the launch path, and any configured model-gateway file, and flags lingering plaintext credentials left in the config by an interrupted migration. The audit is content-free: it reports paths and categories, never file contents, and never touches a customer file that merely lives under `.keiko`. Items it cannot fix automatically are listed as `action`. Add `--dry-run` to report without changing anything.
+
+On Windows, POSIX modes do not apply; repair reports that NTFS ACLs govern access rather than pretending an equivalent change was made.
 
 ```bash
 keiko repair            # diagnose and repair in place
 keiko repair --dry-run  # report findings only
 ```
 
-`keiko uninstall` reverses the runtime artifacts Keiko creates on a machine so you can clean your device and reinstall a clean version. It removes the user-local launcher shortcut(s), the `keiko:start` / `keiko:stop` scripts that `keiko init` added to your `package.json` (only when they still match what `init` writes), and the `.keiko` state directory. A customized script or a non-Keiko file in the state directory is never touched. With no scope flag all three are removed; `--state`, `--launchers`, and `--scripts` narrow the operation, and `--dry-run` previews it.
+`keiko uninstall` reverses the runtime artifacts Keiko creates on a machine so you can clean your device and reinstall a clean version. It removes the user-local launcher shortcut(s), the `keiko:start` / `keiko:stop` scripts that `keiko init` added to your `package.json` (only when they still match what `init` writes), and Keiko-owned runtime state under `.keiko`. With `--state` (and by default), it removes the manifest of Keiko-owned sensitive artifacts — lifecycle and launcher files, the UI, Memory, and Local-Knowledge databases and their sidecars, Evidence and Quality-Intelligence records, and the sealed credential vaults — and then removes the state directory itself only once nothing of yours remains. A customized script, an unknown (non-Keiko) file under `.keiko`, and any symlink are never touched or followed. With no scope flag all three areas are removed; `--state`, `--launchers`, and `--scripts` narrow the operation, and `--dry-run` previews it.
+
+`keiko uninstall --state` deletes local Evidence, Memory, and Local-Knowledge stores. Removing a file from the filesystem unlinks it but does not guarantee secure erasure of SSD-backed data. Repair (`diagnose and fix permission drift`) and uninstall (`remove Keiko-owned local runtime artifacts`) are distinct: repair never deletes a store, and uninstall never weakens permissions.
 
 ```bash
 keiko uninstall              # remove launcher, scripts, and state
 keiko uninstall --dry-run    # preview what would be removed
+keiko uninstall --state      # remove only Keiko-owned runtime state under .keiko
 keiko uninstall --launchers  # remove only the OS launcher shortcut
 ```
 

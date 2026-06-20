@@ -15,23 +15,18 @@
 //   2. `keiko:start` / `keiko:stop` scripts in the project `package.json` — removed
 //      ONLY when their value exactly matches what `keiko init` writes, so a
 //      user-customized script is never clobbered.
-//   3. The `.keiko/` state directory — only the enumerated `KEIKO_STATE_FILES` and the
-//      launcher's `.launcher-state-*` temp dirs are deleted, then the directory is
-//      removed when (and only when) it is empty. Nothing recursively deletes an
-//      arbitrary directory.
+//   3. The `.keiko/` state directory — every artifact the allowlisted runtime-state
+//      manifest (`state-paths.ts`, Issue #1321) recognizes is removed: lifecycle/launcher
+//      files, the UI / Memory / Local-Knowledge databases and their WAL/SHM sidecars,
+//      Evidence and Quality-Intelligence records, and the sealed credential vaults. An
+//      unrecognized customer file and any symlink are left in place; a directory (and the
+//      state root) is removed only once no such entry survives beneath it. Nothing
+//      recursively deletes an arbitrary directory or follows a symlink out of `.keiko`.
 //
 // With no scope flag every step runs; `--state` / `--launchers` / `--scripts` narrow
 // it. `--dry-run` reports `would-...` without changing anything.
 
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  rmdirSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -41,11 +36,12 @@ import { removeLauncherShortcuts } from "./launcher.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import { localPackageRoot } from "./install-layout.js";
 import {
-  KEIKO_STATE_FILES,
-  LAUNCHER_STATE_TMP_PREFIX,
   classifyPid,
   defaultIsProcessAlive,
+  isInsidePath,
   resolveStateDir,
+  scanRuntimeState,
+  type RuntimeStateScan,
 } from "./state-paths.js";
 
 const USAGE = `Usage:
@@ -55,11 +51,16 @@ const USAGE = `Usage:
 Reverses the runtime artifacts Keiko creates on this machine:
   --launchers  remove the user-local OS shortcut(s) (\`keiko launcher install\`)
   --scripts    remove the keiko:start / keiko:stop scripts from package.json
-  --state      remove the .keiko state directory (ui.pid, ui.log, launcher state)
+  --state      remove Keiko-owned runtime state under .keiko: lifecycle/launcher files,
+               UI / Memory / Local-Knowledge databases and their WAL/SHM sidecars,
+               Evidence and Quality-Intelligence records, and the sealed credential vaults
 
-With no scope flag, all three are removed. The installed npm package itself is left in
-place; the command prints the package-manager step to remove it. \`--force\` stops a
-running UI before removing state; \`--dry-run\` shows what would be removed.
+With no scope flag, all three are removed. An unknown (non-Keiko) file under .keiko and any
+symlink are always left in place, and the state directory is removed only once nothing of
+yours remains. The installed npm package itself is left in place; the command prints the
+package-manager step to remove it. \`--force\` stops a running UI before removing state;
+\`--dry-run\` shows what would be removed. Filesystem unlinking does not guarantee secure
+erasure of SSD-backed data.
 `;
 
 const KEIKO_SCRIPTS: Readonly<Record<string, string>> = {
@@ -288,36 +289,66 @@ function removeScriptsStep(opts: UninstallOptions, io: CliIo): void {
   }
 }
 
-function removeStateFiles(stateDir: string, io: CliIo, dryRun: boolean): void {
-  for (const name of KEIKO_STATE_FILES) {
-    const target = join(stateDir, name);
-    if (!existsSync(target)) continue;
+// Issue #1321: remove every Keiko-owned sensitive runtime artifact under the state dir,
+// not only the three lifecycle/launcher files. The set is the allowlisted manifest in
+// `state-paths.ts` (UI/Memory/Knowledge DBs + sidecars, Evidence/QI records, the sealed
+// credential vaults, config, logs). Anything the manifest does not recognize — an unknown
+// customer file or a symlink — is reported and left in place, and a directory is removed
+// only when no such retained entry survives beneath it. Content-free: paths only.
+function removeOwnedFiles(scan: RuntimeStateScan, io: CliIo, dryRun: boolean): void {
+  for (const file of scan.files) {
     if (dryRun) {
-      io.out(`would-remove: ${target}\n`);
+      io.out(`would-remove: ${file.absPath}\n`);
       continue;
     }
-    unlinkSync(target);
-    io.out(`removed: ${target}\n`);
-  }
-  for (const name of readdirSync(stateDir)) {
-    if (!name.startsWith(LAUNCHER_STATE_TMP_PREFIX)) continue;
-    const target = join(stateDir, name);
-    if (dryRun) {
-      io.out(`would-remove: ${target}\n`);
-      continue;
-    }
-    rmSync(target, { recursive: true, force: true });
-    io.out(`removed: ${target}\n`);
+    unlinkSync(file.absPath);
+    io.out(`removed: ${file.absPath}\n`);
   }
 }
 
-// Entries Keiko owns within the state dir: the fixed state files plus launcher temp
-// dirs. Used to decide whether the directory can be removed — in `--dry-run` the files
-// are not actually deleted, so the emptiness check must discount what WOULD be removed.
-function isKeikoOwnedEntry(name: string): boolean {
-  return (
-    (KEIKO_STATE_FILES as readonly string[]).includes(name) ||
-    name.startsWith(LAUNCHER_STATE_TMP_PREFIX)
+function reportRetained(scan: RuntimeStateScan, io: CliIo): void {
+  for (const entry of scan.retained) {
+    const why =
+      entry.reason === "symlink" ? "symlink — not followed" : "not a recognized Keiko artifact";
+    io.out(`kept: ${entry.absPath} (${why})\n`);
+  }
+}
+
+// Owned directories are visited deepest-first (the scan lists them shallowest-first). A
+// directory is removed only when no retained entry lives beneath it, so an unknown file or
+// a refused symlink anywhere inside keeps the whole chain up to the state root in place.
+function removeOwnedDirectories(scan: RuntimeStateScan, io: CliIo, dryRun: boolean): void {
+  for (const dir of [...scan.directories].reverse()) {
+    if (scan.retained.some((entry) => isInsidePath(dir.absPath, entry.absPath))) continue;
+    if (dryRun) {
+      io.out(`would-remove: ${dir.absPath}\n`);
+      continue;
+    }
+    rmdirSync(dir.absPath);
+    io.out(`removed: ${dir.absPath}\n`);
+  }
+}
+
+function finalizeStateDir(
+  scan: RuntimeStateScan,
+  stateDir: string,
+  io: CliIo,
+  dryRun: boolean,
+): void {
+  if (scan.retained.length === 0) {
+    if (dryRun) io.out(`would-remove: ${stateDir} (empty after removals)\n`);
+    else {
+      rmdirSync(stateDir);
+      io.out(`removed: ${stateDir}\n`);
+    }
+    return;
+  }
+  const topLevel = new Set(
+    scan.retained.map((entry) => entry.relPath.split("/")[0] ?? entry.relPath),
+  );
+  const count = topLevel.size;
+  io.out(
+    `kept: ${stateDir} (still contains ${String(count)} non-Keiko entr${count === 1 ? "y" : "ies"})\n`,
   );
 }
 
@@ -327,19 +358,11 @@ function removeStateStep(opts: UninstallOptions, io: CliIo, stateDir: string): v
     io.out(`state: ${stateDir} not found (nothing to remove)\n`);
     return;
   }
-  removeStateFiles(stateDir, io, opts.dryRun);
-  const foreign = readdirSync(stateDir).filter((name) => !isKeikoOwnedEntry(name));
-  if (foreign.length === 0) {
-    if (opts.dryRun) io.out(`would-remove: ${stateDir} (empty after removals)\n`);
-    else {
-      rmdirSync(stateDir);
-      io.out(`removed: ${stateDir}\n`);
-    }
-    return;
-  }
-  io.out(
-    `kept: ${stateDir} (still contains ${String(foreign.length)} non-Keiko entr${foreign.length === 1 ? "y" : "ies"})\n`,
-  );
+  const scan = scanRuntimeState(stateDir);
+  removeOwnedFiles(scan, io, opts.dryRun);
+  reportRetained(scan, io);
+  removeOwnedDirectories(scan, io, opts.dryRun);
+  finalizeStateDir(scan, stateDir, io, opts.dryRun);
 }
 
 function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
