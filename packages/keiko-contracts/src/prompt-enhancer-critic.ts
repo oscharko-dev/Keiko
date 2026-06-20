@@ -18,6 +18,7 @@ import {
   PROMPT_ENHANCER_SCHEMA_VERSION,
   type PromptEnhancementProfileId,
 } from "./prompt-enhancer.js";
+import type { PromptSafetyAssessment } from "./prompt-enhancer-safety.js";
 
 // ─── Critic dimensions ─────────────────────────────────────────────────────────────
 // The six deterministic prompt-quality dimensions the critic scores (Issue #1312 acceptance
@@ -83,7 +84,9 @@ export type PromptCandidateRejectionReason =
   | "duplicate-candidate"
   // The candidate did not preserve the baseline safety/grounding/output floor (defensive; such a
   // candidate is dropped before scoring — candidate generation never relaxes safety, AC5).
-  | "safety-floor-not-preserved";
+  | "safety-floor-not-preserved"
+  // The validate-stage safety screen rejected the generated candidate before scoring.
+  | "safety-validation-failed";
 
 export const PROMPT_CANDIDATE_REJECTION_REASONS: readonly PromptCandidateRejectionReason[] = [
   "lower-aggregate-score",
@@ -91,6 +94,7 @@ export const PROMPT_CANDIDATE_REJECTION_REASONS: readonly PromptCandidateRejecti
   "exceeded-token-budget",
   "duplicate-candidate",
   "safety-floor-not-preserved",
+  "safety-validation-failed",
 ] as const;
 
 export const isPromptCandidateRejectionReason = (
@@ -127,6 +131,8 @@ export interface PromptCandidateSelection {
   readonly schemaVersion: typeof PROMPT_ENHANCER_SCHEMA_VERSION;
   readonly winner: PromptCandidateScorecard;
   readonly ranked: readonly PromptCandidateScorecard[];
+  readonly winnerSafetyAssessment: PromptSafetyAssessment;
+  readonly rankedSafetyAssessments: readonly PromptSafetyAssessment[];
   readonly rejected: readonly PromptCandidateRejection[];
   readonly bounds: PromptOptimizationBounds;
   // Number of progressive-widening rounds actually run (1 .. bounds.maxIterations).

@@ -46,14 +46,13 @@ frozen constant arrays, and discriminated-union validators returning `Ok | Fail`
   policy, no-answer conditions, and RAG evaluation hints the enhancer emits for grounded tasks (§5).
   It is a plan, not execution; it does not carry runtime scope readiness. Server-side binding to
   concrete retrieval scopes and readiness checks remain #1314 work (R1).
-- **`SafetyAnnotation`** — machine-readable, server-enforceable metadata attached to an Enhanced
-  Prompt. The MVP shape is a frozen record:
-  `{ restrictedTools: readonly string[]; deniedOutputPatterns: readonly string[];
-injectionWarnings: readonly string[]; requiresHumanReview: boolean }`. The validate stage
-  (#1313) produces it; the server (#1314) enforces it before the prompt is used (it intersects
-  `restrictedTools` with any tool grant, applies `deniedOutputPatterns` to surfaced output, and
-  routes `requiresHumanReview` prompts to the existing human-review gate). The exact wire shape is
-  fixed in #1309 and enforcement is proved by a #1315 safety fixture.
+- **`PromptSafetyAssessment`** — machine-readable, server-enforceable validation output for an
+  Enhanced Prompt. #1313 implements the accepted/review/rejected decision, verification status,
+  finding codes, and least-privilege constraints as a provider-neutral contract rather than embedding
+  a separate `EnhancedPrompt.safetyAnnotation` field. #1314 consumes this assessment before prompt use:
+  rejected prompts are refused, review-gated prompts enter the existing human-review path, and
+  least-privilege constraints prevent a generated prompt from expanding tool, file, network, or secret
+  authority.
 - **`PromptEnhancementEvidence`** — the redacted, hashed audit record (§8).
 
 ### Task taxonomy (≥10 classes)
@@ -116,8 +115,9 @@ provider` (offline scripted vs live), `scoreFixture`, `aggregateScorecard`, `sum
 - **Reuse**: the `EvidenceStore` port (`put`/`update`/`list`/`get`/`delete`), `buildEvidenceManifest`,
   `persistEvidence`, redaction-on-write, and `RetentionPolicy`.
 - **Extend**: a `src/promptEnhancement/` namespace (manifest schema + store) following the QI store
-  template (record → redact → hash → validate totals → write). The manifest is added to the
-  `EvidenceManifest` union without bumping `EVIDENCE_SCHEMA_VERSION` for unrelated records.
+  template (record → redact → hash → validate totals → write). #1313 stores Prompt Enhancer evidence
+  as a PE sub-manifest under `pe/`, leaving the main `EvidenceManifest` union unchanged. #1314 links
+  workflow/server evidence to that sub-manifest instead of requiring a main-manifest union member.
 
 ### Lifecycle — `keiko-workflows` (reuse + extend)
 
@@ -173,9 +173,9 @@ Each enhancement run writes one `PromptEnhancementEvidence` manifest plus compan
 existing `EvidenceStore`. Every string leaf is redacted by construction (`createAuditRedactor`) and
 the manifest carries a content hash (`canonicalise` + `sha256Hex`) for tamper evidence. Retention
 uses the existing `RetentionPolicy`. No raw secrets, customer data, private logs, or hidden system
-prompts are persisted (ADR-0022, ADR-0030). The manifest records: input fingerprint (not raw input),
-detected task class and profile, applied rules, candidate scores, selected candidate, evaluation
-result, and safety annotations.
+prompts are persisted (ADR-0022, ADR-0030). The PE sub-manifest records: redacted-input fingerprint
+(not raw input), detected task class and profile, applied rules, candidate scores, selected candidate,
+evaluation result, and the `PromptSafetyAssessment` summary consumed by #1314.
 
 ## 6. Evaluation strategy
 
@@ -212,9 +212,9 @@ tool use. Mechanisms:
    channel of `buildPromptSegments` before any model call.
 2. **Validation rules** — the validate stage rejects Enhanced Prompts that grant authority (see the
    validation rule model below), returning a `PromptEnhancementError`.
-3. **Safety annotations** — machine-readable, server-enforced restrictions travel with the Enhanced
-   Prompt (the `SafetyAnnotation` shape in §2); the server honours them and never escalates authority
-   from a generated prompt.
+3. **Safety assessments** — machine-readable, server-enforced restrictions travel beside the Enhanced
+   Prompt as `PromptSafetyAssessment` evidence (§2); the server honours them and never escalates
+   authority from a generated prompt.
 4. **Redaction + safe errors** — all persisted and surfaced text is redacted; errors carry no
    sensitive payload.
 5. **Human review** — any downstream authority continues through existing governed handoff and
@@ -256,15 +256,15 @@ its fixtures.
 Aligned to the epic's required order. Each issue is scoped to disjoint write ownership so no two
 agents edit the same file scope.
 
-| Issue     | Goal                                                        | Primary packages                                                                                     | Key reuse                                                                                                                  | Net-new (gap)                                                                             | Write ownership                                                |
-| --------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| **#1309** | Enhanced Prompt contracts, taxonomy, deterministic analyzer | `keiko-contracts`                                                                                    | `memory-barrel`/`connected-context`/`workflow-handoff` patterns, validators                                                | `prompt-enhancer.ts` shapes + taxonomy + analyzer; no model call by default               | `packages/keiko-contracts/**` + tests                          |
-| **#1310** | Planner profiles + structured generator                     | `keiko-model-gateway/src/promptEnhancer/`, `keiko-workflows/src/promptEnhancer/`                     | `buildPromptSegments`, harness system/user/context convention, QI profiles                                                 | `pe:*` profiles, generator, profile catalog                                               | enhancer sub-modules + tests                                   |
-| **#1311** | Grounding + retrieval planning                              | `keiko-contracts`, `keiko-model-gateway/src/promptEnhancer/`                                        | ADR-0034/0036 grounding vocabulary, source priority, citation, uncertainty, and no-answer semantics                         | `GroundingPlan` contract, deterministic planner, validation, and rendered source policy    | contract/model-gateway grounding modules + tests               |
-| **#1312** | Candidate generation, critic scoring, optimization loop     | `keiko-evaluations`, `keiko-model-gateway/src/promptEnhancer/`, `keiko-contracts/src/evaluations.ts` | `scoreFixture`, `aggregateScorecard`, `EVALUATION_DIMENSIONS`, gateway critic dispatch                                     | enhancer dimensions + scorers, bounded candidate/critic loop                              | enhancer scorers, evaluations extension, tests                 |
-| **#1313** | Safety guardrails, validation, audit evidence               | `keiko-security`, `keiko-evidence/src/promptEnhancement/`, enhancer validate stage                   | redaction/hashing/secretbox, `EvidenceStore`, QI store template, governed handoff                                          | injection patterns, `PromptEnhancementError`, evidence manifest + store, validation rules | security extension, evidence sub-module, validate stage, tests |
+| Issue     | Goal                                                        | Primary packages                                                                                     | Key reuse                                                                                                                                                            | Net-new (gap)                                                                                           | Write ownership                                                |
+| --------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **#1309** | Enhanced Prompt contracts, taxonomy, deterministic analyzer | `keiko-contracts`                                                                                    | `memory-barrel`/`connected-context`/`workflow-handoff` patterns, validators                                                                                          | `prompt-enhancer.ts` shapes + taxonomy + analyzer; no model call by default                             | `packages/keiko-contracts/**` + tests                          |
+| **#1310** | Planner profiles + structured generator                     | `keiko-model-gateway/src/promptEnhancer/`, `keiko-workflows/src/promptEnhancer/`                     | `buildPromptSegments`, harness system/user/context convention, QI profiles                                                                                           | `pe:*` profiles, generator, profile catalog                                                             | enhancer sub-modules + tests                                   |
+| **#1311** | Grounding + retrieval planning                              | `keiko-contracts`, `keiko-model-gateway/src/promptEnhancer/`                                         | ADR-0034/0036 grounding vocabulary, source priority, citation, uncertainty, and no-answer semantics                                                                  | `GroundingPlan` contract, deterministic planner, validation, and rendered source policy                 | contract/model-gateway grounding modules + tests               |
+| **#1312** | Candidate generation, critic scoring, optimization loop     | `keiko-evaluations`, `keiko-model-gateway/src/promptEnhancer/`, `keiko-contracts/src/evaluations.ts` | `scoreFixture`, `aggregateScorecard`, `EVALUATION_DIMENSIONS`, gateway critic dispatch                                                                               | enhancer dimensions + scorers, bounded candidate/critic loop                                            | enhancer scorers, evaluations extension, tests                 |
+| **#1313** | Safety guardrails, validation, audit evidence               | `keiko-security`, `keiko-evidence/src/promptEnhancement/`, enhancer validate stage                   | redaction/hashing/secretbox, `EvidenceStore`, QI store template, governed handoff                                                                                    | injection patterns, `PromptEnhancementError`, evidence manifest + store, validation rules               | security extension, evidence sub-module, validate stage, tests |
 | **#1314** | Governed API, CLI, UI                                       | `keiko-server`, `keiko-cli`, `keiko-ui`                                                              | `API_ROUTES`/`UiHandlerDeps`/`mappedGatewayError`, CLI command pattern, `ChatWindow`/`KeikoSelect`/`SafeMarkdown`/`useSSE`, existing Local Knowledge retrieval paths | `/api/prompt-enhancer/*`, CLI command, `PromptEnhancerPanel`, grounding-plan binding + readiness checks | server routes, cli command, ui panel, integration tests        |
-| **#1315** | Evaluation suite, docs, closure evidence                    | `keiko-evaluations`, `docs/**`                                                                       | `runEvaluationSuite`, scorecard renderer, fixtures, release-doc + ADR patterns                                             | enhancer fixtures, threshold gates, runbook, closure evidence                             | evaluations fixtures, docs, README updates                     |
+| **#1315** | Evaluation suite, docs, closure evidence                    | `keiko-evaluations`, `docs/**`                                                                       | `runEvaluationSuite`, scorecard renderer, fixtures, release-doc + ADR patterns                                                                                       | enhancer fixtures, threshold gates, runbook, closure evidence                                           | evaluations fixtures, docs, README updates                     |
 
 **#1312 vs #1315 ownership (both touch `keiko-evaluations`).** To keep write ownership disjoint:
 #1312 owns the **runtime ranking path** — the six production candidate dimensions in
@@ -283,7 +283,7 @@ listed is reuse or additive extension (§3). No new package is required for the 
 **Net-new contracts and logic (all additive to existing packages):**
 
 - `keiko-contracts`: `prompt-enhancer.ts` (+ optional `prompt-enhancer-validation.ts`) — Enhanced
-  Prompt, taxonomy, profiles, retrieval-plan, safety-annotation, evidence-manifest shapes,
+  Prompt, taxonomy, profiles, retrieval-plan, safety-assessment, evidence-sub-manifest shapes,
   validators. New `EVALUATION_DIMENSIONS` entries.
 - `keiko-model-gateway/src/promptEnhancer/`: enhancer task profiles and candidate/critic dispatch
   wrappers over existing QI primitives.
@@ -300,8 +300,8 @@ listed is reuse or additive extension (§3). No new package is required for the 
 
 **Real capability gaps (confirmed absent):** raw-input normalization + structured-prompt construction
 as a first-class artefact; structured prompt validation (does this prompt illegally grant authority?);
-a machine-readable safety-annotation schema; a `GroundingPlan` source-policy contract; enhancer evaluation
-dimensions and fixtures; prompt-injection redaction patterns; a prompt-enhancement evidence manifest.
+a machine-readable safety-assessment schema; a `GroundingPlan` source-policy contract; enhancer evaluation
+dimensions and fixtures; prompt-injection redaction patterns; a prompt-enhancement evidence sub-manifest.
 None of these is satisfiable by an existing module unchanged, but each lands additively in the
 owning package above.
 
@@ -316,18 +316,18 @@ architecture-gate files; it is taken only with a documented ownership/coverage j
 
 ## 10. Risk register
 
-| #   | Risk                                                                                                                                 | Area              | Likelihood × Impact | Mitigation                                                                                                                                                                                 | Owner issue  |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
+| #   | Risk                                                                                                                                 | Area              | Likelihood × Impact | Mitigation                                                                                                                                                                                     | Owner issue  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
 | R1  | Grounding plan diverges from what the server can execute (scope/embedding mismatch), producing prompts that ask for ungrounded facts | Grounding         | M × H               | #1311 emits only a non-executing source policy; #1314 binds it to concrete scopes, performs pre-execution readiness validation, and degrades to "insufficient evidence" instead of fabricating | #1314        |
-| R2  | Evaluation gives false confidence (overfit fixtures, offline ≠ live)                                                                 | Evaluation        | M × M               | Reuse offline-threshold + human-reviewed-live pilot pattern; checked-in deterministic fixtures; thresholds gate Go/No-Go; surface offline-vs-live deltas                                   | #1312, #1315 |
-| R3  | Prompt-injection / indirect injection escapes into a generated prompt                                                                | Safety            | M × H               | Untrusted segregation via `buildPromptSegments`; injection redaction patterns; validate-stage rejection; safety annotations honoured by server; fixtures                                   | #1313        |
-| R4  | Secret or customer data leaks into evidence or surfaced output                                                                       | Audit evidence    | L × H               | Redact-by-construction before every write; user-context secret detector; hashed manifests; safe-error taxonomy; no raw input persisted                                                     | #1313        |
-| R5  | Generated prompt silently grants tool-write / egress / secret authority (excessive agency)                                           | Safety            | L × H               | Validation rules reject authority grants; enhancer emits data only; downstream authority stays behind governed handoff + human review                                                      | #1313        |
-| R6  | UI integration regresses Conversation Center a11y or streaming                                                                       | UI integration    | M × M               | Reuse `ChatWindow` panel pattern, live-region/`SafeMarkdown`/`useSSE` conventions; jest-axe coverage; no `dangerouslySetInnerHTML`                                                         | #1314        |
-| R7  | Model-specific optimisation breaks provider neutrality                                                                               | Model-agnosticism | L × M               | Provider-neutral Enhanced Prompt by default; model-specific tuning opt-in and capability-gated; no hard-coded model names                                                                  | #1310        |
-| R8  | Candidate/critic loop inflates token cost or latency                                                                                 | Performance/cost  | M × M               | Bound candidates (≥3, capped) and stages with `GovernorState`; cancellation; replay cache for deterministic re-runs                                                                        | #1312        |
-| R9  | Distributed sub-modules drift / contract leakage between packages                                                                    | Architecture      | L × M               | Single contract module in `keiko-contracts`; `arch:check` + `check:package-graph` unchanged (no new edges); blueprint as the conceptual map                                                | #1309        |
-| R10 | Scope creep beyond the MVP (autonomous evolution, fine-tuning, tool write authority)                                                 | Scope             | M × M               | Epic non-goals enforced; stop-conditions in each child issue; this blueprint fixes MVP boundaries                                                                                          | all          |
+| R2  | Evaluation gives false confidence (overfit fixtures, offline ≠ live)                                                                 | Evaluation        | M × M               | Reuse offline-threshold + human-reviewed-live pilot pattern; checked-in deterministic fixtures; thresholds gate Go/No-Go; surface offline-vs-live deltas                                       | #1312, #1315 |
+| R3  | Prompt-injection / indirect injection escapes into a generated prompt                                                                | Safety            | M × H               | Untrusted segregation via `buildPromptSegments`; injection redaction patterns; validate-stage rejection; safety assessments honoured by server; fixtures                                       | #1313        |
+| R4  | Secret or customer data leaks into evidence or surfaced output                                                                       | Audit evidence    | L × H               | Redact-by-construction before every write; user-context secret detector; hashed manifests; safe-error taxonomy; no raw input persisted                                                         | #1313        |
+| R5  | Generated prompt silently grants tool-write / egress / secret authority (excessive agency)                                           | Safety            | L × H               | Validation rules reject authority grants; enhancer emits data only; downstream authority stays behind governed handoff + human review                                                          | #1313        |
+| R6  | UI integration regresses Conversation Center a11y or streaming                                                                       | UI integration    | M × M               | Reuse `ChatWindow` panel pattern, live-region/`SafeMarkdown`/`useSSE` conventions; jest-axe coverage; no `dangerouslySetInnerHTML`                                                             | #1314        |
+| R7  | Model-specific optimisation breaks provider neutrality                                                                               | Model-agnosticism | L × M               | Provider-neutral Enhanced Prompt by default; model-specific tuning opt-in and capability-gated; no hard-coded model names                                                                      | #1310        |
+| R8  | Candidate/critic loop inflates token cost or latency                                                                                 | Performance/cost  | M × M               | Bound candidates (≥3, capped) and stages with `GovernorState`; cancellation; replay cache for deterministic re-runs                                                                            | #1312        |
+| R9  | Distributed sub-modules drift / contract leakage between packages                                                                    | Architecture      | L × M               | Single contract module in `keiko-contracts`; `arch:check` + `check:package-graph` unchanged (no new edges); blueprint as the conceptual map                                                    | #1309        |
+| R10 | Scope creep beyond the MVP (autonomous evolution, fine-tuning, tool write authority)                                                 | Scope             | M × M               | Epic non-goals enforced; stop-conditions in each child issue; this blueprint fixes MVP boundaries                                                                                              | all          |
 
 ## 11. Verification of this blueprint
 
