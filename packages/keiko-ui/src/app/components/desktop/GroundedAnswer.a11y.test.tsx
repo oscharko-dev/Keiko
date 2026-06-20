@@ -22,6 +22,10 @@ const OMITTED_COUNTS_ZERO = {
   "redacted-only": 0,
   "budget-exhausted": 0,
   "tool-unavailable": 0,
+  "unsupported-format": 0,
+  "no-text-layer": 0,
+  "malformed-document": 0,
+  "encrypted-document": 0,
 } as const;
 
 function contextPack(): GroundedAnswerContextPackSummary {
