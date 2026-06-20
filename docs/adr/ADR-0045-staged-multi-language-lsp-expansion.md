@@ -79,8 +79,12 @@ ADR-0042 D4 (one governed source of truth) and D1 (editor owns UI only, computes
 ### D2 — Out-of-process LSP servers are owned server-side; no browser-side LSP client
 
 Each new provider bridges to its standard LSP server as an **out-of-process child of `keiko-server`**,
-spoken to over stdio JSON-RPC. The Monaco↔LSP bridge is a **server-side** concern. **`monaco-languageclient`
-is evaluated and not adopted in the browser tier**: a browser-side language client would open a second
+spoken to over stdio JSON-RPC. The Monaco↔LSP bridge is a **server-side** concern. LSP process launch
+must not introduce an ungoverned second spawn boundary: a future implementation either reuses the
+existing ADR-0043 command wrapper/attestation path (`keiko-tools` `runCommand`, with command rules,
+environment allowlisting, and sandbox attestation) or lands an ADR-0043 amendment that defines an
+equivalent long-lived LSP process manager before any provider ships. **`monaco-languageclient` is
+evaluated and not adopted in the browser tier**: a browser-side language client would open a second
 answer path that bypasses the governed server orchestrator (violating ADR-0042 D4), and any
 browser→server LSP transport (WebSocket/worker) would add a browser egress surface the no-CDN/CSP
 decision (ADR-0042 D3) forbids. The thin JSON-RPC plumbing keiko-server needs (`vscode-jsonrpc` /
@@ -89,8 +93,10 @@ the server. The LSP servers themselves are **operator-provisioned runtime tools 
 (like `git` or `node`), **not bundled** into the Keiko package (consistent with the Out-of-Scope
 "installing language servers" and ADR-0021 bundling model); Keiko does not redistribute them, so their
 licenses (EPL-2.0, BSD-3-Clause, Apache-2.0/MIT, MIT) are invocation concerns, not redistribution
-concerns. A provider whose server is absent reports `UNSUPPORTED_LANGUAGE` (no fabrication, no fallback
-to an ungoverned path).
+concerns that enter the bundled npm/workspace SBOM. They still require a per-language runtime toolchain
+inventory with pinned versions, checksums/provenance, and license review before enablement. A provider
+whose server is absent reports `UNSUPPORTED_LANGUAGE` (no fabrication, no fallback to an ungoverned
+path).
 
 ### D3 — Deterministic-first and safe-by-default; index-time untrusted execution is the gating risk
 
@@ -108,9 +114,12 @@ would execute untrusted project code **off by default**:
 
 Any analysis feature that **requires** executing untrusted project code (e.g. full proc-macro fidelity,
 Gradle-plugin-driven Java model accuracy) is **off by default**, may be enabled only with the LSP
-indexing process wrapped in the **ADR-0043 enforced deny-by-default egress boundary applied to the
-server process itself**, and requires a **separate per-language security review** before it ships. This
-extends ADR-0043's boundary from test execution to index-time execution; it does not relax it.
+indexing process wrapped in an **ADR-0043-compatible enforced boundary applied to the server process
+itself**: `network:"none"` plus `filesystem:"execution-root"` or an equivalent workspace-only
+filesystem and environment boundary with attestation. If that filesystem/environment containment cannot
+be proven on the target platform, the execution-requiring fidelity feature remains disabled. A
+**separate per-language security review** is required before it ships. This extends ADR-0043's boundary
+from test execution to index-time execution; it does not relax it.
 
 ### D4 — Staged rollout order: Python → Go → Java → Rust
 
@@ -143,11 +152,12 @@ For each language the plan defines (blueprint §5/§6) a three-way partition:
   configuration rules (nearest `pyproject.toml`/`go.mod`/`pom.xml`|`build.gradle`/`Cargo.toml` within
   containment + `realpath`), provider registration, output sanitization (bidi/zero-width stripping,
   inert-Markdown hover fence, count caps, byte/wall-clock/`AbortSignal` bounds), deterministic-first
-  orchestration, metadata-only evidence, BFF wiring, and the egress-isolation wrapping of any
-  code-executing server.
+  orchestration, metadata-only evidence, BFF wiring, ADR-0043-compatible process launch, and the
+  network/filesystem/environment isolation wrapping of any code-executing server.
 - **Separate security review** (a dedicated ticket per language): spawning a server that executes
-  untrusted project code at index time (Java, Rust); toolchain provisioning; and per-language test
-  execution (reuses #1202/#1204/ADR-0043).
+  untrusted project code at index time (Java, Rust); any new long-lived LSP process manager that cannot
+  reuse `runCommand`; toolchain provisioning; and per-language test execution (reuses #1202/#1204/
+  ADR-0043).
 
 **Rollback/disable is per-language with no cascade**: flipping a language's flag off removes its
 registry entry and disposes its server process; the orchestrator then returns `UNSUPPORTED_LANGUAGE`
@@ -165,12 +175,15 @@ Each future per-language implementation issue must satisfy, and record evidence 
    calls**; hover rendered as inert Markdown; completion count-capped and sanitized.
 3. **Worker/process lifecycle tests** — bounded cold-start, clean disposal on editor-close/workspace-switch,
    no memory leak across open/close cycles.
-4. **Dependency and license review** — server + bridge npm deps pinned, SBOM-clean, license-compatible;
-   operator-provisioned toolchain documented (not bundled).
-5. **Sandbox and network-boundary evidence** — for any **execution-requiring** toolchain or LSP
-   operation (index-time build-script/proc-macro execution or test execution), an automated ADR-0043
-   enforced-egress proof (an outbound connection from inside `network:"none"` fails); deterministic-local
-   (offline) vs execution-requiring operations are explicitly labelled, the latter off by default.
+4. **Dependency and license review** — server + bridge npm deps pinned, bundled npm/workspace SBOM-clean,
+   license-compatible; operator-provisioned toolchains documented in a runtime inventory with pinned
+   versions, checksums/provenance, and license review (not bundled).
+5. **Sandbox, filesystem, and process-boundary evidence** — for any **execution-requiring** toolchain or
+   LSP operation (index-time build-script/proc-macro execution or test execution), automated evidence
+   that `network:"none"` denies outbound connections and `filesystem:"execution-root"` or an equivalent
+   workspace-only filesystem/environment boundary is enforced; the process launch path must reuse
+   ADR-0043 attestation or cite the required ADR-0043 amendment; deterministic-local (offline) vs
+   execution-requiring operations are explicitly labelled, the latter off by default.
 6. **Performance evidence** — latency per operation vs representative file sizes, large-file degradation
    reuse (read-only above 500 KB / 10,000 lines per ADR-0042 D3.6), server startup/disposal time, and
    LSP-server memory per workspace, recorded against the per-provider budgets (blueprint §9), which each
@@ -210,12 +223,13 @@ first-release TS/JS scope and the #1189 implementation order are unchanged by th
   and isolates the highest-risk language (Rust) behind a dedicated security review, so partial delivery
   is safe and reviewable.
 - The only candidate new npm runtime dependency is a server-side MIT JSON-RPC client; LSP servers and
-  toolchains stay operator-provisioned and out of the bundled supply-chain/SBOM surface (ADR-0021),
-  keeping the package footprint and license exposure flat.
+  toolchains stay operator-provisioned and out of the bundled npm/workspace SBOM surface (ADR-0021).
+  Runtime license/provenance exposure is not flat by default: it is governed by the per-language
+  runtime toolchain inventory and license review.
 - Cost: each language needs server-side LSP-process lifecycle management (spawn, health, dispose,
-  per-language safe-mode configuration) and, for Java/Rust, enforced-egress wrapping of the indexing
-  process — more than a thin registry entry. This is owned by the per-language implementation issues,
-  not this plan.
+  per-language safe-mode configuration) and, for Java/Rust, network/filesystem/environment isolation of
+  the indexing process — more than a thin registry entry. This is owned by the per-language
+  implementation issues, not this plan.
 
 ## Out of Scope
 

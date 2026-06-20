@@ -163,10 +163,10 @@ default-off. Ownership and rollback:
 | Concern                 | Owner                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------- |
 | Provider registration   | keiko-server language-service registry (one `LanguageProviderDescriptor` per language) |
-| LSP process lifecycle   | keiko-server: spawn, health, safe-mode config, dispose on close/workspace-switch       |
+| LSP process lifecycle   | keiko-server through the ADR-0043-compatible spawn boundary: spawn, health, safe-mode config, dispose on close/workspace-switch |
 | Workspace-root + config | keiko-server (reused TS/JS discovery, §8)                                              |
 | Output sanitisation     | keiko-server orchestrator (shared, unchanged)                                          |
-| Enforced isolation      | `@oscharko-dev/keiko-sandbox` (for any code-executing server or test run)              |
+| Enforced isolation      | `@oscharko-dev/keiko-sandbox` + command attestation (for any code-executing server or test run) |
 | Feature flag / rollback | keiko-server config, one flag per language                                             |
 
 **Rollback/disable is per-language and cascade-free.** Turning a language's flag off:
@@ -188,8 +188,8 @@ For every language, operations split three ways:
 | Partition                    | Operations / responsibilities                                                                                                                                                                                                                                                                                                 |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **LSP-delegated**            | diagnostics, hover/quick-info, completion candidates, document symbols, formatting — computed by the out-of-process server                                                                                                                                                                                                    |
-| **Keiko-specific**           | workspace-root discovery & config rules (§8); provider registration; output sanitisation (bidi/zero-width strip, inert-Markdown hover fence, count caps, byte/wall-clock/`AbortSignal` bounds); deterministic-first orchestration; metadata-only evidence; BFF wiring; egress-isolation wrapping of any code-executing server |
-| **Separate security review** | spawning a server that executes untrusted project code at index time (**Java, Rust**); toolchain provisioning & version pinning; per-language test execution (reuses #1202/#1204/ADR-0043); offline artifact-provisioning model                                                                                               |
+| **Keiko-specific**           | workspace-root discovery & config rules (§8); provider registration; output sanitisation (bidi/zero-width strip, inert-Markdown hover fence, count caps, byte/wall-clock/`AbortSignal` bounds); deterministic-first orchestration; metadata-only evidence; BFF wiring; ADR-0043-compatible process launch; network/filesystem/environment isolation wrapping of any code-executing server |
+| **Separate security review** | spawning a server that executes untrusted project code at index time (**Java, Rust**); any new long-lived LSP process manager that cannot reuse `runCommand`; toolchain provisioning & runtime inventory; per-language test execution (reuses #1202/#1204/ADR-0043); offline artifact-provisioning model |
 
 Per-language summary of what is LSP-based vs needs review:
 
@@ -206,7 +206,10 @@ Per-language summary of what is LSP-based vs needs review:
 
 The governing baseline: Keiko is not an OS sandbox (`docs/security-and-audit-boundaries.md`), productive
 model calls route only through the Model Gateway, and untrusted-code execution is gated behind
-ADR-0043's enforced deny-by-default egress boundary, CI-proven via `@oscharko-dev/keiko-sandbox`.
+ADR-0043's enforced deny-by-default execution boundary, CI-proven via `@oscharko-dev/keiko-sandbox` and
+the shared command attestation path. The boundary must cover the threat in question: network egress for
+exfiltration, plus filesystem/environment containment whenever the operation executes untrusted project
+code against an analysis copy rather than an already-applied real workspace.
 
 **Two untrusted-execution surfaces, both governed by ADR-0043:**
 
@@ -216,11 +219,20 @@ ADR-0043's enforced deny-by-default egress boundary, CI-proven via `@oscharko-de
      jdtls build-tool import in read-only/no-execution mode; `GOPROXY=off`; Maven/Gradle offline; Pyright
      static-only.
    - Any feature requiring execution is **off by default**, enabled only with the LSP **server process**
-     wrapped in ADR-0043 enforced `network:"none"` isolation, and only after a per-language security
-     review.
+     wrapped in ADR-0043-compatible isolation: `network:"none"` plus `filesystem:"execution-root"` or an
+     equivalent workspace-only filesystem and environment boundary with attestation. If that containment
+     cannot be proven, the execution-requiring fidelity feature remains disabled. Enablement also requires
+     a per-language security review.
 2. **Test-time execution (already governed).** Generated tests run through the #1202 assured pre-filter
-   and #1204 post-apply verification, in a disposable root under enforced egress. Multi-language reuses
-   this path with language-specific runners (§10) — no parallel execution path.
+   in a disposable execution root and #1204 post-apply verification in the applied workspace, with each
+   path using its documented ADR-0043 enforcement mode. Multi-language reuses this path with
+   language-specific runners (§10) — no parallel execution path.
+
+**Process-launch boundary.** ADR-0043's single subprocess boundary is the existing `keiko-tools`
+`runCommand` path. Future LSP implementations must reuse that wrapper/attestation model, command rules,
+and environment allowlist. A long-lived LSP process manager that cannot reuse `runCommand` is not a
+small implementation detail: it requires an ADR-0043 amendment that records equivalent controls before a
+provider ships.
 
 **Offline artifact provisioning** is the precondition for deny-by-default at both surfaces, because
 every toolchain otherwise fetches dependencies just-in-time:
@@ -232,12 +244,14 @@ every toolchain otherwise fetches dependencies just-in-time:
 | Rust     | `cargo vendor --versioned-dirs` + `cargo test --offline --locked` (verify dev-deps captured) |
 | Go       | `go mod download` / `vendor/` + `GOPROXY=off go test`                                        |
 
-Each per-language issue must produce an automated ADR-0043 egress proof (outbound connection from the
-isolated process **fails**) for any operation that executes toolchain or project code.
+Each per-language issue must produce automated ADR-0043 boundary evidence for any operation that
+executes toolchain or project code: outbound connection from the isolated process **fails**; filesystem
+reads/writes outside the execution root or approved workspace boundary **fail**; environment variables are
+allowlisted; and the command or LSP process emits attestation for the enforced controls.
 
 **Per-language security-review scope and safe-mode proof.** For Java and Rust the implementation issue
-must: (a) document the exact LSP-server launch flags / initialization options that enforce safe-mode
-(no build-script/proc-macro execution at index time); (b) prove with a committed malicious fixture
+must: (a) document the exact LSP-server launch flags / initialization options and process-launch wrapper
+that enforce safe-mode (no build-script/proc-macro execution at index time); (b) prove with a committed malicious fixture
 (e.g. a `pom.xml` build goal, or a `build.rs`/derive macro that would observably fail or write a marker
 if executed) that safe-mode does **not** execute project code at index time; and (c) open a dedicated
 security-review ticket scoped to that language's attack surface — Java: Maven/Gradle plugin loading and
@@ -301,13 +315,15 @@ Every per-language implementation issue must satisfy and record evidence for all
    completion results count-capped and sanitised (bidi/zero-width stripped, clipped to budget).
 3. **Worker/process lifecycle tests** — bounded LSP cold-start; clean kill/dispose on editor close and
    workspace switch; no memory leak across repeated open/close cycles; tested single-file and multi-file.
-4. **Dependency and license review** — server-side bridge npm deps pinned and SBOM-clean; LSP server +
-   toolchain documented as operator-provisioned with their licenses (EPL-2.0/MIT/BSD-3-Clause/Apache-2.0+MIT);
-   versions pinned and reproducible.
-5. **Sandbox and network-boundary evidence** — for any toolchain or LSP code execution, an automated
-   ADR-0043 enforced-egress proof (an outbound connection from inside `network:"none"` **fails**);
-   deterministic-local vs execution-requiring operations are explicitly labelled, with execution-requiring
-   ones off by default.
+4. **Dependency and license review** — server-side bridge npm deps pinned and bundled npm/workspace
+   SBOM-clean; LSP server + toolchain documented as operator-provisioned with their licenses
+   (EPL-2.0/MIT/BSD-3-Clause/Apache-2.0+MIT), pinned versions, checksums/provenance, and reproducible
+   installation instructions in a runtime toolchain inventory.
+5. **Sandbox, filesystem, and process-boundary evidence** — for any toolchain or LSP code execution,
+   automated ADR-0043 evidence that outbound connection from inside `network:"none"` **fails**,
+   filesystem access outside `filesystem:"execution-root"` or an equivalent approved workspace boundary
+   **fails**, the process environment is allowlisted, and the launch path emits attestation; deterministic-local
+   vs execution-requiring operations are explicitly labelled, with execution-requiring ones off by default.
 6. **Performance evidence** — latency per operation vs representative file sizes; large-file degradation
    reuse; server startup/disposal timing; LSP-server memory per workspace — recorded against §9 budgets.
 
@@ -342,8 +358,10 @@ and `@oscharko-dev/keiko-sandbox` — with no parallel spawn path.
 | rust-analyzer                                       | Apache-2.0 AND MIT | **Operator-provisioned, not bundled** | Rust provider. Critical index-time execution → last stage, dedicated security review, enforced isolation of the indexing process.                               |
 | gopls                                               | BSD-3-Clause       | **Operator-provisioned, not bundled** | Go provider. No untrusted-code execution; `GOPROXY=off` enforced.                                                                                               |
 
-No LSP/toolchain dependency enters the bundled product supply-chain or SBOM (ADR-0021); only the
-server-side JSON-RPC bridge would, and it is MIT.
+No LSP/toolchain dependency enters the bundled npm/workspace SBOM (ADR-0021); only the server-side
+JSON-RPC bridge would, and it is MIT. Operator-provisioned LSP servers and toolchains still enter the
+runtime operating surface, so each per-language issue must attach a runtime toolchain inventory with
+pinned versions, checksums/provenance, and license review before enablement.
 
 ---
 
@@ -351,12 +369,13 @@ server-side JSON-RPC bridge would, and it is MIT.
 
 | #   | Risk                                                                                                                 | Category                 | Likelihood × Impact | Mitigation / owner                                                                                                                            |
 | --- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| M1  | LSP server executes untrusted project code at index time (jdtls build scripts, rust-analyzer proc-macros/`build.rs`) | Untrusted execution      | High × High         | Safe-mode by default (ADR-0045 D3); execution only behind ADR-0043 enforced egress on the server process + security review. Java/Rust stages. |
+| M1  | LSP server executes untrusted project code at index time (jdtls build scripts, rust-analyzer proc-macros/`build.rs`) | Untrusted execution      | High × High         | Safe-mode by default (ADR-0045 D3); execution only behind ADR-0043-compatible network + filesystem/environment isolation on the server process + security review. Java/Rust stages. |
 | M2  | Browser-side LSP client bypasses the governed server orchestrator / widens CSP                                       | Model boundary / CSP     | Low × High          | Server-side bridge only (D2); no `monaco-languageclient` in the browser; CSP unchanged.                                                       |
-| M3  | Toolchain fetches dependencies just-in-time, defeating deny-by-default egress                                        | Network boundary         | Med × High          | Offline provisioning (§7) is a precondition; `GOPROXY=off`, `mvn -o`, `cargo --offline`, provisioned venv; egress proof required.             |
+| M3  | Toolchain fetches dependencies just-in-time, defeating deny-by-default egress                                        | Network boundary         | Med × High          | Offline provisioning (§7) is a precondition; `GOPROXY=off`, `mvn -o`, `cargo --offline`, provisioned venv; boundary proof required.           |
+| M3b | Long-lived LSP process launch bypasses ADR-0043's single spawn boundary                                             | Command boundary         | Med × High          | Reuse `runCommand` wrapper/attestation/env allowlist, or land an ADR-0043 amendment with equivalent long-lived process controls before shipping. |
 | M4  | Heavy toolchain (Rust 1.5–2.5 GB) inflates footprint / startup, regressing budgets                                   | Performance / footprint  | Med × Med           | Operator-provisioned (not bundled); per-provider startup/memory budgets recorded (§9); large-file degradation reused.                         |
 | M5  | A new provider regresses the TS/JS path or another language                                                          | Architecture             | Low × High          | Per-language flag + isolated registry entry; cascade-free rollback (§5); TS/JS path untouched (AC1).                                          |
-| M6  | License incompatibility (EPL-2.0 for jdtls) in a regulated-delivery context                                          | Supply chain / legal     | Low × Med           | Invocation not redistribution (ADR-0021); per-language license review (D6.4); bundled npm surface stays MIT/permissive.                       |
+| M6  | Runtime toolchain provenance or license obligations are hidden by bundled-SBOM wording                               | Supply chain / legal     | Med × Med           | Bundled npm/workspace SBOM remains scoped to shipped packages; per-language runtime toolchain inventory records pinned versions, checksums/provenance, and license review. |
 | M7  | Retrieved/test context carries an injection payload into a future language test-gen prompt                           | Prompt injection (LLM08) | Med × High          | Reuse the existing untrusted-content handling and metadata-only evidence (#1211/#1206); deterministic LSP results are never model input.      |
 | M8  | `cargo` offline mode misses dev-dependencies, making Rust verification non-reproducible                              | Verification             | Med × Med           | `cargo vendor --versioned-dirs` + `--locked`; verify dev-deps captured; documented in the Rust stage's evidence.                              |
 
@@ -371,7 +390,7 @@ What the expansion reuses, so no parallel subsystem is created:
 | `keiko-server/src/editor/languageService.ts` + `keiko-contracts/src/language-service.ts`      | Provider registration; orchestration; sanitisation; bounds/cancellation        |
 | `keiko-server/src/editor/assuredPreFilterRunner.ts`                                           | Multi-language test pre-filter (build→pass→stability→coverage→mutation)        |
 | `keiko-verification/src/orchestrator.ts`                                                      | `networkEnforcement` modes; honest enforced-limit reporting                    |
-| `@oscharko-dev/keiko-sandbox`                                                                 | Enforced deny-by-default egress for index-time and test-time execution         |
+| `@oscharko-dev/keiko-sandbox`                                                                 | Enforced network and filesystem/environment boundary evidence for index-time and test-time execution |
 | `keiko-workflows/src/unit-tests/frontend.ts`                                                  | Convention-driven stack detection → `detectBackendStack` analog                |
 | `keiko-model-gateway/src/model-selection.ts`                                                  | Language-agnostic AI completion (unchanged; LSP results stay deterministic)    |
 | `keiko-server/src/editor/codingContextProviders.ts` + `keiko-contracts/src/coding-context.ts` | Server-side retrieval/context for any future test-gen (untrusted, tier-tagged) |
@@ -407,8 +426,9 @@ For the regulated-delivery posture, the multi-language plan preserves the existi
   test-time) is metadata-only-evidenced and human-reviewable; nothing is applied without explicit user
   action.
 - **DORA Reg. (EU) 2022/2554.** No new external network dependency at runtime (LSP servers
-  offline-deployable; `GOPROXY=off`/offline toolchains); supply-chain surface stays bundled-MIT;
-  enforced-egress isolation contains untrusted execution.
+  offline-deployable; `GOPROXY=off`/offline toolchains); the bundled npm/workspace supply-chain surface
+  stays governed separately from the operator runtime toolchain inventory; network plus filesystem/
+  environment isolation contains untrusted execution.
 - **BaFin BDAI principles (2021).** Deterministic-first (no model in the LSP path), explainable results,
   and a clear human-in-the-loop boundary are retained per language.
 
@@ -422,7 +442,7 @@ For the regulated-delivery posture, the multi-language plan preserves the existi
 | AC2 | Candidate language support ordered by risk, user value, dependency footprint, verification feasibility.                        | §3 (matrix) + §4 (scored order); ADR-0045 D4 |
 | AC3 | Each future language has a defined owner boundary and a clear rollback/disable path.                                           | §5; ADR-0045 D5                              |
 | AC4 | Plan documents which parts are LSP-based, Keiko-specific, and which require separate security review.                          | §6; ADR-0045 D5                              |
-| EV  | Per-future-language verification (fixtures, deterministic tests, lifecycle, dependency/license, sandbox/network, performance). | §10; ADR-0045 D6                             |
+| EV  | Per-future-language verification (fixtures, deterministic tests, lifecycle, dependency/license/runtime inventory, sandbox/network/filesystem/process boundary, performance). | §10; ADR-0045 D6                             |
 | SR  | Scheduling Rule: not on #1189 line; promote-to-epic or split-per-language; decoupled shell; deterministic-first.               | §14; ADR-0045 D7                             |
 
 ---
