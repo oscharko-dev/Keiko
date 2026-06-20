@@ -108,8 +108,11 @@ job**: `keiko-cli/src/prompt-enhancer.test.ts` asserted the prompt-enhancement e
 schema v1 (`peEvidenceSchemaVersion` 1, field `inputFingerprintSha256`), but #1314 shipped the v2
 manifest (`PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 2`, field `inputRedactedFingerprintSha256`).
 The assertions were aligned to the shipped v2 shape. This is a test-correctness fix that strengthens
-`ci`; it changes no production behaviour. It is recorded here for transparency and noted as a #1314
-follow-up below.
+`ci`; it changes no production behaviour. The v1→v2 manifest change (schema bump plus the
+`inputFingerprintSha256` → `inputRedactedFingerprintSha256` rename, reflecting that the input is stored
+as a redacted, truncated fingerprint) shipped in #1314; the store, schema validator, and
+`keiko-evidence` store tests already assert against the v2 constant, so only the CLI smoke test was
+stale. Recorded here for transparency.
 
 ## Known limitations
 
@@ -134,7 +137,14 @@ follow-up below.
 - Route safety-critical advice prompts to `requires-human-review` (emit the human-approval rule +
   least-privilege constraint for critical criticality in the planner/generator) instead of outright
   rejection — `keiko-model-gateway` planner `deriveSafetyPosture` / generator safety-rule construction.
-  Belongs to a #1310/#1313 follow-up, not #1315.
+  Generator changes belong to a #1310/#1313 follow-up; the eval only pins the current behaviour so it
+  cannot regress silently.
+- Critic grounding-readiness directive check (observation surfaced by the eval review). The #1312
+  critic's `scoreGroundingReadiness` checks only for the `stay-within-evidence` directive, so
+  open-evidence plans (hybrid / external-research, which emit `separate-known-from-retrieved`) cap at
+  4/5 on that dimension rather than 5/5. This is a minor scoring nuance, not a defect — candidates are
+  still ranked correctly. The evaluation scorer already accepts either evidence-boundary directive.
+  Aligning the critic is a #1312 follow-up.
 - Optional model-assisted LLM-as-judge evaluation stage and calibration study (post-MVP).
 - Close #1314's issue and complete its board fields so the epic can be formally closed.
 
