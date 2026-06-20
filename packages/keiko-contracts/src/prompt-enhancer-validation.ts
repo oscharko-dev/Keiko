@@ -11,9 +11,15 @@ import { stripUnsafeFormatChars } from "./text-safety.js";
 import {
   type ClarificationOrAssumption,
   type EnhancedPrompt,
+  type GroundingDirective,
   type GroundingPlan,
+  type GroundingSourcePolicy,
+  type GroundingStrategy,
+  type NoAnswerCondition,
   type PromptEnhancementRequest,
   type PromptTaskAnalysis,
+  type RagEvaluationHint,
+  type RecencyExpectation,
   CITATION_DISCIPLINES,
   CITATION_GRANULARITIES,
   CONTRADICTION_POLICIES,
@@ -40,6 +46,14 @@ import {
   RETRIEVAL_MODES,
   validatePromptEnhancerIdString,
 } from "./prompt-enhancer.js";
+import {
+  buildDirectives,
+  buildSourcePriority,
+  MULTI_SOURCE_STRATEGIES,
+  RAG_HINT_TEMPLATES,
+  RETRIEVAL_MODES_BY_STRATEGY,
+  SCOPED_EVIDENCE_STRATEGIES,
+} from "./prompt-enhancer-grounding.js";
 import {
   PROMPT_CRITIC_DIMENSIONS,
   isPromptCandidateRejectionReason,
@@ -141,6 +155,11 @@ const RECENCY_KEYS: ReadonlySet<string> = new Set([
 const RAG_HINT_KEYS: ReadonlySet<string> = new Set(["dimension", "instruction"]);
 const RAG_HINT_INSTRUCTION_MAX_CHARS = 400;
 
+interface ValidCitationShape {
+  readonly discipline: (typeof CITATION_DISCIPLINES)[number];
+  readonly granularity: (typeof CITATION_GRANULARITIES)[number];
+}
+
 const CLARIFICATION_TEMPLATES: Readonly<Record<string, string>> = {
   subject: "What specific subject or task should this prompt address?",
   scope: "Which part of the work should the task focus on?",
@@ -169,11 +188,17 @@ const isMember = <T extends string>(value: unknown, allowed: readonly T[]): valu
   typeof value === "string" && (allowed as readonly string[]).includes(value);
 
 // A bounded array whose every entry is a member of the allowed closed set.
-const isMemberArray = (value: unknown, allowed: readonly string[]): boolean =>
+const isMemberArray = (value: unknown, allowed: readonly string[]): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => isMember(item, allowed));
+
+const arraysEqual = <T>(actual: readonly T[], expected: readonly T[]): boolean =>
+  actual.length === expected.length && actual.every((entry, index) => entry === expected[index]);
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0;
 
 // A bounded, control-free string (TAB/LF/CR permitted via the text-safety policy). Rejects bidi /
 // zero-width / control code points and over-length values.
@@ -428,7 +453,7 @@ function isValidSourcePolicy(entry: unknown): boolean {
     isRecord(entry) &&
     Object.keys(entry).every((key) => SOURCE_POLICY_KEYS.has(key)) &&
     isMember(entry.source, GROUNDING_SOURCE_KINDS) &&
-    isNonNegativeInteger(entry.priority) &&
+    isPositiveInteger(entry.priority) &&
     typeof entry.required === "boolean"
   );
 }
@@ -488,6 +513,222 @@ function validateRagEvaluation(value: unknown, errors: string[]): void {
   }
 }
 
+function asGroundingStrategy(value: unknown): GroundingStrategy | undefined {
+  return isMember(value, GROUNDING_STRATEGIES) ? value : undefined;
+}
+
+function isValidSourcePriority(value: unknown): value is readonly GroundingSourcePolicy[] {
+  return Array.isArray(value) && value.every((entry) => isValidSourcePolicy(entry));
+}
+
+function sourcePoliciesEqual(
+  actual: GroundingSourcePolicy,
+  expected: GroundingSourcePolicy,
+): boolean {
+  return (
+    actual.source === expected.source &&
+    actual.priority === expected.priority &&
+    actual.required === expected.required
+  );
+}
+
+function isValidRecency(value: unknown): value is RecencyExpectation {
+  return (
+    isRecord(value) &&
+    typeof value.volatile === "boolean" &&
+    typeof value.requireAsOfDate === "boolean" &&
+    typeof value.flagPotentiallyStale === "boolean"
+  );
+}
+
+function isValidRagEvaluation(value: unknown): value is readonly RagEvaluationHint[] {
+  return Array.isArray(value) && value.every((entry) => isValidRagHint(entry));
+}
+
+function validateAllowedRetrievalModeSemantics(
+  value: unknown,
+  strategy: GroundingStrategy,
+  errors: string[],
+): void {
+  if (!isMemberArray(value, RETRIEVAL_MODES)) return;
+  if (!arraysEqual(value, RETRIEVAL_MODES_BY_STRATEGY[strategy])) {
+    errors.push("groundingPlan.allowedRetrievalModes must match the selected strategy");
+  }
+}
+
+function validateSourcePrioritySemantics(
+  value: unknown,
+  strategy: GroundingStrategy,
+  required: boolean,
+  errors: string[],
+): void {
+  if (!isValidSourcePriority(value)) return;
+  const expected = buildSourcePriority(strategy, required);
+  const matches = value.every((entry, index) => {
+    const expectedEntry = expected[index];
+    return expectedEntry === undefined ? false : sourcePoliciesEqual(entry, expectedEntry);
+  });
+  const uniquePriorities = new Set(value.map((entry) => entry.priority));
+  const uniqueSources = new Set(value.map((entry) => entry.source));
+  if (
+    value.length !== expected.length ||
+    !matches ||
+    uniquePriorities.size !== value.length ||
+    uniqueSources.size !== value.length
+  ) {
+    errors.push(
+      "groundingPlan.sourcePriority must match strategy ordering, 1-based priorities, and required-source rules",
+    );
+  }
+}
+
+function isValidCitationShape(value: unknown): value is ValidCitationShape {
+  return (
+    isRecord(value) &&
+    isMember(value.discipline, CITATION_DISCIPLINES) &&
+    isMember(value.granularity, CITATION_GRANULARITIES)
+  );
+}
+
+function validateNoGroundingCitationSemantics(
+  value: ValidCitationShape,
+  strategy: GroundingStrategy,
+  errors: string[],
+): void {
+  if (
+    strategy === "no-grounding" &&
+    (value.discipline !== "not-required" || value.granularity !== "none")
+  ) {
+    errors.push("groundingPlan.citation must be not-required/none for no-grounding plans");
+  }
+}
+
+function validateGroundedCitationSemantics(
+  value: ValidCitationShape,
+  strategy: GroundingStrategy,
+  errors: string[],
+): void {
+  if (strategy !== "no-grounding" && value.discipline === "not-required") {
+    errors.push("groundingPlan.citation.discipline cannot be not-required for grounded plans");
+  }
+}
+
+function validateCitationGranularitySemantics(value: ValidCitationShape, errors: string[]): void {
+  if (value.discipline === "best-effort" && value.granularity !== "per-section") {
+    errors.push("groundingPlan.citation.granularity must be per-section for best-effort citation");
+  }
+  if (
+    value.discipline !== "best-effort" &&
+    value.discipline !== "not-required" &&
+    value.granularity !== "per-claim"
+  ) {
+    errors.push("groundingPlan.citation.granularity must be per-claim when citations are required");
+  }
+}
+
+function validateCitationSemantics(
+  value: unknown,
+  strategy: GroundingStrategy,
+  errors: string[],
+): void {
+  if (!isValidCitationShape(value)) return;
+  validateNoGroundingCitationSemantics(value, strategy, errors);
+  validateGroundedCitationSemantics(value, strategy, errors);
+  validateCitationGranularitySemantics(value, errors);
+}
+
+function validateRecencySemantics(
+  value: unknown,
+  strategy: GroundingStrategy,
+  errors: string[],
+): void {
+  if (!isValidRecency(value)) return;
+  const expectedStaleFlag = value.volatile || strategy === "external-research-required";
+  if (
+    value.requireAsOfDate !== value.volatile ||
+    value.flagPotentiallyStale !== expectedStaleFlag
+  ) {
+    errors.push(
+      "groundingPlan.recency must pair volatile data with as-of dates and strategy-appropriate stale flags",
+    );
+  }
+}
+
+function expectedNoAnswerConditions(
+  strategy: GroundingStrategy,
+  recency: RecencyExpectation,
+): readonly NoAnswerCondition[] {
+  if (strategy === "no-grounding") {
+    return [];
+  }
+  const expected: NoAnswerCondition[] = ["insufficient-evidence"];
+  if (MULTI_SOURCE_STRATEGIES.has(strategy)) {
+    expected.push("contradictory-evidence");
+  }
+  if (SCOPED_EVIDENCE_STRATEGIES.has(strategy)) {
+    expected.push("outside-evidence-scope");
+  }
+  if (recency.volatile || strategy === "external-research-required") {
+    expected.push("stale-or-unavailable-current-data");
+  }
+  return expected;
+}
+
+function validateNoAnswerSemantics(
+  value: unknown,
+  recency: unknown,
+  strategy: GroundingStrategy,
+  errors: string[],
+): void {
+  if (!isMemberArray(value, NO_ANSWER_CONDITIONS) || !isValidRecency(recency)) return;
+  if (!arraysEqual(value, expectedNoAnswerConditions(strategy, recency))) {
+    errors.push("groundingPlan.noAnswerConditions must match strategy and recency requirements");
+  }
+}
+
+function validateDirectiveSemantics(
+  value: unknown,
+  strategy: GroundingStrategy,
+  required: boolean,
+  errors: string[],
+): void {
+  if (!isMemberArray(value, GROUNDING_DIRECTIVES)) return;
+  const expected: readonly GroundingDirective[] = buildDirectives(strategy, required);
+  if (!arraysEqual(value, expected)) {
+    errors.push("groundingPlan.directives must match the selected strategy and requirement level");
+  }
+}
+
+function validateRagEvaluationSemantics(value: unknown, errors: string[]): void {
+  if (!isValidRagEvaluation(value) || value.length === 0) return;
+  const matchesTemplates =
+    value.length === RAG_EVALUATION_DIMENSIONS.length &&
+    value.every((entry, index) => {
+      const dimension = RAG_EVALUATION_DIMENSIONS[index];
+      return (
+        dimension !== undefined &&
+        entry.dimension === dimension &&
+        entry.instruction === RAG_HINT_TEMPLATES[dimension]
+      );
+    });
+  if (!matchesTemplates) {
+    errors.push("groundingPlan.ragEvaluation must use the fixed RAG hint templates");
+  }
+}
+
+function validateGroundingPlanSemantics(value: Record<string, unknown>, errors: string[]): void {
+  const strategy = asGroundingStrategy(value.strategy);
+  const required = typeof value.required === "boolean" ? value.required : undefined;
+  if (strategy === undefined || required === undefined) return;
+  validateAllowedRetrievalModeSemantics(value.allowedRetrievalModes, strategy, errors);
+  validateSourcePrioritySemantics(value.sourcePriority, strategy, required, errors);
+  validateCitationSemantics(value.citation, strategy, errors);
+  validateRecencySemantics(value.recency, strategy, errors);
+  validateNoAnswerSemantics(value.noAnswerConditions, value.recency, strategy, errors);
+  validateDirectiveSemantics(value.directives, strategy, required, errors);
+  validateRagEvaluationSemantics(value.ragEvaluation, errors);
+}
+
 function collectGroundingPlanErrors(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("groundingPlan must be an object");
@@ -500,6 +741,7 @@ function collectGroundingPlanErrors(value: unknown, errors: string[]): void {
   validateCitation(value.citation, errors);
   validateRecency(value.recency, errors);
   validateRagEvaluation(value.ragEvaluation, errors);
+  validateGroundingPlanSemantics(value, errors);
 }
 
 export function validateGroundingPlan(input: unknown): PromptEnhancerValidation<GroundingPlan> {
