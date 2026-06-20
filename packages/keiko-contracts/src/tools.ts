@@ -8,9 +8,10 @@ import type { ToolDefinition } from "./gateway.js";
 
 // ─── Sandbox policy (the 5 documented, inspectable dimensions) ───────────────────
 
-// Wave 1 does NOT enforce OS-level network isolation (that needs the container layer,
-// deferred to a later wave per ADR-0006). `"inherit"` is the honest current value; a later
-// wave flips this to `"none"` when the isolation layer lands, WITHOUT changing consumers.
+// `"none"` is now OS/container-enforced: keiko-sandbox wraps a `network: "none"` run in a deny-by-
+// default egress boundary at the keiko-tools spawn boundary (ADR-0043), and a host that cannot enforce
+// it fails the command closed. `"inherit"` stays the default for the read-only command tools; a caller
+// that executes untrusted code opts into `"none"` explicitly, WITHOUT any consumer change.
 export type NetworkPolicy = "inherit" | "none";
 
 export interface SandboxPolicy {
