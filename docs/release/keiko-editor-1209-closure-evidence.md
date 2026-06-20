@@ -13,14 +13,14 @@ artifact.
 
 ## 1. Verdict
 
-**Ready for human-reviewed merge of `feat/keiko-editor` into the `release/0.2.0` line.** The v1 editor
-scope (#1190–#1201, #1205–#1208, #1210–#1212) is implemented, merged, and verified. The wave-2 items
-(#1202/#1203/#1204) and the multi-language expansion (#1213) are deferred with the dispositions
-recorded in §3 and §9. No release flow executes model-generated code. All deterministic gates that
-constitute the required `ci` check are green (§10); the browser-measured budgets are recorded in §7.
-The single remaining Definition-of-Done bullet — explicit human approval of the final merge into
-`release/0.2.0` — is intentionally left for the maintainer; the epic remains open until then
-(ADR-0042 D8).
+**Ready for corrective #1209 re-closure after the `codex/issue-1209-audit-release-evidence` PR lands
+green on `feat/keiko-editor`.** The v1 editor scope (#1190–#1201, #1205–#1208, #1210–#1212) remains
+implemented and verified. This corrective audit repairs the post-closure evidence gaps found after
+PR #1284: B2/B3 are enforced against shipped production static-export bytes, B4/B5/B6 are captured
+against the packaged UI path and hard-gated by Playwright, standalone `npm test` is part of the
+verification matrix, and the signature/closure wording is corrected. The wave-2 items
+(#1202/#1203/#1204) and the multi-language expansion (#1213) remain deferred with the dispositions
+recorded in §3 and §9. No release flow executes model-generated code.
 
 ## 2. How the evidence was gathered
 
@@ -29,8 +29,8 @@ The single remaining Definition-of-Done bullet — explicit human approval of th
 - Production bundle evidence (B1/B2/B3) measured against the `npm run build:ui` static export by the
   committed, unit-tested `scripts/editor-release-evidence.mjs` (§7).
 - Browser-measured evidence (B4/B5/B6/B11) and the runtime worker-load capture gathered against the
-  real app path (the dev-runner harness used by `tests/e2e/release-smoke.spec.ts`) by the committed
-  `tests/e2e/editor-performance.spec.ts` (`npm run test:e2e:editor-perf`), recorded in
+  packaged CLI serving the production static UI by the committed `tests/e2e/editor-performance.spec.ts`
+  and `playwright.editor-performance.config.ts` (`npm run test:e2e:editor-perf`), recorded in
   `docs/release/1209-perf-evidence.json` (§7).
 - Every security, FIM-governance, accessibility, and per-child claim below was re-verified against the
   live code on the PR head (file:line citations throughout); claims are not carried from prose alone.
@@ -129,67 +129,52 @@ Each control was re-verified against the PR head. (Threat-model memo:
 ## 7. Performance and memory release evidence (ADR-0042 D3.6)
 
 Two measurement surfaces: the **production static export** (B1/B2/B3, faithful production sizes) and
-the **real app path** (B4/B5/B6/B11, browser-measured). The browser figures come from the dev-runner
-(unminified webpack dev build) and are therefore **conservative upper bounds** — the production export
-is tree-shaken and minified with no on-demand compilation; the worker-load behaviour and memory
-disposal are bundler-independent.
+the **packaged UI path** (B4/B5/B6/B11, browser-measured through the built CLI serving
+`dist/ui/static`). B2/B3 pass/fail is based on shipped static-export bytes only; loaded-worker values
+are diagnostics and cannot override an oversized shipped bundle.
 
 | #   | Budget                                  | Threshold                | Measured                                                                                                   | Verdict                |
 | --- | --------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------- | ---------------------- |
 | B1  | Monaco/editor bytes in first-load JS    | 0 B                      | 0 markers across 11 first-load scripts                                                                     | PASS                   |
-| B2  | Lazy editor + Monaco runtime (loaded)   | ≤ 2.5 MB gzip            | **1085.5 KiB** loaded by a governed session (2721.5 KiB ships incl. unused workers)                        | PASS                   |
-| B3  | Per worker chunk (loaded)               | ≤ 750 KB gzip            | **108.5 KiB** (editor worker); TS worker 1373.8 KiB ships but is **not loaded**                            | PASS                   |
-| B4  | First-card open → interactive           | p50 ≤ 1.5 s, p95 ≤ 2.5 s | dev p50 1979 ms / p95 1981 ms (§7.2; conservative upper bound)                                             | PASS p95; p50 dev-only |
-| B5  | Per-keystroke main-thread work          | < 50 ms (no long task)   | 0 long tasks observed; async/debounced bridges + `@smoke` typing (§7.2)                                    | PASS                   |
-| B6  | Editor INP (completion enabled)         | ≤ 200 ms p75             | not captured in headless dev (Monaco EditContext); `@smoke` corroboration (§7.2)                           | §7.2                   |
+| B2  | Lazy editor + Monaco runtime (shipped)  | ≤ 2.5 MB gzip            | **1107.3 KiB** shipped by the production static export                                                     | PASS                   |
+| B3  | Per worker chunk (shipped)              | ≤ 750 KB gzip            | **107.8 KiB** largest shipped worker (`editor`)                                                            | PASS                   |
+| B4  | First-card open → interactive           | p50 ≤ 1.5 s, p95 ≤ 2.5 s | p50 **848 ms** / p95 **940 ms**                                                                            | PASS                   |
+| B5  | Per-keystroke main-thread work          | < 50 ms (no long task)   | captured; **0 ms** max long task                                                                           | PASS                   |
+| B6  | Editor INP (completion enabled)         | ≤ 200 ms p75             | captured via Event Timing; p75 **16 ms** / max **16 ms**                                                   | PASS                   |
 | B7  | Inline completion debounce / pacing     | 75 ms debounce           | Enforced in code (`DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS`); content-free p50/p95 telemetry route           | PASS                   |
 | B8  | Large file → degraded mode              | > 500 KB or > 10k lines  | `deriveLargeFileMode` (#1207); read-only + features omitted                                                | PASS                   |
 | B9  | Large file → too-large path (no Monaco) | > 1,000,000 bytes        | Server `413 FILE_TOO_LARGE`                                                                                | PASS                   |
 | B10 | Editor own-code footprint               | ≤ 96 KiB gzip            | ~67 KiB (gate `check:editor-bundle-size`)                                                                  | PASS                   |
-| B11 | Worker/model memory growth + residual   | ≤ 128 MiB / ≤ 16 MiB     | +0.0 MiB growth / +0.0 MiB residual over 2 cycles (§7.2) + deterministic `editor-memory-lifecycle.test.ts` | PASS                   |
+| B11 | Worker/model memory growth + residual   | ≤ 128 MiB / ≤ 16 MiB     | baseline/peak/residual all **27,600,000 B** over 2 cycles + deterministic `editor-memory-lifecycle.test.ts` | PASS                  |
 
 ### 7.1 Bundle inventory (production static export)
 
 `scripts/editor-release-evidence.mjs` (unit-tested, deterministic gzip level 9) classifies every
-Monaco/editor chunk in `packages/keiko-ui/out`. The five Monaco workers (gzip): **ts 1373.8 KiB**,
-**css 140.5 KiB**, **editor 108.5 KiB**, **html 91.6 KiB**, **json 22.1 KiB**. The keiko-ui host
-disables every built-in Monaco TypeScript/JavaScript language-service feature
-(`editorMonacoRuntime.ts:49` `setModeConfiguration(GOVERNED_LANGUAGE_SERVICE_MODE)`), so the
-TS/CSS/HTML/JSON language workers **ship in the export but are never instantiated** for a governed
-editor session — only the editor worker (diff/link/colour computers, 108.5 KiB) loads. This is why
-the loaded total (B2) and the largest loaded worker (B3) are comfortably within budget even though the
-TS-services worker alone exceeds the 750 KB per-worker figure when shipped. The full machine-readable
-inventory is `docs/release/1209-bundle-evidence.json`.
+Monaco/editor chunk in `packages/keiko-ui/out` and enforces B2/B3 against the shipped production
+static export. The governed v1 runtime imports Monaco's editor API entry point, selected basic
+language tokenizers, and only the editor worker factory. The shipped Monaco worker inventory is now
+editor-only: **107.8 KiB** and **107.7 KiB** editor-worker chunks; `disabledLanguageWorkers` is empty.
+The shipped lazy editor + Monaco runtime total is **1,133,887 B** (1107.3 KiB) against the
+**2,621,440 B** budget, and the largest shipped worker is **110,398 B** against the **768,000 B**
+budget. The full machine-readable inventory is `docs/release/1209-bundle-evidence.json`.
 
 ### 7.2 Browser-measured figures
 
-Measured against the real app path — the dev-runner harness (keiko-server BFF + Next.js) that
-`tests/e2e/release-smoke.spec.ts` uses — by `tests/e2e/editor-performance.spec.ts`
-(`npm run test:e2e:editor-perf`), recorded in `docs/release/1209-perf-evidence.json`. The dev-runner
-serves the **unminified webpack dev build**, so latency magnitudes are **conservative upper bounds**;
-the production static export (tree-shaken, minified, no on-demand compile) is faster.
+Measured against the packaged CLI serving the production static UI by
+`tests/e2e/editor-performance.spec.ts` and `playwright.editor-performance.config.ts`
+(`npm run test:e2e:editor-perf`), recorded in `docs/release/1209-perf-evidence.json`.
 
-- **B4 cold-start (open → interactive):** samples 1979 / 1978 / 1981 ms → p50 1979 ms, p95 1981 ms
-  (after one warmup). The p95 is within the 2.5 s budget even under the dev bundler; the p50 sits above
-  the 1.5 s target by dev-mode overhead only.
-- **Worker-load capture — the load-bearing browser proof for B2/B3:** across the cold-start and memory
-  cycles the browser instantiated the editor worker **7 times and never requested a TS, JSON, CSS, or
-  HTML language worker** (every request was `vs/editor/editor.worker.js`; `tsLanguageWorkerLoaded:
-false`). This empirically confirms the §7.1 "loaded" set — the governed editor session loads only the
-  editor worker, so the 1.37 MB TS-services worker ships but is never fetched.
-- **B11 worker/model memory:** `performance.memory` was available; over two open/close cycles the heap
-  showed **+0.0 MiB peak growth and +0.0 MiB residual** above a 272.8 MiB baseline — no measurable
-  growth, corroborating the deterministic disposal proof.
-- **B5 / B6 (per-keystroke main-thread work, INP):** no long task was observed during the typing
-  attempt (`maxLongTaskMs: 0`), but the per-interaction figures are recorded as **not captured** in
-  this run. Monaco 0.55.1 drives input through the browser **EditContext** surface
-  (`div.native-edit-context`, confirmed as the focused element) rather than a legacy textarea, which
-  Playwright's synthetic key events do not drive in the headless dev configuration; the harness reports
-  `captured: false` rather than a misleading `0 ms`. Keystroke responsiveness against the real app is
-  already proven by checked-in `@smoke` tests — `release-smoke.spec.ts` types into the editor, reports
-  the live cursor, and accepts inline ghost text — and by the architectural guarantee that the
-  keystroke path runs no model or retrieval work (async, debounced bridges; ADR-0042 D3.6/D5). The
-  committed harness captures the EditContext interactions in a headed or production-served run.
+- **B4 cold-start (open → interactive):** samples 940 / 845 / 848 ms → p50 848 ms, p95 940 ms (after
+  one warmup), passing both the 1.5 s p50 and 2.5 s p95 budgets.
+- **Worker-load capture — browser proof for the governed worker set:** three worker/script captures;
+  classified editor-worker chunks loaded, `editorWorkerLoaded:true`, `tsLanguageWorkerLoaded:false`,
+  and `languageWorkerLoaded:false`. The capture classifies static JS responses by Monaco worker
+  markers, so hash-named production chunks are covered.
+- **B11 worker/model memory:** `performance.memory` was available; baseline, peak, and residual heap
+  were all 27,600,000 B over two open/close cycles, corroborating the deterministic disposal proof.
+- **B5 / B6 (per-keystroke main-thread work, INP):** Playwright clicked Monaco, selected the buffer,
+  inserted text through keyboard APIs, and captured the interaction. B5 recorded 0 long tasks
+  (`maxLongTaskMs: 0`); B6 recorded 25 Event Timing entries with p75 16 ms and max 16 ms.
 
 ## 8. Accessibility sign-off references
 
@@ -223,38 +208,38 @@ Per the owner v1 scope decision (epic #1189) and ADR-0042 D7:
 
 ## 10. Verification command log summary
 
-Run on the PR head (`claude/issue-1209-release-evidence`), Node 22, mirroring the required `ci` job
-for a `feat/keiko-editor`-targeted PR. All commands exited 0:
+Run on the corrective PR branch (`codex/issue-1209-audit-release-evidence`), Node 22, before
+re-checking #1209 evidence rows. All commands exited 0:
 
 ```
-npm run build:packages                                   EXIT 0
-npm run typecheck                                         EXIT 0
-npm run lint                                             EXIT 0
-npm run arch:check                                       EXIT 0
-npm run arch:check:negative                              EXIT 0
-npm run check:version-consistency                        EXIT 0
-npm run check:qi-supply-chain                            EXIT 0
-npm run build:ui                                         EXIT 0
-npm run check:editor-bundle-size -- --require-static-export   EXIT 0   (B1, B10, Monaco 0.55.1 pin)
-npm --workspace @oscharko-dev/keiko-editor test          EXIT 0
-node scripts/editor-release-evidence.mjs --json          EXIT 0   (B1/B2/B3 — §7.1)
-npx vitest run scripts/__tests__/editor-release-evidence.test.mjs   EXIT 0   (12 tests)
-npm run test:e2e:editor-perf                             1 passed (38.7 s)   (B4 + B11 + worker capture — §7.2)
+npm run build:packages                                                    EXIT 0
+npm run typecheck                                                         EXIT 0
+npm run lint                                                              EXIT 0
+npm test                                                                  EXIT 0   (596 files; 9818 passed, 1 skipped)
+npm run arch:check                                                        EXIT 0   (1618 modules, 4148 dependencies)
+npm run arch:check:negative                                               EXIT 0   (42 fixtures fired as expected)
+npm run build:ui                                                          EXIT 0
+npm run check:editor-bundle-size -- --require-static-export               EXIT 0   (own-code gzip 68795 B / 98304 B; first-load isolation holds)
+node scripts/editor-release-evidence.mjs --json                           EXIT 0   (B1 PASS; B2 1107.3 KiB; B3 107.8 KiB)
+npx vitest run scripts/__tests__/editor-release-evidence.test.mjs packages/keiko-editor/src/monaco/workers.test.ts   EXIT 0   (2 files; 22 tests)
+npm --workspace @oscharko-dev/keiko-ui exec vitest run src/app/components/desktop/widgets/cards/editorMonacoRuntime.test.ts   EXIT 0   (1 file; 3 tests)
+npm --workspace @oscharko-dev/keiko-editor test                           EXIT 0   (46 files; 607 tests)
+npm run test:e2e:editor-perf                                              EXIT 0   (1 passed; B4/B5/B6/B11 and worker capture)
+npm run test:e2e:smoke                                                    EXIT 0   (7 passed)
+npm run check:editor-doc-links                                            EXIT 0   (12 files)
+npm run check:qi-supply-chain                                             EXIT 0   (18 matrix rows)
+npm audit --audit-level=high                                              EXIT 0   (0 vulnerabilities)
+npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui       EXIT 0   (0 vulnerabilities)
 ```
-
-For a `feat/keiko-editor`-targeted PR, the heavy `Coverage quality gates` and `Build, scan, SBOM,
-smoke` jobs are skipped by branch filter (run on push/merge); `check:package-surface` (which runs the
-bundle gate through the prepack chain) and the coverage ratchet therefore enforce post-merge.
 
 ## 11. Known limitations and follow-ups
 
-- **Browser latency figures are dev-build upper bounds.** A production-served Playwright harness (the
-  static export served with the keiko-server BFF) would tighten B4/B6 to production magnitudes;
-  dev-runner is the canonical e2e app path today. Tracked as a follow-up to the perf harness, not a
-  v1 acceptance gap.
-- **TS-services worker ships unused (1.37 MB gzip).** Governed services disable it at runtime, so it
-  is never fetched; a future optimization could drop the worker chunk from the export entirely.
-  Follow-up; not a v1 gate (B2/B3 pass on the loaded set).
+- **Browser release evidence now uses the packaged static UI path.** `npm run test:e2e:editor-perf`
+  builds the packages, prepares the CLI, builds the UI, serves `dist/ui/static` through `keiko ui`,
+  and hard-fails B4/B5/B6 budget breaches. This is the acceptance evidence for #1209.
+- **Multi-language Monaco workers are not shipped in v1.** The governed runtime ships the editor
+  worker only; TS/JS intelligence remains server-governed, and #1213 owns any future multi-language
+  worker expansion.
 - **#1195 and #1212 carry a stale `status: new` label** despite being closed/merged — label hygiene
   only.
 - **Wave-2 egress isolation (#1202/#1203/#1204)** is the headline follow-up: enforce deny-by-default
@@ -275,6 +260,17 @@ should:
 The epic #1189 remains **open** until that human merge completes. Keiko performs no autonomous merge
 into the protected release line.
 
+## 13. Corrective closure governance notes
+
+- The original #1209 closure was manual/project-governed after PR #1284 merged; it was not an
+  auto-close from a PR keyword.
+- PR #1284's head commit was GitHub SSH-verified. The resulting merge commit `7b1c70e9` on
+  `feat/keiko-editor` is GitHub verified PGP-signed; closure evidence must not describe that merge
+  commit as SSH-signed.
+- This corrective PR should use `Refs #1209`. After it lands with required checks green, #1209 is
+  re-closed manually only after the issue body checkboxes, labels, and ProjectV2 fields match the
+  evidence in this document and the posted closure comment.
+
 ---
 
-_Signed-off-by: Claude coordinator implementation team._
+_Signed-off-by: Codex coordinator audit team._

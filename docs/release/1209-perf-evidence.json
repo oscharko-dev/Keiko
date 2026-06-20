@@ -1,69 +1,63 @@
 {
-  "measuredAtIso": "2026-06-20T05:36:42.410Z",
-  "harness": "dev-runner (webpack dev build) via playwright.config.ts; conservative upper bound vs production",
+  "measuredAtIso": "2026-06-20T06:24:18.554Z",
+  "harness": "packaged CLI serving the production static UI via playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,
     "samples": [
-      1979,
-      1978,
-      1981
+      940,
+      845,
+      848
     ],
-    "p50": 1979,
-    "p95": 1981
+    "p50": 848,
+    "p95": 940
   },
   "b5KeystrokeMs": {
     "budgetMax": 50,
-    "captured": false,
+    "captured": true,
     "activeElement": "div.native-edit-context",
     "longTaskCount": 0,
     "maxLongTaskMs": 0
   },
   "b6InteractionMs": {
     "budgetP75": 200,
-    "captured": false,
-    "eventCount": 0,
-    "p75": 0,
-    "max": 0
+    "captured": true,
+    "source": "event-timing",
+    "eventCount": 25,
+    "interactionCount": 25,
+    "p75": 16,
+    "max": 16
   },
   "b11Memory": {
     "supported": true,
-    "baselineBytes": 286000000,
-    "peakBytes": 286000000,
-    "residualBytes": 286000000,
+    "baselineBytes": 27600000,
+    "peakBytes": 27600000,
+    "residualBytes": 27600000,
     "cycles": 2
   },
   "workerLoadCapture": {
-    "totalWorkerRequests": 7,
+    "totalWorkerRequests": 3,
+    "editorWorkerLoaded": true,
     "tsLanguageWorkerLoaded": false,
+    "languageWorkerLoaded": false,
     "requests": [
       {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
+        "url": "http://127.0.0.1:32183/_next/static/chunks/43ils02xq1hm1.js",
+        "resourceType": "script",
+        "workerLabel": "editor",
+        "captureReason": "classified-response"
       },
       {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
+        "url": "http://127.0.0.1:32183/_next/static/chunks/turbopack-worker-2gqdcwp7k90ea.js",
+        "resourceType": "script",
+        "workerLabel": "unknown",
+        "captureReason": "request-resource-or-url"
       },
       {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
-      },
-      {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
-      },
-      {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
-      },
-      {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
-      },
-      {
-        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
-        "resourceType": "script"
+        "url": "http://127.0.0.1:32183/_next/static/chunks/0oj6iz8mnbx8s.js",
+        "resourceType": "other",
+        "workerLabel": "editor",
+        "captureReason": "classified-response"
       }
     ]
   }

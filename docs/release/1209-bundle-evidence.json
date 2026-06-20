@@ -6,169 +6,65 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 2786794,
-    "loadedTotalBytes": 1111518,
+    "shipsTotalBytes": 1133887,
+    "loadedTotalBytes": 1133887,
     "ok": true,
-    "shipsOk": false
+    "shipsOk": true,
+    "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 1406795,
-    "largestWorkerLabel": "ts",
-    "largestLoadedWorkerBytes": 111138,
+    "largestWorkerBytes": 110398,
+    "largestWorkerLabel": "editor",
+    "largestLoadedWorkerBytes": 110398,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
-    "shipsOk": false
+    "shipsOk": true,
+    "loadedOk": true
   },
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 111138,
-      "path": "packages/keiko-ui/out/_next/static/chunks/0c8f51bgjw0m5.js"
-    },
-    {
-      "label": "css",
-      "gzipBytes": 143824,
-      "path": "packages/keiko-ui/out/_next/static/chunks/0rfgnninook6m.js"
-    },
-    {
-      "label": "json",
-      "gzipBytes": 22679,
-      "path": "packages/keiko-ui/out/_next/static/chunks/1008yamfukit7.js"
+      "gzipBytes": 110266,
+      "path": "packages/keiko-ui/out/_next/static/chunks/0oj6iz8mnbx8s.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 110271,
-      "path": "packages/keiko-ui/out/_next/static/chunks/1bxwb5on-11s1.js"
-    },
-    {
-      "label": "css",
-      "gzipBytes": 8145,
-      "path": "packages/keiko-ui/out/_next/static/chunks/2-3u4f6f2dxrl.js"
-    },
-    {
-      "label": "ts",
-      "gzipBytes": 1406795,
-      "path": "packages/keiko-ui/out/_next/static/chunks/2udnn0cidn7rd.js"
-    },
-    {
-      "label": "html",
-      "gzipBytes": 93833,
-      "path": "packages/keiko-ui/out/_next/static/chunks/3wdv1n7vcw9cc.js"
+      "gzipBytes": 110398,
+      "path": "packages/keiko-ui/out/_next/static/chunks/43ils02xq1hm1.js"
     }
   ],
-  "disabledLanguageWorkers": [
-    {
-      "label": "css",
-      "gzipBytes": 143824
-    },
-    {
-      "label": "json",
-      "gzipBytes": 22679
-    },
-    {
-      "label": "css",
-      "gzipBytes": 8145
-    },
-    {
-      "label": "ts",
-      "gzipBytes": 1406795
-    },
-    {
-      "label": "html",
-      "gzipBytes": 93833
-    }
-  ],
-  "editorRuntimeChunkCount": 15,
+  "disabledLanguageWorkers": [],
+  "editorRuntimeChunkCount": 5,
   "editorRuntimeChunks": [
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/2udnn0cidn7rd.js",
-      "gzipBytes": 1406795,
-      "rawBytes": 6665088,
-      "workerLabel": "ts"
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0uo6p16ta40vs.js",
-      "gzipBytes": 824655,
-      "rawBytes": 3378734,
+      "path": "packages/keiko-ui/out/_next/static/chunks/29350453epqhl.js",
+      "gzipBytes": 884136,
+      "rawBytes": 3615222,
       "workerLabel": null
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0rfgnninook6m.js",
-      "gzipBytes": 143824,
-      "rawBytes": 744541,
-      "workerLabel": "css"
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0c8f51bgjw0m5.js",
-      "gzipBytes": 111138,
-      "rawBytes": 362896,
+      "path": "packages/keiko-ui/out/_next/static/chunks/43ils02xq1hm1.js",
+      "gzipBytes": 110398,
+      "rawBytes": 362942,
       "workerLabel": "editor"
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/1bxwb5on-11s1.js",
-      "gzipBytes": 110271,
-      "rawBytes": 362896,
+      "path": "packages/keiko-ui/out/_next/static/chunks/0oj6iz8mnbx8s.js",
+      "gzipBytes": 110266,
+      "rawBytes": 362942,
       "workerLabel": "editor"
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/3wdv1n7vcw9cc.js",
-      "gzipBytes": 93833,
-      "rawBytes": 406357,
-      "workerLabel": "html"
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0o0md-30l-oui.js",
-      "gzipBytes": 30015,
-      "rawBytes": 117271,
+      "path": "packages/keiko-ui/out/_next/static/chunks/1c7eg9jvw1s-i.js",
+      "gzipBytes": 16685,
+      "rawBytes": 50363,
       "workerLabel": null
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/1008yamfukit7.js",
-      "gzipBytes": 22679,
-      "rawBytes": 84510,
-      "workerLabel": "json"
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/3_-knskym866k.js",
-      "gzipBytes": 11777,
-      "rawBytes": 39332,
-      "workerLabel": null
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/2-3u4f6f2dxrl.js",
-      "gzipBytes": 8145,
-      "rawBytes": 29195,
-      "workerLabel": "css"
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0j-3gf_jpx8vq.js",
-      "gzipBytes": 7317,
-      "rawBytes": 25055,
-      "workerLabel": null
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/1hu0-yn7a2hl7.js",
-      "gzipBytes": 6786,
-      "rawBytes": 19340,
-      "workerLabel": null
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0yoz4dfy1paoa.js",
-      "gzipBytes": 6458,
-      "rawBytes": 23405,
-      "workerLabel": null
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/1bch0lzf2jhte.js",
-      "gzipBytes": 1610,
-      "rawBytes": 5162,
-      "workerLabel": null
-    },
-    {
-      "path": "packages/keiko-ui/out/_next/static/chunks/3rcxnxkqe56aj.js",
-      "gzipBytes": 1491,
-      "rawBytes": 4462,
+      "path": "packages/keiko-ui/out/_next/static/chunks/35s_u8205h3r5.js",
+      "gzipBytes": 12402,
+      "rawBytes": 36086,
       "workerLabel": null
     }
   ]
