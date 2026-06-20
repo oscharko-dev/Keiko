@@ -51,12 +51,33 @@ interface PdfLoadingTaskLike {
   readonly promise: Promise<PdfDocumentLike>;
 }
 
+export interface PdfDocumentSource {
+  readonly totalBytes: number;
+  readonly loadFullBuffer?: () => Promise<Uint8Array>;
+  readonly readWindow?: (startByte: number, length: number) => Promise<Uint8Array>;
+}
+
+interface PdfRangeTransportInstance {
+  readonly onDataRange: (begin: number, chunk: Uint8Array) => void;
+}
+
+type PdfDataRangeTransportCtor = new (
+  length: number,
+  initialData?: Uint8Array,
+  progressiveDone?: boolean,
+) => PdfRangeTransportInstance;
+
 interface PdfJsModule {
   readonly getDocument: (params: {
-    readonly data: Uint8Array;
+    readonly data?: Uint8Array;
+    readonly range?: PdfRangeTransportInstance;
+    readonly rangeChunkSize?: number;
+    readonly disableAutoFetch?: boolean;
+    readonly disableStream?: boolean;
     readonly useWorkerFetch: false;
     readonly verbosity: 0;
   }) => PdfLoadingTaskLike;
+  readonly PDFDataRangeTransport: PdfDataRangeTransportCtor;
 }
 
 function pdfMatrixValue(
@@ -252,6 +273,54 @@ export async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLik
   const pdfjs = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfJsModule;
   const task = pdfjs.getDocument({
     data: bytes,
+    useWorkerFetch: false,
+    verbosity: 0,
+  });
+  return task.promise;
+}
+
+const PDF_RANGE_CHUNK_BYTES = 256 * 1024;
+
+function createRangeTransport(
+  Transport: PdfDataRangeTransportCtor,
+  source: Required<Pick<PdfDocumentSource, "totalBytes" | "readWindow">>,
+): PdfRangeTransportInstance {
+  class WorkspacePdfRangeTransport extends Transport {
+    requestDataRange(begin: number, end: number): void {
+      const start = Math.max(0, Math.floor(begin));
+      const length = Math.max(0, Math.floor(end) - start);
+      void source
+        .readWindow(start, length)
+        .then((chunk) => {
+          this.onDataRange(start, chunk);
+        })
+        .catch(() => {
+          this.onDataRange(start, new Uint8Array(0));
+        });
+    }
+  }
+  return new WorkspacePdfRangeTransport(source.totalBytes, new Uint8Array(0), false);
+}
+
+export async function loadPdfDocumentFromSource(
+  source: PdfDocumentSource,
+): Promise<PdfDocumentLike> {
+  if (source.loadFullBuffer !== undefined) {
+    return loadPdfDocument(await source.loadFullBuffer());
+  }
+  if (source.readWindow === undefined) {
+    throw new Error("pdf source does not support range reads");
+  }
+  installPdfTextExtractionDomPolyfills();
+  const pdfjs = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfJsModule;
+  const task = pdfjs.getDocument({
+    range: createRangeTransport(pdfjs.PDFDataRangeTransport, {
+      totalBytes: source.totalBytes,
+      readWindow: source.readWindow,
+    }),
+    rangeChunkSize: PDF_RANGE_CHUNK_BYTES,
+    disableAutoFetch: true,
+    disableStream: true,
     useWorkerFetch: false,
     verbosity: 0,
   });

@@ -63,5 +63,10 @@ export default tseslint.config(
       "@typescript-eslint/explicit-function-return-type": "off",
     },
   },
+  {
+    files: ["tests/e2e/fixtures/*.js"],
+    languageOptions: { globals: { Buffer: "readonly", process: "readonly" } },
+    rules: { "@typescript-eslint/explicit-function-return-type": "off" },
+  },
   prettier,
 );

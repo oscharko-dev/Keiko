@@ -96,6 +96,8 @@ const INSERT_DOCUMENT_TEXT_WINDOW_SQL = [
 
 const DELETE_DOCUMENT_TEXT_WINDOWS_SQL =
   "DELETE FROM document_text_windows WHERE capsule_id = :c AND document_id = :d";
+const DELETE_EXTRACTION_CHECKPOINT_SQL =
+  "DELETE FROM extraction_checkpoints WHERE capsule_id = :c AND document_id = :d";
 
 // SQLite SUBSTR is 1-indexed; a document-relative char offset `s` maps to SUBSTR position `s + 1`.
 const SELECT_DOCUMENT_TEXT_SPAN_SQL =
@@ -143,6 +145,7 @@ interface DiscoveryStatements {
   readonly selectDocumentText: GetStatement;
   readonly insertDocumentTextWindow: RunStatement;
   readonly deleteDocumentTextWindows: RunStatement;
+  readonly deleteExtractionCheckpoint: RunStatement;
   readonly selectDocumentTextSpan: GetStatement;
   readonly selectDocumentTextWindowSpan: GetStatement;
   readonly selectDocumentsForSource: {
@@ -173,6 +176,7 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
     insertDocumentTextWindow: db.prepare(INSERT_DOCUMENT_TEXT_WINDOW_SQL) as RunStatement,
     deleteDocumentTextWindows: db.prepare(DELETE_DOCUMENT_TEXT_WINDOWS_SQL) as RunStatement,
+    deleteExtractionCheckpoint: db.prepare(DELETE_EXTRACTION_CHECKPOINT_SQL) as RunStatement,
     selectDocumentTextSpan: db.prepare(SELECT_DOCUMENT_TEXT_SPAN_SQL) as GetStatement,
     selectDocumentTextWindowSpan: db.prepare(SELECT_DOCUMENT_TEXT_WINDOW_SPAN_SQL) as GetStatement,
     selectDocumentsForSource: db.prepare(SELECT_DOCUMENTS_FOR_SOURCE_SQL) as {
@@ -223,6 +227,7 @@ export function deleteDependentRows(
   const params = { c: capsuleId, d: documentId };
   statements(db).deleteDocumentText.run(params);
   statements(db).deleteDocumentTextWindows.run(params);
+  statements(db).deleteExtractionCheckpoint.run(params);
   statements(db).deletePages.run(params);
   statements(db).deleteSections.run(params);
   statements(db).deleteParsedUnits.run(params);
@@ -344,6 +349,7 @@ export function deleteDocumentRow(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): void {
+  deleteDependentRows(db, capsuleId, documentId);
   statements(db).deleteDocument.run({ c: capsuleId, d: documentId });
 }
 

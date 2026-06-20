@@ -51,12 +51,14 @@ describe("checkArchitectureImportPolicy", () => {
     writeText(root, "packages/keiko-tools/src/fs.ts", 'import { readFileSync } from "node:fs";\n');
     writeText(root, "packages/keiko-harness/src/patch.ts", 'const fs = require("fs/promises");\n');
     writeText(root, "src/workflows/provider.ts", 'await import("@anthropic-ai/sdk");\n');
+    writeText(root, "packages/keiko-local-knowledge/src/egress.ts", "await fetch(url);\n");
 
     const violations = await checkArchitectureImportPolicy(root);
     expect(violations.map((violation) => violation.rule).sort()).toEqual([
       "adr-0019-trust-1-provider-sdk-isolation",
       "adr-0019-trust-4-no-direct-fs-outside-workspace",
       "adr-0019-trust-5-patch-routes-through-tools",
+      "adr-0019-trust-9-local-knowledge-no-egress",
     ]);
   });
 
@@ -69,6 +71,7 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0019-trust-1-provider-sdk-isolation": 1,
       "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
       "adr-0019-trust-5-patch-routes-through-tools": 1,
+      "adr-0019-trust-9-local-knowledge-no-egress": 1,
     });
   });
 });

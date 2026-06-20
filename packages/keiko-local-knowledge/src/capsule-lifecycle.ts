@@ -99,6 +99,8 @@ const DELETE_VERIFICATION_TABLES = [
   "capsule_set_members",
   "documents",
   "document_texts",
+  "document_text_windows",
+  "extraction_checkpoints",
   "pages",
   "sections",
   "parsed_units",

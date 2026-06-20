@@ -1,4 +1,5 @@
 import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type {
   DocumentId,
   KnowledgeCapsuleId,
@@ -55,6 +56,32 @@ let cleanup: () => void;
 let source: KnowledgeSource;
 const capsuleId = "cap-prog" as KnowledgeCapsuleId;
 
+function countByteReads(fs: WorkspaceFs): {
+  readonly fs: WorkspaceFs;
+  readonly readFileBytes: () => number;
+  readonly readFileRange: () => number;
+} {
+  let readFileBytesCount = 0;
+  let readFileRangeCount = 0;
+  return {
+    fs: {
+      ...fs,
+      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        readFileBytesCount += 1;
+        if (fs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
+        return fs.readFileBytes(absolutePath, maxBytes);
+      },
+      readFileRange: async (absolutePath, startByte, length): Promise<Uint8Array> => {
+        readFileRangeCount += 1;
+        if (fs.readFileRange === undefined) throw new Error("readFileRange unavailable");
+        return fs.readFileRange(absolutePath, startByte, length);
+      },
+    },
+    readFileBytes: () => readFileBytesCount,
+    readFileRange: () => readFileRangeCount,
+  };
+}
+
 beforeEach(() => {
   const fresh = freshStore();
   store = fresh.store;
@@ -81,10 +108,10 @@ describe("extractDocument — progressive large-document path", () => {
     const totalPages = 6;
     const pageChars = 8;
     const content = syntheticDoc(totalPages, pageChars);
-    const fs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);
+    const counted = countByteReads(memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]));
     const result = await extractDocument(
       {
-        fs,
+        fs: counted.fs,
         store,
         parserRegistry: createDefaultParserRegistry(),
         largeDocumentPolicy: policy(),
@@ -97,6 +124,8 @@ describe("extractDocument — progressive large-document path", () => {
     );
 
     expect(result.outcome.kind).toBe("persisted");
+    expect(counted.readFileBytes()).toBe(0);
+    expect(counted.readFileRange()).toBeGreaterThan(0);
     if (result.outcome.kind !== "persisted") return;
     expect(result.outcome.document.status).toBe("extracted");
     expect(result.outcome.document.parser.parserId).toBe("progressive-pdf");
@@ -168,13 +197,13 @@ describe("extractDocument — progressive large-document path", () => {
 
   it("rejects an oversized file before reading bytes", async () => {
     const content = syntheticDoc(4, 8);
-    const fs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);
+    const counted = countByteReads(memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]));
     const result = await extractDocument(
       {
-        fs,
+        fs: counted.fs,
         store,
         parserRegistry: createDefaultParserRegistry(),
-        largeDocumentPolicy: policy(),
+        largeDocumentPolicy: policy({ maxRawFileBytes: 4, largeFileThresholdBytes: 4 }),
         progressiveExtractors: [
           syntheticProgressiveExtractor({ totalPages: 4, pageChars: 8, pagesPerWindow: 2 }),
         ],
@@ -190,6 +219,8 @@ describe("extractDocument — progressive large-document path", () => {
     if (result.outcome.kind === "failed") {
       expect(result.outcome.error.code).toBe("OVERSIZED_FILE");
     }
+    expect(counted.readFileBytes()).toBe(0);
+    expect(counted.readFileRange()).toBe(0);
   });
 
   it("emits a stable CONVERTER_UNAVAILABLE diagnostic for legacy .doc files", async () => {
@@ -247,17 +278,21 @@ function makeWindow(
   };
 }
 
-function cancellingExtractor(controller: AbortController): ProgressiveExtractor {
+function cancellingExtractor(
+  controller: AbortController,
+  firstText = "AAAAAAAA",
+  parserVersion = "cancel-test@1",
+): ProgressiveExtractor {
   return {
     strategyId: "progressive-pdf",
-    parserVersion: "cancel-test@1",
+    parserVersion,
     matches: (input) => input.extension === "synthetic",
     extractWindows: async function* (
       _source,
       options: ProgressiveExtractionOptions,
     ): AsyncIterable<ProgressiveExtractionWindow> {
       await Promise.resolve();
-      yield makeWindow(options.documentId, 0, 1, "AAAAAAAA");
+      yield makeWindow(options.documentId, 0, 1, firstText);
       controller.abort();
       yield makeWindow(options.documentId, 1, 2, "BBBBBBBB");
     },
@@ -298,5 +333,61 @@ describe("extractDocument — progressive cancellation", () => {
       )
       .get({ c: capsuleId, d: String(documentId) }) as { phase: string } | undefined;
     expect(checkpoint?.phase).toBe("cancelled");
+  });
+
+  it("resumes a compatible extraction checkpoint without duplicating windows or pages", async () => {
+    const content = syntheticDoc(2, 8);
+    const fs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);
+    const parserVersion = "resume-test@1";
+    const controller = new AbortController();
+    const params = {
+      capsuleId,
+      source,
+      file: { relativePath: "big.synthetic", sizeBytes: content.length },
+    };
+    await extractDocument(
+      {
+        fs,
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: policy(),
+        progressiveExtractors: [
+          cancellingExtractor(controller, content.slice(0, 8), parserVersion),
+        ],
+      },
+      { ...params, parserOptions: buildParserOptions({ signal: controller.signal }) },
+    );
+
+    const resumed = await extractDocument(
+      {
+        fs,
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: policy(),
+        progressiveExtractors: [
+          syntheticProgressiveExtractor(
+            { totalPages: 2, pageChars: 8, pagesPerWindow: 1 },
+            parserVersion,
+          ),
+        ],
+      },
+      params,
+    );
+    expect(resumed.outcome.kind).toBe("persisted");
+    const documentId = documentIdFor({
+      capsuleId,
+      sourceId: source.id,
+      relativePath: "big.synthetic",
+    });
+    expect(count(store, "document_text_windows", documentId)).toBe(2);
+    expect(count(store, "pages", documentId)).toBe(2);
+    const checkpoint = store._internal.db
+      .prepare(
+        "SELECT phase, page_cursor, retry_count FROM extraction_checkpoints WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: String(documentId) }) as
+      | { phase: string; page_cursor: number; retry_count: number }
+      | undefined;
+    expect(checkpoint).toMatchObject({ phase: "extracted", page_cursor: 2, retry_count: 1 });
   });
 });

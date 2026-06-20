@@ -66,6 +66,7 @@ const env = loadLocalKeikoEnv({
   KEIKO_UI_DATA_DIR: process.env.KEIKO_UI_DATA_DIR ?? join(stateDir, "ui"),
   KEIKO_MEMORY_DIR: process.env.KEIKO_MEMORY_DIR ?? join(stateDir, "memory"),
 });
+const initialProjectPath = env.KEIKO_INITIAL_PROJECT_PATH ?? repoRoot;
 
 const server = createUiServer({
   staticRoot,
@@ -76,7 +77,7 @@ const server = createUiServer({
     evidenceDir: env.KEIKO_EVIDENCE_DIR,
     uiDbPath: env.KEIKO_UI_DB,
     env,
-    initialProjectPath: repoRoot,
+    initialProjectPath,
   }),
 });
 

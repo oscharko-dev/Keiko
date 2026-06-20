@@ -131,7 +131,7 @@ describe("createProgressivePdfExtractor", () => {
 
     // The job still completes; the empty page is skipped with a quality warning, not a failure.
     expect(summary.pageCount).toBe(2);
-    expect(summary.coverage).toBe("complete");
+    expect(summary.coverage).toBe("partial");
     expect(summary.diagnostics.some((d) => d.code === "OCR_CAPABILITY_UNAVAILABLE")).toBe(true);
     expect(summary.diagnostics.every((d) => d.severity !== "error")).toBe(true);
   });
@@ -150,7 +150,7 @@ describe("createProgressivePdfExtractor", () => {
       options(2, { resumeFromPage: 2, resumeCharacterStart: endOfPage2 }),
       sink,
     );
-    expect(summary.pageCount).toBe(2);
+    expect(summary.pageCount).toBe(4);
     const fullText = pages.join("\n\n");
     for (const w of sink.windows) {
       for (const page of w.pages) {
@@ -161,17 +161,27 @@ describe("createProgressivePdfExtractor", () => {
     }
   });
 
-  it("emits nothing when the source cannot provide a full buffer", async () => {
+  it("opens range-only sources without requiring a full buffer", async () => {
+    let sawRangeRead = false;
     const extractor = createProgressivePdfExtractor({
-      loadDocument: () => Promise.resolve(fakePdf(["x"])),
+      loadDocument: async (source) => {
+        expect(source.loadFullBuffer).toBeUndefined();
+        const bytes = await source.readWindow?.(0, 4);
+        sawRangeRead = bytes?.byteLength === 4;
+        return fakePdf(["x"]);
+      },
     });
-    const streamingOnly: ProgressiveExtractionSource = { totalBytes: 4 };
+    const streamingOnly: ProgressiveExtractionSource = {
+      totalBytes: 4,
+      readWindow: (_start, length) => Promise.resolve(new Uint8Array(length)),
+    };
     const summary = await runProgressiveExtraction(
       extractor,
       streamingOnly,
       options(2),
       collectingSink(),
     );
-    expect(summary.pageCount).toBe(0);
+    expect(summary.pageCount).toBe(1);
+    expect(sawRangeRead).toBe(true);
   });
 });

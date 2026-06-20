@@ -1,11 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 
+const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_LK_E2E_UI_PORT ?? "42183");
 const bffPort = Number(process.env.KEIKO_LK_E2E_BFF_PORT ?? "42184");
 const nextPort = Number(process.env.KEIKO_LK_E2E_NEXT_PORT ?? "42185");
 const corpusRoot =
   process.env.KEIKO_LK_E2E_CORPUS ?? "/Users/oscharko-dev/Keiko-Test-Data/Local-Knowledge-E2E";
+const corpusDataRoot = join(corpusRoot, "fixtures");
 const stateDir = process.env.KEIKO_LK_E2E_STATE_DIR ?? join(corpusRoot, "state");
 
 export default defineConfig({
@@ -30,7 +32,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run build:packages && node scripts/dev-runner.mjs",
+    command: "npm run build:packages && node tests/e2e/fixtures/local-knowledge-e2e-server.js",
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,
     timeout: 180_000,
@@ -43,6 +45,15 @@ export default defineConfig({
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
+      KEIKO_INITIAL_PROJECT_PATH: corpusDataRoot,
+      KEIKO_CONFIG_FILE: join(
+        root,
+        "tests",
+        "e2e",
+        "fixtures",
+        "keiko.local-knowledge.e2e.config.json",
+      ),
+      KEIKO_LK_E2E_MOCK_GATEWAY_PORT: "42186",
       // Issue #1286: drive the bounded large-document path for any PDF so the regression exercises
       // progressive extraction + bounded chunk/embed + the large-document health UI without needing
       // a multi-hundred-MiB binary fixture.

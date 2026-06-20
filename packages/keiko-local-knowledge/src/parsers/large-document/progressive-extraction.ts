@@ -67,6 +67,9 @@ export interface ProgressiveExtractionOptions {
   // recorded character offset so document-relative offsets stay aligned.
   readonly resumeFromPage?: number;
   readonly resumeCharacterStart?: number;
+  readonly resumeWindowIndex?: number;
+  readonly resumeObjectCursor?: number;
+  readonly resumeExtractedTextBytes?: number;
 }
 
 // ─── Extractor ────────────────────────────────────────────────────────────────
@@ -137,6 +140,12 @@ function limitStop(
   if (state.extractedTextBytes + utf8ByteLength(window.text) > policy.maxExtractedTextBytes) {
     return "extracted-text-limit";
   }
+  if (
+    state.extractedTextBytes + utf8ByteLength(window.text) >
+    policy.maxPersistedStorageGrowthBytes
+  ) {
+    return "extracted-text-limit";
+  }
   if (window.objectCursor > policy.maxParserObjects) return "object-limit";
   if (state.pageCount + window.pages.length > policy.maxParserUnits) return "unit-limit";
   return undefined;
@@ -169,12 +178,34 @@ function stopDiagnostic(
   }
 }
 
-function coverageFor(stopReason: ProgressiveStopReason, pageCount: number): CoverageQuality {
+function hasPartialCoverageWarning(diagnostics: readonly ParserDiagnostic[]): boolean {
+  return diagnostics.some(
+    (diagnostic) =>
+      diagnostic.severity !== "info" &&
+      (diagnostic.code === LARGE_DOCUMENT_DIAGNOSTIC_CODES.PARTIAL_COVERAGE ||
+        diagnostic.code === LARGE_DOCUMENT_DIAGNOSTIC_CODES.OCR_CAPABILITY_UNAVAILABLE ||
+        diagnostic.code === LARGE_DOCUMENT_DIAGNOSTIC_CODES.MULTIMODAL_CAPABILITY_UNAVAILABLE),
+  );
+}
+
+function coverageFor(
+  stopReason: ProgressiveStopReason,
+  pageCount: number,
+  diagnostics: readonly ParserDiagnostic[],
+): CoverageQuality {
   if (pageCount === 0) return "none";
+  if (hasPartialCoverageWarning(diagnostics)) return "partial";
   if (stopReason === "completed") return "complete";
   if (stopReason === "cancelled") return "partial";
   // A resource/timeout stop means useful text was indexed but the document was truncated.
   return "partial";
+}
+
+function appendDiagnostics(
+  target: ParserDiagnostic[],
+  diagnostics: readonly ParserDiagnostic[],
+): void {
+  target.push(...diagnostics);
 }
 
 // Pulls windows one at a time, enforces the resource policy between windows, and flushes each
@@ -189,10 +220,10 @@ export async function runProgressiveExtraction(
   const startedAt = options.now();
   const diagnostics: ParserDiagnostic[] = [];
   const state: DriveState = {
-    pageCount: 0,
-    windowCount: 0,
-    extractedTextBytes: utf8ByteLength(""),
-    objectCursor: 0,
+    pageCount: options.resumeFromPage ?? 0,
+    windowCount: options.resumeWindowIndex ?? 0,
+    extractedTextBytes: options.resumeExtractedTextBytes ?? utf8ByteLength(""),
+    objectCursor: options.resumeObjectCursor ?? 0,
     lastPageNumber: options.resumeFromPage ?? 0,
   };
   let stopReason: ProgressiveStopReason = "completed";
@@ -203,9 +234,7 @@ export async function runProgressiveExtraction(
       stopReason = stop;
       break;
     }
-    if (window.diagnostics.length > 0) {
-      diagnostics.push(...window.diagnostics);
-    }
+    appendDiagnostics(diagnostics, window.diagnostics);
     state.pageCount += window.pages.length;
     state.windowCount += 1;
     state.extractedTextBytes += utf8ByteLength(window.text);
@@ -232,6 +261,6 @@ export async function runProgressiveExtraction(
     lastPageNumber: state.lastPageNumber,
     diagnostics,
     stopReason,
-    coverage: coverageFor(stopReason, state.pageCount),
+    coverage: coverageFor(stopReason, state.pageCount, diagnostics),
   };
 }
