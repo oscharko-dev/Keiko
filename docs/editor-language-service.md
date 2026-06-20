@@ -74,10 +74,12 @@ so it is present in the published closure (the root uses `bundleDependencies`, w
 package's third-party dependencies — ADR-0021 D1). The compiler runs server-side only, model-free and
 offline.
 
-### Staged expansion to other languages (#1213)
+### Staged expansion to other languages (#1213, governed by ADR-0045)
 
 Deep deterministic intelligence for additional languages is a **staged expansion**, not part of the
-first release, and is tracked by [#1213](https://github.com/oscharko-dev/Keiko/issues/1213). Each
+first release, tracked by [#1213](https://github.com/oscharko-dev/Keiko/issues/1213) and governed by
+[ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md) with its companion
+[architecture blueprint](planning/keiko-editor-multi-language-expansion.md). Each
 language attaches as a new provider over its standard Language Server Protocol (LSP 3.17) server,
 bridged through the out-of-process LSP path the epic already flags for dependency review
 (`monaco-languageclient` or an out-of-process LSP host):
@@ -94,3 +96,7 @@ provider registration. Monaco already provides multi-language syntax highlightin
 ([#1193](https://github.com/oscharko-dev/Keiko/issues/1193)), and AI completion is language-agnostic
 through the Model Gateway
 ([#1199](https://github.com/oscharko-dev/Keiko/issues/1199)/[#1200](https://github.com/oscharko-dev/Keiko/issues/1200)).
+The LSP bridge architecture (server-side, not browser-side), the provider-registration boundary, the
+per-language security model, and the dependency-decision record are detailed in
+[ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md) and the companion
+[architecture blueprint](planning/keiko-editor-multi-language-expansion.md).
