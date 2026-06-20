@@ -23,6 +23,7 @@ describe("keiko-sandbox barrel", () => {
     if (decision.kind === "wrapped") {
       expect(decision.command).toBe("sandbox-exec");
       expect(decision.attestation.networkEnforced).toBe(true);
+      expect(decision.attestation.filesystemEnforced).toBe(false);
     }
   });
 });

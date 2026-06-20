@@ -153,6 +153,29 @@ module.exports = {
       },
     },
     {
+      name: "adr-0043-sandbox-only-contracts",
+      comment:
+        "ADR-0043 sandbox boundary: keiko-sandbox is a near-leaf package that may depend only " +
+        "on keiko-contracts and Node pure/system probes. It owns wrapper planning and backend " +
+        "selection, never the keiko-tools spawn boundary or server orchestration. Also fires on " +
+        "tests/architecture/fixtures/sandbox/ so scripts/arch-check-negative.mjs proves the " +
+        "boundary live.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-sandbox/src/|tests/architecture/fixtures/sandbox/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|sandbox)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|sandbox)|" +
+          "@oscharko-dev/keiko-(?!contracts|sandbox)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli|server)|" +
+          siblingPackageSourcePattern(["contracts"]) +
+          ")",
+      },
+    },
+    {
       name: "adr-0019-direction-3a-model-gateway-only-contracts-security",
       comment:
         "ADR-0019 direction rule 3 (model-gateway boundary): keiko-model-gateway may depend only " +

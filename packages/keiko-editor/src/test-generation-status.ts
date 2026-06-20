@@ -125,9 +125,36 @@ const STATIC_STATUS: Readonly<Record<TestGenerationFlowState["kind"], string>> =
 };
 
 const ASSURED_PREVIEW_STATUS =
-  "Generated tests passed the assured pre-filter (build, pass, stability, coverage, mutation) — review before applying.";
+  "Generated tests passed the assured pre-filter (build, pass, stability, coverage, mutation); review before applying.";
 const UNVERIFIED_PREVIEW_STATUS =
   "Generated tests are not apply-ready: they did not pass the assured pre-filter and are shown as untrusted evidence only.";
+
+function describeOptionalCount(label: string, value: number | undefined): string | undefined {
+  return value === undefined ? undefined : `${label} ${value.toString()}`;
+}
+
+function describeFunnel(funnel: EditorTestGenerationFunnel): string {
+  const coverage = [
+    describeOptionalCount("lines", funnel.coverageLineDelta),
+    describeOptionalCount("branches", funnel.coverageBranchDelta),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(", ");
+  const mutation =
+    funnel.mutantsKilled === undefined || funnel.mutantsTotal === undefined
+      ? undefined
+      : `mutation ${funnel.mutantsKilled.toString()}/${funnel.mutantsTotal.toString()} killed`;
+  const evidence = [coverage.length > 0 ? `coverage delta ${coverage}` : undefined, mutation]
+    .filter((part): part is string => part !== undefined)
+    .join("; ");
+  return (
+    `Funnel: ${funnel.candidatesGenerated.toString()} generated, ` +
+    `${funnel.candidatesSurfaced.toString()} surfaced; build ${funnel.build}; pass ${funnel.pass}; ` +
+    `stability ${funnel.stability} (${funnel.stabilityRunsRequired.toString()} runs); ` +
+    `coverage ${funnel.coverage}; mutation ${funnel.mutation}` +
+    (evidence.length > 0 ? `; ${evidence}.` : ".")
+  );
+}
 
 /** A content-free, actionable status line for the current flow state. Empty string means "no status". */
 export function describeTestGenerationStatus(state: TestGenerationFlowState): string {
@@ -135,12 +162,15 @@ export function describeTestGenerationStatus(state: TestGenerationFlowState): st
     return state.reason;
   }
   if (state.kind === "preview") {
+    const funnel = describeFunnel(state.funnel);
     if (state.assurance === "assured") {
-      return ASSURED_PREVIEW_STATUS;
+      return `${ASSURED_PREVIEW_STATUS} ${funnel}`;
     }
-    return state.reason !== undefined && state.reason.length > 0
-      ? state.reason
-      : UNVERIFIED_PREVIEW_STATUS;
+    const reason =
+      state.reason !== undefined && state.reason.length > 0
+        ? state.reason
+        : UNVERIFIED_PREVIEW_STATUS;
+    return `${reason} ${funnel}`;
   }
   return STATIC_STATUS[state.kind];
 }

@@ -4,12 +4,13 @@
 // package-internal planning shapes.
 
 import type {
+  FilesystemPolicy,
   NetworkPolicy,
   SandboxAttestation,
   SandboxBackend,
 } from "@oscharko-dev/keiko-contracts";
 
-export type { NetworkPolicy, SandboxAttestation, SandboxBackend };
+export type { FilesystemPolicy, NetworkPolicy, SandboxAttestation, SandboxBackend };
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE
 // selector so backend choice is deterministic and unit-testable without touching the filesystem.
@@ -29,6 +30,7 @@ export interface IsolatedRunPlan {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly network: NetworkPolicy;
+  readonly filesystem?: FilesystemPolicy | undefined;
 }
 
 // The decision for a single run:

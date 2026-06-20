@@ -249,7 +249,13 @@ function resolveSpawnTarget(
   const platform = deps.platform ?? process.platform;
   const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
   const decision = planIsolatedRun(
-    { command: executable, args: input.args, cwd, network: "none" },
+    {
+      command: executable,
+      args: input.args,
+      cwd,
+      network: "none",
+      filesystem: deps.policy.filesystem ?? "inherit",
+    },
     availability,
     platform,
   );

@@ -20,6 +20,8 @@ export interface SandboxedCommand {
 
 export interface SandboxedRunResult {
   readonly exitCode: number | null;
+  readonly networkEnforced: boolean;
+  readonly filesystemEnforced: boolean;
 }
 
 // Runs one untrusted command inside the enforced sandbox (network:"none") in the disposable root.
@@ -136,7 +138,7 @@ export interface SandboxedGateRunnerSpec {
 }
 
 function ok(result: SandboxedRunResult): boolean {
-  return result.exitCode === 0;
+  return result.exitCode === 0 && result.networkEnforced && result.filesystemEnforced;
 }
 
 export function createSandboxedGateRunner(spec: SandboxedGateRunnerSpec): AssuredGateRunner {

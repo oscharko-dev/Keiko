@@ -60,4 +60,19 @@ describe("selectEnforcingBackend", () => {
     expect(selectEnforcingBackend("win32", NONE)).toBe("none");
     expect(selectEnforcingBackend("darwin", NONE)).toBe("none");
   });
+
+  it("requires strict bubblewrap or a container for execution-root isolation", () => {
+    expect(selectEnforcingBackend("linux", { ...NONE, unshare: true }, "execution-root")).toBe(
+      "none",
+    );
+    expect(selectEnforcingBackend("darwin", { ...NONE, seatbelt: true }, "execution-root")).toBe(
+      "none",
+    );
+    expect(selectEnforcingBackend("linux", { ...NONE, bubblewrap: true }, "execution-root")).toBe(
+      "bubblewrap",
+    );
+    expect(selectEnforcingBackend("darwin", { ...NONE, docker: true }, "execution-root")).toBe(
+      "container-docker",
+    );
+  });
 });

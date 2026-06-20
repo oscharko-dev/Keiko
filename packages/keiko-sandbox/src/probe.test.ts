@@ -29,7 +29,8 @@ describe("isExecutableOnPath", () => {
   const binary = "keiko-sandbox-probe-fixture";
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "keiko-sandbox-probe-"));
+    dir = mkdtempSync(join(process.cwd(), ".tmp-keiko-sandbox-probe-"));
+    chmodSync(dir, 0o755);
     const file = join(dir, binary);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);
@@ -56,6 +57,20 @@ describe("isExecutableOnPath", () => {
     expect(isExecutableOnPath("keiko-sandbox-definitely-absent", { PATH: dir }, "linux")).toBe(
       false,
     );
+  });
+
+  it("rejects executables from writable PATH directories on POSIX", () => {
+    const unsafeDir = mkdtempSync(join(tmpdir(), "keiko-sandbox-unsafe-path-"));
+    const file = join(unsafeDir, "unsafe-tool");
+    writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    chmodSync(file, 0o755);
+    chmodSync(unsafeDir, 0o777);
+    try {
+      expect(isExecutableOnPath("unsafe-tool", { PATH: unsafeDir }, "linux")).toBe(false);
+    } finally {
+      chmodSync(unsafeDir, 0o700);
+      rmSync(unsafeDir, { recursive: true, force: true });
+    }
   });
 
   it("returns false when PATH is empty or unset", () => {

@@ -13,6 +13,7 @@ import type { ToolDefinition } from "./gateway.js";
 // it fails the command closed. `"inherit"` stays the default for the read-only command tools; a caller
 // that executes untrusted code opts into `"none"` explicitly, WITHOUT any consumer change.
 export type NetworkPolicy = "inherit" | "none";
+export type FilesystemPolicy = "inherit" | "execution-root";
 
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
@@ -20,6 +21,10 @@ export interface SandboxPolicy {
   readonly envAllowlist: readonly string[];
   // See NetworkPolicy: documented, not yet OS-enforced in Wave 1.
   readonly network: NetworkPolicy;
+  // Optional stronger filesystem boundary for untrusted-code execution. The default/inherited tool
+  // path leaves filesystem behaviour unchanged; assured execution sets this to "execution-root" and
+  // requires an attested backend before surfacing apply-ready generated tests.
+  readonly filesystem?: FilesystemPolicy | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
   readonly maxOutputBytes: number;
   // Default per-command wall-time before SIGTERM/SIGKILL.
@@ -92,6 +97,10 @@ export interface SandboxAttestation {
   // True only when network egress was OS/container-enforced for this run (an outbound connection
   // from the child fails). False for an inherited-network run.
   readonly networkEnforced: boolean;
+  // True only when the run was contained to its disposable execution root for writes and host
+  // user/runtime sockets were not mounted into the sandbox. False for inherited-network and
+  // network-only compatibility runs.
+  readonly filesystemEnforced: boolean;
   // node:os platform the decision was made on (e.g. "linux", "darwin", "win32").
   readonly platform: string;
 }
@@ -333,9 +342,11 @@ export type ToolCallMetadata =
         readonly timeoutMs: number;
         readonly terminationGraceMs: number;
         readonly cwdRequested: boolean;
+        readonly filesystem?: FilesystemPolicy | undefined;
         // Present for a `network: "none"` run (ADR-0043): the enforcing backend and whether egress
         // was actually blocked. Optional so inherited-network audit records are unchanged.
         readonly networkEnforced?: boolean | undefined;
+        readonly filesystemEnforced?: boolean | undefined;
         readonly backend?: SandboxBackend | undefined;
       };
     }

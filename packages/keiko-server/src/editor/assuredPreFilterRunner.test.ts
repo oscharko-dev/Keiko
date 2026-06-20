@@ -1,11 +1,21 @@
 import { describe, it, expect } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  ASSURED_COMMAND_RULES,
   candidateFileText,
+  candidateWritePath,
   planGateCommands,
   relativizeCoverageSummary,
   targetSourceRelPath,
+  writeCandidateInto,
 } from "./assuredPreFilterRunner.js";
-import type { EditorTestGenerationWireTarget } from "@oscharko-dev/keiko-contracts";
+import type {
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireTarget,
+} from "@oscharko-dev/keiko-contracts";
+import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 
 describe("targetSourceRelPath", () => {
   it("returns the document path for a single-document target", () => {
@@ -31,12 +41,40 @@ describe("targetSourceRelPath", () => {
 describe("planGateCommands", () => {
   it("builds the TS/JS toolchain gate commands writing reports under the assured dir", () => {
     const cmds = planGateCommands();
-    expect(cmds.build).toEqual({ command: "npx", args: ["tsc", "--noEmit"] });
-    expect(cmds.test).toEqual({ command: "npx", args: ["vitest", "run"] });
+    expect(cmds.build).toEqual({ command: "npx", args: ["--no-install", "tsc", "--noEmit"] });
+    expect(cmds.test).toEqual({ command: "npx", args: ["--no-install", "vitest", "run"] });
     expect(cmds.coverage.args).toContain("--coverage");
     expect(cmds.coverage.args.some((a) => a.includes(".keiko-assured/patched"))).toBe(true);
     expect(cmds.baseline.args.some((a) => a.includes(".keiko-assured/baseline"))).toBe(true);
-    expect(cmds.mutation).toEqual({ command: "npx", args: ["stryker", "run"] });
+    expect(cmds.mutation).toEqual({
+      command: "npx",
+      args: ["--no-install", "stryker", "run", ".keiko-assured/mutation/stryker.conf.json"],
+    });
+  });
+});
+
+describe("ASSURED_COMMAND_RULES", () => {
+  it("allows only no-install npx invocations for the assured toolchain", () => {
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--no-install", "tsc"])).toMatchObject({
+      allowed: true,
+    });
+    expect(
+      isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--no-install", "vitest", "run"]),
+    ).toMatchObject({ allowed: true });
+    expect(
+      isCommandAllowed(ASSURED_COMMAND_RULES, "npx", [
+        "--no-install",
+        "stryker",
+        "run",
+        ".keiko-assured/mutation/stryker.conf.json",
+      ]),
+    ).toMatchObject({ allowed: true });
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["eslint"])).toMatchObject({
+      allowed: false,
+    });
+    expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--yes", "vitest"])).toMatchObject({
+      allowed: false,
+    });
   });
 });
 
@@ -60,5 +98,55 @@ describe("relativizeCoverageSummary", () => {
 describe("candidateFileText", () => {
   it("concatenates the edit newText fragments", () => {
     expect(candidateFileText([{ newText: "a" }, { newText: "b\n" }])).toBe("ab\n");
+  });
+});
+
+describe("writeCandidateInto", () => {
+  const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
+
+  function patch(path: string): EditorTestGenerationWirePatch {
+    return {
+      patchId: "p",
+      files: [{ path, changeKind: "added", edits: [{ range, newText: "test('x', () => {});\n" }] }],
+    };
+  }
+
+  it("writes safe candidate files inside the disposable root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-candidate-"));
+    try {
+      writeCandidateInto(root, patch("tests/generated.test.ts"));
+      expect(readFileSync(join(root, "tests/generated.test.ts"), "utf8")).toContain("test(");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects absolute, traversal, denied, and NUL-containing paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-candidate-"));
+    try {
+      for (const unsafe of [
+        "/tmp/generated.test.ts",
+        "../generated.test.ts",
+        ".env",
+        `tests/bad\u0000name.test.ts`,
+      ]) {
+        expect(() => candidateWritePath(root, unsafe)).toThrow();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects writes through a symlinked parent that escapes the disposable root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-candidate-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-candidate-outside-"));
+    try {
+      mkdirSync(join(root, "tests"));
+      symlinkSync(outside, join(root, "tests", "escape"));
+      expect(() => candidateWritePath(root, "tests/escape/generated.test.ts")).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

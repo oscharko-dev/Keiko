@@ -8,9 +8,10 @@ import { selectEnforcingBackend } from "./select.js";
 import type { BackendAvailability, IsolatedRunDecision, IsolatedRunPlan } from "./types.js";
 
 const FAIL_CLOSED_REASON =
-  'deny-by-default network isolation was requested (network: "none") but no enforcing sandbox ' +
-  "backend is available on this host (need bubblewrap or unshare on Linux, sandbox-exec on macOS, " +
-  "or docker/podman). Untrusted code is not executed.";
+  'deny-by-default isolation was requested (network: "none") but no compatible sandbox backend ' +
+  "is available on this host. Network-only runs need bubblewrap or unshare on Linux, sandbox-exec " +
+  "on macOS, or docker/podman; execution-root runs need strict bubblewrap or docker/podman. " +
+  "Untrusted code is not executed.";
 
 export function planIsolatedRun(
   plan: IsolatedRunPlan,
@@ -22,22 +23,38 @@ export function planIsolatedRun(
       kind: "passthrough",
       command: plan.command,
       args: plan.args,
-      attestation: { backend: "none", networkEnforced: false, platform },
+      attestation: {
+        backend: "none",
+        networkEnforced: false,
+        filesystemEnforced: false,
+        platform,
+      },
     };
   }
-  const backend = selectEnforcingBackend(platform, availability);
+  const filesystem = plan.filesystem ?? "inherit";
+  const backend = selectEnforcingBackend(platform, availability, filesystem);
   const wrapped = buildWrappedCommand(backend, plan);
   if (backend === "none" || wrapped === undefined) {
     return {
       kind: "fail-closed",
       reason: FAIL_CLOSED_REASON,
-      attestation: { backend: "none", networkEnforced: false, platform },
+      attestation: {
+        backend: "none",
+        networkEnforced: false,
+        filesystemEnforced: false,
+        platform,
+      },
     };
   }
   return {
     kind: "wrapped",
     command: wrapped.command,
     args: wrapped.args,
-    attestation: { backend, networkEnforced: true, platform },
+    attestation: {
+      backend,
+      networkEnforced: true,
+      filesystemEnforced: filesystem === "execution-root",
+      platform,
+    },
   };
 }
