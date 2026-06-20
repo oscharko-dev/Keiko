@@ -85,11 +85,14 @@ const PROOF_SNIPPET = [
   "process.stdout.write(JSON.stringify({ readOutside, wroteOutside, wroteInside }));",
 ].join("");
 
-// Command rules for the assured toolchain: only the deterministic node test toolchain, no network tools.
+// Command rules for the assured toolchain: only the deterministic node test toolchain, no network
+// tools. `playwright` is allowed for Issue #1203 browser-smoke verification; like the other tools it
+// runs `--no-install` (no package fetch) inside the `network: "none"` sandbox, so adding it keeps every
+// existing safety property (no-install, no network, fixed allowlist, denied install/call flags).
 export const ASSURED_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "npx",
-    allowedSubcommands: Object.freeze(["tsc", "vitest", "stryker"]),
+    allowedSubcommands: Object.freeze(["tsc", "vitest", "stryker", "playwright"]),
     denyFlags: Object.freeze(["-c", "--call", "-y", "--yes"]),
   },
 ]);
@@ -146,13 +149,14 @@ function vitestGateCommands(): GateCommands {
 }
 
 // The Playwright gate commands (Issue #1203 browser-smoke). The candidate is type-checked and executed
-// as a Playwright suite; there is no vitest coverage/mutation oracle for an end-to-end smoke, so the
-// coverage/baseline/mutation slots run the same suite and emit no JSON report — those gates therefore
-// cannot pass and the candidate stays `unverified`, never `assured`.
+// as a Playwright suite under the same hardened, no-install, no-network sandbox as the vitest toolchain.
+// There is no vitest coverage/mutation oracle for an end-to-end smoke, so the coverage/baseline/mutation
+// slots run the same suite and emit no JSON report — those gates therefore cannot pass and the candidate
+// stays `unverified`, never `assured`.
 function playwrightGateCommands(): GateCommands {
-  const run = npx(["playwright", "test"]);
+  const run = npx(["--no-install", "playwright", "test"]);
   return {
-    build: npx(["tsc", "--noEmit"]),
+    build: npx(["--no-install", "tsc", "--noEmit"]),
     test: run,
     baseline: run,
     coverage: run,
