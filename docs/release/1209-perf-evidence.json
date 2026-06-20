@@ -1,0 +1,70 @@
+{
+  "measuredAtIso": "2026-06-20T05:36:42.410Z",
+  "harness": "dev-runner (webpack dev build) via playwright.config.ts; conservative upper bound vs production",
+  "b4ColdStartMs": {
+    "budgetP50": 1500,
+    "budgetP95": 2500,
+    "samples": [
+      1979,
+      1978,
+      1981
+    ],
+    "p50": 1979,
+    "p95": 1981
+  },
+  "b5KeystrokeMs": {
+    "budgetMax": 50,
+    "captured": false,
+    "activeElement": "div.native-edit-context",
+    "longTaskCount": 0,
+    "maxLongTaskMs": 0
+  },
+  "b6InteractionMs": {
+    "budgetP75": 200,
+    "captured": false,
+    "eventCount": 0,
+    "p75": 0,
+    "max": 0
+  },
+  "b11Memory": {
+    "supported": true,
+    "baselineBytes": 286000000,
+    "peakBytes": 286000000,
+    "residualBytes": 286000000,
+    "cycles": 2
+  },
+  "workerLoadCapture": {
+    "totalWorkerRequests": 7,
+    "tsLanguageWorkerLoaded": false,
+    "requests": [
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      },
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      },
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      },
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      },
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      },
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      },
+      {
+        "url": "http://127.0.0.1:34283/_next/static/chunks/_app-pages-browser_node_modules_monaco-editor_esm_vs_editor_editor_worker_js.js",
+        "resourceType": "script"
+      }
+    ]
+  }
+}
