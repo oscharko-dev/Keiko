@@ -36,10 +36,12 @@ import {
   RUNTIME_STATE_FILE_MODE,
   classifyPid,
   defaultIsProcessAlive,
+  inspectStateRoot,
   resolveStateDir,
   scanRuntimeState,
   type RuntimeStateCategory,
   type RuntimeStateNode,
+  type StateRootInspection,
 } from "./state-paths.js";
 import {
   credentialStorePath,
@@ -152,6 +154,14 @@ function checkStateDirPerms(stateDir: string, dryRun: boolean): CheckResult {
   return fixed("State directory", `tightened permissions ${observed} -> 0o700`);
 }
 
+function stateRootRefusal(root: StateRootInspection): CheckResult | undefined {
+  if (root.status === "symlink")
+    return action("State directory", `refusing to inspect symlinked state directory: ${root.absPath}`);
+  if (root.status === "not-directory")
+    return action("State directory", `refusing to inspect non-directory state path: ${root.absPath}`);
+  return undefined;
+}
+
 // Issue #1321: audit and tighten the permissions of EVERY Keiko-owned artifact under the
 // state directory — UI/Memory/Knowledge DBs and their WAL/SHM sidecars, Evidence/QI records,
 // the sealed credential vaults, config, and lifecycle/launcher files — not just the state
@@ -218,7 +228,12 @@ function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckRes
   const scan = scanRuntimeState(stateDir);
   if (!scan.present) return [ok("Runtime state artifacts", "state directory not present")];
   const ownedCount = scan.files.length + scan.directories.length;
-  if (ownedCount === 0) return [ok("Runtime state artifacts", "no Keiko-owned artifacts present")];
+  const refusedOwned = scan.retained.filter(
+    (r) => r.owned && (r.reason === "symlink" || r.reason === "hardlink"),
+  );
+  if (ownedCount === 0 && refusedOwned.length === 0) {
+    return [ok("Runtime state artifacts", "no Keiko-owned artifacts present")];
+  }
 
   const findings: LoosePermFinding[] = [];
   tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings);
@@ -228,11 +243,12 @@ function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckRes
   for (const category of new Set(findings.map((f) => f.category))) {
     results.push(summarizeLooseCategory(category, findings, dryRun));
   }
-  for (const link of scan.retained.filter((r) => r.reason === "symlink" && r.owned)) {
+  for (const entry of refusedOwned) {
+    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
     results.push(
       action(
         "Runtime state artifacts",
-        `symlink occupies a Keiko-owned path and was left untouched: ${link.relPath}`,
+        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
       ),
     );
   }
@@ -482,11 +498,19 @@ export function runRepairCli(
   const resolved = resolveDeps(deps);
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
   const defaultConfigPath = defaultLocalGatewayConfigPath(env, resolved.homedir());
+  const stateRoot = inspectStateRoot(stateDir);
+  const stateRootAction = stateRootRefusal(stateRoot);
+  const stateResults =
+    stateRootAction === undefined
+      ? [
+          checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
+          checkStateDirPerms(stateDir, parsed.dryRun),
+          ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
+          checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
+        ]
+      : [stateRootAction];
   const results: CheckResult[] = [
-    checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
-    checkStateDirPerms(stateDir, parsed.dryRun),
-    ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
-    checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
+    ...stateResults,
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
