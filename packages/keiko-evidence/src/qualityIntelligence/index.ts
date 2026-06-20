@@ -138,6 +138,7 @@ export type {
   QualityIntelligenceRecoverySnapshot,
   QualityIntelligenceRetentionDecision,
   QualityIntelligenceRetentionDecisionInput,
+  QualityIntelligenceRetentionDeletionFailure,
   QualityIntelligenceRetentionEnforcementOptions,
   QualityIntelligenceRetentionEnforcementResult,
   QualityIntelligenceRetentionResult,

@@ -145,6 +145,7 @@ export {
   type QualityIntelligenceRedactionSummary,
   type QualityIntelligenceRetentionDecision,
   type QualityIntelligenceRetentionDecisionInput,
+  type QualityIntelligenceRetentionDeletionFailure,
   type QualityIntelligenceRetentionEnforcementOptions,
   type QualityIntelligenceRetentionEnforcementResult,
   type QualityIntelligenceRetentionResult,

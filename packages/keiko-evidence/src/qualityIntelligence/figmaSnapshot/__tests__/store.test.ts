@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -965,6 +966,67 @@ describe("enforceFigmaSnapshotRetention", () => {
     expect(lstatSync(sideDir, { throwIfNoEntry: false })).toBeUndefined();
   });
 
+  it("refuses a symlinked side-file root before deleting snapshot records", () => {
+    if (process.platform === "win32") return;
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-outside-"));
+    try {
+      rmSync(sideFileBase, { recursive: true, force: true });
+      mkdirSync(join(outside, RUN_ID), { recursive: true });
+      symlinkSync(outside, sideFileBase, "dir");
+
+      expect(() => {
+        enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+      }).toThrow(EvidenceWriteError);
+      expect(lstatSync(snapshotFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(lstatSync(join(outside, RUN_ID), { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlinked per-run side-file dir before deleting that snapshot record", () => {
+    if (process.platform === "win32") return;
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-run-outside-"));
+    const runSideDir = join(sideFileBase, RUN_ID);
+    try {
+      rmSync(runSideDir, { recursive: true, force: true });
+      mkdirSync(join(outside, RUN_ID), { recursive: true });
+      symlinkSync(join(outside, RUN_ID), runSideDir, "dir");
+
+      expect(() => {
+        enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+      }).toThrow(EvidenceWriteError);
+      expect(lstatSync(snapshotFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(lstatSync(join(outside, RUN_ID), { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("is a no-op when the evidence dir does not exist yet", () => {
     const nonExistent = join(dir, "does-not-exist");
     expect(() => {
@@ -1006,9 +1068,61 @@ describe("figma snapshot store-init retention (Issue #1323 AC4)", () => {
     const oldest = "00000000-0000-4000-8000-000000000000";
     const middle = "00000000-0000-4000-8000-000000000001";
     const newest = "00000000-0000-4000-8000-000000000002";
+    expect(lstatSync(snapshotFile(oldest), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotFile(middle), { throwIfNoEntry: false })).toBeUndefined();
     expect(store.load(oldest)).toBeUndefined();
     expect(store.load(middle)).toBeUndefined();
     expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("runs retention for listByScope-only callers", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    const results = store.listByScope("KEY123", "0:1");
+
+    expect(results.map((entry) => entry.runId)).toEqual(["00000000-0000-4000-8000-000000000002"]);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000000"), {
+        throwIfNoEntry: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retains records with missing fetchedAt instead of evicting them as oldest", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const uncertain = "00000000-0000-4000-8000-000000000000";
+    const raw = readSnapshotFile(uncertain);
+    raw.provenance = { ...(raw.provenance as Record<string, unknown>), fetchedAt: undefined };
+    writeSnapshotFile(raw, uncertain);
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+
+    expect(lstatSync(snapshotFile(uncertain), { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000001"), {
+        throwIfNoEntry: false,
+      })?.isFile(),
+    ).toBe(true);
+  });
+
+  it("retains records with invalid fetchedAt instead of evicting them as oldest", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const uncertain = "00000000-0000-4000-8000-000000000000";
+    const raw = readSnapshotFile(uncertain);
+    raw.provenance = { ...(raw.provenance as Record<string, unknown>), fetchedAt: "not-a-date" };
+    writeSnapshotFile(raw, uncertain);
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+
+    expect(lstatSync(snapshotFile(uncertain), { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000001"), {
+        throwIfNoEntry: false,
+      })?.isFile(),
+    ).toBe(true);
   });
 
   it("the conservative DEFAULT cap (500) does NOT delete a small fixture set", () => {

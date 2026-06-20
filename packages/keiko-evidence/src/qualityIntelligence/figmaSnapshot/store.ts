@@ -38,11 +38,12 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   assertContainedRealPath,
   resolveWithinWorkspace,
@@ -847,18 +848,22 @@ function sweepOrphanedSideDirs(qiDir: string, sideFileBase: string): void {
   sweepManagementMetadataFiles(qiDir);
 }
 
-// Read the fetchedAt timestamp from one snapshot file, or undefined when unparseable.
+// Read the fetchedAt timestamp from one snapshot file, or undefined when missing/unparseable.
 function readFetchedAt(filePath: string): string | undefined {
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
     const prov = parsed.provenance as Record<string, unknown> | undefined;
-    return typeof prov?.fetchedAt === "string" ? prov.fetchedAt : "";
+    if (typeof prov?.fetchedAt !== "string" || prov.fetchedAt.trim() === "") {
+      return undefined;
+    }
+    return Number.isNaN(Date.parse(prov.fetchedAt)) ? undefined : prov.fetchedAt;
   } catch {
     return undefined;
   }
 }
 
 function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
+  ctx.ensureSwept();
   const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realBase === undefined) return [];
   const boundedLimit = Number.isInteger(limit) && limit > 0 ? limit : 12;
@@ -870,6 +875,47 @@ function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
   }
   records.sort((a, b) => (a.fetchedAt > b.fetchedAt ? -1 : a.fetchedAt < b.fetchedAt ? 1 : 0));
   return records.slice(0, boundedLimit).map((record) => record.runId);
+}
+
+function containedPath(path: string, root: string): boolean {
+  return path === root || path.startsWith(root + sep);
+}
+
+function realSideFileBaseForRetention(qiDir: string, sideFileBase: string): string | undefined {
+  const sideStat = lstatSync(sideFileBase, { throwIfNoEntry: false });
+  if (sideStat === undefined) {
+    return undefined;
+  }
+  if (sideStat.isSymbolicLink() || !sideStat.isDirectory()) {
+    throw new EvidenceWriteError("Figma snapshot side-file root is not a real directory");
+  }
+  const realQiDir = realpathSync(qiDir);
+  const realSideFileBase = realpathSync(sideFileBase);
+  if (!containedPath(realSideFileBase, realQiDir)) {
+    throw new EvidenceWriteError("Figma snapshot side-file root escapes the QI evidence directory");
+  }
+  return realSideFileBase;
+}
+
+function sideDirForRetention(
+  realSideFileBase: string | undefined,
+  runId: string,
+): string | undefined {
+  if (realSideFileBase === undefined) {
+    return undefined;
+  }
+  const runDir = join(realSideFileBase, runId);
+  if (!containedPath(runDir, realSideFileBase)) {
+    throw new EvidenceWriteError("Figma snapshot side-file dir escapes retention root");
+  }
+  const stat = lstatSync(runDir, { throwIfNoEntry: false });
+  if (stat?.isSymbolicLink() === true) {
+    throw new EvidenceWriteError("Figma snapshot side-file dir is a symlink");
+  }
+  if (stat !== undefined && !stat.isDirectory()) {
+    throw new EvidenceWriteError("Figma snapshot side-file dir is not a real directory");
+  }
+  return stat === undefined ? undefined : runDir;
 }
 
 // ─── Retention ───────────────────────────────────────────────────────────────────────────────
@@ -897,6 +943,7 @@ export function enforceFigmaSnapshotRetention(
   const sideFileBase = join(qiDir, SIDE_FILE_SUBDIR);
   const dirStat = lstatSync(qiDir, { throwIfNoEntry: false });
   if (!dirStat?.isDirectory()) return;
+  const realSideFileBase = realSideFileBaseForRetention(qiDir, sideFileBase);
   // Scan for snapshot records and sort by fetchedAt ascending so we remove the oldest first.
   const records: { runId: string; fetchedAt: string }[] = [];
   for (const file of snapshotRecordFiles(qiDir)) {
@@ -908,15 +955,15 @@ export function enforceFigmaSnapshotRetention(
   records.sort((a, b) => (a.fetchedAt < b.fetchedAt ? -1 : a.fetchedAt > b.fetchedAt ? 1 : 0));
   const toEvict = records.slice(0, Math.max(0, records.length - profile.maxRecords));
   for (const { runId } of toEvict) {
-    // Delete record first — after this the side-dir is unreachable by any normal path.
+    const sideDir = sideDirForRetention(realSideFileBase, runId);
+    // After side-dir preflight succeeds, delete the record first — after this the side-dir is
+    // unreachable by any normal path.
     rmSync(join(qiDir, `${runId}${SNAPSHOT_SUFFIX}`), { force: true });
     rmSync(join(qiDir, `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`), { force: true });
-    // Best-effort: remove the side-file dir; failure is non-fatal (it is orphaned, not
-    // linked to a live record, and will be removed by the next sweepOrphanedSideDirs pass).
-    const runDir = join(sideFileBase, runId);
-    const stat = lstatSync(runDir, { throwIfNoEntry: false });
-    if (stat?.isDirectory() === true) {
-      rmSync(runDir, { recursive: true, force: true });
+    // Best-effort: remove the side-file dir; failure is non-fatal for lazy store reads because
+    // ensureSwept catches retention errors and retries on the next store instance.
+    if (sideDir !== undefined) {
+      rmSync(sideDir, { recursive: true, force: true });
     }
   }
 }
@@ -1105,6 +1152,7 @@ function listByScopeOp(
   fileKey: string,
   nodeId: string,
 ): readonly FigmaSnapshotScopeEntry[] {
+  ctx.ensureSwept();
   const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realBase === undefined) return [];
   const results: FigmaSnapshotScopeEntry[] = [];
