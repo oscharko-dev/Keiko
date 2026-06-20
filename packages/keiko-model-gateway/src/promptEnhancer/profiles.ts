@@ -67,8 +67,10 @@ export interface PromptEnhancerExecutionProfile {
   readonly reasoningStrategy: ReasoningStrategy;
   // How much explicit reasoning structure the prompt requests (AC2: reasoning depth).
   readonly reasoningDepth: ReasoningDepth;
-  // Soft output token budget hint for downstream dispatch and the materially-smaller-fast guarantee
-  // (AC2: token budget). Monotonic across profiles: fast is the smallest, research the largest.
+  // Declared soft token budget for this profile (AC2: token budget). Monotonic across profiles: fast
+  // is the smallest, research the largest. It is a forward-looking hint for downstream model dispatch
+  // (#1312); the deterministic generator's actual rendered size is governed by the structural caps
+  // below, so the two are kept consistent (a smaller budget pairs with smaller caps).
   readonly tokenBudget: number;
   // Upper bounds the generator applies when shaping list sections, so leaner profiles emit materially
   // smaller prompts while still populating every required section (AC1 + the token-budget test).

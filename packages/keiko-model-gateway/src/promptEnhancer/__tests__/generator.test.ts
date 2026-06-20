@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  GROUNDING_NEED_KINDS,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   validateEnhancedPrompt,
+  type ClarificationOrAssumption,
   type GroundingNeedKind,
   type RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
@@ -260,5 +262,98 @@ describe("generateEnhancedPrompt — profile shaping (AC2)", () => {
   it("adds an output-controllability criterion for technical and structured outputs", () => {
     const technical = generateFor({ recommendedProfile: "technical" });
     expect(technical.qualityCriteria.some((q) => /output controllability/i.test(q))).toBe(true);
+  });
+
+  it("excludes profile-specific quality criteria from profiles that do not own them", () => {
+    const creative = generateFor({ recommendedProfile: "creative" });
+    expect(creative.qualityCriteria.some((q) => /token efficiency/i.test(q))).toBe(false);
+    expect(creative.qualityCriteria.some((q) => /output controllability/i.test(q))).toBe(false);
+    const research = generateFor({ recommendedProfile: "research" });
+    expect(research.qualityCriteria.some((q) => q.startsWith("Grounding:"))).toBe(true);
+  });
+
+  it("surfaces each profile's distinctive constraint", () => {
+    expect(
+      generateFor({ recommendedProfile: "technical" }).constraints.some((c) =>
+        /Follow the required output format exactly/i.test(c),
+      ),
+    ).toBe(true);
+    expect(
+      generateFor({ recommendedProfile: "creative" }).constraints.some((c) =>
+        /Honor any tone, length, or style/i.test(c),
+      ),
+    ).toBe(true);
+    expect(
+      generateFor({ recommendedProfile: "safety-critical" }).constraints.some((c) =>
+        /Do not present definitive/i.test(c),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("generateEnhancedPrompt — cap and safety invariants", () => {
+  it("never drops a critical constraint even when a profile is misconfigured below the critical count", () => {
+    const analysis = makeAnalysis({ recommendedProfile: "fast" });
+    const base = planPromptEnhancement(analysis);
+    // A pathological profile whose cap is smaller than the two mandatory critical constraints.
+    const plan = { ...base, executionProfile: { ...base.executionProfile, maxConstraints: 1 } };
+    const prompt = generateEnhancedPrompt({
+      promptId: testPromptId(),
+      analysis,
+      plan,
+      input: { text: "x" },
+    });
+    expect(prompt.constraints.some((c) => /do not invent facts/i.test(c))).toBe(true);
+    expect(prompt.constraints.some((c) => /Stay within the scope/i.test(c))).toBe(true);
+    expect(prompt.constraints.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("caps clarification questions at the profile's maxClarifications", () => {
+    const many: ClarificationOrAssumption[] = [
+      { kind: "clarification", topic: "subject", question: "Q1?" },
+      { kind: "clarification", topic: "scope", question: "Q2?" },
+      { kind: "clarification", topic: "audience", question: "Q3?" },
+      { kind: "clarification", topic: "constraints", question: "Q4?" },
+      { kind: "clarification", topic: "data-source", question: "Q5?" },
+    ];
+    const prompt = generateFor(
+      { recommendedProfile: "fast", missingContext: many },
+      { text: "x" },
+      { missingInformationStrategy: "clarify" },
+    );
+    const surfaced = prompt.uncertaintyHandling.filter((u) =>
+      u.startsWith("Before finalizing, ask the user:"),
+    );
+    // The fast profile metadata caps clarifications at 1.
+    expect(surfaced).toHaveLength(1);
+  });
+
+  it("renders all assumptions in context and keeps clarifications out of it", () => {
+    const mixed: ClarificationOrAssumption[] = [
+      { kind: "assumption", topic: "scope", statement: "Assume scope A." },
+      { kind: "assumption", topic: "audience", statement: "Assume audience B." },
+      { kind: "clarification", topic: "subject", question: "Which subject?" },
+    ];
+    const prompt = generateFor(
+      { recommendedProfile: "precise", missingContext: mixed },
+      { text: "x" },
+      { missingInformationStrategy: "clarify" },
+    );
+    const assumptions = prompt.context.filter((c) => c.startsWith("Assumption: "));
+    expect(assumptions).toHaveLength(2);
+    expect(prompt.context.some((c) => c.includes("Which subject?"))).toBe(false);
+  });
+
+  it("flags volatile grounding as time-sensitive for every grounding-need kind", () => {
+    for (const kind of GROUNDING_NEED_KINDS) {
+      const prompt = generateFor({
+        recommendedProfile: "precise",
+        groundingNeed: { kind, volatile: true, signals: [] },
+      });
+      expect(
+        prompt.groundingRules.some((r) => /time-sensitive claims/i.test(r)),
+        `kind ${kind}`,
+      ).toBe(true);
+    }
   });
 });

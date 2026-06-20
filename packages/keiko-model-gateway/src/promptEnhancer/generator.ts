@@ -197,8 +197,10 @@ function buildConstraints(plan: PromptEnhancementPlan): string[] {
       "Do not assume authority to run tools, write files, or make external calls without explicit approval.",
     );
   }
-  const cap = Math.max(critical.length, plan.executionProfile.maxConstraints);
-  return [...critical, ...profileSpecific].slice(0, cap);
+  // The critical constraints are always kept (dropping a "do not fabricate" or scope rule would
+  // weaken safety); only the profile-specific extras are capped to the remaining budget.
+  const extrasBudget = Math.max(0, plan.executionProfile.maxConstraints - critical.length);
+  return [...critical, ...profileSpecific.slice(0, extrasBudget)];
 }
 
 function buildGroundingRules(plan: PromptEnhancementPlan): string[] {
@@ -230,24 +232,26 @@ function groundingRuleForNeed(need: GroundingNeed): string {
 }
 
 function buildQualityCriteria(plan: PromptEnhancementPlan): string[] {
-  // Clarity first, then the profile's most distinctive criterion, then the generic completeness
-  // criterion. Distinctive criteria precede completeness so a tight cap (fast) still keeps the
-  // criterion that characterizes the profile (AC2).
-  const criteria: string[] = ["Clarity: the response is unambiguous and well-organized."];
+  // Clarity is mandatory (always kept). The profile's distinctive criteria precede the generic
+  // completeness criterion so a tight cap (fast) still keeps the criterion that characterizes the
+  // profile (AC2); only these extras are capped to the budget remaining after the mandatory one.
+  const mandatory: string[] = ["Clarity: the response is unambiguous and well-organized."];
+  const optional: string[] = [];
   if (plan.selectedProfile === "fast") {
-    criteria.push("Token efficiency: the response is concise and free of padding.");
+    optional.push("Token efficiency: the response is concise and free of padding.");
   }
   if (plan.selectedProfile === "technical" || plan.outputSchema.structured) {
-    criteria.push("Output controllability: the response conforms exactly to the required format.");
+    optional.push("Output controllability: the response conforms exactly to the required format.");
   }
   if (plan.groundingMandatory || plan.executionProfile.emphasizeGrounding) {
-    criteria.push("Grounding: claims are supported and traceable to evidence.");
+    optional.push("Grounding: claims are supported and traceable to evidence.");
   }
   if (plan.safetyPosture.safetyCritical) {
-    criteria.push("Safety: the response avoids overconfident or harmful guidance.");
+    optional.push("Safety: the response avoids overconfident or harmful guidance.");
   }
-  criteria.push("Completeness: the response addresses the full request.");
-  return criteria.slice(0, Math.max(2, plan.executionProfile.maxQualityCriteria));
+  optional.push("Completeness: the response addresses the full request.");
+  const extrasBudget = Math.max(0, plan.executionProfile.maxQualityCriteria - mandatory.length);
+  return [...mandatory, ...optional.slice(0, extrasBudget)];
 }
 
 function buildUncertaintyHandling(

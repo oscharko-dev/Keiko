@@ -23,17 +23,22 @@ const NEUTRAL_REQUEST: PromptEnhancementRequest = {
   missingInformationStrategy: "clarify",
 };
 
-function renderedFor(profile: PromptEnhancementProfileId): string {
-  const analysis = analyzePrompt(NEUTRAL_REQUEST);
+function renderedForText(profile: PromptEnhancementProfileId, text: string): string {
+  const request: PromptEnhancementRequest = { ...NEUTRAL_REQUEST, input: { text } };
+  const analysis = analyzePrompt(request);
   const plan = planPromptEnhancement(analysis, { profilePreference: profile });
   expect(plan.selectedProfile).toBe(profile);
   const prompt = generateEnhancedPrompt({
     promptId: asEnhancedPromptId("token-budget-prompt"),
     analysis,
     plan,
-    input: NEUTRAL_REQUEST.input,
+    input: request.input,
   });
   return renderEnhancedPromptText(prompt);
+}
+
+function renderedFor(profile: PromptEnhancementProfileId): string {
+  return renderedForText(profile, NEUTRAL_REQUEST.input.text);
 }
 
 describe("token budget (Issue #1310 Expected Verification)", () => {
@@ -48,6 +53,23 @@ describe("token budget (Issue #1310 Expected Verification)", () => {
     expect(fast * 4).toBeLessThanOrEqual(research);
   });
 
+  it("orders the declared token budgets strictly ascending across profiles", () => {
+    const ordered: PromptEnhancementProfileId[] = [
+      "fast",
+      "creative",
+      "technical",
+      "precise",
+      "agentic",
+      "safety-critical",
+      "research",
+    ];
+    const budgets = ordered.map((id) => PROMPT_ENHANCER_EXECUTION_PROFILES[id].tokenBudget);
+    budgets.reduce((prev, curr) => {
+      expect(curr).toBeGreaterThan(prev);
+      return curr;
+    });
+  });
+
   it("produces a materially smaller rendered prompt for fast than for precise and research", () => {
     const fast = renderedFor("fast").length;
     const precise = renderedFor("precise").length;
@@ -57,5 +79,19 @@ describe("token budget (Issue #1310 Expected Verification)", () => {
     // Research carries a deeper decomposition, extra grounding discipline, and richer criteria, so it
     // is comfortably larger than fast.
     expect(fast * 1.2).toBeLessThan(research);
+  });
+
+  it("keeps fast materially smaller than research across different task classes", () => {
+    const inputs = [
+      "Summarize this article in a few sentences.",
+      "Write a function to reverse a string.",
+      "What is the boiling point of water at sea level?",
+    ];
+    for (const text of inputs) {
+      const fast = renderedForText("fast", text).length;
+      const research = renderedForText("research", text).length;
+      expect(fast, `fast<research for: ${text}`).toBeLessThan(research);
+      expect(fast * 1.2, `materially smaller for: ${text}`).toBeLessThan(research);
+    }
   });
 });

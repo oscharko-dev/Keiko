@@ -46,6 +46,18 @@ describe("renderEnhancedPromptText", () => {
     }
   });
 
+  it("places the input section after context and before steps", () => {
+    const text = renderEnhancedPromptText(build());
+    const roleIdx = text.indexOf("## Role");
+    const contextIdx = text.indexOf("## Context");
+    const inputIdx = text.indexOf("## Input");
+    const stepsIdx = text.indexOf("## Steps");
+    expect(roleIdx).toBeGreaterThanOrEqual(0);
+    expect(roleIdx).toBeLessThan(contextIdx);
+    expect(contextIdx).toBeLessThan(inputIdx);
+    expect(inputIdx).toBeLessThan(stepsIdx);
+  });
+
   it("fences the untrusted input and includes its content", () => {
     const text = renderEnhancedPromptText(build({}, { text: "RENDERMARKER find this" }));
     expect(text).toContain('"""');
