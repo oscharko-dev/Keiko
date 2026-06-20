@@ -413,6 +413,106 @@ describe("runUninstallCli — launcher integration", () => {
   });
 });
 
+// ─── uninstall --state runtime-state manifest (Issue #1321) ───────────────────
+
+function seedFullState(root: string, pid = "2147483646"): string {
+  const stateDir = join(root, ".keiko");
+  mkdirSync(join(stateDir, "credentials"), { recursive: true });
+  mkdirSync(join(stateDir, "memory"), { recursive: true });
+  mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
+  mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
+  mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
+  const files: Record<string, string> = {
+    "ui.pid": `${pid}\n`,
+    "ui.log": "log\n",
+    "keiko-ui.db": "db",
+    "keiko-ui.db-wal": "wal",
+    "keiko-ui.db-shm": "shm",
+    "keiko.config.json": "{}",
+    "credentials/provider-credentials.vault": "sealed",
+    "credentials/provider-credentials-vault.key": "key",
+    "memory/keiko-memory.db": "db",
+    "memory/keiko-memory.db-wal": "wal",
+    "local-knowledge/default/capsules.db": "db",
+    "local-knowledge/default/capsules.db-shm": "shm",
+    "evidence/run-1.json": "{}",
+    "evidence/run-1.candidates.json": "{}",
+    "evidence/figma/figma-token.vault": "sealed",
+    "evidence/figma/figma-vault.key": "key",
+    "evidence/qi/run-1.qi.json": "{}",
+    "evidence/qi/figma-snapshots/run-1/screen.png": "img",
+  };
+  for (const [rel, body] of Object.entries(files)) writeFileSync(join(stateDir, rel), body, "utf8");
+  return stateDir;
+}
+
+describe("runUninstallCli — runtime state manifest", () => {
+  it("removes every Keiko-owned sensitive artifact and then the state dir", () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("with --state --dry-run lists the sensitive artifacts without removing them", () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const c = makeIo();
+    expect(
+      runUninstallCli(["--state", "--dry-run"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).toBe(0);
+    const out = c.out();
+    expect(out).toContain(join(stateDir, "keiko-ui.db"));
+    expect(out).toContain(join(stateDir, "memory", "keiko-memory.db"));
+    expect(out).toContain(join(stateDir, "credentials", "provider-credentials.vault"));
+    expect(out).toContain(join(stateDir, "evidence", "figma", "figma-token.vault"));
+    expect(out).toContain(join(stateDir, "evidence", "qi", "run-1.qi.json"));
+    // Nothing actually removed.
+    expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(true);
+    expect(existsSync(stateDir)).toBe(true);
+  });
+
+  it("removes WAL/SHM sidecars alongside their database", () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(join(stateDir, "keiko-ui.db-wal"))).toBe(false);
+    expect(existsSync(join(stateDir, "memory", "keiko-memory.db-wal"))).toBe(false);
+    expect(existsSync(join(stateDir, "local-knowledge", "default", "capsules.db-shm"))).toBe(false);
+  });
+
+  it("keeps a customer file and the state dir, but still removes Keiko artifacts", () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const userFile = join(stateDir, "user-notes.txt");
+    writeFileSync(userFile, "keep me\n", "utf8");
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(existsSync(userFile)).toBe(true);
+    expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(false);
+    expect(existsSync(join(stateDir, "credentials", "provider-credentials.vault"))).toBe(false);
+    expect(c.out()).toContain("non-Keiko entr");
+  });
+
+  it("refuses to follow a symlink and keeps the state dir", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const outsideTarget = join(root, "outside-secret.txt");
+    writeFileSync(outsideTarget, "do not delete\n", "utf8");
+    symlinkSync(outsideTarget, join(stateDir, "evil-link"));
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(outsideTarget)).toBe(true); // never followed
+    expect(existsSync(join(stateDir, "evil-link"))).toBe(true); // left in place
+    expect(existsSync(stateDir)).toBe(true);
+    expect(c.out()).toContain("symlink — not followed");
+  });
+});
+
 describe("runUninstallCli — package guidance", () => {
   it("lists the local uninstall command first when a local install exists", () => {
     const root = makeRoot();

@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -543,5 +544,132 @@ describe("runRepairCli — credential storage", () => {
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
+  });
+});
+
+// ─── checkRuntimeStateArtifacts (Issue #1321) ─────────────────────────────────
+//
+// Seeds known Keiko-owned artifacts under the state dir with loose (group/world-readable)
+// permissions and asserts repair tightens exactly those, never touching customer files.
+
+function seedStateDir(root: string): string {
+  const stateDir = join(root, ".keiko");
+  mkdirSync(join(stateDir, "evidence", "qi"), { recursive: true });
+  chmodSync(stateDir, 0o700);
+  return stateDir;
+}
+
+function modeOf(path: string): number {
+  return statSync(path).mode & 0o777;
+}
+
+describe("runRepairCli — runtime state artifacts", () => {
+  it("tightens loose permissions on Keiko-owned DB, evidence, and QI artifacts", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const uiDb = join(stateDir, "keiko-ui.db");
+    const evidence = join(stateDir, "evidence", "run-1.json");
+    const qi = join(stateDir, "evidence", "qi", "run-1.qi.json");
+    writeFileSync(uiDb, "x", "utf8");
+    writeFileSync(evidence, "x", "utf8");
+    writeFileSync(qi, "x", "utf8");
+    chmodSync(uiDb, 0o644);
+    chmodSync(evidence, 0o644);
+    chmodSync(qi, 0o640);
+    chmodSync(join(stateDir, "evidence"), 0o755);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(c.out()).toContain("[fixed] Runtime state artifacts");
+    expect(modeOf(uiDb)).toBe(0o600);
+    expect(modeOf(evidence)).toBe(0o600);
+    expect(modeOf(qi)).toBe(0o600);
+    expect(modeOf(join(stateDir, "evidence"))).toBe(0o700);
+  });
+
+  it("tightens the sealed credential and Figma vaults", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    mkdirSync(join(stateDir, "credentials"), { recursive: true });
+    mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
+    const providerVault = join(stateDir, "credentials", "provider-credentials.vault");
+    const keyfile = join(stateDir, "credentials", "provider-credentials-vault.key");
+    const figmaVault = join(stateDir, "evidence", "figma", "figma-token.vault");
+    for (const p of [providerVault, keyfile, figmaVault]) writeFileSync(p, "x", "utf8");
+    for (const p of [providerVault, keyfile, figmaVault]) chmodSync(p, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(c.out()).toContain("credential vault");
+    expect(modeOf(providerVault)).toBe(0o600);
+    expect(modeOf(keyfile)).toBe(0o600);
+    expect(modeOf(figmaVault)).toBe(0o600);
+  });
+
+  it("reports loose artifacts in --dry-run without changing them and exits 1", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const evidence = join(stateDir, "evidence", "run-1.json");
+    writeFileSync(evidence, "x", "utf8");
+    chmodSync(evidence, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(c.out()).toContain("[would-fix] Runtime state artifacts");
+    expect(modeOf(evidence)).toBe(0o644);
+  });
+
+  it("does not modify a customer file that merely lives under .keiko", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const evidence = join(stateDir, "evidence", "run-1.json");
+    const userFile = join(stateDir, "user-notes.txt");
+    writeFileSync(evidence, "x", "utf8");
+    writeFileSync(userFile, "x", "utf8");
+    chmodSync(evidence, 0o644);
+    chmodSync(userFile, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(modeOf(evidence)).toBe(0o600);
+    expect(modeOf(userFile)).toBe(0o644); // untouched
+  });
+
+  it("flags a symlink occupying a Keiko-owned path as an action item and exits 1", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    writeFileSync(join(stateDir, "outside-target"), "x", "utf8");
+    symlinkSync(join(stateDir, "outside-target"), join(stateDir, "keiko-ui.db"));
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(c.out()).toContain("[action] Runtime state artifacts");
+    expect(c.out()).toContain("symlink occupies a Keiko-owned path");
+  });
+
+  it("reports owner-only artifacts as healthy", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    chmodSync(stateDir, 0o700);
+    const uiDb = join(stateDir, "keiko-ui.db");
+    writeFileSync(uiDb, "x", "utf8");
+    chmodSync(uiDb, 0o600);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(c.out()).toContain("owner-only permissions");
   });
 });
