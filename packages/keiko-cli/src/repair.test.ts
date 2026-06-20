@@ -16,6 +16,23 @@ import { runLauncherCli } from "./launcher.js";
 import { loadState } from "./launcher-state.js";
 import type { CliIo } from "./runner.js";
 
+// Seeds the encrypted credential vault index next to a config so apiKeySecretRef references are not
+// flagged as orphaned. The repair check reads only the non-secret reference keys (no decryption), so
+// a placeholder sealed value is sufficient to mark a reference as present.
+function seedVault(root: string, refs: readonly string[]): void {
+  const dir = join(root, "credentials");
+  mkdirSync(dir, { recursive: true });
+  const entries: Record<string, string> = {};
+  for (const ref of refs) {
+    entries[ref] = "kv1.placeholder";
+  }
+  writeFileSync(
+    join(dir, "provider-credentials.vault"),
+    JSON.stringify({ version: 1, entries }),
+    "utf8",
+  );
+}
+
 interface Captured {
   readonly io: CliIo;
   readonly out: () => string;
@@ -373,7 +390,7 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports ok when providers use apiKeySecretRef and there is no figma block", () => {
+  it("reports ok when providers use apiKeySecretRef backed by a vault entry and there is no figma block", () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "migrated.json");
@@ -384,12 +401,34 @@ describe("runRepairCli — credential storage", () => {
       }),
       "utf8",
     );
+    seedVault(root, ["cred:claude-3"]);
 
     const c = makeIo();
     runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no plaintext credentials");
+  });
+
+  it("reports action-required when a secret reference has no matching vault entry (interrupted migration)", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "orphaned.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "claude-3", apiKeySecretRef: "cred:claude-3" }],
+      }),
+      "utf8",
+    );
+    // No vault store written → the reference is orphaned.
+
+    const c = makeIo();
+    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("no encrypted entry");
   });
 
   it("reports ok when no --config flag and no KEIKO_CONFIG_FILE env variable are set", () => {
@@ -466,7 +505,7 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("no plaintext credentials");
   });
 
-  it("exits 0 for a fully migrated config with only apiKeySecretRef references", () => {
+  it("exits 0 for a fully migrated config with apiKeySecretRef references backed by the vault", () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "fully-migrated.json");
@@ -477,6 +516,7 @@ describe("runRepairCli — credential storage", () => {
       }),
       "utf8",
     );
+    seedVault(root, ["cred:gpt-4o"]);
 
     const c = makeIo();
     const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
