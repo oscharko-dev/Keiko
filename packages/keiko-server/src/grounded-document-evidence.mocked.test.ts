@@ -132,4 +132,41 @@ describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
     // Per-document cap is respected: each extracted document carries at most the per-document max.
     expect(MAX_DOCUMENT_EXTRACTED_BYTES).toBeGreaterThan(0);
   });
+
+  it("discloses a truncation uncertainty marker when a document is clipped", async () => {
+    extractMock.mockResolvedValue({
+      outcome: "extracted",
+      format: "docx",
+      text: "Policy summary line.",
+      extractedBytes: 20,
+      truncated: true,
+      diagnostics: [],
+    });
+    const result = await run(["docs/long.docx"]);
+    expect(result.candidates).toHaveLength(1);
+    expect(
+      result.uncertainty.some(
+        (marker) => marker.kind === "scope-incomplete" && marker.claim.includes("truncated"),
+      ),
+    ).toBe(true);
+  });
+
+  it("splits an oversized single line into windows that respect the per-window byte cap", async () => {
+    // A document whose extracted projection is one very long unbroken line (e.g. a PDF page with no
+    // line breaks) must still be carried as multiple bounded windows, never one oversized window.
+    extractMock.mockResolvedValue({
+      outcome: "extracted",
+      format: "pdf",
+      text: "y".repeat(20 * 1024),
+      extractedBytes: 20 * 1024,
+      truncated: false,
+      diagnostics: [],
+    });
+    const result = await run(["docs/wide.pdf"]);
+    const windows = result.excerpts.get("docs/wide.pdf") ?? [];
+    expect(windows.length).toBeGreaterThan(1);
+    for (const window of windows) {
+      expect(Buffer.byteLength(window.content, "utf8")).toBeLessThanOrEqual(8 * 1024);
+    }
+  });
 });

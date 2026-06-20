@@ -174,13 +174,35 @@ function utf8ByteLength(value: string): number {
   return TEXT_ENCODER.encode(value).length;
 }
 
+// Splits a single line that exceeds the per-window byte cap into UTF-8-safe chunks, each at most
+// MAX_DOCUMENT_WINDOW_BYTES. This guarantees no window ever exceeds the cap (which the pack
+// assembler would otherwise clamp, dropping bounded-but-extracted text), even for a document whose
+// extracted projection has a very long unbroken line (e.g. a PDF page with no line breaks).
+function splitToWindowChunks(line: string): readonly string[] {
+  if (utf8ByteLength(line) <= MAX_DOCUMENT_WINDOW_BYTES) {
+    return [line];
+  }
+  const encoded = TEXT_ENCODER.encode(line);
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < encoded.length) {
+    const end = Math.min(offset + MAX_DOCUMENT_WINDOW_BYTES, encoded.length);
+    const chunk = decoder.decode(encoded.subarray(offset, end)).replace(/�+$/u, "");
+    const consumed = utf8ByteLength(chunk) || end - offset;
+    chunks.push(chunk);
+    offset += consumed;
+  }
+  return chunks;
+}
+
 // Split already-redacted extracted text into non-overlapping windows, each at most
 // MAX_DOCUMENT_WINDOW_BYTES and capped at MAX_DOCUMENT_WINDOWS. Line numbers index the extracted
 // text projection itself (DOCX paragraph / XLSX row / PDF page lines), so a citation such as
 // `[report.docx:1-40]` references a reproducible span of the extracted text rather than an
 // original on-screen line.
 function windowExtractedText(text: string): readonly ExcerptWindow[] {
-  const lines = text.split("\n");
+  const lines = text.split("\n").flatMap((line) => splitToWindowChunks(line));
   const windows: ExcerptWindow[] = [];
   let startIndex = 0;
   let buffer: string[] = [];
@@ -285,6 +307,7 @@ interface MutableEvidence {
   readonly candidates: CandidateFile[];
   readonly excerpts: Map<string, readonly ExcerptWindow[]>;
   readonly omitted: OmittedContextEntry[];
+  readonly uncertainty: UncertaintyMarker[];
   totalExtractedBytes: number;
 }
 
@@ -370,14 +393,14 @@ async function loadDocumentBytes(
 function recordExtractedDocument(
   inputs: DocumentEvidenceInputs,
   scopePath: string,
-  text: string,
+  extraction: { readonly text: string; readonly truncated: boolean },
   queryFingerprint: string,
   acc: MutableEvidence,
   nowMs: number,
 ): void {
   // The Local Knowledge extractor is pure and does NOT redact; the document text is redacted here,
   // before it enters any excerpt window, prompt, or citation surface (Issue #1285 trust boundary).
-  const windows = windowExtractedText(redact(text));
+  const windows = windowExtractedText(redact(extraction.text));
   if (windows.length === 0) {
     // All extracted text was redaction-stripped — disclose the document was reachable but unusable.
     omit(acc, scopePath, "redacted-only", nowMs);
@@ -392,6 +415,15 @@ function recordExtractedDocument(
     (sum, window) => sum + utf8ByteLength(window.content),
     0,
   );
+  if (extraction.truncated) {
+    // The document was clipped to the extraction byte budget; disclose that the evidence is partial.
+    acc.uncertainty.push({
+      kind: "scope-incomplete",
+      claim: `Document ${scopePath} was truncated to the extraction budget; its evidence is partial.`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs,
+    });
+  }
 }
 
 async function processDocument(
@@ -427,7 +459,14 @@ async function processDocument(
     omit(acc, scopePath, omissionReasonForOutcome(extraction.outcome), nowMs);
     return;
   }
-  recordExtractedDocument(inputs, scopePath, extraction.text, queryFingerprint, acc, nowMs);
+  recordExtractedDocument(
+    inputs,
+    scopePath,
+    { text: extraction.text, truncated: extraction.truncated },
+    queryFingerprint,
+    acc,
+    nowMs,
+  );
 }
 
 // ─── Public entry ────────────────────────────────────────────────────────────────
@@ -487,6 +526,7 @@ export async function collectConnectedDocumentEvidence(
     candidates: [],
     excerpts: new Map(),
     omitted: [],
+    uncertainty: [],
     totalExtractedBytes: 0,
   };
   const seen = new Set<string>();
@@ -496,8 +536,12 @@ export async function collectConnectedDocumentEvidence(
     }
     await processConnectedEntry(inputs, entry, seen, queryFingerprint, acc);
   }
-  const uncertainty =
-    acc.omitted.length > 0 ? [disclosureMarker(acc.omitted.length, inputs.nowMs())] : [];
+  // The skipped-document disclosure (one marker summarizing all omissions) plus any per-document
+  // truncation markers accumulated during extraction.
+  const uncertainty = [
+    ...(acc.omitted.length > 0 ? [disclosureMarker(acc.omitted.length, inputs.nowMs())] : []),
+    ...acc.uncertainty,
+  ];
   return {
     atoms: acc.atoms,
     candidates: acc.candidates,

@@ -1866,10 +1866,14 @@ async function assemblePackFromReads({
       ranked: [...prepared.ordered.kept, ...documentEvidence.candidates],
       omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
       excerpts,
-      // Document evidence is request-local and not part of the file-state cache key, so it is only
-      // assembled on the non-cached path; passing cacheIdentity here would let a later code-only
-      // run reuse a pack that still carries this run's documents.
-      cacheIdentity: documentEvidence.atoms.length > 0 ? undefined : cacheIdentity,
+      // Document evidence is request-local and not part of the file-state cache key, so a pack that
+      // carries any document evidence — extracted atoms OR skipped-document omissions — must not be
+      // written into the micro-index under a code-only file-state key (it would orphan an entry the
+      // read-bypass gate never serves). Mirror the bypass condition in prepareGroundedAssembly.
+      cacheIdentity:
+        documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0
+          ? undefined
+          : cacheIdentity,
       initialUsage: prepared.initialUsage,
       initialUncertainty: [
         ...rings.uncertainty,

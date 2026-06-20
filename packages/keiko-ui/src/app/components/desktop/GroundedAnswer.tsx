@@ -180,7 +180,11 @@ function CitationReference({
   return (
     <span className="grounded-citation" title={citationTitle(citation)}>
       {citation.documentFormat === undefined ? null : (
-        <span className="grounded-citation-doc-badge">{citation.documentFormat.toUpperCase()}</span>
+        // The format is already in the chip's accessible name via citationTitle(); hide the badge
+        // from assistive tech so the format is not announced twice.
+        <span className="grounded-citation-doc-badge" aria-hidden="true">
+          {citation.documentFormat.toUpperCase()}
+        </span>
       )}
       <span>{formatRange(citation)}</span>
       <CitationScore score={citation.score} />
