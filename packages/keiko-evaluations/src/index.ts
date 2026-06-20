@@ -13,6 +13,9 @@ export { scoreFixture, aggregateScorecard, summarizeScorecard } from "./scorer.j
 export type { ScoringInput } from "./scorer.js";
 export { checkSurfaceParity } from "./surface-parity.js";
 export { renderEvalSummary } from "./render.js";
+// Prompt Enhancer evaluation suite (Epic #1307, Issue #1315). Exposed as a single auditable namespace,
+// mirroring the gateway's `PromptEnhancer` and evidence's `PromptEnhancement` namespace convention.
+export * as PromptEnhancerEval from "./promptEnhancer/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,

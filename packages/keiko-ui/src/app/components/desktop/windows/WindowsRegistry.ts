@@ -38,6 +38,11 @@ export type WindowType =
   // Epic #532 — Relationship engine: a singleton tool window (graph list + inspector + impact +
   // health). Like QI, it lives inside the Workspace, not as a full-page route.
   | "relationships"
+  // Epic #1307, Issue #1314 — Prompt Enhancer: a singleton tool window. Enter a raw prompt, choose a
+  // profile + missing-info strategy, and review the governed Enhanced Prompt (sections, grounding
+  // plan, safety rules, output schema, quality criteria, candidate scorecards) before any downstream
+  // use. Deterministic and provider-neutral; routed through the Model Gateway for readiness only.
+  | "promptEnhancer"
   // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
   // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.
   | "figma"
@@ -435,6 +440,20 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  // Epic #1307, Issue #1314 — Prompt Enhancer singleton tool window. Dense workflow-first surface:
+  // raw prompt → profile + strategy → governed Enhanced Prompt with candidate scorecards.
+  promptEnhancer: {
+    title: "Prompt Enhancer",
+    icon: "spark",
+    accent: true,
+    desc: "Turn a raw prompt into a governed, reviewable Enhanced Prompt",
+    w: 460,
+    h: 620,
+    min: { w: 340, h: 360 },
+    tiny: { w: 280, h: 220 },
+    tool: true,
+    singleton: true,
+  },
   // Epic #270 — Quality Intelligence run result card. Non-singleton: one card per run (keyed by
   // cfg.runId). Shows the generated test cases, per-candidate review, and export.
   qiRun: {
@@ -573,6 +592,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figmaJson",
   "files",
   "quality",
+  "promptEnhancer",
   "relationships",
   "automations",
   "mobile",

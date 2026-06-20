@@ -164,6 +164,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  // Epic #1307, Issue #1314 — Prompt Enhancer tool: routes through the Model Gateway for readiness,
+  // surfaces content-light evidence, and produces a reviewable artifact the user confirms before any
+  // downstream use. The BFF returns a transient result (it persists nothing).
+  promptEnhancer: {
+    lifecycle: ["idle", "running", "results", "error"],
+    trustBoundary: ["ui", "model", "evidence"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
   // Epic #270 — QI run result card: shows an evidence-backed run; review/export are user-confirmed.
   qiRun: {
     lifecycle: ["running", "final", "needs-review", "verified", "failed", "cancelled"],

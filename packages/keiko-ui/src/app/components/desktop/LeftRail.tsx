@@ -109,6 +109,19 @@ export function LeftRail({
         >
           <Icons.check size={19} />
         </button>
+        {/* Epic #1307, Issue #1314 — Prompt Enhancer opens as a singleton Workspace tool window. */}
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("promptEnhancer") ? "true" : "false"}
+          aria-label="Prompt Enhancer"
+          aria-pressed={openTools.has("promptEnhancer")}
+          data-tip="Prompt Enhancer"
+          onClick={() => onTool("promptEnhancer")}
+        >
+          <Icons.spark size={19} />
+        </button>
         <button
           type="button"
           className="rail-btn"

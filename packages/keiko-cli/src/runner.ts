@@ -6,6 +6,7 @@ import { runGenTestsCli } from "./gen-tests.js";
 import { runInvestigateCli } from "./investigate.js";
 import { runEvidenceCli } from "./evidence.js";
 import { runEvaluateCli } from "./evaluate.js";
+import { runPromptEnhancerCli } from "./prompt-enhancer.js";
 import { runMemoryCli } from "./memory.js";
 import { runInitCli } from "./init.js";
 import { runLifecycleCli } from "./lifecycle.js";
@@ -44,6 +45,7 @@ Usage:
   keiko investigate [OPTIONS] Investigate a bug and propose a fix + regression test (dry-run by default).
   keiko evidence <list|show> Inspect redacted evidence manifests written by \`keiko run\`.
   keiko evaluate [OPTIONS]     Run the evaluation harness (offline by default; --live for live model).
+  keiko prompt-enhancer [OPTIONS] Enhance a raw prompt into a governed, reviewable Enhanced Prompt.
   keiko memory <maintain|stats> Run a memory maintenance pass or print vault stats (#204).
   keiko ui [OPTIONS]       Launch the local UI on 127.0.0.1 and print its URL.
   keiko launcher <install|remove|status> [OPTIONS]
@@ -70,6 +72,7 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   investigate: runInvestigateCli,
   evidence: (rest, io, env) => runEvidenceCli(rest, io, { env }),
   evaluate: (rest, io, env) => runEvaluateCli(rest, io, env, {}),
+  "prompt-enhancer": (rest, io, env) => runPromptEnhancerCli(rest, io, env, {}),
   memory: (rest, io, env) => runMemoryCli(rest, io, env),
   init: runInitCli,
   doctor: runDoctorCli,

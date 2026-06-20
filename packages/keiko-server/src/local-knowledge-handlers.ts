@@ -300,7 +300,7 @@ function configuredCapabilityForModel(
   config: EmbeddingSelectionConfig,
   modelId: string,
 ): ReturnType<typeof findConfiguredCapability> {
-  return findConfiguredCapability(config as GatewayConfig, modelId);
+  return findConfiguredCapability(config, modelId);
 }
 
 function isConfiguredEmbeddingModel(config: EmbeddingSelectionConfig, modelId: string): boolean {

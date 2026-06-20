@@ -397,12 +397,10 @@ export function currentGroundingLimits(deps: UiHandlerDeps): GroundingLimits {
 // Re-export GroundingLimits so callers (read-handlers, store-handlers) only need one import.
 export type { GroundingLimits };
 
-function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
-  // Epic #177 audit: include both `apiKey` and `baseUrl` so error-message and evidence
-  // redaction can scrub the provider URL the user (or the provider's response) might echo
-  // back. `baseUrl` is not a credential per se, but pairing it with the apiKey reveals the
-  // backend topology and gives an attacker a place to direct probes; the matrix's security
-  // section claims both shapes are scrubbed at the BFF boundary.
+function configTopologyValues(config: GatewayConfig | undefined): readonly string[] {
+  // Epic #177 audit: redact provider URLs and egress settings because backend topology gives an
+  // attacker a place to direct probes. Credentials are collected separately as opaque secrets for
+  // evidence hashing.
   if (config === undefined) return [];
   const out: string[] = [];
   const addEgressTopology = (egress: GatewayConfig["egress"]): void => {
@@ -412,14 +410,27 @@ function configSecretValues(config: GatewayConfig | undefined): readonly string[
     if (egress.caBundlePath !== undefined) out.push(egress.caBundlePath);
   };
   addEgressTopology(config.egress);
+  for (const provider of config.providers) {
+    out.push(provider.baseUrl);
+    addEgressTopology(provider.egress);
+  }
+  return out;
+}
+
+function configOpaqueSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  if (config === undefined) return [];
+  const out: string[] = [];
   if (config.figma?.accessToken !== undefined) {
     out.push(config.figma.accessToken);
   }
   for (const provider of config.providers) {
-    out.push(provider.apiKey, provider.baseUrl);
-    addEgressTopology(provider.egress);
+    out.push(provider.apiKey);
   }
   return out;
+}
+
+function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  return [...configTopologyValues(config), ...configOpaqueSecretValues(config)];
 }
 
 function figmaEnvSecretValues(env: EnvSource): readonly string[] {
@@ -491,6 +502,23 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
 
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
   return redactionSecrets(deps.env, currentGatewayConfig(deps), currentGatewayEgressConfig(deps));
+}
+
+export function currentEvidenceTopologyRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
+  return Array.from(
+    new Set([
+      ...configTopologyValues(currentGatewayConfig(deps)),
+      ...egressSecretValues(currentGatewayEgressConfig(deps)),
+    ]),
+  );
+}
+
+export function currentEvidenceRequiresFullStringRedaction(deps: UiHandlerDeps): boolean {
+  return (
+    keikoApiKeySecretValues(deps.env).length > 0 ||
+    figmaEnvSecretValues(deps.env).length > 0 ||
+    configOpaqueSecretValues(currentGatewayConfig(deps)).length > 0
+  );
 }
 
 // The production ModelPort factory: a GatewayModelPort over a Gateway built from the resolved

@@ -17,4 +17,18 @@ export { canonicalise, sha256Hex, sha256Base64 } from "./hashing.js";
 
 export { sealString, openString, sealBytes, openBytes, isSealed } from "./secretbox.js";
 
+// Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
+export type {
+  PromptInjectionSignalCode,
+  PromptInjectionSeverity,
+  PromptInjectionSignal,
+} from "./promptInjection.js";
+export {
+  PROMPT_INJECTION_SIGNAL_CODES,
+  isPromptInjectionSignalCode,
+  detectPromptInjectionSignals,
+  containsRedactableSecret,
+  hasCriticalInjectionSignal,
+} from "./promptInjection.js";
+
 export * from "./errors/index.js";

@@ -1073,3 +1073,169 @@ export {
   assertRelationshipTypeAllowsKinds,
   validateRelationship,
 } from "./relationships-validation.js";
+
+// ─── Prompt Enhancer (Epic #1307 / Issue #1309) ─────────────────────────────────
+// Wire-safe contracts, task taxonomy (≥10 classes), generation-profile metadata, and the
+// deterministic analyzer-result shape, plus the pure deterministic `analyzePrompt` and the pure
+// Ok|Fail validators. Provider-neutral by construction (no credentials, hidden prompts, or tool
+// authority — ADR-0044 §5). Governed by ADR-0044 and the prompt-enhancer architecture blueprint.
+export type {
+  PromptEnhancementRequestId,
+  EnhancedPromptId,
+  PromptTaskClass,
+  PromptDomain,
+  PromptCriticality,
+  PromptRiskClass,
+  GroundingNeedKind,
+  GroundingSignal,
+  GroundingNeed,
+  GroundingStrategy,
+  RetrievalMode,
+  GroundingSourceKind,
+  GroundingSourcePolicy,
+  CitationDiscipline,
+  CitationGranularity,
+  CitationRequirement,
+  RecencyExpectation,
+  ContradictionPolicy,
+  NoAnswerCondition,
+  GroundingDirective,
+  RagEvaluationDimension,
+  RagEvaluationHint,
+  GroundingPlan,
+  OutputFormat,
+  OutputFormatHint,
+  OutputSchemaDescriptor,
+  MissingContextTopic,
+  PromptClarification,
+  PromptAssumption,
+  ClarificationOrAssumption,
+  MissingInformationStrategy,
+  PromptSignalStrength,
+  PromptSignalDimension,
+  PromptClassificationSignal,
+  PromptEnhancementProfileId,
+  PromptEnhancementProfile,
+  RawPromptInput,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+  EnhancedPrompt,
+} from "./prompt-enhancer.js";
+export {
+  PROMPT_ENHANCER_SCHEMA_VERSION,
+  PROMPT_ANALYSIS_MAX_SCAN_CHARS,
+  PROMPT_MISSING_CONTEXT_MAX_CHARS,
+  PROMPT_TASK_CLASSES,
+  PROMPT_DOMAINS,
+  SAFETY_CRITICAL_DOMAINS,
+  PROMPT_CRITICALITIES,
+  PROMPT_RISK_CLASSES,
+  GROUNDING_NEED_KINDS,
+  GROUNDING_SIGNALS,
+  GROUNDING_STRATEGIES,
+  RETRIEVAL_MODES,
+  GROUNDING_SOURCE_KINDS,
+  CITATION_DISCIPLINES,
+  CITATION_GRANULARITIES,
+  CONTRADICTION_POLICIES,
+  NO_ANSWER_CONDITIONS,
+  GROUNDING_DIRECTIVES,
+  RAG_EVALUATION_DIMENSIONS,
+  PROMPT_OUTPUT_FORMATS,
+  OUTPUT_FORMAT_HINTS,
+  MISSING_CONTEXT_TOPICS,
+  MISSING_INFORMATION_STRATEGIES,
+  PROMPT_SIGNAL_STRENGTHS,
+  PROMPT_SIGNAL_DIMENSIONS,
+  PROMPT_ENHANCEMENT_PROFILE_IDS,
+  PROMPT_ENHANCEMENT_PROFILES,
+  isSafetyCriticalDomain,
+  asPromptEnhancementRequestId,
+  asEnhancedPromptId,
+  validatePromptEnhancerIdString,
+  assertNeverTaskClass,
+  normalizePromptDraft,
+} from "./prompt-enhancer.js";
+export { analyzePrompt } from "./prompt-enhancer-analyzer.js";
+export { planGrounding } from "./prompt-enhancer-grounding.js";
+export type { PlanGroundingOptions } from "./prompt-enhancer-grounding.js";
+export type {
+  ValidationOk as PromptEnhancerValidationOk,
+  ValidationFail as PromptEnhancerValidationFail,
+  PromptEnhancerValidation,
+} from "./prompt-enhancer-validation.js";
+export {
+  PROMPT_REQUEST_TEXT_MAX_CHARS,
+  validatePromptEnhancementRequest,
+  validatePromptTaskAnalysis,
+  validateEnhancedPrompt,
+  validateGroundingPlan,
+  validatePromptCandidateScorecard,
+  validatePromptCandidateSelection,
+} from "./prompt-enhancer-validation.js";
+// Prompt Enhancer candidate-critic contract surface (#1312; ADR-0044 §6).
+export type {
+  PromptCriticDimension,
+  PromptCriticDimensionScore,
+  PromptCandidateScorecard,
+  PromptCandidateRejection,
+  PromptCandidateRejectionReason,
+  PromptOptimizationBounds,
+  PromptCandidateSelection,
+} from "./prompt-enhancer-critic.js";
+export {
+  PROMPT_CRITIC_DIMENSIONS,
+  PROMPT_CANDIDATE_REJECTION_REASONS,
+  isPromptCriticDimension,
+  isPromptCandidateRejectionReason,
+} from "./prompt-enhancer-critic.js";
+// Prompt Enhancer safety annotations + validate-stage rule model (#1313; ADR-0044 §4/§5/§7).
+export type {
+  PromptSafetyRuleId,
+  PromptSafetyViolationCode,
+  PromptSafetySeverity,
+  LeastPrivilegeConstraint,
+  PromptSafetyDecision,
+  PromptSafetyVerificationStatus,
+  PromptSafetyFinding,
+  PromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
+export {
+  PROMPT_SAFETY_RULE_IDS,
+  PROMPT_SAFETY_VIOLATION_CODES,
+  PROMPT_SAFETY_SEVERITIES,
+  LEAST_PRIVILEGE_CONSTRAINTS,
+  PROMPT_SAFETY_DECISIONS,
+  PROMPT_SAFETY_VERIFICATION_STATUSES,
+  PROMPT_SAFETY_VIOLATION_DETAILS,
+  isPromptSafetyViolationCode,
+  requiresHumanReviewForAnalysis,
+  leastPrivilegeForAnalysis,
+  summarizePromptSafety,
+  assessEnhancedPromptStructuralSafety,
+  validatePromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
+// Prompt Enhancer BFF wire surface (#1314; ADR-0044 §1 "BFF /api/prompt-enhancer/* routes"). The
+// request/response envelope the governed API, CLI, and UI surfaces exchange, plus the pure request
+// validator. Also re-exported from `./bff-wire.js` for the `@oscharko-dev/keiko-contracts/bff-wire`
+// subpath the UI imports.
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementModelRouting,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
+  PromptEnhancementWireResponse,
+} from "./prompt-enhancer-bff.js";
+export {
+  PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS,
+  PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS,
+  PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES,
+  validatePromptEnhancementWireRequest,
+} from "./prompt-enhancer-bff.js";
