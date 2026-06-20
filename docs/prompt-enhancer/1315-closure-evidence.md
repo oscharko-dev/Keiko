@@ -22,20 +22,20 @@ metrics, operator guidance, and a precise statement of remaining limitations.
 
 ## Child issue matrix
 
-| Issue | Title                                              | State                                                                                  | Evidence                                                        |
-| ----- | -------------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| #1308 | Architecture and reuse blueprint                   | Closed / completed                                                                     | ADR-0044, architecture-blueprint.md                             |
-| #1309 | Enhanced Prompt contracts, taxonomy, analyzer      | Closed / completed                                                                     | `keiko-contracts` prompt-enhancer-\*                            |
-| #1310 | Planner profiles and structured generator          | Closed / completed                                                                     | `keiko-model-gateway` promptEnhancer planner/generator/profiles |
-| #1311 | Grounding and retrieval planning                   | Closed / completed                                                                     | `keiko-contracts` `planGrounding`; generator rendering          |
-| #1312 | Candidate generation, critic scoring, optimization | Closed / completed                                                                     | `keiko-model-gateway` critic/candidates/optimize                |
-| #1313 | Safety guardrails, validation, audit evidence      | Closed / completed                                                                     | `keiko-security`, `keiko-contracts` safety, `keiko-evidence`    |
-| #1314 | Governed API, CLI, UI surfaces                     | Implementation merged (PR #1349, `ab43fadd`); issue open pending its own board closure | server/cli/ui wiring                                            |
-| #1315 | Evaluation suite, documentation, closure           | This issue                                                                             | this document + the evaluation suite                            |
+| Issue | Title                                              | State                                                                         | Evidence                                                        |
+| ----- | -------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| #1308 | Architecture and reuse blueprint                   | Closed / completed                                                            | ADR-0044, architecture-blueprint.md                             |
+| #1309 | Enhanced Prompt contracts, taxonomy, analyzer      | Closed / completed                                                            | `keiko-contracts` prompt-enhancer-\*                            |
+| #1310 | Planner profiles and structured generator          | Closed / completed                                                            | `keiko-model-gateway` promptEnhancer planner/generator/profiles |
+| #1311 | Grounding and retrieval planning                   | Closed / completed                                                            | `keiko-contracts` `planGrounding`; generator rendering          |
+| #1312 | Candidate generation, critic scoring, optimization | Closed / completed                                                            | `keiko-model-gateway` critic/candidates/optimize                |
+| #1313 | Safety guardrails, validation, audit evidence      | Closed / completed                                                            | `keiko-security`, `keiko-contracts` safety, `keiko-evidence`    |
+| #1314 | Governed API, CLI, UI surfaces                     | Closed / completed (2026-06-20; PR #1349 `ab43fadd`, hardened by #1351/#1357) | server/cli/ui wiring                                            |
+| #1315 | Evaluation suite, documentation, closure           | Closed / completed (this issue)                                               | this document + the evaluation suite                            |
 
-All child **implementations** are merged into `feat/prompt-enhancer-1307`. The only outstanding
-administrative step before the epic can be closed is #1314's own issue closure; that is owned by #1314's
-board workflow, not by #1315.
+All child **implementations** are merged into `feat/prompt-enhancer-1307`, and every child issue
+(#1308–#1315) is now closed / completed. The only remaining open item is the parent epic #1307 itself;
+its closure is recorded in [1307-epic-closure-evidence.md](./1307-epic-closure-evidence.md).
 
 ## Acceptance Criteria ledger
 
@@ -147,7 +147,10 @@ only the CLI smoke test was stale. Recorded here for transparency.
   still ranked correctly. The evaluation scorer already accepts either evidence-boundary directive.
   Aligning the critic is a #1312 follow-up.
 - Optional model-assisted LLM-as-judge evaluation stage and calibration study (post-MVP).
-- Close #1314's issue and complete its board fields so the epic can be formally closed.
+- Add a behavioural cross-surface byte-identical parity test (CLI path vs server orchestrate path on an
+  identical wire request) to pin AC1 against future request-building drift. Parity is correct by
+  construction today (both surfaces call the same `runPromptEnhancement` authority) but is not yet pinned
+  by an explicit cross-surface diff test.
 
 ## No-new-dependency confirmation
 
