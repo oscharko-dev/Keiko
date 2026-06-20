@@ -841,3 +841,75 @@ export {
   assertRelationshipTypeAllowsKinds,
   validateRelationship,
 } from "./relationships-validation.js";
+
+// ─── Prompt Enhancer (Epic #1307 / Issue #1309) ─────────────────────────────────
+// Wire-safe contracts, task taxonomy (≥10 classes), generation-profile metadata, and the
+// deterministic analyzer-result shape, plus the pure deterministic `analyzePrompt` and the pure
+// Ok|Fail validators. Provider-neutral by construction (no credentials, hidden prompts, or tool
+// authority — ADR-0044 §5). Governed by ADR-0044 and the prompt-enhancer architecture blueprint.
+export type {
+  PromptEnhancementRequestId,
+  EnhancedPromptId,
+  PromptTaskClass,
+  PromptDomain,
+  PromptCriticality,
+  PromptRiskClass,
+  GroundingNeedKind,
+  GroundingSignal,
+  GroundingNeed,
+  OutputFormat,
+  OutputFormatHint,
+  OutputSchemaDescriptor,
+  MissingContextTopic,
+  PromptClarification,
+  PromptAssumption,
+  ClarificationOrAssumption,
+  MissingInformationStrategy,
+  PromptSignalStrength,
+  PromptSignalDimension,
+  PromptClassificationSignal,
+  PromptEnhancementProfileId,
+  PromptEnhancementProfile,
+  RawPromptInput,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+  EnhancedPrompt,
+} from "./prompt-enhancer.js";
+export {
+  PROMPT_ENHANCER_SCHEMA_VERSION,
+  PROMPT_ANALYSIS_MAX_SCAN_CHARS,
+  PROMPT_MISSING_CONTEXT_MAX_CHARS,
+  PROMPT_TASK_CLASSES,
+  PROMPT_DOMAINS,
+  SAFETY_CRITICAL_DOMAINS,
+  PROMPT_CRITICALITIES,
+  PROMPT_RISK_CLASSES,
+  GROUNDING_NEED_KINDS,
+  GROUNDING_SIGNALS,
+  PROMPT_OUTPUT_FORMATS,
+  OUTPUT_FORMAT_HINTS,
+  MISSING_CONTEXT_TOPICS,
+  MISSING_INFORMATION_STRATEGIES,
+  PROMPT_SIGNAL_STRENGTHS,
+  PROMPT_SIGNAL_DIMENSIONS,
+  PROMPT_ENHANCEMENT_PROFILE_IDS,
+  PROMPT_ENHANCEMENT_PROFILES,
+  isSafetyCriticalDomain,
+  asPromptEnhancementRequestId,
+  asEnhancedPromptId,
+  validatePromptEnhancerIdString,
+  assertNeverTaskClass,
+  normalizePromptDraft,
+} from "./prompt-enhancer.js";
+export { analyzePrompt } from "./prompt-enhancer-analyzer.js";
+export type {
+  ValidationOk as PromptEnhancerValidationOk,
+  ValidationFail as PromptEnhancerValidationFail,
+  PromptEnhancerValidation,
+} from "./prompt-enhancer-validation.js";
+export {
+  PROMPT_REQUEST_TEXT_MAX_CHARS,
+  validatePromptEnhancementRequest,
+  validatePromptTaskAnalysis,
+  validateEnhancedPrompt,
+} from "./prompt-enhancer-validation.js";
