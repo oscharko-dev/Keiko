@@ -6,6 +6,7 @@
 
 import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import type { ContextPack } from "@oscharko-dev/keiko-workspace";
+import type { TestStrategy, TestStyle } from "./frontend.js";
 import type { TestConventions, UnitTestTarget, UnitTestWorkflowInput } from "./types.js";
 
 const OUTPUT_CONTRACT =
@@ -18,15 +19,54 @@ const OUTPUT_CONTRACT =
   "plain prose, markdown bullets, or escaped newline markers like `\\n+`/`\\n-` inside the diff " +
   "fence; every diff line must be separated by a real newline.";
 
-function systemContent(conventions: TestConventions): string {
+// Per-style discipline (Issue #1203). The output contract is identical for every style — a reviewable
+// unified diff for test files — but the test idioms differ by the convention-driven style.
+const STYLE_DESCRIPTOR: Readonly<Record<TestStyle, string>> = {
+  unit: "rigorous, deterministic unit tests",
+  component: "rigorous React component tests",
+  interaction: "rigorous React component interaction tests",
+  "accessibility-smoke": "rigorous React component tests with an accessibility smoke check",
+  "browser-smoke": "a minimal Playwright browser smoke test",
+  unsupported: "unit tests",
+};
+
+const STYLE_GUIDANCE: Readonly<Record<TestStyle, readonly string[]>> = {
+  unit: [
+    "Cover edge cases explicitly: null, undefined, empty, zero, boundary, negative, and error paths.",
+  ],
+  component: [
+    "Render the component with @testing-library/react render(), query through screen by accessible " +
+      "role/name or visible text, and assert user-visible output. Do not assert implementation details " +
+      "or internal state. Cover empty, loading, and error states where the component supports them.",
+  ],
+  interaction: [
+    "Render the component with @testing-library/react, drive interactions with @testing-library/" +
+      "user-event (const user = userEvent.setup(); await user.click(...) / user.type(...)), and assert " +
+      "the resulting accessible UI changes. Do not assert internal state.",
+  ],
+  "accessibility-smoke": [
+    "Render the component with @testing-library/react and query by accessible role/name so the test " +
+      "exercises the accessibility tree. Include at least one accessibility assertion: where the project " +
+      "provides an axe matcher, assert the rendered output has no detectable accessibility violations.",
+  ],
+  "browser-smoke": [
+    'Write a minimal Playwright browser smoke test: import { test, expect } from "@playwright/test", ' +
+      "navigate to the route under test, and assert that one key user-visible element is visible. Keep " +
+      "it a happy-path smoke test, not an exhaustive suite. Place it under the project's end-to-end test " +
+      "directory.",
+  ],
+  unsupported: [],
+};
+
+function systemContent(conventions: TestConventions, strategy: TestStrategy): string {
   const lines = [
-    "You are a senior engineer writing rigorous, deterministic unit tests for existing code.",
+    `You are a senior engineer writing ${STYLE_DESCRIPTOR[strategy.style]} for existing code.`,
     `Test framework: ${conventions.framework}.`,
     `Place new tests using the project's "${conventions.fileNamingStyle}" naming convention.`,
     conventions.testDirs.length > 0
       ? `Project test directories: ${conventions.testDirs.join(", ")}.`
       : "No dedicated test directory detected; place tests beside their source.",
-    "Cover edge cases explicitly: null, undefined, empty, zero, boundary, negative, and error paths.",
+    ...STYLE_GUIDANCE[strategy.style],
     OUTPUT_CONTRACT,
   ];
   return `${lines.join("\n")}${assertionStyleBlock(conventions)}`;
@@ -78,16 +118,18 @@ function userContent(
 }
 
 // rejectionReason is appended on a retry (D8) so the model can correct an invalid/out-of-scope
-// diff; it is undefined on the first attempt. The documented core signature is (input, conventions,
-// pack); the optional 4th argument carries retry state without breaking that contract.
+// diff; it is undefined on the first attempt. The core signature is (input, conventions, strategy,
+// pack); the optional 5th argument carries retry state without breaking that contract. The strategy
+// (Issue #1203) drives the per-style test idioms in the system message.
 export function buildPrompt(
   input: UnitTestWorkflowInput,
   conventions: TestConventions,
+  strategy: TestStrategy,
   pack: ContextPack,
   rejectionReason?: string,
 ): readonly ChatMessage[] {
   return [
-    { role: "system", content: systemContent(conventions) },
+    { role: "system", content: systemContent(conventions, strategy) },
     { role: "user", content: userContent(input, pack, rejectionReason) },
   ];
 }

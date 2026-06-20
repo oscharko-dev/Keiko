@@ -189,6 +189,20 @@ OS-enforce egress (`tools.ts` `network: "inherit"`; `limits.ts` `enforced: false
 `security-and-audit-boundaries.md` "Keiko is not a sandbox"). No v1 flow executes model-generated
 code.
 
+**Frontend test styles (#1203).** The test-generation workflow detects a project's declared frontend
+test stack (React Testing Library, `user-event`, `jest-dom`/axe matchers, jsdom/happy-dom, Playwright)
+from local package manifests and framework config, and selects a convention-driven style for a target —
+`unit`, `component`, `interaction`, `accessibility-smoke`, or `browser-smoke`. Selection is
+convention-driven, not user-prompt-driven: a library file is `unit` and is never a Playwright target; a
+Playwright `browser-smoke` is chosen only for an application entry point in a Playwright project; a
+React component with no supported stack short-circuits with a reviewable limitation and **no model
+call**, never a fabricated test. Frontend candidates execute through the **same** assured pre-filter and
+enforced-egress isolated-execution path as #1202 (ADR-0043): build → pass → stability (N≥5) → coverage →
+mutation. A browser smoke has no vitest coverage/mutation oracle, so it is verified for
+build/execution/stability only and is never labelled `assured` while the egress boundary is the gating
+condition. The content-free source-class provenance (repository search, Local Knowledge, Quality
+Intelligence, memory) of the generated-test context is recorded in the test-generation evidence.
+
 ### D8 — Release branch and human-in-the-loop merge gates
 
 Editor work lands on the epic integration branch (currently `feat/keiko-editor`); child PRs target

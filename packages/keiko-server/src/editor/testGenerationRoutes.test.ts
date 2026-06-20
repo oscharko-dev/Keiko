@@ -113,6 +113,7 @@ const candidateRunner: TestGenerationRunner = () =>
       mutation: "not-run",
       antiTautology: "not-run",
     },
+    verification: "vitest",
   });
 
 const PASSED_FUNNEL: EditorTestGenerationFunnel = {

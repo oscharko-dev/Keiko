@@ -270,6 +270,7 @@ async function produceOutcome(
       request: ctx.request,
       realRoot: ctx.realRoot,
       signal: ctx.signal,
+      verification: produced.verification,
     });
     return {
       schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,

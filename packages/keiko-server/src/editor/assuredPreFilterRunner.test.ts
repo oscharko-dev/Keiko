@@ -39,7 +39,7 @@ describe("targetSourceRelPath", () => {
 });
 
 describe("planGateCommands", () => {
-  it("builds the TS/JS toolchain gate commands writing reports under the assured dir", () => {
+  it("defaults to the vitest TS/JS toolchain gate commands writing reports under the assured dir", () => {
     const cmds = planGateCommands();
     expect(cmds.build).toEqual({ command: "npx", args: ["--no-install", "tsc", "--noEmit"] });
     expect(cmds.test).toEqual({ command: "npx", args: ["--no-install", "vitest", "run"] });
@@ -75,6 +75,21 @@ describe("ASSURED_COMMAND_RULES", () => {
     expect(isCommandAllowed(ASSURED_COMMAND_RULES, "npx", ["--yes", "vitest"])).toMatchObject({
       allowed: false,
     });
+  });
+
+  it("returns the identical vitest command set when 'vitest' is passed explicitly", () => {
+    expect(planGateCommands("vitest")).toEqual(planGateCommands());
+  });
+
+  it("builds Playwright gate commands for a browser-smoke candidate (Issue #1203)", () => {
+    const cmds = planGateCommands("playwright");
+    expect(cmds.build).toEqual({ command: "npx", args: ["tsc", "--noEmit"] });
+    expect(cmds.test).toEqual({ command: "npx", args: ["playwright", "test"] });
+    // No vitest coverage flags and no Stryker: an end-to-end smoke has no coverage/mutation oracle, so
+    // those gates emit no report and the candidate stays unverified (never assured).
+    expect(cmds.coverage.args).not.toContain("--coverage");
+    expect(cmds.mutation).not.toEqual({ command: "npx", args: ["stryker", "run"] });
+    expect(cmds.test.command).toBe("npx");
   });
 });
 

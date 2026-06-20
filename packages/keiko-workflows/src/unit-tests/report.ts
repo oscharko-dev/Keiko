@@ -8,6 +8,7 @@
 import { redact } from "@oscharko-dev/keiko-security";
 import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
 import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
+import type { TestStyle, TestVerification } from "./frontend.js";
 import type { AddedTestFile, UnitTestWorkflowReport, WorkflowStatus } from "./types.js";
 
 const TEST_CASE_PREFIXES: readonly string[] = ["test(", "it(", "describe("];
@@ -52,6 +53,9 @@ export interface ReportParts {
   readonly verificationSkipReason: string | undefined;
   readonly modelCallCount: number;
   readonly patchRetryCount: number;
+  readonly testStyle?: TestStyle | undefined;
+  readonly verification?: TestVerification | undefined;
+  readonly limitation?: string | undefined;
 }
 
 function redactOptional(value: string | undefined): string | undefined {
@@ -75,6 +79,9 @@ export function assembleReport(parts: ReportParts): UnitTestWorkflowReport {
     verificationSkipReason: redactOptional(parts.verificationSkipReason),
     modelCallCount: parts.modelCallCount,
     patchRetryCount: parts.patchRetryCount,
+    testStyle: parts.testStyle,
+    verification: parts.verification,
+    limitation: redactOptional(parts.limitation),
   };
 }
 
@@ -102,6 +109,17 @@ function verificationLine(report: UnitTestWorkflowReport): readonly string[] {
   return [];
 }
 
+function styleLine(report: UnitTestWorkflowReport): readonly string[] {
+  if (report.testStyle === undefined) {
+    return [];
+  }
+  const verification =
+    report.verification === undefined || report.verification === "none"
+      ? ""
+      : ` · verification: ${report.verification}`;
+  return [`Test style: ${report.testStyle}${verification}`, ""];
+}
+
 // A human-readable Markdown report for the CLI text path. Every field is already redacted by
 // assembleReport, so rendering is plain string composition.
 export function renderMarkdownReport(report: UnitTestWorkflowReport): string {
@@ -110,6 +128,8 @@ export function renderMarkdownReport(report: UnitTestWorkflowReport): string {
     `Model: ${report.modelId} · ${String(report.durationMs)}ms · ` +
       `${String(report.modelCallCount)} model call(s) · ${String(report.patchRetryCount)} retry(ies)`,
     "",
+    ...styleLine(report),
+    ...sectionIf("Limitation", report.limitation),
     ...fileLines(report),
     ...sectionIf("Covered behavior", report.coveredBehavior),
     ...sectionIf("Known gaps", report.knownGaps),

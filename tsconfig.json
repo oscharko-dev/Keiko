@@ -17,6 +17,7 @@
   ],
   "exclude": [
     "tests/architecture/fixtures/**",
+    "tests/fixtures/frontend-test-generation/**",
     "packages/*/dist/**",
     "packages/keiko-ui/**",
     "packages/keiko-editor/src/**/*.test.tsx",

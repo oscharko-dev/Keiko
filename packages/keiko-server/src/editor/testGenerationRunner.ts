@@ -27,6 +27,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { translateDiffToWirePatch, type OriginalContentReader } from "./testGenerationPatch.js";
+import type { AssuredVerificationKind } from "./assuredPreFilterRunner.js";
 
 const GATEWAY_POLICY_VERSION = "editor-test-generation/1";
 const PATCH_ID_LENGTH = 32;
@@ -46,6 +47,9 @@ export interface TestGenerationRunResult {
   readonly patch: EditorTestGenerationWirePatch;
   readonly provenance: EditorTestGenerationWireProvenance;
   readonly funnel: EditorTestGenerationFunnel;
+  // The verification toolchain the workflow selected for this candidate's style (Issue #1203). The
+  // route forwards it to the assured pre-filter so a browser smoke is verified under Playwright.
+  readonly verification: AssuredVerificationKind;
 }
 
 /** Injectable candidate producer. Returns undefined when no candidate could be produced (→ deferred). */
@@ -147,5 +151,6 @@ export const defaultTestGenerationRunner: TestGenerationRunner = async (args) =>
       producedAt: args.nowMs,
     },
     funnel: generatedFunnel(),
+    verification: report.verification === "playwright" ? "playwright" : "vitest",
   };
 };
