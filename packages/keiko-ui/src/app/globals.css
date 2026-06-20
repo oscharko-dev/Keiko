@@ -1749,6 +1749,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   gap: 10px;
   max-width: min(520px, calc(100% - 28px));
+  pointer-events: auto;
   padding: 9px 11px;
   border-radius: 9px;
   border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
@@ -1773,6 +1774,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
+  pointer-events: auto;
 }
 .source-limit-alert-dismiss:hover {
   border-color: var(--line);
