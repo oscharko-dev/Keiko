@@ -1,0 +1,278 @@
+// Bounded chunking + embedding for progressively-extracted large documents (Epic #1160,
+// Issue #1286).
+//
+// The standard chunk/embed path loads the whole document text into a JS string and slices each
+// chunk from it. For a large document that defeats the bounded-memory guarantee. These helpers read
+// each parsed unit's / chunk's text back through the unified `readDocumentTextSpan` (SQLite SUBSTR
+// over the bounded document_text_windows rows), so peak memory stays O(window/batch) regardless of
+// document size. The chunk ids, offsets, token counts, and excerpt hashes are byte-identical to the
+// standard chunker, so the bounded path and the standard path produce the same retrievable index.
+
+import type {
+  ChunkId,
+  DocumentId,
+  EmbeddingModelIdentity,
+  IndexingJobError,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  ParsedUnit,
+} from "@oscharko-dev/keiko-contracts";
+import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
+import type { DatabaseSync } from "node:sqlite";
+
+import {
+  chunkParsedUnit,
+  chunkingStrategyKey,
+  resolveChunkingOptions,
+} from "../chunking/chunker.js";
+import type { ChunkingOptions } from "../chunking/types.js";
+import { composeChunkId, rowToParsedUnit } from "../chunking/chunker-runner.js";
+import {
+  deleteChunksForDocument,
+  insertChunkRow,
+  selectParsedUnitsForDocument,
+} from "../chunking/chunker-persist.js";
+import { readDocumentTextSpan } from "../discovery/persist.js";
+import type { KnowledgeStore } from "../store.js";
+import { embedChunkBatch } from "./embedding-batcher.js";
+import type { ChunkToEmbed, EmbedBatchResult } from "./types.js";
+
+export interface BoundedChunkParams {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
+  readonly documentId: DocumentId;
+}
+
+function rebaseUnit(unit: ParsedUnit, length: number): ParsedUnit {
+  if (unit.kind === "unsupported-media") return unit;
+  return { ...unit, characterStart: 0, characterEnd: length };
+}
+
+interface ChunkUnitContext {
+  readonly db: DatabaseSync;
+  readonly params: BoundedChunkParams;
+  readonly options: ChunkingOptions | undefined;
+  readonly strategyKey: string;
+  readonly maxChunks: number;
+}
+
+// Chunks one parsed unit (read via SUBSTR, rebased to window-local offsets) and persists its chunks
+// with document-relative offsets. Returns the next order index.
+function chunkOneUnit(
+  ctx: ChunkUnitContext,
+  row: ReturnType<typeof selectParsedUnitsForDocument>[number],
+  orderIndex: number,
+): number {
+  const { db, params } = ctx;
+  const start = row.character_start ?? 0;
+  const end = row.character_end ?? start;
+  const unitText = readDocumentTextSpan(db, params.capsuleId, params.documentId, start, end) ?? "";
+  const rebased = rebaseUnit(rowToParsedUnit(row, params.documentId), unitText.length);
+  const chunks = chunkParsedUnit(
+    rebased,
+    unitText,
+    optionsWithBudget(ctx.options, ctx.maxChunks - orderIndex),
+  );
+  let next = orderIndex;
+  for (const chunk of chunks) {
+    insertChunkRow(db, {
+      id: composeChunkId(params.documentId, row.id, next),
+      capsuleId: params.capsuleId,
+      sourceId: params.sourceId,
+      documentId: params.documentId,
+      parsedUnitId: row.id,
+      orderIndex: next,
+      tokenCount: chunk.tokenCount,
+      safeExcerptHash: chunk.safeExcerptHash,
+      chunkingStrategyVersion: ctx.strategyKey,
+      characterStart: start + chunk.characterStart,
+      characterEnd: start + chunk.characterEnd,
+    });
+    next += 1;
+  }
+  return next;
+}
+
+// Bounded re-implementation of the chunker: reads each parsed unit's text via SUBSTR, chunks it with
+// window-relative offsets, then rebases the chunk offsets back to document-relative before persist,
+// so the rows are byte-identical to chunkDocument run over the full text. Returns the chunk count.
+export function chunkDocumentBounded(
+  store: KnowledgeStore,
+  params: BoundedChunkParams,
+  options: ChunkingOptions | undefined,
+  signal: AbortSignal | undefined,
+): number {
+  const db = store._internal.db;
+  const rows = selectParsedUnitsForDocument(db, params.capsuleId, params.documentId);
+  if (rows.length === 0) return 0;
+  const ctx: ChunkUnitContext = {
+    db,
+    params,
+    options,
+    strategyKey: chunkingStrategyKey(options),
+    maxChunks: resolveChunkingOptions(options).maxChunks,
+  };
+  db.exec("BEGIN");
+  try {
+    deleteChunksForDocument(db, params.capsuleId, params.documentId);
+    let orderIndex = 0;
+    for (const row of rows) {
+      if (signal?.aborted === true) throw new Error("bounded chunking aborted");
+      if (orderIndex >= ctx.maxChunks) break;
+      orderIndex = chunkOneUnit(ctx, row, orderIndex);
+    }
+    db.exec("COMMIT");
+    return orderIndex;
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+}
+
+function optionsWithBudget(options: ChunkingOptions | undefined, budget: number): ChunkingOptions {
+  return { ...(options ?? {}), maxChunks: budget };
+}
+
+// ─── Bounded embedding ────────────────────────────────────────────────────────
+interface ChunkOffsetRow {
+  readonly id: string;
+  readonly source_id: string;
+  readonly order_index: number;
+  readonly char_start: number | null;
+  readonly char_end: number | null;
+}
+
+// Selects the next batch of chunks that do NOT yet have a vector. The missing-vector gate is the
+// resume mechanism: it self-heals across an interrupted embed, an externally deleted vector, and an
+// incompatible-checkpoint restart (which deletes vectors first), without trusting a fragile cursor.
+const SELECT_BOUNDED_CHUNKS_SQL = [
+  "SELECT c.id, c.source_id, c.order_index,",
+  "  COALESCE(c.character_start, pu.character_start) AS char_start,",
+  "  COALESCE(c.character_end, pu.character_end) AS char_end",
+  "FROM chunks AS c",
+  "JOIN parsed_units AS pu ON pu.capsule_id = c.capsule_id AND pu.id = c.parsed_unit_id",
+  "LEFT JOIN vectors AS v ON v.capsule_id = c.capsule_id AND v.chunk_id = c.id",
+  "WHERE c.capsule_id = :c AND c.document_id = :d AND v.id IS NULL",
+  "ORDER BY c.order_index ASC",
+  "LIMIT :limit",
+].join(" ");
+
+const COUNT_VECTORS_SQL =
+  "SELECT COUNT(*) AS n FROM vectors WHERE capsule_id = :c AND document_id = :d";
+
+function embeddedChunkCount(db: DatabaseSync, deps: BoundedEmbedDeps): number {
+  const row = db
+    .prepare(COUNT_VECTORS_SQL)
+    .get({ c: String(deps.capsuleId), d: String(deps.documentId) }) as { n: number };
+  return row.n;
+}
+
+export interface BoundedEmbedDeps {
+  readonly store: KnowledgeStore;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly documentId: DocumentId;
+  readonly adapter: OpenAIEmbeddingAdapter;
+  readonly identity: EmbeddingModelIdentity;
+  readonly batchSize: number;
+  readonly concurrency: number;
+  readonly now: () => number;
+  readonly idSource: () => string;
+  readonly signal?: AbortSignal;
+  // Called after each successfully embedded batch with the new embedded-chunk cursor and id, so the
+  // caller can advance the durable checkpoint between model calls.
+  readonly onBatch?: (cursor: number, lastChunkId: ChunkId) => void;
+}
+
+export interface BoundedEmbedResult {
+  readonly vectorCount: number;
+  readonly errors: readonly IndexingJobError[];
+  readonly lastChunkId: ChunkId | null;
+  readonly embeddedCursor: number;
+}
+
+function nextBatch(db: DatabaseSync, deps: BoundedEmbedDeps): readonly ChunkOffsetRow[] {
+  return db.prepare(SELECT_BOUNDED_CHUNKS_SQL).all({
+    c: String(deps.capsuleId),
+    d: String(deps.documentId),
+    limit: deps.batchSize,
+  }) as unknown as readonly ChunkOffsetRow[];
+}
+
+function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): ChunkToEmbed {
+  const text =
+    readDocumentTextSpan(
+      deps.store._internal.db,
+      deps.capsuleId,
+      deps.documentId,
+      row.char_start ?? 0,
+      row.char_end ?? 0,
+    ) ?? "";
+  return {
+    id: row.id as ChunkId,
+    capsuleId: deps.capsuleId,
+    sourceId: row.source_id as KnowledgeSourceId,
+    documentId: deps.documentId,
+    text,
+  };
+}
+
+function embedOptions(deps: BoundedEmbedDeps): Parameters<typeof embedChunkBatch>[1] {
+  return {
+    adapter: deps.adapter,
+    store: deps.store,
+    pinnedIdentity: deps.identity,
+    concurrency: deps.concurrency,
+    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    now: deps.now,
+    idSource: deps.idSource,
+  };
+}
+
+interface EmbedAccumulator {
+  vectorCount: number;
+  readonly errors: IndexingJobError[];
+  lastChunkId: ChunkId | null;
+}
+
+// Embeds one batch, updates the accumulator, and advances the durable checkpoint. Returns false to
+// stop the loop (the batch reported an error).
+async function embedOneBatch(
+  db: DatabaseSync,
+  deps: BoundedEmbedDeps,
+  rows: readonly ChunkOffsetRow[],
+  acc: EmbedAccumulator,
+): Promise<boolean> {
+  const batch = rows.map((row) => toChunkToEmbed(deps, row));
+  const result: EmbedBatchResult = await embedChunkBatch(batch, embedOptions(deps));
+  acc.vectorCount += result.vectors.length;
+  acc.errors.push(...result.errors);
+  const lastVector = result.vectors[result.vectors.length - 1];
+  if (lastVector !== undefined) acc.lastChunkId = lastVector.chunkId;
+  if (acc.lastChunkId !== null) deps.onBatch?.(embeddedChunkCount(db, deps), acc.lastChunkId);
+  return result.errors.length === 0;
+}
+
+// Embeds a document's not-yet-embedded chunks in bounded batches, reading each chunk's text via
+// SUBSTR. Never materializes the whole document text or the whole chunk set, so peak memory stays
+// O(batch) regardless of document size. Resume falls out of the missing-vector gate.
+export async function embedDocumentChunksBounded(
+  deps: BoundedEmbedDeps,
+): Promise<BoundedEmbedResult> {
+  const db = deps.store._internal.db;
+  const acc: EmbedAccumulator = { vectorCount: 0, errors: [], lastChunkId: null };
+  let previousFirstId: string | undefined;
+  for (;;) {
+    if (deps.signal?.aborted === true) break;
+    const rows = nextBatch(db, deps);
+    // No-progress guard: empty, or the same chunks come back unembedded → stop.
+    if (rows.length === 0 || rows[0]?.id === previousFirstId) break;
+    previousFirstId = rows[0]?.id;
+    if (!(await embedOneBatch(db, deps, rows, acc))) break;
+  }
+  return {
+    vectorCount: acc.vectorCount,
+    errors: acc.errors,
+    lastChunkId: acc.lastChunkId,
+    embeddedCursor: embeddedChunkCount(db, deps),
+  };
+}
