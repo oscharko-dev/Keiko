@@ -94,17 +94,20 @@ editor renders its controlled load-error state.
 The host resolvers shape a **content-free** wire request and `fetch` a `keiko-server` route. The route
 map:
 
-| Host capability                        | Route                                                                   | Tier / state                                |
-| -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
-| File load / save                       | `POST /api/files/content` (+ `baseVersion` for save)                    | Workspace I/O; 409 on stale write           |
-| Diagnostics / hover / symbols / format | `POST /api/editor/language`                                             | Deterministic, model-free (#1198) `shipped` |
-| Completion                             | `POST /api/editor/completion`                                           | Two-tier governed (#1199) `shipped`         |
-| Inline completion                      | `POST /api/editor/inline-completion` (+ `/telemetry`)                   | Model-only, gated (#1200) `shipped`         |
-| Coding context                         | `POST /api/editor/context`, `/repo-search`, `/local-knowledge/retrieve` | Query-only retrieval (#1211) `shipped`      |
-| Generate tests                         | `POST /api/editor/test-generation`                                      | Wave 2 (#1202) `gated-off`                  |
+| Host capability                        | Route                                                                   | Tier / state                                      |
+| -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------- |
+| File load / save                       | `GET` / `PATCH /api/files/content` (+ `baseVersion` for save)           | Workspace I/O; `409 STALE_SESSION` on stale write |
+| Diagnostics / hover / symbols / format | `POST /api/editor/language`                                             | Deterministic, model-free (#1198) `shipped`       |
+| Completion                             | `POST /api/editor/completion`                                           | Two-tier governed (#1199) `shipped`               |
+| Inline completion                      | `POST /api/editor/inline-completion` (+ `/telemetry`)                   | Model-only, gated (#1200) `shipped`               |
+| Coding context                         | `POST /api/editor/context`, `/repo-search`, `/local-knowledge/retrieve` | Query-only retrieval (#1211) `shipped`            |
+| Generate tests                         | `POST /api/editor/test-generation`                                      | Wave 2 (#1202) `gated-off`                        |
 
-Every governed response is redacted at the BFF boundary and content-free apart from the reviewable
-insert text or patch `newText` (see [Security and privacy](#security-and-privacy-notes-for-regulated-deployments)).
+File load and save use the workspace-owned `/api/files/content` routes (not editor-specific routes):
+the editor imports neither, and reaches them only through the host-injected `loadBuffer` and
+`saveDocument` ports on `EditorHostPort`. Every governed response is redacted at the BFF boundary and
+content-free apart from the reviewable insert text or patch `newText` (see
+[Security and privacy](#security-and-privacy-notes-for-regulated-deployments)).
 
 ### 3. Mount the controlled editor
 
@@ -162,7 +165,7 @@ deterministic intelligence as their provider lands (#1213).
   invoke. When no governed model is usable the route degrades to Tier 1 and records a content-free
   degrade reason — never a silent ungoverned fallback.
 
-### Inline completion / ghost text (#1200) — `shipped`, enabled by default
+### Inline completion / ghost text (#1200) — `shipped`
 
 `POST /api/editor/inline-completion` is **model-only** — there is no deterministic ghost-text tier. It
 runs the model only when the completion-model selection elects an aligned, suffix-aware (FIM) model in

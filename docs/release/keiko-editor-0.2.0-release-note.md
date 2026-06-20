@@ -5,10 +5,10 @@ Epic: [#1189](https://github.com/oscharko-dev/Keiko/issues/1189) · Documentatio
 [#1208](https://github.com/oscharko-dev/Keiko/issues/1208) · Architecture:
 [ADR-0042](../adr/ADR-0042-keiko-editor-package-and-boundaries.md)
 
-Status: **Draft.** This note documents the Keiko Editor as delivered on the `feat/keiko-editor`
-integration branch. It describes implemented behaviour only; capabilities deferred to a later wave are
-listed explicitly and are not framed as shipped. Finalise the wording and the release line at epic
-merge.
+Status: **Draft for maintainer review.** This note documents the Keiko Editor as delivered on the
+`feat/keiko-editor` integration branch and describes implemented behaviour only; capabilities deferred
+to a later wave are listed explicitly and are not framed as shipped. The final release-line label and
+publication wording are set when the editor epic merges to a release branch.
 
 ## Summary
 

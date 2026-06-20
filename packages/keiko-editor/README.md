@@ -148,7 +148,10 @@ export function installKeikoMonacoRuntime(): boolean {
 it asks the host. A minimal host provides `loadBuffer` and `saveDocument`; richer hosts add the
 governed completion / inline-completion / diagnostics / hover / symbols / formatting resolvers, each
 of which the host backs with its own server call. Every resolver is optional — the editor registers a
-Monaco provider only for the resolvers the host supplies, so a read-only viewer can pass none.
+Monaco provider only for the resolvers the host supplies, so a read-only viewer can pass none. The
+complete optional [`EditorHostPort`](src/host-port.ts) surface is `saveDocument`, `provideCompletions`,
+`provideInlineCompletions`, `provideDiagnostics`, `provideContext`, `generateTests`,
+`provideFormatting`, `previewPatch`, and `applyPatchReview`.
 
 ```ts
 import type { EditorHostPort } from "@oscharko-dev/keiko-editor";
@@ -180,7 +183,7 @@ function StandaloneEditor({ buffer }: { buffer: EditorBuffer }): JSX.Element {
   return (
     <KeikoCodeEditor
       buffer={{ ...buffer, content: { ...buffer.content, text } }}
-      fileModel={createFileModel({ uri: "file://example.ts", version: 1 })}
+      fileModel={createFileModel({ uri: "file://example.ts", language: "typescript", version: 1 })}
       loadState={{ status: "ready" }}
       saveStatus="idle"
       ariaLabel="Example editor"
