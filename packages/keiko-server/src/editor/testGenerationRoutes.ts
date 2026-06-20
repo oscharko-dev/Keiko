@@ -45,6 +45,7 @@ import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { clientAbortSignal, resolveOverlayPath } from "./languageRoutes.js";
 import { recordTestGenerationEvidence } from "./testGenerationEvidence.js";
 import { defaultTestGenerationRunner, type TestGenerationRunner } from "./testGenerationRunner.js";
+import { defaultAssuredPreFilter, type AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
 
 // The overlay buffer(s) may be up to the document-size cap; allow 64 KiB of JSON on top, doubled to
 // accommodate a small changed-file set.
@@ -64,9 +65,10 @@ const DEFERRED_REASON =
   "Editor-driven test generation is enabled, but the assured pre-filter requires an enforced, deny-by-default network-egress boundary that is not yet available. No tests were generated or executed.";
 const FAILED_REASON = "Test generation could not be completed. The editor is still usable.";
 
-/** Injectable options for the route (tests supply a fake runner and a fixed clock). */
+/** Injectable options for the route (tests supply a fake runner, pre-filter, and a fixed clock). */
 export interface EditorTestGenerationRouteOptions {
   readonly runner?: TestGenerationRunner | undefined;
+  readonly preFilter?: AssuredPreFilterPort | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -237,8 +239,11 @@ interface OutcomeContext {
 }
 
 // Produces the candidate outcome once the feature is enabled. Gate B off → `deferred` with NO model
-// call. Gate B on (wave 2) → the injectable runner produces a reviewable `unverified` candidate (the
-// assured pre-filter that would elevate it to `assured` is shared with #1204 and stays `not-run`).
+// call. Gate B on (wave 2) → the injectable runner produces a candidate, which the assured pre-filter
+// then EXECUTES in an enforced-egress disposable root: it is surfaced as `assured` only when it builds,
+// passes, is stable, increases coverage, and kills enough mutants; otherwise it is `unverified`
+// (untrusted evidence only — including the fail-closed path when egress cannot be enforced). The patch
+// is always returned for review; assurance tells the editor whether it is apply-ready.
 async function produceOutcome(
   ctx: OutcomeContext,
   discovery: { readonly pack: CodingContextPack; readonly wire: CodingContextWirePack },
@@ -259,14 +264,22 @@ async function produceOutcome(
     if (produced === undefined) {
       return deferredResponse(discovery.wire);
     }
+    const preFilter = ctx.options.preFilter ?? defaultAssuredPreFilter;
+    const assured = await preFilter({
+      patch: produced.patch,
+      request: ctx.request,
+      realRoot: ctx.realRoot,
+      signal: ctx.signal,
+    });
     return {
       schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
       status: "generated",
-      assurance: "unverified",
-      funnel: produced.funnel,
+      assurance: assured.assurance,
+      funnel: assured.funnel,
       context: discovery.wire,
       patch: produced.patch,
       provenance: produced.provenance,
+      ...(assured.rejectionReason === undefined ? {} : { reason: assured.rejectionReason }),
     };
   } catch {
     return failedResponse(discovery.wire);

@@ -143,4 +143,39 @@ describe("status helpers", () => {
     ).toBe("wave 2");
     expect(describeTestGenerationStatus({ kind: "cancelled" })).toContain("cancelled");
   });
+
+  it("describes an assured vs unverified preview distinctly (ADR-0043)", () => {
+    const base = { kind: "preview", result: RESULT, funnel: FUNNEL } as const;
+    expect(describeTestGenerationStatus({ ...base, assurance: "assured" })).toContain(
+      "assured pre-filter",
+    );
+    expect(
+      describeTestGenerationStatus({
+        ...base,
+        assurance: "unverified",
+        reason: "coverage did not increase",
+      }),
+    ).toBe("coverage did not increase");
+    expect(describeTestGenerationStatus({ ...base, assurance: "unverified" })).toContain(
+      "not apply-ready",
+    );
+  });
+
+  it("carries the rejection reason into the preview state for an unverified candidate", () => {
+    const state = testGenerationReducer(requesting(), {
+      type: "resolve",
+      outcome: {
+        status: "generated",
+        request: REQUEST,
+        result: RESULT,
+        funnel: FUNNEL,
+        assurance: "unverified",
+        reason: "weak oracle",
+      },
+    });
+    expect(state.kind).toBe("preview");
+    if (state.kind === "preview") {
+      expect(state.reason).toBe("weak oracle");
+    }
+  });
 });

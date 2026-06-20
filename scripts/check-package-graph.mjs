@@ -130,6 +130,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-security",
       "@oscharko-dev/keiko-model-gateway",
       "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-sandbox",
       "@oscharko-dev/keiko-tools",
       "@oscharko-dev/keiko-harness",
       "@oscharko-dev/keiko-workflows",
