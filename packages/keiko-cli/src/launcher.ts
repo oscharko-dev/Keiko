@@ -426,33 +426,58 @@ function processRemoveEntry(
   return "removed";
 }
 
+export interface RemoveLauncherResult {
+  readonly removed: number;
+  readonly refused: number;
+  readonly missing: number;
+}
+
+// Shared launcher-shortcut removal used by both `keiko launcher remove` and
+// `keiko uninstall`. Loads the home-contained launcher state, content-hash-verifies
+// every recorded shortcut before unlinking (refusing any file whose content no longer
+// matches what Keiko generated), and persists the pruned state. When `dryRun` is true
+// it reports `would-delete` without touching the filesystem or the state file. The
+// returned counts let `uninstall` fold launcher refusals into its overall exit code.
+export function removeLauncherShortcuts(
+  io: CliIo,
+  deps: { readonly stateDir: string; readonly homedir: string; readonly dryRun: boolean },
+): RemoveLauncherResult {
+  const state = loadState(deps.stateDir, { homedir: deps.homedir, onWarn: ioWarn(io) });
+  if (state.entries.length === 0) {
+    io.out("Keiko launcher: nothing to remove (no recorded shortcuts).\n");
+    return { removed: 0, refused: 0, missing: 0 };
+  }
+  const removeArgs: RemoveArgs = { dryRun: deps.dryRun, explain: false };
+  let nextState = state;
+  let removed = 0;
+  let refused = 0;
+  let missing = 0;
+  for (const entry of state.entries) {
+    const outcome = processRemoveEntry(entry, removeArgs, io, deps.homedir);
+    if (outcome === "missing" || outcome === "removed")
+      nextState = removeEntry(nextState, entry.path);
+    if (outcome === "removed") removed += 1;
+    else if (outcome === "refused") refused += 1;
+    else if (outcome === "missing") missing += 1;
+  }
+  if (!deps.dryRun) {
+    saveState(deps.stateDir, nextState);
+    io.out(`Keiko launcher: removed ${String(removed)} shortcut(s).\n`);
+  }
+  return { removed, refused, missing };
+}
+
 function cmdRemove(
   args: RemoveArgs,
   io: CliIo,
   deps: { readonly stateDir: string; readonly homedir: string },
 ): number {
-  const state = loadState(deps.stateDir, { homedir: deps.homedir, onWarn: ioWarn(io) });
-  if (state.entries.length === 0) {
-    io.out("Keiko launcher: nothing to remove (no recorded shortcuts).\n");
-    return 0;
-  }
-  let nextState = state;
-  let removed = 0;
-  let refused = 0;
-  for (const entry of state.entries) {
-    const outcome = processRemoveEntry(entry, args, io, deps.homedir);
-    if (outcome === "missing" || outcome === "removed") {
-      nextState = removeEntry(nextState, entry.path);
-    }
-    if (outcome === "removed") removed += 1;
-    if (outcome === "refused") refused += 1;
-  }
-  const persisting = !args.dryRun && !args.explain;
-  if (persisting) {
-    saveState(deps.stateDir, nextState);
-    io.out(`Keiko launcher: removed ${String(removed)} shortcut(s).\n`);
-  }
-  return refused > 0 ? 1 : 0;
+  const result = removeLauncherShortcuts(io, {
+    stateDir: deps.stateDir,
+    homedir: deps.homedir,
+    dryRun: args.dryRun || args.explain,
+  });
+  return result.refused > 0 ? 1 : 0;
 }
 
 function cmdStatus(

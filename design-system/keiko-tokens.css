@@ -87,25 +87,152 @@
   transform: translateY(-180%); transition: transform 0.15s;
 }
 .skip-link:focus { transform: none; }
-/* ===== more-contrast mode — bright rooms, glare, low vision ===== */
+/* ============================================================
+   HIGH CONTRAST — a first-class, selectable third mode (not just a
+   bright-room nudge). Lifts EVERY text tone to WCAG AAA (≥7:1) and every
+   UI line to ≥3:1, thickens the focus ring, and brightens status + accent.
+   Pairs with BOTH appearances → four resolved palettes:
+     dark+HC · light+HC.
+
+   Resolution order (enterprise-correct — the OS can raise contrast,
+   an explicit in-app choice can raise it too; neither silently lowers it):
+     1. @media (prefers-contrast: more)  — follow the operating system
+     2. [data-hc="more"]                 — explicit in-app override (wins via specificity)
+   Measured (token vs --card), see accessibility.html:
+     dark+HC  fg 18.6 · muted 13.0 · dim 11.4 · faint 10.7 · accent 12.9 · line 5.1
+     light+HC fg 20.1 · muted 13.6 · dim 11.7 · faint 10.8 · accent 7.5  · line 7.4
+   ============================================================ */
+
+/* --- dark + high-contrast --- */
 @media (prefers-contrast: more) {
   :root {
-    --line: oklch(0.55 0.004 160);
-    --line-soft: oklch(0.46 0.004 160);
-    --line-strong: oklch(0.64 0.005 160);
-    --fg-faint: oklch(0.74 0.004 160);
-    --fg-dim: oklch(0.8 0.004 160);
-    --grid-dot: oklch(0.46 0.005 160);
-    --focus-w: 3px;
-  }
-  [data-theme="light"] {
+    color-scheme: dark;
+    --bg: oklch(0.11 0.004 160);
+    --surface: oklch(0.145 0.004 160);
+    --card: oklch(0.185 0.004 160);
+    --card-2: oklch(0.225 0.004 160);
+    --inset: oklch(0.09 0.004 160);
     --line: oklch(0.62 0.006 160);
-    --line-soft: oklch(0.72 0.005 160);
-    --line-strong: oklch(0.52 0.008 160);
-    --fg-faint: oklch(0.42 0.01 160);
-    --fg-dim: oklch(0.36 0.01 160);
-    --grid-dot: oklch(0.62 0.012 160);
+    --line-soft: oklch(0.5 0.005 160);
+    --line-strong: oklch(0.74 0.006 160);
+    --grid-dot: oklch(0.52 0.006 160);
+    --focus-w: 3px;
+    --fg: oklch(1 0 0);
+    --fg-muted: oklch(0.88 0.004 160);
+    --fg-dim: oklch(0.84 0.004 160);
+    --fg-faint: oklch(0.82 0.004 160);
+    --accent-bright: oklch(0.88 0.15 160);
+    --accent-text: oklch(0.86 0.16 160);
+    --accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+    --accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+    --accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+    --warn: oklch(0.88 0.14 80);
+    --danger: oklch(0.78 0.17 25);
+    --ok: oklch(0.82 0.15 160);
+    --info: oklch(0.84 0.12 240);
+    --shadow-card: 0 0 0 1px var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+    --shadow-pop: 0 0 0 1px var(--line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
   }
+  /* --- light + high-contrast --- */
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: oklch(1 0 0);
+    --surface: oklch(0.99 0.002 160);
+    --card: oklch(1 0 0);
+    --card-2: oklch(0.965 0.004 160);
+    --inset: oklch(0.95 0.004 160);
+    --line: oklch(0.45 0.008 160);
+    --line-soft: oklch(0.6 0.006 160);
+    --line-strong: oklch(0.35 0.01 160);
+    --grid-dot: oklch(0.6 0.01 160);
+    --focus-w: 3px;
+    --fg: oklch(0.13 0.01 160);
+    --fg-muted: oklch(0.3 0.012 160);
+    --fg-dim: oklch(0.34 0.012 160);
+    --fg-faint: oklch(0.36 0.012 160);
+    --accent-text: oklch(0.42 0.14 160);
+    --accent-bright: oklch(0.42 0.14 160);
+    --accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+    --accent-line: color-mix(in oklch, var(--accent-text) 78%, transparent);
+    --accent-glow: color-mix(in oklch, var(--accent-text) 32%, transparent);
+    --danger: oklch(0.42 0.19 25);
+    --warn: oklch(0.38 0.14 75);
+    --info: oklch(0.4 0.16 240);
+    --ok: oklch(0.4 0.14 160);
+    --shadow-card: 0 0 0 1px var(--line-strong);
+    --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--line-strong);
+  }
+}
+
+/* explicit in-app override — identical palettes, higher specificity so an
+   in-app "High" choice raises contrast even when the OS hasn't asked. */
+[data-hc="more"] {
+  color-scheme: dark;
+  --bg: oklch(0.11 0.004 160);
+  --surface: oklch(0.145 0.004 160);
+  --card: oklch(0.185 0.004 160);
+  --card-2: oklch(0.225 0.004 160);
+  --inset: oklch(0.09 0.004 160);
+  --line: oklch(0.62 0.006 160);
+  --line-soft: oklch(0.5 0.005 160);
+  --line-strong: oklch(0.74 0.006 160);
+  --grid-dot: oklch(0.52 0.006 160);
+  --focus-w: 3px;
+  --fg: oklch(1 0 0);
+  --fg-muted: oklch(0.88 0.004 160);
+  --fg-dim: oklch(0.84 0.004 160);
+  --fg-faint: oklch(0.82 0.004 160);
+  --accent-bright: oklch(0.88 0.15 160);
+  --accent-text: oklch(0.86 0.16 160);
+  --accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+  --accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+  --warn: oklch(0.88 0.14 80);
+  --danger: oklch(0.78 0.17 25);
+  --ok: oklch(0.82 0.15 160);
+  --info: oklch(0.84 0.12 240);
+  --shadow-card: 0 0 0 1px var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --shadow-pop: 0 0 0 1px var(--line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
+}
+[data-hc="more"][data-theme="light"] {
+  color-scheme: light;
+  --bg: oklch(1 0 0);
+  --surface: oklch(0.99 0.002 160);
+  --card: oklch(1 0 0);
+  --card-2: oklch(0.965 0.004 160);
+  --inset: oklch(0.95 0.004 160);
+  --line: oklch(0.45 0.008 160);
+  --line-soft: oklch(0.6 0.006 160);
+  --line-strong: oklch(0.35 0.01 160);
+  --grid-dot: oklch(0.6 0.01 160);
+  --focus-w: 3px;
+  --fg: oklch(0.13 0.01 160);
+  --fg-muted: oklch(0.3 0.012 160);
+  --fg-dim: oklch(0.34 0.012 160);
+  --fg-faint: oklch(0.36 0.012 160);
+  --accent-text: oklch(0.42 0.14 160);
+  --accent-bright: oklch(0.42 0.14 160);
+  --accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent-text) 78%, transparent);
+  --accent-glow: color-mix(in oklch, var(--accent-text) 32%, transparent);
+  --danger: oklch(0.42 0.19 25);
+  --warn: oklch(0.38 0.14 75);
+  --info: oklch(0.4 0.16 240);
+  --ok: oklch(0.4 0.14 160);
+  --shadow-card: 0 0 0 1px var(--line-strong);
+  --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--line-strong);
+}
+
+/* Windows / forced-colors High Contrast — defer to the OS palette and make
+   sure the focus ring and card edges survive the colour override. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+  .kx-win,
+  .card { border: 1px solid CanvasText; }
 }
 
 @media (prefers-reduced-motion: reduce) {
