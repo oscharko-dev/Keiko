@@ -140,7 +140,7 @@ describe("large-document redaction", () => {
       .prepare(
         "SELECT terminal_diagnostics_json AS j, source_content_hash AS h FROM extraction_checkpoints WHERE capsule_id = :c",
       )
-      .all({ c: capsuleId }) as readonly { j: string; h: string }[];
+      .all({ c: capsuleId }) as unknown as readonly { j: string; h: string }[];
     for (const row of checkpointJson) {
       expect(row.j).not.toContain(ROOT);
       expect(row.j).not.toContain("/srv");
@@ -150,7 +150,7 @@ describe("large-document redaction", () => {
 
     const diagnostics = store._internal.db
       .prepare("SELECT message FROM parser_diagnostics WHERE capsule_id = :c")
-      .all({ c: capsuleId }) as readonly { message: string }[];
+      .all({ c: capsuleId }) as unknown as readonly { message: string }[];
     for (const diag of diagnostics) {
       expect(diag.message).not.toContain(ROOT);
       expect(diag.message).not.toContain("/srv");

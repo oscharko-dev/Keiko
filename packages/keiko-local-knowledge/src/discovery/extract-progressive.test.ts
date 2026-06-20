@@ -34,7 +34,7 @@ interface CountRow {
 function count(store: KnowledgeStore, table: string, documentId: DocumentId): number {
   const row = store._internal.db
     .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c AND document_id = :d`)
-    .get({ c: "cap-prog", d: String(documentId) }) as CountRow;
+    .get({ c: "cap-prog", d: String(documentId) }) as unknown as CountRow;
   return row.n;
 }
 
@@ -204,7 +204,7 @@ describe("extractDocument — progressive large-document path", () => {
       .prepare(
         "SELECT COUNT(*) AS n FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d AND code = 'CONVERTER_UNAVAILABLE'",
       )
-      .get({ c: capsuleId, d: String(documentId) }) as CountRow;
+      .get({ c: capsuleId, d: String(documentId) }) as unknown as CountRow;
     expect(row.n).toBe(1);
   });
 });

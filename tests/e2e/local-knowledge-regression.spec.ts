@@ -49,6 +49,17 @@ interface CapsuleDetail {
     readonly failedDocuments: number;
     readonly skippedDocuments: number;
   }[];
+  // Issue #1286: present once a document took the bounded progressive path.
+  readonly largeDocumentHealth?: {
+    readonly resourcePolicy: { readonly largeFileThresholdBytes: number };
+    readonly progress: readonly {
+      readonly safeDisplayName: string;
+      readonly phase: string;
+      readonly coverage: string;
+    }[];
+    readonly resumableDocuments: readonly string[];
+    readonly partialCoverageDocuments: number;
+  };
 }
 
 interface CorpusPaths {
@@ -629,7 +640,15 @@ async function runRegressionPass(
   const smallPdfId = await createCapsule(request, `E2E Pass ${passLabel} Small PDF`);
   await connectFolder(request, smallPdfId, corpus.pdfSmall);
   await indexCapsule(request, smallPdfId);
-  await expectIndexed(request, smallPdfId);
+  const smallPdfDetail = await expectIndexed(request, smallPdfId);
+  // Issue #1286: with the lowered threshold the PDF took the bounded progressive path, so the BFF
+  // surfaces large-document health with per-document progress, and the detail UI renders the
+  // "Large documents" section + a progress row.
+  expect(smallPdfDetail.largeDocumentHealth).toBeDefined();
+  expect(smallPdfDetail.largeDocumentHealth?.progress.length ?? 0).toBeGreaterThan(0);
+  expect(smallPdfDetail.largeDocumentHealth?.resourcePolicy.largeFileThresholdBytes).toBe(1024);
+  await page.goto(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(smallPdfId)}`);
+  await expect(page.getByRole("heading", { name: "Large documents" })).toBeVisible();
 
   let largePdfId: string | null = null;
   if (INCLUDE_LARGE_PDF && existsSync(join(corpus.pdfLarge, "microsoft-foundry.pdf"))) {
