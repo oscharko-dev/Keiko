@@ -665,3 +665,151 @@ describe("validateGroundingPlan — rejections", () => {
     expect(validateGroundingPlan({ ...(valid() as object), extra: 1 }).ok).toBe(false);
   });
 });
+
+// ─── Hardening: branch-precise assertions (post-review) ──────────────────────────────
+describe("planGrounding — citation granularity (AC2)", () => {
+  it("uses per-claim granularity for required and safety-critical plans, none for no-grounding", () => {
+    expect(
+      planGrounding(mk({ groundingNeed: { kind: "none", volatile: false, signals: [] } })).citation
+        .granularity,
+    ).toBe("none");
+    expect(
+      planGrounding(
+        mk({
+          taskClass: "rag-question-answering",
+          groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+        }),
+      ).citation.granularity,
+    ).toBe("per-claim");
+    expect(
+      planGrounding(
+        mk({
+          criticality: "critical",
+          recommendedProfile: "safety-critical",
+          groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+        }),
+      ).citation.granularity,
+    ).toBe("per-claim");
+  });
+
+  it("uses per-section granularity for an optional best-effort plan", () => {
+    const plan = planGrounding(
+      mk({
+        taskClass: "factual-qa",
+        recommendedProfile: "precise",
+        groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+      }),
+    );
+    expect(plan.citation.discipline).toBe("best-effort");
+    expect(plan.citation.granularity).toBe("per-section");
+  });
+
+  it("treats both OR-branches of safety-critical detection independently", () => {
+    // safety-critical task class even when criticality is the default "standard"
+    expect(
+      planGrounding(
+        mk({
+          taskClass: "safety-critical",
+          criticality: "standard",
+          groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+        }),
+      ).citation.discipline,
+    ).toBe("require-citations-or-state-no-evidence");
+    // critical criticality even on a non-safety task class
+    expect(
+      planGrounding(
+        mk({
+          taskClass: "factual-qa",
+          criticality: "critical",
+          groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+        }),
+      ).citation.discipline,
+    ).toBe("require-citations-or-state-no-evidence");
+  });
+});
+
+describe("planGrounding — allowed retrieval modes per strategy", () => {
+  const cases: readonly (readonly [
+    GroundingStrategy,
+    readonly string[],
+    GroundingNeed,
+    PromptTaskClass,
+  ])[] = [
+    ["no-grounding", ["none"], { kind: "none", volatile: false, signals: [] }, "factual-qa"],
+    [
+      "supplied-context-only",
+      ["supplied-context"],
+      { kind: "supplied-context", volatile: false, signals: [] },
+      "factual-qa",
+    ],
+    [
+      "local-knowledge",
+      ["local-knowledge-retrieval", "supplied-context"],
+      { kind: "external-knowledge", volatile: false, signals: [] },
+      "rag-question-answering",
+    ],
+    [
+      "repository-context",
+      ["repository-search", "supplied-context"],
+      { kind: "external-knowledge", volatile: false, signals: [] },
+      "code-architecture",
+    ],
+    [
+      "hybrid",
+      ["hybrid-fusion", "local-knowledge-retrieval", "repository-search", "supplied-context"],
+      { kind: "external-knowledge", volatile: false, signals: [] },
+      "decision-support",
+    ],
+    [
+      "external-research-required",
+      ["external-research", "supplied-context"],
+      { kind: "external-current", volatile: false, signals: ["url-reference"] },
+      "factual-qa",
+    ],
+  ];
+
+  it.each(cases)(
+    "maps %s to its allowed retrieval modes",
+    (strategy, expectedModes, groundingNeed, taskClass) => {
+      const plan = planGrounding(mk({ taskClass, groundingNeed }));
+      expect(plan.strategy).toBe(strategy);
+      expect(plan.allowedRetrievalModes).toEqual(expectedModes);
+    },
+  );
+});
+
+describe("planGrounding — directive and condition guards", () => {
+  it("omits contradictory-evidence for a single-source supplied-context plan", () => {
+    const plan = planGrounding(
+      mk({ groundingNeed: { kind: "supplied-context", volatile: false, signals: [] } }),
+    );
+    expect(plan.noAnswerConditions).toContain("insufficient-evidence");
+    expect(plan.noAnswerConditions).not.toContain("contradictory-evidence");
+  });
+
+  it("omits attribute-claims-to-sources for an optional (not required) grounded plan", () => {
+    const plan = planGrounding(
+      mk({
+        taskClass: "decision-support",
+        recommendedProfile: "precise",
+        groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+      }),
+    );
+    expect(plan.required).toBe(false);
+    expect(plan.directives).not.toContain("attribute-claims-to-sources");
+  });
+
+  it("keeps RAG hints for a research task even when it grounds on the repository", () => {
+    // A research task on software grounds via repository-context, but a research synthesis is still
+    // RAG-focused, so the RAGAS hints apply. Pins this intentional behaviour.
+    const plan = planGrounding(
+      mk({
+        taskClass: "research",
+        domain: "software",
+        groundingNeed: { kind: "external-knowledge", volatile: false, signals: [] },
+      }),
+    );
+    expect(plan.strategy).toBe("repository-context");
+    expect(plan.ragEvaluation).toHaveLength(5);
+  });
+});

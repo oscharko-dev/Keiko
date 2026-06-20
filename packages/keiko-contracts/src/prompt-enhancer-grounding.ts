@@ -243,8 +243,11 @@ function buildDirectives(
 
 // ─── RAG evaluation hints (AC5) ─────────────────────────────────────────────────────
 // Populated only for RAG-focused plans: explicit RAG/research question answering, or a plan that
-// answers strictly from supplied or local-knowledge evidence. A plain code or factual-fallback plan
-// is not RAG-focused, so it carries no RAG hints (and stays lean).
+// answers strictly from supplied or local-knowledge evidence. The RAG/research task classes are
+// RAG-focused regardless of the resolved strategy — a research synthesis over the repository
+// (`repository-context`) still benefits from the RAGAS hints. A plain code task (code-generation/
+// -debugging/-architecture) or a factual parametric-fallback plan is NOT RAG-focused, so it carries
+// no RAG hints (and stays lean).
 function isRagFocused(analysis: PromptTaskAnalysis, strategy: GroundingStrategy): boolean {
   return (
     analysis.taskClass === "rag-question-answering" ||

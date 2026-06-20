@@ -98,6 +98,17 @@ export const GROUNDING_FIXTURES: readonly GroundingFixture[] = [
     ),
   },
   {
+    name: "decision-support: optional hybrid planning with parametric fallback",
+    category: "factual",
+    expectedStrategy: "hybrid",
+    expectsRagHints: false,
+    expectedRequired: false,
+    request: makeRequest(
+      "grd-hybrid-optional",
+      "Help me decide whether to expand into the European market, weighing the main trade-offs.",
+    ),
+  },
+  {
     name: "current: recency-sensitive question requires external research",
     category: "current",
     expectedStrategy: "external-research-required",

@@ -125,9 +125,37 @@ describe("rendered uncertainty handling — no-answer conditions (AC4)", () => {
     }
   });
 
-  it("surfaces a contradiction-handling rule for a required multi-source plan", () => {
-    const prompt = generateFor(fixtureFor("hybrid").request);
-    expect(prompt.groundingRules.join("\n")).toMatch(/sources disagree/i);
+  it("surfaces a contradiction-handling rule for every required multi-source plan", () => {
+    const multiSource: GroundingStrategy[] = [
+      "local-knowledge",
+      "repository-context",
+      "hybrid",
+      "external-research-required",
+    ];
+    for (const strategy of multiSource) {
+      const prompt = generateFor(fixtureFor(strategy).request);
+      expect(prompt.groundingRules.join("\n"), strategy).toMatch(/sources disagree/i);
+    }
+  });
+});
+
+// ─── Recency / timestamp expectations rendered for volatile tasks ────────────────────
+describe("rendered recency expectations", () => {
+  it("renders as-of-date and stale-flagging guidance for a volatile, current-information plan", () => {
+    const prompt = generateFor(fixtureFor("external-research-required").request);
+    expect(prompt.groundingPlan.recency.requireAsOfDate).toBe(true);
+    expect(prompt.groundingPlan.recency.flagPotentiallyStale).toBe(true);
+    expect(prompt.groundingRules.join("\n")).toMatch(/as-of|time-sensitive/i);
+  });
+
+  it("renders no recency guidance for a stable factual plan", () => {
+    const prompt = generateFor(fixtureFor("no-grounding").request);
+    expect(prompt.groundingPlan.recency).toEqual({
+      volatile: false,
+      requireAsOfDate: false,
+      flagPotentiallyStale: false,
+    });
+    expect(prompt.groundingRules.join("\n")).not.toMatch(/time-sensitive/i);
   });
 });
 
