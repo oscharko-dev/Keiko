@@ -24,6 +24,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
+  CapsuleReindexMode,
   DocumentId,
   IndexingJobRecord,
   KnowledgeCapsule,
@@ -1016,7 +1017,7 @@ type IndexingTerminal =
   | { readonly kind: "job-failed"; readonly jobId: string };
 
 interface RunCapsuleIndexingJobOptions {
-  readonly mode: "changed-files" | "repair-failed" | undefined;
+  readonly mode: CapsuleReindexMode | undefined;
   // O2-GAP-1 (Epic #189): reindex callers can request a full re-embed when the embedding
   // model has rotated. Start-indexing keeps force=false so a first-pass run never wipes
   // a partially-built index.

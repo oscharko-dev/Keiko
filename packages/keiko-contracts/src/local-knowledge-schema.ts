@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 10 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 11 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -366,6 +366,52 @@ CREATE TABLE capsule_audit_events (
 const CREATE_CAPSULE_AUDIT_EVENTS_INDEX =
   "CREATE INDEX idx_capsule_audit_events_capsule_time ON capsule_audit_events(capsule_id, occurred_at);";
 
+// extraction_checkpoints — durable per-document progress for the bounded large-document
+// ingestion path (Epic #1160, Issue #1286). One row per (capsule_id, document_id); the row is
+// REPLACEd as a document advances through extraction → chunking → embedding so an interrupted
+// large-document job can resume from durable progress instead of restarting. The compatibility
+// fingerprint columns (source_content_hash, parser_version, policy_fingerprint,
+// chunking_strategy_version, embedding_identity_json) let a resumed run refuse a checkpoint that
+// was produced under an incompatible source, parser, policy, chunking strategy, or embedding
+// identity. The table is content-free: it carries hashes, cursors, counts, and redacted
+// diagnostics, never raw extracted text. capsule_id cascades on capsule deletion; document_id is
+// a lineage column rather than an FK so a checkpoint can be written before the document row is
+// persisted during progressive extraction.
+const CREATE_EXTRACTION_CHECKPOINTS = `
+CREATE TABLE extraction_checkpoints (
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  strategy TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  page_cursor INTEGER NOT NULL DEFAULT 0,
+  section_cursor INTEGER NOT NULL DEFAULT 0,
+  object_cursor INTEGER NOT NULL DEFAULT 0,
+  extracted_text_bytes INTEGER NOT NULL DEFAULT 0,
+  chunk_cursor INTEGER NOT NULL DEFAULT 0,
+  embedded_chunk_cursor INTEGER NOT NULL DEFAULT 0,
+  last_embedded_chunk_id TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  coverage TEXT NOT NULL,
+  source_content_hash TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  policy_fingerprint TEXT NOT NULL,
+  chunking_strategy_version TEXT NOT NULL,
+  embedding_identity_json TEXT NOT NULL,
+  terminal_diagnostics_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (capsule_id, document_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX =
+  "CREATE INDEX idx_extraction_checkpoints_capsule_phase ON extraction_checkpoints(capsule_id, phase);";
+
+const CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX =
+  "CREATE INDEX idx_extraction_checkpoints_job ON extraction_checkpoints(capsule_id, job_id);";
+
 // Statements must be applied in this exact order: PRAGMA first (so child-table NOT NULL
 // foreign-key constraints are enforced as the rows arrive), then parents before children.
 export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
@@ -386,6 +432,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_SCHEMA_META,
   CREATE_CAPSULE_MEMBERSHIP_CHANGES,
   CREATE_CAPSULE_AUDIT_EVENTS,
+  CREATE_EXTRACTION_CHECKPOINTS,
 ] as const;
 
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
@@ -412,6 +459,8 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_indexing_jobs_capsule_started ON indexing_jobs(capsule_id, started_at DESC, id DESC);",
   CREATE_CAPSULE_MEMBERSHIP_CHANGES_INDEX,
   CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+  CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX,
+  CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
 ] as const;
 
 // Runtime deletion primitive (#193 uses this inside a transaction). The cascade chain in
@@ -612,6 +661,17 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "Persist KnowledgeSources independently from capsule membership and index capsule-delete verification paths (Issue #193 audit).",
     up: V10_SOURCE_AND_DELETE_INDEXES,
   },
+  {
+    version: 11,
+    reason:
+      "Persist durable per-document extraction checkpoints for bounded large-document ingestion " +
+      "so interrupted large-document jobs resume from progress instead of restarting (Epic #1160, Issue #1286).",
+    up: [
+      CREATE_EXTRACTION_CHECKPOINTS,
+      CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX,
+      CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
+    ],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -642,6 +702,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "document_texts",
   "capsule_membership_changes",
   "capsule_audit_events",
+  "extraction_checkpoints",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
@@ -667,4 +728,6 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_indexing_jobs_capsule_started",
   "idx_capsule_membership_changes_capsule_time",
   "idx_capsule_audit_events_capsule_time",
+  "idx_extraction_checkpoints_capsule_phase",
+  "idx_extraction_checkpoints_job",
 ] as const;
