@@ -149,9 +149,21 @@ describe("buildPrompt — per-style adaptation (Issue #1203)", () => {
 
   it("browser-smoke style instructs a minimal Playwright smoke test", () => {
     const content = system("browser-smoke");
+    expect(content).toContain("Browser test runner: Playwright");
+    expect(content).not.toContain("Test framework: vitest");
     expect(content).toContain("@playwright/test");
     expect(content).toContain("smoke");
     expect(content).toContain("end-to-end");
+  });
+
+  it("browser-smoke style asks for a Playwright route smoke, not unit tests", () => {
+    const user =
+      buildPrompt(fileInput(), conventions(), strategy("browser-smoke"), makePack([]))[1]
+        ?.content ?? "";
+    expect(user).toContain("minimal Playwright browser smoke test");
+    expect(user).toContain("route or application entry point");
+    expect(user).toContain("src/add.ts");
+    expect(user).not.toContain("unit tests");
   });
 
   it("keeps the same fenced-diff output contract for every style", () => {

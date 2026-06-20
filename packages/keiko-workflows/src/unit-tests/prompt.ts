@@ -61,15 +61,31 @@ const STYLE_GUIDANCE: Readonly<Record<TestStyle, readonly string[]>> = {
 function systemContent(conventions: TestConventions, strategy: TestStrategy): string {
   const lines = [
     `You are a senior engineer writing ${STYLE_DESCRIPTOR[strategy.style]} for existing code.`,
-    `Test framework: ${conventions.framework}.`,
+    runnerLine(conventions, strategy),
     `Place new tests using the project's "${conventions.fileNamingStyle}" naming convention.`,
-    conventions.testDirs.length > 0
-      ? `Project test directories: ${conventions.testDirs.join(", ")}.`
-      : "No dedicated test directory detected; place tests beside their source.",
+    locationLine(conventions, strategy),
     ...STYLE_GUIDANCE[strategy.style],
     OUTPUT_CONTRACT,
   ];
   return `${lines.join("\n")}${assertionStyleBlock(conventions)}`;
+}
+
+function runnerLine(conventions: TestConventions, strategy: TestStrategy): string {
+  if (strategy.style === "browser-smoke" || strategy.verification === "playwright") {
+    return "Browser test runner: Playwright.";
+  }
+  return `Test framework: ${conventions.framework}.`;
+}
+
+function locationLine(conventions: TestConventions, strategy: TestStrategy): string {
+  if (strategy.style === "browser-smoke") {
+    return conventions.testDirs.length > 0
+      ? `Project test directories: ${conventions.testDirs.join(", ")}; place browser smoke tests under the project's Playwright/end-to-end test directory.`
+      : "No dedicated test directory detected; place browser smoke tests under the project's Playwright/end-to-end test directory.";
+  }
+  return conventions.testDirs.length > 0
+    ? `Project test directories: ${conventions.testDirs.join(", ")}.`
+    : "No dedicated test directory detected; place tests beside their source.";
 }
 
 function assertionStyleBlock(conventions: TestConventions): string {
@@ -82,16 +98,33 @@ function assertionStyleBlock(conventions: TestConventions): string {
   return `\n\nMatch the assertion and structure style of these existing tests:\n${samples}`;
 }
 
-function targetDescription(target: UnitTestTarget): string {
+function targetAction(strategy: TestStrategy): string {
+  switch (strategy.style) {
+    case "component":
+      return "Write React component tests";
+    case "interaction":
+      return "Write React component interaction tests";
+    case "accessibility-smoke":
+      return "Write React component tests with an accessibility smoke check";
+    case "browser-smoke":
+      return "Write a minimal Playwright browser smoke test for the route or application entry point";
+    case "unit":
+    case "unsupported":
+      return "Write unit tests";
+  }
+}
+
+function targetDescription(target: UnitTestTarget, strategy: TestStrategy): string {
+  const action = targetAction(strategy);
   if (target.kind === "file") {
     return target.targetFunction === undefined
-      ? `Write unit tests for the public API in ${target.filePath}.`
-      : `Write unit tests for the function ${target.targetFunction} in ${target.filePath}.`;
+      ? `${action} for the public API in ${target.filePath}.`
+      : `${action} for the function ${target.targetFunction} in ${target.filePath}.`;
   }
   if (target.kind === "module") {
-    return `Write unit tests for the source files in the module directory ${target.moduleDir}.`;
+    return `${action} for the source files in the module directory ${target.moduleDir}.`;
   }
-  return `Write unit tests for these changed files: ${target.filePaths.join(", ")}.`;
+  return `${action} for these changed files: ${target.filePaths.join(", ")}.`;
 }
 
 function contextBlock(pack: ContextPack): string {
@@ -106,6 +139,7 @@ function contextBlock(pack: ContextPack): string {
 
 function userContent(
   input: UnitTestWorkflowInput,
+  strategy: TestStrategy,
   pack: ContextPack,
   rejectionReason: string | undefined,
 ): string {
@@ -114,7 +148,7 @@ function userContent(
       ? ""
       : `\n\nThe previous diff was rejected: ${rejectionReason}. Produce a corrected diff that ` +
         "modifies ONLY test files.";
-  return `${targetDescription(input.target)}${contextBlock(pack)}${retry}`;
+  return `${targetDescription(input.target, strategy)}${contextBlock(pack)}${retry}`;
 }
 
 // rejectionReason is appended on a retry (D8) so the model can correct an invalid/out-of-scope
@@ -130,6 +164,6 @@ export function buildPrompt(
 ): readonly ChatMessage[] {
   return [
     { role: "system", content: systemContent(conventions, strategy) },
-    { role: "user", content: userContent(input, pack, rejectionReason) },
+    { role: "user", content: userContent(input, strategy, pack, rejectionReason) },
   ];
 }

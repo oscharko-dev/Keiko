@@ -111,6 +111,25 @@ describe("defaultTestGenerationRunner", () => {
     expect(result?.funnel.executionEnabled).toBe(false);
   });
 
+  it("forwards supported verification kinds without coercion", async () => {
+    mockGenerate.mockResolvedValue({ proposedDiff: CREATE_DIFF, verification: "playwright" } as never);
+    await expect(defaultTestGenerationRunner(args())).resolves.toMatchObject({
+      verification: "playwright",
+    });
+
+    mockGenerate.mockResolvedValue({ proposedDiff: CREATE_DIFF, verification: "vitest" } as never);
+    await expect(defaultTestGenerationRunner(args())).resolves.toMatchObject({
+      verification: "vitest",
+    });
+  });
+
+  it("does not coerce unsupported verification kinds to Vitest", async () => {
+    mockGenerate.mockResolvedValue({ proposedDiff: CREATE_DIFF, verification: "jest" } as never);
+    const result = await defaultTestGenerationRunner(args());
+    expect(result?.verification).toBeUndefined();
+    expect(result?.unsupportedVerificationReason).toContain("not supported by the assured pre-filter");
+  });
+
   it("returns undefined when the workflow proposes no diff or an unparseable diff", async () => {
     mockGenerate.mockResolvedValue({ proposedDiff: undefined } as never);
     expect(await defaultTestGenerationRunner(args())).toBeUndefined();

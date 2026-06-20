@@ -44,7 +44,11 @@ import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { clientAbortSignal, resolveOverlayPath } from "./languageRoutes.js";
 import { recordTestGenerationEvidence } from "./testGenerationEvidence.js";
-import { defaultTestGenerationRunner, type TestGenerationRunner } from "./testGenerationRunner.js";
+import {
+  defaultTestGenerationRunner,
+  type TestGenerationRunner,
+  type TestGenerationRunResult,
+} from "./testGenerationRunner.js";
 import { defaultAssuredPreFilter, type AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
 
 // The overlay buffer(s) may be up to the document-size cap; allow 64 KiB of JSON on top, doubled to
@@ -122,6 +126,24 @@ function failedResponse(context: CodingContextWirePack): EditorTestGenerationWir
     reason: FAILED_REASON,
     funnel: notRunTestGenerationFunnel(),
     context,
+  };
+}
+
+function unsupportedVerificationResponse(
+  context: CodingContextWirePack,
+  produced: TestGenerationRunResult,
+): EditorTestGenerationWireResponse {
+  return {
+    schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+    status: "generated",
+    assurance: "unverified",
+    funnel: produced.funnel,
+    context,
+    patch: produced.patch,
+    provenance: produced.provenance,
+    reason:
+      produced.unsupportedVerificationReason ??
+      "The generated candidate cannot run through a supported assured pre-filter and is unverified review evidence only.",
   };
 }
 
@@ -263,6 +285,9 @@ async function produceOutcome(
     });
     if (produced === undefined) {
       return deferredResponse(discovery.wire);
+    }
+    if (produced.verification === undefined) {
+      return unsupportedVerificationResponse(discovery.wire, produced);
     }
     const preFilter = ctx.options.preFilter ?? defaultAssuredPreFilter;
     const assured = await preFilter({

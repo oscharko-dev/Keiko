@@ -14,7 +14,11 @@
 
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { generateUnitTests, type UnitTestTarget } from "@oscharko-dev/keiko-workflows";
+import {
+  generateUnitTests,
+  type TestVerification,
+  type UnitTestTarget,
+} from "@oscharko-dev/keiko-workflows";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   notRunTestGenerationFunnel,
@@ -48,8 +52,11 @@ export interface TestGenerationRunResult {
   readonly provenance: EditorTestGenerationWireProvenance;
   readonly funnel: EditorTestGenerationFunnel;
   // The verification toolchain the workflow selected for this candidate's style (Issue #1203). The
-  // route forwards it to the assured pre-filter so a browser smoke is verified under Playwright.
-  readonly verification: AssuredVerificationKind;
+  // route forwards supported kinds to the assured pre-filter so a browser smoke is verified under
+  // Playwright. Unsupported runners are returned as unverified review evidence; the route does not
+  // coerce them to Vitest.
+  readonly verification?: AssuredVerificationKind | undefined;
+  readonly unsupportedVerificationReason?: string | undefined;
 }
 
 /** Injectable candidate producer. Returns undefined when no candidate could be produced (→ deferred). */
@@ -111,6 +118,21 @@ function generatedFunnel(): EditorTestGenerationFunnel {
   return { ...notRunTestGenerationFunnel(), candidatesGenerated: 1, candidatesSurfaced: 1 };
 }
 
+function toAssuredVerificationKind(
+  verification: TestVerification | undefined,
+): AssuredVerificationKind | undefined {
+  return verification === "vitest" || verification === "playwright" ? verification : undefined;
+}
+
+function unsupportedVerificationReason(
+  verification: TestVerification | undefined,
+): string | undefined {
+  if (toAssuredVerificationKind(verification) !== undefined) {
+    return undefined;
+  }
+  return "The generated candidate uses a test runner that is not supported by the assured pre-filter. It is returned as unverified review evidence only.";
+}
+
 export const defaultTestGenerationRunner: TestGenerationRunner = async (args) => {
   const modelId = resolveModelId(args.deps);
   if (modelId === undefined) {
@@ -142,6 +164,8 @@ export const defaultTestGenerationRunner: TestGenerationRunner = async (args) =>
   if (patch === undefined) {
     return undefined;
   }
+  const verification = toAssuredVerificationKind(report.verification);
+  const reason = unsupportedVerificationReason(report.verification);
   return {
     patch,
     provenance: {
@@ -151,6 +175,7 @@ export const defaultTestGenerationRunner: TestGenerationRunner = async (args) =>
       producedAt: args.nowMs,
     },
     funnel: generatedFunnel(),
-    verification: report.verification === "playwright" ? "playwright" : "vitest",
+    ...(verification === undefined ? {} : { verification }),
+    ...(reason === undefined ? {} : { unsupportedVerificationReason: reason }),
   };
 };
