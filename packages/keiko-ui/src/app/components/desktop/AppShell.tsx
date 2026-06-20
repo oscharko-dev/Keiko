@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
@@ -627,6 +628,27 @@ function AppShellInner(): ReactNode {
   });
   const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
   const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
+  const sourceConnectionAlert =
+    sourceConnectionNotice !== null && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="source-limit-alert"
+            role="alert"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <span>{sourceConnectionNotice}</span>
+            <button
+              type="button"
+              className="source-limit-alert-dismiss"
+              aria-label="Dismiss source connection notice"
+              onClick={() => setSourceConnectionNotice(null)}
+            >
+              ×
+            </button>
+          </div>,
+          document.body,
+        )
+      : null;
 
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
@@ -660,21 +682,6 @@ function AppShellInner(): ReactNode {
             />
             <div className="stage" id="main" tabIndex={-1}>
               <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
-              {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
-                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-              {sourceConnectionNotice !== null && (
-                <div className="source-limit-alert" role="alert">
-                  <span>{sourceConnectionNotice}</span>
-                  <button
-                    type="button"
-                    className="source-limit-alert-dismiss"
-                    aria-label="Dismiss source connection notice"
-                    onClick={() => setSourceConnectionNotice(null)}
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
             </div>
             <RightRail openTools={openTools} onTool={onTool} />
           </div>
@@ -706,6 +713,7 @@ function AppShellInner(): ReactNode {
           {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
           {needsGatewaySetup ? <GatewaySetupDialog /> : null}
           <InstallBanner />
+          {sourceConnectionAlert}
         </div>
       </WsContext.Provider>
     </ChatSessionProvider>
