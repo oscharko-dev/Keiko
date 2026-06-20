@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./credential-vault": {
+      "types": "./dist/credentialVault.d.ts",
+      "import": "./dist/credentialVault.js"
     }
   },
   "scripts": {

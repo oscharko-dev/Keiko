@@ -12,6 +12,7 @@ import {
   parseModelCapability,
   resolveOutboundHttpEgressConfig,
   toSafeObject,
+  type ParseGatewayConfigOptions,
 } from "./config.js";
 
 interface RawProvider {
@@ -1382,5 +1383,202 @@ describe("parseEnvEgressConfigFaultTolerant", () => {
       KEIKO_NO_PROXY: "localhost, 127.0.0.1, .corp.example",
     });
     expect(result.noProxy).toEqual(["localhost", "127.0.0.1", ".corp.example"]);
+  });
+});
+
+describe("secret-reference resolution (#1320)", () => {
+  // Minimal raw provider that needs no apiKey in the file (uses secretRef or env).
+  function secretRefProvider(
+    modelId: string,
+    apiKeySecretRef: string,
+    apiKey?: string,
+  ): Record<string, unknown> {
+    const base: Record<string, unknown> = {
+      modelId,
+      baseUrl: "https://gw.example.com",
+      apiKeySecretRef,
+    };
+    if (apiKey !== undefined) {
+      base.apiKey = apiKey;
+    }
+    return base;
+  }
+
+  // Minimal raw provider with a file apiKey and no secretRef.
+  function fileKeyProvider(modelId: string, apiKey: string): Record<string, unknown> {
+    return { modelId, baseUrl: "https://gw.example.com", apiKey };
+  }
+
+  function wrapProviders(...providers: readonly Record<string, unknown>[]): unknown {
+    return { providers };
+  }
+
+  // 1. Vault resolves: secretRef present, no file apiKey; resolver returns the vault value.
+  it("resolves apiKey from the secretResolver when apiKeySecretRef is present and no file apiKey is set", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (ref) => (ref === "cred:m1" ? "vault-key" : undefined),
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1"));
+    const config = parseGatewayConfig(raw, {}, options);
+    expect(config.providers[0]?.apiKey).toBe("vault-key");
+  });
+
+  // 2. Per-model env beats vault: KEIKO_MODEL_M1_API_KEY overrides apiKeySecretRef.
+  it("per-model env KEIKO_MODEL_<TOKEN>_API_KEY beats secretResolver (highest precedence)", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (ref) => (ref === "cred:m1" ? "vault-key" : undefined),
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1"));
+    const config = parseGatewayConfig(raw, { KEIKO_MODEL_M1_API_KEY: "env-key" }, options);
+    expect(config.providers[0]?.apiKey).toBe("env-key");
+  });
+
+  // 3. Vault beats file plaintext: when both apiKeySecretRef and apiKey are present, vault wins.
+  it("secretResolver result beats a file plaintext apiKey", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (ref) => (ref === "cred:m1" ? "vault-key" : undefined),
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1", "file-key"));
+    const config = parseGatewayConfig(raw, {}, options);
+    expect(config.providers[0]?.apiKey).toBe("vault-key");
+  });
+
+  // 4. File plaintext used when resolver returns undefined (no vault available or ref unknown).
+  it("falls back to file plaintext apiKey when secretResolver returns undefined", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (_ref) => undefined,
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1", "file-key"));
+    const config = parseGatewayConfig(raw, {}, options);
+    expect(config.providers[0]?.apiKey).toBe("file-key");
+  });
+
+  // 4b. File plaintext used when no options are passed at all (no secretResolver).
+  it("falls back to file plaintext apiKey when no options are provided", () => {
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1", "file-key"));
+    const config = parseGatewayConfig(raw, {});
+    expect(config.providers[0]?.apiKey).toBe("file-key");
+  });
+
+  // 5. Default env fallback: secretRef present, resolver returns undefined, no file apiKey.
+  it("falls back to KEIKO_DEFAULT_API_KEY when secretResolver returns undefined and no file apiKey exists", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (_ref) => undefined,
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1"));
+    const config = parseGatewayConfig(raw, { KEIKO_DEFAULT_API_KEY: "default-key" }, options);
+    expect(config.providers[0]?.apiKey).toBe("default-key");
+  });
+
+  // 6. Missing everywhere throws ConfigInvalidError mentioning apiKey.
+  it("throws ConfigInvalidError when no credential source resolves the apiKey", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (_ref) => undefined,
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1"));
+    try {
+      parseGatewayConfig(raw, {}, options);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as ConfigInvalidError).message).toContain("apiKey");
+    }
+  });
+
+  // 7a. Resolver that throws degrades gracefully when a file apiKey is available.
+  it("treats a throwing secretResolver as undefined and falls back to file apiKey", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (_ref) => {
+        throw new Error("vault locked");
+      },
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1", "file-key"));
+    const config = parseGatewayConfig(raw, {}, options);
+    expect(config.providers[0]?.apiKey).toBe("file-key");
+  });
+
+  // 7b. Resolver that throws with no other source → ConfigInvalidError, not the raw vault error.
+  it("throws ConfigInvalidError (not the resolver error) when resolver throws and no other source resolves", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (_ref) => {
+        throw new Error("vault locked");
+      },
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1"));
+    try {
+      parseGatewayConfig(raw, {}, options);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).not.toContain("vault locked");
+      expect((error as ConfigInvalidError).message).toContain("apiKey");
+    }
+  });
+
+  // 8. loadConfigFromFile forwards ParseGatewayConfigOptions to parseGatewayConfig.
+  describe("loadConfigFromFile forwards options", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "keiko-secret-ref-"));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("resolves apiKeySecretRef via secretResolver injected through loadConfigFromFile options", () => {
+      const configPath = join(dir, "config.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({ providers: [secretRefProvider("vault-model", "cred:vm")] }),
+        "utf8",
+      );
+      const options: ParseGatewayConfigOptions = {
+        secretResolver: (ref) => (ref === "cred:vm" ? "injected-vault-key" : undefined),
+      };
+      const config = loadConfigFromFile(configPath, {}, options);
+      expect(config.providers[0]?.apiKey).toBe("injected-vault-key");
+    });
+  });
+
+  // 9. toSafeObject excludes apiKeySecretRef and the resolved key entirely.
+  it("toSafeObject omits apiKeySecretRef, the credential reference value, and the resolved key", () => {
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (ref) => (ref === "cred:m1" ? "resolved-vault-key" : undefined),
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:m1"));
+    const config = parseGatewayConfig(raw, {}, options);
+    const serialised = JSON.stringify(toSafeObject(config));
+    expect(serialised).not.toContain("apiKeySecretRef");
+    expect(serialised).not.toContain("cred:");
+    expect(serialised).not.toContain("resolved-vault-key");
+  });
+
+  // Mutation guard: verify the resolver is actually called with the exact reference string.
+  it("calls secretResolver with the exact apiKeySecretRef string from the raw config", () => {
+    const calls: string[] = [];
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (ref) => {
+        calls.push(ref);
+        return "spy-key";
+      },
+    };
+    const raw = wrapProviders(secretRefProvider("m1", "cred:exact-ref"));
+    parseGatewayConfig(raw, {}, options);
+    expect(calls).toEqual(["cred:exact-ref"]);
+  });
+
+  // Mutation guard: empty string secretRef must not invoke the resolver (treated as absent).
+  it("does not invoke secretResolver when apiKeySecretRef is an empty string", () => {
+    let called = false;
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (_ref) => {
+        called = true;
+        return "should-not-be-used";
+      },
+    };
+    const raw = wrapProviders({ ...fileKeyProvider("m1", "file-key"), apiKeySecretRef: "" });
+    const config = parseGatewayConfig(raw, {}, options);
+    expect(called).toBe(false);
+    expect(config.providers[0]?.apiKey).toBe("file-key");
   });
 });

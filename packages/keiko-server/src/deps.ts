@@ -61,6 +61,8 @@ import {
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
+import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
+import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -262,11 +264,12 @@ function resolveConfig(
   configPath: string | undefined,
   env: EnvSource,
   localConfigPath: string,
+  secretResolver: ProviderSecretResolver,
 ): { config: GatewayConfig | undefined; configPresent: boolean } {
   if (configPath === undefined) {
     let config: GatewayConfig | undefined;
     try {
-      config = loadConfigFromFile(localConfigPath, env);
+      config = loadConfigFromFile(localConfigPath, env, { secretResolver });
     } catch (error) {
       if (error instanceof GatewayError) {
         config = resolveEnvOnlyConfig(env);
@@ -277,7 +280,7 @@ function resolveConfig(
     return { config, configPresent: config !== undefined };
   }
   try {
-    return { config: loadConfigFromFile(configPath, env), configPresent: true };
+    return { config: loadConfigFromFile(configPath, env, { secretResolver }), configPresent: true };
   } catch (error) {
     if (error instanceof GatewayError) {
       const config = resolveEnvOnlyConfig(env);
@@ -628,19 +631,40 @@ function buildPeripherals(
 // wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore). The UI store is
 // created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
 // an injected store is supplied (tests).
+// One-time, idempotent migration of any pre-existing plaintext credentials in the local config
+// (Issue #1320), then resolution of the (now reference-only) config through a vault-backed resolver.
+// Migration is best-effort and crash-aware: it never throws into bootstrap, so a partial state simply
+// re-runs next start and is surfaced by `keiko repair`. It runs before the config is read so the
+// resolver turns the rewritten secret references back into live credentials.
+function loadRuntimeGatewayConfig(
+  options: BuildHandlerDepsOptions,
+  runtimeConfigPath: string,
+  resolvedEvidenceDir: string,
+): { config: GatewayConfig | undefined; configPresent: boolean } {
+  migrateLocalConfigCredentials({
+    configPath: runtimeConfigPath,
+    env: options.env,
+    evidenceDir: resolvedEvidenceDir,
+  });
+  const secretResolver = createProviderSecretResolver({
+    configPath: options.configPath ?? runtimeConfigPath,
+    env: options.env,
+  });
+  return resolveConfig(options.configPath, options.env, runtimeConfigPath, secretResolver);
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
   const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
-  const { config, configPresent } = resolveConfig(
-    options.configPath,
-    options.env,
+  const resolvedEvidenceDir = resolveEvidenceDir(options.evidenceDir, options.env);
+  const { config, configPresent } = loadRuntimeGatewayConfig(
+    options,
     runtimeConfigPath,
+    resolvedEvidenceDir,
   );
   const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
   const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, runtimeConfigPath);
-  const evidenceStore = createNodeEvidenceStore(
-    resolveEvidenceDir(options.evidenceDir, options.env),
-  );
+  const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const { store: uiStore, relationship } = composePersistence(
@@ -659,7 +683,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     config,
     configPresent,
     evidenceStore,
-    evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
+    evidenceDir: resolvedEvidenceDir,
     env: options.env,
     egress,
     redactor: liveRedactor,
