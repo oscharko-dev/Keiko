@@ -53,12 +53,18 @@ interface CapsuleDetail {
   readonly largeDocumentHealth?: {
     readonly resourcePolicy: { readonly largeFileThresholdBytes: number };
     readonly progress: readonly {
+      readonly documentId: string;
       readonly safeDisplayName: string;
       readonly phase: string;
+      readonly processedPages: number;
+      readonly chunkCount: number;
+      readonly embeddedChunkCount: number;
       readonly coverage: string;
+      readonly resumable: boolean;
     }[];
     readonly resumableDocuments: readonly string[];
     readonly partialCoverageDocuments: number;
+    readonly qualityWarnings: readonly string[];
   };
 }
 
@@ -287,11 +293,45 @@ function countRows(table: string, capsuleId?: string): number {
   return sqlScalar(`SELECT COUNT(*) FROM ${table}${where};`);
 }
 
+function markFirstLargeDocumentCheckpointResumable(capsuleId: string): void {
+  const now = Date.now();
+  const diagnostics = JSON.stringify([
+    {
+      code: "E2E_INTERRUPTED",
+      message: "E2E checkpoint interruption for Resume control coverage",
+    },
+  ]);
+  execFileSync("sqlite3", [
+    DB_PATH,
+    `UPDATE extraction_checkpoints
+       SET phase = 'cancelled',
+           updated_at = ${now.toString()},
+           terminal_diagnostics_json = ${sqlQuote(diagnostics)}
+       WHERE capsule_id = ${sqlQuote(capsuleId)}
+         AND document_id = (
+           SELECT document_id
+             FROM extraction_checkpoints
+            WHERE capsule_id = ${sqlQuote(capsuleId)}
+            ORDER BY document_id
+            LIMIT 1
+         );`,
+  ]);
+  expect(
+    sqlScalar(
+      `SELECT COUNT(*) FROM extraction_checkpoints WHERE capsule_id = ${sqlQuote(
+        capsuleId,
+      )} AND phase = 'cancelled';`,
+    ),
+  ).toBeGreaterThan(0);
+}
+
 function assertNoRowsForCapsule(capsuleId: string): void {
   for (const table of [
     "capsule_sources",
     "documents",
     "document_texts",
+    "document_text_windows",
+    "extraction_checkpoints",
     "chunks",
     "vectors",
     "parser_diagnostics",
@@ -442,6 +482,75 @@ async function expectIndexed(
   expect(countRows("chunks", capsuleId)).toBe(current.health.chunkCount);
   expect(countRows("vectors", capsuleId)).toBe(current.health.vectorCount);
   return current;
+}
+
+async function assertSmallPdfLargeDocumentEvidence(
+  request: APIRequestContext,
+  page: Page,
+  smallPdfDetail: CapsuleDetail,
+  smallPdfId: string,
+): Promise<void> {
+  expect(smallPdfDetail.largeDocumentHealth).toBeDefined();
+  expect(smallPdfDetail.largeDocumentHealth?.progress.length ?? 0).toBeGreaterThan(0);
+  expect(smallPdfDetail.largeDocumentHealth?.resourcePolicy.largeFileThresholdBytes).toBe(1024);
+  const pdfProgress = smallPdfDetail.largeDocumentHealth?.progress.find((progress) =>
+    progress.safeDisplayName.includes("small-text-layer.pdf"),
+  );
+  expect(pdfProgress).toBeDefined();
+  if (pdfProgress === undefined) throw new Error("Missing large-document progress row");
+  expect(pdfProgress.phase).toBe("complete");
+  expect(pdfProgress.processedPages).toBeGreaterThan(0);
+  expect(pdfProgress.chunkCount).toBeGreaterThan(0);
+  expect(pdfProgress.embeddedChunkCount).toBe(pdfProgress.chunkCount);
+  expect(pdfProgress.coverage).toBe("partial");
+  expect(smallPdfDetail.largeDocumentHealth?.partialCoverageDocuments).toBeGreaterThan(0);
+  expect(smallPdfDetail.largeDocumentHealth?.qualityWarnings.join("\n")).toContain(
+    "multimodal capability",
+  );
+  expect(countRows("document_text_windows", smallPdfId)).toBeGreaterThan(0);
+  expect(countRows("extraction_checkpoints", smallPdfId)).toBeGreaterThan(0);
+  await page.goto(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(smallPdfId)}`);
+  const largeDocuments = page.getByRole("region", { name: "Large documents" });
+  await expect(largeDocuments.getByRole("heading", { name: "Large documents" })).toBeVisible();
+  await expect(largeDocuments.getByRole("status")).toHaveText("Idle");
+  await expect(largeDocuments.getByText("small-text-layer.pdf")).toBeVisible();
+  await expect(largeDocuments.getByText("Complete")).toBeVisible();
+  await expect(largeDocuments.getByText("partial coverage", { exact: true })).toBeVisible();
+  await expect(
+    largeDocuments.getByText(
+      `${pdfProgress.processedPages.toString()} pages · ${pdfProgress.embeddedChunkCount.toString()}/${pdfProgress.chunkCount.toString()} chunks embedded`,
+    ),
+  ).toBeVisible();
+  await expect(
+    largeDocuments.getByText(/^1 document indexed with partial coverage/u),
+  ).toBeVisible();
+  await expect(largeDocuments.getByText(/multimodal capability/u)).toBeVisible();
+  await assertLargeDocumentResumeControl(request, page, largeDocuments, smallPdfId);
+}
+
+async function assertLargeDocumentResumeControl(
+  request: APIRequestContext,
+  page: Page,
+  largeDocuments: ReturnType<Page["getByRole"]>,
+  smallPdfId: string,
+): Promise<void> {
+  markFirstLargeDocumentCheckpointResumable(smallPdfId);
+  const interruptedDetail = await detail(request, smallPdfId);
+  const interruptedProgress = interruptedDetail.largeDocumentHealth?.progress.find((progress) =>
+    progress.safeDisplayName.includes("small-text-layer.pdf"),
+  );
+  expect(interruptedProgress).toBeDefined();
+  expect(interruptedProgress?.phase).toBe("cancelled");
+  expect(interruptedProgress?.resumable).toBe(true);
+  expect(interruptedDetail.largeDocumentHealth?.resumableDocuments.length ?? 0).toBeGreaterThan(0);
+  await page.goto(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(smallPdfId)}`);
+  await expect(largeDocuments.getByText("Cancelled")).toBeVisible();
+  await expect(largeDocuments.getByText(/resumable/u)).toBeVisible();
+  await expect(
+    largeDocuments.getByRole("button", {
+      name: "Resume interrupted large-document indexing",
+    }),
+  ).toBeVisible();
 }
 
 async function openLocalKnowledge(page: Page): Promise<void> {
@@ -644,11 +753,7 @@ async function runRegressionPass(
   // Issue #1286: with the lowered threshold the PDF took the bounded progressive path, so the BFF
   // surfaces large-document health with per-document progress, and the detail UI renders the
   // "Large documents" section + a progress row.
-  expect(smallPdfDetail.largeDocumentHealth).toBeDefined();
-  expect(smallPdfDetail.largeDocumentHealth?.progress.length ?? 0).toBeGreaterThan(0);
-  expect(smallPdfDetail.largeDocumentHealth?.resourcePolicy.largeFileThresholdBytes).toBe(1024);
-  await page.goto(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(smallPdfId)}`);
-  await expect(page.getByRole("heading", { name: "Large documents" })).toBeVisible();
+  await assertSmallPdfLargeDocumentEvidence(request, page, smallPdfDetail, smallPdfId);
 
   let largePdfId: string | null = null;
   if (INCLUDE_LARGE_PDF && existsSync(join(corpus.pdfLarge, "microsoft-foundry.pdf"))) {

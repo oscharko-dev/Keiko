@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 import { VERIFICATION_COMMAND_RULES } from "./orchestrator.js";
-import { buildVerificationPlan, resolveTargetedTests } from "./plan.js";
+import { buildVerificationPlan, planDirectTargetedTests, resolveTargetedTests } from "./plan.js";
 import type { ScriptCatalog } from "./types.js";
 import { makeWorkspace } from "./_support.js";
 
@@ -121,6 +121,41 @@ describe("resolveTargetedTests", () => {
     ws.writeFile("src/a.test.ts", "");
     const steps = resolveTargetedTests(ws.info, ["src/a.ts", "src/a.ts", "README"]);
     expect(steps[0]?.args).toEqual(["vitest", "run", "src/a.test.ts"]);
+  });
+});
+
+describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => {
+  it("runs exactly the given existing test files, without source→test derivation", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile("src/new.test.ts", "test('x', () => {});");
+    const steps = planDirectTargetedTests(ws.info, ["src/new.test.ts"]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.kind).toBe("targeted-test");
+    expect(steps[0]?.args).toEqual(["vitest", "run", "src/new.test.ts"]);
+    // The step inherits the deny-by-default network limit so the orchestrator can enforce egress.
+    expect(steps[0]?.limits.network).toBe("none");
+  });
+
+  it("skips files that do not exist and deduplicates", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile("src/a.test.ts", "");
+    const steps = planDirectTargetedTests(ws.info, [
+      "src/a.test.ts",
+      "src/a.test.ts",
+      "src/missing.test.ts",
+    ]);
+    expect(steps[0]?.args).toEqual(["vitest", "run", "src/a.test.ts"]);
+  });
+
+  it("returns no step when no file resolves", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    expect(planDirectTargetedTests(ws.info, ["src/none.test.ts"])).toEqual([]);
+  });
+
+  it("returns no step for an unknown framework", () => {
+    const ws = makeWorkspace({ testFramework: "mocha" });
+    ws.writeFile("src/a.test.ts", "");
+    expect(planDirectTargetedTests(ws.info, ["src/a.test.ts"])).toEqual([]);
   });
 });
 

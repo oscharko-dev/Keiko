@@ -27,6 +27,18 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     ],
   ],
   ["@oscharko-dev/keiko-contracts", []],
+  // Reusable OS/container egress-isolation strategy (ADR-0043). A near-leaf: its only workspace
+  // dependency is keiko-contracts (for the SandboxPolicy/attestation types). Spawning stays in
+  // keiko-tools, which depends on this package to apply the wrapper at the single exec boundary.
+  ["@oscharko-dev/keiko-sandbox", ["@oscharko-dev/keiko-contracts"]],
+  // Browser-tier editor package (ADR-0042). Like keiko-ui it lives in the browser tier; its only
+  // permitted workspace dependency is keiko-contracts (type-only where possible). The browser-tier
+  // value-import boundary is enforced separately by adr-0042-editor-not-node-domain-values in
+  // .dependency-cruiser.cjs.
+  ["@oscharko-dev/keiko-editor", ["@oscharko-dev/keiko-contracts"]],
+  // The Next app is not part of the package-build solution, but its workspace edges are still
+  // governed: #1196 allows the Workspace card host to value-import the browser-tier editor package.
+  ["@oscharko-dev/keiko-ui", ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-editor"]],
   [
     "@oscharko-dev/keiko-evaluations",
     [
@@ -118,6 +130,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-security",
       "@oscharko-dev/keiko-model-gateway",
       "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-sandbox",
       "@oscharko-dev/keiko-tools",
       "@oscharko-dev/keiko-harness",
       "@oscharko-dev/keiko-workflows",
@@ -137,6 +150,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     "@oscharko-dev/keiko-tools",
     [
       "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-sandbox",
       "@oscharko-dev/keiko-security",
       "@oscharko-dev/keiko-workspace",
     ],
@@ -239,24 +253,13 @@ function packageGraphFailures(pkg, tsconfig) {
   const failures = [];
   const deps = workspaceDeps(pkg.manifest);
   const refs = workspaceRefs(tsconfig);
-  const allowedDeps = ALLOWED_WORKSPACE_DEPENDENCIES.get(pkg.name);
 
   if (JSON.stringify(refs) !== JSON.stringify(deps)) {
     failures.push(
       `${pkg.name}: tsconfig references ${refs.join(", ")} do not match dependencies ${deps.join(", ")}`,
     );
   }
-  if (!allowedDeps) {
-    failures.push(`${pkg.name}: missing ADR-0019 workspace dependency allowlist entry`);
-  } else {
-    const allowed = new Set(allowedDeps);
-    const disallowedDeps = deps.filter((dep) => !allowed.has(dep));
-    if (disallowedDeps.length > 0) {
-      failures.push(
-        `${pkg.name}: workspace dependencies ${disallowedDeps.join(", ")} are not allowed by the ADR-0019 package graph allowlist`,
-      );
-    }
-  }
+  failures.push(...workspaceDependencyAllowlistFailures(pkg));
   if (tsconfig.compilerOptions?.rootDir !== "src") {
     failures.push(`${pkg.name}: compilerOptions.rootDir must be "src"`);
   }
@@ -267,6 +270,24 @@ function packageGraphFailures(pkg, tsconfig) {
     failures.push(`${pkg.name}: manifest still points at dist/packages/... output`);
   }
   return failures;
+}
+
+function workspaceDependencyAllowlistFailures(pkg) {
+  const deps = workspaceDeps(pkg.manifest);
+  const allowedDeps = ALLOWED_WORKSPACE_DEPENDENCIES.get(pkg.name);
+  if (!allowedDeps) {
+    return [`${pkg.name}: missing ADR-0019 workspace dependency allowlist entry`];
+  }
+
+  const allowed = new Set(allowedDeps);
+  const disallowedDeps = deps.filter((dep) => !allowed.has(dep));
+  if (disallowedDeps.length === 0) {
+    return [];
+  }
+
+  return [
+    `${pkg.name}: workspace dependencies ${disallowedDeps.join(", ")} are not allowed by the ADR-0019 package graph allowlist`,
+  ];
 }
 
 export async function checkWorkspacePackageGraph(root) {
@@ -280,6 +301,10 @@ export async function checkWorkspacePackageGraph(root) {
 
   failures.push(...rootScriptFailures(rootManifest));
   failures.push(...solutionRefFailures(packagesSolution, graphPackages));
+  const uiPackage = packages.find((pkg) => pkg.name === UI_PACKAGE);
+  if (uiPackage) {
+    failures.push(...workspaceDependencyAllowlistFailures(uiPackage));
+  }
   for (const pkg of graphPackages) {
     const tsconfigPath = join(pkg.dir, "tsconfig.json");
     const tsconfig = await readJson(tsconfigPath);

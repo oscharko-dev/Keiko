@@ -2,10 +2,18 @@
 // without spawning a child process: --help, offline run, --json, usage errors, --fixture selection,
 // --live fail-closed, and --output file write. No network or live model.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import { runEvaluateCli } from "./evaluate.js";
 import type { EvaluateDeps } from "./evaluate.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -41,6 +49,8 @@ function makeIo(): { io: Parameters<typeof runEvaluateCli>[1]; captured: () => C
 const FIXED_NOW = 1_700_000_000_000;
 const fixedNow = (): number => FIXED_NOW;
 const fixedId = (): string => "cli-test-id";
+const REAL_TMPDIR = realpathSync(tmpdir());
+const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x36).toString("base64");
 
 function offlineDeps(): EvaluateDeps {
   return {
@@ -114,6 +124,25 @@ function writeGatewayConfig(
     "utf8",
   );
   return path;
+}
+
+function writeReferenceOnlyGatewayConfig(dir: string, modelId = "configured-live-model"): string {
+  const configPath = writeGatewayConfig(dir, { modelId });
+  const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
+    providers: Record<string, unknown>[];
+  };
+  const provider = parsed.providers[0];
+  if (provider === undefined) {
+    throw new Error("test fixture must include one provider");
+  }
+  delete provider.apiKey;
+  provider.apiKeySecretRef = `cred:${modelId}`;
+  writeFileSync(configPath, JSON.stringify(parsed), "utf8");
+  openProviderCredentialVault({
+    configPath,
+    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
+  }).set(`cred:${modelId}`, "example-test-token-1234567890");
+  return configPath;
 }
 
 // ─── --help ───────────────────────────────────────────────────────────────────
@@ -400,6 +429,43 @@ describe("--live fail-closed", () => {
       expect(seenModelIds).toEqual(["configured-live-model"]);
       expect(captured().out).toContain('"modelId": "configured-live-model"');
       expect(captured().out).not.toContain('"modelId": "eval-model"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("selects the configured live model from a reference-only config", async () => {
+    const dir = mkdtempSync(join(REAL_TMPDIR, "keiko-eval-live-"));
+    const seenModelIds: string[] = [];
+    const { io, captured } = makeIo();
+    try {
+      const configPath = writeReferenceOnlyGatewayConfig(dir);
+      const code = await runEvaluateCli(
+        [
+          "--fixture",
+          "bug-investigation/investigation-only",
+          "--live",
+          "--json",
+          "--config",
+          configPath,
+        ],
+        io,
+        { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
+        {
+          runner: {
+            modelProviderFactory: (_fixture, _mode, modelId): ModelPort => {
+              seenModelIds.push(modelId);
+              return createScriptedModelPort([modelResponse("## Root cause\nConfigured model.")]);
+            },
+            store: createInMemoryEvidenceStore(),
+            now: fixedNow,
+            idSource: fixedId,
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(seenModelIds).toEqual(["configured-live-model"]);
+      expect(captured().out + captured().err).not.toContain("example-test-token-1234567890");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

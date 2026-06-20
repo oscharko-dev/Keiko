@@ -20,7 +20,7 @@ import type {
 import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts";
 
 import { buildParserOptions } from "../registry.js";
-import { loadPdfDocument, readPageText, type PdfDocumentLike } from "../pdf-parser.js";
+import { loadPdfDocumentFromSource, readPageText, type PdfDocumentLike } from "../pdf-parser.js";
 import type { OcrPageResult } from "../ocr/types.js";
 import type { ParserOptions, ParserSelectionInput } from "../types.js";
 
@@ -46,7 +46,7 @@ export type OcrPageFn = (input: {
 
 export interface ProgressivePdfExtractorDeps {
   // Injectable so unit tests drive a fake PdfDocumentLike without real PDF bytes / pdfjs.
-  readonly loadDocument?: (bytes: Uint8Array) => Promise<PdfDocumentLike>;
+  readonly loadDocument?: (source: ProgressiveExtractionSource) => Promise<PdfDocumentLike>;
   // Optional OCR capability. When `status` is "available" the `ocrPage` adapter is consulted for
   // no-text-layer pages and its text is indexed with page provenance.
   readonly ocr?: { readonly status: ExtractionCapabilityStatus; readonly ocrPage: OcrPageFn };
@@ -214,24 +214,22 @@ async function extractPdfWindow(
 }
 
 async function* pdfExtractWindows(
-  loadDocument: (bytes: Uint8Array) => Promise<PdfDocumentLike>,
+  loadDocument: (source: ProgressiveExtractionSource) => Promise<PdfDocumentLike>,
   ctx: PdfExtractContext,
   source: ProgressiveExtractionSource,
   options: ProgressiveExtractionOptions,
 ): AsyncIterable<ProgressiveExtractionWindow> {
-  if (source.loadFullBuffer === undefined) return;
   const parserOptions = parserOptionsFromPolicy(options);
-  const bytes = await source.loadFullBuffer();
-  const doc = await loadDocument(bytes);
+  const doc = await loadDocument(source);
   const resumeFromPage = options.resumeFromPage ?? 0;
   const windowPages = Math.max(1, options.policy.extractionWindowPages);
   const startedAt = options.now();
   const state: PdfDriveState = {
     cursor: options.resumeCharacterStart ?? 0,
     anyPageEmitted: resumeFromPage > 0,
-    scannedObjects: 0,
+    scannedObjects: options.resumeObjectCursor ?? 0,
     emittedUnits: 0,
-    windowIndex: 0,
+    windowIndex: options.resumeWindowIndex ?? 0,
   };
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;
@@ -243,7 +241,7 @@ async function* pdfExtractWindows(
 export function createProgressivePdfExtractor(
   deps: ProgressivePdfExtractorDeps = {},
 ): ProgressiveExtractor {
-  const loadDocument = deps.loadDocument ?? loadPdfDocument;
+  const loadDocument = deps.loadDocument ?? loadPdfDocumentFromSource;
   return {
     strategyId: "progressive-pdf",
     parserVersion: PARSER_VERSION,

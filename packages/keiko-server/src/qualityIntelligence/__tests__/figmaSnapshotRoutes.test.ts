@@ -23,6 +23,7 @@
 //       screenName ir.name / "Screen" fallback, reductionHint pluralisation + skipped clause
 
 import { mkdtemp, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -65,6 +66,7 @@ let server: Server;
 let staticRoot: string;
 let port: number;
 let evidenceDir: string;
+const REAL_TMPDIR = realpathSync(tmpdir());
 
 async function listen(srv: Server): Promise<number> {
   await new Promise<void>((resolve) => {
@@ -216,8 +218,8 @@ function makeCtx(bodyStr: string): RouteContext {
 // ─── Test lifecycle ───────────────────────────────────────────────────────────
 
 beforeEach(async () => {
-  staticRoot = await mkdtemp(join(tmpdir(), "keiko-figma-routes-static-"));
-  evidenceDir = await mkdtemp(join(tmpdir(), "keiko-figma-routes-ev-"));
+  staticRoot = await mkdtemp(join(REAL_TMPDIR, "keiko-figma-routes-static-"));
+  evidenceDir = await mkdtemp(join(REAL_TMPDIR, "keiko-figma-routes-ev-"));
   resetInFlightMap();
   const built = await buildServer(makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }));
   server = built.server;

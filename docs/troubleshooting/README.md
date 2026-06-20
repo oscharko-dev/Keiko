@@ -498,5 +498,6 @@ rejected.
 - [Local UI guide](../ui-runbook.md) — UI start and stop semantics, supported project paths.
 - [Security boundaries](../security-and-audit-boundaries.md) — trust boundaries that constrain resolutions in this guide.
 - [Local runtime state contract](../local-runtime-state-contract.md) — files written under `.keiko/` and `~/.keiko/`.
+- [Keiko Editor troubleshooting](../keiko-editor/troubleshooting.md) — Monaco workers, CSP, unsupported files, completion, and verification failures.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

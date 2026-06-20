@@ -55,6 +55,10 @@
     "./hashing": {
       "types": "./dist/hashing.d.ts",
       "import": "./dist/hashing.js"
+    },
+    "./secret-vault": {
+      "types": "./dist/secret-vault.d.ts",
+      "import": "./dist/secret-vault.js"
     }
   },
   "scripts": {

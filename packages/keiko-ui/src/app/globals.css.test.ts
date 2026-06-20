@@ -1183,3 +1183,138 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(detail).toContain("color: var(--fg)");
   });
 });
+
+// ─── Issue #1193 — editor theme tokens surfaced into the runtime (Addendum 3) ────
+
+describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the runtime", () => {
+  it("surfaces the full 12-type syntax palette as --ed-syn-* custom properties", () => {
+    for (const token of [
+      "--ed-syn-comment",
+      "--ed-syn-string",
+      "--ed-syn-number",
+      "--ed-syn-constant",
+      "--ed-syn-keyword",
+      "--ed-syn-type",
+      "--ed-syn-function",
+      "--ed-syn-property",
+      "--ed-syn-variable",
+      "--ed-syn-operator",
+      "--ed-syn-punct",
+      "--ed-syn-regexp",
+    ]) {
+      expect(css, `${token} must be surfaced into globals.css`).toContain(`${token}:`);
+    }
+  });
+
+  it("surfaces the editor chrome / diff / ghost-text tokens the Monaco theme maps", () => {
+    for (const token of [
+      "--ed-bg:",
+      "--ed-fg:",
+      "--ed-bg-gutter:",
+      "--ed-gutter-fg:",
+      "--ed-gutter-fg-active:",
+      "--ed-line-active:",
+      "--ed-cursor:",
+      "--ed-selection:",
+      "--ed-selection-blur:",
+      "--ed-find-match:",
+      "--ed-find-match-active:",
+      "--ed-focus:",
+      "--ed-bracket-match:",
+      "--ed-indent-guide:",
+      "--ed-indent-guide-active:",
+      "--ed-whitespace:",
+      "--ed-diff-ins-line:",
+      "--ed-diff-ins-text:",
+      "--ed-diff-rem-line:",
+      "--ed-diff-rem-text:",
+      "--ed-diff-ins-gutter:",
+      "--ed-diff-rem-gutter:",
+      "--ed-error:",
+      "--ed-warn:",
+      "--ed-info:",
+      "--ed-hint:",
+      "--ed-ghost:",
+      "--ed-suggest-bg:",
+      "--ed-suggest-sel:",
+      "--ed-suggest-match:",
+      "--ed-minimap-bg:",
+      "--ed-minimap-slider:",
+    ]) {
+      expect(css).toContain(token);
+    }
+  });
+
+  it("extends the base palette rather than forking it (diagnostics reuse status tokens)", () => {
+    expect(css).toContain("--ed-error: var(--danger)");
+    expect(css).toContain("--ed-warn: var(--warn)");
+    expect(css).toContain("--ed-info: var(--info)");
+    expect(css).toContain("--ed-ghost: var(--fg-dim)");
+  });
+
+  it("surfaces the finalized #1212 tokens (#1232): two-tone focus ring + changed-diff state", () => {
+    expect(css).toContain("--ed-focus: var(--accent-text)");
+    expect(css).toContain("--ed-focus-inner: var(--ed-bg)");
+    expect(css).toContain("--ed-diff-chg-line:");
+    expect(css).toContain("--ed-diff-chg-text:");
+    expect(css).toContain("--ed-diff-chg-gutter: var(--info)");
+  });
+
+  it("provides dark (default), light, and high-contrast editor surfaces from the token source", () => {
+    // Scope the assertions to the editor token section + its own prefers-contrast block so the
+    // high-contrast values cannot accidentally satisfy the test from :root/[data-theme] (mutation-robust).
+    const edStart = css.indexOf("Editor theme tokens (#1212)");
+    expect(edStart, "editor token section not found").toBeGreaterThan(-1);
+    const edHcStart = css.indexOf("@media (prefers-contrast: more)", edStart);
+    expect(edHcStart, "editor HC @media block not found").toBeGreaterThan(-1);
+
+    let depth = 0;
+    let edHcEnd = edHcStart;
+    let started = false;
+    for (let i = css.indexOf("{", edHcStart); i < css.length; i++) {
+      if (css[i] === "{") {
+        depth++;
+        started = true;
+      } else if (css[i] === "}") {
+        depth--;
+      }
+      if (started && depth === 0) {
+        edHcEnd = i;
+        break;
+      }
+    }
+    const edHcBlock = css.slice(edHcStart, edHcEnd + 1);
+    const edBeforeHc = css.slice(edStart, edHcStart);
+
+    // dark default + light overrides live before the HC block; HC dark/light live inside it.
+    expect(edBeforeHc).toContain("--ed-fg: #c5cdd9"); // dark default (:root)
+    expect(edBeforeHc).toContain("--ed-fg: #2b3440"); // [data-theme="light"]
+    expect(edHcBlock).toContain("--ed-fg: #ffffff"); // prefers-contrast dark
+    expect(edHcBlock).toContain("--ed-fg: #000000"); // prefers-contrast light
+  });
+
+  it("provides the explicit [data-hc] high-contrast hook from the design source", () => {
+    expect(css).toContain('[data-hc="more"]');
+    expect(css).toContain('[data-hc="more"][data-theme="light"]');
+    expect(css).toContain("--ed-syn-keyword: #d8b6ff");
+    expect(css).toContain("--ed-syn-keyword: #6f1b96");
+  });
+});
+
+describe("Issue #1205 — editor tab truncation", () => {
+  it("keeps the tab strip shrinkable inside compact editor cards", () => {
+    expect(cssBlock(".ed-tabs {")).toContain("min-width: 0");
+    expect(cssBlock(".ed-tablist {")).toContain("min-width: 0");
+    expect(cssBlock(".ed-tablist {")).toContain("overflow: hidden");
+  });
+
+  it("truncates long editor tab labels instead of expanding the header", () => {
+    for (const selector of [".ed-tab {", ".ed-tab-label {"]) {
+      const block = cssBlock(selector);
+      expect(block).toContain("min-width: 0");
+      expect(block).toContain("overflow: hidden");
+      expect(block).toContain("white-space: nowrap");
+      expect(block).toContain("text-overflow: ellipsis");
+    }
+  });
+});

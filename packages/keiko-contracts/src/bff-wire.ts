@@ -6,6 +6,9 @@
 // Reused on RunReport.verificationSummary — verification-summary.ts is the canonical home for
 // the post-#7 audit projection used by both the audit ledger and this wire shape.
 import type { VerificationAuditSummary } from "./verification-summary.js";
+// Editor-session correlation metadata (Issue #1197). Carried additively on the editable file
+// content surface so diagnostics/completion can reference an exact, content-free document version.
+import type { EditorDocumentSession, EditorDocumentVersion } from "./editor-session.js";
 // ModelCapability is the credential-free capability registry shape; SafeGatewayConfig surfaces
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
@@ -991,6 +994,8 @@ export type FilesPreviewResponse =
 export interface FilesContentResponse extends FilesPreviewBase {
   readonly content: string;
   readonly maxBytes: number;
+  // Issue #1197: content-free editor-session metadata for the returned document revision.
+  readonly session: EditorDocumentSession;
 }
 
 export interface FilesWriteRequest {
@@ -998,7 +1003,20 @@ export interface FilesWriteRequest {
   readonly path: string;
   readonly content: string;
   readonly expectedModifiedAt?: number;
+  // Issue #1197: version-aware optimistic-concurrency token. When supplied, the BFF rejects the
+  // save with STALE_SESSION (409) if the on-disk document no longer matches this revision. This
+  // supersedes the coarser mtime-only `expectedModifiedAt` check.
+  readonly baseVersion?: EditorDocumentVersion;
 }
+
+// Re-export the editor-session shapes that the file content/write wire types reference, so wire
+// consumers reach them on the same subpath (Issue #1197).
+export type {
+  EditorDocumentSession,
+  EditorDocumentVersion,
+  EditorSessionAiProvenance,
+  EditorSessionErrorCode,
+} from "./editor-session.js";
 
 // ─── Browser tool (ADR-0017) wire types ───────────────────────────────────────────
 

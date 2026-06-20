@@ -23,7 +23,7 @@ const failures = [];
 const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
 const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
-  ["src/cli/index.ts", "35b598c19db4adcd9fe40618f289200463d361d109f951c9e70b99db8db25863"],
+  ["src/cli/index.ts", "d11e2627872fe9df09d85ea3a463131e279782868d3d45d22dde0c13558c2519"],
 ]);
 
 function readJson(path) {

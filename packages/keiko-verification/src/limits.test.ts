@@ -16,11 +16,19 @@ describe("buildAppliedLimits — honest enforced flags (ADR-0007 D2)", () => {
     expect(by("network")).toBe(false);
   });
 
-  it("network carries the documented-not-enforced note", () => {
+  it("network carries the documented-not-enforced note for an inherited-network run", () => {
     const net = buildAppliedLimits(DEFAULT_VERIFICATION_LIMITS, undefined).find(
       (r) => r.dimension === "network",
     );
     expect(net?.note).toContain("container wave");
+  });
+
+  it("network is enforced and notes the keiko-sandbox boundary when the run attests it (ADR-0043)", () => {
+    const net = buildAppliedLimits(DEFAULT_VERIFICATION_LIMITS, undefined, true).find(
+      (r) => r.dimension === "network",
+    );
+    expect(net?.enforced).toBe(true);
+    expect(net?.note).toContain("keiko-sandbox");
   });
 
   it("memory is enforced only on Linux with a ceiling set; otherwise it carries a note", () => {

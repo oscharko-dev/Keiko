@@ -33,7 +33,7 @@ export { classifyScripts, detectScripts } from "./detect.js";
 export { classifyOutcome } from "./classify.js";
 export type { AbortReason, OutcomeInput } from "./classify.js";
 
-export { buildVerificationPlan, resolveTargetedTests } from "./plan.js";
+export { buildVerificationPlan, resolveTargetedTests, planDirectTargetedTests } from "./plan.js";
 export type { PlanOptions } from "./plan.js";
 
 export { nodeResourceMonitor } from "./monitor.js";

@@ -15,6 +15,7 @@ import type {
   IndexingJobError,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
+  LargeDocumentResourcePolicy,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
@@ -43,6 +44,25 @@ export interface BoundedChunkParams {
   readonly documentId: DocumentId;
 }
 
+export class BoundedIndexingCancelledError extends Error {
+  public constructor(message = "bounded indexing cancelled") {
+    super(message);
+    this.name = "BoundedIndexingCancelledError";
+  }
+}
+
+export class BoundedIndexingPolicyError extends Error {
+  public readonly code = "RESOURCE_POLICY_EXCEEDED";
+  public constructor(message: string) {
+    super(message);
+    this.name = "BoundedIndexingPolicyError";
+  }
+
+  public toIndexingError(): IndexingJobError {
+    return { code: this.code, message: this.message };
+  }
+}
+
 function rebaseUnit(unit: ParsedUnit, length: number): ParsedUnit {
   if (unit.kind === "unsupported-media") return unit;
   return { ...unit, characterStart: 0, characterEnd: length };
@@ -54,6 +74,41 @@ interface ChunkUnitContext {
   readonly options: ChunkingOptions | undefined;
   readonly strategyKey: string;
   readonly maxChunks: number;
+}
+
+function boundedMaxChunks(
+  options: ChunkingOptions | undefined,
+  policy: LargeDocumentResourcePolicy | undefined,
+): number {
+  return Math.min(
+    resolveChunkingOptions(options).maxChunks,
+    policy?.maxChunkCount ?? Number.POSITIVE_INFINITY,
+  );
+}
+
+function assertChunkingCanContinue(
+  signal: AbortSignal | undefined,
+  orderIndex: number,
+  maxChunks: number,
+): void {
+  if (signal?.aborted === true) throw new BoundedIndexingCancelledError();
+  if (orderIndex >= maxChunks) {
+    throw new BoundedIndexingPolicyError(
+      "large-document chunk count exceeded the configured resource policy",
+    );
+  }
+}
+
+function assertChunkingHasRemainder(
+  orderIndex: number,
+  rowIndex: number,
+  rowCount: number,
+  maxChunks: number,
+): void {
+  if (orderIndex < maxChunks || rowIndex >= rowCount - 1) return;
+  throw new BoundedIndexingPolicyError(
+    "large-document chunk count exceeded the configured resource policy",
+  );
 }
 
 // Chunks one parsed unit (read via SUBSTR, rebased to window-local offsets) and persists its chunks
@@ -101,6 +156,7 @@ export function chunkDocumentBounded(
   params: BoundedChunkParams,
   options: ChunkingOptions | undefined,
   signal: AbortSignal | undefined,
+  policy?: LargeDocumentResourcePolicy,
 ): number {
   const db = store._internal.db;
   const rows = selectParsedUnitsForDocument(db, params.capsuleId, params.documentId);
@@ -110,16 +166,18 @@ export function chunkDocumentBounded(
     params,
     options,
     strategyKey: chunkingStrategyKey(options),
-    maxChunks: resolveChunkingOptions(options).maxChunks,
+    maxChunks: boundedMaxChunks(options, policy),
   };
   db.exec("BEGIN");
   try {
     deleteChunksForDocument(db, params.capsuleId, params.documentId);
     let orderIndex = 0;
-    for (const row of rows) {
-      if (signal?.aborted === true) throw new Error("bounded chunking aborted");
-      if (orderIndex >= ctx.maxChunks) break;
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
+      if (row === undefined) continue;
+      assertChunkingCanContinue(signal, orderIndex, ctx.maxChunks);
       orderIndex = chunkOneUnit(ctx, row, orderIndex);
+      assertChunkingHasRemainder(orderIndex, rowIndex, rows.length, ctx.maxChunks);
     }
     db.exec("COMMIT");
     return orderIndex;
@@ -178,6 +236,7 @@ export interface BoundedEmbedDeps {
   readonly now: () => number;
   readonly idSource: () => string;
   readonly signal?: AbortSignal;
+  readonly policy?: LargeDocumentResourcePolicy;
   // Called after each successfully embedded batch with the new embedded-chunk cursor and id, so the
   // caller can advance the durable checkpoint between model calls.
   readonly onBatch?: (cursor: number, lastChunkId: ChunkId) => void;
@@ -188,6 +247,7 @@ export interface BoundedEmbedResult {
   readonly errors: readonly IndexingJobError[];
   readonly lastChunkId: ChunkId | null;
   readonly embeddedCursor: number;
+  readonly cancelled: boolean;
 }
 
 function nextBatch(db: DatabaseSync, deps: BoundedEmbedDeps): readonly ChunkOffsetRow[] {
@@ -232,6 +292,7 @@ interface EmbedAccumulator {
   vectorCount: number;
   readonly errors: IndexingJobError[];
   lastChunkId: ChunkId | null;
+  cancelled: boolean;
 }
 
 // Embeds one batch, updates the accumulator, and advances the durable checkpoint. Returns false to
@@ -252,6 +313,54 @@ async function embedOneBatch(
   return result.errors.length === 0;
 }
 
+function markCancelled(acc: EmbedAccumulator): void {
+  acc.cancelled = true;
+}
+
+function appendBatchPolicyError(acc: EmbedAccumulator): void {
+  acc.errors.push({
+    code: "RESOURCE_POLICY_EXCEEDED",
+    message: "large-document embedding batch count exceeded the configured resource policy",
+  });
+}
+
+function batchPolicyExceeded(deps: BoundedEmbedDeps, batchCount: number): boolean {
+  return batchCount >= (deps.policy?.maxEmbeddingBatchCount ?? Number.POSITIVE_INFINITY);
+}
+
+function sawCancellationError(acc: EmbedAccumulator): boolean {
+  return acc.errors.some((error) => error.code === "CANCELLED");
+}
+
+interface EmbedLoopState {
+  previousFirstId?: string;
+  batchCount: number;
+}
+
+async function embedLoopStep(
+  db: DatabaseSync,
+  deps: BoundedEmbedDeps,
+  acc: EmbedAccumulator,
+  loop: EmbedLoopState,
+): Promise<"continue" | "stop"> {
+  if (deps.signal?.aborted === true) {
+    markCancelled(acc);
+    return "stop";
+  }
+  const rows = nextBatch(db, deps);
+  const firstRow = rows[0];
+  if (firstRow === undefined || firstRow.id === loop.previousFirstId) return "stop";
+  if (batchPolicyExceeded(deps, loop.batchCount)) {
+    appendBatchPolicyError(acc);
+    return "stop";
+  }
+  loop.batchCount += 1;
+  loop.previousFirstId = firstRow.id;
+  if (await embedOneBatch(db, deps, rows, acc)) return "continue";
+  if (sawCancellationError(acc)) markCancelled(acc);
+  return "stop";
+}
+
 // Embeds a document's not-yet-embedded chunks in bounded batches, reading each chunk's text via
 // SUBSTR. Never materializes the whole document text or the whole chunk set, so peak memory stays
 // O(batch) regardless of document size. Resume falls out of the missing-vector gate.
@@ -259,20 +368,21 @@ export async function embedDocumentChunksBounded(
   deps: BoundedEmbedDeps,
 ): Promise<BoundedEmbedResult> {
   const db = deps.store._internal.db;
-  const acc: EmbedAccumulator = { vectorCount: 0, errors: [], lastChunkId: null };
-  let previousFirstId: string | undefined;
+  const acc: EmbedAccumulator = {
+    vectorCount: 0,
+    errors: [],
+    lastChunkId: null,
+    cancelled: false,
+  };
+  const loop: EmbedLoopState = { batchCount: 0 };
   for (;;) {
-    if (deps.signal?.aborted === true) break;
-    const rows = nextBatch(db, deps);
-    // No-progress guard: empty, or the same chunks come back unembedded → stop.
-    if (rows.length === 0 || rows[0]?.id === previousFirstId) break;
-    previousFirstId = rows[0]?.id;
-    if (!(await embedOneBatch(db, deps, rows, acc))) break;
+    if ((await embedLoopStep(db, deps, acc, loop)) === "stop") break;
   }
   return {
     vectorCount: acc.vectorCount,
     errors: acc.errors,
     lastChunkId: acc.lastChunkId,
     embeddedCursor: embeddedChunkCount(db, deps),
+    cancelled: acc.cancelled,
   };
 }

@@ -26,12 +26,12 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import {
-  loadConfigFromFile,
   requestOpenAIEmbedding,
   GatewayError,
   type EnvSource,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -241,7 +241,7 @@ function resolveEmbedder(
   const configPath = flagValue(args, "--config") ?? env.KEIKO_CONFIG_FILE;
   if (configPath === undefined) return null;
   try {
-    return createMemoryEmbedder(loadConfigFromFile(configPath, env), requestOpenAIEmbedding);
+    return createMemoryEmbedder(loadGatewayConfigFromFile(configPath, env), requestOpenAIEmbedding);
   } catch (error) {
     if (error instanceof GatewayError) return null;
     throw error;

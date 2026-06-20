@@ -1,0 +1,16 @@
+{
+  // Lint-only TypeScript project. The build project (tsconfig.json) excludes test files and the
+  // jsdom setup so they never land in dist; the typed-lint pass needs them in *some* project to
+  // type-check the React component suites (`*.test.tsx`), the node helper suites, and the vitest
+  // setup. This config includes them with the same React JSX transform as the build and the vitest
+  // + jest-dom ambient types, and emits nothing.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vitest.config.ts", "vitest.setup.ts"],
+  "exclude": ["dist", "node_modules"]
+}

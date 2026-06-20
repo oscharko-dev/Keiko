@@ -18,6 +18,10 @@ export default tseslint.config(
       "only-for-internal-use/**",
       "Only for Internal Use/**",
       "tests/architecture/fixtures/**",
+      // Standalone frontend test-generation fixture projects (Issue #1203): intentionally idiomatic
+      // example code with uninstalled deps (React, Testing Library, Playwright), held as data — not
+      // product code subject to the repo's strict typed rules. Excluded from build and test collection.
+      "tests/fixtures/frontend-test-generation/**",
     ],
   },
   js.configs.recommended,
@@ -36,10 +40,31 @@ export default tseslint.config(
       "no-console": "warn",
     },
   },
+  // The keiko-editor package's build tsconfig (tsconfig.json) excludes test files and the jsdom
+  // setup so they never reach dist. Point the typed-lint parser at the package's lint-only project
+  // (tsconfig.eslint.json) for those files so the React component suites and the setup are still
+  // fully type-checked under strict-type-checked.
+  {
+    files: [
+      "packages/keiko-editor/src/**/*.{ts,tsx}",
+      "packages/keiko-editor/vitest.config.ts",
+      "packages/keiko-editor/vitest.setup.ts",
+    ],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ["packages/keiko-editor/tsconfig.eslint.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
   // Test files are exempt from max-lines-per-function: describe() blocks legitimately group many
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
-  { files: ["**/*.test.ts", "**/*.test.mjs"], rules: { "max-lines-per-function": "off" } },
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    rules: { "max-lines-per-function": "off" },
+  },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
   {
     files: ["**/*.cjs"],
@@ -62,6 +87,11 @@ export default tseslint.config(
       "no-console": "off",
       "@typescript-eslint/explicit-function-return-type": "off",
     },
+  },
+  {
+    files: ["tests/e2e/fixtures/*.js"],
+    languageOptions: { globals: { Buffer: "readonly", process: "readonly" } },
+    rules: { "@typescript-eslint/explicit-function-return-type": "off" },
   },
   prettier,
 );

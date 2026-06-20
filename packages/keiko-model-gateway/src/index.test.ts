@@ -12,9 +12,14 @@ import {
   CAPABILITY_DATA,
   createDefaultChatCapability,
   findCapability,
+  INFILLING_ALIGNMENTS,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
   listCapabilities,
+  modelSupportsInfilling,
   resolveCostClass,
   selectCheapest,
+  selectCompletionModelFromCapabilities,
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
@@ -28,6 +33,7 @@ import {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
+  selectCompletionModel,
   selectConfiguredModel,
   redact,
   AuthenticationError,
@@ -63,6 +69,7 @@ import type {
   FinishReason,
   GatewayConfig,
   GatewayRequest,
+  InfillingAlignment,
   LatencyClass,
   ModelCapability,
   ModelKind,
@@ -77,6 +84,10 @@ import type {
   ToolDefinition,
   UsageMetadata,
   GatewayEgressErrorCode,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
+  CompletionSelectionOptions,
 } from "./index.js";
 
 describe("keiko-model-gateway package surface", () => {
@@ -92,9 +103,14 @@ describe("keiko-model-gateway package surface", () => {
   it("exposes the capability helpers as callable functions", () => {
     expect(typeof createDefaultChatCapability).toBe("function");
     expect(typeof findCapability).toBe("function");
+    expect(Array.from(INFILLING_ALIGNMENTS)).toEqual(["base", "instruct", "edit-tuned"]);
+    expect(typeof isAlignedInfillingModel).toBe("function");
+    expect(typeof isAsYouTypeCompletionModel).toBe("function");
     expect(typeof listCapabilities).toBe("function");
+    expect(typeof modelSupportsInfilling).toBe("function");
     expect(typeof resolveCostClass).toBe("function");
     expect(typeof selectCheapest).toBe("function");
+    expect(typeof selectCompletionModelFromCapabilities).toBe("function");
   });
 
   it("exposes the config helpers as callable functions", () => {
@@ -132,7 +148,82 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof assertConfiguredModel).toBe("function");
     expect(typeof findConfiguredCapability).toBe("function");
     expect(typeof listConfiguredCapabilities).toBe("function");
+    expect(typeof selectCompletionModel).toBe("function");
     expect(typeof selectConfiguredModel).toBe("function");
+  });
+
+  it("exposes completion-model selection through the barrel (#1210)", () => {
+    const fastAligned: ModelCapability = {
+      id: "fast-instruct",
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "test",
+      preferredUseCases: ["completion"],
+      knownLimitations: [],
+      supportsInfilling: true,
+      infillingAlignment: "instruct",
+    };
+
+    const selection = selectCompletionModelFromCapabilities([fastAligned]);
+    expect(modelSupportsInfilling(fastAligned)).toBe(true);
+    expect(isAlignedInfillingModel(fastAligned)).toBe(true);
+    expect(isAsYouTypeCompletionModel(fastAligned)).toBe(true);
+    expect(selection).toEqual({
+      mode: "as-you-type",
+      modelId: "fast-instruct",
+      latencyClass: "fast",
+    });
+  });
+
+  it("exposes config-bound completion-model selection through the barrel (#1210)", () => {
+    const capability: ModelCapability = {
+      id: "standard-edit",
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["completion"],
+      knownLimitations: [],
+      supportsInfilling: true,
+      infillingAlignment: "edit-tuned",
+    };
+    const config: GatewayConfig = {
+      providers: [
+        {
+          modelId: "standard-edit",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "test-config-secret-value-1234567890",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [capability],
+    };
+
+    expect(selectCompletionModel(config)).toEqual({
+      mode: "manual",
+      modelId: "standard-edit",
+      latencyClass: "standard",
+    });
   });
 
   it("re-exposes the redaction primitive from keiko-security as a callable function", () => {
@@ -188,6 +279,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<FinishReason>();
     pin<GatewayConfig>();
     pin<GatewayRequest>();
+    pin<InfillingAlignment>();
     pin<LatencyClass>();
     pin<ModelCapability>();
     pin<ModelKind>();
@@ -202,6 +294,10 @@ describe("keiko-model-gateway package surface", () => {
     pin<ToolDefinition>();
     pin<UsageMetadata>();
     pin<GatewayEgressErrorCode>();
+    pin<CompletionInteractionMode>();
+    pin<CompletionDegradeReason>();
+    pin<CompletionModelSelection>();
+    pin<CompletionSelectionOptions>();
     expect(true).toBe(true);
   });
 });

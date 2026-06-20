@@ -122,6 +122,23 @@ describe("isCommandAllowed — deny-by-default", () => {
       true,
     );
   });
+
+  it("requires declared leading flags before the allowed subcommand", () => {
+    const rules: readonly CommandRule[] = Object.freeze([
+      {
+        executable: "npx",
+        allowedSubcommands: Object.freeze(["vitest"]),
+        requiredLeadingFlags: Object.freeze(["--no-install"]),
+        denyFlags: Object.freeze(["-y", "--yes"]),
+      },
+    ]);
+    expect(isCommandAllowed(rules, "npx", ["--no-install", "vitest", "run"]).allowed).toBe(true);
+    expect(isCommandAllowed(rules, "npx", ["vitest", "run"]).allowed).toBe(false);
+    expect(isCommandAllowed(rules, "npx", ["vitest", "--no-install", "run"]).allowed).toBe(false);
+    expect(isCommandAllowed(rules, "npx", ["--yes", "--no-install", "vitest"]).allowed).toBe(
+      false,
+    );
+  });
 });
 
 describe("isCommandAllowed — S-H2 value-flag bypass + transitive shell", () => {

@@ -16,6 +16,28 @@ export {
 
 export { detectConventions, isTestPath } from "./conventions.js";
 
+// Convention-driven frontend test-style selection (Issue #1203). The detector reads local manifests /
+// framework config; the selector maps a target to its test style; resolveTestStrategy composes both
+// over a workflow target and ContextPack.
+export {
+  detectFrontendStack,
+  detectFrontendStackFromDependencies,
+  manifestDependencyNames,
+  selectTestStrategy,
+  EMPTY_FRONTEND_TEST_STACK,
+  TEST_STYLES,
+  type ComponentFramework,
+  type FrontendStackSignals,
+  type FrontendTestStack,
+  type ManifestReaderFs,
+  type StrategyInput,
+  type TestStrategy,
+  type TestStyle,
+  type TestVerification,
+} from "./frontend.js";
+
+export { resolveTestStrategy, strategyAnchorPath } from "./strategy.js";
+
 export {
   DEFAULT_WORKFLOW_LIMITS,
   type AddedTestFile,

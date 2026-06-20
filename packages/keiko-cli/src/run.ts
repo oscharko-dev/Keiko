@@ -13,7 +13,6 @@ import {
   Gateway,
   GatewayError,
   assertConfiguredModel,
-  loadConfigFromFile,
   redact,
   resolveCostClass,
   selectConfiguredModel,
@@ -33,6 +32,7 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { AuditError } from "@oscharko-dev/keiko-evidence";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
@@ -155,9 +155,7 @@ function redactEventForNonRetainingSink(event: HarnessEvent): HarnessEvent {
   return event;
 }
 
-function redactRunFailedEvent(
-  event: Extract<HarnessEvent, { type: "run:failed" }>,
-): HarnessEvent {
+function redactRunFailedEvent(event: Extract<HarnessEvent, { type: "run:failed" }>): HarnessEvent {
   return {
     ...event,
     failure: {
@@ -251,7 +249,7 @@ function configuredModelId(flags: EvidenceFlags, env: EnvSource): string | undef
   if (path === undefined) {
     return flags.model;
   }
-  const config = loadConfigFromFile(path, env);
+  const config = loadGatewayConfigFromFile(path, env);
   if (flags.model !== undefined) {
     assertConfiguredModel(config, flags.model);
     return flags.model;
@@ -278,7 +276,7 @@ function resolveModel(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    const config = loadConfigFromFile(path, env);
+    const config = loadGatewayConfigFromFile(path, env);
     if (flags.model !== undefined) {
       assertConfiguredModel(config, flags.model);
     }

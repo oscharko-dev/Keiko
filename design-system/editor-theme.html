@@ -197,7 +197,7 @@
               <tr><td class="tok">number</td><td><span class="sample t-num">5_000</span></td><td class="scope">--ed-syn-number</td><td><span class="ratio aaa">8.2</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">12.0</span></td></tr>
               <tr><td class="tok">constant</td><td><span class="sample t-con">true · null</span></td><td class="scope">--ed-syn-constant</td><td><span class="ratio aaa">8.2</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">12.0</span></td></tr>
               <tr><td class="tok">property</td><td><span class="sample t-prop">status</span></td><td class="scope">--ed-syn-property</td><td><span class="ratio aaa">10.4</span></td><td><span class="ratio">6.1</span></td><td><span class="ratio aaa">13.7</span></td></tr>
-              <tr><td class="tok">variable</td><td><span class="sample t-var">res</span></td><td class="scope">--ed-syn-variable</td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">21.0</span></td></tr>
+              <tr><td class="tok">variable</td><td><span class="sample t-var">res</span></td><td class="scope">--ed-syn-variable</td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">17.7</span></td></tr>
               <tr><td class="tok">operator</td><td><span class="sample t-op">=&gt; | !</span></td><td class="scope">--ed-syn-operator</td><td><span class="ratio aaa">12.8</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">15.6</span></td></tr>
               <tr><td class="tok">punctuation</td><td><span class="sample t-pun">{ } ; ,</span></td><td class="scope">--ed-syn-punct</td><td><span class="ratio aaa">12.8</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">15.6</span></td></tr>
               <tr><td class="tok">regexp / escape</td><td><span class="sample t-re">/\d+/g</span></td><td class="scope">--ed-syn-regexp</td><td><span class="ratio aaa">9.4</span></td><td><span class="ratio">6.2</span></td><td><span class="ratio aaa">11.6</span></td></tr>
@@ -271,7 +271,8 @@
               <tr><td><code>--ed-bg · --ed-fg</code></td><td class="mono-fg">colors →</td><td><code>editor.background · editor.foreground</code></td></tr>
               <tr><td><code>--ed-line-active</code></td><td class="mono-fg">colors →</td><td><code>editor.lineHighlightBackground</code></td></tr>
               <tr><td><code>--ed-selection</code></td><td class="mono-fg">colors →</td><td><code>editor.selectionBackground</code></td></tr>
-              <tr><td><code>--ed-diff-ins-line · -rem-line</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedTextBackground · removedTextBackground</code></td></tr>
+              <tr><td><code>--ed-diff-ins-line · -rem-line</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedLineBackground · removedLineBackground</code></td></tr>
+              <tr><td><code>--ed-diff-ins-text · -rem-text</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedTextBackground · removedTextBackground</code></td></tr>
               <tr><td><code>--ed-error · -warn · -info</code></td><td class="mono-fg">colors →</td><td><code>editorError · editorWarning · editorInfo .foreground</code></td></tr>
               <tr><td><code>--ed-ghost</code></td><td class="mono-fg">colors →</td><td><code>editorGhostText.foreground</code></td></tr>
               <tr><td><code>--ed-focus</code></td><td class="mono-fg">colors →</td><td><code>focusBorder · editorWidget.border · editor.findMatchBorder</code></td></tr>
@@ -279,6 +280,7 @@
             </tbody>
           </table>
         </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Boundary</span><div>The table is a representative sample, not row-per-token — every remaining <code style="font-family:var(--font-mono)">--ed-*</code> has a name-obvious Monaco target (e.g. <code style="font-family:var(--font-mono)">--ed-cursor → editorCursor.foreground</code>, <code style="font-family:var(--font-mono)">--ed-syn-number → constant.numeric</code>, <code style="font-family:var(--font-mono)">--ed-suggest-* → editorSuggestWidget.*</code>). One split matters: <b style="color:var(--fg)">Monaco theme vs surrounding chrome.</b> The <code style="font-family:var(--font-mono)">colors{}</code> dictionary and <code style="font-family:var(--font-mono)">tokenColors</code> cover the code well, gutter, diff, diagnostics, ghost text and <code style="font-family:var(--font-mono)">--ed-minimap-*</code>. The <code style="font-family:var(--font-mono)">--ed-tab-*</code> and <code style="font-family:var(--font-mono)">--ed-statusbar-*</code> tokens are <b style="color:var(--fg)">not</b> Monaco editor keys — they style the React editor-card chrome around Monaco via plain <code style="font-family:var(--font-mono)">var()</code>, so #1193 wires them in the component, not in the Monaco theme.</div></div>
       </section>
 
       <!-- RATIONALE -->

@@ -158,6 +158,7 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args).toEqual(
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
+    expect(spawned[0]?.opts.argv0).toBe("Keiko");
     expect(spawned[0]?.opts.env).toMatchObject({
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
     });

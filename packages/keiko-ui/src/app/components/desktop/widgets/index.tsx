@@ -311,12 +311,25 @@ registerWindowRender("files", (cfg, ctx) => {
     />
   );
 });
-registerWindowRender("editor", (cfg) => {
+registerWindowRender("editor", (cfg, ctx) => {
   const root = str(cfg, "root");
   const file = str(cfg, "file");
-  const props: { root?: string; file?: string } = {};
+  const props: {
+    root?: string;
+    file?: string;
+    windowId?: string;
+    linkedRoot?: string | null;
+    linkedFilePath?: string | undefined;
+    linkedCapsuleIds?: readonly string[];
+    linkedCapsuleSetIds?: readonly string[];
+  } = {};
   if (root !== undefined) props.root = root;
   if (file !== undefined) props.file = file;
+  props.linkedRoot = ctx.linkedRoot;
+  props.linkedFilePath = ctx.linkedFilePath;
+  props.linkedCapsuleIds = ctx.linkedCapsuleIds;
+  props.linkedCapsuleSetIds = ctx.linkedCapsuleSetIds;
+  props.windowId = ctx.windowId;
   return <EditorWidget {...props} />;
 });
 registerWindowRender("browser", (cfg) => {

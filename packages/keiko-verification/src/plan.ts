@@ -159,6 +159,42 @@ export function resolveTargetedTests(
   ];
 }
 
+// Builds a single targeted-test step that runs EXACTLY the given test files (Issue #1204 post-apply
+// verification), rather than deriving sibling test paths from changed source files. Each path is
+// validated to be a workspace-contained, existing file before it is included; an unknown test framework
+// or an empty resolved set yields no step (the caller then reports verification as skipped/not-run).
+// Used to re-confirm a just-applied generated test in place, isolated by the orchestrator's enforced
+// network policy.
+export function planDirectTargetedTests(
+  workspace: WorkspaceInfo,
+  testFiles: readonly string[],
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  limits: VerificationResourceLimits = DEFAULT_VERIFICATION_LIMITS,
+): readonly VerificationStep[] {
+  const resolved: string[] = [];
+  for (const file of testFiles) {
+    if (existsInWorkspace(workspace, fs, file) && !resolved.includes(file)) {
+      resolved.push(file);
+    }
+  }
+  if (resolved.length === 0) {
+    return [];
+  }
+  const invocation = targetedInvocation(workspace, resolved);
+  if (invocation === undefined) {
+    return [];
+  }
+  return [
+    {
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: invocation.command,
+      args: invocation.args,
+      limits,
+    },
+  ];
+}
+
 export function buildVerificationPlan(
   workspace: WorkspaceInfo,
   catalog: ScriptCatalog,

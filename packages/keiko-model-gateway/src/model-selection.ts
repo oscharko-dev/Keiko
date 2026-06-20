@@ -3,9 +3,16 @@ import {
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
+  selectCompletionModelFromCapabilities,
+  type CompletionSelectionOptions,
 } from "./capabilities.js";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { ModelCapability, ModelKind } from "./types.js";
+import type {
+  CompletionModelSelection,
+  GatewayConfig,
+  ModelCapability,
+  ModelKind,
+} from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 
@@ -90,4 +97,15 @@ export function selectConfiguredModel(
     }
   }
   return best?.id;
+}
+
+// Completion-oriented model selection (Issue #1210, ADR-0042 D5). Resolves the configured
+// capabilities and applies the infilling-aware decision tree (as-you-type → manual → deterministic)
+// from `selectCompletionModelFromCapabilities`. Only configured providers are eligible, so a
+// capability that names no provider can never be elected. The result is content-free.
+export function selectCompletionModel(
+  config: GatewayConfig,
+  options: CompletionSelectionOptions = {},
+): CompletionModelSelection {
+  return selectCompletionModelFromCapabilities(listConfiguredCapabilities(config), options);
 }
