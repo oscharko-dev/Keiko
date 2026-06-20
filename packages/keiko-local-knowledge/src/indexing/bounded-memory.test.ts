@@ -155,7 +155,7 @@ async function streamBounded(
             insertParsedUnitRow(db, capsuleId, `${String(docId)}#u${String(unitIndex)}`, unit);
             unitIndex += 1;
           }
-          insertDocumentTextWindowRow(db, {
+          insertDocumentTextWindowRow(db, store._internal.contentCipher, {
             capsuleId,
             documentId: docId,
             windowIndex: window.windowIndex,

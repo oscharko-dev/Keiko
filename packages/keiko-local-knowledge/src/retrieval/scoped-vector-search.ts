@@ -155,8 +155,16 @@ function readVectorsForCapsule(
   }
   const rows = store._internal.db
     .prepare(`${SELECT_VECTORS_FOR_CAPSULE_SQL}${sourceClause}`)
-    .all(params);
-  return rows as unknown as readonly VectorRow[];
+    .all(params) as unknown as readonly VectorRow[];
+  // Open the sealed embedding at the store boundary so the similarity layer (decodeEmbedding) always
+  // sees plaintext Float32 bytes. The cleartext vector_dimensions gives the expected plaintext length;
+  // a wrong key throws here rather than producing a silently-wrong vector.
+  const cipher = store._internal.contentCipher;
+  if (!cipher.isEncrypted) return rows;
+  return rows.map((row) => ({
+    ...row,
+    embedding: cipher.openVector(row.embedding, row.vector_dimensions * 4),
+  }));
 }
 
 // ─── Citation row reader ─────────────────────────────────────────────────────
@@ -490,10 +498,16 @@ function readLexicalDocuments(
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): readonly LexicalDocumentRow[] {
-  const rows = store._internal.db
-    .prepare(lexicalDocumentSql(sourceFilter))
-    .all({ capsule_id: String(capsuleId), ...sourceParams(sourceFilter) });
-  return rows as unknown as readonly LexicalDocumentRow[];
+  const rows = store._internal.db.prepare(lexicalDocumentSql(sourceFilter)).all({
+    capsule_id: String(capsuleId),
+    ...sourceParams(sourceFilter),
+  }) as unknown as readonly LexicalDocumentRow[];
+  // Decrypt the joined document_texts text at the store boundary before the lexical scan runs over it.
+  // This join only matches small documents (large documents store text in document_text_windows, not
+  // document_texts), so the per-row decrypt stays within the small-document memory bound.
+  const cipher = store._internal.contentCipher;
+  if (!cipher.isEncrypted) return rows;
+  return rows.map((row) => ({ ...row, normalized_text: cipher.openText(row.normalized_text) }));
 }
 
 function lexicalChunkSql(
@@ -1071,7 +1085,9 @@ function readCitationSearchExcerpt(
       capsule_id: String(capsuleId),
       document_id: String(citation.documentId),
     }) as DocumentTextRow | undefined;
-  const text = row?.normalized_text;
+  const stored = row?.normalized_text;
+  const text =
+    typeof stored === "string" ? store._internal.contentCipher.openText(stored) : undefined;
   if (typeof text !== "string" || text.length === 0) return "";
   const focusStart = Math.max(0, Math.min(text.length, citation.characterStart ?? 0));
   const focusEnd = Math.max(
