@@ -149,6 +149,39 @@ export {
   type QualityIntelligenceSourceFingerprintRow,
 } from "./qualityIntelligence/index.js";
 
+// PromptEnhancement sub-module (Epic #1307, Issue #1313; ADR-0044 §1/§5). Same dual surface as the
+// QualityIntelligence module: a `PromptEnhancement` namespace import plus flat-named re-exports.
+export * as PromptEnhancement from "./promptEnhancement/index.js";
+export {
+  PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
+  PE_SUBDIR,
+  validatePromptEnhancementEvidenceManifest,
+  redactPromptEnhancementEvidence,
+  buildPromptEnhancementEvidenceManifest,
+  createInMemoryPromptEnhancementLocalStore,
+  createNodePromptEnhancementLocalStore,
+  recordPromptEnhancementRun,
+  loadPromptEnhancementRun,
+  listPromptEnhancementRuns,
+  type PromptEnhancementEvidenceStatus,
+  type PromptEnhancementRedactionSummary,
+  type PromptEnhancementRedactionOptions,
+  type PromptEnhancementRedactionResult,
+  type PromptEnhancementCandidateScoreRow,
+  type PromptEnhancementSafetyRecord,
+  type PromptEnhancementModelMetadata,
+  type PromptEnhancementIntegrityHashes,
+  type PromptEnhancementManifestTotals,
+  type PromptEnhancementEvidenceManifest,
+  type PromptEnhancementSchemaValidationResult,
+  type PromptEnhancementRecordInput,
+  type PromptEnhancementRecordOptions,
+  type PromptEnhancementRecordResult,
+  type PromptEnhancementLocalStore,
+  type PromptEnhancementNodeStoreOptions,
+  type PromptEnhancementLoadOptions,
+} from "./promptEnhancement/index.js";
+
 export {
   EVIDENCE_SCHEMA_VERSION,
   DEFAULT_RETENTION,

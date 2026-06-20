@@ -957,3 +957,29 @@ export {
   isPromptCriticDimension,
   isPromptCandidateRejectionReason,
 } from "./prompt-enhancer-critic.js";
+// Prompt Enhancer safety annotations + validate-stage rule model (#1313; ADR-0044 §4/§5/§7).
+export type {
+  PromptSafetyRuleId,
+  PromptSafetyViolationCode,
+  PromptSafetySeverity,
+  LeastPrivilegeConstraint,
+  PromptSafetyDecision,
+  PromptSafetyVerificationStatus,
+  PromptSafetyFinding,
+  PromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
+export {
+  PROMPT_SAFETY_RULE_IDS,
+  PROMPT_SAFETY_VIOLATION_CODES,
+  PROMPT_SAFETY_SEVERITIES,
+  LEAST_PRIVILEGE_CONSTRAINTS,
+  PROMPT_SAFETY_DECISIONS,
+  PROMPT_SAFETY_VERIFICATION_STATUSES,
+  PROMPT_SAFETY_VIOLATION_DETAILS,
+  isPromptSafetyViolationCode,
+  requiresHumanReviewForAnalysis,
+  leastPrivilegeForAnalysis,
+  summarizePromptSafety,
+  assessEnhancedPromptStructuralSafety,
+  validatePromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
