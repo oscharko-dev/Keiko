@@ -70,6 +70,28 @@ describe("generatePromptCandidates", () => {
     expect(rejected).toHaveLength(0);
   });
 
+  it("preserves the grounding plan and output schema across every candidate (AC5)", () => {
+    const { candidates } = generatePromptCandidates({
+      analysis: makeAnalysis({
+        recommendedProfile: "research",
+        groundingNeed: { kind: "supplied-context", volatile: false, signals: [] },
+        outputSchema: { format: "json", structured: true, hints: ["explicit-json"] },
+      }),
+      input: INPUT,
+      candidateCount: 4,
+    });
+    expect(candidates.length).toBeGreaterThanOrEqual(3);
+    for (const candidate of candidates) {
+      expect(candidate.prompt.outputSchema).toEqual({
+        format: "json",
+        structured: true,
+        hints: ["explicit-json"],
+      });
+      expect(candidate.prompt.groundingPlan.required).toBe(true);
+      expect(candidate.prompt.groundingPlan).toEqual(candidates[0]?.prompt.groundingPlan);
+    }
+  });
+
   it("produces structurally distinct prompts across candidates", () => {
     const { candidates } = candidatesFor({ recommendedProfile: "technical" }, 3);
     const signatures = candidates.map((candidate) =>

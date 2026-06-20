@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  PROMPT_CRITIC_DIMENSIONS,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
   validatePromptCandidateSelection,
+  type PromptCandidateScorecard,
+  type PromptCriticDimension,
+  type PromptEnhancementProfileId,
   type PromptOptimizationBounds,
   type RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
@@ -9,8 +14,39 @@ import {
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_TOKEN_BUDGET,
   optimizePromptCandidates,
+  rankCandidates,
 } from "../optimize.js";
 import { makeAnalysis, type AnalysisOverrides } from "./_support.js";
+
+// Build a scorecard with controlled dimension scores so the deterministic tie-break order can be
+// exercised directly (real generation rarely produces exact aggregate ties).
+function card(
+  profile: PromptEnhancementProfileId,
+  aggregate: number,
+  dims: Partial<Record<PromptCriticDimension, number>> = {},
+): PromptCandidateScorecard {
+  const base: Record<PromptCriticDimension, number> = {
+    clarity: 0.5,
+    completeness: 0.5,
+    "grounding-readiness": 0.5,
+    safety: 0.5,
+    "output-controllability": 0.5,
+    "token-efficiency": 0.5,
+  };
+  const merged = { ...base, ...dims };
+  return {
+    schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    candidateId: `c-${profile}`,
+    profile,
+    dimensionScores: PROMPT_CRITIC_DIMENSIONS.map((dimension) => ({
+      dimension,
+      score: merged[dimension],
+      rationale: "x",
+    })),
+    aggregateScore: aggregate,
+    estimatedTokens: 100,
+  };
+}
 
 const INPUT: RawPromptInput = { text: "Draft a concise migration plan for the billing service." };
 
@@ -137,5 +173,61 @@ describe("optimizePromptCandidates", () => {
       },
     );
     expect(selection.tokensConsumed).toBeLessThanOrEqual(1_200);
+  });
+
+  it("surfaces lower-aggregate-score and exceeded-token-budget rejections together in one result (AC3)", () => {
+    // A budget that admits the baseline plus one more candidate but not the rest yields both a scored
+    // loser and several budget-skipped candidates in the same selection. (safety-floor rejections
+    // cannot co-occur with losers: an agentic/critical baseline collapses to a single candidate, which
+    // is covered separately above — together the two tests exercise all three rejection pathways.)
+    const selection = optimizeFor(
+      { recommendedProfile: "technical" },
+      { candidateCount: 6, maxIterations: 6, tokenBudget: 800 },
+    );
+    const reasons = new Set(selection.rejected.map((entry) => entry.reason));
+    expect(reasons.has("lower-aggregate-score")).toBe(true);
+    expect(reasons.has("exceeded-token-budget")).toBe(true);
+    expect(selection.candidatesConsidered).toBeGreaterThanOrEqual(2);
+    expect(selection.tokensConsumed).toBeLessThanOrEqual(800);
+  });
+});
+
+describe("rankCandidates tie-breaking", () => {
+  it("breaks an aggregate tie toward the safer candidate", () => {
+    const ranked = rankCandidates([
+      card("fast", 0.7, { safety: 0.6 }),
+      card("precise", 0.7, { safety: 0.9 }),
+    ]);
+    expect(ranked[0]?.profile).toBe("precise");
+  });
+
+  it("breaks a safety tie toward the more complete candidate", () => {
+    const ranked = rankCandidates([
+      card("fast", 0.7, { safety: 0.8, completeness: 0.4 }),
+      card("precise", 0.7, { safety: 0.8, completeness: 0.9 }),
+    ]);
+    expect(ranked[0]?.profile).toBe("precise");
+  });
+
+  it("breaks a completeness tie toward the more token-efficient candidate", () => {
+    const ranked = rankCandidates([
+      card("fast", 0.7, { safety: 0.8, completeness: 0.5, "token-efficiency": 0.3 }),
+      card("precise", 0.7, { safety: 0.8, completeness: 0.5, "token-efficiency": 0.9 }),
+    ]);
+    expect(ranked[0]?.profile).toBe("precise");
+  });
+
+  it("breaks an all-numeric tie toward the earlier catalog profile", () => {
+    const dims = { safety: 0.8, completeness: 0.5, "token-efficiency": 0.5 };
+    const ranked = rankCandidates([card("technical", 0.7, dims), card("fast", 0.7, dims)]);
+    expect(ranked[0]?.profile).toBe("fast");
+  });
+
+  it("is deterministic and does not mutate the input", () => {
+    const input = [card("research", 0.6), card("fast", 0.8), card("precise", 0.7)];
+    const snapshot = input.map((c) => c.profile);
+    const ranked = rankCandidates(input);
+    expect(ranked.map((c) => c.profile)).toEqual(["fast", "precise", "research"]);
+    expect(input.map((c) => c.profile)).toEqual(snapshot);
   });
 });

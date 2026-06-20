@@ -61,4 +61,5 @@ export {
   DEFAULT_TOKEN_BUDGET,
   MAX_CANDIDATE_COUNT,
   optimizePromptCandidates,
+  rankCandidates,
 } from "./optimize.js";
