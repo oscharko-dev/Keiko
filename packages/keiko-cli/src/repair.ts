@@ -41,7 +41,11 @@ import {
   type RuntimeStateCategory,
   type RuntimeStateNode,
 } from "./state-paths.js";
-import { hasPlaintextGatewayCredentials } from "@oscharko-dev/keiko-server/credential-vault";
+import {
+  credentialStorePath,
+  hasPlaintextGatewayCredentials,
+} from "@oscharko-dev/keiko-server/credential-vault";
+import { readLocalVaultReferences } from "@oscharko-dev/keiko-security/secret-vault";
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -394,7 +398,33 @@ function checkCredentialStorage(
       "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
     );
   }
+  const orphaned = orphanedSecretRefs(raw, configPath);
+  if (orphaned > 0) {
+    return action(
+      "Credential storage",
+      `${String(orphaned)} credential reference(s) have no encrypted entry — incomplete or interrupted migration; start \`keiko ui\` to complete it`,
+    );
+  }
   return ok("Credential storage", "no plaintext credentials in config");
+}
+
+// Counts provider `apiKeySecretRef` values in the config that have no matching entry in the encrypted
+// credential vault — the signature of an interrupted migration or a deleted/corrupt vault store.
+// Reads only the non-secret reference index (no vault key resolution, no decryption).
+function orphanedSecretRefs(raw: unknown, configPath: string): number {
+  if (typeof raw !== "object" || raw === null) return 0;
+  const providers = (raw as { readonly providers?: unknown }).providers;
+  if (!Array.isArray(providers)) return 0;
+  const refs = providers
+    .map((provider) =>
+      typeof provider === "object" && provider !== null
+        ? (provider as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef
+        : undefined,
+    )
+    .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+  if (refs.length === 0) return 0;
+  const vaulted = new Set(readLocalVaultReferences(credentialStorePath(configPath)));
+  return refs.filter((ref) => !vaulted.has(ref)).length;
 }
 
 interface ResolvedRepairDeps {

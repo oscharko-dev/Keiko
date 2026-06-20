@@ -501,6 +501,11 @@ describe("createKeychainVaultKeyAccess", () => {
     const key = createKeychainVaultKeyAccess("svc", runner)();
     expect(key?.length).toBe(32);
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
+    // The key persisted to the keychain (the `-w` value of add-generic-password) must be exactly the
+    // key returned to the caller, so a later read resolves the same vault key.
+    const addArgs = commands[1] ?? [];
+    const storedKey = addArgs[addArgs.indexOf("-w") + 1] ?? "";
+    expect(Buffer.from(storedKey, "base64")).toEqual(key);
   });
 
   it("returns undefined when generating the key fails (add error)", () => {

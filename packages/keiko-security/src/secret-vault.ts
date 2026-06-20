@@ -184,6 +184,8 @@ function generateKeychainKey(
 
 function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
   const keyfile = resolve(vaultDir, keyfileName);
+  // Refuse to read or write the key through a symlinked path segment so a hostile symlink cannot
+  // redirect key material outside the hardened vault directory.
   assertNoSymlinkedPathSegments(keyfile);
   ensureDirHardened(dirname(keyfile));
   assertNoSymlinkedPathSegments(keyfile);
@@ -256,11 +258,22 @@ function readStore(storePath: string): Record<string, string> {
   return isStoreFile(parsed) ? { ...parsed.entries } : {};
 }
 
+// Lists the references held in a sealed store WITHOUT resolving a vault key — a pure read over the
+// non-secret index. Used by callers that must reconcile config references against vaulted secrets
+// (e.g. preserve-existing persistence and `keiko repair`) without triggering key generation or
+// decryption. Returns an empty array for a missing or corrupt store.
+export function readLocalVaultReferences(storePath: string): readonly string[] {
+  return Object.keys(readStore(storePath));
+}
+
 // Atomic, crash-safe write: a fresh temp file in the same directory is written with 0600 and renamed
 // over the target so a reader never observes a partially written store. Mirrors savePrivateJson.
 function writeStore(storePath: string, entries: Record<string, string>): void {
   const resolvedPath = resolve(storePath);
   const dir = dirname(resolvedPath);
+  // Check both before and after directory creation (mirrors private-json.ts): the first guards an
+  // already-symlinked path, the second narrows the window where a parent could be swapped between
+  // dir creation and the atomic rename. The atomic temp-then-rename below remains the real guarantee.
   assertNoSymlinkedPathSegments(resolvedPath);
   ensureDirHardened(dir);
   assertNoSymlinkedPathSegments(resolvedPath);

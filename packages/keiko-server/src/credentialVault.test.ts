@@ -15,6 +15,7 @@ import {
   openProviderCredentialVault,
   prepareSealedProviderApiKeys,
   providerSecretRef,
+  pruneProviderCredentialVault,
   sealProviderApiKeys,
 } from "./credentialVault.js";
 
@@ -174,37 +175,75 @@ describe("sealProviderApiKeys", () => {
     );
   });
 
-  it("removes a stale store when no providers need vaulting", () => {
+  it("never deletes existing vault entries when re-sealing (merge, not replace)", () => {
     const configPath = tempConfigPath();
     const env = envWith(KEY1);
-    // Seed a store, then re-seal a config whose only provider is env-provided.
-    openProviderCredentialVault({ configPath, env }).set("cred:old", "stale");
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set("cred:m1", "k1");
+    // Re-seal a config that only adds a new provider; the prior entry must survive.
     sealProviderApiKeys({
-      raw: { providers: [{ modelId: "m1", baseUrl: "https://gw" }] },
+      raw: { providers: [{ modelId: "m2", baseUrl: "https://gw", apiKey: "k2" }] },
       env,
       configPath,
     });
-    expect(existsSync(join(credentialVaultDir(configPath), "provider-credentials.vault"))).toBe(
-      false,
+    expect(openProviderCredentialVault({ configPath, env }).get("cred:m1")).toBe("k1");
+    expect(openProviderCredentialVault({ configPath, env }).get("cred:m2")).toBe("k2");
+  });
+
+  it("preserves a vaulted credential when the provider is overridden by a per-model env var (#1320 blocker)", () => {
+    const configPath = tempConfigPath();
+    // m1 was previously vaulted with its durable key.
+    openProviderCredentialVault({ configPath, env: envWith(KEY1) }).set("cred:m1", "durable-k1");
+    // A per-model env var now overrides m1 at runtime; preserve-existing re-save passes the resolved
+    // (env) value. The durable vault entry and the reference must both survive.
+    const env: EnvSource = { ...envWith(KEY1), KEIKO_MODEL_M1_API_KEY: "env-override" };
+    const providers = sealProviderApiKeys({
+      raw: { providers: [{ modelId: "m1", baseUrl: "https://gw", apiKey: "env-override" }] },
+      env,
+      configPath,
+    });
+    expect(providers).toEqual([
+      { modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" },
+    ]);
+    // The vault still holds the ORIGINAL durable credential, not the transient env override.
+    expect(openProviderCredentialVault({ configPath, env: envWith(KEY1) }).get("cred:m1")).toBe(
+      "durable-k1",
     );
   });
 
-  it("preserves active reference-only credentials while pruning stale refs after sealing", () => {
+  it("preserves a reference-bearing provider that carries no plaintext (already migrated)", () => {
+    const configPath = tempConfigPath();
+    openProviderCredentialVault({ configPath, env: envWith(KEY1) }).set("cred:m1", "k1");
+    const providers = sealProviderApiKeys({
+      raw: { providers: [{ modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" }] },
+      env: envWith(KEY1),
+      configPath,
+    });
+    expect(providers).toEqual([
+      { modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" },
+    ]);
+    expect(openProviderCredentialVault({ configPath, env: envWith(KEY1) }).get("cred:m1")).toBe(
+      "k1",
+    );
+  });
+
+  it("preserves active reference-only credentials while pruning stale refs after config rewrite", () => {
     const configPath = tempConfigPath();
     const env = envWith(KEY1);
     const vault = openProviderCredentialVault({ configPath, env });
     vault.set("cred:m1", "active-secret");
     vault.set("cred:stale", "stale-secret");
 
-    const providers = sealProviderApiKeys({
+    const prepared = prepareSealedProviderApiKeys({
       raw: {
         providers: [{ modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" }],
       },
       env,
       configPath,
     });
+    pruneProviderCredentialVault({ configPath, env }, prepared.activeSecretRefs);
 
-    expect(providers).toEqual([
+    expect(prepared.providers).toEqual([
       { modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" },
     ]);
     expect(vault.get("cred:m1")).toBe("active-secret");
