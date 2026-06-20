@@ -163,7 +163,7 @@ describe("runProgressiveExtraction", () => {
       options({ resumeFromPage: 2, resumeCharacterStart: endOfPage2 }),
       sink,
     );
-    expect(summary.pageCount).toBe(4); // pages 3..6
+    expect(summary.pageCount).toBe(6); // durable cursor after pages 3..6 are appended
     const fullText = expectedDocText(6, config.pageChars);
     for (const w of sink.windows) {
       for (const page of w.pages) {

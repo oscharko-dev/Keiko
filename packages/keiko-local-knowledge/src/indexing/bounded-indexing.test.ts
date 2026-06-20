@@ -94,6 +94,13 @@ const documentId = documentIdFor({
   relativePath: REL,
 });
 
+function tableCount(table: "document_text_windows" | "extraction_checkpoints"): number {
+  const row = store._internal.db
+    .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c AND document_id = :d`)
+    .get({ c: capsuleId, d: String(documentId) }) as { readonly n: number };
+  return row.n;
+}
+
 describe("bounded large-document indexing", () => {
   it("extracts, chunks, embeds, and checkpoints a large document end-to-end", async () => {
     const content = syntheticDoc(6, 12);
@@ -160,5 +167,55 @@ describe("bounded large-document indexing", () => {
       .get({ c: capsuleId, d: String(documentId) }) as { m: string; d: number } | undefined;
     expect(row?.m).toBe(DEFAULT_EMBEDDING.modelId);
     expect(row?.d).toBe(DEFAULT_EMBEDDING.vectorDimensions);
+  });
+
+  it("prunes large-document windows and checkpoints when the source file is removed", async () => {
+    const content = syntheticDoc(4, 12);
+    await drain(runIndexingJob(options(content)));
+    expect(tableCount("document_text_windows")).toBeGreaterThan(0);
+    expect(tableCount("extraction_checkpoints")).toBe(1);
+
+    await drain(runIndexingJob({ ...options(content), workspaceFs: memoryFs(ROOT, []) }));
+
+    expect(tableCount("document_text_windows")).toBe(0);
+    expect(tableCount("extraction_checkpoints")).toBe(0);
+  });
+
+  it("fails with a controlled checkpoint when the chunk count policy is exceeded", async () => {
+    const content = syntheticDoc(6, 12);
+    const events = await drain(
+      runIndexingJob(options(content, { largeDocumentPolicy: { ...policy(), maxChunkCount: 1 } })),
+    );
+
+    const failure = events.find((event) => event.kind === "document-failed");
+    expect(failure).toMatchObject({
+      kind: "document-failed",
+      error: { code: "RESOURCE_POLICY_EXCEEDED" },
+    });
+    const checkpoint = selectExtractionCheckpoint(store._internal.db, capsuleId, documentId);
+    expect(checkpoint?.phase).toBe("failed");
+    expect(checkpoint?.terminalDiagnostics[0]?.code).toBe("RESOURCE_POLICY_EXCEEDED");
+  });
+
+  it("fails with a controlled checkpoint when the embedding batch policy is exceeded", async () => {
+    const content = syntheticDoc(6, 12);
+    const events = await drain(
+      runIndexingJob(
+        options(content, {
+          batchSize: 1,
+          largeDocumentPolicy: { ...policy(), maxEmbeddingBatchCount: 1 },
+        }),
+      ),
+    );
+
+    const failure = events.find((event) => event.kind === "document-failed");
+    expect(failure).toMatchObject({
+      kind: "document-failed",
+      error: { code: "RESOURCE_POLICY_EXCEEDED" },
+    });
+    const checkpoint = selectExtractionCheckpoint(store._internal.db, capsuleId, documentId);
+    expect(checkpoint?.phase).toBe("failed");
+    expect(checkpoint?.embeddedChunkCursor).toBe(1);
+    expect(checkpoint?.terminalDiagnostics[0]?.code).toBe("RESOURCE_POLICY_EXCEEDED");
   });
 });

@@ -122,8 +122,8 @@ async function* syntheticExtractWindows(
   const state: SyntheticState = {
     cursor: options.resumeCharacterStart ?? 0,
     anyPageEmitted: resumeFromPage > 0,
-    objectCursor: 0,
-    windowIndex: 0,
+    objectCursor: options.resumeObjectCursor ?? 0,
+    windowIndex: options.resumeWindowIndex ?? 0,
   };
   for (
     let firstPage = resumeFromPage + 1;

@@ -32,6 +32,13 @@ export interface WorkspaceFs {
   // facade's binary-detection probe. Optional so existing in-memory test fakes that only
   // implement the synchronous surface keep compiling; callers must handle `undefined`.
   readonly readFileBytes?: (absolutePath: string, maxBytes: number) => Promise<Uint8Array>;
+  // Optional bounded range read over [startByte, startByte + length). Large-document parsers use
+  // this instead of materializing the full raw file at the workspace boundary.
+  readonly readFileRange?: (
+    absolutePath: string,
+    startByte: number,
+    length: number,
+  ) => Promise<Uint8Array>;
 }
 
 function isSymlink(absolutePath: string): boolean {
@@ -75,6 +82,25 @@ export const nodeWorkspaceFs: WorkspaceFs = {
         return buffer;
       }
       const { bytesRead } = await handle.read(buffer, 0, cap, 0);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  },
+  readFileRange: async (
+    absolutePath: string,
+    startByte: number,
+    length: number,
+  ): Promise<Uint8Array> => {
+    const handle = await open(absolutePath, "r");
+    try {
+      const offset = Math.max(0, Math.floor(startByte));
+      const cap = Math.max(0, Math.floor(length));
+      const buffer = new Uint8Array(cap);
+      if (cap === 0) {
+        return buffer;
+      }
+      const { bytesRead } = await handle.read(buffer, 0, cap, offset);
       return buffer.subarray(0, bytesRead);
     } finally {
       await handle.close();

@@ -46,9 +46,12 @@ import type {
 import {
   buildParserOptions,
   createProgressivePdfExtractor,
+  classifyLargeDocument,
   isLegacyBinaryOfficeFormat,
   legacyFormatDiagnostic,
   unsupportedParser,
+  usesProgressivePath,
+  type ProgressiveExtractionSource,
 } from "../parsers/index.js";
 import { DEFAULT_CHUNKING_STRATEGY_KEY } from "../chunking/types.js";
 import {
@@ -728,6 +731,76 @@ function largeDocumentContextFor(
   };
 }
 
+const PROGRESSIVE_HASH_CHUNK_BYTES = 4 * 1024 * 1024;
+
+async function readRange(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  target: ResolvedTarget,
+  startByte: number,
+  length: number,
+): Promise<Uint8Array | DiscoveryError> {
+  const reader = deps.fs.readFileRange;
+  if (reader === undefined) {
+    return {
+      code: "READ_FAILED",
+      message: "WorkspaceFs.readFileRange is unavailable",
+      relativePath: params.file.relativePath,
+    };
+  }
+  const requestedError = validateRequestedTarget(deps, params, target);
+  if (requestedError !== undefined) return requestedError;
+  const resolvedError = validateResolvedTarget(deps, params, target);
+  if (resolvedError !== undefined) return resolvedError;
+  try {
+    return await reader(target.absolutePath, startByte, length);
+  } catch {
+    return {
+      code: "READ_FAILED",
+      message: "readFileRange failed for selected file",
+      relativePath: params.file.relativePath,
+    };
+  }
+}
+
+function progressiveRangeSource(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  target: ResolvedTarget,
+): ProgressiveExtractionSource | DiscoveryError {
+  if (deps.fs.readFileRange === undefined) {
+    return {
+      code: "READ_FAILED",
+      message: "WorkspaceFs.readFileRange is unavailable",
+      relativePath: params.file.relativePath,
+    };
+  }
+  return {
+    totalBytes: params.file.sizeBytes,
+    readWindow: async (startByte, length): Promise<Uint8Array> => {
+      const bytes = await readRange(deps, params, target, startByte, length);
+      if (bytes instanceof Uint8Array) return bytes;
+      throw new Error(bytes.message);
+    },
+  };
+}
+
+async function hashProgressiveSource(source: ProgressiveExtractionSource): Promise<string> {
+  if (source.readWindow === undefined) {
+    throw new Error("progressive source does not support bounded range reads");
+  }
+  const hash = createHash("sha256");
+  for (let offset = 0; offset < source.totalBytes; offset += PROGRESSIVE_HASH_CHUNK_BYTES) {
+    const bytes = await source.readWindow(
+      offset,
+      Math.min(PROGRESSIVE_HASH_CHUNK_BYTES, source.totalBytes - offset),
+    );
+    if (bytes.byteLength === 0) break;
+    hash.update(bytes);
+  }
+  return hash.digest("hex");
+}
+
 // Legacy binary office formats (.doc/.ppt/.xls) get the existing unsupported path plus a stable
 // CONVERTER_UNAVAILABLE diagnostic with actionable guidance, leaving the job stable.
 function appendLegacyDiagnostic(
@@ -998,6 +1071,80 @@ async function parseAndPersistDocument(
   return parserExtractionResult(params, document, redactedParserResult, status);
 }
 
+async function progressiveExtractionResult(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  resolved: ResolvedTarget,
+  documentId: DocumentId,
+  options: ParserOptions,
+  extension: string,
+  mediaType: string,
+): Promise<ExtractionResult | undefined> {
+  const context = largeDocumentContextFor(deps, resolved, options);
+  const preflight = classifyLargeDocument(
+    { extension, mediaType, sizeBytes: params.file.sizeBytes },
+    context.policy,
+  );
+  if (preflight.decision === "reject-oversized") {
+    return buildOversizedFailure(deps, params, documentId, {
+      ...options,
+      maxBytes: context.policy.maxRawFileBytes,
+    });
+  }
+  const extractor =
+    params.file.sizeBytes >= context.policy.largeFileThresholdBytes
+      ? selectProgressiveExtractor(context, extension, mediaType)
+      : undefined;
+  if (!usesProgressivePath(preflight) && extractor === undefined) return undefined;
+  if (extractor === undefined) return undefined;
+  const source = progressiveRangeSource(deps, params, resolved);
+  if (!("totalBytes" in source)) return buildFailureResult(deps, params, documentId, source);
+  let contentHash: string;
+  try {
+    contentHash = await hashProgressiveSource(source);
+  } catch {
+    return buildFailureResult(deps, params, documentId, {
+      code: "READ_FAILED",
+      message: "readFileRange failed for selected file",
+      relativePath: params.file.relativePath,
+    });
+  }
+  const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
+  return (
+    fast ??
+    (await extractDocumentProgressive(deps, params, context, source, contentHash, extractor))
+  );
+}
+
+async function standardExtractionResult(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  resolved: ResolvedTarget,
+  documentId: DocumentId,
+  options: ParserOptions,
+  extension: string,
+): Promise<ExtractionResult> {
+  if (params.file.sizeBytes > options.maxBytes) {
+    return buildOversizedFailure(deps, params, documentId, options);
+  }
+  const bytes = await readBoundedDocumentBytes(deps, params, documentId, resolved, options);
+  if (!(bytes instanceof Uint8Array)) return bytes;
+  const contentHash = hashBytes(bytes);
+  const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
+  if (fast !== undefined) return fast;
+  const result = await parseAndPersistDocument(
+    deps,
+    params,
+    documentId,
+    bytes,
+    contentHash,
+    options,
+  );
+  return isLegacyBinaryOfficeFormat(extension)
+    ? appendLegacyDiagnostic(deps, params, documentId, extension, result)
+    : result;
+}
+
 export async function extractDocument(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -1009,46 +1156,19 @@ export async function extractDocument(
   const canonicalParams = paramsWithRelativePath(params, resolved.relativePath);
   const documentId = extractionDocumentId(canonicalParams);
   const options = canonicalParams.parserOptions ?? buildParserOptions();
-  if (canonicalParams.file.sizeBytes > options.maxBytes) {
-    return buildOversizedFailure(deps, canonicalParams, documentId, options);
-  }
-  const bytes = await readBoundedDocumentBytes(
-    deps,
-    canonicalParams,
-    documentId,
-    resolved,
-    options,
-  );
-  if (!(bytes instanceof Uint8Array)) {
-    return bytes;
-  }
-  const contentHash = hashBytes(bytes);
-  const fast = readUnchangedFastPath(deps, canonicalParams, documentId, contentHash);
-  if (fast !== undefined) return fast;
-
   const extension = extensionOf(canonicalParams.file.relativePath);
   const mediaType = mediaTypeFor(extension);
-  const context = largeDocumentContextFor(deps, resolved, options);
-  // Route large files to the progressive page-windowed path when a registered progressive extractor
-  // matches; everything else keeps the existing full-buffer path. `classifyLargeDocument` surfaces
-  // the same decision to the BFF/UI for diagnostics.
-  if (canonicalParams.file.sizeBytes >= context.policy.largeFileThresholdBytes) {
-    const extractor = selectProgressiveExtractor(context, extension, mediaType);
-    if (extractor !== undefined) {
-      return extractDocumentProgressive(deps, canonicalParams, context, bytes, extractor);
-    }
-  }
-  const result = await parseAndPersistDocument(
+  const progressive = await progressiveExtractionResult(
     deps,
     canonicalParams,
+    resolved,
     documentId,
-    bytes,
-    contentHash,
     options,
+    extension,
+    mediaType,
   );
-  return isLegacyBinaryOfficeFormat(extension)
-    ? appendLegacyDiagnostic(deps, canonicalParams, documentId, extension, result)
-    : result;
+  if (progressive !== undefined) return progressive;
+  return standardExtractionResult(deps, canonicalParams, resolved, documentId, options, extension);
 }
 
 export function recordExtractionFailure(
