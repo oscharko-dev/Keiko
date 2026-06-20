@@ -54,6 +54,12 @@ import {
   RETRIEVAL_MODES_BY_STRATEGY,
   SCOPED_EVIDENCE_STRATEGIES,
 } from "./prompt-enhancer-grounding.js";
+import {
+  PROMPT_CRITIC_DIMENSIONS,
+  isPromptCandidateRejectionReason,
+  type PromptCandidateScorecard,
+  type PromptCandidateSelection,
+} from "./prompt-enhancer-critic.js";
 
 // ─── Result types ────────────────────────────────────────────────────────────────
 export interface ValidationOk<T> {
@@ -607,10 +613,7 @@ function validateGroundedCitationSemantics(
   }
 }
 
-function validateCitationGranularitySemantics(
-  value: ValidCitationShape,
-  errors: string[],
-): void {
+function validateCitationGranularitySemantics(value: ValidCitationShape, errors: string[]): void {
   if (value.discipline === "best-effort" && value.granularity !== "per-section") {
     errors.push("groundingPlan.citation.granularity must be per-section for best-effort citation");
   }
@@ -792,4 +795,209 @@ export function validateEnhancedPrompt(input: unknown): PromptEnhancerValidation
   collectGroundingPlanErrors(input.groundingPlan, errors);
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: input as unknown as EnhancedPrompt };
+}
+
+// ─── Candidate-critic validators (Issue #1312) ─────────────────────────────────────
+const CRITIC_RATIONALE_MAX_CHARS = 2_000;
+const CANDIDATE_ID_MAX_CHARS = 256;
+const CANDIDATE_LIST_MAX = 64;
+
+const SCORECARD_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "candidateId",
+  "profile",
+  "dimensionScores",
+  "aggregateScore",
+  "estimatedTokens",
+]);
+const DIMENSION_SCORE_KEYS: ReadonlySet<string> = new Set(["dimension", "score", "rationale"]);
+const REJECTION_KEYS: ReadonlySet<string> = new Set([
+  "candidateId",
+  "profile",
+  "aggregateScore",
+  "reason",
+]);
+const SELECTION_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "winner",
+  "ranked",
+  "rejected",
+  "bounds",
+  "iterations",
+  "candidatesConsidered",
+  "tokensConsumed",
+]);
+const BOUNDS_KEYS: ReadonlySet<string> = new Set([
+  "candidateCount",
+  "tokenBudget",
+  "maxIterations",
+]);
+
+// A finite number within the closed unit interval [0, 1] — the legal range for every score.
+const isUnitInterval = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+
+// Validate the per-dimension scores array: exactly one entry per critic dimension, in canonical order.
+function collectDimensionScoreErrors(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value) || value.length !== PROMPT_CRITIC_DIMENSIONS.length) {
+    errors.push(
+      `scorecard.dimensionScores must list all ${String(PROMPT_CRITIC_DIMENSIONS.length)} dimensions`,
+    );
+    return;
+  }
+  PROMPT_CRITIC_DIMENSIONS.forEach((dimension, index) => {
+    const entry: unknown = value[index];
+    if (!isRecord(entry)) {
+      errors.push(`scorecard.dimensionScores[${String(index)}] must be an object`);
+      return;
+    }
+    validateExactKeys(
+      entry,
+      DIMENSION_SCORE_KEYS,
+      `scorecard.dimensionScores[${String(index)}]`,
+      errors,
+    );
+    if (entry.dimension !== dimension) {
+      errors.push(`scorecard.dimensionScores[${String(index)}].dimension must be "${dimension}"`);
+    }
+    if (!isUnitInterval(entry.score)) {
+      errors.push(`scorecard.dimensionScores[${String(index)}].score must be a number in [0, 1]`);
+    }
+    if (!isBoundedSafeText(entry.rationale, CRITIC_RATIONALE_MAX_CHARS)) {
+      errors.push(
+        `scorecard.dimensionScores[${String(index)}].rationale must be a bounded, control-free string`,
+      );
+    }
+  });
+}
+
+function collectScorecardErrors(input: unknown, label: string, errors: string[]): void {
+  if (!isRecord(input)) {
+    errors.push(`${label} must be an object`);
+    return;
+  }
+  validateExactKeys(input, SCORECARD_KEYS, label, errors);
+  if (input.schemaVersion !== PROMPT_ENHANCER_SCHEMA_VERSION) {
+    errors.push(`${label}.schemaVersion must be "${PROMPT_ENHANCER_SCHEMA_VERSION}"`);
+  }
+  if (!isBoundedSafeText(input.candidateId, CANDIDATE_ID_MAX_CHARS)) {
+    errors.push(`${label}.candidateId must be a bounded, control-free string`);
+  }
+  if (!isMember(input.profile, PROMPT_ENHANCEMENT_PROFILE_IDS)) {
+    errors.push(`${label}.profile must be a known generation profile`);
+  }
+  collectDimensionScoreErrors(input.dimensionScores, errors);
+  if (!isUnitInterval(input.aggregateScore)) {
+    errors.push(`${label}.aggregateScore must be a number in [0, 1]`);
+  }
+  if (!isNonNegativeInteger(input.estimatedTokens)) {
+    errors.push(`${label}.estimatedTokens must be a non-negative integer`);
+  }
+}
+
+/**
+ * Validate a `PromptCandidateScorecard`. Pure; returns a discriminated result and never throws.
+ */
+export function validatePromptCandidateScorecard(
+  input: unknown,
+): PromptEnhancerValidation<PromptCandidateScorecard> {
+  const errors: string[] = [];
+  collectScorecardErrors(input, "scorecard", errors);
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: input as PromptCandidateScorecard };
+}
+
+function collectRejectionErrors(value: unknown, index: number, errors: string[]): void {
+  const label = `selection.rejected[${String(index)}]`;
+  if (!isRecord(value)) {
+    errors.push(`${label} must be an object`);
+    return;
+  }
+  validateExactKeys(value, REJECTION_KEYS, label, errors);
+  if (!isBoundedSafeText(value.candidateId, CANDIDATE_ID_MAX_CHARS)) {
+    errors.push(`${label}.candidateId must be a bounded, control-free string`);
+  }
+  if (!isMember(value.profile, PROMPT_ENHANCEMENT_PROFILE_IDS)) {
+    errors.push(`${label}.profile must be a known generation profile`);
+  }
+  if (value.aggregateScore !== null && !isUnitInterval(value.aggregateScore)) {
+    errors.push(`${label}.aggregateScore must be null or a number in [0, 1]`);
+  }
+  if (!isPromptCandidateRejectionReason(value.reason)) {
+    errors.push(`${label}.reason must be a known rejection reason`);
+  }
+}
+
+function collectBoundsErrors(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("selection.bounds must be an object");
+    return;
+  }
+  validateExactKeys(value, BOUNDS_KEYS, "selection.bounds", errors);
+  for (const field of ["candidateCount", "tokenBudget", "maxIterations"] as const) {
+    if (!isNonNegativeInteger(value[field])) {
+      errors.push(`selection.bounds.${field} must be a non-negative integer`);
+    }
+  }
+}
+
+function collectRankedErrors(ranked: unknown, winner: unknown, errors: string[]): void {
+  if (!Array.isArray(ranked) || ranked.length === 0) {
+    errors.push("selection.ranked must be a non-empty array");
+    return;
+  }
+  if (ranked.length > CANDIDATE_LIST_MAX) {
+    errors.push(`selection.ranked must contain at most ${String(CANDIDATE_LIST_MAX)} entries`);
+    return;
+  }
+  ranked.forEach((entry: unknown, index) => {
+    collectScorecardErrors(entry, `selection.ranked[${String(index)}]`, errors);
+  });
+  const winnerId = isRecord(winner) ? winner.candidateId : undefined;
+  const firstRanked: unknown = ranked[0];
+  if (isRecord(firstRanked) && firstRanked.candidateId !== winnerId) {
+    errors.push("selection.winner must be the first ranked candidate");
+  }
+}
+
+function collectRejectedListErrors(rejected: unknown, errors: string[]): void {
+  if (!Array.isArray(rejected) || rejected.length > CANDIDATE_LIST_MAX) {
+    errors.push(
+      `selection.rejected must be an array of at most ${String(CANDIDATE_LIST_MAX)} entries`,
+    );
+    return;
+  }
+  rejected.forEach((entry: unknown, index) => {
+    collectRejectionErrors(entry, index, errors);
+  });
+}
+
+/**
+ * Validate a `PromptCandidateSelection`. Pure; returns a discriminated result and never throws. Checks
+ * structural well-formedness and the cross-field invariants that make the result auditable: the winner
+ * is the first ranked entry, every ranked scorecard is well-formed, and the considered/consumed totals
+ * are non-negative integers within the declared bounds.
+ */
+export function validatePromptCandidateSelection(
+  input: unknown,
+): PromptEnhancerValidation<PromptCandidateSelection> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["selection must be an object"] };
+  }
+  const errors: string[] = [];
+  validateExactKeys(input, SELECTION_KEYS, "selection", errors);
+  if (input.schemaVersion !== PROMPT_ENHANCER_SCHEMA_VERSION) {
+    errors.push(`selection.schemaVersion must be "${PROMPT_ENHANCER_SCHEMA_VERSION}"`);
+  }
+  collectScorecardErrors(input.winner, "selection.winner", errors);
+  collectRankedErrors(input.ranked, input.winner, errors);
+  collectRejectedListErrors(input.rejected, errors);
+  collectBoundsErrors(input.bounds, errors);
+  for (const field of ["iterations", "candidatesConsidered", "tokensConsumed"] as const) {
+    if (!isNonNegativeInteger(input[field])) {
+      errors.push(`selection.${field} must be a non-negative integer`);
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: input as unknown as PromptCandidateSelection };
 }

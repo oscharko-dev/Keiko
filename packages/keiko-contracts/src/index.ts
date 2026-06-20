@@ -937,4 +937,22 @@ export {
   validatePromptTaskAnalysis,
   validateEnhancedPrompt,
   validateGroundingPlan,
+  validatePromptCandidateScorecard,
+  validatePromptCandidateSelection,
 } from "./prompt-enhancer-validation.js";
+// Prompt Enhancer candidate-critic contract surface (#1312; ADR-0044 §6).
+export type {
+  PromptCriticDimension,
+  PromptCriticDimensionScore,
+  PromptCandidateScorecard,
+  PromptCandidateRejection,
+  PromptCandidateRejectionReason,
+  PromptOptimizationBounds,
+  PromptCandidateSelection,
+} from "./prompt-enhancer-critic.js";
+export {
+  PROMPT_CRITIC_DIMENSIONS,
+  PROMPT_CANDIDATE_REJECTION_REASONS,
+  isPromptCriticDimension,
+  isPromptCandidateRejectionReason,
+} from "./prompt-enhancer-critic.js";
