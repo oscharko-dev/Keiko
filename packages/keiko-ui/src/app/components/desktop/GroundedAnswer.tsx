@@ -144,10 +144,20 @@ function citationTitle(citation: GroundedEvidenceCitation): string {
   // uiux-fix F051 C306 — the tooltip must explain the trailing decimal on the chip
   // (a retrieval relevance score), not just the source location.
   const relevance = `relevance ${citation.score.toFixed(2)}`;
+  // Issue #1285 — a document citation references extracted document text, not source lines; make
+  // that explicit so the line span is not read as an on-screen line number.
+  const kind =
+    citation.documentFormat === undefined
+      ? "Evidence citation"
+      : `${citation.documentFormat.toUpperCase()} document evidence (extracted text)`;
   if (citation.lineRange === undefined) {
-    return `Evidence citation in ${citation.scopePath} — ${relevance}`;
+    return `${kind} in ${citation.scopePath} — ${relevance}`;
   }
-  return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)} — ${relevance}`;
+  const span =
+    citation.documentFormat === undefined
+      ? `at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`
+      : `at extracted span ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
+  return `${kind} in ${citation.scopePath} ${span} — ${relevance}`;
 }
 
 // uiux-fix F051 C306 — the score was a naked decimal ("0.87") with no visual or accessible
@@ -169,6 +179,9 @@ function CitationReference({
 }): ReactNode {
   return (
     <span className="grounded-citation" title={citationTitle(citation)}>
+      {citation.documentFormat === undefined ? null : (
+        <span className="grounded-citation-doc-badge">{citation.documentFormat.toUpperCase()}</span>
+      )}
       <span>{formatRange(citation)}</span>
       <CitationScore score={citation.score} />
     </span>
@@ -180,7 +193,9 @@ function CitationReference({
 // an explicit disclosure so the actually-cited sources stay findable.
 const CITATION_DISPLAY_CAP = 8;
 
-function uniqueByStableId<T extends { readonly stableId: string }>(items: readonly T[]): readonly T[] {
+function uniqueByStableId<T extends { readonly stableId: string }>(
+  items: readonly T[],
+): readonly T[] {
   const seen = new Set<string>();
   const unique: T[] = [];
   for (const item of items) {
@@ -354,9 +369,17 @@ const COVERAGE_GAP_REASONS: ReadonlyArray<{
   { reason: "size-exceeded", label: "larger than 2 MB" },
   { reason: "binary", label: "binary or an unsupported format" },
   { reason: "tool-unavailable", label: "unreadable" },
+  // Bounded small-document extraction diagnostics (Issue #1285).
+  { reason: "unsupported-format", label: "an unsupported document format" },
+  { reason: "no-text-layer", label: "a scanned document with no text layer" },
+  { reason: "malformed-document", label: "a malformed document" },
+  { reason: "encrypted-document", label: "a password-protected document" },
 ];
-const REPOSITORY_TEXT_ONLY_NOTICE =
-  "Some connected files were skipped because Repository Search currently reads text/code files only.";
+// Repository Search now extracts bounded text from small DOCX/XLSX/text-layer-PDF documents
+// (Issue #1285); larger, scanned, encrypted, or other document formats stay on the Local Knowledge
+// path. Shown whenever a connected document or binary file was skipped.
+const REPOSITORY_DOCUMENT_NOTICE =
+  "Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF documents. Larger, scanned, encrypted, or other document formats remain available through Local Knowledge.";
 
 function CoverageNotice({
   omittedCounts,
@@ -372,13 +395,19 @@ function CoverageNotice({
   const detail = gaps.map((gap) => `${String(gap.count)} ${gap.label}`).join(", ");
   const fileWord = total === 1 ? "file" : "files";
   const verb = total === 1 ? "was" : "were";
+  const showDocumentNotice =
+    omittedCounts.binary > 0 ||
+    omittedCounts["unsupported-format"] > 0 ||
+    omittedCounts["no-text-layer"] > 0 ||
+    omittedCounts["malformed-document"] > 0 ||
+    omittedCounts["encrypted-document"] > 0;
   return (
     <div className="grounded-coverage-notice" role="note">
       <span className="grounded-coverage-notice-title">Partial coverage</span>
       <span>
         {`This answer reflects only the searchable files in the connected scope — ${String(total)} ${fileWord} ${verb} not searched (${detail}). It does not cover the entire folder.`}
       </span>
-      {omittedCounts.binary > 0 ? <span>{REPOSITORY_TEXT_ONLY_NOTICE}</span> : null}
+      {showDocumentNotice ? <span>{REPOSITORY_DOCUMENT_NOTICE}</span> : null}
     </div>
   );
 }

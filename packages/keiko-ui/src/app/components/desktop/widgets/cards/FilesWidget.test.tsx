@@ -531,7 +531,7 @@ describe("FilePreview", () => {
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
   });
 
-  it("explains that DOCX is not searchable in Repository Search yet", async () => {
+  it("explains that DOCX is searchable via bounded extraction with stated limits (Issue #1285)", async () => {
     vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
       root: "/repo",
       path: "docs/handbook.docx",
@@ -549,10 +549,33 @@ describe("FilePreview", () => {
 
     expect(
       await screen.findByText(
-        "DOCX is not searchable in Repository Search yet. Add it to Local Knowledge, or enable small-document repository extraction when available.",
+        /DOCX files up to 2 MB are searchable in Repository Search via bounded text extraction/,
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByText("handbook.docx").length).toBeGreaterThan(0);
+  });
+
+  it("explains that XLSX is searchable via bounded extraction (Issue #1285)", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "docs/budget.xlsx",
+      name: "budget.xlsx",
+      sizeBytes: 20_000,
+      modifiedAt: 1,
+      extension: "xlsx",
+      mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    render(<FilePreview root="/repo" path="docs/budget.xlsx" onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        /XLSX files up to 2 MB are searchable in Repository Search via bounded text extraction/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders a generic safety alert when the BFF returns 403 DENIED", async () => {

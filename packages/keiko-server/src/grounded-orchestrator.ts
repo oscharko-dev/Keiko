@@ -65,6 +65,11 @@ import {
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { normalizeGroundedAnswerPayload, type GroundedAnswerPayload } from "./grounded-answer.js";
+import {
+  collectConnectedDocumentEvidence,
+  isConnectedDocumentPath,
+  type DocumentEvidenceResult,
+} from "./grounded-document-evidence.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -1218,6 +1223,13 @@ function selectedFileScopeAtoms(
       continue;
     }
     seen.add(scopePath);
+    // Connected documents (supported DOCX/XLSX/PDF, or a known-unsupported document format) are not
+    // code-first excerpt files; they are handled exclusively by bounded document extraction (Issue
+    // #1285), so they must not also enter the line-window excerpt path here — that would double-count
+    // the file and leave an empty, unreadable code excerpt alongside the document evidence/diagnostic.
+    if (isConnectedDocumentPath(scopePath)) {
+      continue;
+    }
     if (fileExistsInSearchScope(searchScope, fs, scopePath)) {
       atoms.push(selectedFileAtom(input.scope, scopePath, queryFingerprint, nowMs));
     }
@@ -1719,8 +1731,25 @@ interface FinalContextPackInputs {
   readonly rings: RingRunSummary;
   readonly prepared: PreparedPackAssembly;
   readonly excerptReads: ExcerptReadSummary;
+  readonly documentEvidence: DocumentEvidenceResult;
   readonly cacheIdentity: PackCacheIdentity | undefined;
   readonly assembleOptions: AssembleOptionsForGroundedPack;
+}
+
+// Document paths are disjoint from code excerpt paths (documents are excluded from the code-first
+// selected-file atoms), so a plain copy-merge never overwrites a code excerpt.
+function mergeExcerptSources(
+  base: ReadonlyMap<string, readonly ExcerptWindow[]>,
+  documents: ReadonlyMap<string, readonly ExcerptWindow[]>,
+): ReadonlyMap<string, readonly ExcerptWindow[]> {
+  if (documents.size === 0) {
+    return base;
+  }
+  const merged = new Map<string, readonly ExcerptWindow[]>(base);
+  for (const [scopePath, windows] of documents) {
+    merged.set(scopePath, windows);
+  }
+  return merged;
 }
 
 async function assembleEmptyGroundedPack({
@@ -1813,27 +1842,40 @@ async function assemblePackFromReads({
   rings,
   prepared,
   excerptReads,
+  documentEvidence,
   cacheIdentity,
   assembleOptions,
 }: FinalContextPackInputs): Promise<ConnectedContextPack> {
+  const excerpts = mergeExcerptSources(excerptReads.excerpts, documentEvidence.excerpts);
   const needsNoEvidenceMarker =
-    excerptReads.excerpts.size === 0 &&
+    excerpts.size === 0 &&
     !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence");
+  // Connected documents are owned exclusively by the bounded document-extraction path: they either
+  // surface as document evidence or as a precise document diagnostic. The code-first lexical scan
+  // also sees them as binary candidates, so strip any document-path omission it produced to avoid a
+  // path that is both a selected file and an omitted entry (which the pack validator rejects).
+  const codeOmitted = [...rings.omitted, ...prepared.ordered.omitted].filter(
+    (entry) => !isConnectedDocumentPath(entry.scopePath),
+  );
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
       query: input.query,
       budget: plan.budget,
-      atoms: prepared.atoms,
-      ranked: prepared.ordered.kept,
-      omittedFromRanking: [...rings.omitted, ...prepared.ordered.omitted],
-      excerpts: excerptReads.excerpts,
-      cacheIdentity,
+      atoms: [...prepared.atoms, ...documentEvidence.atoms],
+      ranked: [...prepared.ordered.kept, ...documentEvidence.candidates],
+      omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
+      excerpts,
+      // Document evidence is request-local and not part of the file-state cache key, so it is only
+      // assembled on the non-cached path; passing cacheIdentity here would let a later code-only
+      // run reuse a pack that still carries this run's documents.
+      cacheIdentity: documentEvidence.atoms.length > 0 ? undefined : cacheIdentity,
       initialUsage: prepared.initialUsage,
       initialUncertainty: [
         ...rings.uncertainty,
         ...excerptReads.uncertainty,
         ...prepared.evidenceUncertainty,
+        ...documentEvidence.uncertainty,
         ...(needsNoEvidenceMarker ? [noEvidence(assembleOptions.nowMs())] : []),
       ],
     },
@@ -1863,30 +1905,63 @@ async function augmentRingsWithDeterministicAtoms({
   );
 }
 
-async function assembleGroundedPack(
+interface GroundedAssemblyContext {
+  readonly documentEvidence: DocumentEvidenceResult;
+  readonly cached: ConnectedContextPack | undefined;
+  readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly assembleOptions: AssembleOptionsForGroundedPack;
+}
+
+async function prepareGroundedAssembly(
   args: AssembleGroundedPackInputs,
-): Promise<ConnectedContextPack> {
+  augmentedRings: RingRunSummary,
+  prepared: PreparedPackAssembly,
+): Promise<GroundedAssemblyContext> {
   const { input, deps, plan, searchScope, fs, nowMs } = args;
-  const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
-  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
+  // Bounded small-document extraction for explicit `files` scopes (Issue #1285). Returns empty
+  // evidence for every other scope kind, leaving the code-first path byte-identical.
+  const documentEvidence = await collectConnectedDocumentEvidence({
+    scope: input.scope,
+    query: input.query,
+    searchScope,
+    fs,
+    nowMs,
+    signal: deps.signal,
+  });
+  const hasDocumentEvidence =
+    documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0;
   const cacheIdentity =
     deps.microIndex === undefined
       ? undefined
       : fileStateCacheIdentity(prepared.keptPaths, searchScope, fs);
   const assembleOptions =
     deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
-  const cached = cachedGroundedPack({
-    input,
-    deps,
-    plan,
-    rings: augmentedRings,
-    ordered: prepared.ordered,
-    cacheIdentity,
-    initialUsage: prepared.initialUsage,
-    assembleOptions,
-  });
-  if (cached !== undefined) {
-    return cached;
+  // The micro-index cache key does not model request-local document evidence, so a scope that
+  // carried documents this run must not be served from (or written to) the shared cache.
+  const cached = hasDocumentEvidence
+    ? undefined
+    : cachedGroundedPack({
+        input,
+        deps,
+        plan,
+        rings: augmentedRings,
+        ordered: prepared.ordered,
+        cacheIdentity,
+        initialUsage: prepared.initialUsage,
+        assembleOptions,
+      });
+  return { documentEvidence, cached, cacheIdentity, assembleOptions };
+}
+
+async function assembleGroundedPack(
+  args: AssembleGroundedPackInputs,
+): Promise<ConnectedContextPack> {
+  const { input, deps, plan, searchScope, fs, nowMs } = args;
+  const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
+  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
+  const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
+  if (ctx.cached !== undefined) {
+    return ctx.cached;
   }
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     searchScope,
@@ -1903,8 +1978,9 @@ async function assembleGroundedPack(
     rings: augmentedRings,
     prepared,
     excerptReads,
-    cacheIdentity,
-    assembleOptions,
+    documentEvidence: ctx.documentEvidence,
+    cacheIdentity: ctx.cacheIdentity,
+    assembleOptions: ctx.assembleOptions,
   });
 }
 

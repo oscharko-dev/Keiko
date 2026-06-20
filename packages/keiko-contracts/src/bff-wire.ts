@@ -553,11 +553,21 @@ export interface GroundedAskRequest {
   readonly modelId?: string | undefined;
 }
 
+// Bounded-extraction document formats surfaced to the browser citation layer (Issue #1285).
+// A normalized, content-free discriminator (not a file path or extracted text) so the UI can
+// label DOCX/XLSX/text-layer-PDF evidence distinctly without re-deriving format from the
+// scopePath suffix. Absent for ordinary code/text citations.
+export type GroundedCitationDocumentFormat = "docx" | "xlsx" | "pdf";
+
 export interface GroundedEvidenceCitation {
   readonly scopePath: string;
   readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
   readonly score: number;
   readonly stableId: string;
+  // Present only when this citation refers to text extracted from a connected small document
+  // by Repository Search bounded document extraction (Issue #1285); undefined for code/text
+  // evidence. Carries no document content — only the recognized format token.
+  readonly documentFormat?: GroundedCitationDocumentFormat;
   // Epic #532 — a short, human-readable label of the connected source this citation came from
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.

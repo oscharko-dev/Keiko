@@ -55,6 +55,10 @@ const OMITTED_COUNTS_ZERO = {
   "redacted-only": 0,
   "budget-exhausted": 0,
   "tool-unavailable": 0,
+  "unsupported-format": 0,
+  "no-text-layer": 0,
+  "malformed-document": 0,
+  "encrypted-document": 0,
 } as const;
 
 function contextPack(
@@ -145,9 +149,51 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/2 binary or an unsupported format/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Some connected files were skipped because Repository Search currently reads text/code files only.",
+        /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("surfaces skipped-document diagnostics in the coverage notice (Issue #1285)", () => {
+    const a = answer({
+      contextPack: contextPack({
+        omittedCounts: {
+          ...OMITTED_COUNTS_ZERO,
+          "no-text-layer": 1,
+          "encrypted-document": 1,
+          "unsupported-format": 2,
+          "malformed-document": 1,
+        },
+      }),
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.getByText(/Partial coverage/)).toBeInTheDocument();
+    expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
+    expect(screen.getByText(/1 a scanned document with no text layer/)).toBeInTheDocument();
+    expect(screen.getByText(/1 a password-protected document/)).toBeInTheDocument();
+    expect(screen.getByText(/2 an unsupported document format/)).toBeInTheDocument();
+    expect(screen.getByText(/1 a malformed document/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("tags a document-evidence citation with its format badge (Issue #1285)", () => {
+    const a = answer({
+      citations: [
+        citation({
+          scopePath: "docs/report.docx",
+          lineRange: { startLine: 1, endLine: 4 },
+          documentFormat: "docx",
+          stableId: "atom-doc",
+        }),
+      ],
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.getByText("DOCX")).toBeInTheDocument();
+    expect(screen.getByText("docs/report.docx:1-4")).toBeInTheDocument();
   });
 
   it("does not warn about coverage when omissions are only relevance or noise filtering", () => {
