@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -214,6 +215,20 @@ describe("runUninstallCli — scripts edge cases", () => {
     const c = makeIo();
     expect(runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
     expect(c.out()).toContain("no keiko:start / keiko:stop scripts");
+  });
+
+  it("exits 1 gracefully when package.json cannot be written", () => {
+    // Skip where the read-only bit does not block the owner (Windows, or running as root).
+    if (process.platform === "win32") return;
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const root = makeRoot();
+    const pkg = seedPackageJson(root);
+    chmodSync(pkg, 0o444);
+    const c = makeIo();
+    const code = runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
+    chmodSync(pkg, 0o644); // restore so afterEach cleanup can remove it
+    expect(code).toBe(1);
+    expect(c.err()).toContain("keiko uninstall:");
   });
 
   it("honors a custom --package path", () => {

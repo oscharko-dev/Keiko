@@ -226,6 +226,31 @@ describe("runRepairCli — install layout", () => {
     expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Install layout");
   });
+
+  it("accepts a global install reachable via KEIKO_UI_STATIC_ROOT", () => {
+    const root = makeRoot();
+    const staticRoot = join(root, "global-ui", "static");
+    mkdirSync(staticRoot, { recursive: true });
+    writeFileSync(join(staticRoot, "index.html"), "<html></html>\n", "utf8");
+    const c = makeIo();
+    // No local layout seeded — the install-layout check must resolve via the env var.
+    expect(runRepairCli([], c.io, { KEIKO_UI_STATIC_ROOT: staticRoot }, healthyDeps(root))).toBe(0);
+    expect(c.out()).toContain("UI static export present");
+  });
+});
+
+describe("runRepairCli — summary message", () => {
+  it("tells the user to apply fixes when --dry-run finds only fixable items", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "ui.pid"), "4242\n", "utf8");
+    const c = makeIo();
+    expect(runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(c.out()).toContain("apply the fixes above");
+    expect(c.out()).not.toContain("review the items marked");
+  });
 });
 
 describe("runRepairCli — launch path", () => {

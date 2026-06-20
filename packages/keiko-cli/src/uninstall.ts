@@ -352,6 +352,7 @@ function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
     io.out("  npm uninstall -g @oscharko-dev/keiko     (global install)\n");
     io.out("  npm uninstall @oscharko-dev/keiko        (if installed locally in a project)\n");
   }
+  io.out("  yarn remove @oscharko-dev/keiko  •  pnpm remove @oscharko-dev/keiko  (yarn / pnpm)\n");
 }
 
 export function runUninstallCli(
@@ -383,6 +384,9 @@ export function runUninstallCli(
       io.err(`${e.message}\n`);
       return 1;
     }
-    throw e;
+    // Filesystem errors (e.g. a read-only package.json or state file) are reported as a
+    // clean non-zero exit rather than crashing the CLI with an unhandled exception.
+    io.err(`keiko uninstall: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
   }
 }

@@ -43,7 +43,13 @@ Runs an offline diagnostic-and-repair pass over the local Keiko install:
   - verifies the built CLI/UI assets and the launch path
   - validates a configured model-gateway config file
 
-\`--dry-run\` reports findings without changing anything.
+Options:
+  --state-dir PATH  inspect this state directory instead of <cwd>/.keiko.
+  --config PATH     validate this model-gateway config file (else KEIKO_CONFIG_FILE).
+  --dry-run         report findings without changing anything.
+
+Exit code: 0 when the install is healthy or every issue was repaired; 1 when an item
+needs manual action (with --dry-run, also when a fixable item is found).
 `;
 
 type CheckStatus = "ok" | "fixed" | "fixable" | "action-required";
@@ -186,12 +192,23 @@ function checkLauncherRecords(
   return summarizeLauncher(state, stateDir, dryRun);
 }
 
-function checkInstallLayout(cwd: string): CheckResult {
+function checkInstallLayout(cwd: string, env: EnvSource): CheckResult {
+  // The UI static export is what `keiko start` / `keiko ui` serve. The bin shim exports
+  // KEIKO_UI_STATIC_ROOT for the running install (so a global install resolves even when
+  // run outside a project), while a local checkout/install resolves via
+  // resolvePreferredInstallLayout. Either reachable -> ok.
+  const staticRoot = env.KEIKO_UI_STATIC_ROOT ?? process.env.KEIKO_UI_STATIC_ROOT;
+  if (
+    typeof staticRoot === "string" &&
+    staticRoot.length > 0 &&
+    existsSync(join(staticRoot, "index.html"))
+  )
+    return ok("Install layout", "UI static export present");
   if (resolvePreferredInstallLayout(cwd) !== undefined)
     return ok("Install layout", "built CLI and UI assets present");
   return action(
     "Install layout",
-    "built CLI/UI assets not found — reinstall `npm install @oscharko-dev/keiko` or rebuild `npm run build`",
+    "UI assets not found — reinstall `npm install @oscharko-dev/keiko` or rebuild `npm run build`",
   );
 }
 
@@ -278,16 +295,20 @@ export function runRepairCli(
     checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
     checkStateDirPerms(stateDir, parsed.dryRun),
     checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
-    checkInstallLayout(resolved.cwd),
+    checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
   ];
   reportResults(io, results);
-  const summary = exitCodeFor(results, parsed.dryRun);
-  io.out(
-    summary === 0
-      ? "\nKeiko repair: system is healthy.\n"
-      : "\nKeiko repair: review the items marked `action` above.\n",
-  );
-  return summary;
+  const code = exitCodeFor(results, parsed.dryRun);
+  io.out(summaryMessage(results, code));
+  return code;
+}
+
+function summaryMessage(results: readonly CheckResult[], code: number): string {
+  if (code === 0) return "\nKeiko repair: system is healthy.\n";
+  if (results.some((r) => r.status === "action-required"))
+    return "\nKeiko repair: review the items marked `action` above.\n";
+  // dry-run with only fixable items: nothing needs manual action, the fixes are pending.
+  return "\nKeiko repair: run `keiko repair` (without --dry-run) to apply the fixes above.\n";
 }
