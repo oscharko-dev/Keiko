@@ -187,7 +187,8 @@ function buildEvidenceManifest(
   // The builder fingerprints + redacts by construction, so the returned manifest carries no raw secret.
   // Pass env + loaded config literals so config-only secrets are scrubbed too.
   return buildPromptEnhancementEvidenceManifest(record, {
-    additionalSecrets: promptEnhancerRedactionSecrets(env, config),
+    additionalSecrets: promptEnhancerTopologyRedactionSecrets(config),
+    opaqueSecrets: promptEnhancerOpaqueRedactionSecrets(env, config),
   }).manifest;
 }
 
@@ -198,14 +199,23 @@ function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] 
   );
 }
 
-function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
+function configTopologyValues(config: GatewayConfig | undefined): readonly string[] {
   if (config === undefined) return [];
   const out: string[] = [...egressSecretValues(config.egress)];
+  for (const provider of config.providers) {
+    out.push(provider.baseUrl, ...egressSecretValues(provider.egress));
+  }
+  return out;
+}
+
+function configOpaqueSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  if (config === undefined) return [];
+  const out: string[] = [];
   if (config.figma?.accessToken !== undefined) {
     out.push(config.figma.accessToken);
   }
   for (const provider of config.providers) {
-    out.push(provider.apiKey, provider.baseUrl, ...egressSecretValues(provider.egress));
+    out.push(provider.apiKey);
   }
   return out;
 }
@@ -223,7 +233,27 @@ function promptEnhancerRedactionSecrets(
     new Set([
       ...keikoApiKeySecretValues(env),
       ...figmaEnvSecretValues(env),
-      ...configSecretValues(config),
+      ...configTopologyValues(config),
+      ...configOpaqueSecretValues(config),
+    ]),
+  );
+}
+
+function promptEnhancerTopologyRedactionSecrets(
+  config: GatewayConfig | undefined,
+): readonly string[] {
+  return Array.from(new Set(configTopologyValues(config)));
+}
+
+function promptEnhancerOpaqueRedactionSecrets(
+  env: EnvSource,
+  config: GatewayConfig | undefined,
+): readonly string[] {
+  return Array.from(
+    new Set([
+      ...keikoApiKeySecretValues(env),
+      ...figmaEnvSecretValues(env),
+      ...configOpaqueSecretValues(config),
     ]),
   );
 }

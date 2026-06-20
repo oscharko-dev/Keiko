@@ -42,4 +42,14 @@ describe("redactPromptEnhancementEvidence", () => {
     );
     expect(redacted.v).not.toContain("super-secret-literal");
   });
+
+  it("replaces opaque credential-bearing leaves with a fixed marker", () => {
+    const { redacted, summary } = redactPromptEnhancementEvidence(
+      { v: "value config-only-api-key here", safe: "still visible" },
+      { opaqueSecrets: ["config-only-api-key"] },
+    );
+    expect(redacted.v).toBe("[REDACTED]");
+    expect(redacted.safe).toBe("still visible");
+    expect(summary.patternsMatched["opaque-secret"]).toBe(1);
+  });
 });

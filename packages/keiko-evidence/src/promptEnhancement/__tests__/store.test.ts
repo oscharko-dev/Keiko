@@ -143,6 +143,19 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
     );
     expect(manifest.enhancedPromptTextRedacted).not.toContain("super-secret-literal");
   });
+
+  it("hashes opaque credential redactions from a fixed marker", () => {
+    const apiKey = "config-only-api-key";
+    const { manifest } = buildPromptEnhancementEvidenceManifest(
+      recordInput({ originalInput: `Use ${apiKey} for the provider.` }),
+      { opaqueSecrets: [apiKey] },
+    );
+    expect(manifest.inputExcerptRedacted).toBe("[REDACTED]");
+    expect(manifest.inputRedactedFingerprintSha256).toBe(sha256Hex("[REDACTED]"));
+    expect(manifest.inputRedactedFingerprintSha256).not.toBe(
+      sha256Hex(`Use ${apiKey} for the provider.`),
+    );
+  });
 });
 
 describe("createInMemoryPromptEnhancementLocalStore", () => {

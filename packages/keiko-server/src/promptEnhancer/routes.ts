@@ -23,7 +23,11 @@ import {
 import type { RouteContext, RouteResult } from "../routes.js";
 import { errorBody } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "../deps.js";
+import {
+  currentEvidenceOpaqueRedactionSecrets,
+  currentEvidenceTopologyRedactionSecrets,
+  currentGatewayConfig,
+} from "../deps.js";
 import {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
@@ -122,7 +126,10 @@ function recordEvidenceReference(
   });
   const { manifest } = recordPromptEnhancementRun(record, {
     evidenceDir: deps.evidenceDir,
-    redaction: { additionalSecrets: currentRedactionSecrets(deps) },
+    redaction: {
+      additionalSecrets: currentEvidenceTopologyRedactionSecrets(deps),
+      opaqueSecrets: currentEvidenceOpaqueRedactionSecrets(deps),
+    },
   });
   return {
     status: "recorded",
