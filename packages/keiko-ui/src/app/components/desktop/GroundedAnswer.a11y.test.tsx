@@ -75,10 +75,11 @@ function answer(): GroundedAnswerType {
         stableId: "atom-a",
       },
       {
-        scopePath: "src/bar.ts",
-        lineRange: undefined,
+        scopePath: "docs/report.docx",
+        lineRange: { startLine: 1, endLine: 3 },
         score: 0.4,
         stableId: "atom-b",
+        documentFormat: "docx",
       },
     ],
     uncertainty: [{ kind: "no-evidence", claim: "excerpt unavailable" }],

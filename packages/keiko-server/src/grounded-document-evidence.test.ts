@@ -224,6 +224,106 @@ describe("collectConnectedDocumentEvidence", () => {
     ]);
   });
 
+  it("reports tool-unavailable when document metadata cannot be read", async () => {
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      fs: {
+        ...baseInputs.fs,
+        stat: () => {
+          throw new Error("EACCES");
+        },
+      },
+    });
+
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/report.docx", reason: "tool-unavailable", omittedAtMs: 1_000 },
+    ]);
+    expect(result.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
+  });
+
+  it("reports tool-unavailable when document bytes cannot be read", async () => {
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      fs: {
+        ...baseInputs.fs,
+        readFileBytes: () => Promise.reject(new Error("EACCES")),
+      },
+    });
+
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/report.docx", reason: "tool-unavailable", omittedAtMs: 1_000 },
+    ]);
+    expect(result.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
+  });
+
+  it("denies a connected document whose real path no longer matches the explicit file scope", async () => {
+    const scope = filesScope(["docs/link.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/private/secret.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    let readFileBytesCalls = 0;
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      fs: {
+        ...baseInputs.fs,
+        realPath: (absolutePath): string =>
+          absolutePath === "/ws/docs/link.docx" ? "/ws/private/secret.docx" : absolutePath,
+        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+          readFileBytesCalls += 1;
+          return baseInputs.fs.readFileBytes?.(absolutePath, maxBytes) ?? new Uint8Array();
+        },
+      },
+    });
+
+    expect(readFileBytesCalls).toBe(0);
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/link.docx", reason: "outside-scope", omittedAtMs: 1_000 },
+    ]);
+  });
+
+  it("denies a hard-linked connected document before reading bytes", async () => {
+    const scope = filesScope(["docs/report.docx"]);
+    const baseInputs = inputs(
+      scope,
+      entriesFor({ "/ws/docs/report.docx": { bytes: DOCX_SIMPLE } }),
+    );
+    let readFileBytesCalls = 0;
+    const result = await collectConnectedDocumentEvidence({
+      ...baseInputs,
+      fs: {
+        ...baseInputs.fs,
+        stat: (absolutePath): WorkspaceStat => ({
+          ...baseInputs.fs.stat(absolutePath),
+          hardLinkCount: 2,
+        }),
+        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+          readFileBytesCalls += 1;
+          return baseInputs.fs.readFileBytes?.(absolutePath, maxBytes) ?? new Uint8Array();
+        },
+      },
+    });
+
+    expect(readFileBytesCalls).toBe(0);
+    expect(result.atoms).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "docs/report.docx", reason: "outside-scope", omittedAtMs: 1_000 },
+    ]);
+  });
+
   it("extracts every connected document when the aggregate budget is not exhausted", async () => {
     const paths = ["docs/a.docx", "docs/b.docx", "docs/c.docx"];
     const entries: Record<string, FsEntry> = {};

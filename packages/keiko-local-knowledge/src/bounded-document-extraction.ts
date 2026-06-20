@@ -212,6 +212,7 @@ function failure(
 
 interface TimeoutHandle {
   readonly signal: AbortSignal;
+  readonly expired: Promise<"timed-out">;
   dispose(): void;
 }
 
@@ -231,10 +232,24 @@ function armTimeout(timeoutMs: number, callerSignal: AbortSignal | undefined): T
     callerSignal === undefined
       ? controller.signal
       : AbortSignal.any([callerSignal, controller.signal]);
+  let resolveExpired: (value: "timed-out") => void = () => undefined;
+  const expired = new Promise<"timed-out">((resolve) => {
+    resolveExpired = resolve;
+  });
+  const onAbort = (): void => {
+    resolveExpired("timed-out");
+  };
+  if (signal.aborted) {
+    onAbort();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
   return {
     signal,
+    expired,
     dispose: (): void => {
       clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
     },
   };
 }
@@ -268,7 +283,7 @@ async function runParser(
   binding: FormatBinding,
   input: BoundedDocumentExtractionInput,
   options: BoundedDocumentExtractionOptions,
-): Promise<InternalParserResult | "malformed"> {
+): Promise<InternalParserResult | "malformed" | "timed-out"> {
   const timeout = armTimeout(options.timeoutMs, options.signal);
   const selection: ParserSelectionInput = {
     documentId: input.documentId ?? DEFAULT_DOCUMENT_ID,
@@ -284,8 +299,11 @@ async function runParser(
     now: options.now,
   });
   try {
-    return await binding.parser.parseAsync(selection, parserOptions);
+    return await Promise.race([binding.parser.parseAsync(selection, parserOptions), timeout.expired]);
   } catch {
+    if (timeout.signal.aborted) {
+      return "timed-out";
+    }
     return "malformed";
   } finally {
     timeout.dispose();
@@ -305,6 +323,9 @@ export async function extractBoundedDocumentText(
     return preflight;
   }
   const result = await runParser(binding, input, options);
+  if (result === "timed-out") {
+    return failure("timed-out", binding.format);
+  }
   if (result === "malformed") {
     return failure("malformed", binding.format);
   }

@@ -177,16 +177,16 @@ function CitationReference({
 }: {
   readonly citation: GroundedEvidenceCitation;
 }): ReactNode {
+  const documentFormat = citation.documentFormat?.toUpperCase();
   return (
     <span className="grounded-citation" title={citationTitle(citation)}>
-      {citation.documentFormat === undefined ? null : (
-        // The format is already in the chip's accessible name via citationTitle(); hide the badge
-        // from assistive tech so the format is not announced twice.
-        <span className="grounded-citation-doc-badge" aria-hidden="true">
-          {citation.documentFormat.toUpperCase()}
-        </span>
+      {documentFormat === undefined ? null : (
+        <>
+          <span className="grounded-citation-doc-badge">{documentFormat}</span>
+          <span className="sr-only"> document evidence extracted text </span>
+        </>
       )}
-      <span>{formatRange(citation)}</span>
+      <span className="grounded-citation-range">{formatRange(citation)}</span>
       <CitationScore score={citation.score} />
     </span>
   );

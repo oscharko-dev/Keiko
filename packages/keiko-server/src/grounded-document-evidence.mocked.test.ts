@@ -107,6 +107,26 @@ describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
     expect(content).toContain("[REDACTED]");
   });
 
+  it("strips unsafe format characters before redacting extracted document text", async () => {
+    extractMock.mockResolvedValue({
+      outcome: "extracted",
+      format: "docx",
+      text: "Connection: sk-\u200bABCDEFGHIJKLMNOP1234567890 is split by a zero-width char.",
+      extractedBytes: 80,
+      truncated: false,
+      diagnostics: [],
+    });
+    const result = await run(["docs/split-secret.docx"]);
+    const content =
+      result.excerpts
+        .get("docs/split-secret.docx")
+        ?.map((window) => window.content)
+        .join("\n") ?? "";
+    expect(content).not.toContain("\u200b");
+    expect(content).not.toContain("sk-ABCDEFGHIJKLMNOP1234567890");
+    expect(content).toContain("[REDACTED]");
+  });
+
   it("enforces the per-request aggregate document byte budget", async () => {
     // Each document fills its full extraction allowance (respecting the per-document cap and the
     // remaining aggregate budget). After two full documents the aggregate budget is exhausted, so
