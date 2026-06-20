@@ -131,14 +131,13 @@ editor, or a very large file fails to open with a too-large load error.
 
 **Root Cause**
 
-This is enforced large-file and file-type policy, not a defect (ADR-0042 D3.6). Files \*\*> 500 KB or
-
-> 10,000 lines** enter degraded mode: expensive Monaco features are disabled and `largeFileOptimizations`
-> is on so per-keystroke work stays within budget. Files **> 1,000,000 bytes\*\* are rejected server-side
-> and never instantiate Monaco. Binary and unsupported files are surfaced with a content-free note rather
-> than a diff. Deterministic language intelligence is available only for TypeScript/JavaScript; other
-> languages get Monaco editing and language-agnostic AI completion but no governed diagnostics/hover/
-> symbols until their provider lands (#1213).
+This is enforced large-file and file-type policy, not a defect (ADR-0042 D3.6). Files larger than
+500 KB or more than 10,000 lines enter degraded mode: expensive Monaco features are disabled and
+`largeFileOptimizations` is on so per-keystroke work stays within budget. Files larger than 1,000,000
+bytes are rejected server-side and never instantiate Monaco. Binary and unsupported files are surfaced
+with a content-free note rather than a diff. Governed language intelligence is available only for
+TypeScript/JavaScript; other languages get Monaco editing only, with no governed completion, inline
+completion, diagnostics, hover, symbols, or formatting until their provider lands (#1213).
 
 **Diagnostic Steps**
 
@@ -159,8 +158,8 @@ explains the load rejection.
   or reduce the file below the thresholds.
 - For files over `1,000,000` bytes, open them outside the editor; the limit protects responsiveness and
   is not configurable at run time.
-- For an unsupported language, expect Monaco editing and AI completion only; deterministic language
-  intelligence depends on a registered provider (TypeScript/JavaScript today).
+- For an unsupported language, expect Monaco editing only; governed completion and deterministic
+  language intelligence depend on a registered provider (TypeScript/JavaScript today).
 
 ---
 

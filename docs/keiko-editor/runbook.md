@@ -247,18 +247,19 @@ The editor ships only the pure, browser-safe controllers (`buildTestGenerationCo
 The editor's threat model and hardening are detailed in the
 [security hardening review](1206-security-hardening-review.md); this is the operational summary.
 
-### Content-free wire posture
+### Content-free provenance posture
 
-Across completion, inline completion, diagnostics, and context, the wire and the audit evidence are
-content-free. The browser, telemetry, and evidence store **never** receive raw prompts, queries,
-retrieved excerpts, buffers, workspace roots, secrets, or customer content. They receive only the
-reviewable insert text (or patch `newText`), source-kind labels
-(`deterministic-language-service`, `model-assisted`, `repository-context`, `local-knowledge`, `memory`,
-`connected-context`), a SHA-256 prompt hash, byte counts, provenance ids, and omission reasons. A
-compile-time content-free guard (`content-free-guard.ts`) and the cross-route
+Across completion, inline completion, diagnostics, and context, the browser receives the opened file
+buffer by design and sends live editor text plus request context to same-origin BFF routes through host
+resolvers. The content-free guarantee applies to the derived surfaces: prompts, retrieved excerpts,
+workspace roots, secrets, telemetry, and persisted evidence do not expose those raw payloads back to the
+browser or evidence artifacts. Responses expose only reviewable insert text (or patch `newText`),
+source-kind labels (`deterministic-language-service`, `model-assisted`, `repository-context`,
+`local-knowledge`, `memory`, `connected-context`), a SHA-256 prompt hash, byte counts, provenance ids,
+and omission reasons. A compile-time content-free guard (`content-free-guard.ts`) and the cross-route
 `editorSecurityBoundary.test.ts` hold this invariant.
 
-### No CDN, no browser egress, CSP unchanged
+### No CDN, no direct browser provider egress, CSP unchanged
 
 Monaco core and all five language workers (`editor`, `typescript`, `json`, `css`, `html`) are served
 same-origin from the locally installed `monaco-editor` (pinned `0.55.1`); no editor asset is fetched
@@ -332,7 +333,7 @@ production bundle — is recorded as release evidence by [#1209], not by this ru
   deterministic completion only.
 - Large files degrade or are rejected as above; very large files never instantiate Monaco.
 - No editor-driven test execution in v1 (test generation switched off).
-- No CDN and no browser egress; the CSP is not widened for Monaco.
+- No CDN and no direct browser provider egress; the CSP is not widened for Monaco.
 
 ## Related documentation
 

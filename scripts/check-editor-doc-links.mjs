@@ -14,28 +14,24 @@
 // `npm run check:editor-doc-links`; a broken link or dangling anchor exits non-zero and names the
 // offending file, link, and reason.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-
-// The curated Keiko Editor documentation set this gate owns.
-const DOC_FILES = collectDocFiles();
+const DEFAULT_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const LINK_PATTERN = /\[(?:[^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const EXTERNAL_PREFIX = /^(?:https?:|mailto:|tel:|#?\/\/|data:)/i;
-const failures = [];
 
-function collectDocFiles() {
+export function collectDocFiles(repoRoot = DEFAULT_REPO_ROOT) {
   const files = ["packages/keiko-editor/README.md"];
-  files.push(...listMarkdown("docs", (name) => name.startsWith("editor-")));
-  files.push(...listMarkdownRecursive("docs/keiko-editor"));
-  files.push(...listMarkdown("docs/release", (name) => name.startsWith("keiko-editor-")));
+  files.push(...listMarkdown(repoRoot, "docs", (name) => name.startsWith("editor-")));
+  files.push(...listMarkdownRecursive(repoRoot, "docs/keiko-editor"));
+  files.push(...listMarkdown(repoRoot, "docs/release", (name) => name.startsWith("keiko-editor-")));
   return files.filter((file) => existsSync(join(repoRoot, file)));
 }
 
-function listMarkdown(dir, predicate) {
+function listMarkdown(repoRoot, dir, predicate) {
   const absolute = join(repoRoot, dir);
   if (!existsSync(absolute)) return [];
   return readdirSync(absolute)
@@ -43,13 +39,13 @@ function listMarkdown(dir, predicate) {
     .map((name) => join(dir, name));
 }
 
-function listMarkdownRecursive(dir) {
+function listMarkdownRecursive(repoRoot, dir) {
   const absolute = join(repoRoot, dir);
   if (!existsSync(absolute)) return [];
   const out = [];
   for (const entry of readdirSync(absolute, { withFileTypes: true })) {
     const rel = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listMarkdownRecursive(rel));
+    if (entry.isDirectory()) out.push(...listMarkdownRecursive(repoRoot, rel));
     else if (entry.name.endsWith(".md")) out.push(rel);
   }
   return out;
@@ -57,7 +53,7 @@ function listMarkdownRecursive(dir) {
 
 // GitHub heading-slug algorithm: lowercase, drop characters that are not word/space/hyphen, then map
 // spaces to hyphens. Good enough for the simple, prose headings this doc set uses.
-function slug(heading) {
+export function slug(heading) {
   return heading
     .trim()
     .toLowerCase()
@@ -65,10 +61,15 @@ function slug(heading) {
     .replace(/\s+/g, "-");
 }
 
-const anchorCache = new Map();
+export function isWithinPath(root, candidate) {
+  const rootAbsolute = resolve(root);
+  const candidateAbsolute = resolve(candidate);
+  const relativePath = relative(rootAbsolute, candidateAbsolute);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
 
-function anchorsFor(absoluteFile) {
-  const cached = anchorCache.get(absoluteFile);
+function anchorsFor(context, absoluteFile) {
+  const cached = context.anchorCache.get(absoluteFile);
   if (cached !== undefined) return cached;
   const anchors = new Set();
   if (absoluteFile.endsWith(".md") && existsSync(absoluteFile)) {
@@ -77,58 +78,104 @@ function anchorsFor(absoluteFile) {
       if (match) anchors.add(slug(match[1]));
     }
   }
-  anchorCache.set(absoluteFile, anchors);
+  context.anchorCache.set(absoluteFile, anchors);
   return anchors;
 }
 
-function fail(file, link, reason) {
-  failures.push(`${file}: ${link} — ${reason}`);
+function fail(context, file, link, reason) {
+  context.failures.push(`${file}: ${link} — ${reason}`);
 }
 
-function checkAnchor(file, link, targetFile, anchor) {
+function checkAnchor(context, file, link, targetFile, displayTargetFile, anchor) {
   if (anchor === "" || !targetFile.endsWith(".md")) return;
-  if (!anchorsFor(targetFile).has(anchor)) {
-    fail(file, link, `anchor "#${anchor}" not found in ${relative(repoRoot, targetFile)}`);
+  if (!anchorsFor(context, targetFile).has(anchor)) {
+    fail(
+      context,
+      file,
+      link,
+      `anchor "#${anchor}" not found in ${relative(context.repoRootAbsolute, displayTargetFile)}`,
+    );
   }
 }
 
-function checkLink(file, absoluteDir, rawLink) {
+function containedTarget(context, file, link, targetFile) {
+  const targetAbsolute = resolve(targetFile);
+  if (!isWithinPath(context.repoRootAbsolute, targetAbsolute)) {
+    fail(context, file, link, "target path escapes repository");
+    return undefined;
+  }
+  if (!existsSync(targetAbsolute)) {
+    fail(context, file, link, "target path does not exist");
+    return undefined;
+  }
+  const targetReal = realpathSync(targetAbsolute);
+  if (!isWithinPath(context.repoRootReal, targetReal)) {
+    fail(context, file, link, "target realpath escapes repository");
+    return undefined;
+  }
+  return { targetAbsolute, targetReal };
+}
+
+function checkLink(context, file, absoluteDir, rawLink) {
   if (EXTERNAL_PREFIX.test(rawLink)) return;
   const [pathPart, anchor = ""] = rawLink.split("#");
   if (pathPart === "") {
-    checkAnchor(file, rawLink, join(repoRoot, file), anchor);
+    const currentFile = join(context.repoRootAbsolute, file);
+    checkAnchor(context, file, rawLink, realpathSync(currentFile), currentFile, anchor);
     return;
   }
-  const targetFile = resolve(absoluteDir, pathPart);
-  if (!existsSync(targetFile)) {
-    fail(file, rawLink, "target path does not exist");
-    return;
-  }
-  if (statSync(targetFile).isDirectory()) return;
-  checkAnchor(file, rawLink, targetFile, anchor);
+  const target = containedTarget(context, file, rawLink, resolve(absoluteDir, pathPart));
+  if (target === undefined) return;
+  if (statSync(target.targetReal).isDirectory()) return;
+  checkAnchor(context, file, rawLink, target.targetReal, target.targetAbsolute, anchor);
 }
 
-function checkFile(file) {
-  const absolute = join(repoRoot, file);
+function checkFile(context, file) {
+  const absolute = join(context.repoRootAbsolute, file);
   const absoluteDir = dirname(absolute);
   const content = readFileSync(absolute, "utf8");
   for (const match of content.matchAll(LINK_PATTERN)) {
-    checkLink(file, absoluteDir, match[1]);
+    checkLink(context, file, absoluteDir, match[1]);
   }
 }
 
-for (const file of DOC_FILES) {
-  checkFile(file);
-}
-
-if (failures.length > 0) {
-  console.error(`Editor documentation link check failed (${failures.length.toString()}):`);
-  for (const failure of failures) {
-    console.error(`  - ${failure}`);
+function reportResult({ failures, files, log, error }) {
+  if (failures.length > 0) {
+    error(`Editor documentation link check failed (${failures.length.toString()}):`);
+    for (const failure of failures) {
+      error(`  - ${failure}`);
+    }
+    return { ok: false, failures, fileCount: files.length };
   }
-  process.exit(1);
+
+  log(
+    `Editor documentation link check passed: ${files.length.toString()} files, all relative links and anchors resolve.`,
+  );
+  return { ok: true, failures, fileCount: files.length };
 }
 
-console.log(
-  `Editor documentation link check passed: ${DOC_FILES.length.toString()} files, all relative links and anchors resolve.`,
-);
+export function runEditorDocLinkCheck({
+  repoRoot = DEFAULT_REPO_ROOT,
+  files = collectDocFiles(repoRoot),
+  log = console.log,
+  error = console.error,
+} = {}) {
+  const repoRootAbsolute = resolve(repoRoot);
+  const context = {
+    repoRootAbsolute,
+    repoRootReal: realpathSync(repoRootAbsolute),
+    anchorCache: new Map(),
+    failures: [],
+  };
+
+  for (const file of files) {
+    checkFile(context, file);
+  }
+
+  return reportResult({ failures: context.failures, files, log, error });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const result = runEditorDocLinkCheck();
+  if (!result.ok) process.exit(1);
+}

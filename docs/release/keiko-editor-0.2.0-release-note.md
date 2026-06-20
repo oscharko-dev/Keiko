@@ -54,11 +54,12 @@ browser-tier workspace package (`@oscharko-dev/keiko-editor`) that a host can em
   through the Model Gateway, server-side only.
 - **The server language service is the single source of truth** for deterministic intelligence; the
   in-browser Monaco TypeScript worker is disabled for governed features.
-- **Content-free wire and audit.** Prompts, queries, retrieved excerpts, buffers, workspace roots,
-  secrets, and customer content never cross to the browser, telemetry, or evidence; only reviewable
-  insert text plus provenance labels, hashes, and counts do.
-- **No CDN and no browser egress.** Monaco core and workers are served same-origin; the server
-  Content-Security-Policy is not widened for the editor.
+- **Content-free provenance and audit.** The browser receives opened buffers and sends live editor text
+  plus request context to same-origin BFF routes. Prompts, retrieved excerpts, workspace roots, secrets,
+  telemetry, and persisted evidence do not expose those raw payloads back to the browser or evidence
+  artifacts; responses expose only reviewable insert text plus provenance labels, hashes, and counts.
+- **No CDN and no direct browser provider egress.** Monaco core and workers are served same-origin; the
+  server Content-Security-Policy is not widened for the editor.
 - **Aligned models only** for AI completion (no raw base-model fill-in-the-middle), with server-owned
   request-rate and token-budget ceilings (denial-of-wallet control).
 - **Reusable outside `keiko-ui`** — the package owns editor UI only and reaches all backend capability
@@ -70,9 +71,9 @@ browser-tier workspace package (`@oscharko-dev/keiko-editor`) that a host can em
   gates. Executing model-generated tests is untrusted-code execution, and Keiko does not yet OS-enforce
   network egress, so it is deferred until an enforced, deny-by-default egress boundary exists and is
   proven by an automated test (ADR-0042 D7). No release flow executes model-generated code.
-- **Deterministic language intelligence for languages other than TypeScript/JavaScript** (#1213). Other
-  languages get Monaco editing and language-agnostic AI completion, but no deterministic diagnostics,
-  hover, symbols, or formatting yet.
+- **Governed language intelligence for languages other than TypeScript/JavaScript** (#1213). Other
+  languages get Monaco editing only; completion, inline completion, diagnostics, hover, symbols, and
+  formatting require a registered provider.
 
 ## Operational notes and limitations
 
@@ -87,17 +88,26 @@ browser-tier workspace package (`@oscharko-dev/keiko-editor`) that a host can em
 
 ## Verification
 
-The editor's boundaries are verified by deterministic, offline gates in the required `ci` check:
+The editor's boundaries are verified by deterministic, offline gates split between required `ci` and the
+protected-branch release/smoke checks.
+
+Required `ci` covers:
 
 ```bash
 npm --workspace @oscharko-dev/keiko-editor run build
 npm --workspace @oscharko-dev/keiko-editor run typecheck
 npm --workspace @oscharko-dev/keiko-editor test
 npm run arch:check && npm run arch:check:negative
-npm run check:editor-bundle-size
-npm audit --audit-level=high
-npm run check:workspace-supply-chain
+npm run check:qi-supply-chain
+npm run check:editor-bundle-size -- --require-static-export
+npm run check:package-surface
+KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
+npm run test:coverage:quality
 ```
+
+Protected-branch release/smoke gates keep the security and supply-chain bar at least as strict by also
+running the high-severity dependency audit, SBOM generation, workspace supply-chain check, static-export
+dist scan, and release smoke commands before publishing release evidence.
 
 ## Documentation
 
