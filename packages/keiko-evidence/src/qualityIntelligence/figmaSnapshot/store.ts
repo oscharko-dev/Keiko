@@ -193,7 +193,23 @@ export interface FigmaSnapshotStore {
 export interface FigmaSnapshotStoreOptions {
   readonly fs?: WorkspaceFs;
   readonly randomSuffix?: () => string;
+  /**
+   * Count-based retention applied ONCE per store instance from the lazy sweep seam (Issue #1323
+   * AC4 — make retention operational). Figma snapshot records carry no retention policy id; they
+   * are evicted oldest-first by `fetchedAt` beyond `maxRecords`. Omitted → the conservative default
+   * cap ({@link DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS}) is used so a normal local set is never silently
+   * purged. A non-positive `maxRecords` disables retention entirely.
+   */
+  readonly retention?: { readonly maxRecords?: number } | undefined;
 }
+
+/**
+ * Conservative default Figma-snapshot retention cap. Chosen to match the QI `qi:standard-90d`
+ * profile's `maxRunArtifacts` (500) — the least-destructive value that still bounds growth, so
+ * wiring retention on by default does NOT surprise an operator with an aggressive small cap (ADR-0048).
+ * Deployments raise/lower it via `FigmaSnapshotStoreOptions.retention.maxRecords`.
+ */
+export const DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS = 500;
 
 // ─── Integrity hash (mirrors figmaSnapshotHash.ts — inlined so keiko-evidence does not depend
 //     on the private keiko-server package). MUST stay bit-identical with the server builder. ────
@@ -1108,6 +1124,7 @@ export function createNodeFigmaSnapshotStore(
 ): FigmaSnapshotStore {
   const qiDir = join(evidenceDir, QI_SUBDIR);
   const sideFileBase = join(qiDir, SIDE_FILE_SUBDIR);
+  const maxRecords = options.retention?.maxRecords ?? DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS;
   let swept = false;
   const ctx: StoreCtx = {
     qiDir,
@@ -1118,6 +1135,18 @@ export function createNodeFigmaSnapshotStore(
       if (swept) return;
       swept = true;
       sweepOrphanedSideDirs(qiDir, sideFileBase);
+      // Issue #1323 AC4 — make retention operational. Runs once per store instance (the sweep is
+      // already guarded against concurrent re-entry by `swept`). A non-positive cap disables it so
+      // a deployment can opt out without removing the call site. Best-effort: `ensureSwept` runs at
+      // the head of read ops too, so a transient eviction fault (e.g. rmSync EPERM/EBUSY) must never
+      // surface as a read error; it is swallowed and retried on the next store instance.
+      if (Number.isFinite(maxRecords) && maxRecords > 0) {
+        try {
+          enforceFigmaSnapshotRetention(evidenceDir, { maxRecords });
+        } catch {
+          // ignore; retention is best-effort and re-runs once per fresh store instance
+        }
+      }
     },
   };
   return {

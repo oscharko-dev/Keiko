@@ -17,6 +17,7 @@ import { join, resolve, sep } from "node:path";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { CANDIDATES_SUFFIX } from "./candidatesArtifact.js";
 import { deleteQualityIntelligenceCompanionArtifact } from "./companionStore.js";
+import type { QualityIntelligenceEvidenceManifest } from "./manifestSchema.js";
 import {
   getQualityIntelligenceRetentionProfile,
   type QualityIntelligenceRetentionProfile,
@@ -278,6 +279,96 @@ export function deleteQualityIntelligenceRun(
     removedCompanionSuffixes,
     auditEvent: { type: "qi:run:deleted", runId, status, removedCompanionSuffixes, at },
   };
+}
+
+// ─── Retention enforcement orchestration (Issue #1323 AC4) ──────────────────────────
+
+// Wires the pure decision (`applyQualityIntelligenceRetention`) to the hardened deletion primitive
+// (`deleteQualityIntelligenceRun`) over a real on-disk store, so retention policy ids become
+// OPERATIONAL — short-lived runs are purged deterministically rather than the id staying passive
+// metadata. This function performs side effects (it lists + loads + deletes) but stays leaf-clean:
+// it never calls the audit ledger. Each deletion receipt carries a `qi:run:deleted` audit event the
+// CALLER (the server bootstrap seam) forwards to its audit sink — keiko-evidence does not.
+//
+// Fail-safe by construction: a run only enters the retention snapshot when its manifest LOADS and
+// carries a PARSEABLE timestamp. A corrupt manifest, an integrity-gate failure (EvidenceReadError),
+// or an unparseable `completedAt ?? planAt` is SKIPPED — never purged on doubt. Unknown-policy and
+// newest-N retention are handled inside the pure decision.
+
+export interface QualityIntelligenceRetentionEnforcementOptions {
+  readonly evidenceDir: string;
+  // Injectable wall-clock seam for deterministic tests; defaults to Date.now at call time.
+  readonly now?: (() => number) | undefined;
+  // Server-owned companion suffixes forwarded to each deletion (e.g. `.review.json`); the
+  // evidence-owned `.candidates.json` is always swept by the primitive.
+  readonly companionSuffixes?: readonly string[] | undefined;
+  // Per-run side-file root (`<evidenceDir>/qi/`); when set, each purged run's `<root>/<runId>/` is
+  // removed by the primitive alongside the manifest.
+  readonly sideFileRoot?: string | undefined;
+}
+
+export interface QualityIntelligenceRetentionEnforcementResult {
+  readonly receipts: readonly QualityIntelligenceDeletionReceipt[];
+  readonly result: QualityIntelligenceRetentionResult;
+}
+
+// Load one run's manifest and project it onto a retention snapshot entry. Returns undefined when the
+// run MUST be skipped: load returned absent/corrupt (undefined or EvidenceReadError) or the
+// manifest's `completedAt ?? planAt` is not a parseable timestamp. Skipping means the run never
+// reaches the decision and is therefore never purged — the destructive-path fail-safe.
+function snapshotEntryForRun(
+  store: QualityIntelligenceLocalStore,
+  runId: string,
+): QualityIntelligenceRunSnapshotEntry | undefined {
+  let manifest: QualityIntelligenceEvidenceManifest | undefined;
+  try {
+    manifest = store.load(runId);
+  } catch {
+    // A corrupt / tampered / unreadable manifest fails closed: skip, never delete.
+    return undefined;
+  }
+  if (manifest === undefined) {
+    return undefined;
+  }
+  const recordedAt = Date.parse(manifest.completedAt ?? manifest.planAt);
+  if (Number.isNaN(recordedAt)) {
+    // No usable timestamp → cannot age the run out safely → retain.
+    return undefined;
+  }
+  return { runId, recordedAt, retentionPolicyId: manifest.retentionPolicyId };
+}
+
+function buildRetentionSnapshot(
+  store: QualityIntelligenceLocalStore,
+): readonly QualityIntelligenceRunSnapshotEntry[] {
+  const snapshot: QualityIntelligenceRunSnapshotEntry[] = [];
+  for (const runId of store.list()) {
+    const entry = snapshotEntryForRun(store, runId);
+    if (entry !== undefined) {
+      snapshot.push(entry);
+    }
+  }
+  return snapshot;
+}
+
+export function enforceQualityIntelligenceRetentionPolicy(
+  options: QualityIntelligenceRetentionEnforcementOptions,
+): QualityIntelligenceRetentionEnforcementResult {
+  const store = createNodeQualityIntelligenceLocalStore(options.evidenceDir);
+  const snapshot = buildRetentionSnapshot(store);
+  const result = applyQualityIntelligenceRetention({
+    snapshot,
+    now: options.now?.() ?? Date.now(),
+  });
+  const receipts = result.expiredRunIds.map((runId) =>
+    deleteQualityIntelligenceRun(runId, {
+      evidenceDir: options.evidenceDir,
+      now: options.now,
+      companionSuffixes: options.companionSuffixes,
+      sideFileRoot: options.sideFileRoot,
+    }),
+  );
+  return { receipts, result };
 }
 
 // ─── Corrupt-manifest quarantine ───────────────────────────────────────────────────

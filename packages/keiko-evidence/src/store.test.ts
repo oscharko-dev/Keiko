@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -258,5 +259,18 @@ describe("createNodeEvidenceStore", () => {
     // O_EXCL ("wx") refuses to open through the existing symlink → the put fails, never writing out.
     expect(() => store.put("run-1", '{"evil":true}')).toThrow(EvidenceWriteError);
     expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
+  });
+
+  it("creates the evidence base dir with mode 0o700 and written manifests with mode 0o600 (AC1)", () => {
+    // POSIX only: Windows does not expose UNIX permission bits via statSync.mode.
+    if (process.platform === "win32") return;
+    // Point at a not-yet-existing subdir so prepareBaseDir's mkdirSync is what CREATES the
+    // directory: freshDir() (mkdtemp) is always 0o700 and would mask a regression where the
+    // `mode: 0o700` is dropped from the recursive mkdir.
+    const base = join(freshDir(), "evidence");
+    const store = createNodeEvidenceStore(base);
+    const manifestPath = store.put("run-perms", '{"evidenceSchemaVersion":"1"}');
+    expect(statSync(base).mode & 0o777).toBe(0o700);
+    expect(statSync(manifestPath).mode & 0o777).toBe(0o600);
   });
 });

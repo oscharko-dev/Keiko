@@ -65,6 +65,10 @@ import { createProviderSecretResolver, type ProviderSecretResolver } from "./cre
 import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
 import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
+import {
+  enforceQiRetentionAtStartup,
+  type QiRetentionAuditSink,
+} from "./qualityIntelligence/retentionEnforcement.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -207,6 +211,11 @@ export interface BuildHandlerDepsOptions {
   readonly figmaCredentialTester?:
     | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
     | undefined;
+  // Issue #1323 AC4 — QI retention runs once at bootstrap. These optional seams let tests assert
+  // the forwarded deletion-audit events and inject a deterministic clock; production leaves them
+  // undefined (default no-op sink + wall-clock). See qualityIntelligence/retentionEnforcement.ts.
+  readonly qiRetentionAuditSink?: QiRetentionAuditSink | undefined;
+  readonly qiRetentionNow?: (() => number) | undefined;
 }
 
 function envModelToken(modelId: string): string {
@@ -695,10 +704,24 @@ function loadRuntimeGatewayConfig(
   return { ...resolved, storagePath: effectiveConfigPath };
 }
 
+// Resolve the evidence dir AND run QI run-retention ONCE per server instance at bootstrap (Issue
+// #1323 AC4). Lazy, no timer (a setInterval would race the filesystem-backed store). Best-effort:
+// retention never throws into construction (mirrors migrateLocalConfigCredentials). Short-lived runs
+// past their retention policy are purged deterministically rather than the policy id staying passive.
+function resolveEvidenceDirAndEnforceRetention(options: BuildHandlerDepsOptions): string {
+  const evidenceDir = resolveEvidenceDir(options.evidenceDir, options.env);
+  enforceQiRetentionAtStartup({
+    evidenceDir,
+    now: options.qiRetentionNow,
+    auditSink: options.qiRetentionAuditSink,
+  });
+  return evidenceDir;
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
   const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
-  const resolvedEvidenceDir = resolveEvidenceDir(options.evidenceDir, options.env);
+  const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
   const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
     options,
     runtimeConfigPath,
