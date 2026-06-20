@@ -1,3 +1,5 @@
+/* global document, localStorage, window */
+/* eslint-disable @typescript-eslint/explicit-function-return-type */
 /* ============================================================
    Keiko DS — appearance + contrast control
    Upgrades the legacy 2-way theme toggle into a first-class
@@ -23,18 +25,40 @@
     high: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 3.6 a8.4 8.4 0 0 0 0 16.8 z" fill="currentColor" stroke="none"/></svg>'
   };
 
+  function safeGet(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
   function readTheme() {
-    try { var t = localStorage.getItem(THEME_KEY); if (t === "light" || t === "dark") return t; } catch (e) {}
+    var t = safeGet(THEME_KEY);
+    if (t === "light" || t === "dark") return t;
     return root.dataset.theme === "light" ? "light" : "dark";
   }
+
   function readContrast() {
-    try { var c = localStorage.getItem(CONTRAST_KEY); if (c === "more" || c === "auto") return c; } catch (e) {}
+    var c = safeGet(CONTRAST_KEY);
+    if (c === "more" || c === "auto") return c;
     return root.dataset.hc === "more" ? "more" : "auto";
   }
-  function store(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+
+  function store(key, val) {
+    try {
+      localStorage.setItem(key, val);
+    } catch {
+      return;
+    }
+  }
 
   var osHC = null;
-  try { osHC = window.matchMedia("(prefers-contrast: more)"); } catch (e) {}
+  try {
+    osHC = window.matchMedia("(prefers-contrast: more)");
+  } catch {
+    osHC = null;
+  }
 
   function applyTheme(t) {
     root.dataset.theme = t;
@@ -58,8 +82,7 @@
     group.className = "tc-seg";
     group.setAttribute("role", "radiogroup");
     group.setAttribute("aria-label", ariaLabel);
-    row.appendChild(label);
-    row.appendChild(group);
+    row.appendChild(label); row.appendChild(group);
 
     var buttons = [];
     opts.forEach(function (o) {
@@ -91,7 +114,7 @@
     group.addEventListener("keydown", function (e) {
       var idx = buttons.findIndex(function (b) { return b.getAttribute("aria-checked") === "true"; });
       if (idx < 0) idx = 0;
-      var next = idx;
+      var next;
       if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % buttons.length;
       else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + buttons.length) % buttons.length;
       else if (e.key === "Home") next = 0;
