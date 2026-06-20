@@ -88,6 +88,11 @@ function sha256OfJson(value: unknown): string {
   return sha256Hex(JSON.stringify(value));
 }
 
+type PromptEnhancementEvidenceManifestWithoutHashes = Omit<
+  PromptEnhancementEvidenceManifest,
+  "integrityHashes"
+>;
+
 function buildIntegrityHashes(
   enhancedOutput: {
     readonly enhancedPromptId: string;
@@ -99,12 +104,48 @@ function buildIntegrityHashes(
     readonly assumptions: readonly string[];
   },
   candidateScores: readonly PromptEnhancementCandidateScoreRow[],
+  record: PromptEnhancementEvidenceManifestWithoutHashes,
 ): PromptEnhancementIntegrityHashes {
   return {
     enhancedOutput: sha256OfJson(enhancedOutput),
     appliedRules: sha256OfJson(appliedRules),
     candidateScores: sha256OfJson(candidateScores),
+    record: sha256OfJson(record),
   };
+}
+
+function buildManifestIntegrityHashes(
+  manifest: PromptEnhancementEvidenceManifestWithoutHashes,
+): PromptEnhancementIntegrityHashes {
+  return buildIntegrityHashes(
+    {
+      enhancedPromptId: manifest.enhancedPromptId,
+      enhancedPromptTextRedacted: manifest.enhancedPromptTextRedacted,
+    },
+    {
+      appliedSafetyRules: manifest.appliedSafetyRules,
+      appliedGroundingDirectives: manifest.appliedGroundingDirectives,
+      assumptions: manifest.assumptions,
+    },
+    manifest.candidateScores,
+    manifest,
+  );
+}
+
+function withoutIntegrityHashes(
+  manifest: PromptEnhancementEvidenceManifest,
+): PromptEnhancementEvidenceManifestWithoutHashes {
+  const record = { ...manifest } as {
+    integrityHashes?: PromptEnhancementEvidenceManifest["integrityHashes"];
+  } & PromptEnhancementEvidenceManifestWithoutHashes;
+  delete record.integrityHashes;
+  return record;
+}
+
+function withRecomputedIntegrityHashes(
+  manifest: PromptEnhancementEvidenceManifestWithoutHashes,
+): PromptEnhancementEvidenceManifest {
+  return { ...manifest, integrityHashes: buildManifestIntegrityHashes(manifest) };
 }
 
 function truncate(value: string, max: number): string {
@@ -119,52 +160,45 @@ function truncate(value: string, max: number): string {
  * assertions.
  */
 interface RedactedTextFields {
+  readonly originalInputRedacted: string;
   readonly inputExcerptRedacted: string;
   readonly enhancedPromptTextRedacted: string;
   readonly appliedSafetyRules: readonly string[];
   readonly assumptions: readonly string[];
+  readonly modelMetadata: PromptEnhancementModelMetadata;
 }
 
 function assembleManifest(
   input: PromptEnhancementRecordInput,
   redacted: RedactedTextFields,
   summary: PromptEnhancementEvidenceManifest["redactionSummary"],
-  inputFingerprintSha256: string,
+  inputRedactedFingerprintSha256: string,
 ): PromptEnhancementEvidenceManifest {
-  const enhancedOutput = {
-    enhancedPromptId: input.enhancedPromptId,
-    enhancedPromptTextRedacted: redacted.enhancedPromptTextRedacted,
-  };
-  const appliedRules = {
-    appliedSafetyRules: redacted.appliedSafetyRules,
-    appliedGroundingDirectives: input.appliedGroundingDirectives,
-    assumptions: redacted.assumptions,
-  };
-  return {
+  const manifestWithoutHashes: PromptEnhancementEvidenceManifestWithoutHashes = {
     peEvidenceSchemaVersion: PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
     runId: input.runId,
     recordedAt: input.recordedAt,
     requestId: input.requestId,
     status: input.status,
-    inputFingerprintSha256,
+    inputRedactedFingerprintSha256,
     inputExcerptRedacted: redacted.inputExcerptRedacted,
     enhancedPromptId: input.enhancedPromptId,
     enhancedPromptTextRedacted: redacted.enhancedPromptTextRedacted,
-    appliedSafetyRules: appliedRules.appliedSafetyRules,
-    appliedGroundingDirectives: appliedRules.appliedGroundingDirectives,
-    assumptions: appliedRules.assumptions,
+    appliedSafetyRules: redacted.appliedSafetyRules,
+    appliedGroundingDirectives: input.appliedGroundingDirectives,
+    assumptions: redacted.assumptions,
     candidateScores: input.candidateScores,
     safety: input.safety,
-    modelMetadata: input.modelMetadata,
+    modelMetadata: redacted.modelMetadata,
     redactionSummary: summary,
-    integrityHashes: buildIntegrityHashes(enhancedOutput, appliedRules, input.candidateScores),
     totals: {
       candidateScores: input.candidateScores.length,
-      appliedSafetyRules: appliedRules.appliedSafetyRules.length,
-      assumptions: appliedRules.assumptions.length,
+      appliedSafetyRules: redacted.appliedSafetyRules.length,
+      assumptions: redacted.assumptions.length,
       safetyFindings: input.safety.findingCodes.length,
     },
   };
+  return withRecomputedIntegrityHashes(manifestWithoutHashes);
 }
 
 export function buildPromptEnhancementEvidenceManifest(
@@ -173,20 +207,73 @@ export function buildPromptEnhancementEvidenceManifest(
 ): { readonly manifest: PromptEnhancementEvidenceManifest } {
   assertValidRunId(input.runId);
   const excerptMax = input.inputExcerptMaxChars ?? DEFAULT_INPUT_EXCERPT_MAX_CHARS;
-  const inputFingerprintSha256 = sha256Hex(input.originalInput);
   // Redact every free-text leaf BEFORE assembly or hashing (redaction by construction). Ids, enums,
   // and numbers (runId, requestId, candidate ids/profiles, scores, finding codes) carry no free text
   // and stay outside the redactor — matching the QI store's redaction scope.
   const { redacted, summary } = redactPromptEnhancementEvidence(
     {
-      inputExcerptRedacted: truncate(input.originalInput, excerptMax),
+      originalInputRedacted: input.originalInput,
+      inputExcerptRedacted: "",
       enhancedPromptTextRedacted: input.enhancedPromptText,
       appliedSafetyRules: input.appliedSafetyRules,
       assumptions: input.assumptions,
+      modelMetadata: input.modelMetadata,
     },
     redaction,
   );
-  return { manifest: assembleManifest(input, redacted, summary, inputFingerprintSha256) };
+  const inputExcerptRedacted = truncate(redacted.originalInputRedacted, excerptMax);
+  const inputRedactedFingerprintSha256 = sha256Hex(redacted.originalInputRedacted);
+  const manifest = assembleManifest(
+    input,
+    { ...redacted, inputExcerptRedacted },
+    summary,
+    inputRedactedFingerprintSha256,
+  );
+  assertManifestWriteReady(manifest);
+  return { manifest };
+}
+
+function foldRedactionSummary(
+  base: PromptEnhancementEvidenceManifest["redactionSummary"],
+  add: PromptEnhancementEvidenceManifest["redactionSummary"],
+): PromptEnhancementEvidenceManifest["redactionSummary"] {
+  const patternsMatched: Record<string, number> = { ...base.patternsMatched };
+  for (const [key, count] of Object.entries(add.patternsMatched)) {
+    patternsMatched[key] = (patternsMatched[key] ?? 0) + count;
+  }
+  return {
+    totalStringsScanned: base.totalStringsScanned + add.totalStringsScanned,
+    stringsRedacted: base.stringsRedacted + add.stringsRedacted,
+    patternsMatched,
+  };
+}
+
+function assertManifestWriteReady(manifest: PromptEnhancementEvidenceManifest): void {
+  const validation = validatePromptEnhancementEvidenceManifest(manifest);
+  if (!validation.ok) {
+    throw new EvidenceWriteError(`PE manifest schema invalid: ${validation.reason ?? "unknown"}`);
+  }
+  try {
+    assertManifestIntegrity(manifest);
+  } catch (error) {
+    throw new EvidenceWriteError(
+      error instanceof Error ? error.message : "PE manifest integrity invalid",
+    );
+  }
+}
+
+function sanitizeManifestForPersistence(
+  manifest: PromptEnhancementEvidenceManifest,
+): PromptEnhancementEvidenceManifest {
+  assertValidRunId(manifest.runId);
+  const { redacted, summary } = redactPromptEnhancementEvidence(withoutIntegrityHashes(manifest));
+  const redactionSummary =
+    summary.stringsRedacted > 0
+      ? foldRedactionSummary(redacted.redactionSummary, summary)
+      : redacted.redactionSummary;
+  const sanitized = withRecomputedIntegrityHashes({ ...redacted, redactionSummary });
+  assertManifestWriteReady(sanitized);
+  return sanitized;
 }
 
 // ─── Port ──────────────────────────────────────────────────────────────────────────
@@ -203,13 +290,16 @@ export function createInMemoryPromptEnhancementLocalStore(): PromptEnhancementLo
   const data = new Map<string, PromptEnhancementEvidenceManifest>();
   return {
     record: (manifest: PromptEnhancementEvidenceManifest): string => {
-      assertValidRunId(manifest.runId);
-      data.set(manifest.runId, manifest);
-      return `${manifest.runId}${PE_MANIFEST_SUFFIX}`;
+      const sanitized = sanitizeManifestForPersistence(manifest);
+      data.set(sanitized.runId, sanitized);
+      return `${sanitized.runId}${PE_MANIFEST_SUFFIX}`;
     },
     load: (runId: string): PromptEnhancementEvidenceManifest | undefined => {
       assertValidRunId(runId);
-      return data.get(runId);
+      const manifest = data.get(runId);
+      return manifest === undefined
+        ? undefined
+        : parseAndValidateManifest(JSON.stringify(manifest));
     },
     list: (): readonly string[] => [...data.keys()].sort(),
     location: (runId: string): string => {
@@ -244,18 +334,7 @@ function assertManifestIntegrity(manifest: PromptEnhancementEvidenceManifest): v
       );
     }
   }
-  const expected = buildIntegrityHashes(
-    {
-      enhancedPromptId: manifest.enhancedPromptId,
-      enhancedPromptTextRedacted: manifest.enhancedPromptTextRedacted,
-    },
-    {
-      appliedSafetyRules: manifest.appliedSafetyRules,
-      appliedGroundingDirectives: manifest.appliedGroundingDirectives,
-      assumptions: manifest.assumptions,
-    },
-    manifest.candidateScores,
-  );
+  const expected = buildManifestIntegrityHashes(withoutIntegrityHashes(manifest));
   assertHashMatches(
     "enhancedOutput",
     expected.enhancedOutput,
@@ -267,6 +346,7 @@ function assertManifestIntegrity(manifest: PromptEnhancementEvidenceManifest): v
     expected.candidateScores,
     manifest.integrityHashes.candidateScores,
   );
+  assertHashMatches("record", expected.record, manifest.integrityHashes.record);
 }
 
 function parseAndValidateManifest(json: string): PromptEnhancementEvidenceManifest {
@@ -395,11 +475,11 @@ function recordManifest(
   randomSuffix: () => string,
   manifest: PromptEnhancementEvidenceManifest,
 ): string {
-  assertValidRunId(manifest.runId);
+  const sanitized = sanitizeManifestForPersistence(manifest);
   const realBase = prepareBaseDir(baseDir, fs);
-  const target = lexicalManifestPath(manifest.runId, realBase);
+  const target = lexicalManifestPath(sanitized.runId, realBase);
   assertWritableManifestEntry(target, fs);
-  atomicWriteManifest(target, JSON.stringify(manifest), randomSuffix);
+  atomicWriteManifest(target, JSON.stringify(sanitized), randomSuffix);
   return target;
 }
 

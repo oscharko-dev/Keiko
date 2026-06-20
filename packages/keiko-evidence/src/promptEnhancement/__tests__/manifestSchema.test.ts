@@ -45,7 +45,7 @@ describe("validatePromptEnhancementEvidenceManifest", () => {
   it("rejects an unexpected schema version", () => {
     const result = validatePromptEnhancementEvidenceManifest({
       ...validManifest(),
-      peEvidenceSchemaVersion: 2,
+      peEvidenceSchemaVersion: 1,
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("peEvidenceSchemaVersion");
@@ -66,7 +66,26 @@ describe("validatePromptEnhancementEvidenceManifest", () => {
     expect(result.reason).toBe("invalid status");
   });
 
+  it("rejects inconsistent status and safety records", () => {
+    const result = validatePromptEnhancementEvidenceManifest({
+      ...validManifest(),
+      status: "requires-human-review",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("review");
+  });
+
+  it("rejects malformed integrity hashes", () => {
+    const manifest = validManifest();
+    const result = validatePromptEnhancementEvidenceManifest({
+      ...manifest,
+      integrityHashes: { ...(manifest.integrityHashes as object), record: "not-a-hash" },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("integrityHashes.record");
+  });
+
   it("exposes the current schema version literal", () => {
-    expect(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION).toBe(1);
+    expect(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION).toBe(2);
   });
 });

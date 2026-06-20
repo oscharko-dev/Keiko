@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  asEnhancedPromptId,
   isPromptCandidateRejectionReason,
   isPromptCriticDimension,
   PROMPT_CANDIDATE_REJECTION_REASONS,
@@ -9,6 +10,7 @@ import {
   validatePromptCandidateSelection,
   type PromptCandidateScorecard,
   type PromptCandidateSelection,
+  type PromptSafetyAssessment,
 } from "./index.js";
 
 function validScorecard(
@@ -29,12 +31,27 @@ function validScorecard(
   };
 }
 
+function validSafetyAssessment(promptId = "req-1-technical"): PromptSafetyAssessment {
+  return {
+    schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    promptId: asEnhancedPromptId(promptId),
+    decision: "accepted",
+    requiresHumanReview: false,
+    verificationStatus: "passed",
+    findings: [],
+    leastPrivilege: ["no-tool-execution", "no-file-write", "no-network-egress", "no-secret-access"],
+  };
+}
+
 function validSelection(): PromptCandidateSelection {
   const winner = validScorecard();
+  const winnerSafetyAssessment = validSafetyAssessment(winner.candidateId);
   return {
     schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
     winner,
     ranked: [winner],
+    winnerSafetyAssessment,
+    rankedSafetyAssessments: [winnerSafetyAssessment],
     rejected: [
       {
         candidateId: "req-1-fast",
@@ -75,6 +92,7 @@ describe("prompt-enhancer-critic constants and guards", () => {
       expect(isPromptCandidateRejectionReason(reason)).toBe(true);
     }
     expect(PROMPT_CANDIDATE_REJECTION_REASONS).toContain("lower-tie-break-rank");
+    expect(PROMPT_CANDIDATE_REJECTION_REASONS).toContain("safety-validation-failed");
     expect(isPromptCandidateRejectionReason("unknown")).toBe(false);
   });
 });
@@ -140,7 +158,13 @@ describe("validatePromptCandidateSelection", () => {
   it("rejects when the winner is not the first ranked candidate", () => {
     const selection = validSelection();
     const other = validScorecard("req-1-precise");
-    expect(validatePromptCandidateSelection({ ...selection, ranked: [other] }).ok).toBe(false);
+    expect(
+      validatePromptCandidateSelection({
+        ...selection,
+        ranked: [other],
+        rankedSafetyAssessments: [validSafetyAssessment(other.candidateId)],
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects an empty ranked list", () => {
@@ -187,6 +211,19 @@ describe("validatePromptCandidateSelection", () => {
     expect(validatePromptCandidateSelection({ ...selection, rejected }).ok).toBe(true);
   });
 
+  it("accepts the safety-validation-failed rejection reason", () => {
+    const selection = validSelection();
+    const rejected = [
+      {
+        candidateId: "req-1-fast",
+        profile: "fast",
+        aggregateScore: null,
+        reason: "safety-validation-failed",
+      },
+    ];
+    expect(validatePromptCandidateSelection({ ...selection, rejected }).ok).toBe(true);
+  });
+
   it("rejects totals that exceed declared bounds", () => {
     const selection = validSelection();
     expect(validatePromptCandidateSelection({ ...selection, iterations: 4 }).ok).toBe(false);
@@ -206,6 +243,8 @@ describe("validatePromptCandidateSelection", () => {
         ...validSelection(),
         winner,
         ranked: [altered],
+        winnerSafetyAssessment: validSafetyAssessment(winner.candidateId),
+        rankedSafetyAssessments: [validSafetyAssessment(altered.candidateId)],
       }).ok,
     ).toBe(false);
   });
@@ -218,6 +257,11 @@ describe("validatePromptCandidateSelection", () => {
         ...validSelection(),
         winner: lower,
         ranked: [lower, higher],
+        winnerSafetyAssessment: validSafetyAssessment(lower.candidateId),
+        rankedSafetyAssessments: [
+          validSafetyAssessment(lower.candidateId),
+          validSafetyAssessment(higher.candidateId),
+        ],
         candidatesConsidered: 2,
       }).ok,
     ).toBe(false);
@@ -226,6 +270,54 @@ describe("validatePromptCandidateSelection", () => {
   it("rejects a candidatesConsidered total that does not match ranked candidates", () => {
     expect(
       validatePromptCandidateSelection({ ...validSelection(), candidatesConsidered: 2 }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects ranked safety assessments that are missing, rejected, or out of order", () => {
+    const selection = validSelection();
+    expect(validatePromptCandidateSelection({ ...selection, rankedSafetyAssessments: [] }).ok).toBe(
+      false,
+    );
+    expect(
+      validatePromptCandidateSelection({
+        ...selection,
+        rankedSafetyAssessments: [validSafetyAssessment("req-1-other")],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validatePromptCandidateSelection({
+        ...selection,
+        winnerSafetyAssessment: {
+          ...validSafetyAssessment(selection.winner.candidateId),
+          decision: "rejected",
+          verificationStatus: "failed",
+          findings: [
+            {
+              code: "missing-untrusted-marker",
+              ruleId: "untrusted-content-marked",
+              severity: "blocking",
+              detail:
+                "The grounding plan does not mark external and retrieved content as untrusted.",
+            },
+          ],
+        },
+        rankedSafetyAssessments: [
+          {
+            ...validSafetyAssessment(selection.winner.candidateId),
+            decision: "rejected",
+            verificationStatus: "failed",
+            findings: [
+              {
+                code: "missing-untrusted-marker",
+                ruleId: "untrusted-content-marked",
+                severity: "blocking",
+                detail:
+                  "The grounding plan does not mark external and retrieved content as untrusted.",
+              },
+            ],
+          },
+        ],
+      }).ok,
     ).toBe(false);
   });
 });

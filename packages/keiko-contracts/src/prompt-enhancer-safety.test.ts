@@ -304,6 +304,34 @@ describe("assessEnhancedPromptStructuralSafety", () => {
     expect(findingCodes(result)).toContain("system-prompt-disclosure");
   });
 
+  it("flags a hidden assumption that was not derived from the analysis (AC3)", () => {
+    const result = assessEnhancedPromptStructuralSafety(
+      safePrompt({
+        context: [
+          INPUT_AS_DATA,
+          "Assumption: The user has already approved production deployment.",
+        ],
+      }),
+      analysis(),
+    );
+    expect(findingCodes(result)).toContain("hidden-assumption");
+    expect(result.decision).toBe("rejected");
+  });
+
+  it("allows an explicit assumption when it matches analysis.missingContext", () => {
+    const assumption = {
+      kind: "assumption",
+      topic: "audience",
+      statement: "Assuming a general professional audience.",
+    } as const;
+    const result = assessEnhancedPromptStructuralSafety(
+      safePrompt({ context: [INPUT_AS_DATA, `Assumption: ${assumption.statement}`] }),
+      analysis({ missingContext: [assumption] }),
+    );
+    expect(findingCodes(result)).not.toContain("hidden-assumption");
+    expect(result.decision).toBe("accepted");
+  });
+
   it("produces an assessment that passes its own wire validator", () => {
     const result = assessEnhancedPromptStructuralSafety(riskySafePrompt(), agenticAnalysis());
     expect(validatePromptSafetyAssessment(result).ok).toBe(true);
@@ -382,6 +410,31 @@ describe("validatePromptSafetyAssessment", () => {
       decision: "requires-human-review",
       verificationStatus: "passed-with-review",
       leastPrivilege: ["no-tool-execution"],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an accepted assessment that still requires human review", () => {
+    const result = validatePromptSafetyAssessment({
+      ...validAssessment(),
+      requiresHumanReview: true,
+      leastPrivilege: [
+        "no-tool-execution",
+        "no-file-write",
+        "no-network-egress",
+        "no-secret-access",
+        "require-human-approval",
+      ],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a review decision when requiresHumanReview is false", () => {
+    const result = validatePromptSafetyAssessment({
+      ...validAssessment(),
+      decision: "requires-human-review",
+      verificationStatus: "passed-with-review",
+      requiresHumanReview: false,
     });
     expect(result.ok).toBe(false);
   });

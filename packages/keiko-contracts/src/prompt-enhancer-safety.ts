@@ -306,6 +306,7 @@ const TRUSTED_DISCLOSURE_CUES: readonly string[] = [
   "reveal your system prompt",
   "disclose the system prompt",
 ];
+const TRUSTED_ASSUMPTION_PREFIX = "Assumption: ";
 
 // ─── Human-review derivation ──────────────────────────────────────────────────────────
 /**
@@ -420,8 +421,8 @@ function collectStructuralFindings(
   ];
 }
 
-function collectProhibitedTrustedFindings(prompt: EnhancedPrompt): PromptSafetyFinding[] {
-  const trusted = [
+function trustedEntries(prompt: EnhancedPrompt): readonly string[] {
+  return [
     prompt.role,
     prompt.goal,
     ...prompt.context,
@@ -431,9 +432,31 @@ function collectProhibitedTrustedFindings(prompt: EnhancedPrompt): PromptSafetyF
     ...prompt.qualityCriteria,
     ...prompt.uncertaintyHandling,
     ...prompt.safetyRules,
-  ]
-    .join(" \n ")
-    .toLowerCase();
+  ];
+}
+
+function collectHiddenAssumptionFindings(
+  prompt: EnhancedPrompt,
+  analysis: PromptTaskAnalysis,
+): PromptSafetyFinding[] {
+  const allowed = new Set(
+    analysis.missingContext
+      .filter((item) => item.kind === "assumption")
+      .map((item) => `${TRUSTED_ASSUMPTION_PREFIX}${item.statement}`),
+  );
+  const hasHiddenAssumption = trustedEntries(prompt)
+    .flatMap((entry) => entry.split(/\r?\n/u).map((line) => line.trim()))
+    .some((entry) => entry.startsWith(TRUSTED_ASSUMPTION_PREFIX) && !allowed.has(entry));
+  return hasHiddenAssumption
+    ? [finding("hidden-assumption", "no-manipulative-or-injected-instructions", "blocking")]
+    : [];
+}
+
+function collectProhibitedTrustedFindings(
+  prompt: EnhancedPrompt,
+  analysis: PromptTaskAnalysis,
+): PromptSafetyFinding[] {
+  const trusted = [...trustedEntries(prompt)].join(" \n ").toLowerCase();
   const findings: PromptSafetyFinding[] = [];
   if (containsAny(trusted, TRUSTED_AUTHORITY_GRANT_CUES)) {
     findings.push(finding("capability-grant-claim", "no-authority-grant", "blocking"));
@@ -452,6 +475,7 @@ function collectProhibitedTrustedFindings(prompt: EnhancedPrompt): PromptSafetyF
       finding("system-prompt-disclosure", "no-secret-or-system-prompt-disclosure", "blocking"),
     );
   }
+  findings.push(...collectHiddenAssumptionFindings(prompt, analysis));
   return findings;
 }
 
@@ -469,7 +493,7 @@ export function assessEnhancedPromptStructuralSafety(
   const requiresReview = requiresHumanReviewForAnalysis(analysis);
   const findings = [
     ...collectStructuralFindings(prompt, requiresReview),
-    ...collectProhibitedTrustedFindings(prompt),
+    ...collectProhibitedTrustedFindings(prompt, analysis),
   ];
   const { decision, verificationStatus } = summarizePromptSafety(findings, requiresReview);
   return {
@@ -603,6 +627,14 @@ function validateHumanReviewConstraint(
   leastPrivilegeOk: boolean,
   errors: string[],
 ): void {
+  if (input.decision === "accepted" && input.requiresHumanReview !== false) {
+    errors.push("assessment.decision accepted requires requiresHumanReview to be false");
+  }
+  if (input.decision === "requires-human-review" && input.requiresHumanReview !== true) {
+    errors.push(
+      "assessment.decision requires-human-review requires requiresHumanReview to be true",
+    );
+  }
   if (
     input.requiresHumanReview === true &&
     leastPrivilegeOk &&

@@ -62,6 +62,10 @@ import {
   type PromptCriticDimension,
   type PromptCriticDimensionScore,
 } from "./prompt-enhancer-critic.js";
+import {
+  validatePromptSafetyAssessment,
+  type PromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
 
 // ─── Result types ────────────────────────────────────────────────────────────────
 export interface ValidationOk<T> {
@@ -823,6 +827,8 @@ const SELECTION_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
   "winner",
   "ranked",
+  "winnerSafetyAssessment",
+  "rankedSafetyAssessments",
   "rejected",
   "bounds",
   "iterations",
@@ -994,9 +1000,52 @@ function sameScorecard(left: PromptCandidateScorecard, right: PromptCandidateSco
   );
 }
 
+function sameSafetyFinding(
+  left: PromptSafetyAssessment["findings"][number],
+  right: PromptSafetyAssessment["findings"][number],
+): boolean {
+  return (
+    left.code === right.code &&
+    left.ruleId === right.ruleId &&
+    left.severity === right.severity &&
+    left.detail === right.detail
+  );
+}
+
+function sameSafetyAssessment(
+  left: PromptSafetyAssessment,
+  right: PromptSafetyAssessment,
+): boolean {
+  return (
+    left.promptId === right.promptId &&
+    left.decision === right.decision &&
+    left.requiresHumanReview === right.requiresHumanReview &&
+    left.verificationStatus === right.verificationStatus &&
+    arraysEqual(left.leastPrivilege, right.leastPrivilege) &&
+    left.findings.length === right.findings.length &&
+    left.findings.every((entry, index) => {
+      const other = right.findings[index];
+      return other !== undefined && sameSafetyFinding(entry, other);
+    })
+  );
+}
+
 function toValidScorecard(value: unknown): PromptCandidateScorecard | undefined {
   const result = validatePromptCandidateScorecard(value);
   return result.ok ? result.value : undefined;
+}
+
+function collectSafetyAssessmentErrors(
+  value: unknown,
+  label: string,
+  errors: string[],
+): PromptSafetyAssessment | undefined {
+  const result = validatePromptSafetyAssessment(value);
+  if (!result.ok) {
+    errors.push(`${label} must be a valid PromptSafetyAssessment`);
+    return undefined;
+  }
+  return result.value;
 }
 
 function collectRankedErrors(ranked: unknown, winner: unknown, errors: string[]): void {
@@ -1032,6 +1081,81 @@ function collectRankedErrors(ranked: unknown, winner: unknown, errors: string[])
       errors.push("selection.ranked must be sorted in deterministic rank order");
     }
   });
+}
+
+function collectRankedSafetyAssessmentListErrors(
+  ranked: unknown,
+  assessments: unknown,
+  errors: string[],
+): readonly (PromptSafetyAssessment | undefined)[] {
+  if (!Array.isArray(assessments)) {
+    errors.push("selection.rankedSafetyAssessments must be an array");
+    return [];
+  }
+  if (Array.isArray(ranked) && assessments.length !== ranked.length) {
+    errors.push("selection.rankedSafetyAssessments must match selection.ranked length");
+  }
+  const validatedAssessments = assessments.map((entry: unknown, index) =>
+    collectSafetyAssessmentErrors(
+      entry,
+      `selection.rankedSafetyAssessments[${String(index)}]`,
+      errors,
+    ),
+  );
+  validatedAssessments.forEach((assessment, index) => {
+    if (assessment === undefined) return;
+    if (assessment.decision === "rejected") {
+      errors.push("selection.rankedSafetyAssessments must not include rejected assessments");
+    }
+    const rankedEntry = Array.isArray(ranked) ? toValidScorecard(ranked[index]) : undefined;
+    if (rankedEntry !== undefined && assessment.promptId !== rankedEntry.candidateId) {
+      errors.push(
+        `selection.rankedSafetyAssessments[${String(index)}].promptId must match the ranked candidateId`,
+      );
+    }
+  });
+  return validatedAssessments;
+}
+
+function collectWinnerSafetyAssessmentErrors(
+  input: Record<string, unknown>,
+  firstAssessment: PromptSafetyAssessment | undefined,
+  errors: string[],
+): void {
+  const winnerAssessment = collectSafetyAssessmentErrors(
+    input.winnerSafetyAssessment,
+    "selection.winnerSafetyAssessment",
+    errors,
+  );
+  if (
+    winnerAssessment !== undefined &&
+    firstAssessment !== undefined &&
+    !sameSafetyAssessment(winnerAssessment, firstAssessment)
+  ) {
+    errors.push("selection.winnerSafetyAssessment must exactly match the first ranked assessment");
+  }
+  const winner = toValidScorecard(input.winner);
+  if (
+    winner !== undefined &&
+    winnerAssessment !== undefined &&
+    winnerAssessment.promptId !== winner.candidateId
+  ) {
+    errors.push(
+      "selection.winnerSafetyAssessment.promptId must match selection.winner.candidateId",
+    );
+  }
+}
+
+function collectRankedSafetyAssessmentErrors(
+  input: Record<string, unknown>,
+  errors: string[],
+): void {
+  const validatedAssessments = collectRankedSafetyAssessmentListErrors(
+    input.ranked,
+    input.rankedSafetyAssessments,
+    errors,
+  );
+  collectWinnerSafetyAssessmentErrors(input, validatedAssessments[0], errors);
 }
 
 function collectRejectedListErrors(rejected: unknown, errors: string[]): void {
@@ -1116,6 +1240,7 @@ export function validatePromptCandidateSelection(
   }
   collectScorecardErrors(input.winner, "selection.winner", errors);
   collectRankedErrors(input.ranked, input.winner, errors);
+  collectRankedSafetyAssessmentErrors(input, errors);
   collectRejectedListErrors(input.rejected, errors);
   collectBoundsErrors(input.bounds, errors);
   collectSelectionCounterErrors(input, errors);
