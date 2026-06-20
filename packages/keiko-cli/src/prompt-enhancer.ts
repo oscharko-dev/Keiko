@@ -17,6 +17,7 @@ import {
 import {
   PromptEnhancementInputError,
   buildPromptEnhancementRecordInput,
+  promptEnhancementGatewayRoutingConfig,
   runPromptEnhancement,
 } from "@oscharko-dev/keiko-workflows";
 import {
@@ -326,7 +327,9 @@ export function runPromptEnhancerCli(
   const run = deps.run ?? runPromptEnhancement;
   let result: PromptEnhancementWireResponse;
   try {
-    result = run(wire.request, { gatewayConfig: config.config });
+    result = run(wire.request, {
+      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(config.config),
+    });
   } catch (error) {
     if (error instanceof PromptEnhancementInputError) {
       io.err(`Error: enhancement rejected the request:\n  - ${error.errors.join("\n  - ")}\n`);

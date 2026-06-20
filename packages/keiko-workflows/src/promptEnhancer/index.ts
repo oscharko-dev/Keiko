@@ -29,6 +29,7 @@ import {
 import {
   findConfiguredCapability,
   PromptEnhancer,
+  type ConfiguredCapabilitySource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { PromptEnhancementRecordInput } from "@oscharko-dev/keiko-evidence";
@@ -57,11 +58,25 @@ export class PromptEnhancementCancelledError extends Error {
 }
 
 export interface RunPromptEnhancementDeps {
-  // The resolved Model-Gateway config, or undefined when none is configured. Used only to resolve the
-  // optional downstream-dispatch model's readiness (AC3); never to dispatch.
-  readonly gatewayConfig: GatewayConfig | undefined;
+  // A credential-free view of the resolved Model-Gateway config, or undefined when none is configured.
+  // Used only to resolve the optional downstream-dispatch model's readiness (AC3); never to dispatch.
+  readonly gatewayRoutingConfig: ConfiguredCapabilitySource | undefined;
   // Optional cancellation signal (client disconnect). Checked at the bounded checkpoints below.
   readonly signal?: AbortSignal | undefined;
+}
+
+export type PromptEnhancementGatewayRoutingConfig = ConfiguredCapabilitySource;
+
+export function promptEnhancementGatewayRoutingConfig(
+  config: GatewayConfig | undefined,
+): PromptEnhancementGatewayRoutingConfig | undefined {
+  if (config === undefined) {
+    return undefined;
+  }
+  return {
+    providers: config.providers.map((provider) => ({ modelId: provider.modelId })),
+    ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
+  };
 }
 
 const throwIfCancelled = (signal: AbortSignal | undefined): void => {
@@ -105,7 +120,7 @@ const deriveRequestId = (
 
 const resolveModelRouting = (
   request: PromptEnhancementWireRequest,
-  config: GatewayConfig | undefined,
+  config: PromptEnhancementGatewayRoutingConfig | undefined,
 ): PromptEnhancementModelRouting => {
   const requestedModelId = request.modelId;
   if (requestedModelId === undefined) {
@@ -247,7 +262,7 @@ export function runPromptEnhancement(
       rejected: selection.rejected,
     },
     safety: selection.winnerSafetyAssessment,
-    modelRouting: resolveModelRouting(request, deps.gatewayConfig),
+    modelRouting: resolveModelRouting(request, deps.gatewayRoutingConfig),
     groundingReadiness: resolveGroundingReadiness(request, enhancedPrompt.groundingPlan.required),
     evidence: NOT_RECORDED_EVIDENCE,
   };

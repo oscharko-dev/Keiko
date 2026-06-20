@@ -32,6 +32,7 @@ import {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
   buildPromptEnhancementRecordInput,
+  promptEnhancementGatewayRoutingConfig,
   runPromptEnhancement,
 } from "./orchestrate.js";
 
@@ -194,7 +195,7 @@ export const handlePromptEnhancement = async (
 
   try {
     const result = runPromptEnhancement(validated.value, {
-      gatewayConfig: currentGatewayConfig(deps),
+      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(currentGatewayConfig(deps)),
       signal,
     });
     const body: PromptEnhancementWireResponse = {

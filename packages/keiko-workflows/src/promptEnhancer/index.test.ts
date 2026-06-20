@@ -5,6 +5,7 @@ import {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
   buildPromptEnhancementRecordInput,
+  promptEnhancementGatewayRoutingConfig,
   runPromptEnhancement,
 } from "./index.js";
 
@@ -43,13 +44,15 @@ function configWithProvider(modelId: string, kind: "chat" | "embedding" = "chat"
   };
 }
 
-const NO_GATEWAY = { gatewayConfig: undefined } as const;
+const NO_GATEWAY = { gatewayRoutingConfig: undefined } as const;
 
 function run(
   request: PromptEnhancementWireRequest,
   gatewayConfig?: GatewayConfig,
 ): ReturnType<typeof runPromptEnhancement> {
-  return runPromptEnhancement(request, { gatewayConfig });
+  return runPromptEnhancement(request, {
+    gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(gatewayConfig),
+  });
 }
 
 describe("runPromptEnhancement", () => {
@@ -254,7 +257,7 @@ describe("runPromptEnhancement", () => {
     expect(() =>
       runPromptEnhancement(
         { text: "anything" },
-        { gatewayConfig: undefined, signal: controller.signal },
+        { gatewayRoutingConfig: undefined, signal: controller.signal },
       ),
     ).toThrow(PromptEnhancementCancelledError);
   });

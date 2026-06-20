@@ -215,6 +215,8 @@
     "CliEventSink",
     "Clock",
     "ConfigInvalidError",
+    "ConfiguredCapabilityProvider",
+    "ConfiguredCapabilitySource",
     "ContextEntry",
     "ContextEntrySummary",
     "ContextOverflowError",

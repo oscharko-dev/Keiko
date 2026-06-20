@@ -76,6 +76,8 @@ export {
   findConfiguredCapability,
   listConfiguredCapabilities,
   selectConfiguredModel,
+  type ConfiguredCapabilityProvider,
+  type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
 } from "./model-selection.js";
 
