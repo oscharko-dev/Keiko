@@ -7,6 +7,7 @@
     { "path": "./packages/keiko-quality-intelligence" },
     { "path": "./packages/keiko-model-gateway" },
     { "path": "./packages/keiko-workspace" },
+    { "path": "./packages/keiko-sandbox" },
     { "path": "./packages/keiko-tools" },
     { "path": "./packages/keiko-evidence" },
     { "path": "./packages/keiko-harness" },

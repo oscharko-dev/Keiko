@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-sandbox": "*",
     "@oscharko-dev/keiko-security": "*",
     "@oscharko-dev/keiko-workspace": "*",
     "ws": "^8.21.0"

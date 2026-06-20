@@ -538,6 +538,11 @@ export interface EditorTestGenerationFunnel {
   readonly coverage: EditorTestGenerationGateState;
   readonly mutation: EditorTestGenerationGateState;
   readonly antiTautology: EditorTestGenerationGateState;
+  // Content-free oracle/coverage evidence, present once the pre-filter has executed (wave 2).
+  readonly coverageLineDelta?: number | undefined;
+  readonly coverageBranchDelta?: number | undefined;
+  readonly mutantsKilled?: number | undefined;
+  readonly mutantsTotal?: number | undefined;
 }
 
 /**
@@ -564,6 +569,9 @@ export type EditorTestGenerationOutcome =
       readonly result: EditorTestGenerationResult;
       readonly funnel: EditorTestGenerationFunnel;
       readonly assurance: EditorTestGenerationAssurance;
+      // Present when the candidate was surfaced as `unverified` (rejected by a gate or fail-closed): a
+      // content-free explanation of why it is not apply-ready.
+      readonly reason?: string | undefined;
       readonly context?: EditorContextPack | undefined;
     }
   | { readonly status: "failed"; readonly request: EditorRequestIdentity; readonly reason: string };

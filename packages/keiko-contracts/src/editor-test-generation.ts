@@ -157,6 +157,14 @@ export interface EditorTestGenerationFunnel {
   readonly coverage: EditorTestGenerationGateState;
   readonly mutation: EditorTestGenerationGateState;
   readonly antiTautology: EditorTestGenerationGateState;
+  // Content-free oracle/coverage evidence, populated only when the assured pre-filter actually
+  // executes (wave 2, behind the enforced egress boundary). Counts/deltas only — never test source.
+  // The coverage deltas are the strict increase in covered lines/branches for the target vs the
+  // pre-patch baseline; the mutation counts are killed/total injected mutants (oracle strength).
+  readonly coverageLineDelta?: number | undefined;
+  readonly coverageBranchDelta?: number | undefined;
+  readonly mutantsKilled?: number | undefined;
+  readonly mutantsTotal?: number | undefined;
 }
 
 // One reviewable change in a candidate patch. `newText` is content-bearing reviewable code (the

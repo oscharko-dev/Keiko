@@ -12,6 +12,8 @@ import {
 export type {
   NetworkPolicy,
   SandboxPolicy,
+  SandboxBackend,
+  SandboxAttestation,
   CommandRule,
   CommandRunInput,
   CommandResult,

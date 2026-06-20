@@ -32,16 +32,14 @@ describe("requestEditorTestGeneration", () => {
   });
 
   it("posts the target to the test-generation route with the CSRF header", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse({
-          schemaVersion: "1",
-          status: "disabled",
-          reason: "off",
-          funnel: NOT_RUN_FUNNEL,
-        }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        status: "disabled",
+        reason: "off",
+        funnel: NOT_RUN_FUNNEL,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const response = await requestEditorTestGeneration({
       root: "/repo",
@@ -135,5 +133,91 @@ describe("mapWireToEditorTestGenerationOutcome", () => {
       funnel: NOT_RUN_FUNNEL,
     });
     expect(outcome.status).toBe("failed");
+  });
+
+  it("maps an assured candidate's funnel evidence (coverage delta + mutants killed)", () => {
+    const wire: EditorTestGenerationWireResponse = {
+      schemaVersion: "1",
+      status: "generated",
+      assurance: "assured",
+      funnel: {
+        ...NOT_RUN_FUNNEL,
+        executionEnabled: true,
+        candidatesGenerated: 1,
+        candidatesSurfaced: 1,
+        build: "passed",
+        pass: "passed",
+        stability: "passed",
+        coverage: "passed",
+        mutation: "passed",
+        antiTautology: "passed",
+        coverageLineDelta: 5,
+        coverageBranchDelta: 2,
+        mutantsKilled: 4,
+        mutantsTotal: 6,
+      },
+      patch: {
+        patchId: "p2",
+        files: [
+          {
+            path: "src/a.test.ts",
+            changeKind: "added",
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                newText: "it('x', () => {});\n",
+              },
+            ],
+          },
+        ],
+      },
+      provenance: { modelId: "m", gatewayPolicyVersion: "v", promptHash: "h", producedAt: 7 },
+    };
+    const outcome = mapWireToEditorTestGenerationOutcome(REQUEST, wire);
+    expect(outcome.status).toBe("generated");
+    if (outcome.status === "generated") {
+      expect(outcome.assurance).toBe("assured");
+      expect(outcome.funnel.coverageLineDelta).toBe(5);
+      expect(outcome.funnel.mutantsKilled).toBe(4);
+      expect(outcome.funnel.mutantsTotal).toBe(6);
+      expect(outcome.reason).toBeUndefined();
+    }
+  });
+
+  it("carries the rejection reason for an unverified (rejected) candidate", () => {
+    const wire: EditorTestGenerationWireResponse = {
+      schemaVersion: "1",
+      status: "generated",
+      assurance: "unverified",
+      reason: "The generated candidate does not increase coverage.",
+      funnel: {
+        ...NOT_RUN_FUNNEL,
+        executionEnabled: true,
+        candidatesGenerated: 1,
+        coverage: "failed",
+      },
+      patch: {
+        patchId: "p3",
+        files: [
+          {
+            path: "src/a.test.ts",
+            changeKind: "added",
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                newText: "it('x', () => {});\n",
+              },
+            ],
+          },
+        ],
+      },
+      provenance: { modelId: "m", gatewayPolicyVersion: "v", promptHash: "h", producedAt: 7 },
+    };
+    const outcome = mapWireToEditorTestGenerationOutcome(REQUEST, wire);
+    expect(outcome.status).toBe("generated");
+    if (outcome.status === "generated") {
+      expect(outcome.assurance).toBe("unverified");
+      expect(outcome.reason).toContain("coverage");
+    }
   });
 });

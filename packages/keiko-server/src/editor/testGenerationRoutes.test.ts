@@ -19,6 +19,8 @@ import {
   type EditorTestGenerationRouteOptions,
 } from "./testGenerationRoutes.js";
 import type { TestGenerationRunner } from "./testGenerationRunner.js";
+import type { AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
+import type { EditorTestGenerationFunnel } from "@oscharko-dev/keiko-contracts";
 
 let root: string;
 let store: UiStore;
@@ -113,10 +115,51 @@ const candidateRunner: TestGenerationRunner = () =>
     },
   });
 
+const PASSED_FUNNEL: EditorTestGenerationFunnel = {
+  executionEnabled: true,
+  candidatesGenerated: 1,
+  candidatesSurfaced: 1,
+  stabilityRunsRequired: 5,
+  build: "passed",
+  pass: "passed",
+  stability: "passed",
+  coverage: "passed",
+  mutation: "passed",
+  antiTautology: "passed",
+  coverageLineDelta: 4,
+  coverageBranchDelta: 1,
+  mutantsKilled: 3,
+  mutantsTotal: 4,
+};
+
+// A pre-filter that surfaces the candidate as assured (all gates passed).
+const assuredPreFilter: AssuredPreFilterPort = () =>
+  Promise.resolve({ funnel: PASSED_FUNNEL, assurance: "assured", surfaced: true });
+
+// A pre-filter that rejects the candidate (e.g. coverage did not increase) → untrusted evidence only.
+const rejectingPreFilter: AssuredPreFilterPort = () =>
+  Promise.resolve({
+    funnel: {
+      ...PASSED_FUNNEL,
+      candidatesSurfaced: 0,
+      coverage: "failed",
+      mutation: "not-run",
+      antiTautology: "not-run",
+      coverageLineDelta: 0,
+      coverageBranchDelta: 0,
+      mutantsKilled: undefined,
+      mutantsTotal: undefined,
+    },
+    assurance: "unverified",
+    surfaced: false,
+    rejectionReason: "The generated candidate does not increase coverage.",
+  });
+
 function execOptions(
   runner: TestGenerationRunner = candidateRunner,
+  preFilter: AssuredPreFilterPort = assuredPreFilter,
 ): EditorTestGenerationRouteOptions {
-  return { runner, now: () => 1_000 };
+  return { runner, preFilter, now: () => 1_000 };
 }
 
 beforeEach(async () => {
@@ -218,7 +261,7 @@ describe("POST /api/editor/test-generation — enabled, egress not enforced (def
 });
 
 describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)", () => {
-  it("surfaces a reviewable, unverified candidate via the injected runner", async () => {
+  it("surfaces an assured, apply-ready candidate when the assured pre-filter passes", async () => {
     const result = await handleEditorTestGeneration(
       postContext(fileBody()),
       deps({ env: EXECUTION }),
@@ -226,9 +269,26 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     );
     const body = wire(result);
     expect(body.status).toBe("generated");
-    expect(body.assurance).toBe("unverified");
+    expect(body.assurance).toBe("assured");
+    expect(body.funnel.coverage).toBe("passed");
+    expect(body.funnel.mutation).toBe("passed");
     expect(body.patch?.files[0]?.path).toBe("src/a.test.ts");
     expect(body.context?.purpose).toBe("test-generation");
+  });
+
+  it("surfaces a rejected candidate as unverified with a reason (untrusted evidence only)", async () => {
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody()),
+      deps({ env: EXECUTION }),
+      execOptions(candidateRunner, rejectingPreFilter),
+    );
+    const body = wire(result);
+    expect(body.status).toBe("generated");
+    expect(body.assurance).toBe("unverified");
+    expect(body.funnel.coverage).toBe("failed");
+    expect(body.reason).toContain("coverage");
+    // The patch is still returned for review, but it is not apply-ready.
+    expect(body.patch?.files[0]?.path).toBe("src/a.test.ts");
   });
 
   it("falls back to `deferred` when the runner produces no candidate", async () => {

@@ -27,6 +27,8 @@ export type TestGenerationFlowState =
       readonly result: EditorTestGenerationResult;
       readonly funnel: EditorTestGenerationFunnel;
       readonly assurance: EditorTestGenerationAssurance;
+      // Present when the candidate is `unverified`: why it is not apply-ready (content-free).
+      readonly reason?: string | undefined;
     }
   | { readonly kind: "failed"; readonly reason: string }
   | { readonly kind: "cancelled" };
@@ -56,6 +58,7 @@ function outcomeToState(outcome: EditorTestGenerationOutcome): TestGenerationFlo
       result: outcome.result,
       funnel: outcome.funnel,
       assurance: outcome.assurance,
+      ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
     };
   }
   return { kind: "failed", reason: outcome.reason };
@@ -121,10 +124,23 @@ const STATIC_STATUS: Readonly<Record<TestGenerationFlowState["kind"], string>> =
   failed: "",
 };
 
+const ASSURED_PREVIEW_STATUS =
+  "Generated tests passed the assured pre-filter (build, pass, stability, coverage, mutation) — review before applying.";
+const UNVERIFIED_PREVIEW_STATUS =
+  "Generated tests are not apply-ready: they did not pass the assured pre-filter and are shown as untrusted evidence only.";
+
 /** A content-free, actionable status line for the current flow state. Empty string means "no status". */
 export function describeTestGenerationStatus(state: TestGenerationFlowState): string {
   if (state.kind === "disabled" || state.kind === "deferred" || state.kind === "failed") {
     return state.reason;
+  }
+  if (state.kind === "preview") {
+    if (state.assurance === "assured") {
+      return ASSURED_PREVIEW_STATUS;
+    }
+    return state.reason !== undefined && state.reason.length > 0
+      ? state.reason
+      : UNVERIFIED_PREVIEW_STATUS;
   }
   return STATIC_STATUS[state.kind];
 }

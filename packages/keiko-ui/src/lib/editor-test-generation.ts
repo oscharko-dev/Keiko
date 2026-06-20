@@ -68,6 +68,14 @@ function toEditorFunnel(funnel: WireFunnel): EditorTestGenerationFunnel {
     coverage: funnel.coverage,
     mutation: funnel.mutation,
     antiTautology: funnel.antiTautology,
+    ...(funnel.coverageLineDelta === undefined
+      ? {}
+      : { coverageLineDelta: funnel.coverageLineDelta }),
+    ...(funnel.coverageBranchDelta === undefined
+      ? {}
+      : { coverageBranchDelta: funnel.coverageBranchDelta }),
+    ...(funnel.mutantsKilled === undefined ? {} : { mutantsKilled: funnel.mutantsKilled }),
+    ...(funnel.mutantsTotal === undefined ? {} : { mutantsTotal: funnel.mutantsTotal }),
   };
 }
 
@@ -150,6 +158,8 @@ function toGeneratedOutcome(
     result,
     funnel: toEditorFunnel(wire.funnel),
     assurance,
+    // A rejected (unverified) candidate carries the content-free reason it is not apply-ready.
+    ...(assurance === "unverified" && wire.reason !== undefined ? { reason: wire.reason } : {}),
     ...(context === undefined ? {} : { context }),
   };
 }
