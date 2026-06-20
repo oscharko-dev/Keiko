@@ -72,12 +72,12 @@ distinct controls and one does not substitute for the other. The governing decis
 
 Evidence artifacts are classified into four confidentiality tiers:
 
-| Class                   | Example artifacts                                                                                                     | Controls                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Customer-reconstructive | `<runId>.candidates.json` (generated test-case bodies), Figma snapshot JSON (`irJson`/`tokens`), Figma PNG side-files | `0o600` file / `0o700` dir, redaction, deterministic bounded retention. Encryption-at-rest deferred (see below). |
-| Customer-metadata       | QI run manifests (`<runId>.qi.json`), Prompt Enhancement manifests (`<runId>.pe.json`)                                | Redacted-by-construction, integrity-hashed (tamper-evident reads), `0o600`/`0o700`.                              |
-| Process evidence        | Run manifests (`<runId>.json` under `evidence/`)                                                                      | Redacted workflow summaries, `0o600`/`0o700`.                                                                    |
-| Operational             | Atomic `*.tmp` write files, lock/sidecar files                                                                        | Transient; `0o600`/`0o700`; never contain customer content.                                                      |
+| Class                   | Example artifacts                                                                                                     | Controls                                                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Customer-reconstructive | `<runId>.candidates.json` (generated test-case bodies), Figma snapshot JSON (`irJson`/`tokens`), Figma PNG side-files | `0o600` file / `0o700` dir, redaction, deterministic bounded retention. Encryption-at-rest deferred (see below).                                 |
+| Customer-metadata       | QI run manifests (`<runId>.qi.json`), Prompt Enhancement manifests (`<runId>.pe.json`)                                | Redacted-by-construction, integrity-hashed (tamper-evident reads), `0o600`/`0o700`.                                                              |
+| Process evidence        | Run manifests (`<runId>.json` under `evidence/`)                                                                      | Redacted workflow summaries, `0o600`/`0o700`.                                                                                                    |
+| Operational             | Atomic `*.tmp` write files, lock/sidecar files                                                                        | Transient; `0o600`/`0o700`; temp write files may briefly contain the target payload and are ignored by read/list paths after interrupted writes. |
 
 **Write-time permissions.** All evidence, Quality Intelligence, Prompt Enhancement, companion,
 figma-snapshot, and binary side-file writers create directories with mode `0o700` and files with

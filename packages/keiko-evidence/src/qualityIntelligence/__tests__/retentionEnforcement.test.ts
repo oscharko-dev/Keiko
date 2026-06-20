@@ -7,7 +7,7 @@
 // timestamp, unknown policy, newest-N) MUST RETAIN. These tests pin that contract so a single-line
 // mutation of the purge predicate fails.
 
-import { mkdtemp, readdir, readFile, rm, writeFile, mkdir, stat } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile, mkdir, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -60,12 +60,16 @@ function inputFor(runId: string, options: SeedOptions = {}): QualityIntelligence
 }
 
 function seedRun(runId: string, options: SeedOptions = {}): void {
-  recordQualityIntelligenceRun(inputFor(runId, options), { evidenceDir });
+  seedRunIn(evidenceDir, runId, options);
+}
+
+function seedRunIn(targetEvidenceDir: string, runId: string, options: SeedOptions = {}): void {
+  recordQualityIntelligenceRun(inputFor(runId, options), { evidenceDir: targetEvidenceDir });
   recordQualityIntelligenceCandidates({
     runId,
     generatedAt: "2026-01-01T00:00:00.000Z",
     candidates: [],
-    evidenceDir,
+    evidenceDir: targetEvidenceDir,
     redact: identity,
   });
 }
@@ -119,6 +123,93 @@ describe("enforceQualityIntelligenceRetentionPolicy — age expiry", () => {
     });
 
     await expect(stat(runSideDir)).rejects.toThrow();
+  });
+
+  it("continues purging independent runs when one side-file dir is unsafe", async () => {
+    if (process.platform === "win32") return;
+    seedRun("run-blocked");
+    seedRun("run-ok");
+    const sideFileRoot = join(evidenceDir, QI_SUBDIR, "side-files");
+    const outside = await mkdtemp(join(tmpdir(), "keiko-qi-ret-outside-"));
+    try {
+      await mkdir(join(outside, "run-blocked"), { recursive: true });
+      await mkdir(join(sideFileRoot, "run-ok"), { recursive: true });
+      await writeFile(join(sideFileRoot, "run-ok", "blob.bin"), Buffer.from("x"));
+      await symlink(join(outside, "run-blocked"), join(sideFileRoot, "run-blocked"), "dir");
+
+      const { receipts, failures, result } = enforceQualityIntelligenceRetentionPolicy({
+        evidenceDir,
+        now: NOW_FAR_FUTURE,
+        sideFileRoot,
+      });
+
+      expect(result.expiredRunIds).toEqual(["run-blocked", "run-ok"]);
+      expect(receipts.map((r) => r.runId)).toEqual(["run-ok"]);
+      expect(failures.map((f) => f.runId)).toEqual(["run-blocked"]);
+      expect(failures[0]?.message).toContain("symlink");
+      expect(await readdir(join(evidenceDir, QI_SUBDIR))).toContain("run-blocked.qi.json");
+      expect(await readdir(join(evidenceDir, QI_SUBDIR))).not.toContain("run-ok.qi.json");
+      await expect(stat(join(outside, "run-blocked"))).resolves.toBeDefined();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlinked side-file root before deleting the run manifest", async () => {
+    if (process.platform === "win32") return;
+    seedRun("run-root-symlink");
+    const qiDir = join(evidenceDir, QI_SUBDIR);
+    const sideFileRoot = join(qiDir, "side-root");
+    const outside = await mkdtemp(join(tmpdir(), "keiko-qi-ret-root-"));
+    try {
+      await symlink(outside, sideFileRoot, "dir");
+
+      const { receipts, failures } = enforceQualityIntelligenceRetentionPolicy({
+        evidenceDir,
+        now: NOW_FAR_FUTURE,
+        sideFileRoot,
+      });
+
+      expect(receipts).toEqual([]);
+      expect(failures.map((f) => f.runId)).toEqual(["run-root-symlink"]);
+      expect(await readdir(qiDir)).toContain("run-root-symlink.qi.json");
+      await expect(stat(outside)).resolves.toBeDefined();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("allows a symlinked evidence root when the side-file root resolves inside it", async () => {
+    if (process.platform === "win32") return;
+    const realEvidenceDir = await mkdtemp(join(tmpdir(), "keiko-qi-ret-real-"));
+    const linkParent = await mkdtemp(join(tmpdir(), "keiko-qi-ret-link-parent-"));
+    const linkedEvidenceDir = join(linkParent, "evidence-link");
+    try {
+      await symlink(realEvidenceDir, linkedEvidenceDir, "dir");
+      seedRunIn(linkedEvidenceDir, "run-linked-root");
+      const sideFileRoot = join(linkedEvidenceDir, QI_SUBDIR, "side-files");
+      const runSideDir = join(sideFileRoot, "run-linked-root");
+      await mkdir(runSideDir, { recursive: true });
+      await writeFile(join(runSideDir, "blob.bin"), Buffer.from("x"));
+
+      const { receipts, failures } = enforceQualityIntelligenceRetentionPolicy({
+        evidenceDir: linkedEvidenceDir,
+        now: NOW_FAR_FUTURE,
+        sideFileRoot,
+      });
+
+      expect(failures).toEqual([]);
+      expect(receipts.map((r) => r.runId)).toEqual(["run-linked-root"]);
+      await expect(
+        stat(join(realEvidenceDir, QI_SUBDIR, "run-linked-root.qi.json")),
+      ).rejects.toThrow();
+      await expect(
+        stat(join(realEvidenceDir, QI_SUBDIR, "side-files", "run-linked-root")),
+      ).rejects.toThrow();
+    } finally {
+      await rm(linkParent, { recursive: true, force: true });
+      await rm(realEvidenceDir, { recursive: true, force: true });
+    }
   });
 });
 
