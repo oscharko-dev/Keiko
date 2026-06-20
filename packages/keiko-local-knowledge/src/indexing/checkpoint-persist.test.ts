@@ -3,6 +3,7 @@ import {
   largeDocumentPolicyFingerprint,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  ChunkId,
   CheckpointFingerprint,
   DocumentId,
   EmbeddingModelIdentity,
@@ -63,7 +64,6 @@ function checkpoint(
     extractedTextBytes: 65_536,
     chunkCursor: 40,
     embeddedChunkCursor: 24,
-    lastEmbeddedChunkId: "doc#u3#24" as ExtractionCheckpointRecord["lastEmbeddedChunkId"],
     retryCount: 1,
     coverage: "partial",
     fingerprint: fingerprint(),
@@ -96,9 +96,11 @@ describe("extraction checkpoint persistence", () => {
     fixture.cleanup();
   });
 
-  it("round-trips a checkpoint", () => {
+  it("round-trips a checkpoint including the last embedded chunk id", () => {
     const doc = "doc-1" as DocumentId;
-    const record = checkpoint(fixture.capsuleId, doc);
+    const record = checkpoint(fixture.capsuleId, doc, {
+      lastEmbeddedChunkId: "doc#u3#24" as ChunkId,
+    });
     upsertExtractionCheckpoint(fixture.store._internal.db, record);
     const read = selectExtractionCheckpoint(fixture.store._internal.db, fixture.capsuleId, doc);
     expect(read).toEqual(record);
@@ -128,10 +130,7 @@ describe("extraction checkpoint persistence", () => {
 
   it("persists a checkpoint with no lastEmbeddedChunkId", () => {
     const doc = "doc-2" as DocumentId;
-    const record = checkpoint(fixture.capsuleId, doc, {
-      phase: "extracted",
-      lastEmbeddedChunkId: undefined,
-    });
+    const record = checkpoint(fixture.capsuleId, doc, { phase: "extracted" });
     upsertExtractionCheckpoint(fixture.store._internal.db, record);
     const read = selectExtractionCheckpoint(fixture.store._internal.db, fixture.capsuleId, doc);
     expect(read?.lastEmbeddedChunkId).toBeUndefined();

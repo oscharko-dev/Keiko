@@ -137,9 +137,9 @@ describe("createProgressivePdfExtractor", () => {
   });
 
   it("resumes extraction from a page cursor", async () => {
-    const pages = ["alpha page", "bravo page", "charlie page", "delta page"];
+    const pages = ["alpha page", "bravo page", "charlie page", "delta page"] as const;
     const extractor = createProgressivePdfExtractor({
-      loadDocument: () => Promise.resolve(fakePdf(pages)),
+      loadDocument: () => Promise.resolve(fakePdf([...pages])),
     });
     // Simulate having already extracted pages 1-2; resume from the end of page 2.
     const endOfPage2 = pages[0].length + 2 + pages[1].length;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  ChunkId,
   CheckpointFingerprint,
   EmbeddingModelIdentity,
   ExtractionCheckpointRecord,
@@ -55,7 +56,7 @@ function baseCheckpoint(): ExtractionCheckpointRecord {
     extractedTextBytes: 65_536,
     chunkCursor: 40,
     embeddedChunkCursor: 24,
-    lastEmbeddedChunkId: "doc-1#u3#24" as ExtractionCheckpointRecord["lastEmbeddedChunkId"],
+    lastEmbeddedChunkId: "doc-1#u3#24" as ChunkId,
     retryCount: 1,
     coverage: "partial",
     fingerprint: baseFingerprint(),
