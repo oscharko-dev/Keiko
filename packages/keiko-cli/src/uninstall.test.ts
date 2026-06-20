@@ -428,11 +428,13 @@ function seedFullState(root: string, pid = "2147483646"): string {
     "keiko-ui.db": "db",
     "keiko-ui.db-wal": "wal",
     "keiko-ui.db-shm": "shm",
+    "keiko-ui.db.corrupt.2026-06-20T12-00-00-000Z": "quarantine",
     "keiko.config.json": "{}",
     "credentials/provider-credentials.vault": "sealed",
     "credentials/provider-credentials-vault.key": "key",
     "memory/keiko-memory.db": "db",
     "memory/keiko-memory.db-wal": "wal",
+    "memory/keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z": "quarantine",
     "local-knowledge/default/capsules.db": "db",
     "local-knowledge/default/capsules.db-shm": "shm",
     "evidence/run-1.json": "{}",
@@ -466,21 +468,31 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(out).toContain(join(stateDir, "keiko-ui.db"));
     expect(out).toContain(join(stateDir, "memory", "keiko-memory.db"));
     expect(out).toContain(join(stateDir, "credentials", "provider-credentials.vault"));
+    expect(out).toContain(join(stateDir, "credentials", "provider-credentials-vault.key"));
     expect(out).toContain(join(stateDir, "evidence", "figma", "figma-token.vault"));
+    expect(out).toContain(join(stateDir, "evidence", "figma", "figma-vault.key"));
     expect(out).toContain(join(stateDir, "evidence", "qi", "run-1.qi.json"));
     // Nothing actually removed.
     expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(true);
     expect(existsSync(stateDir)).toBe(true);
   });
 
-  it("removes WAL/SHM sidecars alongside their database", () => {
+  it("removes WAL/SHM and quarantine sidecars alongside every database", () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const c = makeIo();
     expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
-    expect(existsSync(join(stateDir, "keiko-ui.db-wal"))).toBe(false);
-    expect(existsSync(join(stateDir, "memory", "keiko-memory.db-wal"))).toBe(false);
-    expect(existsSync(join(stateDir, "local-knowledge", "default", "capsules.db-shm"))).toBe(false);
+    for (const rel of [
+      "keiko-ui.db-wal",
+      "keiko-ui.db-shm",
+      "keiko-ui.db.corrupt.2026-06-20T12-00-00-000Z",
+      "memory/keiko-memory.db-wal",
+      "memory/keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z",
+      "local-knowledge/default/capsules.db-shm",
+      "evidence/figma/figma-vault.key",
+    ]) {
+      expect(existsSync(join(stateDir, rel))).toBe(false);
+    }
   });
 
   it("keeps a customer file and the state dir, but still removes Keiko artifacts", () => {

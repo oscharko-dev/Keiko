@@ -151,11 +151,13 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "keiko-ui.db"));
   touch(join(stateDir, "keiko-ui.db-wal"));
   touch(join(stateDir, "keiko-ui.db-shm"));
+  touch(join(stateDir, "keiko-ui.db.corrupt.2026-06-20T12-00-00-000Z")); // quarantined db
   touch(join(stateDir, "keiko.config.json"));
   touch(join(stateDir, "credentials", "provider-credentials.vault"));
   touch(join(stateDir, "credentials", "provider-credentials-vault.key"));
   touch(join(stateDir, "memory", "keiko-memory.db"));
   touch(join(stateDir, "memory", "keiko-memory.db-wal"));
+  touch(join(stateDir, "memory", "keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z"));
   touch(join(stateDir, "local-knowledge", "default", "capsules.db"));
   touch(join(stateDir, "local-knowledge", "default", "capsules.db-shm"));
   touch(join(stateDir, "evidence", "run-1.json"));
@@ -201,10 +203,36 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "evidence/run-1.candidates.json")).toBe("evidence");
     expect(categoryOf(scan, "evidence/run-1.lock")).toBe("evidence");
     expect(categoryOf(scan, "evidence/figma/figma-token.vault")).toBe("credential-vault");
+    expect(categoryOf(scan, "evidence/figma/figma-vault.key")).toBe("credential-vault");
     expect(categoryOf(scan, "evidence/qi/run-1.qi.json")).toBe("quality-intelligence");
     expect(categoryOf(scan, "evidence/qi/figma-snapshots/run-1/screen.png")).toBe(
       "quality-intelligence",
     );
+  });
+
+  it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {
+    const stateDir = seedRuntimeState(makeRoot());
+    const scan = scanRuntimeState(stateDir);
+    expect(categoryOf(scan, "keiko-ui.db.corrupt.2026-06-20T12-00-00-000Z")).toBe("ui-database");
+    expect(categoryOf(scan, "memory/keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z")).toBe(
+      "memory-vault",
+    );
+  });
+
+  it("retains a customer file whose name only resembles a database (no prefix over-match)", () => {
+    const stateDir = join(makeRoot(), ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "keiko-ui.db"), "x", "utf8");
+    // Names that share a prefix with the DB but are NOT Keiko sidecars/quarantine files.
+    for (const name of ["keiko-ui.db.backup", "keiko-ui.db-old", "keiko-ui.dbackup"]) {
+      writeFileSync(join(stateDir, name), "customer", "utf8");
+    }
+    const scan = scanRuntimeState(stateDir);
+    expect(scan.files.some((f) => f.relPath === "keiko-ui.db")).toBe(true);
+    const retainedNames = scan.retained.map((r) => r.relPath);
+    expect(retainedNames).toContain("keiko-ui.db.backup");
+    expect(retainedNames).toContain("keiko-ui.db-old");
+    expect(retainedNames).toContain("keiko-ui.dbackup");
   });
 
   it("retains a customer file and never claims it as Keiko-owned", () => {
