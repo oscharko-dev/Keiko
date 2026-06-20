@@ -1,9 +1,10 @@
 // Store content cipher — the single crypto boundary for Local Knowledge encryption at rest
 // (Issue #1322, Epic #1319; ADR-0047). Resolves a 32-byte AES-256-GCM key once at store-open and
 // binds it into a `StoreContentCipher` that the row layer threads through every read/write of the
-// three reconstructive content columns (document_texts.normalized_text,
-// document_text_windows.normalized_text, vectors.embedding). The key NEVER appears in an error
-// message, event, or persisted row; only sealed envelopes touch SQLite.
+// reconstructive content columns (document_texts.normalized_text,
+// document_text_windows.normalized_text, vectors.embedding, sections.section_path_json, and
+// parsed_units path JSON). The key NEVER appears in an error message, event, or persisted row; only
+// sealed envelopes touch SQLite.
 //
 // Mirrors keiko-memory-vault's MemoryContentCipher (ADR-0035): crypto knowledge lives only here, so
 // retrieval/parsing/UI layers stay crypto-free and just call seal*/open* at the column boundary.
@@ -29,15 +30,14 @@ export interface StoreContentCipher {
   // true only for the encrypted cipher. The span reader branches on this so the plaintext path keeps
   // its in-SQL SUBSTR (no full materialization) while the encrypted path decrypts one bounded unit.
   readonly isEncrypted: boolean;
-  // Seals/opens a TEXT content column. openText tolerates legacy plaintext (a value written before
-  // encryption, or by the not-yet-swept migration window) by returning it verbatim, so reads never
-  // fail mid-migration. A sealed value opened with the wrong key throws loudly (secretbox auth fail).
+  // Seals/opens a TEXT content column. Once an encrypted store handle is returned, openText is
+  // strict: unsealed text, malformed envelopes, wrong-key content, and tampering fail closed. Legacy
+  // plaintext tolerance lives only in the migration classifier, before the handle is returned.
   readonly sealText: (plaintext: string) => string;
   readonly openText: (stored: string) => string;
-  // Seals/opens a BLOB content column. There is no in-band plaintext-vs-sealed marker for raw bytes,
-  // so openVector uses the cleartext vector_dimensions to compute the expected plaintext byte length:
-  // a stored blob of exactly that length is legacy plaintext, anything else is a sealed binary
-  // envelope authenticated by openBytes (throws loudly on a wrong key or tampered data).
+  // Seals/opens a BLOB content column. Encrypted openVector always authenticates the sealed binary
+  // envelope and verifies the decrypted plaintext length. Legacy plaintext-length vectors are sealed
+  // only by the migration sweep, never returned by a steady-state encrypted store.
   readonly sealVector: (plaintext: Uint8Array) => Uint8Array;
   readonly openVector: (stored: Uint8Array, plaintextByteLength: number) => Uint8Array;
   // Whether a TEXT value is already a sealed envelope. Used by the migration sweep for idempotency
@@ -68,10 +68,39 @@ export function createEncryptedContentCipher(key: Uint8Array): StoreContentCiphe
   return {
     isEncrypted: true,
     sealText: (plaintext: string): string => sealString(keyBuf, plaintext),
-    openText: (stored: string): string => (isSealed(stored) ? openString(keyBuf, stored) : stored),
+    openText: (stored: string): string => {
+      if (!isSealed(stored)) {
+        throw new KnowledgeStoreError(
+          "encrypted Local Knowledge text content is not sealed at rest",
+        );
+      }
+      try {
+        return openString(keyBuf, stored);
+      } catch (cause) {
+        throw new KnowledgeStoreError(
+          "cannot open encrypted Local Knowledge text content: wrong key or tampered content",
+          { cause },
+        );
+      }
+    },
     sealVector: (plaintext: Uint8Array): Uint8Array => sealBytes(keyBuf, Buffer.from(plaintext)),
-    openVector: (stored: Uint8Array, plaintextByteLength: number): Uint8Array =>
-      stored.byteLength === plaintextByteLength ? stored : openBytes(keyBuf, Buffer.from(stored)),
+    openVector: (stored: Uint8Array, plaintextByteLength: number): Uint8Array => {
+      let opened: Buffer;
+      try {
+        opened = openBytes(keyBuf, Buffer.from(stored));
+      } catch (cause) {
+        throw new KnowledgeStoreError(
+          "cannot open encrypted Local Knowledge vector content: wrong key or tampered content",
+          { cause },
+        );
+      }
+      if (opened.byteLength !== plaintextByteLength) {
+        throw new KnowledgeStoreError(
+          "encrypted Local Knowledge vector content length does not match vector_dimensions",
+        );
+      }
+      return opened;
+    },
     isSealed,
   };
 }

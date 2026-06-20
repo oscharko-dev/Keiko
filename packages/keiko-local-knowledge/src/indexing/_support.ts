@@ -92,7 +92,7 @@ export function seedParsedUnit(
   unitId: string,
   unit: ParsedUnit,
 ): void {
-  insertParsedUnitRow(store._internal.db, capsuleId, unitId, unit);
+  insertParsedUnitRow(store._internal.db, store._internal.contentCipher, capsuleId, unitId, unit);
 }
 
 // Seeds one page parsed unit covering the whole document then runs the real chunker so

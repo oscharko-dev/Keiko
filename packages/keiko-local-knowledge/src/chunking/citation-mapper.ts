@@ -32,6 +32,7 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import type { KnowledgeStore } from "../store.js";
+import type { StoreContentCipher } from "../store-content-cipher.js";
 
 interface ChunkRow {
   readonly id: string;
@@ -129,9 +130,12 @@ function fetchPageForRange(
   return row === undefined ? undefined : (row as unknown as PageHopRow);
 }
 
-function parseStringArray(raw: string | null): readonly string[] | undefined {
+function parseStringArray(
+  raw: string | null,
+  cipher: StoreContentCipher,
+): readonly string[] | undefined {
   if (raw === null) return undefined;
-  const parsed: unknown = JSON.parse(raw);
+  const parsed: unknown = JSON.parse(cipher.openText(raw));
   if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
     return undefined;
   }
@@ -162,7 +166,11 @@ function baseHopFields(unit: ParsedUnitHopRow): HopFields {
   };
 }
 
-type HopFieldsBuilder = (unit: ParsedUnitHopRow, base: HopFields) => HopFields;
+type HopFieldsBuilder = (
+  unit: ParsedUnitHopRow,
+  base: HopFields,
+  cipher: StoreContentCipher,
+) => HopFields;
 
 const HOP_FIELDS_BY_KIND = new Map<string, HopFieldsBuilder>([
   [
@@ -175,16 +183,16 @@ const HOP_FIELDS_BY_KIND = new Map<string, HopFieldsBuilder>([
   ],
   [
     "section",
-    (unit, base): HopFields => ({
+    (unit, base, cipher): HopFields => ({
       ...base,
-      sectionPath: parseStringArray(unit.section_path_json),
+      sectionPath: parseStringArray(unit.section_path_json, cipher),
     }),
   ],
   [
     "html-block",
-    (unit, base): HopFields => ({
+    (unit, base, cipher): HopFields => ({
       ...base,
-      sectionPath: parseStringArray(unit.heading_path_json),
+      sectionPath: parseStringArray(unit.heading_path_json, cipher),
     }),
   ],
   [
@@ -204,9 +212,9 @@ const HOP_FIELDS_BY_KIND = new Map<string, HopFieldsBuilder>([
   ],
 ]);
 
-function hopFieldsForUnit(unit: ParsedUnitHopRow): HopFields {
+function hopFieldsForUnit(unit: ParsedUnitHopRow, cipher: StoreContentCipher): HopFields {
   const base = baseHopFields(unit);
-  return HOP_FIELDS_BY_KIND.get(unit.kind)?.(unit, base) ?? base;
+  return HOP_FIELDS_BY_KIND.get(unit.kind)?.(unit, base, cipher) ?? base;
 }
 
 function applyChunkSpan(hop: HopFields, chunk: ChunkRow): HopFields {
@@ -280,7 +288,7 @@ export function mapChunkToCitation(
   const document = fetchDocumentRow(db, capsuleId, chunk.document_id as DocumentId);
   if (document === undefined) return null;
 
-  const baseHop = applyChunkSpan(hopFieldsForUnit(unit), chunk);
+  const baseHop = applyChunkSpan(hopFieldsForUnit(unit, store._internal.contentCipher), chunk);
   const hop = attachPageHop(db, capsuleId, chunk.document_id as DocumentId, baseHop);
   return buildCitation(chunk, document, hop, chunkId, capsuleId);
 }

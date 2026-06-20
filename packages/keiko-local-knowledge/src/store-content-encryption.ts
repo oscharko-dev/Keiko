@@ -6,22 +6,30 @@
 //   marker present, opened WITH a key provider     → verify the sealed probe (fail-closed on a wrong
 //                                                     key / tampered probe), then proceed.
 //   marker present, opened WITHOUT a key provider   → throw: the store is encrypted, a key is required.
-//   marker absent,  opened WITHOUT a key provider   → plaintext store opened plaintext: no-op.
+//   marker absent,  probe present, WITHOUT a key    → throw: incomplete encrypted migration, a key is
+//                                                     required.
+//   marker absent,  probe present, WITH a key       → verify the existing probe before any mutation,
+//                                                     then finish the idempotent migration.
+//   marker absent,  probe absent,  opened WITHOUT a key → plaintext store opened plaintext: no-op.
 //   marker absent,  opened WITH a key provider      → forward migration: seal every plaintext content
 //                                                     row, write the probe, set the marker, then flush
 //                                                     plaintext from the WAL and freelist.
 //
-// The migration is crash-aware and idempotent: it is wrapped in a transaction and gated on the marker,
-// so an interrupted run simply re-runs on the next open (re-sealing is skipped for already-sealed rows).
+// The migration is crash-aware and idempotent: it verifies any existing probe before retrying, seals
+// only rows that do not authenticate with the current key, and sets the marker only after plaintext
+// has been checkpointed and vacuumed away.
 
 import type { DatabaseSync } from "node:sqlite";
 
 import { KnowledgeStoreError } from "./errors.js";
+import { sectionPathHashFromJson } from "./section-path-hash.js";
 import type { StoreContentCipher } from "./store-content-cipher.js";
 
 const ENCRYPTION_MARKER_KEY = "content_encryption";
 const ENCRYPTION_MARKER_VALUE = "aes-256-gcm/v1";
 const ENCRYPTION_PROBE_KEY = "content_encryption_probe";
+const ENCRYPTION_SCOPE_KEY = "content_encryption_scope";
+const ENCRYPTION_SCOPE_VALUE = "reconstructive-columns/v2";
 // Fixed, non-secret sentinel. Sealed at migration time and re-opened on every encrypted open to prove
 // the resolved key matches the one the store was sealed with. Never carries customer content.
 const ENCRYPTION_PROBE_PLAINTEXT = "keiko-local-knowledge-content-encryption-v1";
@@ -58,19 +66,137 @@ function collectRowIds(db: DatabaseSync, table: string): number[] {
   return ids;
 }
 
-interface DocumentTextSweepRow {
-  readonly normalized_text: string;
+interface TextTarget {
+  readonly table: string;
+  readonly column: string;
 }
 
-// Seals every TEXT content row that is not already sealed, one row at a time. Idempotent via
-// cipher.isSealed, so a re-run after an interrupted migration only seals the rows it has not reached.
-function sealTextColumn(db: DatabaseSync, table: string, cipher: StoreContentCipher): void {
-  const select = db.prepare(`SELECT normalized_text FROM ${table} WHERE rowid = :id`);
-  const update = db.prepare(`UPDATE ${table} SET normalized_text = :t WHERE rowid = :id`);
-  for (const id of collectRowIds(db, table)) {
-    const row = select.get({ id }) as DocumentTextSweepRow | undefined;
-    if (row === undefined || cipher.isSealed(row.normalized_text)) continue;
-    update.run({ t: cipher.sealText(row.normalized_text), id });
+const LEGACY_TEXT_TARGETS: readonly TextTarget[] = [
+  { table: "document_texts", column: "normalized_text" },
+  { table: "document_text_windows", column: "normalized_text" },
+];
+
+const PATH_TEXT_TARGETS: readonly TextTarget[] = [
+  { table: "sections", column: "section_path_json" },
+  { table: "parsed_units", column: "section_path_json" },
+  { table: "parsed_units", column: "heading_path_json" },
+];
+
+const TEXT_TARGETS: readonly TextTarget[] = [...LEGACY_TEXT_TARGETS, ...PATH_TEXT_TARGETS];
+
+interface TextSweepRow {
+  readonly value: string | null;
+}
+
+function isAlreadySealed(cipher: StoreContentCipher, value: string): boolean {
+  if (!cipher.isSealed(value)) return false;
+  try {
+    cipher.openText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function openMaybeSealedText(cipher: StoreContentCipher, value: string): string {
+  return cipher.isEncrypted && isAlreadySealed(cipher, value) ? cipher.openText(value) : value;
+}
+
+// Seals every TEXT content row that does not authenticate under the current key, one row at a time.
+// This intentionally does NOT trust the "kv1." prefix alone: a legacy plaintext value can literally
+// start with "kv1.", and must be sealed as plaintext instead of skipped.
+function sealTextColumn(db: DatabaseSync, target: TextTarget, cipher: StoreContentCipher): void {
+  const select = db.prepare(
+    `SELECT ${target.column} AS value FROM ${target.table} WHERE rowid = :id`,
+  );
+  const update = db.prepare(`UPDATE ${target.table} SET ${target.column} = :t WHERE rowid = :id`);
+  for (const id of collectRowIds(db, target.table)) {
+    const row = select.get({ id }) as TextSweepRow | undefined;
+    const value = row?.value;
+    if (value === undefined || value === null || isAlreadySealed(cipher, value)) continue;
+    update.run({ t: cipher.sealText(value), id });
+  }
+}
+
+interface SectionHashRow {
+  readonly section_path_json: string;
+  readonly section_path_hash: string | null;
+}
+
+function ensureSectionPathHashes(db: DatabaseSync, cipher: StoreContentCipher): void {
+  const select = db.prepare(
+    "SELECT section_path_json, section_path_hash FROM sections WHERE rowid = :id",
+  );
+  const update = db.prepare("UPDATE sections SET section_path_hash = :h WHERE rowid = :id");
+  for (const id of collectRowIds(db, "sections")) {
+    const row = select.get({ id }) as SectionHashRow | undefined;
+    if (row === undefined) continue;
+    const canonicalJson = openMaybeSealedText(cipher, row.section_path_json);
+    const hash = sectionPathHashFromJson(canonicalJson);
+    if (row.section_path_hash !== hash) update.run({ h: hash, id });
+  }
+}
+
+function sealTextColumns(db: DatabaseSync, cipher: StoreContentCipher): void {
+  for (const target of TEXT_TARGETS) {
+    sealTextColumn(db, target, cipher);
+  }
+}
+
+function sealPathTextColumns(db: DatabaseSync, cipher: StoreContentCipher): void {
+  for (const target of PATH_TEXT_TARGETS) {
+    sealTextColumn(db, target, cipher);
+  }
+}
+
+function assertTextColumnSealed(
+  db: DatabaseSync,
+  target: TextTarget,
+  cipher: StoreContentCipher,
+): void {
+  const select = db.prepare(
+    `SELECT ${target.column} AS value FROM ${target.table} WHERE rowid = :id`,
+  );
+  for (const id of collectRowIds(db, target.table)) {
+    const row = select.get({ id }) as TextSweepRow | undefined;
+    const value = row?.value;
+    if (value === undefined || value === null) continue;
+    if (isAlreadySealed(cipher, value)) continue;
+    throw new KnowledgeStoreError(
+      `encrypted Local Knowledge store contains unsealed ${target.table}.${target.column}`,
+    );
+  }
+}
+
+function assertLegacyTextColumnsSealed(db: DatabaseSync, cipher: StoreContentCipher): void {
+  for (const target of LEGACY_TEXT_TARGETS) {
+    assertTextColumnSealed(db, target, cipher);
+  }
+}
+
+function assertVectorOpens(row: VectorSweepRow, cipher: StoreContentCipher): void {
+  const plaintextByteLength = row.vector_dimensions * BYTES_PER_FLOAT32;
+  try {
+    cipher.openVector(row.embedding, plaintextByteLength);
+  } catch (cause) {
+    throw new KnowledgeStoreError(
+      "encrypted Local Knowledge vector row is neither plaintext nor a valid sealed envelope",
+      { cause },
+    );
+  }
+}
+
+function sealVectorColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
+  const select = db.prepare("SELECT embedding, vector_dimensions FROM vectors WHERE rowid = :id");
+  const update = db.prepare("UPDATE vectors SET embedding = :e WHERE rowid = :id");
+  for (const id of collectRowIds(db, "vectors")) {
+    const row = select.get({ id }) as VectorSweepRow | undefined;
+    if (row === undefined) continue;
+    if (row.embedding.byteLength === row.vector_dimensions * BYTES_PER_FLOAT32) {
+      update.run({ e: cipher.sealVector(row.embedding), id });
+      continue;
+    }
+    assertVectorOpens(row, cipher);
   }
 }
 
@@ -79,18 +205,23 @@ interface VectorSweepRow {
   readonly vector_dimensions: number;
 }
 
-// Seals every plaintext embedding BLOB, one row at a time. A stored blob whose byte length equals
-// dimensions * 4 is legacy plaintext (Float32 packed) and is sealed; a longer blob is already a sealed
-// envelope and is left untouched, so the sweep is idempotent.
-function sealVectorColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
+function assertVectorColumnSealed(db: DatabaseSync, cipher: StoreContentCipher): void {
   const select = db.prepare("SELECT embedding, vector_dimensions FROM vectors WHERE rowid = :id");
-  const update = db.prepare("UPDATE vectors SET embedding = :e WHERE rowid = :id");
   for (const id of collectRowIds(db, "vectors")) {
     const row = select.get({ id }) as VectorSweepRow | undefined;
-    if (row === undefined) continue;
-    if (row.embedding.byteLength !== row.vector_dimensions * BYTES_PER_FLOAT32) continue;
-    update.run({ e: cipher.sealVector(row.embedding), id });
+    if (row !== undefined) assertVectorOpens(row, cipher);
   }
+}
+
+function sealReconstructiveContent(db: DatabaseSync, cipher: StoreContentCipher): void {
+  ensureSectionPathHashes(db, cipher);
+  sealTextColumns(db, cipher);
+  sealVectorColumn(db, cipher);
+}
+
+function flushPlaintextResidue(db: DatabaseSync): void {
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.exec("VACUUM");
 }
 
 function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void {
@@ -98,9 +229,7 @@ function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void 
   // completion MARKER is deliberately NOT written here — see phase 2.
   db.exec("BEGIN");
   try {
-    sealTextColumn(db, "document_texts", cipher);
-    sealTextColumn(db, "document_text_windows", cipher);
-    sealVectorColumn(db, cipher);
+    sealReconstructiveContent(db, cipher);
     writeSchemaMeta(db, ENCRYPTION_PROBE_KEY, cipher.sealText(ENCRYPTION_PROBE_PLAINTEXT));
     db.exec("COMMIT");
   } catch (cause) {
@@ -111,16 +240,34 @@ function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void 
     );
   }
   // Phase 2: after the in-place UPDATEs, plaintext can linger in the WAL and on freed pages. Truncate
-  // the WAL and VACUUM so the rewritten file holds no plaintext extracted text or vector bytes
-  // (ADR-0047 D4). These run outside the transaction; VACUUM cannot run inside one.
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  db.exec("VACUUM");
+  // the WAL and VACUUM so the rewritten file holds no plaintext extracted text, path labels, or
+  // vector bytes (ADR-0047 D4). These run outside the transaction; VACUUM cannot run inside one.
   // Phase 3: mark the store encrypted ONLY after the file has been rewritten free of plaintext. If
   // phase 2 throws (I/O error, disk full), the marker stays unset, this open fails closed, and the
   // next open re-runs the idempotent migration instead of skipping it over a WAL that still holds
   // plaintext. The seal sweep is a no-op on the already-sealed rows, so the retry only re-checkpoints
   // and re-VACUUMs.
+  flushPlaintextResidue(db);
   writeSchemaMeta(db, ENCRYPTION_MARKER_KEY, ENCRYPTION_MARKER_VALUE);
+  writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
+}
+
+function upgradeEncryptedScope(db: DatabaseSync, cipher: StoreContentCipher): void {
+  db.exec("BEGIN");
+  try {
+    ensureSectionPathHashes(db, cipher);
+    assertLegacyTextColumnsSealed(db, cipher);
+    assertVectorColumnSealed(db, cipher);
+    sealPathTextColumns(db, cipher);
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw new KnowledgeStoreError("failed to upgrade Local Knowledge encrypted-content coverage", {
+      cause,
+    });
+  }
+  flushPlaintextResidue(db);
+  writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
 }
 
 function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {
@@ -151,16 +298,45 @@ function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {
 // openKnowledgeStore after migrations and before the handle is returned.
 export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreContentCipher): void {
   const marker = readSchemaMeta(db, ENCRYPTION_MARKER_KEY);
+  const probe = readSchemaMeta(db, ENCRYPTION_PROBE_KEY);
+  const scope = readSchemaMeta(db, ENCRYPTION_SCOPE_KEY);
   if (marker !== undefined) {
+    if (marker !== ENCRYPTION_MARKER_VALUE) {
+      throw new KnowledgeStoreError(
+        `unsupported Local Knowledge content encryption marker: ${marker}`,
+      );
+    }
     if (!cipher.isEncrypted) {
       throw new KnowledgeStoreError(
         "this Local Knowledge store is encrypted; a key provider is required to open it",
       );
     }
     verifyProbe(db, cipher);
+    if (scope !== undefined && scope !== ENCRYPTION_SCOPE_VALUE) {
+      throw new KnowledgeStoreError(
+        `unsupported Local Knowledge content encryption scope marker: ${scope}`,
+      );
+    }
+    if (scope !== ENCRYPTION_SCOPE_VALUE) {
+      upgradeEncryptedScope(db, cipher);
+    }
     return;
   }
-  if (!cipher.isEncrypted) return;
+  if (probe !== undefined) {
+    if (!cipher.isEncrypted) {
+      throw new KnowledgeStoreError(
+        "this Local Knowledge store has an incomplete encrypted-content migration; " +
+          "a key provider is required to finish opening it",
+      );
+    }
+    verifyProbe(db, cipher);
+    migrateToEncrypted(db, cipher);
+    return;
+  }
+  if (!cipher.isEncrypted) {
+    ensureSectionPathHashes(db, cipher);
+    return;
+  }
   migrateToEncrypted(db, cipher);
 }
 
@@ -169,4 +345,6 @@ export const STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS = {
   markerValue: ENCRYPTION_MARKER_VALUE,
   probeKey: ENCRYPTION_PROBE_KEY,
   probePlaintext: ENCRYPTION_PROBE_PLAINTEXT,
+  scopeKey: ENCRYPTION_SCOPE_KEY,
+  scopeValue: ENCRYPTION_SCOPE_VALUE,
 } as const;

@@ -125,7 +125,7 @@ function chunkOneUnit(
   const end = row.character_end ?? start;
   const unitText =
     readDocumentTextSpan(db, cipher, params.capsuleId, params.documentId, start, end) ?? "";
-  const rebased = rebaseUnit(rowToParsedUnit(row, params.documentId), unitText.length);
+  const rebased = rebaseUnit(rowToParsedUnit(row, params.documentId, cipher), unitText.length);
   const chunks = chunkParsedUnit(
     rebased,
     unitText,
