@@ -24,7 +24,7 @@ import type { RouteContext, RouteResult } from "../routes.js";
 import { errorBody } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  currentEvidenceOpaqueRedactionSecrets,
+  currentEvidenceRequiresFullStringRedaction,
   currentEvidenceTopologyRedactionSecrets,
   currentGatewayConfig,
 } from "../deps.js";
@@ -128,7 +128,7 @@ function recordEvidenceReference(
     evidenceDir: deps.evidenceDir,
     redaction: {
       additionalSecrets: currentEvidenceTopologyRedactionSecrets(deps),
-      opaqueSecrets: currentEvidenceOpaqueRedactionSecrets(deps),
+      redactAllStrings: currentEvidenceRequiresFullStringRedaction(deps),
     },
   });
   return {

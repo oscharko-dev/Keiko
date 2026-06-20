@@ -3,10 +3,9 @@
 // Runs the authoritative `redact` from `@oscharko-dev/keiko-security` over every string leaf of a
 // candidate Prompt Enhancement evidence record, returning the redacted value plus a counts-only
 // `redactionSummary` (matched-string count, never the matched text). Topology literals (baseUrl/proxy
-// values) are passed through as `additionalSecrets` for substring redaction. Opaque credentials (API
-// keys/tokens) are passed through `opaqueSecrets`: if one appears in a string leaf, the whole leaf is
-// replaced by a fixed marker before evidence hashing, so the credential value never becomes a hash
-// input.
+// values) are passed through as `additionalSecrets` for substring redaction. When opaque credentials
+// (API keys/tokens) are configured, callers set `redactAllStrings`; every string leaf is replaced by
+// a fixed marker before evidence hashing, so credential values never travel toward hash inputs.
 
 import { redact } from "@oscharko-dev/keiko-security";
 import type { PromptEnhancementRedactionSummary } from "./manifestSchema.js";
@@ -27,18 +26,14 @@ function createCounter(): CounterState {
   };
 }
 
-function hasOpaqueSecret(input: string, opaqueSecrets: readonly string[]): boolean {
-  return opaqueSecrets.some((secret) => secret.length > 0 && input.includes(secret));
-}
-
 function redactString(
   input: string,
   additionalSecrets: readonly string[],
-  opaqueSecrets: readonly string[],
+  redactAllStrings: boolean,
   counter: CounterState,
 ): string {
   counter.totalStringsScanned += 1;
-  if (hasOpaqueSecret(input, opaqueSecrets)) {
+  if (redactAllStrings) {
     counter.patternsMatched["opaque-secret"] = (counter.patternsMatched["opaque-secret"] ?? 0) + 1;
     counter.stringsRedacted += 1;
     return REDACTED;
@@ -55,21 +50,21 @@ function redactString(
 function deepRedact(
   value: unknown,
   additionalSecrets: readonly string[],
-  opaqueSecrets: readonly string[],
+  redactAllStrings: boolean,
   counter: CounterState,
 ): unknown {
   if (typeof value === "string") {
-    return redactString(value, additionalSecrets, opaqueSecrets, counter);
+    return redactString(value, additionalSecrets, redactAllStrings, counter);
   }
   if (Array.isArray(value)) {
     return value.map((item): unknown =>
-      deepRedact(item, additionalSecrets, opaqueSecrets, counter),
+      deepRedact(item, additionalSecrets, redactAllStrings, counter),
     );
   }
   if (typeof value === "object" && value !== null) {
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
-      out[key] = deepRedact(child, additionalSecrets, opaqueSecrets, counter);
+      out[key] = deepRedact(child, additionalSecrets, redactAllStrings, counter);
     }
     return out;
   }
@@ -81,9 +76,9 @@ export interface PromptEnhancementRedactionOptions {
   // literals so non-standard shapes still scrub. Strings shorter than the security floor are filtered
   // out there, not here.
   readonly additionalSecrets?: readonly string[] | undefined;
-  // Opaque credentials whose exact value must never become part of a redacted evidence fingerprint or
-  // integrity hash. If any appears in a string leaf, the whole leaf becomes `[REDACTED]`.
-  readonly opaqueSecrets?: readonly string[] | undefined;
+  // Use when opaque credentials are configured. This intentionally does not carry the credential
+  // values; instead every string leaf becomes `[REDACTED]` before any evidence hash is computed.
+  readonly redactAllStrings?: boolean | undefined;
 }
 
 export interface PromptEnhancementRedactionResult<TValue> {
@@ -102,9 +97,9 @@ export function redactPromptEnhancementEvidence<TValue>(
   options: PromptEnhancementRedactionOptions = {},
 ): PromptEnhancementRedactionResult<TValue> {
   const additionalSecrets: readonly string[] = options.additionalSecrets ?? [];
-  const opaqueSecrets: readonly string[] = options.opaqueSecrets ?? [];
+  const redactAllStrings = options.redactAllStrings ?? false;
   const counter = createCounter();
-  const redacted = deepRedact(value, additionalSecrets, opaqueSecrets, counter) as TValue;
+  const redacted = deepRedact(value, additionalSecrets, redactAllStrings, counter) as TValue;
   const summary: PromptEnhancementRedactionSummary = {
     totalStringsScanned: counter.totalStringsScanned,
     stringsRedacted: counter.stringsRedacted,

@@ -185,10 +185,11 @@ function buildEvidenceManifest(
     recordedAt: new Date().toISOString(),
   });
   // The builder fingerprints + redacts by construction, so the returned manifest carries no raw secret.
-  // Pass env + loaded config literals so config-only secrets are scrubbed too.
+  // Topology values are literal-redacted; configured credentials only trigger full string redaction so
+  // the raw credential values never approach the evidence hashing boundary.
   return buildPromptEnhancementEvidenceManifest(record, {
     additionalSecrets: promptEnhancerTopologyRedactionSecrets(config),
-    opaqueSecrets: promptEnhancerOpaqueRedactionSecrets(env, config),
+    redactAllStrings: promptEnhancerHasOpaqueRedactionSecret(env, config),
   }).manifest;
 }
 
@@ -245,16 +246,14 @@ function promptEnhancerTopologyRedactionSecrets(
   return Array.from(new Set(configTopologyValues(config)));
 }
 
-function promptEnhancerOpaqueRedactionSecrets(
+function promptEnhancerHasOpaqueRedactionSecret(
   env: EnvSource,
   config: GatewayConfig | undefined,
-): readonly string[] {
-  return Array.from(
-    new Set([
-      ...keikoApiKeySecretValues(env),
-      ...figmaEnvSecretValues(env),
-      ...configOpaqueSecretValues(config),
-    ]),
+): boolean {
+  return (
+    keikoApiKeySecretValues(env).length > 0 ||
+    figmaEnvSecretValues(env).length > 0 ||
+    configOpaqueSecretValues(config).length > 0
   );
 }
 

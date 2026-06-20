@@ -499,13 +499,11 @@ export function currentEvidenceTopologyRedactionSecrets(deps: UiHandlerDeps): re
   );
 }
 
-export function currentEvidenceOpaqueRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
-  return Array.from(
-    new Set([
-      ...keikoApiKeySecretValues(deps.env),
-      ...figmaEnvSecretValues(deps.env),
-      ...configOpaqueSecretValues(currentGatewayConfig(deps)),
-    ]),
+export function currentEvidenceRequiresFullStringRedaction(deps: UiHandlerDeps): boolean {
+  return (
+    keikoApiKeySecretValues(deps.env).length > 0 ||
+    figmaEnvSecretValues(deps.env).length > 0 ||
+    configOpaqueSecretValues(currentGatewayConfig(deps)).length > 0
   );
 }
 

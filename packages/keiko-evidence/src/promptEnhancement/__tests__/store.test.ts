@@ -144,16 +144,16 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
     expect(manifest.enhancedPromptTextRedacted).not.toContain("super-secret-literal");
   });
 
-  it("hashes opaque credential redactions from a fixed marker", () => {
-    const apiKey = "config-only-api-key";
+  it("hashes full-redaction evidence from a fixed marker", () => {
+    const credentialText = "config-only-credential";
     const { manifest } = buildPromptEnhancementEvidenceManifest(
-      recordInput({ originalInput: `Use ${apiKey} for the provider.` }),
-      { opaqueSecrets: [apiKey] },
+      recordInput({ originalInput: `Use ${credentialText} for the provider.` }),
+      { redactAllStrings: true },
     );
     expect(manifest.inputExcerptRedacted).toBe("[REDACTED]");
     expect(manifest.inputRedactedFingerprintSha256).toBe(sha256Hex("[REDACTED]"));
     expect(manifest.inputRedactedFingerprintSha256).not.toBe(
-      sha256Hex(`Use ${apiKey} for the provider.`),
+      sha256Hex(`Use ${credentialText} for the provider.`),
     );
   });
 });
