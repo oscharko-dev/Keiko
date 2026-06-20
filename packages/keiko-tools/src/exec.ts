@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  planIsolatedRun,
+  probeBackends,
+  type BackendAvailability,
+} from "@oscharko-dev/keiko-sandbox";
+import {
   containedRealPathInfo,
   isDenied,
   isWithinWorkspace,
@@ -25,7 +30,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
-import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";
+import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
 
 export interface SpawnOptions {
   readonly cwd: string;
@@ -79,6 +84,12 @@ export interface RunCommandDeps {
   readonly fs?: WorkspaceFs | undefined;
   // Supplies the ephemeral empty HOME/USERPROFILE for the child (C5). Defaults to nodeHomeProvider.
   readonly home?: HomeProvider | undefined;
+  // Egress enforcement (ADR-0043). When policy.network === "none", keiko-sandbox wraps the spawn in
+  // an OS/container boundary so an outbound connection from the child fails; a host with no enforcing
+  // backend fails the command closed (untrusted code is never run unprotected). These seams let tests
+  // force a backend deterministically; they default to probing the real host.
+  readonly sandboxAvailability?: BackendAvailability | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 export interface RunCommandInput {
@@ -205,6 +216,56 @@ function defaultResolveExecutable(command: string, deps: ExecutableResolverDeps)
   throw new CommandDeniedError(`executable not found on PATH: ${command}`, command);
 }
 
+// The command/args/attestation actually handed to spawn. For an inherited-network run this is the
+// resolved executable unchanged; for network:"none" it is the isolation wrapper (bwrap/sandbox-exec/
+// unshare/container) with the resolved executable nested inside, and the attestation records how
+// egress was enforced (ADR-0043).
+interface SpawnTarget {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly attestation: SandboxAttestation | undefined;
+}
+
+// Resolves the isolation wrapper binary (e.g. bwrap) to a real absolute path through the same
+// resolver as the inner command, so the wrapper is PATH-resolved and proven to live outside the
+// workspace before it is ever spawned.
+function resolveWrapperExecutable(name: string, deps: RunCommandDeps): string {
+  const resolver = deps.resolveExecutable ?? defaultResolveExecutable;
+  return resolver(name, { workspace: deps.workspace, processEnv: deps.processEnv, fs: deps.fs });
+}
+
+// Decides what to spawn. Inherited network → run the executable directly. network:"none" → ask
+// keiko-sandbox for an enforcing wrapper; a fail-closed decision throws (the command never spawns),
+// so untrusted code is never executed without an enforced egress boundary.
+function resolveSpawnTarget(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  executable: string,
+  cwd: string,
+): SpawnTarget {
+  if (deps.policy.network !== "none") {
+    return { command: executable, args: input.args, attestation: undefined };
+  }
+  const platform = deps.platform ?? process.platform;
+  const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
+  const decision = planIsolatedRun(
+    { command: executable, args: input.args, cwd, network: "none" },
+    availability,
+    platform,
+  );
+  if (decision.kind === "fail-closed") {
+    throw new CommandDeniedError(decision.reason, input.command);
+  }
+  if (decision.kind === "passthrough") {
+    return { command: executable, args: input.args, attestation: decision.attestation };
+  }
+  return {
+    command: resolveWrapperExecutable(decision.command, deps),
+    args: decision.args,
+    attestation: decision.attestation,
+  };
+}
+
 function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: number): boolean {
   if (buffers.truncated) {
     return false;
@@ -262,8 +323,10 @@ function buildResult(
   termSignal: NodeJS.Signals | null,
   deps: RunCommandDeps,
   startedAt: number,
+  attestation: SandboxAttestation | undefined,
 ): CommandResult {
   const secrets = collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist);
+  const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
     return {
       command: input.command,
@@ -275,6 +338,7 @@ function buildResult(
       durationMs: deps.now() - startedAt,
       timedOut: state.timedOut,
       truncated: true,
+      ...attest,
     };
   }
   return {
@@ -287,6 +351,7 @@ function buildResult(
     durationMs: deps.now() - startedAt,
     timedOut: state.timedOut,
     truncated: buffers.truncated,
+    ...attest,
   };
 }
 
@@ -341,6 +406,7 @@ interface ExecContext {
   readonly buffers: Buffers;
   readonly state: RunState;
   readonly startedAt: number;
+  readonly attestation: SandboxAttestation | undefined;
 }
 
 function settleOnClose(
@@ -363,7 +429,16 @@ function settleOnClose(
       return;
     }
     resolve(
-      buildResult(ctx.input, ctx.buffers, ctx.state, code, signalName, ctx.deps, ctx.startedAt),
+      buildResult(
+        ctx.input,
+        ctx.buffers,
+        ctx.state,
+        code,
+        signalName,
+        ctx.deps,
+        ctx.startedAt,
+        ctx.attestation,
+      ),
     );
   });
   ctx.child.on("error", (error) => {
@@ -437,13 +512,13 @@ function createRunState(home: HomeProvider, homeDir: string): RunState {
 function spawnChild(
   input: RunCommandInput,
   deps: RunCommandDeps,
-  executable: string,
+  target: SpawnTarget,
   cwd: string,
   env: Record<string, string>,
   state: RunState,
 ): ChildProcess {
   try {
-    return deps.spawn(executable, input.args, { cwd, env, shell: false, detached: POSIX });
+    return deps.spawn(target.command, target.args, { cwd, env, shell: false, detached: POSIX });
   } catch (error) {
     cleanup(state, input.signal);
     throw asError(error, "spawn failed");
@@ -467,15 +542,24 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     validateRunCommandInput(input, deps);
     const executable = resolveExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);
+    const target = resolveSpawnTarget(input, deps, executable, cwd);
     const env = buildSandboxEnv(deps.processEnv, deps.policy.envAllowlist);
     const home = deps.home ?? nodeHomeProvider;
     const homeDir = home.make();
     env.HOME = homeDir;
     env.USERPROFILE = homeDir;
     const state = createRunState(home, homeDir);
-    const child = spawnChild(input, deps, executable, cwd, env, state);
+    const child = spawnChild(input, deps, target, cwd, env, state);
     const buffers: Buffers = { out: [], err: [], total: 0, truncated: false };
-    const ctx: ExecContext = { child, input, deps, buffers, state, startedAt: deps.now() };
+    const ctx: ExecContext = {
+      child,
+      input,
+      deps,
+      buffers,
+      state,
+      startedAt: deps.now(),
+      attestation: target.attestation,
+    };
     return runSpawnedChild(ctx);
   } catch (error) {
     return Promise.reject(asError(error, "command execution failed"));

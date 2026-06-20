@@ -2,6 +2,7 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
+import { basename } from "node:path";
 import type { IsolatedRunPlan, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -54,7 +55,9 @@ function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
 
 function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] {
   // --network=none removes all networking. The execution root is bind-mounted read-write and used as
-  // the working directory so the wrapped toolchain sees the same paths it would natively.
+  // the working directory so the wrapped toolchain sees the same paths it would natively. Unlike the
+  // native backends (which share the host filesystem and so take an absolute executable path), the
+  // container resolves the command from the IMAGE's PATH, so only the bare name is used.
   return [
     "run",
     "--rm",
@@ -64,7 +67,7 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
     "--workdir",
     plan.cwd,
     image,
-    plan.command,
+    basename(plan.command),
     ...plan.args,
   ];
 }
