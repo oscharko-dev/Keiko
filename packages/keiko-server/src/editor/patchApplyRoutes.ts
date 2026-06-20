@@ -14,8 +14,8 @@
 // only after it passes keiko-tools validation (scope containment AC2, per-hunk write-conflict detection,
 // size/line/file limits, and the no-silent-overwrite guardrail AC7/AC14). The diff is round-tripped from
 // the generation response and re-validated from scratch — the client's framing is never trusted. On a
-// failed verification a guarded revert proposal (an inverse diff for explicit re-apply) is surfaced; the
-// server never reverts silently (AC5).
+// failed verification a guarded restore proposal for explicit re-apply is surfaced; the server never
+// reverts silently (AC5).
 
 import {
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
@@ -31,9 +31,10 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import {
   applyPatch,
-  invertPatch,
+  buildRestorePatch,
   validatePatch,
   type PatchApplyResult,
+  type PatchFileChange,
   type PatchRejection,
   type PatchValidation,
 } from "@oscharko-dev/keiko-tools";
@@ -47,7 +48,9 @@ import { clientAbortSignal } from "./languageRoutes.js";
 import { recordPatchApplyEvidence, recordPatchVerificationEvidence } from "./patchApplyEvidence.js";
 import {
   defaultPostApplyVerification,
+  defaultPostApplyVerificationPreflight,
   skippedVerificationSummary,
+  type PostApplyVerificationPreflightPort,
   type PostApplyVerificationPort,
 } from "./postApplyVerification.js";
 
@@ -65,6 +68,7 @@ const DISABLE_TOKENS: ReadonlySet<string> = new Set(["0", "false", "off", "no", 
 
 const DISABLED_REASON =
   "Editor-driven patch apply is disabled in this build. It is a wave-2 feature gated behind an enforced network-egress boundary (ADR-0042 D7).";
+const DISABLED_PATCH_ID = "disabled";
 const REJECTED_REASON = "The candidate patch was rejected; the workspace was not modified.";
 const FAILED_REASON = "The patch could not be applied. The editor is still usable.";
 const REVERT_REASON =
@@ -73,6 +77,7 @@ const REVERT_REASON =
 /** Injectable options for the route (tests supply a deterministic verification port and a fixed clock). */
 export interface EditorPatchApplyRouteOptions {
   readonly verification?: PostApplyVerificationPort | undefined;
+  readonly verificationPreflight?: PostApplyVerificationPreflightPort | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -98,11 +103,11 @@ function isRouteResult(value: unknown): value is RouteResult {
 
 // ─── Response builders ───────────────────────────────────────────────────────────────────────────
 
-function disabledResponse(patchId: string): EditorPatchApplyWireResponse {
+function disabledResponse(): EditorPatchApplyWireResponse {
   return {
     schemaVersion: EDITOR_PATCH_APPLY_SCHEMA_VERSION,
     status: "disabled",
-    patchId,
+    patchId: DISABLED_PATCH_ID,
     reason: DISABLED_REASON,
   };
 }
@@ -194,22 +199,21 @@ function verifiableFiles(result: PatchApplyResult): readonly string[] {
   return result.changedFiles.filter((path) => !deleted.has(path));
 }
 
+function verifiableValidationFiles(files: readonly PatchFileChange[]): readonly string[] {
+  return files.filter((file) => file.kind !== "delete").map((file) => file.path);
+}
+
 function buildRevertProposal(
   request: EditorPatchApplyWireRequest,
-  effectiveDiff: string,
+  restoreDiff: string,
   result: PatchApplyResult,
 ): EditorPatchRevertProposal | undefined {
-  try {
-    return {
-      patchId: request.patchId,
-      diff: invertPatch(effectiveDiff),
-      changedFiles: result.changedFiles,
-      reason: REVERT_REASON,
-    };
-  } catch {
-    // An un-invertible diff yields no proposal; the failed status + detail still bound the outcome (AC5).
-    return undefined;
-  }
+  return {
+    patchId: request.patchId,
+    diff: restoreDiff,
+    changedFiles: result.changedFiles,
+    reason: REVERT_REASON,
+  };
 }
 
 // ─── Apply handling ────────────────────────────────────────────────────────────────────────────────
@@ -227,7 +231,7 @@ async function runVerificationPhase(
   ctx: ApplyContext,
   result: PatchApplyResult,
 ): Promise<{ readonly summary: EditorPatchVerificationSummary; readonly command: string }> {
-  if (!isPatchApplyVerificationEnabledByPolicy(ctx.deps.env) || ctx.request.verify === false) {
+  if (!isPatchApplyVerificationEnabledByPolicy(ctx.deps.env)) {
     return { summary: skippedVerificationSummary(), command: "none" };
   }
   const port = ctx.options.verification ?? defaultPostApplyVerification;
@@ -275,10 +279,51 @@ function failureOutcome(ctx: ApplyContext): EditorPatchApplyWireResponse {
   return failedResponse(ctx.request.patchId, { applyRunId });
 }
 
+async function verificationPreflightOutcome(
+  ctx: ApplyContext,
+  validation: PatchValidation,
+): Promise<EditorPatchApplyWireResponse | undefined> {
+  if (!isPatchApplyVerificationEnabledByPolicy(ctx.deps.env)) {
+    return undefined;
+  }
+  const port = ctx.options.verificationPreflight ?? defaultPostApplyVerificationPreflight;
+  const preflight = await port({
+    realRoot: ctx.realRoot,
+    appliedTestFiles: verifiableValidationFiles(validation.files),
+  });
+  if (preflight.ok) {
+    return undefined;
+  }
+  const applyRunId = recordPatchApplyEvidence(
+    ctx.deps.evidenceStore,
+    ctx.deps.redactor,
+    {
+      patchId: ctx.request.patchId,
+      decision: "apply",
+      status: "failed",
+      applied: false,
+      allowOverwrite: ctx.request.allowOverwrite === true,
+    },
+    ctx.nowMs,
+  );
+  const verificationRunId = recordPatchVerificationEvidence(
+    ctx.deps.evidenceStore,
+    ctx.deps.redactor,
+    {
+      patchId: ctx.request.patchId,
+      rootRealPath: ctx.realRoot,
+      command: preflight.command,
+      summary: preflight.summary,
+    },
+    ctx.nowMs,
+  );
+  return failedResponse(ctx.request.patchId, { applyRunId, verificationRunId });
+}
+
 async function appliedOutcome(
   ctx: ApplyContext,
   result: PatchApplyResult,
-  validation: PatchValidation,
+  restoreDiff: string | undefined,
 ): Promise<EditorPatchApplyWireResponse> {
   const { request, deps, nowMs } = ctx;
   const counts = changeCounts(result);
@@ -302,9 +347,10 @@ async function appliedOutcome(
     { patchId: request.patchId, rootRealPath: ctx.realRoot, command, summary },
     nowMs,
   );
-  const effectiveDiff = validation.normalizedDiff ?? request.diff;
   const revertProposal =
-    summary.outcome === "failed" ? buildRevertProposal(request, effectiveDiff, result) : undefined;
+    summary.outcome === "failed" && restoreDiff !== undefined
+      ? buildRevertProposal(request, restoreDiff, result)
+      : undefined;
   return {
     schemaVersion: EDITOR_PATCH_APPLY_SCHEMA_VERSION,
     status: "applied",
@@ -323,6 +369,18 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   if (!validation.ok) {
     return conflictOutcome(ctx, validation);
   }
+  const preflightResponse = await verificationPreflightOutcome(ctx, validation);
+  if (preflightResponse !== undefined) {
+    return preflightResponse;
+  }
+  let restoreDiff: string | undefined;
+  try {
+    restoreDiff = buildRestorePatch(workspace, validation.normalizedDiff ?? ctx.request.diff, {
+      allowOverwrite,
+    });
+  } catch {
+    return failureOutcome(ctx);
+  }
   let result: PatchApplyResult;
   try {
     result = applyPatch(workspace, ctx.request.diff, {
@@ -333,7 +391,7 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   } catch {
     return failureOutcome(ctx);
   }
-  return appliedOutcome(ctx, result, validation);
+  return appliedOutcome(ctx, result, restoreDiff);
 }
 
 export async function handleEditorPatchApply(
@@ -341,6 +399,10 @@ export async function handleEditorPatchApply(
   deps: UiHandlerDeps,
   options: EditorPatchApplyRouteOptions = {},
 ): Promise<RouteResult> {
+  // Gate A — default OFF: surface disabled without reading, parsing, validation, writes, or execution.
+  if (!isPatchApplyEnabledByPolicy(deps.env)) {
+    return { status: 200, body: deps.redactor(disabledResponse()) };
+  }
   const body = await readJsonObject(ctx.req, MAX_PATCH_APPLY_BODY_BYTES);
   if (isRouteResult(body)) {
     return body;
@@ -350,10 +412,6 @@ export async function handleEditorPatchApply(
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   const request = parsed.value;
-  // Gate A — default OFF: surface the disabled state (echoing patchId) without any validation or write.
-  if (!isPatchApplyEnabledByPolicy(deps.env)) {
-    return { status: 200, body: deps.redactor(disabledResponse(request.patchId)) };
-  }
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     const nowMs = (options.now ?? Date.now)();

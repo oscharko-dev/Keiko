@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch, invertPatch, validatePatch } from "./patch.js";
+import { applyPatch, buildRestorePatch, invertPatch, validatePatch } from "./patch.js";
 import { PatchValidationError } from "./errors.js";
 import { makeWorkspace } from "./_support.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -35,6 +35,7 @@ function liveSignal(): AbortSignal {
 
 const CREATE_DIFF = "--- /dev/null\n+++ b/src/new.test.ts\n@@ -0,0 +1,1 @@\n+created\n";
 const MODIFY_DIFF = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+const DELETE_DIFF = "--- a/src/delete.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-remove me\n";
 
 describe("invertPatch", () => {
   it("inverts a create into a delete", () => {
@@ -97,5 +98,51 @@ describe("allowOverwrite apply option (AC7/AC14)", () => {
       allowOverwrite: true,
     });
     expect(read("src/new.test.ts")).toBe("created\n");
+  });
+});
+
+describe("buildRestorePatch", () => {
+  it("restores a created file by deleting it", () => {
+    const restore = buildRestorePatch(info, CREATE_DIFF);
+    expect(restore).toBeDefined();
+    if (restore === undefined) {
+      throw new Error("expected a content-safe restore diff");
+    }
+    applyPatch(info, CREATE_DIFF, { applyEnabled: true, signal: liveSignal() });
+    expect(read("src/new.test.ts")).toBe("created\n");
+    applyPatch(info, restore, { applyEnabled: true, signal: liveSignal() });
+    expect(existsSync(join(root, "src/new.test.ts"))).toBe(false);
+  });
+
+  it("restores a modified file to its pre-apply content", () => {
+    write("src/x.txt", "one\ntwo\n");
+    const restore = buildRestorePatch(info, MODIFY_DIFF);
+    expect(restore).toBeDefined();
+    if (restore === undefined) {
+      throw new Error("expected a content-safe restore diff");
+    }
+    applyPatch(info, MODIFY_DIFF, { applyEnabled: true, signal: liveSignal() });
+    expect(read("src/x.txt")).toBe("one\nTWO\n");
+    applyPatch(info, restore, { applyEnabled: true, signal: liveSignal() });
+    expect(read("src/x.txt")).toBe("one\ntwo\n");
+  });
+
+  it("restores a deleted file by recreating its original content", () => {
+    write("src/delete.txt", "remove me\n");
+    const restore = buildRestorePatch(info, DELETE_DIFF);
+    expect(restore).toBeDefined();
+    if (restore === undefined) {
+      throw new Error("expected a content-safe restore diff");
+    }
+    applyPatch(info, DELETE_DIFF, { applyEnabled: true, signal: liveSignal() });
+    expect(existsSync(join(root, "src/delete.txt"))).toBe(false);
+    applyPatch(info, restore, { applyEnabled: true, signal: liveSignal() });
+    expect(read("src/delete.txt")).toBe("remove me\n");
+  });
+
+  it("does not emit a restore diff for explicit create-over-existing overwrite", () => {
+    write("src/new.test.ts", "existing\n");
+    const restore = buildRestorePatch(info, CREATE_DIFF, { allowOverwrite: true });
+    expect(restore).toBeUndefined();
   });
 });

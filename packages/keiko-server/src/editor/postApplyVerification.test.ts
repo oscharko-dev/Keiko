@@ -16,6 +16,7 @@ import {
   defaultPostApplyVerification,
   notRunVerificationSummary,
   probeNetworkIsolation,
+  requiresPostApplyVerificationPreflight,
   skippedVerificationSummary,
 } from "./postApplyVerification.js";
 
@@ -34,14 +35,17 @@ function note(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
-function workspaceOf(root: string): WorkspaceInfo {
+function workspaceOf(
+  root: string,
+  testFramework: WorkspaceInfo["testFramework"] = "unknown",
+): WorkspaceInfo {
   return {
     root,
     name: undefined,
     version: undefined,
-    testFramework: "unknown" as const,
-    sourceDirs: [],
-    testDirs: [],
+    testFramework,
+    sourceDirs: ["src"],
+    testDirs: ["test"],
     languages: [],
     ignoreLines: [],
   };
@@ -85,6 +89,36 @@ describe("defaultPostApplyVerification", () => {
       });
       expect(result.summary.outcome).toBe("not-run");
       expect(result.command).toBe("none");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("requiresPostApplyVerificationPreflight", () => {
+  it("requires sandbox preflight for newly-created direct targets before they exist", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-postapply-preflight-")));
+    try {
+      expect(
+        requiresPostApplyVerificationPreflight(workspaceOf(root, "vitest"), ["src/new.test.ts"]),
+      ).toBe(true);
+      expect(
+        requiresPostApplyVerificationPreflight(workspaceOf(root, "vitest"), ["src/source.ts"]),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require sandbox preflight for empty targets or unknown test frameworks", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-postapply-preflight-")));
+    try {
+      expect(requiresPostApplyVerificationPreflight(workspaceOf(root, "vitest"), [])).toBe(false);
+      expect(
+        requiresPostApplyVerificationPreflight(workspaceOf(root, "unknown"), [
+          "src/new.test.ts",
+        ]),
+      ).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

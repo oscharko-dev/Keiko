@@ -1020,7 +1020,6 @@ export interface EditorPatchApplyRequestInput {
   readonly decision: EditorPatchApplyDecision;
   readonly diff: string;
   readonly allowOverwrite?: boolean | undefined;
-  readonly verify?: boolean | undefined;
 }
 
 export async function requestEditorPatchApply(
@@ -1034,7 +1033,6 @@ export async function requestEditorPatchApply(
     decision: input.decision,
     diff: input.diff,
     ...(input.allowOverwrite === undefined ? {} : { allowOverwrite: input.allowOverwrite }),
-    ...(input.verify === undefined ? {} : { verify: input.verify }),
   };
   return fetchJson("/api/editor/patch-apply", {
     method: "POST",

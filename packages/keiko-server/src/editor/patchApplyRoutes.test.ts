@@ -19,7 +19,10 @@ import {
   isPatchApplyVerificationEnabledByPolicy,
   type EditorPatchApplyRouteOptions,
 } from "./patchApplyRoutes.js";
-import type { PostApplyVerificationPort } from "./postApplyVerification.js";
+import type {
+  PostApplyVerificationPreflightPort,
+  PostApplyVerificationPort,
+} from "./postApplyVerification.js";
 
 let root: string;
 let store: UiStore;
@@ -28,6 +31,17 @@ function postContext(body: unknown): RouteContext {
   const req = Readable.from([
     Buffer.from(JSON.stringify(body), "utf8"),
   ]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "POST";
+  return {
+    req,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL("http://localhost/api/editor/patch-apply"),
+  };
+}
+
+function rawPostContext(body: string): RouteContext {
+  const req = Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
     req,
@@ -53,6 +67,7 @@ const ENABLED_NO_VERIFY = {
   KEIKO_EDITOR_PATCH_APPLY: "on",
   KEIKO_EDITOR_PATCH_APPLY_VERIFICATION: "off",
 };
+const PATCH_ID = "0123456789abcdef0123456789abcdef";
 
 const CREATE_DIFF = "--- /dev/null\n+++ b/src/a.test.ts\n@@ -0,0 +1,1 @@\n+it('x', () => {});\n";
 const MODIFY_DIFF = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
@@ -62,7 +77,7 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
   return {
     schemaVersion: "1",
     root,
-    patchId: "patch-1",
+    patchId: PATCH_ID,
     decision: "apply",
     diff: CREATE_DIFF,
     ...overrides,
@@ -91,8 +106,17 @@ function verificationPort(s: EditorPatchVerificationSummary): PostApplyVerificat
   return () => Promise.resolve({ summary: s, command: "npx vitest run" });
 }
 
-function options(s: EditorPatchVerificationSummary = summary()): EditorPatchApplyRouteOptions {
-  return { verification: verificationPort(s), now: () => 1_000 };
+const passingPreflight: PostApplyVerificationPreflightPort = () => Promise.resolve({ ok: true });
+
+function deniedPreflight(s: EditorPatchVerificationSummary): PostApplyVerificationPreflightPort {
+  return () => Promise.resolve({ ok: false, summary: s, command: "none" });
+}
+
+function options(
+  s: EditorPatchVerificationSummary = summary(),
+  preflight: PostApplyVerificationPreflightPort = passingPreflight,
+): EditorPatchApplyRouteOptions {
+  return { verification: verificationPort(s), verificationPreflight: preflight, now: () => 1_000 };
 }
 
 function wire(result: { status: number; body: unknown }): EditorPatchApplyWireResponse {
@@ -141,8 +165,24 @@ describe("POST /api/editor/patch-apply — switched off (v1 default)", () => {
     expect(result.status).toBe(200);
     const response = wire(result);
     expect(response.status).toBe("disabled");
-    expect(response.patchId).toBe("patch-1");
+    expect(response.patchId).toBe("disabled");
     expect(await exists("src/a.test.ts")).toBe(false);
+  });
+
+  it("returns disabled for malformed JSON without request validation when the flag is off", async () => {
+    const result = await handleEditorPatchApply(rawPostContext("{not json"), deps(), options());
+    expect(result.status).toBe(200);
+    expect(wire(result).status).toBe("disabled");
+  });
+
+  it("returns disabled for an oversized raw body without reading it when the flag is off", async () => {
+    const result = await handleEditorPatchApply(
+      rawPostContext("x".repeat(2 * 1_048_576 + 1)),
+      deps(),
+      options(),
+    );
+    expect(result.status).toBe(200);
+    expect(wire(result).status).toBe("disabled");
   });
 
   it("rejects a malformed request body with 400", async () => {
@@ -270,13 +310,13 @@ describe("POST /api/editor/patch-apply — post-apply verification (AC3/AC5/AC10
     expect(wire(result).verification?.outcome).toBe("passed");
   });
 
-  it("skips verification only when explicitly disabled by request policy", async () => {
+  it("ignores request-level verify=false and still runs verification", async () => {
     const result = await handleEditorPatchApply(
       postContext(body({ verify: false })),
       deps({ env: ENABLED }),
       options(),
     );
-    expect(wire(result).verification?.outcome).toBe("skipped");
+    expect(wire(result).verification?.outcome).toBe("passed");
   });
 
   it("skips verification when disabled by deployment policy", async () => {
@@ -297,10 +337,51 @@ describe("POST /api/editor/patch-apply — post-apply verification (AC3/AC5/AC10
     const response = wire(result);
     expect(response.status).toBe("applied");
     expect(response.verification?.outcome).toBe("failed");
-    expect(response.revertProposal?.patchId).toBe("patch-1");
+    expect(response.revertProposal?.patchId).toBe(PATCH_ID);
     expect(response.revertProposal?.diff).toContain("+++ /dev/null");
     // The applied file is NOT auto-reverted (no unreviewed follow-up mutation).
     expect(await exists("src/a.test.ts")).toBe(true);
+  });
+
+  it("denies before write when verification preflight cannot enforce egress", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleEditorPatchApply(
+      postContext(body()),
+      deps({ env: ENABLED, evidenceStore }),
+      options(
+        summary(),
+        deniedPreflight(
+          summary({
+            outcome: "denied",
+            networkEnforced: false,
+            sandboxBackend: "none",
+            stepCount: 0,
+            passed: 0,
+            failed: 0,
+            preApply: true,
+          }),
+        ),
+      ),
+    );
+    const response = wire(result);
+    expect(response.status).toBe("failed");
+    expect(response.evidence?.applyRunId).toBeTruthy();
+    expect(response.evidence?.verificationRunId).toBeTruthy();
+    expect(await exists("src/a.test.ts")).toBe(false);
+    expect(evidenceStore.list()).toHaveLength(2);
+  });
+
+  it("does not expose a restore diff after confirmed overwrite failure", async () => {
+    await writeFile(join(root, "src/a.test.ts"), "existing\n", "utf8");
+    const result = await handleEditorPatchApply(
+      postContext(body({ allowOverwrite: true })),
+      deps({ env: ENABLED }),
+      options(summary({ outcome: "failed", passed: 0, failed: 1 })),
+    );
+    const response = wire(result);
+    expect(response.status).toBe("applied");
+    expect(await readFile(join(root, "src/a.test.ts"), "utf8")).toBe("it('x', () => {});\n");
+    expect(response.revertProposal).toBeUndefined();
   });
 
   it("does not propose a revert when verification is denied (egress unavailable)", async () => {

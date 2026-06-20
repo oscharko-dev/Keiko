@@ -14,9 +14,9 @@ behaviour and, in particular, the **isolation boundary** the post-apply verifica
 `POST /api/editor/patch-apply` (`packages/keiko-server/src/editor/patchApplyRoutes.ts`). Wave-2, shipped
 **switched off**: the route is gated behind `KEIKO_EDITOR_PATCH_APPLY` (default off → `disabled`, no
 validation, write, or execution). Post-apply verification runs **by default** when apply is enabled and
-is skipped only when explicitly disabled — by deployment policy
-(`KEIKO_EDITOR_PATCH_APPLY_VERIFICATION` set to a disable token) or per request (`verify: false`). Both
-branches are covered by tests.
+is skipped only when explicitly disabled by deployment policy
+(`KEIKO_EDITOR_PATCH_APPLY_VERIFICATION` set to a disable token). Request payloads cannot disable
+verification; both deployment-policy branches are covered by tests.
 
 ## Apply (deterministic, fail-closed)
 
@@ -64,6 +64,11 @@ does — untrusted, model-generated code never runs without an enforced egress b
 `appliedLimits` network dimension reports the enforcement honestly from the run's sandbox attestation
 (ADR-0043 D4).
 
+The editor apply route also runs a pre-write verification preflight against the same targeted-test plan
+and sandbox probe. If verification would need to execute untrusted tests and no enforcing backend is
+available, the route returns a bounded `failed` result with verification evidence and leaves the
+workspace untouched.
+
 **Egress proven, not documented (AC8/AC12/AC15).** The canonical, CI-non-skippable proof is
 `packages/keiko-sandbox/src/egress.test.ts` (an outbound TCP connection from inside `network:"none"`
 fails, with a negative control). The post-apply verification traverses the same
@@ -85,10 +90,13 @@ log line, a workspace path, or a secret.
 
 ## Guarded rollback (no silent revert)
 
-When post-apply verification fails, the response carries a **guarded revert proposal**: the inverse
-unified diff (`invertPatch`) that restores the pre-apply state, surfaced for the user to review and
-explicitly re-apply through the same route. The server never reverts silently (Out of Scope: "Silent
-rollback without user approval") and performs no unreviewed follow-up mutation (AC5).
+When post-apply verification fails, the response carries a **guarded revert proposal**: a restore diff
+built only from content already present in the reviewed forward diff, surfaced for the user to review
+and explicitly re-apply through the same route. When explicit overwrite confirmation replaces
+pre-existing content that was not part of the reviewed diff, no restore diff is returned; emitting one
+would disclose file content that the apply response must not reveal, while a blind inverse delete would
+destroy the original file. The server never reverts silently (Out of Scope: "Silent rollback without
+user approval") and performs no unreviewed follow-up mutation (AC5).
 
 ## Browser/UI status
 

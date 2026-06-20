@@ -486,6 +486,44 @@ export function invertPatch(diff: string): string {
   return renderParsedPatch(parsed.files.map(invertFileChange));
 }
 
+function hasCreateOverwrite(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  files: readonly PatchFileChange[],
+): boolean {
+  return files.some((file) => file.kind === "create" && readCurrent(workspace, fs, file.path) !== undefined);
+}
+
+// Builds a guarded restore proposal only when the diff needed for restoration is already content-safe.
+// For normal creates, modifies, and deletes, `invertPatch` contains only content that was already in the
+// reviewed forward diff. For explicit create-over-existing overwrites, a faithful restore would need the
+// undisclosed pre-existing file body; returning it would create a read/exfiltration path, and returning a
+// delete would destroy the pre-existing file. In that case no restore diff is emitted.
+export function buildRestorePatch(
+  workspace: WorkspaceInfo,
+  diff: string,
+  deps: ValidateDeps = {},
+): string | undefined {
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  const allowOverwrite = deps.allowOverwrite ?? false;
+  const validation = validatePatch(workspace, diff, {
+    fs,
+    allowOverwrite,
+    ...(deps.limits ? { limits: deps.limits } : {}),
+  });
+  if (!validation.ok) {
+    throw new PatchValidationError(
+      "patch failed validation",
+      validation.reasons,
+      validation.conflicts,
+    );
+  }
+  if (allowOverwrite && hasCreateOverwrite(workspace, fs, validation.files)) {
+    return undefined;
+  }
+  return invertPatch(validation.normalizedDiff ?? diff);
+}
+
 export interface ApplyDeps {
   readonly applyEnabled: boolean;
   readonly signal: AbortSignal;
