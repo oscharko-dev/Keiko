@@ -7,6 +7,8 @@ export {
   PromptEnhancementCancelledError,
   PromptEnhancementInputError,
   buildPromptEnhancementRecordInput,
+  promptEnhancementGatewayRoutingConfig,
   runPromptEnhancement,
+  type PromptEnhancementGatewayRoutingConfig,
   type RunPromptEnhancementDeps,
 } from "@oscharko-dev/keiko-workflows";
