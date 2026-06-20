@@ -240,6 +240,28 @@ describe("local credential migration (#1320)", () => {
     }
   });
 
+  it("degrades gracefully when the credential vault is deleted after migration", () => {
+    const l = layout();
+    writeConfig(l.configPath, legacyConfig());
+    const first = buildUiHandlerDeps(l.options({ ...VAULT_ENV }));
+    first.store.close();
+    // Simulate vault corruption/loss: the reference survives in config, the sealed store is gone.
+    rmSync(l.credentialStorePath, { force: true });
+
+    // Re-bootstrap must NOT throw; the unresolvable reference simply yields no usable provider.
+    const second = buildUiHandlerDeps(l.options({ ...VAULT_ENV }));
+    try {
+      // Config on disk still holds no plaintext — only the (now-orphaned) reference.
+      const onDisk = readFileSync(l.configPath, "utf8");
+      expect(onDisk).not.toContain("legacy-secret-key");
+      expect(onDisk).toContain("cred:gpt-x");
+      // The credential cannot be resolved, so no provider is activated (honest, not a silent default).
+      expect(currentGatewayConfig(second)?.providers[0]?.apiKey).toBeUndefined();
+    } finally {
+      second.store.close();
+    }
+  });
+
   it("keeps the live redactor scrubbing the vault-resolved credential (AC5)", () => {
     const l = layout();
     writeConfig(l.configPath, legacyConfig());
