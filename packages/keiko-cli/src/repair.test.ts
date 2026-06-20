@@ -597,15 +597,15 @@ describe("runRepairCli — runtime state artifacts", () => {
     const providerVault = join(stateDir, "credentials", "provider-credentials.vault");
     const keyfile = join(stateDir, "credentials", "provider-credentials-vault.key");
     const figmaVault = join(stateDir, "evidence", "figma", "figma-token.vault");
-    for (const p of [providerVault, keyfile, figmaVault]) writeFileSync(p, "x", "utf8");
-    for (const p of [providerVault, keyfile, figmaVault]) chmodSync(p, 0o644);
+    const figmaKeyfile = join(stateDir, "evidence", "figma", "figma-vault.key");
+    const vaultFiles = [providerVault, keyfile, figmaVault, figmaKeyfile];
+    for (const p of vaultFiles) writeFileSync(p, "x", "utf8");
+    for (const p of vaultFiles) chmodSync(p, 0o644);
 
     const c = makeIo();
     expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
-    expect(c.out()).toContain("credential vault");
-    expect(modeOf(providerVault)).toBe(0o600);
-    expect(modeOf(keyfile)).toBe(0o600);
-    expect(modeOf(figmaVault)).toBe(0o600);
+    expect(c.out()).toMatch(/\[fixed\] Runtime state artifacts.*credential vault/);
+    for (const p of vaultFiles) expect(modeOf(p)).toBe(0o600);
   });
 
   it("reports loose artifacts in --dry-run without changing them and exits 1", () => {

@@ -138,10 +138,23 @@ export type RuntimeStateCategory =
   | "evidence"
   | "quality-intelligence";
 
-// A SQLite store file plus its WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies:
-// `<base>`, `<base>-wal`, `<base>-shm`, `<base>.corrupt.<ts>`, `<base>-wal.corrupt.<ts>`.
+// A SQLite store file plus its exact WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies
+// — and ONLY those. Matching is exact-name or a known dotted suffix, never a bare `${base}-`
+// or `${base}.` prefix, so a customer file such as `keiko-ui.db.backup` or `keiko-ui.db-old`
+// is left as an unrecognized entry and is never chmod-ed or deleted.
+//   `<base>`                                   the live database
+//   `<base>-wal`, `<base>-shm`                 WAL/SHM sidecars
+//   `<base>-wal.corrupt.<ts>`, `-shm.corrupt`  quarantined sidecars (keiko-memory-vault db.ts)
+//   `<base>.corrupt.<ts>`                      quarantined database (keiko-server store/db.ts)
 function isSqliteFamily(base: string, name: string): boolean {
-  return name === base || name.startsWith(`${base}-`) || name.startsWith(`${base}.`);
+  return (
+    name === base ||
+    name === `${base}-wal` ||
+    name === `${base}-shm` ||
+    name.startsWith(`${base}-wal.corrupt.`) ||
+    name.startsWith(`${base}-shm.corrupt.`) ||
+    name.startsWith(`${base}.corrupt.`)
+  );
 }
 
 // Evidence / Quality-Intelligence records and their lock sidecars are all `*.json` /
