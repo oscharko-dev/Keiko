@@ -94,6 +94,7 @@ import {
   handleEditorInlineCompletionTelemetry,
 } from "./editor/inlineCompletionRoutes.js";
 import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
+import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -307,6 +308,17 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/editor/test-generation",
     handler: handleEditorTestGeneration,
+  },
+  // Issue #1204 — governed editor-driven patch apply + post-apply verification (ADR-0042 D7, ADR-0043).
+  // Wave-2 surface shipped switched OFF: default → `disabled` (no validation/write/execution). When
+  // enabled, a reviewed candidate patch is applied only on an explicit user decision and only after
+  // keiko-tools validation (scope, conflict, no-silent-overwrite, limits); post-apply verification then
+  // re-confirms the applied test under an enforced, deny-by-default egress boundary (keiko-sandbox), and
+  // a failed verification surfaces a guarded revert proposal (never a silent rollback).
+  {
+    method: "POST",
+    pattern: "/api/editor/patch-apply",
+    handler: handleEditorPatchApply,
   },
   {
     method: "POST",

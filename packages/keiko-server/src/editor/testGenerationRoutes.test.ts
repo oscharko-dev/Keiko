@@ -114,6 +114,7 @@ const candidateRunner: TestGenerationRunner = () =>
       antiTautology: "not-run",
     },
     verification: "vitest",
+    proposedDiff: "--- /dev/null\n+++ b/src/a.test.ts\n@@ -0,0 +1,1 @@\n+it('adds', () => {});\n",
   });
 
 const playwrightCandidateRunner: TestGenerationRunner = async (args) => {

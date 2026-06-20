@@ -33,7 +33,7 @@ export { classifyScripts, detectScripts } from "./detect.js";
 export { classifyOutcome } from "./classify.js";
 export type { AbortReason, OutcomeInput } from "./classify.js";
 
-export { buildVerificationPlan, resolveTargetedTests } from "./plan.js";
+export { buildVerificationPlan, resolveTargetedTests, planDirectTargetedTests } from "./plan.js";
 export type { PlanOptions } from "./plan.js";
 
 export { nodeResourceMonitor } from "./monitor.js";
@@ -42,8 +42,8 @@ export type { ResourceMonitor } from "./monitor.js";
 export { buildAppliedLimits } from "./limits.js";
 export type { BreachedDimension } from "./limits.js";
 
-export { runVerification } from "./orchestrator.js";
-export type { VerificationDeps } from "./orchestrator.js";
+export { runVerification, resolveStepNetwork } from "./orchestrator.js";
+export type { VerificationDeps, NetworkEnforcementMode } from "./orchestrator.js";
 
 export { buildVerificationSummary, renderMarkdownSummary, summarizeForAudit } from "./summary.js";
 export type {

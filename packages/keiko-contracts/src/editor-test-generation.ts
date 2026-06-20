@@ -211,6 +211,13 @@ export interface EditorTestGenerationWireResponse {
   // The reviewable candidate patch — present only when `status === "generated"` (wave 2).
   readonly patch?: EditorTestGenerationWirePatch;
   readonly provenance?: EditorTestGenerationWireProvenance;
+  // The candidate's reviewable unified diff (Issue #1204), present only when `status === "generated"`.
+  // This is the SAME reviewable code as the patch `newText`, in unified-diff form: it is the opaque
+  // payload the editor round-trips to `POST /api/editor/patch-apply` when the user applies the candidate
+  // (ADR-0042 D2: the browser never parses it; the server re-validates and applies it). No new content
+  // class is exposed — a create diff is the candidate test, a modify diff's context is the user's own
+  // open buffer.
+  readonly applyableDiff?: string;
 }
 
 // Builds the v1 funnel: no execution, every gate `not-run`, no candidates. The single authority for the

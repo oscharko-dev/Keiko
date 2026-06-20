@@ -258,6 +258,37 @@ export {
   parseEditorTestGenerationRequest,
 } from "./editor-test-generation.js";
 
+// ─── Editor patch apply + post-apply verification (Issue #1204) ───────────────────
+// Wire request/response for the governed `POST /api/editor/patch-apply` route. Wave-2 surface, shipped
+// switched off (ADR-0042 D7): patch apply and the verification that follows execute untrusted model
+// code in an enforced, deny-by-default egress boundary (ADR-0043). Content-free apart from the
+// reviewable diff the user explicitly applies and a guarded revert proposal's inverse diff.
+export type {
+  EditorPatchApplyDecision,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyStatus,
+  EditorPatchRejectionReason,
+  EditorPatchApplyRejection,
+  EditorPatchApplyChangeCounts,
+  EditorPatchVerificationOutcome,
+  EditorPatchVerificationBounds,
+  EditorPatchVerificationSummary,
+  EditorPatchRevertProposal,
+  EditorPatchApplyEvidenceRefs,
+  EditorPatchApplyWireResponse,
+  EditorPatchApplyParseOk,
+  EditorPatchApplyParseFail,
+  EditorPatchApplyParse,
+} from "./editor-patch-apply.js";
+export {
+  EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+  EDITOR_PATCH_APPLY_DECISIONS,
+  EDITOR_PATCH_APPLY_STATUSES,
+  EDITOR_PATCH_REJECTION_REASONS,
+  EDITOR_PATCH_VERIFICATION_OUTCOMES,
+  parseEditorPatchApplyRequest,
+} from "./editor-patch-apply.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,

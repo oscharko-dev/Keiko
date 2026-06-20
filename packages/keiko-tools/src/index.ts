@@ -76,6 +76,7 @@ export {
 // ─── Patch workflow ─────────────────────────────────────────────────────────────────
 export {
   applyPatch,
+  invertPatch,
   renderDryRun,
   validatePatch,
   type ApplyDeps,

@@ -39,6 +39,9 @@ import type {
   EditorTestGenerationWireRequest,
   EditorTestGenerationWireResponse,
   EditorTestGenerationWireTarget,
+  EditorPatchApplyDecision,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyWireResponse,
   LanguageDiagnosticsResult,
   LanguageHoverResult,
   LanguageSymbolResult,
@@ -64,6 +67,7 @@ import {
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
   EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+  EDITOR_PATCH_APPLY_SCHEMA_VERSION,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -999,6 +1003,40 @@ export async function requestEditorTestGeneration(
     ...(input.context === undefined ? {} : { context: input.context }),
   };
   return fetchJson("/api/editor/test-generation", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1204 — governed editor-driven patch apply + post-apply verification. Applies (or rejects) a
+// reviewed candidate patch only on an explicit user decision; the BFF validates scope/conflict/overwrite,
+// applies atomically, then re-confirms the applied test under an enforced egress boundary. The browser
+// never writes files or runs tests directly; the response is content-free apart from a guarded revert
+// diff. `signal` lets the editor cancel a superseded request.
+export interface EditorPatchApplyRequestInput {
+  readonly root: string;
+  readonly patchId: string;
+  readonly decision: EditorPatchApplyDecision;
+  readonly diff: string;
+  readonly allowOverwrite?: boolean | undefined;
+  readonly verify?: boolean | undefined;
+}
+
+export async function requestEditorPatchApply(
+  input: EditorPatchApplyRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorPatchApplyWireResponse> {
+  const requestBody: EditorPatchApplyWireRequest = {
+    schemaVersion: EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+    root: input.root,
+    patchId: input.patchId,
+    decision: input.decision,
+    diff: input.diff,
+    ...(input.allowOverwrite === undefined ? {} : { allowOverwrite: input.allowOverwrite }),
+    ...(input.verify === undefined ? {} : { verify: input.verify }),
+  };
+  return fetchJson("/api/editor/patch-apply", {
     method: "POST",
     body: JSON.stringify(requestBody),
     ...(signal === undefined ? {} : { signal }),

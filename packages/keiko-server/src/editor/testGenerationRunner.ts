@@ -57,6 +57,9 @@ export interface TestGenerationRunResult {
   // coerce them to Vitest.
   readonly verification?: AssuredVerificationKind | undefined;
   readonly unsupportedVerificationReason?: string | undefined;
+  // The candidate's reviewable unified diff (Issue #1204), surfaced so the editor can round-trip it to
+  // the patch-apply route. The wire patch is its content-free projection; this is the apply payload.
+  readonly proposedDiff: string;
 }
 
 /** Injectable candidate producer. Returns undefined when no candidate could be produced (→ deferred). */
@@ -177,5 +180,6 @@ export const defaultTestGenerationRunner: TestGenerationRunner = async (args) =>
     funnel: generatedFunnel(),
     ...(verification === undefined ? {} : { verification }),
     ...(reason === undefined ? {} : { unsupportedVerificationReason: reason }),
+    proposedDiff: report.proposedDiff,
   };
 };
