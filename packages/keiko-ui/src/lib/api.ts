@@ -54,6 +54,8 @@ import type {
   ModelCapability,
   PatchChatMessageBody,
   PatchMessageResponse,
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
   ProjectResponse,
   ProjectsResponse,
   RunReport,
@@ -227,6 +229,20 @@ export async function startRun(
   return fetchJson("/api/runs", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+// Epic #1307 / Issue #1314 — generate a governed, reviewable Enhanced Prompt. Deterministic and
+// provider-neutral; the result is data for review, never executed. The optional AbortSignal lets the
+// panel cancel an in-flight request when the user edits the draft again.
+export async function enhancePrompt(
+  body: PromptEnhancementWireRequest,
+  signal?: AbortSignal,
+): Promise<PromptEnhancementWireResponse> {
+  return fetchJson<PromptEnhancementWireResponse>("/api/prompt-enhancement", {
+    method: "POST",
+    body: JSON.stringify(body),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 

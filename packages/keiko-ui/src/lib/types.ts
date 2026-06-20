@@ -247,6 +247,20 @@ export type {
   BrowserEventEnvelope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
+// ─── Prompt Enhancer wire types (Epic #1307 / Issue #1314) ──────────────────────────
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
+  PromptEnhancementModelRouting,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+
 export type { ExpectedCheck, WorkflowKind } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 
 // ─── SSE stream aggregation (UI-internal — see ./sse-types for rationale) ──────────

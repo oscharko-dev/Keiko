@@ -146,3 +146,15 @@ export {
   type FilesTreeEntry,
   type FilesTreeResponse,
 } from "./files.js";
+
+// Epic #1307 / Issue #1314 — Prompt Enhancer governed surface. The BFF route handler and the reusable,
+// deterministic orchestration the CLI command (`keiko prompt-enhancer`) drives so both surfaces produce
+// byte-identical enhancements (AC1). Routed through the Model Gateway; never dispatches a model.
+export {
+  handlePromptEnhancement,
+  buildPromptEnhancementRecordInput,
+  runPromptEnhancement,
+  PromptEnhancementCancelledError,
+  PromptEnhancementInputError,
+  type RunPromptEnhancementDeps,
+} from "./promptEnhancer/index.js";

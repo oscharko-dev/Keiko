@@ -26,6 +26,15 @@ export interface ModelSelectionQuery {
   readonly supportsImageInput?: boolean | undefined;
 }
 
+export interface ConfiguredCapabilityProvider {
+  readonly modelId: string;
+}
+
+export interface ConfiguredCapabilitySource {
+  readonly providers: readonly ConfiguredCapabilityProvider[];
+  readonly capabilities?: readonly ModelCapability[] | undefined;
+}
+
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
   if (capability.kind !== query.kind) {
     return false;
@@ -45,14 +54,14 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
   return true;
 }
 
-export function assertConfiguredModel(config: GatewayConfig, modelId: string): void {
+export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelId: string): void {
   if (!config.providers.some((provider) => provider.modelId === modelId)) {
     throw new ConfigInvalidError(`model '${modelId}' is not configured as a provider`);
   }
 }
 
 export function findConfiguredCapability(
-  config: GatewayConfig,
+  config: ConfiguredCapabilitySource,
   modelId: string,
 ): ModelCapability | undefined {
   return (
@@ -66,14 +75,16 @@ export function findConfiguredCapability(
   );
 }
 
-export function listConfiguredCapabilities(config: GatewayConfig): readonly ModelCapability[] {
+export function listConfiguredCapabilities(
+  config: ConfiguredCapabilitySource,
+): readonly ModelCapability[] {
   return config.providers
     .map((provider) => findConfiguredCapability(config, provider.modelId))
     .filter((capability): capability is ModelCapability => capability !== undefined);
 }
 
 export function selectConfiguredModel(
-  config: GatewayConfig,
+  config: ConfiguredCapabilitySource,
   query: ModelSelectionQuery,
 ): string | undefined {
   let best: ModelCapability | undefined;

@@ -5,11 +5,13 @@ on:
     branches:
       - dev
       - feat/keiko-editor
+      - feat/prompt-enhancer-1307
       - "release/**"
   pull_request:
     branches:
       - dev
       - feat/keiko-editor
+      - feat/prompt-enhancer-1307
       - "release/**"
   workflow_dispatch:
 
@@ -24,11 +26,11 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${{ github.ref }}:${{ github.base_ref }}" in
-            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:release/*)
-              echo "Protected branch gate satisfied."
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/prompt-enhancer-1307 | *:release/*)
+              echo "Protected or integration branch gate satisfied."
               ;;
             *)
-              echo "This gate is only valid for protected dev, feat/keiko-editor, and release branches."
+              echo "This gate is only valid for protected dev, integration, and release branches."
               exit 1
               ;;
           esac
