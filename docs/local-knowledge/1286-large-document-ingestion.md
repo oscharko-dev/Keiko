@@ -118,6 +118,54 @@ fails:
 Capsule health distinguishes **pipeline stability** (the job succeeded) from
 **retrieval quality** (coverage was partial with explicit warnings).
 
+## 6a. Bounded text storage and the unified span reader
+
+Storing a multi-hundred-MiB extracted text as one `document_texts.normalized_text`
+column would force either an O(n) JS string at write time or an O(n²) `||` append.
+DB schema **v12** adds `document_text_windows(capsule_id, document_id, window_index,
+character_start, character_end, normalized_text)`: a progressively-extracted
+document persists its text as one bounded row per extraction window. The on-disk
+text is stored exactly once with linear growth, and the JS working set never holds
+more than one window.
+
+`readDocumentTextSpan(db, capsuleId, documentId, charStart, charEnd)` is the single
+text-read primitive: it reads a bounded span via SQLite `SUBSTR` from
+`document_texts` for small files, or from the one `document_text_windows` row that
+contains the span (every chunk lies inside one page → one window) for large files.
+All three text-read sites route through it — bounded chunking, bounded embedding,
+and retrieval citation excerpts.
+
+## 6b. End-to-end pipeline
+
+1. **Discovery** (`extract.ts`): preflight routes a file `≥ largeFileThresholdBytes`
+   with a matching progressive extractor to `extractDocumentProgressive`, which
+   flushes each window (pages, parsed units, one `document_text_windows` row,
+   checkpoint) in its own transaction. Small files keep the exact existing path.
+2. **Orchestrator** (`bounded-indexing.ts`): a document carrying an
+   `extraction_checkpoints` row is chunked by reading each parsed unit's text via
+   `readDocumentTextSpan` (byte-identical chunk ids/offsets/hashes to the full-text
+   chunker), then embedded one batch at a time over chunks that have no vector yet —
+   the missing-vector gate is the self-healing resume. The checkpoint advances
+   between batches; an incompatible checkpoint restarts with a
+   `CHECKPOINT_INCOMPATIBLE` diagnostic.
+3. **BFF** (`local-knowledge-handlers.ts`): exposes the resource policy
+   (operator-overridable `KEIKO_LK_LARGE_DOC_THRESHOLD_BYTES`), per-document
+   progress, partial-coverage / quality-warning / resumable counts, and routes the
+   `resume` reindex mode to a checkpoint-resuming job.
+4. **UI** (`capsule-detail.tsx`): renders per-document phase progress, a
+   partial-coverage badge, retrieval-quality warnings, and a Resume control, with an
+   accessible live region announcing active phases.
+
+## 6c. Verified bounded resource use
+
+The bounded-memory profile drives a fully-streamed synthetic fixture (the source
+generates bytes per window and is never held whole). Across an 8× document-size
+difference the peak single byte-window read and peak text row are **identical**
+(O(window), not O(document)), persisted text grows linearly as per-window rows, and
+no `document_texts` column is written for a large document. pdfjs-dist still holds
+the raw PDF buffer for real PDFs (see §8); the synthetic streaming fixture
+demonstrates the contract supports a fully byte-windowed source.
+
 ## 7. Backward compatibility
 
 Files below `largeFileThresholdBytes` follow the exact existing buffer path with

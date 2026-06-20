@@ -4,6 +4,7 @@ import { basename, dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   addSourceToCapsule,
+  checkpointToProgress,
   composeCapsules,
   CompositionError,
   createSqliteAuditSink,
@@ -14,6 +15,8 @@ import {
   listCapsuleSets,
   listCapsuleSources,
   listCapsules,
+  listExtractionCheckpoints,
+  listResumableDocuments,
   openKnowledgeStore,
   removeSourceFromCapsule,
   resolveKnowledgeStorePath,
@@ -24,6 +27,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
+  CapsuleLargeDocumentHealth,
   CapsuleReindexMode,
   DocumentId,
   IndexingJobRecord,
@@ -31,13 +35,18 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
+  LargeDocumentJobProgress,
+  LargeDocumentResourcePolicy,
   ParserDiagnostic,
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import {
   CAPSULE_SET_MAX_MEMBERS,
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeDisplaySummary,
+  isSafeQualityWarning,
   validateCapsuleReindexRequest,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
@@ -625,6 +634,81 @@ function lastIndexedAt(
   return row.finished_at ?? undefined;
 }
 
+// Bounded large-document ingestion (Epic #1160, Issue #1286). The active resource policy layers an
+// optional operator-configured large-file threshold over the contract defaults.
+function resolveLargeDocumentPolicy(): LargeDocumentResourcePolicy {
+  const raw = process.env.KEIKO_LK_LARGE_DOC_THRESHOLD_BYTES;
+  const threshold = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  if (!Number.isFinite(threshold) || threshold <= 0) {
+    return DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
+  }
+  return {
+    ...DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+    largeFileThresholdBytes: Math.min(
+      threshold,
+      DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxRawFileBytes,
+    ),
+  };
+}
+
+function countPartialCoverageDocuments(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+): number {
+  const row = store._internal.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM extraction_checkpoints WHERE capsule_id = :c AND coverage <> 'complete'",
+    )
+    .get({ c: capsuleId }) as { readonly n: number };
+  return row.n;
+}
+
+// Distinct, browser-safe warning-severity diagnostic messages. The SELECT carries no paths or
+// secrets (parser diagnostics are redacted at write time) and is bounded.
+function loadQualityWarnings(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+): readonly string[] {
+  const rows = store._internal.db
+    .prepare(
+      "SELECT DISTINCT message FROM parser_diagnostics WHERE capsule_id = :c AND severity = 'warning' ORDER BY message ASC LIMIT 50",
+    )
+    .all({ c: capsuleId }) as unknown as readonly { readonly message: string }[];
+  return rows.map((row) => row.message).filter((message) => isSafeQualityWarning(message));
+}
+
+function documentDisplayName(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): string {
+  const row = store._internal.db
+    .prepare("SELECT safe_display_name AS n FROM documents WHERE capsule_id = :c AND id = :d")
+    .get({ c: capsuleId, d: String(documentId) }) as { readonly n: string } | undefined;
+  return row?.n ?? String(documentId);
+}
+
+function buildLargeDocumentHealth(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  policy: LargeDocumentResourcePolicy,
+): CapsuleLargeDocumentHealth {
+  const progress: LargeDocumentJobProgress[] = listExtractionCheckpoints(
+    store._internal.db,
+    capsule.id,
+  ).map((checkpoint) =>
+    checkpointToProgress(checkpoint, documentDisplayName(store, capsule.id, checkpoint.documentId)),
+  );
+  return {
+    resourcePolicy: policy,
+    capabilities: DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    progress,
+    resumableDocuments: listResumableDocuments(store, capsule.id),
+    partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
+    qualityWarnings: loadQualityWarnings(store, capsule.id),
+  };
+}
+
 function buildCapsuleHealth(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -662,6 +746,9 @@ function buildCapsuleHealth(
           ]
         : unsupportedGuidance,
     staleReasons: compatibility.staleReasons,
+    partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
+    qualityWarnings: loadQualityWarnings(store, capsule.id),
+    resumableDocuments: listResumableDocuments(store, capsule.id).length,
   };
 }
 
@@ -783,6 +870,7 @@ function buildCapsuleResponseBody(
   return {
     capsule,
     health: buildCapsuleHealth(deps, store, dbPath, capsule),
+    largeDocumentHealth: buildLargeDocumentHealth(store, capsule, resolveLargeDocumentPolicy()),
     sources: loadSourceStats(store, capsule.id),
     parserDiagnostics: diagnostics.items,
     parserDiagnosticsTotal: diagnostics.total,
@@ -1063,6 +1151,31 @@ function indexingCompletionResponse(
   return actionResponse(capsuleId);
 }
 
+function buildIndexingOptions(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  adapter: OpenAIEmbeddingAdapter,
+  options: RunCapsuleIndexingJobOptions,
+  sourceSelection: IndexingSourceSelection,
+  signal: AbortSignal,
+): Parameters<typeof runIndexingJob>[0] {
+  return {
+    capsuleId: capsule.id,
+    ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
+      ? { sourceIds: sourceSelection.sourceIds }
+      : {}),
+    parserRegistry: createDefaultParserRegistry(),
+    workspaceFs: nodeWorkspaceFs,
+    embeddingAdapter: adapter,
+    auditSink: createSqliteAuditSink(store),
+    store,
+    force: options.force,
+    largeDocumentPolicy: resolveLargeDocumentPolicy(),
+    ...(options.mode === "resume" ? { resume: true } : {}),
+    signal,
+  };
+}
+
 async function runCapsuleIndexingJob(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -1086,17 +1199,9 @@ async function runCapsuleIndexingJob(
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   let terminal: IndexingTerminal | undefined;
   try {
-    for await (const event of runIndexingJob({
-      capsuleId: capsule.id,
-      ...(sourceSelection.sourceIds !== undefined ? { sourceIds: sourceSelection.sourceIds } : {}),
-      parserRegistry: createDefaultParserRegistry(),
-      workspaceFs: nodeWorkspaceFs,
-      embeddingAdapter: adapter,
-      auditSink: createSqliteAuditSink(store),
-      store,
-      force: options.force,
-      signal: controller.signal,
-    })) {
+    for await (const event of runIndexingJob(
+      buildIndexingOptions(store, capsule, adapter, options, sourceSelection, controller.signal),
+    )) {
       if (event.kind === "job-started") {
         localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
       }

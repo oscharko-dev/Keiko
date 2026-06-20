@@ -11,9 +11,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CapsuleDetail } from "./capsule-detail";
 import type { CapsuleDetail as CapsuleDetailData } from "@/lib/local-knowledge-api";
 import type {
+  CapsuleLargeDocumentHealth,
+  DocumentId,
   KnowledgeCapsuleId,
   KnowledgeCapsule,
   CapsuleHealth,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -610,6 +616,99 @@ describe("CapsuleDetail — a11y", () => {
       expect(screen.getByTestId("diag-empty")).toBeInTheDocument();
     });
 
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Large-document progress + resume (Issue #1286)
+// ---------------------------------------------------------------------------
+
+function largeDocumentHealth(
+  overrides: Partial<CapsuleLargeDocumentHealth> = {},
+): CapsuleLargeDocumentHealth {
+  return {
+    resourcePolicy: DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+    capabilities: DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    progress: [
+      {
+        documentId: "doc-1" as DocumentId,
+        safeDisplayName: "annual-report.pdf",
+        strategy: "progressive-pdf",
+        phase: "embedding",
+        processedPages: 124,
+        extractedTextBytes: 540_000,
+        chunkCount: 80,
+        embeddedChunkCount: 32,
+        retryCount: 0,
+        coverage: "partial",
+        resumable: true,
+      },
+    ],
+    resumableDocuments: ["doc-1" as DocumentId],
+    partialCoverageDocuments: 1,
+    qualityWarnings: ["page has no extractable text layer; indexed with partial coverage"],
+    ...overrides,
+  };
+}
+
+function detailWithLargeDocs(health: CapsuleLargeDocumentHealth): CapsuleDetailData {
+  return { ...FULL_DETAIL, largeDocumentHealth: health };
+}
+
+describe("CapsuleDetail — large-document progress", () => {
+  it("renders per-document phase progress, partial-coverage badge, and quality warnings", async () => {
+    render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail(detailWithLargeDocs(largeDocumentHealth()))} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Large documents" })).toBeInTheDocument();
+    });
+    expect(screen.getByText("annual-report.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Embedding")).toBeInTheDocument();
+    // The distinct quality-warning line (the partial-coverage badge shares the phrase).
+    expect(
+      screen.getByText("page has no extractable text layer; indexed with partial coverage"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/32\/80 chunks embedded/u)).toBeInTheDocument();
+  });
+
+  it("does not render the section when there is no large-document progress", async () => {
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(FULL_DETAIL)} />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("heading", { name: "Large documents" })).not.toBeInTheDocument();
+  });
+
+  it("invokes the resume seam when the Resume control is clicked", async () => {
+    const resumeImpl = vi.fn((id: KnowledgeCapsuleId) =>
+      Promise.resolve({ ok: true as const, capsuleId: id }),
+    );
+    render(
+      <CapsuleDetail
+        fetchDetailImpl={resolveDetail(detailWithLargeDocs(largeDocumentHealth()))}
+        resumeImpl={resumeImpl}
+      />,
+    );
+    const button = await screen.findByRole("button", {
+      name: "Resume interrupted large-document indexing",
+    });
+    await userEvent.click(button);
+    await waitFor(() => {
+      expect(resumeImpl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("has no accessibility violations with the large-document section", async () => {
+    const { container } = render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail(detailWithLargeDocs(largeDocumentHealth()))} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Large documents" })).toBeInTheDocument();
+    });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });

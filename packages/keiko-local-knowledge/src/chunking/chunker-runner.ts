@@ -120,7 +120,7 @@ function rowToHtmlBlockUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedU
   };
 }
 
-function rowToParsedUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+export function rowToParsedUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
   switch (row.kind) {
     case "page":
       return rowToPageUnit(row, documentId);
@@ -155,7 +155,7 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 // composite scheme — rather than UUIDs — keeps the chunks table re-runnable: a
 // re-chunk with force=true reproduces byte-identical row IDs, which makes the audit /
 // evidence-manifest layer's row-equality assertions hold across runs.
-function composeChunkId(
+export function composeChunkId(
   documentId: DocumentId,
   parsedUnitRowId: string,
   orderIndex: number,

@@ -84,6 +84,29 @@ const DELETE_DIAGNOSTICS_SQL =
   "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d";
 const SELECT_DOCUMENT_TEXT_SQL =
   "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d";
+
+// ─── Bounded large-document text windows (Epic #1160, Issue #1286) ─────────────
+const INSERT_DOCUMENT_TEXT_WINDOW_SQL = [
+  "INSERT OR REPLACE INTO document_text_windows (",
+  "  capsule_id, document_id, window_index, character_start, character_end, normalized_text",
+  ") VALUES (",
+  "  :capsule_id, :document_id, :window_index, :character_start, :character_end, :normalized_text",
+  ")",
+].join(" ");
+
+const DELETE_DOCUMENT_TEXT_WINDOWS_SQL =
+  "DELETE FROM document_text_windows WHERE capsule_id = :c AND document_id = :d";
+
+// SQLite SUBSTR is 1-indexed; a document-relative char offset `s` maps to SUBSTR position `s + 1`.
+const SELECT_DOCUMENT_TEXT_SPAN_SQL =
+  "SELECT SUBSTR(normalized_text, :start + 1, :len) AS span FROM document_texts WHERE capsule_id = :c AND document_id = :d";
+
+const SELECT_DOCUMENT_TEXT_WINDOW_SPAN_SQL = [
+  "SELECT SUBSTR(normalized_text, :start - character_start + 1, :len) AS span",
+  "FROM document_text_windows",
+  "WHERE capsule_id = :c AND document_id = :d AND character_start <= :start AND character_end >= :end",
+  "ORDER BY window_index ASC LIMIT 1",
+].join(" ");
 const SELECT_DOCUMENTS_FOR_SOURCE_SQL = [
   "SELECT id, document_path FROM documents",
   "WHERE capsule_id = :c AND source_id = :s",
@@ -118,6 +141,10 @@ interface DiscoveryStatements {
   readonly deleteDiagnostics: RunStatement;
   readonly deleteDocument: RunStatement;
   readonly selectDocumentText: GetStatement;
+  readonly insertDocumentTextWindow: RunStatement;
+  readonly deleteDocumentTextWindows: RunStatement;
+  readonly selectDocumentTextSpan: GetStatement;
+  readonly selectDocumentTextWindowSpan: GetStatement;
   readonly selectDocumentsForSource: {
     readonly all: (params?: SqlParams) => readonly unknown[];
   };
@@ -144,6 +171,10 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
     deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
     selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
+    insertDocumentTextWindow: db.prepare(INSERT_DOCUMENT_TEXT_WINDOW_SQL) as RunStatement,
+    deleteDocumentTextWindows: db.prepare(DELETE_DOCUMENT_TEXT_WINDOWS_SQL) as RunStatement,
+    selectDocumentTextSpan: db.prepare(SELECT_DOCUMENT_TEXT_SPAN_SQL) as GetStatement,
+    selectDocumentTextWindowSpan: db.prepare(SELECT_DOCUMENT_TEXT_WINDOW_SPAN_SQL) as GetStatement,
     selectDocumentsForSource: db.prepare(SELECT_DOCUMENTS_FOR_SOURCE_SQL) as {
       readonly all: (params?: SqlParams) => readonly unknown[];
     },
@@ -191,6 +222,7 @@ export function deleteDependentRows(
 ): void {
   const params = { c: capsuleId, d: documentId };
   statements(db).deleteDocumentText.run(params);
+  statements(db).deleteDocumentTextWindows.run(params);
   statements(db).deletePages.run(params);
   statements(db).deleteSections.run(params);
   statements(db).deleteParsedUnits.run(params);
@@ -224,6 +256,70 @@ export function readDocumentTextRow(
     d: documentId,
   }) as DocumentTextRow | undefined;
   return row?.normalized_text;
+}
+
+// ─── Bounded large-document text windows (Epic #1160, Issue #1286) ─────────────
+export interface DocumentTextWindowInsertRow {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly documentId: DocumentId;
+  readonly windowIndex: number;
+  readonly characterStart: number;
+  readonly characterEnd: number;
+  readonly normalizedText: string;
+}
+
+export function insertDocumentTextWindowRow(
+  db: DatabaseSync,
+  row: DocumentTextWindowInsertRow,
+): void {
+  statements(db).insertDocumentTextWindow.run({
+    capsule_id: String(row.capsuleId),
+    document_id: String(row.documentId),
+    window_index: row.windowIndex,
+    character_start: row.characterStart,
+    character_end: row.characterEnd,
+    normalized_text: row.normalizedText,
+  });
+}
+
+export function deleteDocumentTextWindows(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): void {
+  statements(db).deleteDocumentTextWindows.run({ c: capsuleId, d: documentId });
+}
+
+interface SpanRow {
+  readonly span: string | null;
+}
+
+// Reads a bounded, document-relative character span without ever materializing the whole
+// document text. Resolves from `document_texts` when a small file stored a single row, otherwise
+// from the one `document_text_windows` row that contains the span (every chunk lies inside one
+// page → one window). Returns undefined when no text is stored for the document.
+export function readDocumentTextSpan(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  charStart: number,
+  charEnd: number,
+): string | undefined {
+  const start = Math.max(0, Math.floor(charStart));
+  const end = Math.max(start, Math.floor(charEnd));
+  const len = end - start;
+  const c = String(capsuleId);
+  const d = String(documentId);
+  const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
+    | SpanRow
+    | undefined;
+  if (single !== undefined) {
+    return single.span ?? "";
+  }
+  const windowed = statements(db).selectDocumentTextWindowSpan.get({ c, d, start, end, len }) as
+    | SpanRow
+    | undefined;
+  return windowed === undefined ? undefined : (windowed.span ?? "");
 }
 
 export interface PersistedSourceDocumentRow {

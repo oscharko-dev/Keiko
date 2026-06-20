@@ -8,17 +8,23 @@
 import { useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
+  CapsuleLargeDocumentHealth,
+  CoverageQuality,
+  ExtractionPhase,
   KnowledgeCapsuleId,
+  LargeDocumentJobProgress,
   ParserDiagnostic,
   IndexingJobRecord,
   ParserDiagnosticSeverity,
   IndexingJobStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { isTerminalExtractionPhase } from "@oscharko-dev/keiko-contracts";
 import type {
   CapsuleDetail as CapsuleDetailData,
   CapsuleActionResponse,
   SourceIndexStats,
 } from "@/lib/local-knowledge-api";
+import { resumeCapsuleLargeDocuments } from "@/lib/local-knowledge-api";
 import Link from "next/link";
 import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
@@ -669,18 +675,157 @@ function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): 
 // CapsuleDetail — root export
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// LargeDocumentSection (Epic #1160, Issue #1286)
+// Granular per-document progress, partial-coverage badge, retrieval-quality
+// warnings, and a Resume control for interrupted large-document jobs.
+// ---------------------------------------------------------------------------
+
+const PHASE_LABELS: Readonly<Record<ExtractionPhase, string>> = {
+  preflight: "Preflight",
+  extracting: "Extracting",
+  extracted: "Extracted",
+  chunking: "Chunking",
+  chunked: "Chunked",
+  embedding: "Embedding",
+  embedded: "Embedded",
+  complete: "Complete",
+  cancelled: "Cancelled",
+  failed: "Failed",
+};
+
+function coverageTone(coverage: CoverageQuality): "ok" | "warn" | "danger" {
+  if (coverage === "complete") return "ok";
+  if (coverage === "none") return "danger";
+  return "warn";
+}
+
+function LargeDocumentRow({ progress }: { progress: LargeDocumentJobProgress }): ReactNode {
+  return (
+    <li className="lkd-source-card">
+      <div className="lkd-source-card-head">
+        <div className="lkd-source-name" title={progress.safeDisplayName}>
+          {progress.safeDisplayName}
+        </div>
+        <span className="lkd-source-scope">{PHASE_LABELS[progress.phase]}</span>
+      </div>
+      <div className="lkd-metric-meta">
+        <span data-tone={coverageTone(progress.coverage)}>{progress.coverage} coverage</span>
+        {" · "}
+        {progress.processedPages.toString()} pages {" · "}
+        {progress.embeddedChunkCount.toString()}/{progress.chunkCount.toString()} chunks embedded
+        {progress.resumable ? " · resumable" : ""}
+      </div>
+    </li>
+  );
+}
+
+interface LargeDocumentSectionProps {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly health: CapsuleLargeDocumentHealth;
+  readonly onActionComplete: () => void;
+  readonly jobActive: boolean;
+  readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
+}
+
+function LargeDocumentSection({
+  capsuleId,
+  health,
+  onActionComplete,
+  jobActive,
+  resumeImpl,
+}: LargeDocumentSectionProps): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (health.progress.length === 0) return null;
+
+  const activePhases = health.progress
+    .filter((p) => !isTerminalExtractionPhase(p.phase))
+    .map((p) => PHASE_LABELS[p.phase]);
+
+  async function handleResume(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      await (resumeImpl ?? resumeCapsuleLargeDocuments)(capsuleId);
+      onActionComplete();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Resume failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section aria-labelledby="lkd-large-doc-heading" className="lkd-status-section">
+      <div className="lkd-section-title-row">
+        <SectionHeading>
+          <span id="lkd-large-doc-heading">Large documents</span>
+        </SectionHeading>
+        <span className="lkd-live-note" role="status" aria-live="polite">
+          {activePhases.length > 0 ? `In progress: ${activePhases.join(", ")}` : "Idle"}
+        </span>
+      </div>
+      {health.partialCoverageDocuments > 0 ? (
+        <p className="lkd-status-callout" data-tone="warn">
+          {health.partialCoverageDocuments.toString()} document
+          {health.partialCoverageDocuments === 1 ? "" : "s"} indexed with partial coverage. The
+          pipeline is stable; retrieval quality is limited for these documents.
+        </p>
+      ) : null}
+      <ul className="lkd-list lkd-source-list" aria-label="Large-document progress">
+        {health.progress.map((progress) => (
+          <LargeDocumentRow key={progress.documentId} progress={progress} />
+        ))}
+      </ul>
+      {health.qualityWarnings.length > 0 ? (
+        <ul className="lkd-stale-reasons" aria-label="Retrieval quality warnings">
+          {health.qualityWarnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+      {health.resumableDocuments.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => {
+            void handleResume();
+          }}
+          disabled={busy || jobActive}
+          aria-label="Resume interrupted large-document indexing"
+          className="lk-action-button"
+        >
+          {busy
+            ? "Resuming…"
+            : `Resume ${health.resumableDocuments.length.toString()} document${
+                health.resumableDocuments.length === 1 ? "" : "s"
+              }`}
+        </button>
+      ) : null}
+      {error !== null ? (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          {error}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export interface CapsuleDetailProps {
   readonly capsuleId?: KnowledgeCapsuleId;
   readonly onDeleted?: (response: CapsuleActionResponse) => void;
   // Injectable fetch seam — defaults to the real BFF helper. Tests pass a mock
   // so they never hit the network, following the ConnectorGraph seam pattern.
   readonly fetchDetailImpl?: typeof import("@/lib/local-knowledge-api").fetchCapsuleDetail;
+  // Injectable resume seam for the large-document Resume control (tests pass a mock).
+  readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
 }
 
 export function CapsuleDetail({
   capsuleId: providedCapsuleId,
   onDeleted,
   fetchDetailImpl,
+  resumeImpl,
 }: CapsuleDetailProps = {}): ReactNode {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -774,6 +919,19 @@ export function CapsuleDetail({
       />
 
       <IndexingStatusSection data={data} />
+      {data.largeDocumentHealth !== undefined ? (
+        <LargeDocumentSection
+          capsuleId={capsuleId}
+          health={data.largeDocumentHealth}
+          onActionComplete={reload}
+          jobActive={
+            data.capsule.lifecycleState === "indexing" ||
+            latestJob(data)?.status === "running" ||
+            latestJob(data)?.status === "queued"
+          }
+          {...(resumeImpl !== undefined ? { resumeImpl } : {})}
+        />
+      ) : null}
       <OverviewSection data={data} />
       <PrivacySection />
       <SourcesSection sources={data.sources} />

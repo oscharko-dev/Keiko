@@ -19,13 +19,19 @@ import { createHash } from "node:crypto";
 import type {
   DocumentId,
   DocumentRecord,
+  ExtractionCapabilityAvailability,
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceScope,
+  LargeDocumentResourcePolicy,
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
-import { isSafeScopePath } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  isSafeScopePath,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
@@ -35,8 +41,21 @@ import type {
   ParserOptions,
   ParserRegistry,
   ParserSelectionInput,
+  ProgressiveExtractor,
 } from "../parsers/index.js";
-import { buildParserOptions, unsupportedParser } from "../parsers/index.js";
+import {
+  buildParserOptions,
+  createProgressivePdfExtractor,
+  isLegacyBinaryOfficeFormat,
+  legacyFormatDiagnostic,
+  unsupportedParser,
+} from "../parsers/index.js";
+import { DEFAULT_CHUNKING_STRATEGY_KEY } from "../chunking/types.js";
+import {
+  extractDocumentProgressive,
+  selectProgressiveExtractor,
+  type ProgressiveExtractContext,
+} from "./extract-progressive.js";
 import type { InternalParserResult } from "../parsers/types.js";
 import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
@@ -72,6 +91,17 @@ export interface ExtractDocumentDeps {
   readonly fs: WorkspaceFs;
   readonly store: KnowledgeStore;
   readonly parserRegistry: ParserRegistry;
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). All optional; when omitted the
+  // defaults apply and only large supported PDFs take the progressive page-windowed path while
+  // every other file keeps the exact existing full-buffer behavior.
+  readonly largeDocumentPolicy?: LargeDocumentResourcePolicy;
+  readonly extractionCapabilities?: ExtractionCapabilityAvailability;
+  // Injectable so tests drive the synthetic streaming extractor; defaults to the PDF extractor.
+  readonly progressiveExtractors?: readonly ProgressiveExtractor[];
+  readonly largeDocumentJobId?: string;
+  // The chunking strategy key the orchestrator will use; pinned into the checkpoint fingerprint so
+  // resume refuses a checkpoint produced under a different chunking strategy.
+  readonly chunkingStrategyVersion?: string;
 }
 
 // ─── Path helpers (re-derived to keep extract.ts self-contained for the realpath gate) ──
@@ -645,7 +675,9 @@ function readUnchangedFastPath(
   const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
   if (existing === undefined) return undefined;
   if (existing.content_hash !== contentHash) return undefined;
-  if (existing.status === "failed") return undefined;
+  // Skip only terminal-good states. A `pending` row is an interrupted progressive extraction
+  // (Issue #1286) and `failed` should be retried; both must re-extract rather than be skipped.
+  if (existing.status !== "extracted" && existing.status !== "unsupported") return undefined;
   const document: DocumentRecord = {
     id: documentId,
     capsuleId: params.capsuleId,
@@ -659,7 +691,7 @@ function readUnchangedFastPath(
       parserVersion: existing.parser_version,
     },
     lastExtractedAt: existing.last_extracted_at,
-    status: existing.status as DocumentRecord["status"],
+    status: existing.status,
     safeDisplayName: existing.safe_display_name,
   };
   return {
@@ -669,6 +701,51 @@ function readUnchangedFastPath(
     outcome: { kind: "skipped", document, reason: "unchanged" },
     diagnostics: [],
   };
+}
+
+// ─── Large-document routing (Epic #1160, Issue #1286) ────────────────────────
+let defaultProgressiveExtractorsCache: readonly ProgressiveExtractor[] | undefined;
+
+function defaultProgressiveExtractors(): readonly ProgressiveExtractor[] {
+  defaultProgressiveExtractorsCache ??= [createProgressivePdfExtractor()];
+  return defaultProgressiveExtractorsCache;
+}
+
+function largeDocumentContextFor(
+  deps: ExtractDocumentDeps,
+  resolved: ResolvedTarget,
+  options: ParserOptions,
+): ProgressiveExtractContext {
+  return {
+    policy: deps.largeDocumentPolicy ?? DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+    capabilities: deps.extractionCapabilities ?? DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    extractors: deps.progressiveExtractors ?? defaultProgressiveExtractors(),
+    jobId: deps.largeDocumentJobId ?? "extract",
+    chunkingStrategyVersion: deps.chunkingStrategyVersion ?? DEFAULT_CHUNKING_STRATEGY_KEY,
+    absolutePath: resolved.absolutePath,
+    relativePath: resolved.relativePath,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  };
+}
+
+// Legacy binary office formats (.doc/.ppt/.xls) get the existing unsupported path plus a stable
+// CONVERTER_UNAVAILABLE diagnostic with actionable guidance, leaving the job stable.
+function appendLegacyDiagnostic(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  extension: string,
+  result: ExtractionResult,
+): ExtractionResult {
+  const diagnostic = legacyFormatDiagnostic(extension, documentId);
+  if (diagnostic === undefined) return result;
+  insertDiagnosticRow(deps.store._internal.db, {
+    id: `${String(documentId)}#legacy`,
+    capsuleId: params.capsuleId,
+    diagnostic,
+    createdAt: deps.store._internal.now(),
+  });
+  return { ...result, diagnostics: [...result.diagnostics, diagnostic] };
 }
 
 // ─── Top-level entry point ───────────────────────────────────────────────────
@@ -948,7 +1025,30 @@ export async function extractDocument(
   const contentHash = hashBytes(bytes);
   const fast = readUnchangedFastPath(deps, canonicalParams, documentId, contentHash);
   if (fast !== undefined) return fast;
-  return parseAndPersistDocument(deps, canonicalParams, documentId, bytes, contentHash, options);
+
+  const extension = extensionOf(canonicalParams.file.relativePath);
+  const mediaType = mediaTypeFor(extension);
+  const context = largeDocumentContextFor(deps, resolved, options);
+  // Route large files to the progressive page-windowed path when a registered progressive extractor
+  // matches; everything else keeps the existing full-buffer path. `classifyLargeDocument` surfaces
+  // the same decision to the BFF/UI for diagnostics.
+  if (canonicalParams.file.sizeBytes >= context.policy.largeFileThresholdBytes) {
+    const extractor = selectProgressiveExtractor(context, extension, mediaType);
+    if (extractor !== undefined) {
+      return extractDocumentProgressive(deps, canonicalParams, context, bytes, extractor);
+    }
+  }
+  const result = await parseAndPersistDocument(
+    deps,
+    canonicalParams,
+    documentId,
+    bytes,
+    contentHash,
+    options,
+  );
+  return isLegacyBinaryOfficeFormat(extension)
+    ? appendLegacyDiagnostic(deps, canonicalParams, documentId, extension, result)
+    : result;
 }
 
 export function recordExtractionFailure(

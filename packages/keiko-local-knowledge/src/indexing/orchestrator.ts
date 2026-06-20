@@ -28,12 +28,20 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  CheckpointFingerprint,
   ChunkId,
   DocumentId,
+  ExtractionCheckpointRecord,
   IndexingJobError,
   KnowledgeCapsule,
   KnowledgeSource,
   KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  checkpointCompatibility,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  LARGE_DOCUMENT_DIAGNOSTIC_CODES,
+  largeDocumentPolicyFingerprint,
 } from "@oscharko-dev/keiko-contracts";
 import {
   assertCompatibleEmbeddingIdentity,
@@ -52,12 +60,15 @@ import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "../discovery/index.js";
 import {
   deleteDocumentRow,
+  insertDiagnosticRow,
   listPersistedDocumentsForSource,
   readDocumentTextRow,
   updateDocumentStatusRow,
 } from "../discovery/persist.js";
 import type { ExtractionEvent, ExtractionResult } from "../discovery/types.js";
 import { listCapsuleSources } from "../source-lifecycle.js";
+import { chunkDocumentBounded, embedDocumentChunksBounded } from "./bounded-indexing.js";
+import { selectExtractionCheckpoint, upsertExtractionCheckpoint } from "./checkpoint-persist.js";
 
 import {
   finalizeJobRow,
@@ -801,9 +812,220 @@ function* persistedEvents(handling: PersistedHandling): Generator<IndexingEvent>
   }
 }
 
+// ─── Bounded large-document chunk + embed + resume (Epic #1160, Issue #1286) ─────
+function boundedCurrentFingerprint(
+  state: RunState,
+  checkpoint: ExtractionCheckpointRecord,
+): CheckpointFingerprint {
+  const policy = state.options.largeDocumentPolicy ?? DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
+  return {
+    ...checkpoint.fingerprint,
+    policyFingerprint: largeDocumentPolicyFingerprint(policy),
+    chunkingStrategyVersion: chunkingStrategyKey(state.options.chunkingOptions),
+    embeddingIdentity: state.capsule.embeddingModelIdentity,
+  };
+}
+
+function writeBoundedCheckpoint(
+  state: RunState,
+  checkpoint: ExtractionCheckpointRecord,
+  fingerprint: CheckpointFingerprint,
+  phase: ExtractionCheckpointRecord["phase"],
+  chunkCursor: number,
+  embeddedChunkCursor: number,
+  lastEmbeddedChunkId: ChunkId | null,
+): void {
+  upsertExtractionCheckpoint(state.options.store._internal.db, {
+    capsuleId: checkpoint.capsuleId,
+    documentId: checkpoint.documentId,
+    jobId: state.jobId,
+    strategy: checkpoint.strategy,
+    phase,
+    pageCursor: checkpoint.pageCursor,
+    sectionCursor: checkpoint.sectionCursor,
+    objectCursor: checkpoint.objectCursor,
+    extractedTextBytes: checkpoint.extractedTextBytes,
+    chunkCursor,
+    embeddedChunkCursor,
+    ...(lastEmbeddedChunkId !== null ? { lastEmbeddedChunkId } : {}),
+    retryCount: checkpoint.retryCount,
+    coverage: checkpoint.coverage,
+    fingerprint,
+    terminalDiagnostics: checkpoint.terminalDiagnostics,
+    createdAt: checkpoint.createdAt,
+    updatedAt: state.now(),
+  });
+}
+
+function persistCheckpointIncompatibleDiagnostic(
+  state: RunState,
+  documentId: DocumentId,
+  reasons: readonly string[],
+): void {
+  insertDiagnosticRow(state.options.store._internal.db, {
+    id: `${String(documentId)}#checkpoint-incompatible`,
+    capsuleId: state.capsule.id,
+    diagnostic: {
+      severity: "warning",
+      code: LARGE_DOCUMENT_DIAGNOSTIC_CODES.CHECKPOINT_INCOMPATIBLE,
+      message: `resume refused and restarted; changed: ${reasons.join(", ")}`,
+      documentId,
+    },
+    createdAt: state.now(),
+  });
+}
+
+function boundedNeedsRechunk(
+  state: RunState,
+  documentId: DocumentId,
+  fingerprint: CheckpointFingerprint,
+  incompatible: boolean,
+): boolean {
+  const db = state.options.store._internal.db;
+  return (
+    incompatible ||
+    state.options.force === true ||
+    countChunksForDocument(db, state.capsule.id, documentId) === 0 ||
+    hasStaleChunksForDocument(db, state.capsule.id, documentId, fingerprint.chunkingStrategyVersion)
+  );
+}
+
+function boundedEmbedDeps(
+  state: RunState,
+  documentId: DocumentId,
+  fingerprint: CheckpointFingerprint,
+  checkpoint: ExtractionCheckpointRecord,
+  chunkCount: number,
+): Parameters<typeof embedDocumentChunksBounded>[0] {
+  return {
+    store: state.options.store,
+    capsuleId: state.capsule.id,
+    documentId,
+    adapter: state.options.embeddingAdapter,
+    identity: state.capsule.embeddingModelIdentity,
+    batchSize: state.batchSize,
+    concurrency: state.concurrency,
+    now: state.now,
+    idSource: state.idSource,
+    ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+    onBatch: (cursor, lastId): void => {
+      writeBoundedCheckpoint(
+        state,
+        checkpoint,
+        fingerprint,
+        "embedding",
+        chunkCount,
+        cursor,
+        lastId,
+      );
+    },
+  };
+}
+
+// Bounded path for a progressively-extracted document: resumes a compatible checkpoint, restarts an
+// incompatible one with a CHECKPOINT_INCOMPATIBLE diagnostic, chunks + embeds through SUBSTR-backed
+// readers, and advances the durable checkpoint between batches.
+// Reconciles existing chunks/vectors against the current fingerprint: refuses an incompatible
+// checkpoint (diagnostic + delete vectors) and re-chunks when stale/forced/missing. Returns the
+// chunk count.
+function prepareBoundedChunks(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+  checkpoint: ExtractionCheckpointRecord,
+  fingerprint: CheckpointFingerprint,
+): number {
+  const db = state.options.store._internal.db;
+  const compat = checkpointCompatibility(checkpoint.fingerprint, fingerprint);
+  if (!compat.compatible) {
+    persistCheckpointIncompatibleDiagnostic(state, documentId, compat.reasons);
+    deleteVectorsForDocument(db, state.capsule.id, documentId);
+  }
+  if (boundedNeedsRechunk(state, documentId, fingerprint, !compat.compatible)) {
+    chunkDocumentBounded(
+      state.options.store,
+      { capsuleId: state.capsule.id, sourceId: result.sourceId, documentId },
+      state.options.chunkingOptions,
+      state.options.signal,
+    );
+    deleteVectorsForDocument(db, state.capsule.id, documentId);
+  }
+  return countChunksForDocument(db, state.capsule.id, documentId);
+}
+
+async function* handleBoundedDocument(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+  checkpoint: ExtractionCheckpointRecord,
+): AsyncGenerator<IndexingEvent> {
+  const db = state.options.store._internal.db;
+  const sourceId = result.sourceId;
+  const fingerprint = boundedCurrentFingerprint(state, checkpoint);
+  const chunkCount = prepareBoundedChunks(state, result, documentId, checkpoint, fingerprint);
+  yield* chunkedDocumentEvents(state, sourceId, documentId, result.relativePath, chunkCount);
+  persistJobProgress(state);
+  const alreadyEmbedded = countVectorsForDocument(db, state.capsule.id, documentId);
+  writeBoundedCheckpoint(
+    state,
+    checkpoint,
+    fingerprint,
+    "embedding",
+    chunkCount,
+    alreadyEmbedded,
+    null,
+  );
+
+  // The bounded embed self-resumes from chunks that have no vector yet.
+  const embedResult = await embedDocumentChunksBounded(
+    boundedEmbedDeps(state, documentId, fingerprint, checkpoint, chunkCount),
+  );
+  writeBoundedCheckpoint(
+    state,
+    checkpoint,
+    fingerprint,
+    embedResult.errors.length === 0 ? "complete" : "embedded",
+    chunkCount,
+    embedResult.embeddedCursor,
+    embedResult.lastChunkId,
+  );
+  yield* persistedEvents(
+    applyEmbedResult(state, sourceId, documentId, result.relativePath, [], {
+      vectorCount: embedResult.vectorCount,
+      errors: embedResult.errors,
+      lastChunkId: embedResult.lastChunkId,
+    }),
+  );
+}
+
 // Wraps the chunk-then-embed pipeline for a single persisted document. Extraction/chunking
 // events are yielded before awaiting embeddings, so progress consumers see pre-model work
 // immediately instead of only after all embedding batches finish.
+function* handleUnsupportedDocument(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+): Generator<IndexingEvent> {
+  clearDocumentArtifacts(state, documentId, { deleteChunks: true });
+  state.skippedDocuments += 1;
+  yield {
+    kind: "document-extracted",
+    jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId: result.sourceId,
+    documentId,
+    relativePath: result.relativePath,
+  };
+  yield {
+    kind: "document-skipped",
+    jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId: result.sourceId,
+    documentId,
+    reason: "unsupported",
+  };
+}
+
 async function* handlePersistedDocument(
   state: RunState,
   result: ExtractionResult,
@@ -811,24 +1033,19 @@ async function* handlePersistedDocument(
   const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
   if (documentId === null) return;
   if (result.outcome.document.status === "unsupported") {
-    clearDocumentArtifacts(state, documentId, { deleteChunks: true });
-    state.skippedDocuments += 1;
-    yield {
-      kind: "document-extracted",
-      jobId: state.jobId,
-      capsuleId: state.capsule.id,
-      sourceId: result.sourceId,
-      documentId,
-      relativePath: result.relativePath,
-    };
-    yield {
-      kind: "document-skipped",
-      jobId: state.jobId,
-      capsuleId: state.capsule.id,
-      sourceId: result.sourceId,
-      documentId,
-      reason: "unsupported",
-    };
+    yield* handleUnsupportedDocument(state, result, documentId);
+    return;
+  }
+
+  // A document with a durable extraction checkpoint took the progressive page-windowed path; route
+  // it to the bounded chunk/embed pass (which owns its own resume + fast-path logic).
+  const checkpoint = selectExtractionCheckpoint(
+    state.options.store._internal.db,
+    state.capsule.id,
+    documentId,
+  );
+  if (checkpoint !== undefined) {
+    yield* handleBoundedDocument(state, result, documentId, checkpoint);
     return;
   }
 
@@ -984,6 +1201,17 @@ async function* runOneSource(
       fs: state.options.workspaceFs,
       store: state.options.store,
       parserRegistry: state.options.parserRegistry,
+      ...(state.options.largeDocumentPolicy !== undefined
+        ? { largeDocumentPolicy: state.options.largeDocumentPolicy }
+        : {}),
+      ...(state.options.progressiveExtractors !== undefined
+        ? { progressiveExtractors: state.options.progressiveExtractors }
+        : {}),
+      ...(state.options.extractionCapabilities !== undefined
+        ? { extractionCapabilities: state.options.extractionCapabilities }
+        : {}),
+      largeDocumentJobId: state.jobId,
+      chunkingStrategyVersion: chunkingStrategyKey(state.options.chunkingOptions),
     },
     sourceDiscoveryParams(state, source),
   );

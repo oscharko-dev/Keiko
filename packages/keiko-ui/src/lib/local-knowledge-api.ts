@@ -11,6 +11,7 @@ import type {
   KnowledgeSourceScope,
   CapsuleLifecycleState,
   CapsuleHealth,
+  CapsuleLargeDocumentHealth,
   CapsuleReindexRequest,
   CapsuleDeleteRequest,
   ParserDiagnostic,
@@ -268,6 +269,9 @@ export interface CapsuleDetail {
   readonly sources: readonly SourceIndexStats[];
   readonly parserDiagnostics: readonly ParserDiagnostic[];
   readonly indexingJobs: readonly IndexingJobRecord[];
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). Optional so an older BFF response
+  // without it still renders.
+  readonly largeDocumentHealth?: CapsuleLargeDocumentHealth;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +331,20 @@ export async function repairCapsuleFailedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
   const request: CapsuleReindexRequest = { capsuleId, mode: "repair-failed" };
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify(request) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsules/:id/reindex — resume interrupted large-document jobs
+// ---------------------------------------------------------------------------
+
+export async function resumeCapsuleLargeDocuments(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "resume" };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
     { method: "POST", body: JSON.stringify(request) },

@@ -43,6 +43,10 @@ export default defineConfig({
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
+      // Issue #1286: drive the bounded large-document path for any PDF so the regression exercises
+      // progressive extraction + bounded chunk/embed + the large-document health UI without needing
+      // a multi-hundred-MiB binary fixture.
+      KEIKO_LK_LARGE_DOC_THRESHOLD_BYTES: process.env.KEIKO_LK_LARGE_DOC_THRESHOLD_BYTES ?? "1024",
     },
   },
 });
