@@ -4,11 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Accessibility · Keiko Design System</title>
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="components.css" />
     <style>
@@ -50,6 +51,8 @@
       <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
       <a class="nav-item on" href="accessibility.html" aria-current="page"><span class="ni-dot"></span>Accessibility</a>
       <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <div class="nav-label">Review</div>
+      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
       <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
         <span class="ti">
           <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
@@ -57,7 +60,7 @@
         </span>
         <span class="tspace">Theme</span><span data-theme-label>Dark</span>
       </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
+      <div class="nav-foot">Keiko · v0.3.0</div>
     </nav>
 
     <main class="main" id="main">
@@ -84,8 +87,25 @@
         <div class="note flag" style="margin-top:18px"><span class="tag">Rule</span><div>Minimum <b>4.5:1</b> for text, <b>3:1</b> for large text, UI borders and the focus ring. The monotonic ramp (muted → dim → faint) preserves hierarchy without any step dropping below AA — every figure here is <b>measured</b> by rasterising each token to sRGB, in both themes. Meaningful accent graphics (connectors, the focus ring) use the darker <code>--accent-text</code> tone so they clear 3:1 on white too. And when the OS asks for <b>more contrast</b>, borders, faint text, the grid and the focus ring all step up automatically.</div></div>
       </section>
 
+      <section class="sec" id="high-contrast">
+        <div class="sec-head"><div class="num">02 — HIGH CONTRAST</div><h2>A first-class third mode</h2><p>High contrast isn’t a bright-room nudge bolted onto a theme — it’s a full, selectable mode that pairs with <em>both</em> appearances (dark+HC, light+HC). Every text tone is lifted to WCAG <b>AAA (≥ 7:1)</b>, every UI line to ≥ 3:1, the focus ring thickens to 3px, and status + accent brighten. Switch it from the sidebar — <b>Contrast → Auto / High</b> — or let the OS drive it.</p></div>
+        <div class="card" style="padding:8px 24px;margin-bottom:18px">
+          <table class="ac-table">
+            <tbody>
+              <tr><td><span class="ac-sample" style="background:var(--card);color:var(--fg);font-weight:600">Aa — High contrast</span></td><td class="ac-role">Primary text</td><td class="ac-ratio">dark 18.6 · light 20.1</td><td><span class="pass aaa">AAA</span></td></tr>
+              <tr><td><span class="ac-sample" style="background:var(--card);color:var(--fg-muted)">Aa — Body &amp; secondary</span></td><td class="ac-role">Muted</td><td class="ac-ratio">dark 13.0 · light 13.6</td><td><span class="pass aaa">AAA</span></td></tr>
+              <tr><td><span class="ac-sample" style="background:var(--card);color:var(--fg-dim)">Aa — Tertiary</span></td><td class="ac-role">Dim</td><td class="ac-ratio">dark 11.4 · light 11.7</td><td><span class="pass aaa">AAA</span></td></tr>
+              <tr><td><span class="ac-sample" style="background:var(--card);color:var(--fg-faint)">Aa — Captions</span></td><td class="ac-role">Faint</td><td class="ac-ratio">dark 10.7 · light 10.8</td><td><span class="pass aaa">AAA</span></td></tr>
+              <tr><td><span class="ac-sample" style="background:var(--card);color:var(--accent-text)">Aa — Accent &amp; links</span></td><td class="ac-role">Accent text</td><td class="ac-ratio">dark 12.9 · light 7.5</td><td><span class="pass aaa">AAA</span></td></tr>
+              <tr><td><span class="ac-sample" style="background:var(--card);color:var(--danger)">Aa — Errors</span></td><td class="ac-role">Danger</td><td class="ac-ratio">dark 8.0 · light 8.8</td><td><span class="pass aaa">AAA</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note flag"><span class="tag">Resolution</span><div>Order is <b>enterprise-correct</b>: the OS may raise contrast (<code>@media (prefers-contrast: more)</code>), and an explicit in-app choice (<code>[data-hc="more"]</code>) may raise it too — neither silently <em>lowers</em> it below what the user asked for at system level. The whole system is token-driven, so every component inherits HC for free, and Windows / <code>forced-colors</code> High Contrast hands the focus ring and card edges to the OS palette. <b>Samples above render in the current mode</b> — switch Contrast to <b>High</b> in the sidebar to watch this page step up.</div></div>
+      </section>
+
       <section class="sec" id="legibility">
-        <div class="sec-head"><div class="num">02 — LEGIBILITY</div><h2>Type for the long haul</h2><p>Sizes, spacing and measure tuned to be read for hours, not glanced at.</p></div>
+        <div class="sec-head"><div class="num">03 — LEGIBILITY</div><h2>Type for the long haul</h2><p>Sizes, spacing and measure tuned to be read for hours, not glanced at.</p></div>
         <div class="card" style="padding:8px 24px;margin-bottom:18px">
           <table class="tbl">
             <thead><tr><th>Rule</th><th>Value</th><th>Why</th></tr></thead>
@@ -102,7 +122,7 @@
       </section>
 
       <section class="sec" id="targets">
-        <div class="sec-head"><div class="num">03 — TARGET SIZES</div><h2>Hit targets</h2><p>Every interactive element meets WCAG 2.5.8 (≥ 24×24px); primary controls are larger, with spacing so neighbours never collide.</p></div>
+        <div class="sec-head"><div class="num">04 — TARGET SIZES</div><h2>Hit targets</h2><p>Every interactive element meets WCAG 2.5.8 (≥ 24×24px); primary controls are larger, with spacing so neighbours never collide.</p></div>
         <div class="card demo-card">
           <div class="tgt-row">
             <div><div class="tgt" style="width:24px;height:24px">24</div><div class="tgt-cap">min</div></div>
@@ -116,7 +136,7 @@
       </section>
 
       <section class="sec" id="focus">
-        <div class="sec-head"><div class="num">04 — FOCUS &amp; KEYBOARD</div><h2>Focus &amp; keyboard</h2><p>Everything is reachable and visibly focusable. Tab through these — a two-tone ring (a neutral separator plus the accent outside it) stays visible on every surface, including the green primary button, and surfaces in Windows High Contrast.</p></div>
+        <div class="sec-head"><div class="num">05 — FOCUS &amp; KEYBOARD</div><h2>Focus &amp; keyboard</h2><p>Everything is reachable and visibly focusable. Tab through these — a two-tone ring (a neutral separator plus the accent outside it) stays visible on every surface, including the green primary button, and surfaces in Windows High Contrast.</p></div>
         <div class="card demo-card">
           <div class="focus-demo">
             <button class="c-btn c-btn--primary">Primary</button>
@@ -134,17 +154,17 @@
       </section>
 
       <section class="sec" id="environments">
-        <div class="sec-head"><div class="num">05 — ENVIRONMENTS &amp; EYE COMFORT</div><h2>Built for every room</h2><p>The same UI has to hold up in a dark studio at 2am and on a laptop in daylight. Both themes are first-class and tuned to reduce strain, not just to invert.</p></div>
+        <div class="sec-head"><div class="num">06 — ENVIRONMENTS &amp; EYE COMFORT</div><h2>Built for every room</h2><p>The same UI has to hold up in a dark studio at 2am and on a laptop in daylight. Both themes are first-class and tuned to reduce strain, not just to invert.</p></div>
         <div class="env-grid">
           <div class="env"><h3><span class="ico" data-licon="moon" data-size="18"></span>Dark — low light</h3><p>Surfaces are <b>near-black, never #000</b> (oklch 0.17). Pure black against bright text causes halation and OLED smear — the warm near-black keeps edges crisp and calm in the dark.</p></div>
           <div class="env"><h3><span class="ico" data-licon="sun" data-size="18"></span>Light — daylight</h3><p>Background is an <b>off-white (0.955), not pure white</b>, to cut glare; text and chromatic tones darken so contrast holds even with screen reflections outdoors.</p></div>
           <div class="env"><h3><span class="ico" data-licon="spark" data-size="18"></span>Warm-neutral hue</h3><p>One hue (160) across both themes gives a slightly warm grey that’s gentler over long sessions than a pure, cold neutral.</p></div>
-          <div class="env"><h3><span class="ico" data-licon="settings" data-size="18"></span>Follows the user</h3><p>Theme is a one-tap toggle, persisted per device and applied before first paint — no white flash on reload, no fighting the OS.</p></div>
+          <div class="env"><h3><span class="ico" data-licon="settings" data-size="18"></span>Follows the user</h3><p>Appearance <b>and</b> contrast persist per device and apply before first paint — no white flash, no fighting the OS. High Contrast defaults to <b>Auto</b> (follows the system) and can be forced on from the sidebar.</p></div>
         </div>
       </section>
 
       <section class="sec" id="resolution">
-        <div class="sec-head"><div class="num">06 — RESOLUTION &amp; ZOOM</div><h2>Any screen, any zoom</h2></div>
+        <div class="sec-head"><div class="num">07 — RESOLUTION &amp; ZOOM</div><h2>Any screen, any zoom</h2></div>
         <div class="card" style="padding:8px 24px">
           <table class="tbl">
             <tbody>
@@ -158,9 +178,9 @@
       </section>
 
       <section class="sec" id="checklist">
-        <div class="sec-head"><div class="num">07 — CHECKLIST</div><h2>Every component must…</h2></div>
+        <div class="sec-head"><div class="num">08 — CHECKLIST</div><h2>Every component must…</h2></div>
         <div class="card" style="padding:14px 24px">
-          <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Clear 4.5:1 text contrast in both themes (3:1 for large text, borders, focus).</div>
+          <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Clear 4.5:1 text contrast in both themes (3:1 for large text, borders, focus) — and AAA (7:1) in High Contrast.</div>
           <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Offer a ≥ 24px hit target with non-colliding spacing.</div>
           <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Show a visible focus ring and be fully keyboard-operable.</div>
           <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Convey state with icon + text + shape — never colour alone.</div>
@@ -176,5 +196,6 @@
       function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
       dsSyncToggle();
     </script>
-  </body>
+      <script src="theme-control.js"></script>
+</body>
 </html>

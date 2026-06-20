@@ -94,6 +94,7 @@ afterEach(() => {
   document.documentElement.style.removeProperty("--workspace-bg-brightness");
   document.documentElement.style.removeProperty("--workspace-grid-strength");
   document.documentElement.style.removeProperty("--frame-border-strength");
+  document.documentElement.style.removeProperty("--frame-inner-glow-strength");
 });
 
 describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () => {
@@ -233,7 +234,7 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
     expect(modelsTab).toHaveAttribute("aria-pressed", "true");
     const generalTab = screen.getByRole("button", { name: "General" });
     expect(generalTab).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(generalTab);
+    fireEvent.pointerDown(generalTab);
     expect(generalTab).toHaveAttribute("aria-pressed", "true");
     expect(modelsTab).toHaveAttribute("aria-pressed", "false");
     await waitFor(() => {
@@ -302,5 +303,20 @@ describe("SettingsPanel workspace wallpaper controls", () => {
 
     expect(window.localStorage.getItem("keiko.frame.border.strength")).toBe("57");
     expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("57%");
+  });
+
+  it("persists workspace inner glow and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace inner glow" }), {
+      target: { value: "34" },
+    });
+
+    expect(window.localStorage.getItem("keiko.frame.inner.glow.strength")).toBe("34");
+    expect(document.documentElement.style.getPropertyValue("--frame-inner-glow-strength")).toBe(
+      "34%",
+    );
   });
 });

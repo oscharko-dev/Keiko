@@ -2,7 +2,7 @@
 //
 // Tests cover:
 //   - Empty state: no candidates → "No test cases" message.
-//   - Card rendering: one card per candidate with title, priority, riskClass, review badge,
+//   - Card rendering: one card per candidate with title, riskClass, review badge,
 //     preconditions, steps, expectedResults lists, and tags.
 //   - onReview present: Approve/Reject/Request-changes buttons render.
 //   - onReview present: clicking Approve calls onReview(id, "approve").
@@ -95,10 +95,10 @@ describe("CandidatesPane — card rendering", () => {
     expect(screen.getByText("Login with valid credentials succeeds")).toBeInTheDocument();
   });
 
-  it("renders the candidate priority in each card", () => {
+  it("does not render candidate priority in the compact card header", () => {
     const c = makeCandidate({ priority: "P0" });
     render(<CandidatesPane candidates={[c]} />);
-    expect(screen.getByText(/P0/)).toBeInTheDocument();
+    expect(screen.queryByText(/P0/)).not.toBeInTheDocument();
   });
 
   it("renders the candidate riskClass in each card", () => {
@@ -639,10 +639,10 @@ describe("CandidatesPane — edge cases", () => {
     expect(onReview).not.toHaveBeenCalledWith(c2.id, expect.anything());
   });
 
-  it("renders the 'Open' review badge on a newly generated candidate", () => {
+  it("does not render the default 'Open' review badge on a newly generated candidate", () => {
     const c = makeCandidate({ reviewState: "open" });
     render(<CandidatesPane candidates={[c]} />);
-    expect(screen.getByText(/^open$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^open$/i)).not.toBeInTheDocument();
   });
 
   it("renders review buttons for all visible candidates when onReview is provided and count > 25", () => {
@@ -767,17 +767,24 @@ describe("CandidatesPane — inline editing", () => {
         actionsDisabledReason="Set a reviewer label to review or edit candidates."
       />,
     );
-    const note = screen.getByText(/set a reviewer label to review or edit candidates/i);
-    expect(note).toBeInTheDocument();
+    const notes = screen.getAllByText(/set a reviewer label to review or edit candidates/i);
+    const paneNote = notes.find((node) => node.classList.contains("qi-cand-governance-note"));
+    const localNote = notes.find((node) => node.classList.contains("qi-cand-action-note"));
+    if (paneNote === undefined || localNote === undefined) {
+      throw new Error("Expected both the pane-level and local action-row governance notes.");
+    }
     // Governance-gated controls use aria-disabled (NOT native disabled) so they stay focusable and
-    // a screen reader announces the reason via aria-describedby pointing at the governance note.
+    // a screen reader announces both the pane-level and local action-row reasons.
     const editButton = screen.getByRole("button", { name: /^edit$/i });
     const approveButton = screen.getByRole("button", { name: /approve/i });
     expect(editButton).toHaveAttribute("aria-disabled", "true");
     expect(approveButton).toHaveAttribute("aria-disabled", "true");
-    expect(note.id).toBeTruthy();
-    expect(editButton).toHaveAttribute("aria-describedby", note.id);
-    expect(approveButton).toHaveAttribute("aria-describedby", note.id);
+    expect(paneNote.id).toBeTruthy();
+    expect(localNote.id).toBeTruthy();
+    expect(editButton.getAttribute("aria-describedby")).toContain(paneNote.id);
+    expect(editButton.getAttribute("aria-describedby")).toContain(localNote.id);
+    expect(approveButton.getAttribute("aria-describedby")).toContain(paneNote.id);
+    expect(approveButton.getAttribute("aria-describedby")).toContain(localNote.id);
   });
 
   it("does not start editing when the Edit button is governance-disabled (aria-disabled guard)", async () => {

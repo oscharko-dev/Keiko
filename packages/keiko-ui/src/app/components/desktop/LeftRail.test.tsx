@@ -158,6 +158,35 @@ describe("LeftRail — workspace tool buttons", () => {
     );
   });
 
+  it("renders Figma Snapshot as a tool button (not a page-route link)", () => {
+    renderRail();
+    expect(screen.getByRole("button", { name: "Figma Snapshot" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Figma Snapshot" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Figma Snapshot manager via onTool('figma') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Figma Snapshot" }));
+    expect(onTool).toHaveBeenCalledWith("figma");
+  });
+
+  it("marks the Figma Snapshot button pressed when its window is open", () => {
+    renderRail(new Set(["figma"]));
+    expect(screen.getByRole("button", { name: "Figma Snapshot" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
 });
 
 describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
@@ -184,7 +213,6 @@ describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
     const settingsBtn = screen.getByRole("button", { name: "Settings" });
     expect(settingsBtn).toHaveAttribute("aria-pressed", "true");
   });
-
 });
 
 // SH-01 (WCAG 4.1.2) — theme-toggle button aria-pressed tracks the active theme.

@@ -258,7 +258,7 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
     page.getByRole("navigation", { name: "Primary workspace navigation" }),
   ).toBeVisible();
   await expect(page.getByText("Keiko").first()).toBeVisible();
-  await expect(page.locator(".header .hd-tool-cta")).toBeVisible();
+  await expect(page.locator(".header .hd-tool-cta")).toHaveCount(0);
   await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
 
   assertNoPageErrors();
@@ -490,8 +490,10 @@ test("chat window renders a bound Files grounding source and enforces the 16-sou
   await expect(chatWindow).toBeVisible();
   const grounding = chatWindow.getByLabel("Grounding mode");
   await expect(grounding).toBeVisible();
-  await expect(grounding).toHaveValue("files");
-  await expect(grounding.locator("option:checked")).toHaveText("Live Files context");
+  await expect(grounding).toContainText("Live Files context");
+  await grounding.click();
+  const liveFilesOption = page.getByRole("option", { name: "Live Files context" });
+  await expect(liveFilesOption).toHaveAttribute("aria-selected", "true");
   await expect(chatWindow.getByRole("textbox", { name: "Chat message" })).toBeVisible();
 
   assertNoPageErrors();

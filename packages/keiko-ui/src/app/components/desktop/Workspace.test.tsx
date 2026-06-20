@@ -1,7 +1,6 @@
 import { createRef } from "react";
-import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
@@ -178,122 +177,6 @@ describe("Workspace card connections", () => {
     expect(
       screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" }),
     ).toBeNull();
-  });
-
-  it("does not expose the workspace outline until the shell-controlled rail opens it", () => {
-    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
-    render(
-      <Workspace
-        ws={workspace({ wins })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-
-    expect(screen.queryByRole("region", { name: "Workspace outline" })).not.toBeInTheDocument();
-  });
-
-  it("exposes a semantic workspace outline with window actions and textual relationships", async () => {
-    const restore = vi.fn();
-    const minimize = vi.fn();
-    const maximize = vi.fn();
-    const close = vi.fn();
-    const removeConn = vi.fn();
-    const tileAll = vi.fn();
-    const openPalette = vi.fn();
-    const user = userEvent.setup();
-    const workspaceApi = api({ restore, minimize, maximize, close, removeConn, tileAll });
-    const wins = [
-      appWindow({
-        id: "chat-1",
-        type: "chat",
-        z: 2,
-        cfg: { title: "Release review" },
-      }),
-      appWindow({
-        id: "files-1",
-        type: "files",
-        x: 420,
-        z: 1,
-        cfg: { root: "/repo", activeFilePath: "src/app.ts" },
-      }),
-    ];
-
-    render(
-      <Workspace
-        ws={workspace({
-          wins,
-          conns: [{ id: "conn-1", a: "chat-1", b: "files-1" }],
-          api: workspaceApi,
-        })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={openPalette}
-        outlineOpen={true}
-      />,
-    );
-
-    const outline = screen.getByRole("region", { name: "Workspace outline" });
-    expect(outline).toHaveTextContent("2 workspace windows, 1 relationship.");
-    expect(
-      screen.getByRole("heading", { name: "Chat: Release review", level: 4 }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Files: /repo", level: 4 })).toBeInTheDocument();
-    expect(outline).toHaveTextContent("Chat: Release review uses app.ts Files: /repo.");
-
-    const outlineQueries = within(outline);
-    await user.click(outlineQueries.getByRole("button", { name: "Tile all windows" }));
-    await user.click(outlineQueries.getByRole("button", { name: "Open Chat: Release review" }));
-    await user.click(outlineQueries.getByRole("button", { name: "Minimize Chat: Release review" }));
-    await user.click(
-      outlineQueries.getByRole("button", { name: "Full screen Chat: Release review" }),
-    );
-    await user.click(outlineQueries.getByRole("button", { name: "Close Chat: Release review" }));
-    await user.click(
-      outlineQueries.getByRole("button", {
-        name: "Remove relationship between Chat: Release review and Files: /repo",
-      }),
-    );
-    await user.click(outlineQueries.getByRole("button", { name: "New window" }));
-
-    expect(tileAll).toHaveBeenCalledTimes(1);
-    expect(restore).toHaveBeenCalledWith("chat-1");
-    expect(minimize).toHaveBeenCalledWith("chat-1");
-    expect(maximize).toHaveBeenCalledWith("chat-1");
-    expect(close).toHaveBeenCalledWith("chat-1");
-    expect(removeConn).toHaveBeenCalledWith("conn-1");
-    expect(openPalette).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes axe with the semantic workspace outline and a connected relationship", async () => {
-    const wins = [
-      appWindow({
-        id: "chat-1",
-        type: "chat",
-        z: 2,
-        cfg: { title: "Release review" },
-      }),
-      appWindow({
-        id: "files-1",
-        type: "files",
-        x: 420,
-        z: 1,
-        cfg: { root: "/repo", activeFilePath: "src/app.ts" },
-      }),
-    ];
-
-    const { container } = render(
-      <Workspace
-        ws={workspace({
-          wins,
-          conns: [{ id: "conn-1", a: "chat-1", b: "files-1" }],
-        })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={vi.fn()}
-        outlineOpen={true}
-      />,
-    );
-
-    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("marks canvas overlays hidden when a visible window is maximized", () => {
@@ -516,7 +399,7 @@ describe("Workspace card connections", () => {
     expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
   });
 
-  it("creates a scoped Figma view card when a snapshot thumbnail is dropped", () => {
+  it("creates a scoped Figma View card when a snapshot thumbnail is dropped", () => {
     const add = vi.fn(() => "figma-view-1");
     const update = vi.fn();
     const workspaceApi = api({ add, update });
@@ -565,7 +448,7 @@ describe("Workspace card connections", () => {
     });
     fireEvent(surface, dropEvent);
 
-    expect(add).toHaveBeenCalledWith("figma", {
+    expect(add).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-123",
       selectedScreenIdsJson: JSON.stringify(["1:102746"]),
       selectedScreenName: "Kontokorrentkredit hinzufügen",
@@ -573,7 +456,7 @@ describe("Workspace card connections", () => {
     expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
   });
 
-  it("creates the same scoped Figma view card from the pointer drag-out event", () => {
+  it("creates the same scoped Figma View card from the pointer drag-out event", () => {
     const add = vi.fn(() => "figma-view-1");
     const update = vi.fn();
     const workspaceApi = api({ add, update });
@@ -616,7 +499,7 @@ describe("Workspace card connections", () => {
       }),
     );
 
-    expect(add).toHaveBeenCalledWith("figma", {
+    expect(add).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-123",
       selectedScreenIdsJson: JSON.stringify(["1:102746"]),
       selectedScreenName: "Kontokorrentkredit hinzufügen",
@@ -640,7 +523,7 @@ describe("Workspace card connections", () => {
         }),
         appWindow({
           id: "figma-view-1",
-          type: "figma",
+          type: "figmaView",
           x: 420,
           z: 1,
           cfg: {
@@ -781,7 +664,7 @@ describe("Workspace card connections", () => {
       const workspaceApi = api({ add, update, removeConn, connect });
       const wins = [
         appWindow({ id: "quality", type: "quality", z: 2 }),
-        appWindow({ id: "figma-view-1", type: "figma", x: 420, z: 1 }),
+        appWindow({ id: "figma-view-1", type: "figmaView", x: 420, z: 1 }),
       ];
       render(
         <Workspace
@@ -1056,10 +939,12 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("marks the free workspace surface as actively panning while the primary button is held", () => {
+  it("pans the free workspace surface on primary-button drag", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
     render(
       <Workspace
-        ws={workspace({})}
+        ws={workspace({ api: workspaceApi })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={() => undefined}
       />,
@@ -1068,8 +953,10 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
     expect(surface).toHaveAttribute("data-panning", "true");
-
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
     fireEvent.pointerUp(window);
+
+    expect(panBy).toHaveBeenCalledWith(30, 15);
     expect(surface).not.toHaveAttribute("data-panning");
   });
 
@@ -1175,6 +1062,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
     const button = document.querySelector<HTMLElement>(".ws-fab");
     if (button === null) throw new Error("missing workspace FAB");
+    expect(button).toHaveClass("cmp-tip-end");
     const event = createEvent.keyDown(button, { key: " ", code: "Space" });
 
     fireEvent(button, event);

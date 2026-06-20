@@ -6,11 +6,12 @@ import { Palette } from "./Palette";
 // 10 cards in the 3-column .palette-grid — mirrors the live picker size the
 // C363 audit observed (rows: [0,1,2] [3,4,5] [6,7,8] [9]).
 const ORDER = TYPE_ORDER.slice(0, 10);
-const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "figma", "files"];
+const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "files", "agents"];
 
-function renderPalette(
-  order: readonly WindowType[] = ORDER,
-): { onAdd: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
+function renderPalette(order: readonly WindowType[] = ORDER): {
+  onAdd: ReturnType<typeof vi.fn>;
+  onClose: ReturnType<typeof vi.fn>;
+} {
   const onAdd = vi.fn();
   const onClose = vi.fn();
   render(<Palette types={WIN_TYPES} order={order} onAdd={onAdd} onClose={onClose} />);
@@ -44,7 +45,7 @@ describe("Palette", () => {
     expect(TYPE_ORDER).not.toContain("keiko");
   });
 
-  it("does not expose the hidden Agents surface in the default window order", () => {
+  it("keeps Agents out of the broad default order while the curated picker can expose it", () => {
     expect(TYPE_ORDER).not.toContain("agents");
   });
 
@@ -80,12 +81,18 @@ describe("Palette", () => {
     expect(cardNames()).not.toContain("Review");
   });
 
+  it("does not render the Figma Snapshot manager in the new-window picker", () => {
+    renderPalette(PICKER_ORDER);
+
+    expect(cardNames()).not.toContain("Figma Snapshot");
+  });
+
   it("lays out the four visible picker cards as a two-column grid", () => {
     renderPalette(PICKER_ORDER);
     const dialog = screen.getByRole("dialog");
 
     expect(dialog).toHaveAttribute("data-columns", "2");
-    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Figma Snapshot", "Files"]);
+    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Files", "Agents"]);
   });
 
   it("uses the compact two-column arrangement for a two-card picker", () => {

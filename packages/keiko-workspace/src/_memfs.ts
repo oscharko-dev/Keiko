@@ -38,6 +38,46 @@ function entry(name: string, isDirectory: boolean): WorkspaceDirEntry {
   return { name, isDirectory, isFile: !isDirectory, isSymbolicLink: false };
 }
 
+function encodedFile(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+): Uint8Array | undefined {
+  if (key === undefined) {
+    return undefined;
+  }
+  return new TextEncoder().encode(files[key] ?? "");
+}
+
+function memReadFileBytes(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const cap = Math.max(0, Math.floor(maxBytes));
+  const encoded = encodedFile(files, key);
+  if (encoded === undefined) {
+    return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
+  }
+  return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, cap)));
+}
+
+function memReadFileRange(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+  startByte: number,
+  length: number,
+): Promise<Uint8Array> {
+  const start = Math.max(0, Math.floor(startByte));
+  const cap = Math.max(0, Math.floor(length));
+  const encoded = encodedFile(files, key);
+  if (encoded === undefined) {
+    return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
+  }
+  return Promise.resolve(encoded.subarray(start, Math.min(encoded.length, start + cap)));
+}
+
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const findKey = (absolutePath: string): string | undefined =>
     Object.keys(files).find((key) => toAbs(root, key) === absolutePath);
@@ -67,13 +107,14 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
     exists: (absolutePath: string): boolean =>
       findKey(absolutePath) !== undefined || absolutePath === root,
     readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
-      const key = findKey(absolutePath);
-      if (key === undefined) {
-        return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
-      }
-      const cap = Math.max(0, Math.floor(maxBytes));
-      const encoded = new TextEncoder().encode(files[key] ?? "");
-      return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, cap)));
+      return memReadFileBytes(files, findKey(absolutePath), absolutePath, maxBytes);
+    },
+    readFileRange: (
+      absolutePath: string,
+      startByte: number,
+      length: number,
+    ): Promise<Uint8Array> => {
+      return memReadFileRange(files, findKey(absolutePath), absolutePath, startByte, length);
     },
   };
 }

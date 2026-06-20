@@ -47,13 +47,20 @@ describe("doctor", () => {
     const root = makeRoot();
     const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
     mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+    mkdirSync(join(packageRoot, "dist", "ui", "static"), { recursive: true });
     writeFileSync(join(packageRoot, "package.json"), '{"version":"0.2.0-beta.5"}\n', "utf8");
     writeFileSync(join(packageRoot, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
+    writeFileSync(
+      join(packageRoot, "dist", "ui", "static", "index.html"),
+      "<html></html>\n",
+      "utf8",
+    );
     const report = collectDoctorReport({
       cwd: root,
       argv: [process.execPath, "C:\\Users\\dev\\AppData\\Roaming\\npm\\keiko.cmd"],
     });
-    expect(report.warning).toContain("different Keiko binary");
+    expect(report.warning).toContain("different");
+    expect(report.warning).toContain("local build");
   });
 
   it("warns when a built checkout exists but the running entry points elsewhere", () => {

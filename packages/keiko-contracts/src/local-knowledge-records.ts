@@ -214,11 +214,16 @@ export const INDEXING_JOB_STATUSES: readonly IndexingJobStatus[] = [
   "cancelled",
 ] as const;
 
-export type CapsuleReindexMode = "changed-files" | "repair-failed";
+// `resume` continues interrupted large-document jobs from durable extraction checkpoints
+// where the source, parser, policy, chunking strategy, and embedding identity remain
+// compatible; incompatible checkpoints are refused and that document restarts cleanly
+// (Epic #1160, Issue #1286).
+export type CapsuleReindexMode = "changed-files" | "repair-failed" | "resume";
 
 export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
   "changed-files",
   "repair-failed",
+  "resume",
 ] as const;
 
 export interface CapsuleReindexRequest {
@@ -244,6 +249,13 @@ export interface IndexingJobRecord {
   readonly failedDocuments: number;
   readonly skippedDocuments: number;
   readonly lastError?: IndexingJobError;
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). Optional and content-free:
+  // counts of documents that took the progressive large-document path, that completed with
+  // partial coverage, and that hold a resumable checkpoint. Absent on jobs that predate the
+  // large-document path so existing consumers stay backward-compatible.
+  readonly largeDocumentCount?: number;
+  readonly partialCoverageDocuments?: number;
+  readonly resumableDocuments?: number;
 }
 
 // ─── Capsule health + delete ──────────────────────────────────────────────────
@@ -266,6 +278,14 @@ export interface CapsuleHealth {
   readonly unsupportedDocuments: number;
   readonly unsupportedGuidance: readonly string[];
   readonly staleReasons: readonly string[];
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). Optional and content-free.
+  // `partialCoverageDocuments` counts documents indexed with explicit quality limits (e.g.
+  // missing OCR/multimodal capability); `qualityWarnings` are browser-safe summaries that
+  // describe retrieval-quality limits without implying pipeline instability;
+  // `resumableDocuments` counts documents that hold a durable, compatible resume checkpoint.
+  readonly partialCoverageDocuments?: number;
+  readonly qualityWarnings?: readonly string[];
+  readonly resumableDocuments?: number;
 }
 
 // Sources point at user-owned files that live OUTSIDE Keiko's local state. Deleting them

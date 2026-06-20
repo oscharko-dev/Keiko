@@ -5,6 +5,7 @@
 //            does not resolve value-exports correctly in jsdom).
 
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -241,7 +242,8 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
     expect(screen.queryByText(/No conversation-eligible model/i)).toBeNull();
   });
 
-  it("does not render embedding-only models in the chat selector", () => {
+  it("does not render embedding-only models in the chat selector", async () => {
+    const user = userEvent.setup();
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -249,7 +251,8 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
         models: [embeddingModel("text-embedding-3-large"), chatModel("gpt-oss")],
       }),
     );
-    expect(screen.getByRole("option", { name: "gpt-oss" })).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Models" }));
+    expect(await screen.findByRole("option", { name: "gpt-oss" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "text-embedding-3-large" })).toBeNull();
   });
 });
@@ -434,7 +437,9 @@ describe("ChatWindow mini composer (AC #2)", () => {
       true, // mini=true
     );
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Model")).toHaveValue("inherited-model");
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent(
+      "inherited-model",
+    );
   });
 
   it("renders the no-model alert in mini mode when noEligibleModels is true", () => {

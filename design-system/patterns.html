@@ -4,11 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Patterns · Keiko Design System</title>
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="components.css" />
     <style>
@@ -51,6 +52,8 @@
       <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
       <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
       <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <div class="nav-label">Review</div>
+      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
       <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
         <span class="ti">
           <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
@@ -58,7 +61,7 @@
         </span>
         <span class="tspace">Theme</span><span data-theme-label>Dark</span>
       </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
+      <div class="nav-foot">Keiko · v0.3.0</div>
     </nav>
 
     <main class="main" id="main">
@@ -141,5 +144,6 @@
       function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
       dsSyncToggle();
     </script>
-  </body>
+      <script src="theme-control.js"></script>
+</body>
 </html>

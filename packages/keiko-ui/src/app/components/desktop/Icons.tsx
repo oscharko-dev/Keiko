@@ -97,11 +97,11 @@ export const Icons = {
       <path d="M13.50 7.40 H18.00 A2.4 2.4 0 0 1 20.40 9.80 V16.00 A2.4 2.4 0 0 1 18.00 18.40 H6.00 A2.4 2.4 0 0 1 3.60 16.00 V9.80 A2.4 2.4 0 0 1 6.00 7.40 H10.50" />
     </Ico>
   ),
-  /* Lift: gear ring with one seam + eight spokes. */
+  /* Lift: toothed cog with one seam centred on the top tooth. */
   settings: (p: IcoProps): ReactNode => (
     <Ico {...p}>
-      <path d="M13.25 9.83 A2.5 2.5 0 1 1 10.75 9.83" />
-      <path d="M16.00 12.00 L18.60 12.00 M14.83 14.83 L16.67 16.67 M12.00 16.00 L12.00 18.60 M9.17 14.83 L7.33 16.67 M8.00 12.00 L5.40 12.00 M9.17 9.17 L7.33 7.33 M12.00 8.00 L12.00 5.40 M14.83 9.17 L16.67 7.33" />
+      <path d="M 13.02 3.36 L 13.21 3.38 L 13.66 5.82 L 15.20 6.46 L 17.24 5.05 L 18.95 6.76 L 17.54 8.80 L 18.18 10.34 L 20.62 10.79 L 20.62 13.21 L 18.18 13.66 L 17.54 15.20 L 18.95 17.24 L 17.24 18.95 L 15.20 17.54 L 13.66 18.18 L 13.21 20.62 L 10.79 20.62 L 10.34 18.18 L 8.80 17.54 L 6.76 18.95 L 5.05 17.24 L 6.46 15.20 L 5.82 13.66 L 3.38 13.21 L 3.38 10.79 L 5.82 10.34 L 6.46 8.80 L 5.05 6.76 L 6.76 5.05 L 8.80 6.46 L 10.34 5.82 L 10.79 3.38 L 10.98 3.36" />
+      <circle cx="12" cy="12" r="2.7" />
     </Ico>
   ),
   /* Lift: document with folded corner; outline opens at the top seam. */
@@ -226,6 +226,32 @@ export const Icons = {
     </Ico>
   ),
   check: (p: IcoProps): ReactNode => <Ico {...p} d="M5 12.5l4.5 4.5L19 6.5" />,
+  /* Lift: info ring open at the top seam + stem. */
+  info: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M14.51 4.96 A8.6 8.6 0 1 1 9.49 4.96" />
+      <path d="M12 8.2 h.01" />
+      <path d="M12 11.3 V16.3" />
+    </Ico>
+  ),
+  /* Lift: edit — open paper lines with a pen gesture. */
+  edit: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M4.5 6.5 H13" />
+      <path d="M4.5 10 H10" />
+      <path d="M14.4 13.6 l4-4 a1.6 1.6 0 0 1 2.3 2.3 l-6.2 6.2 -3 .7 .7 -3 z" />
+    </Ico>
+  ),
+  /* Lift: trash — open lid + open can contour, no filled shape. */
+  trash: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M5 7 H19" />
+      <path d="M9 7 V5.6 A1.6 1.6 0 0 1 10.6 4 H13.4 A1.6 1.6 0 0 1 15 5.6 V7" />
+      <path d="M17.5 10 L16.8 18.2 A2 2 0 0 1 14.8 20 H9.2 A2 2 0 0 1 7.2 18.2 L6.5 10" />
+      <path d="M10 11.5 V17" />
+      <path d="M14 11.5 V17" />
+    </Ico>
+  ),
   reset: (p: IcoProps): ReactNode => (
     <Ico {...p}>
       <path d="M4 12a8 8 0 1 1 2.3 5.6" />

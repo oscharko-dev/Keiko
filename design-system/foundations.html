@@ -7,13 +7,14 @@
     <script>
       try {
         var t = localStorage.getItem("keiko-ds-theme");
-        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more";
       } catch (e) { document.documentElement.dataset.theme = "dark"; }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
   </head>
   <body class="ds">
@@ -35,6 +36,8 @@
       <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
       <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
       <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <div class="nav-label">Review</div>
+      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
       <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
         <span class="ti">
           <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
@@ -43,7 +46,7 @@
         <span class="tspace">Theme</span>
         <span data-theme-label>Dark</span>
       </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
+      <div class="nav-foot">Keiko · v0.3.0</div>
     </nav>
 
     <main class="main" id="main">
@@ -104,6 +107,14 @@
           <span class="tag">Note</span>
           <div><b>Never colour alone.</b> Status is always paired with an icon, label or shape — and in light theme the chromatic tokens darken (e.g. <code>--accent-text</code> → oklch(0.48 0.13 160)) so green/red/amber text clears 4.5:1 on white. <code>--fg-dim</code> (0.66) and <code>--fg-faint</code> (0.64) sit deliberately close: both are WCAG-checked and kept monotonic, not a duplication.</div>
         </div>
+
+        <div class="sub-head" style="margin-top:32px">Three modes — one palette</div>
+        <div class="demo-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="card demo" style="padding:18px"><div style="height:64px;border-radius:9px;border:1px solid oklch(0.3 0.004 160);background:oklch(0.235 0.004 160);display:flex;align-items:center;justify-content:center;color:oklch(0.97 0.003 160);font-weight:600;font-size:14px">Dark</div><div class="cap"><b>default</b>near-black 0.17 · text to 15:1 · AA/AAA</div></div>
+          <div class="card demo" style="padding:18px"><div style="height:64px;border-radius:9px;border:1px solid oklch(0.88 0.006 160);background:oklch(1 0 0);display:flex;align-items:center;justify-content:center;color:oklch(0.26 0.012 160);font-weight:600;font-size:14px">Light</div><div class="cap"><b>off-white</b>0.955 ground · chromatic tones darken · AA/AAA</div></div>
+          <div class="card demo" style="padding:18px"><div style="height:64px;border-radius:9px;border:1px solid oklch(0.62 0.006 160);background:oklch(0.185 0.004 160);display:flex;align-items:center;justify-content:center;color:oklch(1 0 0);font-weight:600;font-size:14px">High contrast</div><div class="cap"><b>selectable</b>every text tone ≥ 7:1 · lines ≥ 3:1 · AAA</div></div>
+        </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">How</span><div>Appearance (<code>data-theme</code>) and contrast (<code>data-hc</code>) are independent axes that compose into four resolved palettes. High contrast follows the OS (<code>prefers-contrast</code>) and can be forced on per device. See <a href="accessibility.html#high-contrast" style="color:var(--accent-text)">Accessibility → High contrast</a> for the measured ratios.</div></div>
       </section>
 
       <!-- TYPOGRAPHY -->
@@ -234,7 +245,14 @@
   /* …full set in the file… */
 }
 
-[data-theme="light"] { /* same hue, inverted lightness */ }</pre></div>
+[data-theme="light"] { /* same hue, inverted lightness */ }
+
+/* High contrast — selectable third mode, AAA. Follows the OS, or
+   forced from the sidebar (Contrast → High). Pairs with both
+   appearances → dark+HC and light+HC. */
+@media (prefers-contrast: more) { :root { /* dark+HC */ } [data-theme="light"] { /* light+HC */ } }
+[data-hc="more"]                 { /* dark+HC, explicit override  */ }
+[data-hc="more"][data-theme="light"] { /* light+HC */ }</pre></div>
       </section>
     </main>
 
@@ -252,5 +270,6 @@
       }
       dsSyncToggle();
     </script>
-  </body>
+      <script src="theme-control.js"></script>
+</body>
 </html>

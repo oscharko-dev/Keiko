@@ -59,12 +59,21 @@ describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
   });
 
   it(".rail-btn:focus-visible sets outline: 2px solid var(--accent-text)", () => {
-    // Find the rule block after .rail-btn:focus-visible
-    const selectorIdx = css.indexOf(".rail-btn:focus-visible");
+    // Find the actual focus-ring rule, not earlier :has(...) occurrences.
+    const selectorIdx = css.indexOf(
+      ".rail-btn:focus-visible,\n.rail-new:focus-visible,\n.rail-avatar:focus-visible",
+    );
     expect(selectorIdx).toBeGreaterThan(-1);
     const block = css.slice(selectorIdx, css.indexOf("}", selectorIdx) + 1);
     expect(block).toContain("outline: 2px solid var(--accent-text)");
     expect(block).toContain("outline-offset: 2px");
+  });
+});
+
+describe("Gateway credential dialog chrome", () => {
+  it("hides workspace rails while the gateway setup dialog is open", () => {
+    const block = cssBlock('html[data-keiko-gateway-setup-open="true"] .rail');
+    expect(block).toContain("display: none");
   });
 });
 
@@ -190,15 +199,48 @@ describe("Fix 2 — reduced-motion wrapping (WCAG 2.3.3)", () => {
 });
 
 describe("Gateway setup constrained-height scrolling", () => {
-  it("keeps the fixed backdrop and rounded frame from becoming scroll containers", () => {
-    expect(cssBlock(".gw-setup-backdrop")).toContain("overflow: hidden");
-    expect(cssBlock(".gw-setup")).toContain("overflow: hidden");
+  it("lets the backdrop recover on short viewports while the rounded frame clips", () => {
+    expect(cssBlock(".gw-setup-backdrop")).toContain("overflow-y: auto");
+    expect(cssBlock(".gw-setup {")).toContain("overflow: hidden");
   });
 
   it("uses the form as the internal scroll region", () => {
     const block = cssBlock(".gw-form");
+    expect(block).toContain("flex: 1");
     expect(block).toContain("min-height: 0");
     expect(block).toContain("overflow-y: auto");
+  });
+});
+
+describe("Compact model picker", () => {
+  it("keeps the model icon visible while hiding compact-only text and caret chrome", () => {
+    const triggerBlock = cssBlock(".cmp-model-compact .cmp-model-select");
+    expect(triggerBlock).not.toContain("opacity: 0");
+    expect(triggerBlock).toContain("width: 34px");
+    expect(triggerBlock).toContain("height: 34px");
+    expect(triggerBlock).toContain("max-width: 34px");
+    expect(triggerBlock).toContain("display: flex");
+    expect(triggerBlock).toContain("align-items: center");
+    expect(triggerBlock).toContain("justify-content: center");
+    expect(triggerBlock).toContain("gap: 0");
+
+    const copyRule = css.indexOf(
+      ".cmp-model-compact .cmp-model-select .ksel-trigger-copy,\n" +
+        ".cmp-model-compact .cmp-model-select .ksel-trigger-caret",
+    );
+    expect(copyRule).toBeGreaterThan(-1);
+    const copyBlock = css.slice(copyRule, css.indexOf("}", copyRule) + 1);
+    expect(copyBlock).toContain("display: none");
+
+    const leadingBlock = cssBlock(".cmp-model-compact .cmp-model-select .ksel-trigger-leading");
+    expect(leadingBlock).toContain("width: 100%");
+    expect(leadingBlock).toContain("height: 100%");
+    expect(leadingBlock).toContain("display: grid");
+    expect(leadingBlock).toContain("place-items: center");
+
+    expect(cssBlock(".cmp-bar-compact .cmp-model-compact .cmp-model-select")).toContain(
+      "max-width: 34px",
+    );
   });
 });
 
@@ -376,6 +418,82 @@ describe("Conversation memory switch target size (WCAG 2.5.8)", () => {
   });
 });
 
+describe("Issue #1227 — first-run gateway setup responsiveness", () => {
+  it(".gw-setup-backdrop uses safe centering and vertical overflow scrolling", () => {
+    const block = cssBlock(".gw-setup-backdrop {");
+    expect(block).toContain("place-items: safe center");
+    expect(block).toContain("overflow-y: auto");
+  });
+
+  it(".gw-setup clips scrollbar bleed while the form owns internal scrolling", () => {
+    const setupBlock = cssBlock(".gw-setup {");
+    expect(setupBlock).toContain("max-height: calc(100vh - 48px)");
+    expect(setupBlock).toContain("max-height: calc(100dvh - 48px)");
+    expect(setupBlock).toContain("overflow: hidden");
+
+    const formBlock = cssBlock(".gw-form {");
+    expect(formBlock).toContain("flex: 1");
+    expect(formBlock).toContain("min-height: 0");
+    expect(formBlock).toContain("overflow-y: auto");
+  });
+});
+
+describe("Quality Intelligence source-type picker", () => {
+  it("renders the source-type choices as a segmented grid instead of plain inline text", () => {
+    const gridBlock = cssBlock(".qi-source-kind-grid {");
+    expect(gridBlock).toContain("display: grid");
+    expect(gridBlock).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
+    expect(gridBlock).toContain("gap: 2px");
+    expect(gridBlock).toContain("height: 34px");
+    expect(gridBlock).toContain("background: var(--card)");
+
+    const optionBlock = cssBlock(".qi-source-kind-option {");
+    expect(optionBlock).toContain("display: flex");
+    expect(optionBlock).not.toContain("flex-direction: column");
+    expect(optionBlock).toContain("height: 100%");
+    expect(optionBlock).toContain("border: 1px solid transparent");
+    expect(optionBlock).toContain("align-items: center");
+    expect(optionBlock).toContain("color: var(--fg-muted)");
+    expect(optionBlock).toContain("line-height: 1");
+  });
+
+  it("prevents source-type labels from overflowing compact buttons", () => {
+    const spanBlock = cssBlock(".qi-source-kind-label {");
+    expect(spanBlock).toContain("overflow: hidden");
+    expect(spanBlock).toContain("text-overflow: ellipsis");
+    expect(spanBlock).toContain("white-space: nowrap");
+    expect(css).not.toContain(".qi-source-kind-option span:last-child");
+
+    const iconBlock = cssBlock(".qi-source-kind-icon {");
+    expect(iconBlock).toContain("display: none");
+    expect(iconBlock).toContain("color: currentColor");
+    expect(cssBlock(".qi-source-kind-option > span:last-child")).toContain("color: currentColor");
+    expect(cssBlock(".qi-source-kind-icon svg {", { fromLast: true })).toContain(
+      "stroke-width: 3.1",
+    );
+    expect(css).toContain("@container (max-width: 620px)");
+
+    const selectedBlock = cssBlock('.qi-source-kind-option[aria-checked="true"] {');
+    expect(selectedBlock).toContain("border-color: transparent");
+    expect(selectedBlock).toContain("background: transparent");
+    expect(selectedBlock).toContain("color: var(--fg)");
+    expect(selectedBlock).toContain("inset 0 0 0 1.5px");
+  });
+
+  it("shows source-type tooltips only in the compact icon state", () => {
+    const compactStart = css.indexOf("@container (max-width: 620px)");
+    expect(compactStart).toBeGreaterThan(-1);
+    const tooltipIdx = css.indexOf(".qi-source-kind-option[data-tip]::after");
+    expect(tooltipIdx).toBeGreaterThan(compactStart);
+    expect(css.slice(compactStart, tooltipIdx)).toContain(".qi-source-kind-label");
+    expect(cssBlock(".qi-source-kind-option[data-tip]::after")).toContain(
+      "content: attr(data-tip)",
+    );
+    expect(css).toContain(".qi-source-kind-option[data-tip]:hover::after");
+    expect(css).toContain(".qi-source-kind-option[data-tip]:focus-visible::after");
+  });
+});
+
 // ─── Fix 4: dense desktop text clarity ───────────────────────────────────────
 
 describe("Fix 4 — dense desktop text clarity", () => {
@@ -415,9 +533,18 @@ describe("Fix 4 — dense desktop text clarity", () => {
     expect(titleBlock).toContain("font-size: 13.5px");
     expect(titleBlock).toContain("font-weight: 650");
 
-    const subtitleBlock = cssBlock(".win-sub");
+    const subtitleBlock = cssBlock(".win-sub {");
+    expect(subtitleBlock).toContain("display: inline-flex");
+    expect(subtitleBlock).toContain("align-items: center");
+    expect(subtitleBlock).toContain("justify-content: center");
+    expect(subtitleBlock).toContain("min-width: 72px");
     expect(subtitleBlock).toContain("font-size: 11.5px");
-    expect(subtitleBlock).toContain("font-weight: 500");
+    expect(subtitleBlock).toContain("font-weight: 560");
+    expect(subtitleBlock).toContain("max-width: clamp(128px, 26vw, 260px)");
+
+    const subtitleTextBlock = cssBlock(".win-sub-text");
+    expect(subtitleTextBlock).toContain("overflow: hidden");
+    expect(subtitleTextBlock).toContain("text-overflow: ellipsis");
   });
 
   it("keeps window controls large enough for full-screen cards (WCAG 2.5.8)", () => {
@@ -515,7 +642,7 @@ describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility",
     expect(css).toContain(".cmp-budget-clear:focus-visible");
     expect(css).toContain(".cmp-budget-clear:disabled");
     // The flex row is what un-merges the inline text run ("tokensLowiClear history").
-    const rowIdx = css.indexOf(".cmp-budget-row");
+    const rowIdx = css.lastIndexOf(".cmp-budget-row");
     const rowBlock = css.slice(rowIdx, css.indexOf("}", rowIdx) + 1);
     expect(rowBlock).toContain("display: flex");
     expect(rowBlock).toContain("gap: 8px");
@@ -585,6 +712,31 @@ describe("uiux-fix F013 — header responsive stages and tab truncation", () => 
 // ─── uiux-fix A11Y (WCAG 2.2 AA audit) — focus rings, reduced-motion, contrast ──
 
 describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)", () => {
+  it("keeps shell chrome seamless without hard rail cutoff lines", () => {
+    expect(cssBlock(".header {")).toContain("border-bottom: 0");
+    expect(cssBlock(".footer {")).toContain("border-top: 0");
+    expect(cssBlock(".rail-div {")).toContain(
+      "background: color-mix(in oklch, var(--line-soft) 68%, transparent)",
+    );
+  });
+
+  it("molds the rails around the rounded workspace canvas", () => {
+    const stageBlock = cssBlock(".stage {");
+    expect(stageBlock).toContain("gap: 0");
+    expect(stageBlock).toContain("padding: 8px");
+
+    const workspaceBlock = cssBlock(".workspace {");
+    expect(workspaceBlock).toContain("border-radius: 14px");
+    expect(workspaceBlock).toContain(
+      "background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%))",
+    );
+    expect(workspaceBlock).not.toContain("color-mix(in oklch, var(--accent) 8%, transparent)");
+    expect(workspaceBlock).not.toContain("0 22px 60px");
+
+    expect(cssBlock(".rail-left")).toContain("border-radius: 0 14px 14px 0");
+    expect(cssBlock(".rail-right")).toContain("border-radius: 14px 0 0 14px");
+  });
+
   it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
     const block = cssBlock(".footer:focus-visible");
     expect(block).toContain("outline: 2px solid var(--accent-text)");
@@ -598,6 +750,187 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
   it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
     const block = cssBlock(".tr-caret-btn:focus-visible");
     expect(block).toContain("box-shadow: 0 0 0 1px var(--bg)");
+  });
+});
+
+describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
+  it("globally suppresses mouse-click focus paint without disabling keyboard focus-visible", () => {
+    const block = cssBlock(':root[data-input-modality="pointer"]');
+    expect(block).toContain(":focus");
+    expect(block).not.toContain(":focus-visible");
+    expect(block).toContain("outline: none !important");
+
+    const shadowBlock = cssBlock(
+      ':root[data-input-modality="pointer"]\n  :where(button, a, input, textarea, select, [role="button"], [tabindex]:not([tabindex="-1"])):focus:not(',
+    );
+    expect(shadowBlock).toContain('[aria-pressed="true"]');
+    expect(shadowBlock).toContain('[aria-checked="true"]');
+    expect(shadowBlock).toContain("box-shadow: none !important");
+  });
+
+  it("keeps model dropdown seams direction-aware when opening up or down", () => {
+    expect(cssBlock(".cmp-model-select.ksel-trigger-open-down")).toContain(
+      "border-bottom-left-radius: 0",
+    );
+    expect(cssBlock(".cmp-model-select.ksel-trigger-open-up")).toContain(
+      "border-top-left-radius: 0",
+    );
+    expect(cssBlock(".cmp-model-menu.ksel-menu-open-down")).toContain("border-top: none");
+    expect(cssBlock(".cmp-model-menu.ksel-menu-open-up")).toContain("border-bottom: none");
+    expect(css).not.toContain(".cmp-model-select.ksel-trigger-open {\n");
+  });
+
+  it("keeps chat composer ring keyboard-only", () => {
+    expect(css).not.toContain(".cmp-box:focus-within {");
+
+    const keyboardBlock = cssBlock(
+      ':root[data-input-modality="keyboard"] .cmp-box:has(.cmp-input:focus)',
+    );
+    expect(keyboardBlock).toContain("border-color: var(--accent-line)");
+    expect(keyboardBlock).toContain("0 0 0 3px var(--accent-glow)");
+
+    const pointerBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .cmp-box:has(.cmp-input:focus)',
+    );
+    expect(pointerBlock).toContain("border-color: var(--line)");
+    expect(pointerBlock).toContain("box-shadow: var(--shadow-card)");
+  });
+
+  it("keeps workflow dialog inputs pointer-neutral while preserving keyboard focus", () => {
+    const keyboardBlock = cssBlock(':root[data-input-modality="keyboard"] .wf-dialog-input:focus');
+    expect(keyboardBlock).toContain("border-color: var(--accent-line)");
+
+    const pointerBlock = cssBlock(':root[data-input-modality="pointer"] .wf-dialog-input:focus');
+    expect(pointerBlock).toContain("outline: none !important");
+    expect(pointerBlock).toContain("border-color: var(--line) !important");
+  });
+
+  it("keeps chat history rename mouse focus neutral while preserving keyboard focus", () => {
+    const keyboardInputBlock = cssBlock(
+      ':root[data-input-modality="keyboard"] .chat-history-open:focus-visible,\n:root[data-input-modality="keyboard"] .chat-history-title-input:focus-visible',
+    );
+    expect(keyboardInputBlock).toContain("outline: 2px solid var(--accent-line)");
+
+    const pointerInputBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .chat-history-open:focus,\n:root[data-input-modality="pointer"] .chat-history-title-input:focus',
+    );
+    expect(pointerInputBlock).toContain("outline: none !important");
+    expect(pointerInputBlock).toContain("box-shadow: none !important");
+
+    const pointerRowBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .chat-history-row:focus-within',
+    );
+    expect(pointerRowBlock).toContain("border-color: var(--line-soft)");
+    expect(pointerRowBlock).toContain("var(--card) 88%");
+    expect(cssBlock(".chat-history-title-input", { fromLast: true })).toContain(
+      "border: 1px solid var(--line)",
+    );
+  });
+
+  it("keeps chat model and grounding selects pointer-neutral", () => {
+    expect(cssBlock(':root[data-input-modality="pointer"] .cmp-model-select:focus')).toContain(
+      "outline: none",
+    );
+    const groundingBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .scope-grounding-select:focus',
+    );
+    expect(groundingBlock).toContain("box-shadow: none !important");
+    expect(groundingBlock).toContain("border-color: var(--line-soft) !important");
+  });
+
+  it("keeps the grounding select at its default width in compact chat layouts", () => {
+    const baseBlock = cssBlock(".scope-grounding-select");
+    expect(baseBlock).toContain("width: 180px");
+    expect(baseBlock).toContain("min-width: 180px");
+
+    const compactBlock = cssBlock(".chatw-compact .scope-grounding-select");
+    expect(compactBlock).toContain("width: 180px");
+    expect(compactBlock).toContain("min-width: 180px");
+    expect(compactBlock).toContain("max-width: 180px");
+
+    const minimalBlock = cssBlock(".chatw-minimal .scope-grounding-select");
+    expect(minimalBlock).toContain("width: 180px");
+    expect(minimalBlock).toContain("min-width: 180px");
+    expect(minimalBlock).toContain("max-width: 180px");
+  });
+
+  it("keeps QI field focus rings keyboard-only", () => {
+    const block = cssBlock(
+      ':root[data-input-modality="keyboard"] .qi-input:focus-visible,\n:root[data-input-modality="keyboard"] .qi-textarea:focus-visible,\n:root[data-input-modality="keyboard"] .qi-select:focus-visible',
+    );
+    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("border-color: var(--accent)");
+  });
+
+  it("suppresses pointer focus rings on QI text fields", () => {
+    const block = cssBlock(
+      ':root[data-input-modality="pointer"] .qi-input:focus,\n:root[data-input-modality="pointer"] .qi-textarea:focus,\n:root[data-input-modality="pointer"] .qi-select:focus',
+    );
+    expect(block).toContain("outline: none !important");
+    expect(block).toContain("border-color: var(--line) !important");
+    expect(block).toContain("box-shadow: none !important");
+  });
+
+  it("suppresses pointer focus rings on dialog and gateway inputs", () => {
+    expect(cssBlock(':root[data-input-modality="pointer"] .dlg-input:focus')).toContain(
+      "box-shadow: none !important",
+    );
+    expect(cssBlock(':root[data-input-modality="pointer"] .gw-input:focus')).toContain(
+      "box-shadow: none !important",
+    );
+  });
+
+  it("suppresses pointer focus rings on memory and template manager fields", () => {
+    const memoryBlock = cssBlock(':root[data-input-modality="pointer"] .mem-add input:focus');
+    expect(memoryBlock).toContain("border-color: var(--line-soft) !important");
+    expect(memoryBlock).toContain("box-shadow: none !important");
+
+    const templateBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .tm-field input:focus,\n:root[data-input-modality="pointer"] .tm-field select:focus',
+    );
+    expect(templateBlock).toContain("border-color: var(--line-strong) !important");
+    expect(templateBlock).toContain("box-shadow: none !important");
+  });
+
+  it("renders connector create actions as buttons, not text links", () => {
+    const block = cssBlock(".connector-picker-create-link");
+    expect(block).toContain("height: 36px");
+    expect(block).toContain("padding: 0 18px");
+    expect(block).toContain("border-radius: 10px");
+    expect(block).toContain("font-weight: 650");
+
+  });
+
+  it("keeps the bottom-right new-window affordance and palette above workspace windows", () => {
+    const fabSelector = ".ws-fab {\n  position: absolute;";
+    const fabIdx = css.indexOf(fabSelector);
+    expect(fabIdx, "base .ws-fab block not found").toBeGreaterThan(-1);
+    const fabBlock = css.slice(fabIdx, css.indexOf("}", fabIdx) + 1);
+    expect(fabBlock).toContain("z-index: 1");
+    expect(css).toContain("z-index: 14000");
+    expect(css).toContain("z-index: 99999");
+  });
+
+  it("makes MemoriaViva responsive to its window width, not only viewport width", () => {
+    expect(cssBlock(".memoria-window")).toContain("container-type: inline-size");
+    expect(css).toContain("@container (max-width: 430px)");
+    expect(css).toContain(".memoria-window .lk-header");
+    expect(css).toContain("grid-template-columns: 1fr");
+    expect(css).toContain("@container (max-width: 360px)");
+  });
+
+  it("keeps modal dialog fields keyboard-only and pointer-neutral", () => {
+    const keyboardBlock = cssBlock(
+      ':root[data-input-modality="keyboard"] .mc-dialog-textarea:focus,\n:root[data-input-modality="keyboard"] .mc-dialog-input:focus,\n:root[data-input-modality="keyboard"] .mc-dialog-select:focus',
+    );
+    expect(keyboardBlock).toContain("border-color: var(--accent)");
+    expect(keyboardBlock).toContain("box-shadow: 0 0 0 2px var(--accent-glow)");
+
+    const pointerBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .mc-dialog-textarea:focus,\n:root[data-input-modality="pointer"] .mc-dialog-input:focus,\n:root[data-input-modality="pointer"] .mc-dialog-select:focus',
+    );
+    expect(pointerBlock).toContain("outline: none !important");
+    expect(pointerBlock).toContain("box-shadow: none !important");
   });
 });
 
@@ -676,6 +1009,77 @@ describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
     const block = cssBlock('.qi-edit-label[data-required="true"]::after');
     expect(block).toContain('content: " *"');
   });
+
+  it("settings tab hover does not compete with the selected green line", () => {
+    const hoverBlock = cssBlock(".set-tab:hover");
+    expect(hoverBlock).not.toContain("box-shadow");
+
+    const selectedBlock = cssBlock('.set-tab[data-on="true"]');
+    const activeBlock = cssBlock(".set-tab:active");
+    expect(selectedBlock).toContain("box-shadow: inset 0 -2px 0 var(--accent)");
+    expect(activeBlock).toContain("box-shadow: inset 0 -2px 0 var(--accent)");
+  });
+
+  it("keeps shared dropdown menus proportional to compact trigger buttons", () => {
+    const headBlock = cssBlock(".ksel-menu-head");
+    expect(headBlock).toContain("min-height: 26px");
+    expect(headBlock).toContain("padding: 5px 8px");
+    expect(cssBlock(".ksel-menu-scroll")).toContain("padding: 4px");
+
+    const optionBlock = cssBlock(".ksel-option {");
+    expect(optionBlock).toContain("min-height: var(--ksel-option-height, 30px)");
+    expect(optionBlock).toContain("padding: 4px 7px");
+    expect(optionBlock).toContain("font-size: 0.86em");
+    expect(optionBlock).toContain("line-height: 1.2");
+  });
+
+  it("keeps the QI policy profile select capped while allowing narrow-window shrink", () => {
+    const fieldBlock = cssBlock(".qi-policy-profile-field");
+    expect(fieldBlock).toContain("flex: 1 1 300px");
+    expect(fieldBlock).toContain("min-width: 0");
+    expect(fieldBlock).toContain("max-width: 300px");
+    expect(fieldBlock).toContain("justify-content: space-between");
+    expect(cssBlock(".qi-policy-profile-field > .qi-field-label")).toContain("max-width: 56px");
+
+    const selectBlock = cssBlock(".qi-policy-profile-field .qi-select");
+    expect(selectBlock).toContain("width: min(236px, 100%)");
+    expect(selectBlock).toContain("min-width: 0");
+    expect(selectBlock).toContain("max-width: 236px");
+    expect(cssBlock(".qi-number-control")).toContain("flex: 1 1 194px");
+
+    expect(css).toContain(".qi-policy-profile-field {\n    flex: 1 1 300px;");
+    expect(cssBlock("select.qi-select")).toContain("background-image:");
+  });
+
+  it("keeps the QI policy profile dropdown compact enough for narrow triggers", () => {
+    expect(cssBlock(".qi-policy-profile-menu .ksel-menu-head")).toContain("min-height: 24px");
+    expect(cssBlock(".qi-policy-profile-menu .ksel-menu-title")).toContain("font-size: 0.62em");
+
+    const optionBlock = cssBlock(".qi-policy-profile-menu .ksel-option");
+    expect(optionBlock).toContain("min-height: 28px");
+    expect(optionBlock).toContain("font-size: 0.74em");
+    expect(optionBlock).toContain("line-height: 1.15");
+  });
+
+  it("keeps custom number steppers clickable while preserving the Keiko chevron styling", () => {
+    expect(cssBlock(".number-control {")).toContain("--number-stepper-size: 28px");
+
+    const stepperBlock = cssBlock(".number-control-stepper");
+    expect(stepperBlock).toContain("display: grid");
+    expect(stepperBlock).toContain("top: 4px");
+    expect(stepperBlock).toContain("bottom: 4px");
+    expect(stepperBlock).not.toContain("pointer-events: none");
+
+    const buttonBlock = cssBlock(".number-control-stepper-button");
+    expect(buttonBlock).toContain("appearance: none");
+    expect(buttonBlock).toContain("cursor: pointer");
+
+    expect(cssBlock(".number-control-stepper-button::before")).toContain(
+      "border-right: 1.5px solid currentColor",
+    );
+    expect(cssBlock(".number-control-stepper-up::before")).toContain("rotate(225deg)");
+    expect(cssBlock(".number-control-stepper-down::before")).toContain("rotate(45deg)");
+  });
 });
 
 // ─── Figma snapshot button target size (WCAG 2.5.8) — #756 audit ─────────────
@@ -689,6 +1093,17 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
   it(".figma-snapshot-cancel-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-cancel-btn:focus-visible");
     expect(block).toContain("outline: 2px solid var(--accent-text)");
+  });
+
+  it(".figma-snapshot-input suppresses mouse-click focus paint while keeping keyboard focus-visible", () => {
+    const keyboardBlock = cssBlock(".figma-snapshot-input:focus-visible");
+    expect(keyboardBlock).toContain("outline: 2px solid var(--accent-text)");
+
+    const pointerBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .figma-snapshot-input:focus',
+    );
+    expect(pointerBlock).toContain("outline: none !important");
+    expect(pointerBlock).toContain("box-shadow: none !important");
   });
 
   it(".figma-snapshot-revoke-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
@@ -736,6 +1151,26 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(block).toContain("width: 72px");
     expect(block).toContain("height: 54px");
     expect(block).toContain("object-fit: contain");
+  });
+
+  it(".figma-view-json-drag-surface spans the free JSON inspector header area", () => {
+    const block = cssBlock(".figma-view-json-drag-surface {");
+    expect(block).toContain("flex: 1 1 auto");
+    expect(block).toContain("align-self: stretch");
+    expect(block).toContain("cursor: grab");
+  });
+
+  it(".figma-view-json-code grows with a resized Figma View card", () => {
+    const viewBlock = cssBlock(".figma-view-window {");
+    const inspectorBlock = cssBlock(".figma-view-json-inspector {");
+    const codeBlock = cssBlock(".figma-view-json-code {");
+    expect(viewBlock).toContain("height: 100%");
+    expect(viewBlock).toContain("min-height: 0");
+    expect(inspectorBlock).toContain("flex: 1 1 280px");
+    expect(inspectorBlock).toContain("overflow: hidden");
+    expect(codeBlock).toContain("flex: 1 1 auto");
+    expect(codeBlock).toContain("max-height: none");
+    expect(codeBlock).not.toContain("max-height: 360px");
   });
 
   it(".figma-snapshot-error-card uses the contrast-pinned danger token, not raw red HSL", () => {

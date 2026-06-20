@@ -164,21 +164,12 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-const CARD_TYPES: readonly WindowType[] = [
-  "chat",
-  "connector",
-  // Epic #750 #756 — the Figma Snapshot window was registered (WindowsRegistry + render + TYPE_ORDER)
-  // but omitted here, so it never appeared in the New-Window palette or the "New …" command list,
-  // i.e. a user could not open it at all (an unreachable surface). Listed here (ordered as in
-  // TYPE_ORDER) so it is launchable like every other card.
-  "figma",
-  "files",
-];
+const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files", "agents"];
 const TOOL_TYPES: readonly WindowType[] = [
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with rail buttons but were missing here, so the command palette could not open them
-  // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
-  // the WindowsRegistry declaration.
+  // (same forgotten-WindowType pattern as the Figma Snapshot manager). Ordered as in the
+  // WindowsRegistry declaration.
   "chatHistory",
   "memoria",
   "settings",
@@ -189,6 +180,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "notifications",
   "resources",
   "localKnowledge",
+  "figma",
   "quality",
   "relationships",
 ];
@@ -478,7 +470,6 @@ function AppShellInner(): ReactNode {
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
   const [cmdkOpen, setCmdkOpen] = useState(false);
-  const [outlineOpen, setOutlineOpen] = useState(false);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
 
   const winCount = ws.wins?.length ?? 0;
@@ -610,14 +601,26 @@ function AppShellInner(): ReactNode {
   useKeyboardShortcuts({ bindings: SHELL_SHORTCUT_BINDINGS, dispatch: dispatchShortcut });
 
   useEffect(() => {
-    const h = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
-        setCmdkOpen((o) => !o);
-      }
+    const root = document.documentElement;
+    const setPointerModality = (): void => {
+      root.setAttribute("data-input-modality", "pointer");
     };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    const setKeyboardModality = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== "Tab") return;
+      root.setAttribute("data-input-modality", "keyboard");
+    };
+
+    root.setAttribute("data-input-modality", "pointer");
+    window.addEventListener("pointerdown", setPointerModality, true);
+    window.addEventListener("mousedown", setPointerModality, true);
+    window.addEventListener("keydown", setKeyboardModality, true);
+    return () => {
+      window.removeEventListener("pointerdown", setPointerModality, true);
+      window.removeEventListener("mousedown", setPointerModality, true);
+      window.removeEventListener("keydown", setKeyboardModality, true);
+      root.removeAttribute("data-input-modality");
+    };
   }, []);
 
   const commands = useMemo(
@@ -662,20 +665,21 @@ function AppShellInner(): ReactNode {
             onCascade={ws.api.cascade}
           />
           <div className="mid">
-            <LeftRail
-              openTools={openTools}
-              onTool={onTool}
-              onNewChat={onNewChat}
-              theme={theme}
-              onToggleTheme={toggleTheme}
-            />
+            {needsGatewaySetup ? null : (
+              <LeftRail
+                openTools={openTools}
+                onTool={onTool}
+                onNewChat={onNewChat}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+              />
+            )}
             <div className="stage" id="main" tabIndex={-1}>
               <Workspace
                 ws={ws}
                 wsRef={wsRef}
                 openPalette={openPalette}
                 palette={paletteNode}
-                outlineOpen={outlineOpen}
               />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
@@ -693,12 +697,9 @@ function AppShellInner(): ReactNode {
                 </div>
               )}
             </div>
-            <RightRail
-              openTools={openTools}
-              onTool={onTool}
-              outlineOpen={outlineOpen}
-              onToggleOutline={() => setOutlineOpen((open) => !open)}
-            />
+            {needsGatewaySetup ? null : (
+              <RightRail openTools={openTools} onTool={onTool} />
+            )}
           </div>
           <Footer
             winCount={winCount}

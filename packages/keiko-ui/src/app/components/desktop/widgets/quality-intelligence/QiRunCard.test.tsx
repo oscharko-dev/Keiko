@@ -334,9 +334,9 @@ describe("QiRunCard", () => {
       "true",
     );
     expect(screen.getByLabelText(/reviewer label/i)).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getAllByText(/set a reviewer label to review or edit candidates/i)).toHaveLength(
-      2,
-    );
+    const reasonNotes = screen.getAllByText(/set a reviewer label to review or edit candidates/i);
+    expect(reasonNotes.length).toBeGreaterThanOrEqual(3);
+    expect(reasonNotes.some((node) => node.classList.contains("qi-cand-action-note"))).toBe(true);
   });
 
   it("clears aria-invalid on the reviewer-label input once a label is entered", async () => {

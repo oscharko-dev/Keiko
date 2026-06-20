@@ -22,15 +22,29 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { LaunchGroundedWorkflowButton, LaunchWorkflowButton } from "./WorkflowHandoff";
+import {
+  LaunchGroundedWorkflowButton,
+  LaunchWorkflowButton,
+  RunSummaryCard,
+} from "./WorkflowHandoff";
 import { useChatSession, type ChatSessionApi } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  trigger: HTMLElement,
+  optionName: string,
+): Promise<void> {
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name: optionName }));
+}
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -84,7 +98,7 @@ function plainChatModel(id: string): ModelCapability {
   return { ...workflowEligibleModel(id), id, toolCalling: false, structuredOutput: false };
 }
 
-function userMessage(content: string): ChatMessage {
+function userMessage(content: string, overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
     id: "m1",
     chatId: "chat-1",
@@ -96,6 +110,7 @@ function userMessage(content: string): ChatMessage {
     workflowStatus: undefined,
     shortResult: undefined,
     taskType: undefined,
+    ...overrides,
   };
 }
 
@@ -162,6 +177,10 @@ function connectedGroundedAnswer() {
         "redacted-only": 0,
         "budget-exhausted": 0,
         "tool-unavailable": 0,
+        "unsupported-format": 0,
+        "no-text-layer": 0,
+        "malformed-document": 0,
+        "encrypted-document": 0,
       },
       uncertaintyCount: 0,
       elapsedMs: 20,
@@ -223,6 +242,10 @@ function renderWindow(session: ChatSessionApi): void {
       <ChatWindow />
     </ChatSessionProvider>,
   );
+}
+
+function strictModeWrapper({ children }: { readonly children: ReactNode }) {
+  return <StrictMode>{children}</StrictMode>;
 }
 
 // ─── 1. AC #2: launch affordance hidden for non-workflow-eligible models ──────
@@ -450,13 +473,17 @@ describe("WorkflowHandoff — dialog edge cases and grounded input matrix", () =
     await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provide a target file.");
 
-    await user.selectOptions(within(dialog).getByLabelText(/target mode/i), "module");
+    await chooseComboboxOption(user, within(dialog).getByLabelText(/target mode/i), "Module");
     await user.click(within(dialog).getByRole("button", { name: /^launch$/i }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Provide a module directory.",
     );
 
-    await user.selectOptions(within(dialog).getByLabelText(/target mode/i), "changedFiles");
+    await chooseComboboxOption(
+      user,
+      within(dialog).getByLabelText(/target mode/i),
+      "Changed files",
+    );
     await user.type(
       within(dialog).getByLabelText(/changed files \(one per line\)/i),
       "src/a.ts\nsrc/b.ts",
@@ -601,6 +628,21 @@ describe("WorkflowHandoff — run summary rendering (AC#3)", () => {
     const card = screen.getByTestId("run-summary-card");
     expect(card.getAttribute("data-status")).toBe("queued");
   });
+
+  it("offers a result CTA and evidence link for a run-summary message", async () => {
+    const user = userEvent.setup();
+    const message = systemRunSummaryMessage({ workflowStatus: "completed" });
+    const openResult = vi.fn();
+    render(<RunSummaryCard message={message} onOpenResult={openResult} />);
+
+    await user.click(screen.getByRole("button", { name: /open result/i }));
+
+    expect(openResult).toHaveBeenCalledWith(message);
+    expect(screen.getByRole("link", { name: /evidence/i })).toHaveAttribute(
+      "href",
+      "/api/evidence/run-42",
+    );
+  });
 });
 
 // ─── 5. AC #4: the chat RunSummaryCard never exposes patch apply / shell exec ──
@@ -635,6 +677,12 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
     });
     vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [makeChat()] });
     vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+    vi.spyOn(api, "fetchRunReport").mockRejectedValue(
+      new api.ApiError("RUN_STILL_STARTING", "Run report is not ready.", 409),
+    );
+    vi.spyOn(api, "fetchEvidenceManifest").mockRejectedValue(
+      new api.ApiError("EVIDENCE_NOT_FOUND", "Evidence manifest not found.", 404),
+    );
   });
 
   afterEach(() => {
@@ -647,7 +695,7 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
       messages: [userMessage("test draft"), systemRunSummaryMessage({ workflowStatus: "running" })],
     });
 
-    const { result } = renderHook(() => useChatSession());
+    const { result } = renderHook(() => useChatSession(), { wrapper: strictModeWrapper });
     // Wait for bootstrap to settle.
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -669,6 +717,111 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
     expect(body?.run.apply ?? false).toBe(false);
     // Chat row is preserved.
     expect(body?.chatId).toBe("chat-1");
+  });
+
+  it("merges launch-created messages with the existing chat history", async () => {
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({
+      messages: [userMessage("previous turn", { id: "m-prev" })],
+    });
+    vi.spyOn(api, "startChatRun").mockResolvedValue({
+      run: { runId: "run-append", fingerprint: "fp" },
+      messages: [
+        userMessage("src/example.ts", { id: "m-run-user", timestamp: 3 }),
+        systemRunSummaryMessage({ id: "m-run-system", runId: "run-append", timestamp: 4 }),
+      ],
+    });
+
+    const { result } = renderHook(() => useChatSession(), { wrapper: strictModeWrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.launchWorkflowFromConversation({
+        workflowId: "unit-test-generation",
+        modelId: "wf-model",
+        text: "src/example.ts",
+      });
+    });
+
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "m-prev",
+      "m-run-user",
+      "m-run-system",
+    ]);
+  });
+
+  it("patches a unit-test run-summary when the run report reaches a terminal dry-run status", async () => {
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({
+      messages: [systemRunSummaryMessage({ id: "m-unit", runId: "run-unit" })],
+    });
+    vi.spyOn(api, "fetchRunReport").mockResolvedValue({
+      report: {
+        status: "dry-run",
+        addedTestFiles: [{ path: "tests/example.test.ts", estimatedTestCount: 2 }],
+      },
+    });
+    const patch = vi.spyOn(api, "patchChatMessage").mockResolvedValue({
+      message: systemRunSummaryMessage({
+        id: "m-unit",
+        runId: "run-unit",
+        workflowStatus: "completed",
+        shortResult: "Generated 1 test files; 2 tests proposed.",
+      }),
+    });
+
+    const { result } = renderHook(() => useChatSession(), { wrapper: strictModeWrapper });
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("m-unit", "chat-1", "/proj", {
+        workflowStatus: "completed",
+        shortResult: "Generated 1 test files; 2 tests proposed.",
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current.messages[0]).toMatchObject({
+        id: "m-unit",
+        workflowStatus: "completed",
+        shortResult: "Generated 1 test files; 2 tests proposed.",
+      }),
+    );
+  });
+
+  it("patches a bug-investigation run-summary when the investigation report is terminal", async () => {
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({
+      messages: [
+        systemRunSummaryMessage({
+          id: "m-bug",
+          runId: "run-bug",
+          workflowId: "bug-investigation",
+          content: "Launched: Investigate bug",
+        }),
+      ],
+    });
+    vi.spyOn(api, "fetchRunReport").mockResolvedValue({
+      report: { status: "investigation-only" },
+    });
+    const patch = vi.spyOn(api, "patchChatMessage").mockResolvedValue({
+      message: systemRunSummaryMessage({
+        id: "m-bug",
+        runId: "run-bug",
+        workflowId: "bug-investigation",
+        workflowStatus: "completed",
+        shortResult: "Investigation complete; root cause documented.",
+      }),
+    });
+
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("m-bug", "chat-1", "/proj", {
+        workflowStatus: "completed",
+        shortResult: "Investigation complete; root cause documented.",
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current.messages[0]).toMatchObject({
+        id: "m-bug",
+        workflowStatus: "completed",
+        shortResult: "Investigation complete; root cause documented.",
+      }),
+    );
   });
 
   it("rejects when the requested modelId is not workflow-eligible (AC#2)", async () => {
@@ -767,6 +920,12 @@ describe("useChatSession.launchGroundedWorkflowHandoff", () => {
     });
     vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [makeChat()] });
     vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+    vi.spyOn(api, "fetchRunReport").mockRejectedValue(
+      new api.ApiError("RUN_STILL_STARTING", "Run report is not ready.", 409),
+    );
+    vi.spyOn(api, "fetchEvidenceManifest").mockRejectedValue(
+      new api.ApiError("EVIDENCE_NOT_FOUND", "Evidence manifest not found.", 404),
+    );
   });
 
   afterEach(() => {
@@ -813,5 +972,46 @@ describe("useChatSession.launchGroundedWorkflowHandoff", () => {
       unknowns: ["Need API confirmation"],
     });
     expect(typeof start.mock.calls[0]?.[0]?.requestedAtMs).toBe("number");
+  });
+
+  it("merges grounded handoff messages with the existing chat history", async () => {
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({
+      messages: [userMessage("previous grounded turn", { id: "m-prev-grounded" })],
+    });
+    vi.spyOn(api, "startGroundedWorkflowHandoff").mockResolvedValue({
+      run: { runId: "run-grounded", fingerprint: "fp" },
+      messages: [
+        userMessage("Requested grounded unit-test generation.", {
+          id: "m-grounded-user",
+          timestamp: 3,
+        }),
+        systemRunSummaryMessage({
+          id: "m-grounded-system",
+          runId: "run-grounded",
+          timestamp: 4,
+        }),
+      ],
+    });
+
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.launchGroundedWorkflowHandoff({
+        assistantMessageId: "msg-a",
+        modelId: "wf-model",
+        workflowKind: "unit-test-generation",
+        input: { target: { kind: "file", filePath: "src/example.ts" } },
+        editablePaths: ["tests/example.test.ts"],
+        expectedChecks: ["tests"],
+        unknowns: [],
+      });
+    });
+
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "m-prev-grounded",
+      "m-grounded-user",
+      "m-grounded-system",
+    ]);
   });
 });

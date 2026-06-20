@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -9,10 +9,31 @@ vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
     mini,
     linkedRoot,
+    onOpenRunResult,
   }: {
     readonly mini?: boolean;
     readonly linkedRoot?: string | null;
-  }) => <div data-testid="chat-window">{`${String(mini)}:${linkedRoot ?? ""}`}</div>,
+    readonly onOpenRunResult?: (message: {
+      readonly runId: string;
+      readonly workflowId: string;
+      readonly taskType?: string | undefined;
+    }) => void;
+  }) => (
+    <div data-testid="chat-window">
+      {`${String(mini)}:${linkedRoot ?? ""}`}
+      <button
+        type="button"
+        onClick={() =>
+          onOpenRunResult?.({
+            runId: "run-chat",
+            workflowId: "unit-test-generation",
+          })
+        }
+      >
+        Open chat run
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("../context/ChatSessionContext", () => ({
@@ -22,6 +43,7 @@ vi.mock("../context/ChatSessionContext", () => ({
 vi.mock("../hooks/useChatSession", () => ({
   useChatSession: () => ({
     activeChat: { id: "chat-1", title: "Chat 1", status: "open" },
+    activeProject: { path: "/repo" },
     chats: [{ id: "chat-1", title: "Chat 1", status: "open" }],
     loading: false,
     openChat: vi.fn(),
@@ -311,6 +333,15 @@ function makeCtx(): WindowRenderContext & {
 }
 
 describe("workspace widget renderer registry", () => {
+  it("syncs an open chat window title when the active chat is renamed", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Old title" }, ctx)}</>);
+
+    await waitFor(() => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
+    });
+  });
+
   it("maps window cfg into widget props and follow-up workspace actions", () => {
     const ctx = makeCtx();
     const view = render(<>{WIN_TYPES.files.render({ root: "/repo" }, ctx)}</>);
@@ -387,7 +418,7 @@ describe("workspace widget renderer registry", () => {
     fireEvent.click(screen.getByTestId("figma-window"));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ snapshotRunId: "fs-2" });
     fireEvent.click(screen.getByRole("button", { name: "Add screen source" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("figma", {
+    expect(ctx.openWindow).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-1",
       selectedScreenIdsJson: JSON.stringify(["screen-1"]),
       selectedScreenName: "Screen 1",
@@ -396,6 +427,20 @@ describe("workspace widget renderer registry", () => {
     view.rerender(
       <>
         {WIN_TYPES.figma.render(
+          {
+            snapshotRunId: "fs-1",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Screen 1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
+
+    view.rerender(
+      <>
+        {WIN_TYPES.figmaView.render(
           {
             snapshotRunId: "fs-1",
             selectedScreenIdsJson: JSON.stringify(["screen-1"]),
@@ -444,6 +489,12 @@ describe("workspace widget renderer registry", () => {
       </>,
     );
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Open chat run" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("agents", {
+      runId: "run-chat",
+      workflow: "unit-test-generation",
+      workspaceRoot: "/repo",
+    });
     expect(screen.getByTestId("connector-graph")).toHaveTextContent("false");
     expect(screen.getByText("RelationshipsView")).toBeInTheDocument();
   });

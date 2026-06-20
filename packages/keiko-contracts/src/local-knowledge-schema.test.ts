@@ -191,8 +191,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 10 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(10);
+  it("is the integer 12 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(12);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a

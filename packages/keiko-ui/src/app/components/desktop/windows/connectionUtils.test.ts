@@ -97,14 +97,18 @@ describe("connectionUtils — general workspace contracts", () => {
   it("detects connectable peers including reverse-only peers and rejects unknowns", () => {
     expect(hasConnectablePeer("quality")).toBe(true);
     expect(hasConnectablePeer("figma")).toBe(true);
+    expect(hasConnectablePeer("figmaView")).toBe(true);
     expect(hasConnectablePeer("chatHistory")).toBe(false);
     expect(hasConnectablePeer(undefined)).toBe(false);
     expect(canConnect(undefined, "chat")).toBe(false);
     expect(canConnect("chat", undefined)).toBe(false);
+    expect(canConnect("quality", "figmaView")).toBe(true);
+    expect(canConnect("figmaView", "quality")).toBe(true);
   });
 
   it("labels common non-file relationship predicates with readable verbs", () => {
     expect(relLabel(snap("quality"), snap("figma"))).toBe("uses snapshot");
+    expect(relLabel(snap("quality"), snap("figmaView"))).toBe("uses view");
     expect(relLabel(snap("chat"), snap("keiko"))).toBe("governed by");
     expect(relLabel(snap("agents"), snap("agents"))).toBe("delegates");
     expect(relLabel(snap("agents"), snap("terminal"))).toBe("runs in");
@@ -172,6 +176,10 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("chat", { title: "Release QA" })).toBe("Release QA");
     expect(subText("chat", { title: "New chat" })).toBeNull();
     expect(subText("connector", { provider: "github" })).toBeNull();
+    expect(subText("figma", { snapshotRunId: "fs-hidden" })).toBeNull();
+    expect(subText("figma", { selectedScreenName: "Checkout" })).toBe("Checkout");
+    expect(subText("figmaView", { selectedScreenName: "Checkout" })).toBe("Checkout");
+    expect(subText("figmaJson", { snapshotRunId: "fs-hidden", screenId: "12:34" })).toBe("12:34");
     expect(subText("files", undefined)).toBeNull();
   });
 });

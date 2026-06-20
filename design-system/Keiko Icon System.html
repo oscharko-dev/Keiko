@@ -6,7 +6,7 @@
     <script>
       try {
         var t = localStorage.getItem("keiko-ds-theme");
-        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more";
       } catch (e) { document.documentElement.dataset.theme = "dark"; }
     </script>
     <title>Keiko Icon System · Lift</title>
@@ -14,6 +14,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="lift-doc.css" />
     <link rel="stylesheet" href="ds.css" />
     <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
@@ -39,6 +40,8 @@
       <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
       <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
       <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
+      <div class="nav-label">Review</div>
+      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
       <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
         <span class="ti">
           <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
@@ -47,7 +50,7 @@
         <span class="tspace">Theme</span>
         <span data-theme-label>Dark</span>
       </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
+      <div class="nav-foot">Keiko · v0.3.0</div>
     </nav>
     <main id="main">
       <div id="root"></div>
@@ -245,22 +248,41 @@
       }
 
       function Library() {
-        const all = [...LIFT_NAMES, "min", "max", "restore", "close"];
+        const CATS = [
+          ["Core & navigation", ["search", "compose", "plus", "check", "chevron", "send", "folder", "files", "terminal", "branch", "server", "sidebar", "panelRight", "split", "tile", "layers", "settings"]],
+          ["AI · models & reasoning", ["llm", "modelLarge", "modelSmall", "embedding", "brain", "brainHalf", "tokens", "agent", "twin", "memory", "spark", "bolt"]],
+          ["Voice & speech", ["mic", "micOff", "speak", "waveform", "speaker", "mute", "headphones", "textToSpeech", "speechToText", "translate"]],
+          ["Governance & security", ["shield", "shieldCheck", "shieldAlert", "lock", "unlock", "key", "policy", "eval", "auditTrail", "permission", "user"]],
+          ["AI control & feedback", ["regenerate", "stop", "play", "pause", "thumbsUp", "thumbsDown", "clock"]],
+          ["Status & messaging", ["error", "alert", "info", "success", "bell", "archive"]],
+          ["Connectivity & data", ["plug", "puzzle", "link", "globe", "cloud", "database", "barChart", "lineChart", "pieChart", "activity"]],
+          ["Utility", ["eye", "eyeOff", "copy", "trash", "edit", "download", "upload", "filter", "ellipsis", "external", "code", "sun", "moon"]],
+          ["Window controls", ["min", "max", "restore", "close"]],
+        ];
+        const seen = new Set(CATS.flatMap(([, ns]) => ns));
+        const leftover = LIFT_NAMES.filter((n) => !seen.has(n));
+        if (leftover.length) CATS.push(["More", leftover]);
+        const total = LIFT_NAMES.length + 4;
         return (
           <section id="library">
             <div className="sec-head">
               <div className="sec-num">04 — LIBRARY</div>
-              <h2>The starter icons</h2>
-              <p>Sidebar, header, footer — all in the Lift hand. Names match your keys in <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Icons.tsx</span>, so they’re 1:1 swappable.</p>
+              <h2>The library — {total} glyphs</h2>
+              <p>One monochrome hand across the whole product: workspace, the digital twin, model types, voice, governance and data. Names match the keys in <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>lift-glyphs.js</span> / <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Icons.tsx</span>, so they’re 1:1 swappable in code.</p>
             </div>
-            <div className="lib">
-              {all.map((n) => (
-                <div className="lib-cell" key={n}>
-                  <LIcon name={n} size={26} />
-                  <span className="name">{n}</span>
+            {CATS.map(([title, names]) => (
+              <div className="lib-group" key={title}>
+                <div className="lib-cat">{title}<span className="lib-count">{names.length}</span></div>
+                <div className="lib">
+                  {names.map((n) => (
+                    <div className="lib-cell" key={n}>
+                      <LIcon name={n} size={26} />
+                      <span className="name">{n}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </section>
         );
       }
@@ -362,5 +384,6 @@ export const maximize = (
       }
       dsSyncToggle();
     </script>
-  </body>
+      <script src="theme-control.js"></script>
+</body>
 </html>

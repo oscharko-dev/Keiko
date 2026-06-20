@@ -151,10 +151,12 @@ import {
 import {
   handleFigmaListSnapshots,
   handleFigmaInspectSnapshotScreenJson,
+  handleFigmaDeleteSnapshot,
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
   handleFigmaLoadSnapshotImage,
   handleFigmaRevokeToken,
+  handleFigmaUpdateSnapshotMetadata,
 } from "./qualityIntelligence/figmaSnapshotRoutes.js";
 import { handleFigmaGenerateCode } from "./qualityIntelligence/figmaCodegenRoutes.js";
 
@@ -543,6 +545,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
   { method: "GET", pattern: "/api/figma/snapshots", handler: handleFigmaListSnapshots },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
+  {
+    method: "PATCH",
+    pattern: "/api/figma/snapshots/:runId",
+    handler: handleFigmaUpdateSnapshotMetadata,
+  },
+  { method: "DELETE", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaDeleteSnapshot },
   {
     method: "GET",
     pattern: "/api/figma/snapshots/:runId/screens/:screenId/json",

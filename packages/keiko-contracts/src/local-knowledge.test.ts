@@ -194,7 +194,7 @@ describe("frozen-constant arrays", () => {
     expect(PARSED_UNIT_KINDS.length).toBeGreaterThan(0);
     expect(INDEXING_JOB_STATUSES.length).toBeGreaterThan(0);
     expect(PARSER_DIAGNOSTIC_SEVERITIES).toEqual(["info", "warning", "error"]);
-    expect(CAPSULE_REINDEX_MODES).toEqual(["changed-files", "repair-failed"]);
+    expect(CAPSULE_REINDEX_MODES).toEqual(["changed-files", "repair-failed", "resume"]);
   });
 });
 

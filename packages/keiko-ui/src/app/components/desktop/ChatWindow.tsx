@@ -9,12 +9,15 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type WheelEvent,
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
+import KeikoSelect from "./KeikoSelect";
+import { NumberControlStepper } from "./NumberControlStepper";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   AttachButton,
@@ -59,6 +62,7 @@ interface ChatWindowProps {
   readonly barCompact?: boolean;
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
+  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
 
 // AC #1 — voice is not yet implemented. Gate on a constant so that when the
@@ -74,30 +78,13 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
-// uiux-fix F042 (C308) — ONE canonical composer placeholder (U+2026 ellipsis, the
-// codebase's majority style). The same field previously flickered between "..."
-// and "…" depending on whether the chat already had messages.
-const COMPOSER_PLACEHOLDER = "Ask Keiko about your code…";
+// One canonical composer placeholder. The same field previously flickered between
+// long task-oriented prompts depending on whether the chat already had messages.
+const COMPOSER_PLACEHOLDER = "Ask Keiko...";
 
 // uiux-fix F042 (C308/C322) — keep the visible send tooltip short and
 // consistent; the keyboard hint remains in accessible descriptions.
 const SEND_TOOLTIP = "Send message";
-
-// Workspace-aware starter prompts for the empty state.
-function starterPrompts(activeProject: ProjectWithAvailability | undefined): readonly string[] {
-  if (activeProject !== undefined) {
-    return [
-      `Explain the architecture of ${activeProject.name}`,
-      `Find a bug in ${activeProject.name}`,
-      `Write tests for ${activeProject.name}`,
-    ];
-  }
-  return [
-    "Explain the architecture of this codebase",
-    "Find and fix a bug in the workspace store",
-    "Write tests for the window manager",
-  ];
-}
 
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
@@ -199,13 +186,19 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   );
 }
 
-function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
+function ChatBubble({
+  message,
+  onOpenRunResult,
+}: {
+  readonly message: ChatMessage;
+  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+}): ReactNode {
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
   // without weakening evidence semantics (the BFF's persisted runId is still the source of
   // truth; this surface is read-only and never exposes apply/exec — AC#4).
   if (isRunSummaryMessage(message)) {
-    return <RunSummaryCard message={message} />;
+    return <RunSummaryCard message={message} onOpenResult={onOpenRunResult} />;
   }
   const isUser = message.role === "user";
   return (
@@ -356,39 +349,48 @@ function ComposerBar({
           launch={launchWorkflowFromConversation}
         />
         {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
-        <label
+        <div
           className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
           data-tip={controlsNarrow ? compactModelTip : undefined}
         >
-          <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
-          <select
-            className="cmp-model-select"
+          <KeikoSelect
+            triggerClassName="cmp-model-select"
             value={selectValue}
-            aria-label="Model"
-            aria-disabled={noEligibleModels || loading ? "true" : undefined}
-            aria-describedby={selectDescribedBy}
+            ariaLabel="Models"
+            ariaDescribedBy={selectDescribedBy}
             disabled={loading}
-            onChange={(event) => {
+            placeholder={
+              loading
+                ? "Loading models…"
+                : noEligibleModels
+                  ? "No conversation-eligible model"
+                  : "Models"
+            }
+            leadingVisual={
+              <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
+            }
+            menuTitle="Models"
+            menuClassName="cmp-model-menu"
+            menuMinWidth={controlsNarrow ? 118 : 280}
+            mono
+            sections={[
+              {
+                options: loading
+                  ? [{ value: "", label: "Loading models…", disabled: true }]
+                  : noEligibleModels
+                    ? [{ value: "", label: "No conversation-eligible model", disabled: true }]
+                    : modelList(models).map((model) => ({
+                        value: model.id,
+                        label: model.id,
+                      })),
+              },
+            ]}
+            onValueChange={(next) => {
               if (noEligibleModels || loading) return;
-              setSelectedModel(event.target.value);
+              setSelectedModel(next);
             }}
-          >
-            {loading ? (
-              <option value="" disabled>
-                Loading models…
-              </option>
-            ) : noEligibleModels ? (
-              <option value="">No conversation-eligible model</option>
-            ) : (
-              modelList(models).map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                </option>
-              ))
-            )}
-          </select>
-          {controlsNarrow ? null : <Icons.chevron size={12} />}
-        </label>
+          />
+        </div>
         {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
             When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
         {VOICE_SUPPORTED ? (
@@ -601,102 +603,76 @@ function ComposerCore({
 
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
-      {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-      <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-      {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-      <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-      <textarea
-        className="cmp-input"
-        ref={taRef}
-        rows={2}
-        value={draft}
-        aria-label="Chat message"
-        placeholder={placeholder}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={onComposerKeyDown(sendMessage)}
-        // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
-        // fully editable while a send is in flight so the next message can be
-        // pre-typed during streaming. Re-submit stays blocked by the isInFlight
-        // guard in useChatSession, and the primary button is "Cancel" meanwhile.
-      />
-      {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-      <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-      {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
-          adjacent to the textarea so SR users hear the state without losing
-          composer focus. Hidden when there is nothing to announce. */}
-      <SendLifecycleStatus status={sendStatus} />
-      {/* Issue #151 — context-pressure indicator + clear-history affordance */}
-      {minimal ? null : (
-        <BudgetIndicator
-          budget={budget}
-          onClearHistory={clearHistory}
-          disabled={sending || loading}
-          compact={compact}
+      <div className="cmp-input-stack">
+        {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
+        <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+        <textarea
+          className="cmp-input"
+          ref={taRef}
+          rows={2}
+          value={draft}
+          aria-label="Chat message"
+          placeholder={placeholder}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onComposerKeyDown(sendMessage)}
+          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
+          // fully editable while a send is in flight so the next message can be
+          // pre-typed during streaming. Re-submit stays blocked by the isInFlight
+          // guard in useChatSession, and the primary button is "Cancel" meanwhile.
         />
-      )}
-      <ComposerBar
-        session={session}
-        ready={ready}
-        selectedModelCapability={selectedModelCapability}
-        onAttachFiles={handleFiles}
-        compact={compact}
-        controlsNarrow={controlsNarrow}
-        barCompact={barCompact}
-        workflowCompact={workflowCompact}
-        budgetExceeded={budgetExceeded}
-      />
+        {/* Chip strip below the textarea, above the composer bar (AC #3) */}
+        <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
+        {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
+        <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+        {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
+            adjacent to the textarea so SR users hear the state without losing
+            composer focus. Hidden when there is nothing to announce. */}
+        <SendLifecycleStatus status={sendStatus} />
+      </div>
+      <div className="cmp-footer-row">
+        {/* Issue #151 — context-pressure indicator + clear-history affordance */}
+        {minimal ? null : (
+          <BudgetIndicator
+            budget={budget}
+            onClearHistory={clearHistory}
+            disabled={sending || loading}
+            compact={compact}
+          />
+        )}
+        <ComposerBar
+          session={session}
+          ready={ready}
+          selectedModelCapability={selectedModelCapability}
+          onAttachFiles={handleFiles}
+          compact={compact}
+          controlsNarrow={controlsNarrow}
+          barCompact={barCompact}
+          workflowCompact={workflowCompact}
+          budgetExceeded={budgetExceeded}
+        />
+      </div>
     </div>
   );
 }
 
 // Deliverable: polished empty state when no messages are present and an active
-// chat exists. Shows a welcoming headline, project-aware subhead, and 2–3
-// starter-prompt buttons that prefill the composer draft.
+// chat exists. Keep the center copy intentionally minimal so the composer
+// remains the primary action.
 interface EmptyComposerStateProps {
-  readonly session: ChatSessionApi;
-  readonly noEligibleModels: boolean;
   readonly minimal?: boolean;
 }
 
-function EmptyComposerState({
-  session,
-  noEligibleModels,
-  minimal = false,
-}: EmptyComposerStateProps): ReactNode {
-  const { activeProject, setDraft } = session;
-  const prompts = starterPrompts(activeProject);
+function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): ReactNode {
   if (minimal) {
     return (
       <div className="chatw-empty chatw-empty-minimal" role="note" aria-label="Conversation ready">
-        <h2 className="chatw-empty-headline">Start a Keiko conversation</h2>
-        <p className="chatw-empty-sub">
-          {activeProject !== undefined
-            ? `Working in ${activeProject.name}. What would you like to explore?`
-            : "Type a message to start."}
-        </p>
+        <h2 className="chatw-empty-headline">How can I help you today?</h2>
       </div>
     );
   }
   return (
     <div className="chatw-empty">
-      <h2 className="chatw-empty-headline">Start a Keiko conversation</h2>
-      <p className="chatw-empty-sub">
-        {activeProject !== undefined
-          ? `Working in ${activeProject.name}. What would you like to explore?`
-          : "Pick a project from the sidebar to scope your workspace, or ask anything below."}
-      </p>
-      {/* Starter prompts are only useful when a model is available */}
-      {/* uiux-fix F042 (C319) — without a role the group's aria-label is ignored by AT. */}
-      {!noEligibleModels ? (
-        <div className="chatw-empty-prompts" role="group" aria-label="Starter prompts">
-          {prompts.map((prompt) => (
-            <button type="button" key={prompt} className="suggest" onClick={() => setDraft(prompt)}>
-              <Icons.spark size={12} style={{ color: "var(--accent)" }} />
-              {prompt}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <h2 className="chatw-empty-headline">How can I help you today?</h2>
     </div>
   );
 }
@@ -724,7 +700,7 @@ function ChatHero({
   readonly session: ChatSessionApi;
   readonly ready: boolean;
 }): ReactNode {
-  const { loading, activeProject, setDraft, sendMessage } = session;
+  const { loading, activeProject, sendMessage } = session;
   return (
     <form
       className="composer composer-compact"
@@ -755,13 +731,6 @@ function ChatHero({
           <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
         </button>
       </div>
-      <div className="cmp-suggest">
-        {starterPrompts(activeProject).map((prompt) => (
-          <button type="button" key={prompt} className="suggest" onClick={() => setDraft(prompt)}>
-            <Icons.spark size={12} style={{ color: "var(--accent)" }} /> {prompt}
-          </button>
-        ))}
-      </div>
     </form>
   );
 }
@@ -787,7 +756,7 @@ function MiniChat({
           className="cmp-input cmp-input-mini"
           value={draft}
           aria-label="Chat message"
-          placeholder={loading ? "Loading…" : "Ask Keiko…"}
+          placeholder={loading ? "Loading…" : COMPOSER_PLACEHOLDER}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onComposerKeyDown(sendMessage)}
           // uiux-fix F041 (C205) — see ComposerCore: editable while sending so the
@@ -1008,9 +977,6 @@ function LocalKnowledgeScopeControl({
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // #2 — needed to revert the <select> to its prior value when the user
-  // cancels the "Model only" confirmation dialog.
-  const selectRef = useRef<HTMLSelectElement>(null);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -1026,12 +992,7 @@ function LocalKnowledgeScopeControl({
           const confirmed = window.confirm(
             `This will disconnect ${String(sourceCount)} grounding ${sourceCount === 1 ? "source" : "sources"}. Continue?`,
           );
-          if (!confirmed) {
-            if (selectRef.current !== null) {
-              selectRef.current.value = groundedModeValue(chat);
-            }
-            return;
-          }
+          if (!confirmed) return;
         }
         const response = await updateChat(chat.id, {
           connectedScopes: null,
@@ -1100,47 +1061,47 @@ function LocalKnowledgeScopeControl({
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
-    <label className="scope-grounding" data-connected={connected ? "true" : "false"}>
+    <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">Grounding</span>
-      <select
-        ref={selectRef}
-        className="scope-grounding-select"
+      <KeikoSelect
+        triggerClassName="scope-grounding-select"
         value={value}
         disabled={busy}
-        aria-label="Grounding mode"
-        onChange={(event) => {
-          void handleChange(event.target.value);
+        ariaLabel="Grounding mode"
+        menuTitle="Strategy"
+        sections={[
+          {
+            options: [
+              { value: "none", label: "Model only" },
+              {
+                value: "files",
+                label: "Live Files context",
+                disabled: !hasFolderGroundingScope(chat),
+              },
+              ...(value === "multi"
+                ? [{ value: "multi", label: "Multiple sources", disabled: true }]
+                : []),
+              ...capsuleChoices.map((capsule) => ({
+                value: capsule.value,
+                label: capsule.label,
+              })),
+              ...capsuleSetChoices.map((capsuleSet) => ({
+                value: capsuleSet.value,
+                label: capsuleSet.label,
+              })),
+            ],
+          },
+        ]}
+        onValueChange={(next) => {
+          void handleChange(next);
         }}
-      >
-        <option value="none">Model only</option>
-        <option value="files" disabled={!hasFolderGroundingScope(chat)}>
-          Live Files context
-        </option>
-        {/* #28 — read-only sentinel shown when more than one grounding source
-            is active. The user cannot select this value; switching away removes
-            the multi-source state by choosing a specific scope or "Model only". */}
-        {value === "multi" ? (
-          <option value="multi" disabled>
-            Multiple sources
-          </option>
-        ) : null}
-        {capsuleChoices.map((capsule) => (
-          <option key={capsule.value} value={capsule.value}>
-            {capsule.label}
-          </option>
-        ))}
-        {capsuleSetChoices.map((capsuleSet) => (
-          <option key={capsuleSet.value} value={capsuleSet.value}>
-            {capsuleSet.label}
-          </option>
-        ))}
-      </select>
+      />
       {displayedError !== null ? (
         <span role="alert" className="scope-connect-error">
           {displayedError}
         </span>
       ) : null}
-    </label>
+    </div>
   );
 }
 
@@ -1423,16 +1384,34 @@ function MemoryPanel({
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   const memoryDisclosureLabel =
     memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included";
+  const stepMemoryBudget = (delta: number): void => {
+    setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + delta));
+  };
+  const handleBudgetWheel = (event: WheelEvent<HTMLInputElement>): void => {
+    if (event.deltaY === 0) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    stepMemoryBudget(direction * 100);
+  };
   const budgetControl = (
     <label className="chat-memory-budget">
       <span>Budget (tokens)</span>
-      <input
-        type="number"
-        min={0}
-        step={100}
-        value={memoryBudgetTokens}
-        onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
-      />
+      <span className="number-control number-control-pill">
+        <input
+          type="number"
+          className="number-control-input"
+          min={0}
+          step={100}
+          value={memoryBudgetTokens}
+          onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
+          onWheel={handleBudgetWheel}
+        />
+        <NumberControlStepper
+          label="memory budget"
+          onStepUp={() => stepMemoryBudget(100)}
+          onStepDown={() => stepMemoryBudget(-100)}
+        />
+      </span>
     </label>
   );
 
@@ -1544,6 +1523,7 @@ export function ChatWindow({
   controlsNarrow = false,
   barCompact = false,
   workflowCompact = false,
+  onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
   const {
@@ -1585,7 +1565,7 @@ export function ChatWindow({
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   const effectiveMinimal = minimalChat;
   const effectiveCompact = compact || mini;
-  const effectiveControlsNarrow = controlsNarrow || mini;
+  const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
   const effectiveBarCompact = barCompact || effectiveMinimal;
   const effectiveWorkflowCompact = workflowCompact || mini || effectiveMinimal;
   useEffect(() => {
@@ -1645,18 +1625,18 @@ export function ChatWindow({
       >
         {visible.length === 0 ? (
           activeChat !== undefined ? (
-            <EmptyComposerState
-              session={session}
-              noEligibleModels={noEligibleModels}
-              minimal={effectiveMinimal}
-            />
+            <EmptyComposerState minimal={effectiveMinimal} />
           ) : (
             <NoChatState />
           )
         ) : (
           <div className="chatw-log">
             {visible.map((message) => (
-              <ChatBubble key={message.id} message={message} />
+              <ChatBubble
+                key={message.id}
+                message={message}
+                onOpenRunResult={onOpenRunResult}
+              />
             ))}
             {sending && sendStatus !== "streaming" ? (
               <div className="chatw-typing-row">

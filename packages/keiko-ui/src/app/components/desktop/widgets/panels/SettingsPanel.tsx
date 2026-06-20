@@ -17,8 +17,11 @@ import {
   WALLPAPER_ENABLED_KEY,
   WALLPAPER_OPACITY_EVENT,
   WALLPAPER_OPACITY_KEY,
+  FRAME_INNER_GLOW_STRENGTH_EVENT,
+  FRAME_INNER_GLOW_STRENGTH_KEY,
   FRAME_BORDER_STRENGTH_EVENT,
   FRAME_BORDER_STRENGTH_KEY,
+  applyFrameInnerGlowStrength,
   WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT,
   WORKSPACE_BACKGROUND_BRIGHTNESS_KEY,
   WORKSPACE_GRID_STRENGTH_EVENT,
@@ -27,6 +30,7 @@ import {
   applyWorkspaceBackgroundBrightness,
   applyWorkspaceGridStrength,
   readFrameBorderStrength,
+  readFrameInnerGlowStrength,
   readWallpaperEnabled,
   readWallpaperOpacity,
   readWorkspaceBackgroundBrightness,
@@ -135,6 +139,8 @@ function GeneralPrefs(): ReactNode {
   const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
   const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
   const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
+  const [frameInnerGlowStrength, setFrameInnerGlowStrength] =
+    useState<number>(readFrameInnerGlowStrength);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -193,12 +199,28 @@ function GeneralPrefs(): ReactNode {
     );
   }, [frameBorderStrength]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(FRAME_INNER_GLOW_STRENGTH_KEY, String(frameInnerGlowStrength));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyFrameInnerGlowStrength(frameInnerGlowStrength);
+    window.dispatchEvent(
+      new CustomEvent(FRAME_INNER_GLOW_STRENGTH_EVENT, { detail: frameInnerGlowStrength }),
+    );
+  }, [frameInnerGlowStrength]);
+
   // CSS uses --p to fill the track; React's CSSProperties doesn't know custom props.
   const fill: CSSProperties = { ["--p"]: `${String(wp)}%` } as CSSProperties;
   const bgFill: CSSProperties = { ["--p"]: `${String(bgBrightness)}%` } as CSSProperties;
   const gridFill: CSSProperties = { ["--p"]: `${String(gridStrength)}%` } as CSSProperties;
   const frameBorderFill: CSSProperties = {
     ["--p"]: `${String(frameBorderStrength)}%`,
+  } as CSSProperties;
+  const frameInnerGlowFill: CSSProperties = {
+    ["--p"]: `${String(frameInnerGlowStrength)}%`,
   } as CSSProperties;
   return (
     <>
@@ -315,6 +337,30 @@ function GeneralPrefs(): ReactNode {
           <span>Strong</span>
         </div>
       </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="frame-inner-glow-strength">
+            Workspace inner glow
+          </label>
+          <span className="gpref-val mono">{frameInnerGlowStrength}%</span>
+        </div>
+        <input
+          id="frame-inner-glow-strength"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={frameInnerGlowStrength}
+          onChange={(e) => setFrameInnerGlowStrength(Number.parseInt(e.target.value, 10))}
+          style={frameInnerGlowFill}
+          aria-label="Workspace inner glow"
+        />
+        <div className="gpref-scale">
+          <span>Off</span>
+          <span>Strong</span>
+        </div>
+      </div>
     </>
   );
 }
@@ -417,6 +463,7 @@ export function SettingsPanel(): ReactNode {
             // toggle-button pattern, same as the density buttons in
             // RelationshipListPanel (state was previously CSS-only via data-on).
             aria-pressed={tab === id}
+            onPointerDown={() => setTab(id)}
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}

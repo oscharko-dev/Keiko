@@ -16,7 +16,7 @@
 // Design note: startImpl is typed as the real function but replaced with a
 // controllable fake in every test. We never hit the network.
 
-import { render, screen, waitFor, act, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
@@ -237,14 +237,39 @@ describe("RunLauncher — initial render", () => {
     expect(sourceTypeRadio("Capsule set")).toBeInTheDocument();
   });
 
+  it("exposes source-type labels as icon tooltips for compact state", () => {
+    render(<RunLauncher />);
+    for (const label of ["Requirements", "Folder", "File", "Capsule", "Capsule set"]) {
+      expect(sourceTypeRadio(label)).toHaveAttribute("data-tip", label);
+    }
+  });
+
+  it("moves source-type selection on pointer down so the rail outline does not flicker", () => {
+    render(<RunLauncher />);
+
+    fireEvent.pointerDown(sourceTypeRadio("Folder"), { button: 0 });
+
+    expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "false");
+    expect(sourceTypeRadio("Folder")).toHaveAttribute("aria-checked", "true");
+  });
+
   it("renders a requirements textarea (default source type)", () => {
     render(<RunLauncher />);
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
   });
 
-  it("renders a policy-profile select", () => {
+  it("renders a policy-profile select with the compact policy menu", async () => {
+    const user = userEvent.setup();
     render(<RunLauncher />);
-    expect(screen.getByRole("combobox", { name: /policy profile/i })).toBeInTheDocument();
+    const select = screen.getByRole("combobox", { name: /policy profile/i });
+    expect(select).toBeInTheDocument();
+    expect(select.closest(".qi-policy-profile-field")).not.toBeNull();
+
+    await user.click(select);
+    expect(document.querySelector(".qi-policy-profile-menu")).not.toBeNull();
+    expect(document.querySelector(".qi-policy-profile-menu .ksel-menu-title")).toHaveTextContent(
+      "Policy",
+    );
   });
 
   it("renders an optional seed input", () => {
@@ -473,7 +498,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     );
 
     await chooseSourceType(user, "Capsule");
-    await screen.findByRole("option", { name: "Audit Capsule 01" });
+    await screen.findByText("Audit Capsule 01");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -509,7 +534,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     );
 
     await chooseSourceType(user, "Capsule set");
-    await screen.findByRole("option", { name: "Audit Capsule Set (2 capsules)" });
+    await screen.findByText("Audit Capsule Set (2 capsules)");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -576,6 +601,32 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     ];
     expect(calledRequest.seed).toBe(17);
   });
+
+  it("steps the seed on wheel hover without focusing first", () => {
+    render(<RunLauncher startImpl={vi.fn()} />);
+
+    const seedInput = screen.getByRole("spinbutton", { name: /seed \(optional\)/i });
+    expect(seedInput).not.toHaveFocus();
+
+    fireEvent.wheel(seedInput, { deltaY: -100 });
+    expect(seedInput).toHaveValue(1);
+    expect(seedInput).not.toHaveFocus();
+
+    fireEvent.wheel(seedInput, { deltaY: 100 });
+    expect(seedInput).toHaveValue(0);
+  });
+
+  it("steps the seed with the custom number-control buttons", () => {
+    render(<RunLauncher startImpl={vi.fn()} />);
+
+    const seedInput = screen.getByRole("spinbutton", { name: /seed \(optional\)/i });
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase seed" }));
+    expect(seedInput).toHaveValue(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decrease seed" }));
+    expect(seedInput).toHaveValue(0);
+  });
 });
 
 describe("RunLauncher — run lifecycle (in-progress state)", () => {
@@ -596,6 +647,8 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
       expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: /generate test cases/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Increase seed" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Decrease seed" })).toBeDisabled();
 
     // Let the run finish.
     act(() => {
@@ -747,8 +800,41 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     const notice = await screen.findByTestId("qi-coverage-notice");
     // Both halves of the coverage notice render: the >16 cap drop AND the per-source skip with label.
     expect(notice).toHaveTextContent("3 sources over the 16-source limit were not included");
-    expect(notice).toHaveTextContent("1 connected source could not be read");
+    expect(notice).toHaveTextContent("1 connected source was skipped");
     expect(notice).toHaveTextContent("Empty capsule");
+    expect(notice).toHaveTextContent("knowledge source is unavailable");
+  });
+
+  it("explains image-description skips without blaming Figma image reads", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-image-skip-1",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 2,
+        atomCount: 4,
+        skippedSources: [
+          {
+            label: "Image · Login mask",
+            kind: "image",
+            code: "QI_IMAGE_DESCRIPTION_UNAVAILABLE",
+          },
+        ],
+      },
+      DONE_FRAME,
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Spec line");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    const notice = await screen.findByTestId("qi-coverage-notice");
+    expect(notice).toHaveTextContent("1 connected source was skipped");
+    expect(notice).toHaveTextContent("Image · Login mask");
+    expect(notice).toHaveTextContent(
+      "image was readable, but the image model produced no usable description",
+    );
   });
 
   it("renders NO coverage notice when no sources were dropped or skipped", async () => {

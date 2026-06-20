@@ -22,6 +22,10 @@ const OMITTED_COUNTS_ZERO = {
   "redacted-only": 0,
   "budget-exhausted": 0,
   "tool-unavailable": 0,
+  "unsupported-format": 0,
+  "no-text-layer": 0,
+  "malformed-document": 0,
+  "encrypted-document": 0,
 } as const;
 
 function contextPack(): GroundedAnswerContextPackSummary {
@@ -71,10 +75,11 @@ function answer(): GroundedAnswerType {
         stableId: "atom-a",
       },
       {
-        scopePath: "src/bar.ts",
-        lineRange: undefined,
+        scopePath: "docs/report.docx",
+        lineRange: { startLine: 1, endLine: 3 },
         score: 0.4,
         stableId: "atom-b",
+        documentFormat: "docx",
       },
     ],
     uncertainty: [{ kind: "no-evidence", claim: "excerpt unavailable" }],

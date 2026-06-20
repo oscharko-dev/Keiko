@@ -218,8 +218,35 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 | `keiko verify`                | Runs configured verification gates and writes redacted evidence. |
 | `keiko evidence list`         | Lists local evidence manifests.                                  |
 | `keiko evidence show <runId>` | Shows one redacted evidence manifest.                            |
+| `keiko doctor`                | Diagnoses stale global-vs-local launch paths.                    |
+| `keiko repair`                | Runs an offline diagnostic-and-repair pass on the local install. |
+| `keiko uninstall`             | Removes Keiko's runtime artifacts so you can reinstall cleanly.  |
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
+
+### Repair and uninstall
+
+`keiko repair` runs an offline, deterministic pass that fixes a broken or half-installed local state without a full reinstall. It removes a stale `ui.pid` left by an unclean shutdown, tightens the `.keiko` state-directory permissions to `0o700`, prunes launcher records whose shortcut files were deleted, and verifies the built CLI/UI assets, the launch path, and any configured model-gateway file. Items it cannot fix automatically are listed as `action`. Add `--dry-run` to report without changing anything.
+
+```bash
+keiko repair            # diagnose and repair in place
+keiko repair --dry-run  # report findings only
+```
+
+`keiko uninstall` reverses the runtime artifacts Keiko creates on a machine so you can clean your device and reinstall a clean version. It removes the user-local launcher shortcut(s), the `keiko:start` / `keiko:stop` scripts that `keiko init` added to your `package.json` (only when they still match what `init` writes), and the `.keiko` state directory. A customized script or a non-Keiko file in the state directory is never touched. With no scope flag all three are removed; `--state`, `--launchers`, and `--scripts` narrow the operation, and `--dry-run` previews it.
+
+```bash
+keiko uninstall              # remove launcher, scripts, and state
+keiko uninstall --dry-run    # preview what would be removed
+keiko uninstall --launchers  # remove only the OS launcher shortcut
+```
+
+Keiko never removes its own installed npm package — a running process cannot reliably delete the files it is executing from. After `keiko uninstall` completes it prints the package-manager command to finish removal:
+
+```bash
+npm uninstall -g @oscharko-dev/keiko   # global install
+npm uninstall @oscharko-dev/keiko      # local install in a project
+```
 
 ### Connected sources: folder search vs. Knowledge Capsules
 
@@ -415,7 +442,8 @@ Read the full contracts and decisions:
 | No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
 | Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
-| Stale process state    | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again.  |
+| Stale process state    | Run `npm run keiko:stop`, then `npx keiko repair` to clear a stale pid and verify the install.           |
+| Broken local install   | Run `npx keiko repair` for an offline diagnostic-and-repair pass, or `npx keiko uninstall` to reset.     |
 
 For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
 

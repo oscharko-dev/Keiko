@@ -705,6 +705,47 @@ export {
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
 
+// ─── Bounded large-document ingestion (Epic #1160 / Issue #1286) ────────────────
+export type {
+  LargeDocumentResourcePolicy,
+  LargeDocumentExtractionStrategy,
+  LargeDocumentPreflightDecision,
+  LargeDocumentPreflight,
+  ExtractionPhase,
+  CoverageQuality,
+  ExtractionCapabilityStatus,
+  ExtractionCapabilityAvailability,
+  LargeDocumentDiagnosticCode,
+  CheckpointFingerprint,
+  ExtractionCheckpointRecord,
+  CheckpointIncompatibilityReason,
+  CheckpointCompatibility,
+  LargeDocumentJobProgress,
+  LargeDocumentResumeChoice,
+  CapsuleLargeDocumentHealth,
+} from "./local-knowledge-large-document.js";
+export {
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  largeDocumentPolicyFingerprint,
+  LARGE_DOCUMENT_EXTRACTION_STRATEGIES,
+  EXTRACTION_PHASES,
+  TERMINAL_EXTRACTION_PHASES,
+  isTerminalExtractionPhase,
+  COVERAGE_QUALITIES,
+  EXTRACTION_CAPABILITY_STATUSES,
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  capabilityContributesCoverage,
+  LARGE_DOCUMENT_DIAGNOSTIC_CODES,
+  CHECKPOINT_INCOMPATIBILITY_REASONS,
+  checkpointCompatibility,
+  LARGE_DOCUMENT_RESUME_CHOICES,
+} from "./local-knowledge-large-document.js";
+export {
+  validateLargeDocumentResourcePolicy,
+  validateExtractionCheckpointRecord,
+  isSafeQualityWarning,
+} from "./local-knowledge-large-document-validation.js";
+
 // ─── Local Knowledge Capsule persistent schema (Issue #265 / Epic #189) ─────────
 // Static SQL DDL manifest + scoped indexes + migration manifest for the on-disk capsule
 // store. The runtime that *applies* the DDL ships in #193; this package only carries the

@@ -21,6 +21,7 @@ import {
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { Icons } from "../../Icons";
+import KeikoSelect from "../../KeikoSelect";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,8 +100,11 @@ function EmptyState({
 }): ReactNode {
   return (
     <div className="connector-picker-empty">
-      <p>No ready connectors found.</p>
-      <button type="button" className="connector-picker-create-link" onClick={onManageConnectors}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary connector-picker-create-link"
+        onClick={onManageConnectors}
+      >
         Create a connector
       </button>
     </div>
@@ -313,39 +317,41 @@ export function ConnectorPickerWidget({
         selectedId={selectedId}
       />
 
-      <label className="connector-picker-label" htmlFor="connector-picker-select">
-        Select a connector
-      </label>
-      <select
-        id="connector-picker-select"
-        className="connector-picker-select"
+      <div className="connector-picker-label">Select a connector</div>
+      <KeikoSelect
+        triggerClassName="connector-picker-select"
         value={currentValue}
-        onChange={(e) => {
-          handleChange(e.target.value);
+        ariaLabel="Select a connector"
+        placeholder="— choose a connector —"
+        menuTitle="Available connectors"
+        sections={[
+          ...(hasCapsules
+            ? [
+                {
+                  label: "Capsules",
+                  options: capsules.map((cap) => ({
+                    value: `capsule:${cap.id}`,
+                    label: `${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`,
+                  })),
+                },
+              ]
+            : []),
+          ...(hasSets
+            ? [
+                {
+                  label: "Capsule sets",
+                  options: capsuleSets.map((set) => ({
+                    value: `capsule-set:${set.id}`,
+                    label: `${set.displayName} (${String(set.capsuleCount)} capsules)`,
+                  })),
+                },
+              ]
+            : []),
+        ]}
+        onValueChange={(next) => {
+          handleChange(next);
         }}
-      >
-        <option value="" disabled>
-          — choose a connector —
-        </option>
-        {hasCapsules && (
-          <optgroup label="Capsules">
-            {capsules.map((cap) => (
-              <option key={`capsule:${cap.id}`} value={`capsule:${cap.id}`}>
-                {`${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {hasSets && (
-          <optgroup label="Capsule sets">
-            {capsuleSets.map((set) => (
-              <option key={`capsule-set:${set.id}`} value={`capsule-set:${set.id}`}>
-                {`${set.displayName} (${String(set.capsuleCount)} capsules)`}
-              </option>
-            ))}
-          </optgroup>
-        )}
-      </select>
+      />
 
       {setsFailed ? (
         <p className="connector-picker-notice" role="status">

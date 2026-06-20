@@ -157,6 +157,35 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).not.toHaveBeenCalled();
   });
 
+  it("hides content zoom controls when Quality Intelligence is at its narrow width", () => {
+    render(
+      <WindowFrame
+        win={appWindow({ type: "quality", id: "quality-1", w: 300, h: 420 })}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Quality Intelligence" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom Quality Intelligence content out" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "100% — reset Quality Intelligence content zoom",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom Quality Intelligence content in" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Quality Intelligence window controls" }),
+    ).toBeInTheDocument();
+  });
+
   it("ignores header double clicks in the right-side control gutter", () => {
     const maximize = vi.fn();
     const { container } = render(
@@ -219,7 +248,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).toHaveBeenCalledTimes(1);
   });
 
-  it("focuses the window without starting header dragging from the primary button", () => {
+  it("drags the window from the header with the primary button", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -245,9 +274,9 @@ describe("WindowFrame content zoom controls", () => {
     fireEvent.pointerUp(window);
 
     expect(focus).toHaveBeenCalledWith("agents-1");
-    expect(update).not.toHaveBeenCalled();
-    expect(setSnap).not.toHaveBeenCalled();
-    expect(commitSnap).not.toHaveBeenCalled();
+    expect(update).toHaveBeenLastCalledWith("agents-1", { x: 680, y: -0 });
+    expect(setSnap).toHaveBeenLastCalledWith("tr");
+    expect(commitSnap).toHaveBeenCalledWith("agents-1");
     expect(document.body.style.cursor).toBe("");
     expect(document.body.style.userSelect).toBe("");
     expect(section).not.toHaveAttribute("data-dragging");

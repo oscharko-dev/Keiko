@@ -51,7 +51,12 @@ export type EvidenceAtomProvenanceKind =
   | "excerpt-read"
   | "structural"
   | "git-history"
-  | "model-rerank";
+  | "model-rerank"
+  // Bounded request-local text extracted from a connected small document (DOCX/XLSX/
+  // text-layer PDF) by the Repository Search document-extraction path (Issue #1285). Kept
+  // distinct from "excerpt-read" so downstream prompt framing and browser citation surfaces
+  // can label document-derived evidence separately from raw code/text excerpts.
+  | "document-extract";
 
 export const EVIDENCE_ATOM_PROVENANCE_KINDS: readonly EvidenceAtomProvenanceKind[] = [
   "lexical-search",
@@ -60,6 +65,7 @@ export const EVIDENCE_ATOM_PROVENANCE_KINDS: readonly EvidenceAtomProvenanceKind
   "structural",
   "git-history",
   "model-rerank",
+  "document-extract",
 ] as const;
 
 export interface EvidenceAtomProvenance {
@@ -158,7 +164,19 @@ export type CandidateOmissionReason =
   | "low-relevance"
   | "redacted-only"
   | "budget-exhausted"
-  | "tool-unavailable";
+  | "tool-unavailable"
+  // ─── Repository Search small-document extraction diagnostics (Issue #1285) ───
+  // A connected document whose container format is not supported by bounded extraction
+  // (e.g. legacy .doc, .ppt, image-only binaries). Distinct from "tool-unavailable", which
+  // signals a transient infrastructure gap rather than a permanent format decision.
+  | "unsupported-format"
+  // A supported container (typically a scanned PDF) that carries no extractable text layer.
+  // Repository Search performs no OCR, so the document is skipped with a stable diagnostic.
+  | "no-text-layer"
+  // A supported container that could not be parsed because it is corrupt or truncated.
+  | "malformed-document"
+  // A password-protected / encrypted document that cannot be opened for text extraction.
+  | "encrypted-document";
 
 export const CANDIDATE_OMISSION_REASONS: readonly CandidateOmissionReason[] = [
   "outside-scope",
@@ -171,6 +189,10 @@ export const CANDIDATE_OMISSION_REASONS: readonly CandidateOmissionReason[] = [
   "redacted-only",
   "budget-exhausted",
   "tool-unavailable",
+  "unsupported-format",
+  "no-text-layer",
+  "malformed-document",
+  "encrypted-document",
 ] as const;
 
 export interface CandidateSignal {

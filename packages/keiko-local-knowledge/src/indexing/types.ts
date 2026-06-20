@@ -13,9 +13,11 @@ import type {
   ChunkId,
   DocumentId,
   EmbeddingModelIdentity,
+  ExtractionCapabilityAvailability,
   IndexingJobError,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
+  LargeDocumentResourcePolicy,
   VectorRecord,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
@@ -24,7 +26,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { ChunkingOptions } from "../chunking/index.js";
 import type { DiscoveryOptions } from "../discovery/index.js";
 import { KnowledgeStoreError } from "../errors.js";
-import type { ParserRegistry } from "../parsers/index.js";
+import type { ParserRegistry, ProgressiveExtractor } from "../parsers/index.js";
 import type { AuditEventSink } from "../privacy/index.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -94,6 +96,16 @@ export interface IndexingOptions {
   readonly now?: () => number;
   // Optional id source so tests can pin the job id. Defaults to `crypto.randomUUID`.
   readonly idSource?: () => string;
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). Threaded into discovery so large
+  // supported documents take the progressive page-windowed extraction + bounded chunk/embed path.
+  readonly largeDocumentPolicy?: LargeDocumentResourcePolicy;
+  // Injectable progressive extractors (defaults to the PDF extractor). Tests inject the synthetic
+  // streaming extractor; an OCR-capable extractor can be injected to recover no-text-layer pages.
+  readonly progressiveExtractors?: readonly ProgressiveExtractor[];
+  readonly extractionCapabilities?: ExtractionCapabilityAvailability;
+  // When true, large-document jobs continue from durable extraction checkpoints where compatible
+  // (the `resume` reindex mode); incompatible checkpoints restart cleanly.
+  readonly resume?: boolean;
 }
 
 // ─── Event stream ────────────────────────────────────────────────────────────

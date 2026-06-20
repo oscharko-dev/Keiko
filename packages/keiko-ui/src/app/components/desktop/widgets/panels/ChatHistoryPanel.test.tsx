@@ -110,6 +110,22 @@ describe("ChatHistoryPanel", () => {
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "closed" });
   });
 
+  it("keeps the active tab selected after deleting a chat", async () => {
+    const chat = makeChat();
+    vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "closed" } });
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [chat] }));
+
+    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
+    expect(row).not.toBeNull();
+    await user.click(within(row as HTMLElement).getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "closed" }));
+    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute("aria-selected", "false");
+  });
+
   it("restores a deleted chat through the PATCH helper", async () => {
     const chat = makeChat({ status: "closed" });
     vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "open" } });
@@ -122,6 +138,26 @@ describe("ChatHistoryPanel", () => {
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "open" });
+  });
+
+  it("keeps the deleted tab selected after restoring a chat", async () => {
+    const chat = makeChat({ status: "closed" });
+    vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "open" } });
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [chat] }));
+
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: /restore/i }));
+
+    await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
+    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("renames a chat through the PATCH helper", async () => {
