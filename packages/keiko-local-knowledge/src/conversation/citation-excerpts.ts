@@ -22,7 +22,8 @@ function readDocumentText(
       capsule_id: capsuleId,
       document_id: citation.documentId,
     }) as DocumentTextRow | undefined;
-  return typeof row?.normalized_text === "string" ? row.normalized_text : undefined;
+  const stored = row?.normalized_text;
+  return typeof stored === "string" ? store._internal.contentCipher.openText(stored) : undefined;
 }
 
 function capExcerpt(raw: string, maxChars: number): string {
@@ -58,6 +59,7 @@ export function readCitationExcerpt(
   if (characterStart !== undefined && characterEnd !== undefined) {
     const span = readDocumentTextSpan(
       store._internal.db,
+      store._internal.contentCipher,
       capsuleId,
       citation.documentId,
       characterStart,

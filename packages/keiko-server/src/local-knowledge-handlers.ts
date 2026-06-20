@@ -41,6 +41,7 @@ import type {
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
+import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
@@ -266,7 +267,8 @@ function openStoreForDeps(deps: UiHandlerDeps): {
     throw new KnowledgeStoreError("UI runtime-state path is unavailable.");
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const store = openKnowledgeStore({ dbPath });
+  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
   recoverAbandonedIndexingJobs(store);
   return {
     store,

@@ -146,7 +146,7 @@ function persistWindow(
       );
       state.unitIndex += 1;
     }
-    insertDocumentTextWindowRow(db, {
+    insertDocumentTextWindowRow(db, deps.store._internal.contentCipher, {
       capsuleId: deps.capsuleId,
       documentId: deps.documentId,
       windowIndex: state.windowIndex,

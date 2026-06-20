@@ -62,6 +62,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
 import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
+import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
+import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
@@ -163,6 +165,11 @@ export interface UiHandlerDeps {
   // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
   // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
   readonly evidenceDir?: string | undefined;
+  // Issue #1322 — Local Knowledge content encryption at rest (ADR-0047). When set, capsule stores are
+  // opened encrypted: extracted text and vector content are sealed with the key this provider resolves.
+  // Optional so legacy tests that build deps manually keep their plaintext fixtures unchanged;
+  // buildUiHandlerDeps creates one so production stores encrypt by default.
+  readonly localKnowledgeKeyProvider?: KnowledgeStoreKeyProvider | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -651,7 +658,12 @@ function loadRuntimeGatewayConfig(
     configPath: effectiveConfigPath,
     env: options.env,
   });
-  const resolved = resolveConfig(options.configPath, options.env, runtimeConfigPath, secretResolver);
+  const resolved = resolveConfig(
+    options.configPath,
+    options.env,
+    runtimeConfigPath,
+    secretResolver,
+  );
   return { ...resolved, storagePath: effectiveConfigPath };
 }
 
@@ -699,6 +711,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
+    localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry(),
     ...(relationship === undefined ? {} : { relationship }),

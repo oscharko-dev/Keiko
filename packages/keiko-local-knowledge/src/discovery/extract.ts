@@ -319,7 +319,13 @@ function persistDependentRows(
   const db = deps.store._internal.db;
   deleteDependentRows(db, capsuleId, documentId);
   if (parserResult.normalizedText !== undefined) {
-    insertDocumentTextRow(db, capsuleId, documentId, parserResult.normalizedText);
+    insertDocumentTextRow(
+      db,
+      deps.store._internal.contentCipher,
+      capsuleId,
+      documentId,
+      parserResult.normalizedText,
+    );
   }
   for (const page of parserResult.pages) insertPageRow(db, capsuleId, page);
   for (const section of parserResult.sections) insertSectionRow(db, capsuleId, section);

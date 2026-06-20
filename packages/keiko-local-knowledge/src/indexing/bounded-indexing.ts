@@ -35,6 +35,7 @@ import {
 } from "../chunking/chunker-persist.js";
 import { readDocumentTextSpan } from "../discovery/persist.js";
 import type { KnowledgeStore } from "../store.js";
+import type { StoreContentCipher } from "../store-content-cipher.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
 import type { ChunkToEmbed, EmbedBatchResult } from "./types.js";
 
@@ -70,6 +71,7 @@ function rebaseUnit(unit: ParsedUnit, length: number): ParsedUnit {
 
 interface ChunkUnitContext {
   readonly db: DatabaseSync;
+  readonly cipher: StoreContentCipher;
   readonly params: BoundedChunkParams;
   readonly options: ChunkingOptions | undefined;
   readonly strategyKey: string;
@@ -118,10 +120,11 @@ function chunkOneUnit(
   row: ReturnType<typeof selectParsedUnitsForDocument>[number],
   orderIndex: number,
 ): number {
-  const { db, params } = ctx;
+  const { db, cipher, params } = ctx;
   const start = row.character_start ?? 0;
   const end = row.character_end ?? start;
-  const unitText = readDocumentTextSpan(db, params.capsuleId, params.documentId, start, end) ?? "";
+  const unitText =
+    readDocumentTextSpan(db, cipher, params.capsuleId, params.documentId, start, end) ?? "";
   const rebased = rebaseUnit(rowToParsedUnit(row, params.documentId), unitText.length);
   const chunks = chunkParsedUnit(
     rebased,
@@ -163,6 +166,7 @@ export function chunkDocumentBounded(
   if (rows.length === 0) return 0;
   const ctx: ChunkUnitContext = {
     db,
+    cipher: store._internal.contentCipher,
     params,
     options,
     strategyKey: chunkingStrategyKey(options),
@@ -262,6 +266,7 @@ function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): ChunkToEmb
   const text =
     readDocumentTextSpan(
       deps.store._internal.db,
+      deps.store._internal.contentCipher,
       deps.capsuleId,
       deps.documentId,
       row.char_start ?? 0,

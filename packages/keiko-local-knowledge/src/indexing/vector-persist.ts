@@ -23,6 +23,7 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import { KnowledgeStoreError } from "../errors.js";
+import type { StoreContentCipher } from "../store-content-cipher.js";
 
 const INSERT_VECTOR_SQL = [
   "INSERT INTO vectors (",
@@ -97,7 +98,13 @@ function assertEmbeddingShape(row: VectorInsertRow): void {
   }
 }
 
-export function insertVectorRow(db: DatabaseSync, row: VectorInsertRow): void {
+export function insertVectorRow(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  row: VectorInsertRow,
+): void {
+  // Validate the PLAINTEXT shape (dimensions * 4 bytes) before sealing, so the identity check stays
+  // meaningful; the embedding is content (ADR-0047) and is sealed before it touches the BLOB column.
   assertEmbeddingShape(row);
   db.prepare(INSERT_VECTOR_SQL).run({
     id: String(row.id),
@@ -105,7 +112,7 @@ export function insertVectorRow(db: DatabaseSync, row: VectorInsertRow): void {
     source_id: String(row.sourceId),
     document_id: String(row.documentId),
     chunk_id: String(row.chunkId),
-    embedding: row.embedding,
+    embedding: cipher.sealVector(row.embedding),
     provider: row.identity.provider,
     model_id: row.identity.modelId,
     revision: row.identity.modelRevision ?? null,

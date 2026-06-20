@@ -14,6 +14,7 @@ import {
   type AnswerGeneratorInput,
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import type {
   Chat,
   ChatLocalKnowledgeScope,
@@ -120,7 +121,8 @@ export function openStoreForDeps(deps: UiHandlerDeps): {
     throw new Error("UI runtime-state path is unavailable.");
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const store = openKnowledgeStore({ dbPath });
+  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
   return {
     store,
     close: (): void => {
@@ -862,9 +864,7 @@ function persistScopedGroundedAnswer(
   if (result.references.length > 0) emitAnswerContextAudit(auditSink, result, occurredAt);
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   const assistantContent =
-    noEvidenceReason === undefined
-      ? result.answer.trim()
-      : LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER;
+    noEvidenceReason === undefined ? result.answer.trim() : LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER;
   const redactedUserContent = redactText(deps, input.content);
   const redactedAssistantContent = redactText(deps, assistantContent);
   return buildLocalKnowledgeAnswer(

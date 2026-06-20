@@ -487,7 +487,7 @@ function persistOutcomes(
         storageReference: idSource(),
         createdAt: now(),
       };
-      insertVectorRow(db, row);
+      insertVectorRow(db, store._internal.contentCipher, row);
       persisted.push(composeVectorRecord(row));
     }
     db.exec("COMMIT");

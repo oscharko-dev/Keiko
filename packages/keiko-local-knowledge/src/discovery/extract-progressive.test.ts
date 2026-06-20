@@ -168,9 +168,16 @@ describe("extractDocument — progressive large-document path", () => {
     if (result.outcome.kind !== "persisted") throw new Error("expected persisted");
     const documentId = result.outcome.document.id;
     // page 3 starts at (3-1)*(8+2) = 20, spans 8 chars.
-    expect(readDocumentTextSpan(store._internal.db, capsuleId, documentId, 20, 28)).toBe(
-      content.slice(20, 28),
-    );
+    expect(
+      readDocumentTextSpan(
+        store._internal.db,
+        store._internal.contentCipher,
+        capsuleId,
+        documentId,
+        20,
+        28,
+      ),
+    ).toBe(content.slice(20, 28));
   });
 
   it("re-running an extracted large document hits the unchanged fast-path", async () => {

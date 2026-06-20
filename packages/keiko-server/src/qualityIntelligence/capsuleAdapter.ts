@@ -14,6 +14,7 @@ import {
   QualityIntelligenceHandoff,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "../deps.js";
+import { localKnowledgeProtectionOptions } from "../localKnowledgeKeyProvider.js";
 
 /** One indexed document's id + full normalized text, read through the LK QI handoff seam. */
 export interface CapsuleDocumentText {
@@ -46,6 +47,7 @@ export function makeCapsuleResolver(deps: UiHandlerDeps): CapsuleResolver | unde
   if (uiDbPath === undefined || uiDbPath.length === 0) return undefined;
 
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: dirname(uiDbPath) });
+  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
   let store: ReturnType<typeof openKnowledgeStore> | null = null;
   let openFailed = false;
 
@@ -53,7 +55,7 @@ export function makeCapsuleResolver(deps: UiHandlerDeps): CapsuleResolver | unde
     if (openFailed) return null;
     if (store !== null) return store;
     try {
-      store = openKnowledgeStore({ dbPath });
+      store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
       return store;
     } catch {
       openFailed = true;

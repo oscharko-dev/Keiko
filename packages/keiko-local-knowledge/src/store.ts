@@ -22,6 +22,12 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeStoreError } from "./errors.js";
+import {
+  createEncryptedContentCipher,
+  PLAINTEXT_CONTENT_CIPHER,
+  type StoreContentCipher,
+} from "./store-content-cipher.js";
+import { applyStoreContentEncryption } from "./store-content-encryption.js";
 
 export interface OpenKnowledgeStoreOptions {
   readonly dbPath: string;
@@ -53,6 +59,10 @@ export interface KnowledgeStore {
   readonly _internal: {
     readonly db: DatabaseSync;
     readonly now: () => number;
+    // The store-boundary cipher for the three reconstructive content columns (ADR-0047). The identity
+    // cipher in plaintext mode, an AES-256-GCM cipher when a key provider is supplied. The row layer
+    // threads it through every content read/write; no other module touches crypto.
+    readonly contentCipher: StoreContentCipher;
   };
 }
 
@@ -86,15 +96,27 @@ function applyDurabilityPragmas(db: DatabaseSync): void {
   db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);
 }
 
-function rejectUnsupportedProtection(opts: OpenKnowledgeStoreOptions): void {
-  if (
-    opts.protection?.mode === "encrypted-key-provider" ||
-    opts.protection?.keyProvider !== undefined
-  ) {
+// Resolves the store-boundary content cipher from the protection options. Plaintext (identity cipher)
+// is the default: a store opened without a key provider behaves exactly as before. Encryption is
+// requested by `encrypted-key-provider` mode or by supplying a keyProvider; the provider's 32-byte key
+// (resolved for this dbPath + schema version) binds an AES-256-GCM cipher (ADR-0047 D1/D2).
+function resolveContentCipher(
+  opts: OpenKnowledgeStoreOptions,
+  schemaVersion: number,
+): StoreContentCipher {
+  const protection = opts.protection;
+  if (protection === undefined) return PLAINTEXT_CONTENT_CIPHER;
+  const encryptionRequested =
+    protection.mode === "encrypted-key-provider" || protection.keyProvider !== undefined;
+  if (!encryptionRequested) return PLAINTEXT_CONTENT_CIPHER;
+  const provider = protection.keyProvider;
+  if (provider === undefined) {
     throw new KnowledgeStoreError(
-      "Encrypted local-knowledge stores are not enabled in this build; refusing to open with a key provider.",
+      "encrypted-key-provider protection requires a keyProvider to resolve the store key",
     );
   }
+  const key = provider.resolveKey({ dbPath: opts.dbPath, schemaVersion });
+  return createEncryptedContentCipher(key);
 }
 
 function currentUserVersion(db: DatabaseSync): number {
@@ -235,7 +257,6 @@ function restrictStoreFilePermissions(dbPath: string): void {
 }
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
-  rejectUnsupportedProtection(opts);
   ensureParentDir(opts.dbPath);
   let db = tryOpenAndMigrate(opts.dbPath);
   let lastError: unknown;
@@ -251,6 +272,17 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
       lastError !== undefined ? { cause: lastError } : undefined,
     );
   }
+  // The cipher binds the key resolved for the migrated schema version. Reconcile the store's on-disk
+  // encryption state before the handle is usable: this seals a legacy plaintext store forward, or
+  // fails closed on a wrong key / missing provider for an already-encrypted store (ADR-0047 D4). A
+  // failure here closes the handle so a half-open store never leaks.
+  const contentCipher = resolveContentCipher(opts, currentUserVersion(db));
+  try {
+    applyStoreContentEncryption(db, contentCipher);
+  } catch (cause) {
+    db.close();
+    throw cause;
+  }
   restrictStoreFilePermissions(opts.dbPath);
   const now = opts.clock ?? defaultClock;
   const handle = db;
@@ -258,6 +290,6 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
     close: (): void => {
       handle.close();
     },
-    _internal: { db: handle, now },
+    _internal: { db: handle, now, contentCipher },
   };
 }

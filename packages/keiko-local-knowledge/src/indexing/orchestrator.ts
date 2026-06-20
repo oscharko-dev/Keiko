@@ -355,6 +355,7 @@ function resolveChunkSourceText(
 ): string {
   const persistedText = readDocumentTextRow(
     state.options.store._internal.db,
+    state.options.store._internal.contentCipher,
     state.capsule.id,
     documentId,
   );
