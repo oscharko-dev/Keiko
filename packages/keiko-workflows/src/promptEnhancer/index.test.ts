@@ -359,3 +359,32 @@ describe("runPromptEnhancement", () => {
     expect(record.candidateScores.every((row) => !row.selected)).toBe(true);
   });
 });
+
+describe("promptEnhancementGatewayRoutingConfig (credential-free routing projection, #1357)", () => {
+  it("returns undefined when no gateway config is present", () => {
+    expect(promptEnhancementGatewayRoutingConfig(undefined)).toBeUndefined();
+  });
+
+  it("drops provider credentials and connection topology, keeping only model ids and capabilities", () => {
+    const config = configWithProvider("example-chat-model");
+    // Sanity: the source config really does carry the secret and endpoint we expect to be stripped.
+    expect(config.providers[0]?.apiKey).toBe("example-test-token-1234567890");
+    expect(config.providers[0]?.baseUrl).toBe("https://provider.example/v1");
+
+    const routing = promptEnhancementGatewayRoutingConfig(config);
+
+    // The projection rebuilds each provider with ONLY a modelId key, so no apiKey, baseUrl, timeout,
+    // retry, or circuit-breaker topology can structurally reach the deterministic workflow run path.
+    expect(routing?.providers).toEqual([{ modelId: "example-chat-model" }]);
+    for (const provider of routing?.providers ?? []) {
+      expect(Object.keys(provider)).toEqual(["modelId"]);
+    }
+    // Non-secret capability metadata is preserved for downstream-dispatch readiness resolution (AC3).
+    expect(routing?.capabilities?.[0]?.id).toBe("example-chat-model");
+
+    // Defense in depth: no credential or endpoint literal survives serialization of the projection.
+    const serialized = JSON.stringify(routing);
+    expect(serialized).not.toContain("example-test-token-1234567890");
+    expect(serialized).not.toContain("provider.example");
+  });
+});
