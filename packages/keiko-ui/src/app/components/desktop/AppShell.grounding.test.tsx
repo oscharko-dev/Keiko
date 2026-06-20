@@ -1,5 +1,6 @@
 import type { ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
@@ -392,6 +393,7 @@ describe("AppShell grounding connections", () => {
   });
 
   it("lets the user dismiss the inline source-limit notice", async () => {
+    const user = userEvent.setup();
     const connectedScopes = Array.from({ length: 8 }, (_unused, index) =>
       fileScope(`/repo-${String(index)}`, index),
     );
@@ -413,9 +415,37 @@ describe("AppShell grounding connections", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("already has 16 of 16 connected sources");
 
-    await act(async () => {
-      screen.getByRole("button", { name: "Dismiss source connection notice" }).click();
+    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
     });
+  });
+
+  it("lets the user dismiss the missing-ready-chat source connection notice", async () => {
+    const user = userEvent.setup();
+    const closedChat = chat({ status: "closed" });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [closedChat],
+      activeChat: closedChat,
+    };
+    await renderMounted();
+
+    let accepted = true;
+    await act(async () => {
+      accepted =
+        (await mocks.state.workspaceOptions?.onConnectorBind?.(
+          "chat-window",
+          capsuleScope("cap-ready"),
+        )) === true;
+    });
+
+    expect(accepted).toBe(false);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Open a ready chat window before connecting a source.");
+
+    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
 
     await waitFor(() => {
       expect(screen.queryByRole("alert")).toBeNull();
