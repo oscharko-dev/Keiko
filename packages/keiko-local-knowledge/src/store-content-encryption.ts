@@ -46,55 +46,62 @@ function writeSchemaMeta(db: DatabaseSync, key: string, value: string): void {
   });
 }
 
+// Collects a table's rowids up front so the seal pass holds at most one row's content in memory at a
+// time, and never UPDATEs the table while a SELECT cursor over it is still open (SQLite does not
+// guarantee a consistent enumeration in that case). rowids are integers, so the collection is tiny
+// relative to the content it gates — the Issue #1286 bounded-memory invariant holds during migration.
+function collectRowIds(db: DatabaseSync, table: string): number[] {
+  const ids: number[] = [];
+  for (const row of db.prepare(`SELECT rowid AS rowid FROM ${table}`).iterate()) {
+    ids.push((row as unknown as { readonly rowid: number }).rowid);
+  }
+  return ids;
+}
+
 interface DocumentTextSweepRow {
-  readonly rowid: number;
   readonly normalized_text: string;
 }
 
-// Seals every TEXT content row that is not already sealed. Idempotent via cipher.isSealed, so a
-// re-run after an interrupted migration only seals the rows it has not reached yet.
+// Seals every TEXT content row that is not already sealed, one row at a time. Idempotent via
+// cipher.isSealed, so a re-run after an interrupted migration only seals the rows it has not reached.
 function sealTextColumn(db: DatabaseSync, table: string, cipher: StoreContentCipher): void {
-  const rows = db
-    .prepare(`SELECT rowid AS rowid, normalized_text FROM ${table}`)
-    .all() as unknown as readonly DocumentTextSweepRow[] | undefined;
-  if (rows === undefined) return;
+  const select = db.prepare(`SELECT normalized_text FROM ${table} WHERE rowid = :id`);
   const update = db.prepare(`UPDATE ${table} SET normalized_text = :t WHERE rowid = :id`);
-  for (const row of rows) {
-    if (cipher.isSealed(row.normalized_text)) continue;
-    update.run({ t: cipher.sealText(row.normalized_text), id: row.rowid });
+  for (const id of collectRowIds(db, table)) {
+    const row = select.get({ id }) as DocumentTextSweepRow | undefined;
+    if (row === undefined || cipher.isSealed(row.normalized_text)) continue;
+    update.run({ t: cipher.sealText(row.normalized_text), id });
   }
 }
 
 interface VectorSweepRow {
-  readonly id: string;
   readonly embedding: Uint8Array;
   readonly vector_dimensions: number;
 }
 
-// Seals every plaintext embedding BLOB. A stored blob whose byte length equals dimensions * 4 is
-// legacy plaintext (Float32 packed) and is sealed; a longer blob is already a sealed envelope and is
-// left untouched, so the sweep is idempotent.
+// Seals every plaintext embedding BLOB, one row at a time. A stored blob whose byte length equals
+// dimensions * 4 is legacy plaintext (Float32 packed) and is sealed; a longer blob is already a sealed
+// envelope and is left untouched, so the sweep is idempotent.
 function sealVectorColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
-  const rows = db
-    .prepare("SELECT id, embedding, vector_dimensions FROM vectors")
-    .all() as unknown as readonly VectorSweepRow[] | undefined;
-  if (rows === undefined) return;
-  const update = db.prepare("UPDATE vectors SET embedding = :e WHERE id = :id");
-  for (const row of rows) {
-    const plaintextByteLength = row.vector_dimensions * BYTES_PER_FLOAT32;
-    if (row.embedding.byteLength !== plaintextByteLength) continue;
-    update.run({ e: cipher.sealVector(row.embedding), id: row.id });
+  const select = db.prepare("SELECT embedding, vector_dimensions FROM vectors WHERE rowid = :id");
+  const update = db.prepare("UPDATE vectors SET embedding = :e WHERE rowid = :id");
+  for (const id of collectRowIds(db, "vectors")) {
+    const row = select.get({ id }) as VectorSweepRow | undefined;
+    if (row === undefined) continue;
+    if (row.embedding.byteLength !== row.vector_dimensions * BYTES_PER_FLOAT32) continue;
+    update.run({ e: cipher.sealVector(row.embedding), id });
   }
 }
 
 function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void {
+  // Phase 1 (transactional): seal every content row and write the sealed key-verification probe. The
+  // completion MARKER is deliberately NOT written here — see phase 2.
   db.exec("BEGIN");
   try {
     sealTextColumn(db, "document_texts", cipher);
     sealTextColumn(db, "document_text_windows", cipher);
     sealVectorColumn(db, cipher);
     writeSchemaMeta(db, ENCRYPTION_PROBE_KEY, cipher.sealText(ENCRYPTION_PROBE_PLAINTEXT));
-    writeSchemaMeta(db, ENCRYPTION_MARKER_KEY, ENCRYPTION_MARKER_VALUE);
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");
@@ -103,11 +110,17 @@ function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void 
       { cause },
     );
   }
-  // After the in-place UPDATEs, plaintext can linger in the WAL and on freed pages. Truncate the WAL
-  // and VACUUM so the rewritten file holds no plaintext extracted text or vector bytes (ADR-0047 D4).
-  // These run outside the transaction; VACUUM cannot run inside one.
+  // Phase 2: after the in-place UPDATEs, plaintext can linger in the WAL and on freed pages. Truncate
+  // the WAL and VACUUM so the rewritten file holds no plaintext extracted text or vector bytes
+  // (ADR-0047 D4). These run outside the transaction; VACUUM cannot run inside one.
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   db.exec("VACUUM");
+  // Phase 3: mark the store encrypted ONLY after the file has been rewritten free of plaintext. If
+  // phase 2 throws (I/O error, disk full), the marker stays unset, this open fails closed, and the
+  // next open re-runs the idempotent migration instead of skipping it over a WAL that still holds
+  // plaintext. The seal sweep is a no-op on the already-sealed rows, so the retry only re-checkpoints
+  // and re-VACUUMs.
+  writeSchemaMeta(db, ENCRYPTION_MARKER_KEY, ENCRYPTION_MARKER_VALUE);
 }
 
 function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {

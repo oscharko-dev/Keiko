@@ -57,6 +57,12 @@ one store cannot open with another's key):
 On non-darwin hosts (e.g. Linux CI) the keychain tier is unavailable and resolution falls through to
 the keyfile tier automatically; no configuration is required.
 
+**Operator guidance for regulated deployments.** The keyfile tier stores the key next to the
+ciphertext, so an attacker who can read the state directory has both halves. For regulated banking and
+insurance deployments, prefer tier 1 (`KEIKO_LOCAL_KNOWLEDGE_KEY`, e.g. injected from a secrets
+manager) or tier 2 (macOS Keychain). The keyfile tier is appropriate only on a single-user developer
+machine or a corporate laptop with full-disk encryption.
+
 ## Migration of existing plaintext stores
 
 Opening a legacy plaintext store with a key provider performs a one-time, crash-aware, idempotent

@@ -20,9 +20,11 @@ import {
   readDocumentTextRow,
   readDocumentTextSpan,
 } from "./discovery/persist.js";
+import { listCapsuleDocumentTexts } from "./qualityIntelligence/capsuleCorpus.js";
+import { searchVectorsForScope } from "./retrieval/scoped-vector-search.js";
 import { openKnowledgeStore, type KnowledgeStoreKeyProvider } from "./store.js";
 import { createEncryptedContentCipher, PLAINTEXT_CONTENT_CIPHER } from "./store-content-cipher.js";
-import { seedCapsuleWithVectors } from "./testing.js";
+import { scriptedAdapter, seedCapsuleWithVectors, type SeedVectorsOptions } from "./testing.js";
 import type { CitationReference } from "@oscharko-dev/keiko-contracts";
 
 const FIXTURE_TEXT =
@@ -144,6 +146,82 @@ describe("fresh encrypted store", () => {
       store.close();
     }
   });
+
+  it("hybrid retrieval over an encrypted store equals retrieval over an identical plaintext store", async () => {
+    // Exercises the full public retrieval API end-to-end under encryption — the vector decode path
+    // (readVectorsForCapsule -> openVector) and the lexical decode path (readLexicalDocuments ->
+    // openText) — and proves encryption is transparent: identical seeds yield byte-identical results.
+    const seedOptions: SeedVectorsOptions = {
+      capsuleId: "cap-enc",
+      sourceId: "src-enc",
+      documentId: "doc-enc",
+      text: "alpha alpha beta beta gamma gamma delta delta epsilon epsilon zeta zeta eta eta",
+    };
+    const query = "alpha gamma epsilon";
+
+    const plainStore = openKnowledgeStore({ dbPath: join(tmp, "plain.db") });
+    let plainResult: readonly { chunkId: string; score: number }[];
+    try {
+      const seeded = await seedCapsuleWithVectors(plainStore, seedOptions);
+      const outcome = await searchVectorsForScope(
+        plainStore,
+        scriptedAdapter(),
+        { capsuleIds: [seeded.capsuleId] },
+        query,
+        { topK: 10 },
+      );
+      plainResult = outcome.references.map((ref) => ({
+        chunkId: String(ref.chunkId),
+        score: ref.score,
+      }));
+    } finally {
+      plainStore.close();
+    }
+
+    const encStore = openKnowledgeStore({
+      dbPath: join(tmp, "enc.db"),
+      protection: encryptedProtection(7),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(encStore, seedOptions);
+      const outcome = await searchVectorsForScope(
+        encStore,
+        scriptedAdapter(),
+        { capsuleIds: [seeded.capsuleId] },
+        query,
+        { topK: 10 },
+      );
+      const encResult = outcome.references.map((ref) => ({
+        chunkId: String(ref.chunkId),
+        score: ref.score,
+      }));
+      expect(encResult.length).toBeGreaterThan(0);
+      expect(encResult).toEqual(plainResult);
+    } finally {
+      encStore.close();
+    }
+  });
+
+  it("QI corpus reader returns decrypted document text on an encrypted store", async () => {
+    const store = openKnowledgeStore({
+      dbPath: join(tmp, "capsules.db"),
+      protection: encryptedProtection(7),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(store);
+      insertDocumentTextRow(
+        store._internal.db,
+        store._internal.contentCipher,
+        seeded.capsuleId,
+        seeded.documentId,
+        FIXTURE_TEXT,
+      );
+      const docs = listCapsuleDocumentTexts(store, seeded.capsuleId);
+      expect(docs).toContainEqual({ documentId: String(seeded.documentId), text: FIXTURE_TEXT });
+    } finally {
+      store.close();
+    }
+  });
 });
 
 describe("legacy plaintext store migration", () => {
@@ -175,11 +253,17 @@ describe("legacy plaintext store migration", () => {
           seeded.documentId,
         ),
       ).toBe(FIXTURE_TEXT);
-      // Vectors survived and are readable (the retrieval decode path validates the plaintext length).
-      const vectorCount = encrypted._internal.db
-        .prepare("SELECT COUNT(*) AS n FROM vectors")
-        .get() as { readonly n: number };
-      expect(vectorCount.n).toBeGreaterThan(0);
+      // Migrated vectors decrypt and drive retrieval: searchVectorsForScope reads them through
+      // readVectorsForCapsule -> openVector, so a non-empty result proves the sealed embeddings were
+      // re-opened to valid Float32 bytes (a wrong-length or undecryptable blob would throw or yield none).
+      const outcome = await searchVectorsForScope(
+        encrypted,
+        scriptedAdapter(),
+        { capsuleIds: [seeded.capsuleId] },
+        "query",
+        { topK: 10 },
+      );
+      expect(outcome.references.length).toBeGreaterThan(0);
     } finally {
       encrypted.close();
     }
