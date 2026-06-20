@@ -45,6 +45,25 @@ export type PostApplyVerificationPort = (
   args: PostApplyVerificationArgs,
 ) => Promise<PostApplyVerificationResult>;
 
+export interface PostApplyVerificationPreflightArgs {
+  readonly realRoot: string;
+  // Workspace-relative paths that would be verified if the patch is written.
+  readonly appliedTestFiles: readonly string[];
+}
+
+export type PostApplyVerificationPreflightResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly summary: EditorPatchVerificationSummary;
+      readonly command: string;
+    };
+
+/** Injectable pre-write verification preflight port. */
+export type PostApplyVerificationPreflightPort = (
+  args: PostApplyVerificationPreflightArgs,
+) => Promise<PostApplyVerificationPreflightResult>;
+
 const ENV_ALLOWLIST_COUNT = DEFAULT_SANDBOX_POLICY.envAllowlist.length;
 
 function bounds(): EditorPatchVerificationSummary["bounds"] {
@@ -72,7 +91,7 @@ export function notRunVerificationSummary(): EditorPatchVerificationSummary {
   };
 }
 
-/** The summary for a verification explicitly skipped by configured policy (`verify: false`). */
+/** The summary for a verification explicitly skipped by configured deployment policy. */
 export function skippedVerificationSummary(): EditorPatchVerificationSummary {
   return {
     outcome: "skipped",
@@ -89,9 +108,30 @@ export function skippedVerificationSummary(): EditorPatchVerificationSummary {
   };
 }
 
+/** The summary for a verification denied before patch application because egress cannot be enforced. */
+export function deniedVerificationSummary(): EditorPatchVerificationSummary {
+  return {
+    outcome: "denied",
+    networkEnforced: false,
+    sandboxBackend: "none",
+    stepCount: 0,
+    passed: 0,
+    failed: 0,
+    durationMs: 0,
+    bounds: bounds(),
+    preApply: true,
+    secretsRedacted: true,
+    detail: "No enforcing sandbox backend is available on this host; the patch was not applied.",
+  };
+}
+
 interface NetworkIsolationProbe {
   readonly available: boolean;
   readonly backend: string;
+}
+
+function isRunnableTestFramework(workspace: WorkspaceInfo): boolean {
+  return workspace.testFramework === "vitest" || workspace.testFramework === "jest";
 }
 
 // Probes whether THIS host can enforce a deny-by-default network-egress boundary for a run rooted at
@@ -171,6 +211,16 @@ function verificationCommand(workspace: WorkspaceInfo): string {
   return "none";
 }
 
+export function requiresPostApplyVerificationPreflight(
+  workspace: WorkspaceInfo,
+  appliedTestFiles: readonly string[],
+): boolean {
+  if (!isRunnableTestFramework(workspace)) {
+    return false;
+  }
+  return appliedTestFiles.length > 0;
+}
+
 // The route's default post-apply verification: plan a targeted-test step for the applied files, then run
 // it through the orchestrator with enforced, fail-closed egress isolation.
 export const defaultPostApplyVerification: PostApplyVerificationPort = async (args) => {
@@ -190,4 +240,18 @@ export const defaultPostApplyVerification: PostApplyVerificationPort = async (ar
     },
   );
   return { summary: toSummary(report, probe), command: verificationCommand(workspace) };
+};
+
+// Preflight the same isolation control before any workspace write. If no targeted test would run, the
+// route may apply and report `not-run` post-apply; otherwise an unenforced host fails closed before write.
+export const defaultPostApplyVerificationPreflight: PostApplyVerificationPreflightPort = (args) => {
+  const workspace = detectWorkspaceAt(args.realRoot, nodeWorkspaceFs);
+  if (!requiresPostApplyVerificationPreflight(workspace, args.appliedTestFiles)) {
+    return Promise.resolve({ ok: true });
+  }
+  const probe = probeNetworkIsolation(args.realRoot);
+  if (probe.available) {
+    return Promise.resolve({ ok: true });
+  }
+  return Promise.resolve({ ok: false, summary: deniedVerificationSummary(), command: "none" });
 };

@@ -76,6 +76,7 @@ export {
 // ─── Patch workflow ─────────────────────────────────────────────────────────────────
 export {
   applyPatch,
+  buildRestorePatch,
   invertPatch,
   renderDryRun,
   validatePatch,

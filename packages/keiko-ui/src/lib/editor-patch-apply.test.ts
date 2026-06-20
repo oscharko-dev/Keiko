@@ -75,6 +75,15 @@ describe("mapWireToPatchApplyView", () => {
     expect(view.headline).toContain("revert");
   });
 
+  it("maps a failed verification without a revert proposal without promising one", () => {
+    const view = mapWireToPatchApplyView(
+      applied({ verification: summary({ outcome: "failed", passed: 0, failed: 1 }) }),
+    );
+    expect(view.tone).toBe("warning");
+    expect(view.revert).toBeUndefined();
+    expect(view.headline).not.toContain("revert");
+  });
+
   it("maps a denied verification to a warning tone without a revert", () => {
     const view = mapWireToPatchApplyView(
       applied({ verification: summary({ outcome: "denied", networkEnforced: false }) }),
@@ -125,7 +134,6 @@ describe("requestEditorPatchApply", () => {
       patchId: "p1",
       decision: "apply",
       diff: "DIFF",
-      verify: false,
     });
     expect(response.status).toBe("disabled");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -133,6 +141,7 @@ describe("requestEditorPatchApply", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: expect.not.stringContaining("verify"),
       }),
     );
   });
@@ -140,20 +149,19 @@ describe("requestEditorPatchApply", () => {
 
 describe("buildPatchApplyInput / buildRevertApplyInput", () => {
   it("builds an apply request from a reviewed candidate's diff", () => {
-    const input = buildPatchApplyInput("/repo", "p1", "DIFF", "apply", { verify: false });
+    const input = buildPatchApplyInput("/repo", "p1", "DIFF", "apply", { allowOverwrite: true });
     expect(input).toEqual({
       root: "/repo",
       patchId: "p1",
       decision: "apply",
       diff: "DIFF",
-      verify: false,
+      allowOverwrite: true,
     });
   });
 
   it("omits absent optional fields", () => {
     const input = buildPatchApplyInput("/repo", "p1", "DIFF", "reject");
     expect("allowOverwrite" in input).toBe(false);
-    expect("verify" in input).toBe(false);
   });
 
   it("builds a revert re-apply request from a guarded revert proposal", () => {

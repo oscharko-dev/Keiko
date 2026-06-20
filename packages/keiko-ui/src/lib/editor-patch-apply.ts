@@ -54,7 +54,7 @@ function verificationLabel(outcome: EditorPatchVerificationOutcome): string {
     case "passed":
       return "Verification passed under enforced isolation.";
     case "failed":
-      return "Verification failed. Review the change and the revert proposal.";
+      return "Verification failed. Review the change before taking follow-up action.";
     case "denied":
       return "Verification could not run: no enforced sandbox is available on this host.";
     case "skipped":
@@ -75,7 +75,10 @@ function toVerificationView(summary: EditorPatchVerificationSummary): PatchApply
   };
 }
 
-function appliedHeadline(summary: EditorPatchVerificationSummary | undefined): {
+function appliedHeadline(
+  summary: EditorPatchVerificationSummary | undefined,
+  hasRevertProposal: boolean,
+): {
   readonly headline: string;
   readonly tone: PatchApplyTone;
 } {
@@ -84,7 +87,9 @@ function appliedHeadline(summary: EditorPatchVerificationSummary | undefined): {
   }
   if (summary.outcome === "failed") {
     return {
-      headline: "Patch applied, but verification failed. A revert proposal is available.",
+      headline: hasRevertProposal
+        ? "Patch applied, but verification failed. A revert proposal is available."
+        : "Patch applied, but verification failed. Review the change before taking follow-up action.",
       tone: "warning",
     };
   }
@@ -109,7 +114,10 @@ function rejectionHeadline(rejections: readonly EditorPatchApplyRejection[]): st
 export function mapWireToPatchApplyView(wire: EditorPatchApplyWireResponse): PatchApplyView {
   const base = { status: wire.status, patchId: wire.patchId, rejections: wire.rejections ?? [] };
   if (wire.status === "applied") {
-    const { headline, tone } = appliedHeadline(wire.verification);
+    const { headline, tone } = appliedHeadline(
+      wire.verification,
+      wire.revertProposal !== undefined,
+    );
     return {
       ...base,
       headline,
@@ -135,7 +143,6 @@ export function mapWireToPatchApplyView(wire: EditorPatchApplyWireResponse): Pat
 
 export interface PatchApplyDecisionOptions {
   readonly allowOverwrite?: boolean;
-  readonly verify?: boolean;
 }
 
 /** Builds the apply/reject request from a reviewed candidate's id and reviewable diff (Issue #1204). */
@@ -152,7 +159,6 @@ export function buildPatchApplyInput(
     decision,
     diff: applyableDiff,
     ...(options.allowOverwrite === undefined ? {} : { allowOverwrite: options.allowOverwrite }),
-    ...(options.verify === undefined ? {} : { verify: options.verify }),
   };
 }
 

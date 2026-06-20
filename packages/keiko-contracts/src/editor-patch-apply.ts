@@ -53,9 +53,6 @@ export interface EditorPatchApplyWireRequest {
   // Explicit user confirmation to overwrite an existing target file. Absent/false → a candidate that
   // would create a file which already exists is rejected (Issue #1204 AC7/AC14: no silent overwrite).
   readonly allowOverwrite?: boolean;
-  // Whether to run post-apply verification. Defaults to true (verification runs after apply by default);
-  // set false ONLY to express an explicit policy decision to skip it (both branches are covered by tests).
-  readonly verify?: boolean;
 }
 
 // ─── Outcome ─────────────────────────────────────────────────────────────────────────────────────
@@ -107,7 +104,7 @@ export interface EditorPatchApplyChangeCounts {
 // The outcome of the post-apply verification run.
 //   - "passed"  — every step passed (or was legitimately skipped).
 //   - "failed"  — at least one step failed; a guarded revert proposal accompanies the response (AC5).
-//   - "skipped" — verification was explicitly disabled by policy (`verify: false`).
+//   - "skipped" — verification was explicitly disabled by deployment policy.
 //   - "denied"  — egress isolation was required but no enforcing backend was available, so the untrusted
 //                 test code was NOT executed (fail-closed; AC8/AC12).
 //   - "not-run" — no targeted test could be resolved for the applied files.
@@ -176,7 +173,8 @@ export interface EditorPatchApplyEvidenceRefs {
 export interface EditorPatchApplyWireResponse {
   readonly schemaVersion: typeof EDITOR_PATCH_APPLY_SCHEMA_VERSION;
   readonly status: EditorPatchApplyStatus;
-  // Echoes the request `patchId` so the editor can correlate the response with the reviewed proposal.
+  // Echoes the request `patchId` after request parsing. Disabled responses short-circuit before body
+  // parsing and use the stable sentinel `"disabled"` instead.
   readonly patchId: string;
   // A stable, content-free, human-readable explanation. Present for disabled/failed/rejected.
   readonly reason?: string;
@@ -211,6 +209,10 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isOpaquePatchId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{32}$/u.test(value);
+}
+
 function isDecision(value: unknown): value is EditorPatchApplyDecision {
   return value === "apply" || value === "reject";
 }
@@ -227,9 +229,6 @@ function collectOptionalFlagErrors(value: Record<string, unknown>, errors: strin
   if (value.allowOverwrite !== undefined && typeof value.allowOverwrite !== "boolean") {
     errors.push("allowOverwrite must be a boolean when provided");
   }
-  if (value.verify !== undefined && typeof value.verify !== "boolean") {
-    errors.push("verify must be a boolean when provided");
-  }
 }
 
 function collectRequestErrors(value: Record<string, unknown>): string[] {
@@ -240,8 +239,8 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
   }
-  if (!isNonEmptyString(value.patchId)) {
-    errors.push("patchId must be a non-empty string");
+  if (!isOpaquePatchId(value.patchId)) {
+    errors.push("patchId must be a 32-character lowercase hex string");
   }
   if (!isDecision(value.decision)) {
     errors.push("decision must be one of: apply, reject");
@@ -272,7 +271,6 @@ export function parseEditorPatchApplyRequest(value: unknown): EditorPatchApplyPa
       ...(typeof value.allowOverwrite === "boolean"
         ? { allowOverwrite: value.allowOverwrite }
         : {}),
-      ...(typeof value.verify === "boolean" ? { verify: value.verify } : {}),
     },
   };
 }
