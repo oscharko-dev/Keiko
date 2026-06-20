@@ -182,6 +182,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "localKnowledge",
   "figma",
   "quality",
+  "promptEnhancer",
   "relationships",
 ];
 
@@ -675,12 +676,7 @@ function AppShellInner(): ReactNode {
               />
             )}
             <div className="stage" id="main" tabIndex={-1}>
-              <Workspace
-                ws={ws}
-                wsRef={wsRef}
-                openPalette={openPalette}
-                palette={paletteNode}
-              />
+              <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
               {sourceConnectionNotice !== null && (
@@ -697,9 +693,7 @@ function AppShellInner(): ReactNode {
                 </div>
               )}
             </div>
-            {needsGatewaySetup ? null : (
-              <RightRail openTools={openTools} onTool={onTool} />
-            )}
+            {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
           </div>
           <Footer
             winCount={winCount}

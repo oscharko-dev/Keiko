@@ -12,6 +12,7 @@ export { runGenTestsCli } from "./gen-tests.js";
 export { runInvestigateCli } from "./investigate.js";
 export { runVerifyCli } from "./verify.js";
 export { runEvaluateCli, type EvaluateDeps } from "./evaluate.js";
+export { runPromptEnhancerCli, type PromptEnhancerCliDeps } from "./prompt-enhancer.js";
 export { runEvidenceCli } from "./evidence.js";
 export { runContextCli } from "./context.js";
 export { runModelsCli } from "./models.js";

@@ -1069,3 +1069,24 @@ export interface BrowserEventEnvelope {
   readonly sessionId: string;
   readonly payload: Readonly<Record<string, unknown>>;
 }
+
+// ─── Prompt Enhancer BFF wire surface (Epic #1307 / Issue #1314) ───────────────────
+// Re-exported here so UI surfaces import the prompt-enhancement request/response envelope from the
+// canonical `@oscharko-dev/keiko-contracts/bff-wire` subpath alongside the other BFF wire entities.
+// The shapes and the pure request validator live in `prompt-enhancer-bff.ts`.
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementModelRouting,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementWireResponse,
+} from "./prompt-enhancer-bff.js";
+export {
+  PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS,
+  PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS,
+  PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES,
+  validatePromptEnhancementWireRequest,
+} from "./prompt-enhancer-bff.js";
