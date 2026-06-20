@@ -22,6 +22,13 @@ so the vendored DOMPurify sink (D3.7) only ever processes HTML-escaped text. No 
 diagnostics, hover, symbols, and formatting are Monaco-provider bridges to the server language
 service; the in-browser worker stays disabled for governed features.
 
+Amended 2026-06-20 for Issue [#1213](https://github.com/oscharko-dev/Keiko/issues/1213): the staged
+multi-language expansion this ADR defers (Out of Scope; D4 and Alternatives "reconsider … after
+dependency review") is now planned in [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md) and
+its companion blueprint. ADR-0045 performs the dependency review and records the server-side
+out-of-process LSP decision, the staged rollout order, and the per-language security model; it relaxes
+nothing in this ADR.
+
 ## Date
 
 2026-06-18
@@ -141,7 +148,7 @@ is required). It is the single governed source of truth for completion, diagnost
 and quick info. The in-browser Monaco `ts.worker` is **disabled for governed features** and provides
 only local tokenization/bracket-matching/colouring. Where both could answer, the server language
 service wins for anything recorded, audited, or model-augmented. `monaco-languageclient` is **not
-adopted by default**; reconsider only for an out-of-process LSP bridge (#1213) after dependency review.
+adopted by default**; reconsider only for an out-of-process LSP bridge (#1213) after dependency review — now performed in [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md).
 
 ### D5 — All completion and generated output is governed; FIM is a Model Gateway extension
 
@@ -232,7 +239,7 @@ patches without explicit local action.
 - Implementing editor components, server endpoints, or applying generated code (owned by #1191–#1213).
 - Running arbitrary VS Code extensions; browser-side direct model calls; live writes to external
   test-management systems.
-- Multi-language deterministic LSP providers and their test stacks (#1213, P2, deferred).
+- Multi-language deterministic LSP providers and their test stacks — now planned in [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md) (#1213, P2).
 - Native installers (Electron/Tauri) — unchanged from ADR-0024.
 
 ## Alternatives Considered
@@ -244,7 +251,7 @@ patches without explicit local action.
   ungoverned, single-file, and would create a second answer path that bypasses audit and
   model-boundary governance. It is kept only for cosmetic local tokenization.
 - **Adopt `monaco-languageclient` now.** Rejected for v1: Monaco's bundled workers + the server
-  language service cover TS/JS without LSP/JSON-RPC plumbing; revisit for out-of-process LSP (#1213).
+  language service cover TS/JS without LSP/JSON-RPC plumbing; revisit for out-of-process LSP (#1213, now planned in [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md)).
 - **`monaco-editor-webpack-plugin` for worker bundling.** Rejected: incompatible with Next.js 16
   Turbopack; ESM worker wiring is used instead.
 - **Enable editor-driven test execution in v1.** Rejected: untrusted-code execution without enforced
@@ -258,6 +265,7 @@ patches without explicit local action.
 - ADR-0029 (Workspace object registry and extension contract)
 - ADR-0038 (Shared proxy- and custom-CA-aware outbound HTTP egress)
 - Epic #1189; Issue #1190 (this ADR + the companion blueprint); Issues #1191–#1213
+- [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md) and [docs/planning/keiko-editor-multi-language-expansion.md](../planning/keiko-editor-multi-language-expansion.md) (staged multi-language expansion; realises the #1213 deferral)
 - `docs/planning/keiko-editor-architecture-blueprint.md`
 - `docs/security-and-audit-boundaries.md`
 - Monaco Editor 0.55.1 (MIT); `@monaco-editor/react` 4.7.0 (MIT); Monaco ESM worker integration; LSP
