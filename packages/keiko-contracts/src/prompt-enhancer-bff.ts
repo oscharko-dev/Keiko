@@ -92,7 +92,8 @@ export type PromptEnhancementModelRoutingReason =
   | "no-model-requested"
   | "model-available"
   | "no-gateway-config"
-  | "model-not-configured";
+  | "model-not-configured"
+  | "model-not-chat-capable";
 
 export interface PromptEnhancementModelRouting {
   readonly availability: PromptEnhancementModelAvailability;
@@ -116,6 +117,42 @@ export interface PromptEnhancementCandidateComparison {
   readonly scorecards: readonly PromptCandidateScorecard[];
   // Candidates dropped before or during scoring, each with its content-free reason.
   readonly rejected: readonly PromptCandidateRejection[];
+}
+
+// ─── Grounding readiness ───────────────────────────────────────────────────────────
+// Content-free readiness binding for the grounding plan. It never carries source excerpts or private
+// context, only whether the server saw concrete connected-context metadata for a prompt whose plan
+// requires grounding.
+export type PromptEnhancementGroundingReadinessStatus = "not-required" | "ready" | "unavailable";
+
+export type PromptEnhancementGroundingReadinessReason =
+  | "no-grounding-required"
+  | "connected-context-present"
+  | "missing-concrete-scope";
+
+export interface PromptEnhancementGroundingReadiness {
+  readonly status: PromptEnhancementGroundingReadinessStatus;
+  readonly reason: PromptEnhancementGroundingReadinessReason;
+  readonly notice?: string;
+}
+
+// ─── Evidence reference ────────────────────────────────────────────────────────────
+// A browser-safe pointer to the persisted Prompt Enhancement evidence manifest. The manifest itself is
+// served through the PE-specific evidence route; this reference carries only ids, schema/version, and
+// integrity metadata.
+export type PromptEnhancementEvidenceReferenceStatus = "recorded" | "not-recorded";
+export type PromptEnhancementEvidenceReferenceReason =
+  | "evidence-recorded"
+  | "evidence-store-not-configured";
+
+export interface PromptEnhancementEvidenceReference {
+  readonly status: PromptEnhancementEvidenceReferenceStatus;
+  readonly reason: PromptEnhancementEvidenceReferenceReason;
+  readonly runId?: string;
+  readonly manifestUrl?: string;
+  readonly manifestLocation?: string;
+  readonly peEvidenceSchemaVersion?: number;
+  readonly recordIntegritySha256?: string;
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────────────
@@ -145,6 +182,10 @@ export interface PromptEnhancementWireResponse {
   readonly safety: PromptSafetyAssessment;
   // The Model-Gateway readiness/routing descriptor for the optional downstream-dispatch model (AC3).
   readonly modelRouting: PromptEnhancementModelRouting;
+  // Content-free readiness state for required grounding against connected-context metadata.
+  readonly groundingReadiness: PromptEnhancementGroundingReadiness;
+  // Content-free pointer to persisted audit evidence when a BFF or CLI surface records it.
+  readonly evidence: PromptEnhancementEvidenceReference;
 }
 
 // ─── Pure request validator ────────────────────────────────────────────────────────────

@@ -1080,6 +1080,10 @@ export type {
   PromptEnhancementModelRoutingReason,
   PromptEnhancementModelRouting,
   PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
   PromptEnhancementWireResponse,
 } from "./prompt-enhancer-bff.js";
 export {

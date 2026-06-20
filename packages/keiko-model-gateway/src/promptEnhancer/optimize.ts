@@ -14,6 +14,7 @@
 // Determinism: pure. No IO, clock, or randomness. Identical inputs always yield an identical selection.
 
 import {
+  type EnhancedPrompt,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   type PromptCandidateRejection,
@@ -221,6 +222,22 @@ function rankedSafetyAssessmentsFor(
   });
 }
 
+function rankedPromptsFor(
+  ranked: readonly PromptCandidateScorecard[],
+  candidates: readonly ScreenedPromptCandidate[],
+): readonly EnhancedPrompt[] {
+  const promptByCandidateId = new Map<string, EnhancedPrompt>(
+    candidates.map(({ candidate }) => [candidate.candidateId, candidate.prompt]),
+  );
+  return ranked.map((card) => {
+    const prompt = promptByCandidateId.get(card.candidateId);
+    if (prompt === undefined) {
+      throw new Error("Prompt candidate optimization lost prompt for ranked candidate.");
+    }
+    return prompt;
+  });
+}
+
 /**
  * Generate, score, rank, and select the best Enhanced Prompt candidate under the configured bounds.
  * Pure. Returns the winning scorecard, every scored candidate in deterministic rank order (winner
@@ -259,11 +276,13 @@ export function optimizePromptCandidates(
   if (winnerSafetyAssessment === undefined) {
     throw new Error("Prompt candidate optimization produced no safety assessment.");
   }
+  const rankedPrompts = rankedPromptsFor(ranked, safetyScreen.safe);
 
   return {
     schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
     winner,
     ranked,
+    rankedPrompts,
     winnerSafetyAssessment,
     rankedSafetyAssessments,
     rejected: [

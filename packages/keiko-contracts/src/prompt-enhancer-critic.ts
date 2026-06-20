@@ -16,6 +16,7 @@
 
 import {
   PROMPT_ENHANCER_SCHEMA_VERSION,
+  type EnhancedPrompt,
   type PromptEnhancementProfileId,
 } from "./prompt-enhancer.js";
 import type { PromptSafetyAssessment } from "./prompt-enhancer-safety.js";
@@ -131,6 +132,7 @@ export interface PromptCandidateSelection {
   readonly schemaVersion: typeof PROMPT_ENHANCER_SCHEMA_VERSION;
   readonly winner: PromptCandidateScorecard;
   readonly ranked: readonly PromptCandidateScorecard[];
+  readonly rankedPrompts: readonly EnhancedPrompt[];
   readonly winnerSafetyAssessment: PromptSafetyAssessment;
   readonly rankedSafetyAssessments: readonly PromptSafetyAssessment[];
   readonly rejected: readonly PromptCandidateRejection[];

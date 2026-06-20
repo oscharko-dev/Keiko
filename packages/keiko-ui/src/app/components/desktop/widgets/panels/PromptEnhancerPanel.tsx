@@ -107,7 +107,12 @@ function ModelRoutingBanner({
         ? "Selected model unavailable — enhancement still completed deterministically"
         : "No downstream model selected — enhancement is provider-neutral";
   return (
-    <p className={`pe-routing pe-routing-${tone}`} data-testid="pe-model-routing">
+    <p
+      className={`pe-routing pe-routing-${tone}`}
+      data-testid="pe-model-routing"
+      role="status"
+      aria-live="polite"
+    >
       {label}
     </p>
   );
@@ -155,11 +160,27 @@ function SafetyPanel({
 
 function GroundingPanel({
   plan,
+  readiness,
 }: {
   readonly plan: PromptEnhancementWireResponse["enhancedPrompt"]["groundingPlan"];
+  readonly readiness: PromptEnhancementWireResponse["groundingReadiness"];
 }): ReactNode {
+  const readinessText =
+    readiness.status === "ready"
+      ? "Grounding readiness: connected context available"
+      : readiness.status === "unavailable"
+        ? `Grounding readiness: unavailable${readiness.notice === undefined ? "" : ` — ${readiness.notice}`}`
+        : "Grounding readiness: not required";
   return (
     <Section title="Grounding plan">
+      <p
+        className={`pe-grounding-readiness pe-grounding-readiness-${readiness.status}`}
+        data-testid="pe-grounding-readiness"
+        role={readiness.status === "unavailable" ? "alert" : "status"}
+        aria-live="polite"
+      >
+        {readinessText}
+      </p>
       <p className="pe-grounding-meta">
         Strategy: <strong>{plan.strategy}</strong> · {plan.required ? "required" : "optional"} ·
         citations: {plan.citation.discipline} ({plan.citation.granularity})
@@ -179,6 +200,36 @@ function GroundingPanel({
       ) : null}
       <StringList items={[...plan.directives]} />
     </Section>
+  );
+}
+
+function EvidencePanel({
+  evidence,
+  fingerprint,
+}: {
+  readonly evidence: PromptEnhancementWireResponse["evidence"];
+  readonly fingerprint: string;
+}): ReactNode {
+  return (
+    <p className="pe-evidence" data-testid="pe-evidence">
+      Evidence fingerprint: {fingerprint.slice(0, 16)}…
+      {evidence.status === "recorded" && evidence.runId !== undefined ? (
+        <>
+          {" "}
+          Manifest:{" "}
+          <a
+            href={evidence.manifestUrl ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Prompt enhancement evidence manifest ${evidence.runId}`}
+          >
+            {evidence.runId}
+          </a>
+        </>
+      ) : (
+        " Manifest not recorded."
+      )}
+    </p>
   );
 }
 
@@ -284,6 +335,7 @@ export function PromptEnhancerPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const draftId = useId();
@@ -322,6 +374,7 @@ export function PromptEnhancerPanel({
     setLoading(true);
     setError(null);
     setCopied(false);
+    setCopyStatus(null);
     const body: PromptEnhancementWireRequest = {
       text,
       missingInformationStrategy: strategy === "assume" ? "assume" : "clarify",
@@ -346,9 +399,15 @@ export function PromptEnhancerPanel({
 
   const handleCopy = useCallback(async (): Promise<void> => {
     if (result === null) return;
+    const writeText = navigator.clipboard?.writeText;
+    if (writeText === undefined) {
+      setError("Clipboard is not available in this browser.");
+      return;
+    }
     try {
-      await navigator.clipboard?.writeText(result.renderedPrompt);
+      await writeText.call(navigator.clipboard, result.renderedPrompt);
       setCopied(true);
+      setCopyStatus("Rendered prompt copied to clipboard.");
     } catch {
       setError("Could not copy to the clipboard.");
     }
@@ -433,6 +492,11 @@ export function PromptEnhancerPanel({
         >
           {loading ? "Enhancing…" : "Enhance prompt"}
         </button>
+        {loading ? (
+          <p className="pe-status" role="status" aria-live="polite">
+            Enhancing prompt…
+          </p>
+        ) : null}
       </div>
 
       {error !== null ? (
@@ -451,7 +515,10 @@ export function PromptEnhancerPanel({
 
           <SafetyPanel safety={result.safety} />
           <EnhancedPromptSections result={result} />
-          <GroundingPanel plan={result.enhancedPrompt.groundingPlan} />
+          <GroundingPanel
+            plan={result.enhancedPrompt.groundingPlan}
+            readiness={result.groundingReadiness}
+          />
           <CandidateScorecards candidates={result.candidates} />
 
           <Section title="Rendered prompt">
@@ -466,14 +533,17 @@ export function PromptEnhancerPanel({
                   void handleCopy();
                 }}
               >
-                {copied ? "Copied" : "Copy rendered prompt"}
+                Copy rendered prompt
               </button>
             </div>
+            {copied && copyStatus !== null ? (
+              <p className="pe-status" role="status" aria-live="polite">
+                {copyStatus}
+              </p>
+            ) : null}
           </Section>
 
-          <p className="pe-evidence">
-            Evidence fingerprint: {result.inputFingerprintSha256.slice(0, 16)}…
-          </p>
+          <EvidencePanel evidence={result.evidence} fingerprint={result.inputFingerprintSha256} />
         </div>
       ) : null}
     </div>

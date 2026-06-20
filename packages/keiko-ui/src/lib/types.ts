@@ -178,6 +178,10 @@ export type {
   PromptEnhancementModelAvailability,
   PromptEnhancementModelRoutingReason,
   PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type { ExpectedCheck, WorkflowKind } from "@oscharko-dev/keiko-contracts/workflow-handoff";

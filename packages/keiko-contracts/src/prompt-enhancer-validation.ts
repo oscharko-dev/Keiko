@@ -827,6 +827,7 @@ const SELECTION_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
   "winner",
   "ranked",
+  "rankedPrompts",
   "winnerSafetyAssessment",
   "rankedSafetyAssessments",
   "rejected",
@@ -1083,6 +1084,33 @@ function collectRankedErrors(ranked: unknown, winner: unknown, errors: string[])
   });
 }
 
+function collectRankedPromptErrors(
+  ranked: unknown,
+  rankedPrompts: unknown,
+  errors: string[],
+): void {
+  if (!Array.isArray(rankedPrompts)) {
+    errors.push("selection.rankedPrompts must be an array");
+    return;
+  }
+  if (Array.isArray(ranked) && rankedPrompts.length !== ranked.length) {
+    errors.push("selection.rankedPrompts must match selection.ranked length");
+  }
+  rankedPrompts.forEach((entry: unknown, index) => {
+    const result = validateEnhancedPrompt(entry);
+    if (!result.ok) {
+      errors.push(`selection.rankedPrompts[${String(index)}] must be a valid EnhancedPrompt`);
+      return;
+    }
+    const rankedEntry = Array.isArray(ranked) ? toValidScorecard(ranked[index]) : undefined;
+    if (rankedEntry !== undefined && result.value.promptId !== rankedEntry.candidateId) {
+      errors.push(
+        `selection.rankedPrompts[${String(index)}].promptId must match the ranked candidateId`,
+      );
+    }
+  });
+}
+
 function collectRankedSafetyAssessmentListErrors(
   ranked: unknown,
   assessments: unknown,
@@ -1240,6 +1268,7 @@ export function validatePromptCandidateSelection(
   }
   collectScorecardErrors(input.winner, "selection.winner", errors);
   collectRankedErrors(input.ranked, input.winner, errors);
+  collectRankedPromptErrors(input.ranked, input.rankedPrompts, errors);
   collectRankedSafetyAssessmentErrors(input, errors);
   collectRejectedListErrors(input.rejected, errors);
   collectBoundsErrors(input.bounds, errors);
