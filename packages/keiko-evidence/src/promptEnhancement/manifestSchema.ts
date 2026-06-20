@@ -94,9 +94,10 @@ export interface PromptEnhancementManifestTotals {
 // Invariants the builder enforces:
 // - `peEvidenceSchemaVersion` is the current schema literal.
 // - Every free-text leaf has already been passed through the security redactor.
-// - No raw secret reaches this shape: the original input is a SHA-256 fingerprint + a redacted excerpt;
-//   the enhanced output and applied rules are redacted strings; everything else is ids / enums /
-//   numbers.
+// - No unredacted secret reaches this shape: the original input is a stable SHA-256 fingerprint plus a
+//   redacted, truncated excerpt. Non-secret prompt text may remain in that excerpt, so the manifest is
+//   redacted evidence rather than anonymous telemetry. The enhanced output and applied rules are
+//   redacted strings; everything else is ids / enums / numbers.
 // - `totals` MUST match the lengths of the corresponding collections (asserted on read).
 // - `integrityHashes` MUST match the SHA-256 of the redacted groups (asserted on read).
 export interface PromptEnhancementEvidenceManifest {
@@ -105,7 +106,7 @@ export interface PromptEnhancementEvidenceManifest {
   readonly recordedAt: string;
   readonly requestId: string;
   readonly status: PromptEnhancementEvidenceStatus;
-  // Original input (AC4): a stable fingerprint plus a redacted, truncated excerpt — never raw text.
+  // Original input (AC4): a stable fingerprint plus a redacted, truncated excerpt.
   readonly inputRedactedFingerprintSha256: string;
   readonly inputExcerptRedacted: string;
   // Enhanced output (AC4): the selected prompt id + a redacted rendered view.

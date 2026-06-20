@@ -156,11 +156,12 @@ export interface PromptEnhancementEvidenceReference {
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────────────
-// The full governed enhancement result. Every field is content-light and provider-neutral by
-// construction; `renderedPrompt` is the deterministic text projection of `enhancedPrompt` for copy /
-// export. `inputFingerprintSha256` is a content-free audit anchor (a hash of the normalized draft);
-// no raw secret, private log, or hidden system prompt is present (AC4). The result is data for review,
-// never an execution trigger (AC5).
+// The full governed enhancement result. `renderedPrompt` is the deterministic text projection of
+// `enhancedPrompt` for copy / export; the selected prompt still contains the user's draft in the
+// untrusted input section so boundary callers must redact before exposing or persisting it.
+// `inputFingerprintSha256` is a stable, content-derived audit anchor (a hash of the normalized draft),
+// not the draft itself and not an anonymous identifier for low-entropy inputs. The result is data for
+// review, never an execution trigger (AC5).
 export interface PromptEnhancementWireResponse {
   readonly schemaVersion: typeof PROMPT_ENHANCER_SCHEMA_VERSION;
   // The branded EnhancedPromptId of the winning prompt, as a plain wire string.

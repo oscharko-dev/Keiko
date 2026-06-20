@@ -232,6 +232,19 @@ describe("POST /api/prompt-enhancement", () => {
     expect(rawText).toContain("[REDACTED]");
   });
 
+  it("returns a controlled rejected response for safety-critical advice", async () => {
+    const res = await post({
+      text: "What medication should I take for chest pain before I can see a doctor?",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PromptEnhancementWireResponse;
+    expect(body.analysis.taskClass).toBe("safety-critical");
+    expect(body.safety.decision).toBe("rejected");
+    expect(body.safety.verificationStatus).toBe("failed");
+    expect(body.candidates.winnerCandidateId).toBe(body.promptId);
+    expect(body.renderedPrompt).toContain("## Safety rules");
+  });
+
   it("returns 400 for an invalid PE evidence run id", async () => {
     const evidenceDir = mkdtempSync(join(tmpdir(), "keiko-pe-evidence-bad-id-"));
     await closeServer();

@@ -59,7 +59,8 @@ export interface PromptEnhancementRecordInput {
   readonly recordedAt: string;
   readonly requestId: string;
   readonly status: PromptEnhancementEvidenceStatus;
-  // The original, untrusted user input. Fingerprinted (SHA-256) and stored only as a redacted excerpt.
+  // The original, untrusted user input. Represented in evidence as a SHA-256 fingerprint plus a
+  // redacted, truncated excerpt.
   readonly originalInput: string;
   readonly inputExcerptMaxChars?: number | undefined;
   readonly enhancedPromptId: string;

@@ -98,9 +98,10 @@ capabilities:
   assessment.
 - **Evidence** — `keiko-evidence` `PromptEnhancement` writes a versioned, redacted, integrity-hashed
   manifest (`recordPromptEnhancementRun`) following the Quality Intelligence template
-  (record → redact → hash → validate → write). The original draft is stored only as a SHA-256
-  fingerprint plus a redacted, truncated excerpt — never raw text (AC4 of #1313). Current manifest
-  schema: `PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 2`.
+  (record → redact → hash → validate → write). The original draft is represented as a stable SHA-256
+  fingerprint plus a redacted, truncated excerpt; non-secret prompt text may remain in that excerpt, so
+  it is redacted evidence rather than anonymous telemetry. Current manifest schema:
+  `PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 2`.
 
 ## 5. Extension points
 

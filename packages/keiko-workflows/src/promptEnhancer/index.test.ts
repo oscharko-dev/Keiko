@@ -189,6 +189,21 @@ describe("runPromptEnhancement", () => {
     expect(result.safety.requiresHumanReview || result.safety.findings.length > 0).toBe(true);
   });
 
+  it("returns a rejected fail-safe response for safety-critical advice", () => {
+    const result = run({
+      text: "What medication should I take for chest pain before I can see a doctor?",
+    });
+    expect(result.analysis.taskClass).toBe("safety-critical");
+    expect(result.analysis.criticality).toBe("critical");
+    expect(result.safety.decision).toBe("rejected");
+    expect(result.safety.verificationStatus).toBe("failed");
+    expect(result.promptId).toBe(result.candidates.winnerCandidateId);
+    expect(result.candidates.scorecards).toHaveLength(1);
+    expect(result.candidates.scorecards[0]?.candidateId).toBe(result.promptId);
+    expect(result.renderedPrompt).toContain("## Safety rules");
+    expect(result.groundingReadiness.status).toBe("unavailable");
+  });
+
   it("honors the missing-information strategy by emitting uncertainty handling", () => {
     const assume = run({ text: "Build something useful.", missingInformationStrategy: "assume" });
     const clarify = run({ text: "Build something useful.", missingInformationStrategy: "clarify" });
