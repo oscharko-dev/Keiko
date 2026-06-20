@@ -106,9 +106,10 @@ available standalone via `npm run check:editor-bundle-size`.
   magnitude). Re-baseline by updating `editorOwnCodeGzipBytesObserved` and, if intentional, the
   ceiling, with a rationale in the PR.
 - Monaco runtime footprint (informational): the full installed `monaco-editor/esm` tree is ~26 MB raw
-  / ~4.9 MB gzip across 1,227 files; the production bundle ships only the tree-shaken editor + TS/JS
-  worker subset, which #1209 measures against B2 (≤ 2.5 MB gzip) and B3 (≤ 750 KB gzip per worker).
-  Worker entry points: `editor`, `ts`, `json`, `css`, `html` (`worker-entries.ts`).
+  / ~4.9 MB gzip across 1,227 files; the governed v1 production bundle ships only the tree-shaken
+  editor runtime plus `editor.worker.js`. #1209 measures that shipped static export against B2
+  (≤ 2.5 MB gzip) and B3 (≤ 750 KB gzip per worker). Keiko's server-governed TS/JS provider remains
+  the language-intelligence source of truth; #1213 owns any future multi-language worker expansion.
 
 **Why the editor package is bundle-excluded from the published product tarball.** `keiko-editor` is a
 browser-tier workspace consumed by `keiko-ui`, whose runtime artifact is copied into `dist/ui/static`;
@@ -172,8 +173,8 @@ per-keystroke long-task figures are browser-measured by #1209 (§10).
 
 ## 10. Release-evidence handoff (#1209)
 
-#1209 records measured evidence against this table using the existing browser smoke harness
-(`tests/e2e/release-smoke.spec.ts`) extended with editor timings, plus a production build:
+#1209 records measured evidence against this table using the packaged CLI serving the production
+static UI (`playwright.editor-performance.config.ts` + `tests/e2e/editor-performance.spec.ts`):
 
 1. **Bundle (B1/B2/B3):** `npm run build:ui`, then from the static export measure (a) that the
    first-load/entry chunks contain no Monaco/editor code (B1), (b) the gzipped total of the lazy

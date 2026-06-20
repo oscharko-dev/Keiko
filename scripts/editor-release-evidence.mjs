@@ -15,11 +15,9 @@
 //
 // Worker-loading nuance (D4): the keiko-ui host disables every built-in Monaco TypeScript/JavaScript
 // language-service feature (`editorMonacoRuntime.ts` `setModeConfiguration(GOVERNED_LANGUAGE_SERVICE
-// _MODE)`), so the TS/JSON/CSS/HTML worker chunks SHIP in the export but are never instantiated for a
-// governed editor session — only the editor worker is. The set actually loaded at runtime is proven
-// separately by the browser network capture in `tests/e2e/editor-performance.spec.ts`. This script
-// therefore reports two views: what SHIPS (every Monaco/editor chunk) and what a governed editor
-// session LOADS (editor runtime + editor worker, excluding the disabled language workers).
+// _MODE)`) and the governed v1 worker factory ships only Monaco's editor worker. This script enforces
+// B2/B3 against what SHIPS in the production static export. Loaded-worker diagnostics are kept as
+// runtime evidence, but they cannot turn an oversized shipped export into a pass.
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -108,8 +106,8 @@ export function isEditorRuntimeChunk(source) {
 
 /**
  * Evaluate B2/B3 from a classified chunk inventory. `chunks` is a list of
- * `{ path, gzipBytes, isEditorRuntime, workerLabel }`. Language workers (ts/json/css/html) ship but
- * are not instantiated for a governed editor session (D4), so the "loaded" total excludes them.
+ * `{ path, gzipBytes, isEditorRuntime, workerLabel }`. The authoritative #1209/ADR-0042 budget
+ * evidence is the shipped production static export; loaded-worker totals are diagnostics only.
  */
 export function evaluateBundleBudgets(chunks, budgets = RELEASE_EVIDENCE_BUDGETS) {
   const editorRuntime = chunks.filter((c) => c.isEditorRuntime);
@@ -139,9 +137,10 @@ export function evaluateBundleBudgets(chunks, budgets = RELEASE_EVIDENCE_BUDGETS
       budgetBytes: budgets.lazyEditorPlusMonacoRuntimeGzipBytesBudget,
       shipsTotalBytes: shipsTotal,
       loadedTotalBytes: loadedTotal,
-      // The governed editor session is what the budget constrains: editor runtime + editor worker.
-      ok: loadedTotal <= budgets.lazyEditorPlusMonacoRuntimeGzipBytesBudget,
+      // B2 is enforced against the shipped production editor + Monaco runtime.
+      ok: shipsTotal <= budgets.lazyEditorPlusMonacoRuntimeGzipBytesBudget,
       shipsOk: shipsTotal <= budgets.lazyEditorPlusMonacoRuntimeGzipBytesBudget,
+      loadedOk: loadedTotal <= budgets.lazyEditorPlusMonacoRuntimeGzipBytesBudget,
     },
     b3: {
       budgetBytes: budgets.perWorkerChunkGzipBytesBudget,
@@ -149,10 +148,10 @@ export function evaluateBundleBudgets(chunks, budgets = RELEASE_EVIDENCE_BUDGETS
       largestWorkerLabel: largestWorker.workerLabel,
       largestLoadedWorkerBytes: largestLoadedWorker.gzipBytes,
       largestLoadedWorkerLabel: largestLoadedWorker.workerLabel,
-      // The budget is enforced against the workers a governed session actually loads (the editor
-      // worker); the disabled language workers ship but are never instantiated.
-      ok: largestLoadedWorker.gzipBytes <= budgets.perWorkerChunkGzipBytesBudget,
+      // B3 is enforced against the largest shipped worker chunk.
+      ok: largestWorker.gzipBytes <= budgets.perWorkerChunkGzipBytesBudget,
       shipsOk: largestWorker.gzipBytes <= budgets.perWorkerChunkGzipBytesBudget,
+      loadedOk: largestLoadedWorker.gzipBytes <= budgets.perWorkerChunkGzipBytesBudget,
     },
     workers: workers.map((c) => ({ label: c.workerLabel, gzipBytes: c.gzipBytes, path: c.path })),
     disabledLanguageWorkers: disabledLanguageWorkers.map((c) => ({
@@ -245,28 +244,33 @@ function fmtKiB(bytes) {
   return `${(bytes / 1024).toFixed(1)} KiB`;
 }
 
+function verdict(ok) {
+  return ok ? "PASS" : "FAIL";
+}
+
 function printReport(record) {
   const lines = [];
   lines.push("Keiko Editor release-evidence bundle measurement (Issue #1209, ADR-0042 D3.6)");
   lines.push("");
   lines.push(
-    `B1  first-load Monaco/editor bytes: ${record.b1.ok ? "PASS" : "FAIL"} ` +
+    `B1  first-load Monaco/editor bytes: ${verdict(record.b1.ok)} ` +
       `(${String(record.b1.monacoMarkersInFirstLoad)} markers across ${String(record.b1.firstLoadScriptCount)} first-load scripts; budget 0)`,
   );
   lines.push(
-    `B2  governed editor session (editor runtime + editor worker): ${record.b2.ok ? "PASS" : "FAIL"} ` +
-      `${fmtKiB(record.b2.loadedTotalBytes)} / ${fmtKiB(record.b2.budgetBytes)}`,
+    `B2  shipped lazy editor + Monaco runtime: ${verdict(record.b2.ok)} ` +
+      `${fmtKiB(record.b2.shipsTotalBytes)} / ${fmtKiB(record.b2.budgetBytes)}`,
   );
   lines.push(
-    `    (all Monaco/editor chunks SHIP: ${fmtKiB(record.b2.shipsTotalBytes)}; the TS/JSON/CSS/HTML ` +
-      `language workers ship but are not instantiated — governed services disabled, D4)`,
+    `    (loaded editor-session diagnostic: ${verdict(record.b2.loadedOk)} ` +
+      `${fmtKiB(record.b2.loadedTotalBytes)} / ${fmtKiB(record.b2.budgetBytes)})`,
   );
   lines.push(
-    `B3  largest worker a governed session loads (${record.b3.largestLoadedWorkerLabel ?? "editor"}): ` +
-      `${record.b3.ok ? "PASS" : "FAIL"} ${fmtKiB(record.b3.largestLoadedWorkerBytes)} / ${fmtKiB(record.b3.budgetBytes)}`,
+    `B3  largest shipped Monaco worker (${record.b3.largestWorkerLabel ?? "none"}): ` +
+      `${verdict(record.b3.ok)} ${fmtKiB(record.b3.largestWorkerBytes)} / ${fmtKiB(record.b3.budgetBytes)}`,
   );
   lines.push(
-    `    (largest worker that SHIPS: ${record.b3.largestWorkerLabel} ${fmtKiB(record.b3.largestWorkerBytes)} — shipped, not loaded)`,
+    `    (loaded editor-worker diagnostic: ${verdict(record.b3.loadedOk)} ` +
+      `${record.b3.largestLoadedWorkerLabel ?? "none"} ${fmtKiB(record.b3.largestLoadedWorkerBytes)} / ${fmtKiB(record.b3.budgetBytes)})`,
   );
   lines.push("");
   lines.push("Monaco worker chunks (gzip):");

@@ -58,33 +58,50 @@ describe("isEditorRuntimeChunk", () => {
 describe("evaluateBundleBudgets", () => {
   const chunks = [
     { path: "ts.js", gzipBytes: 1_400_000, isEditorRuntime: true, workerLabel: "ts" },
-    { path: "core.js", gzipBytes: 800_000, isEditorRuntime: true, workerLabel: null },
+    { path: "core.js", gzipBytes: 1_000_000, isEditorRuntime: true, workerLabel: null },
     { path: "editor-worker.js", gzipBytes: 110_000, isEditorRuntime: true, workerLabel: "editor" },
     { path: "css.js", gzipBytes: 140_000, isEditorRuntime: true, workerLabel: "css" },
     { path: "runtime.js", gzipBytes: 30_000, isEditorRuntime: true, workerLabel: null },
   ];
 
-  it("excludes the disabled language workers from the governed-session loaded total (B2)", () => {
+  it("enforces B2 against the shipped production runtime, not loaded-only diagnostics", () => {
     const result = evaluateBundleBudgets(chunks);
     // Loaded = core + editor worker + runtime; the ts/css/html/json language workers are not loaded.
-    expect(result.b2.loadedTotalBytes).toBe(800_000 + 110_000 + 30_000);
-    expect(result.b2.ok).toBe(true);
+    expect(result.b2.loadedTotalBytes).toBe(1_000_000 + 110_000 + 30_000);
+    expect(result.b2.loadedOk).toBe(true);
     // Ships = every editor-runtime chunk, including the unloaded language workers.
-    expect(result.b2.shipsTotalBytes).toBe(1_400_000 + 800_000 + 110_000 + 140_000 + 30_000);
+    expect(result.b2.shipsTotalBytes).toBe(1_400_000 + 1_000_000 + 110_000 + 140_000 + 30_000);
+    expect(result.b2.ok).toBe(false);
+    expect(result.b2.shipsOk).toBe(false);
   });
 
-  it("enforces B3 against the largest worker a governed session loads, not the shipped TS worker", () => {
+  it("enforces B3 against the largest shipped worker", () => {
     const result = evaluateBundleBudgets(chunks);
     expect(result.b3.largestWorkerLabel).toBe("ts");
     expect(result.b3.largestWorkerBytes).toBe(1_400_000);
     expect(result.b3.largestLoadedWorkerLabel).toBe("editor");
     expect(result.b3.largestLoadedWorkerBytes).toBe(110_000);
-    expect(result.b3.ok).toBe(true);
-    // The TS worker ships above the per-worker budget but is never instantiated.
+    expect(result.b3.loadedOk).toBe(true);
+    expect(result.b3.ok).toBe(false);
     expect(result.b3.shipsOk).toBe(false);
   });
 
-  it("flags a real B3 regression when a loaded worker exceeds the budget", () => {
+  it("passes B2/B3 when the shipped runtime and largest shipped worker are within budget", () => {
+    const result = evaluateBundleBudgets([
+      { path: "core.js", gzipBytes: 800_000, isEditorRuntime: true, workerLabel: null },
+      {
+        path: "editor-worker.js",
+        gzipBytes: 110_000,
+        isEditorRuntime: true,
+        workerLabel: "editor",
+      },
+      { path: "runtime.js", gzipBytes: 30_000, isEditorRuntime: true, workerLabel: null },
+    ]);
+    expect(result.b2.ok).toBe(true);
+    expect(result.b3.ok).toBe(true);
+  });
+
+  it("flags a B3 regression when any shipped worker exceeds the budget", () => {
     const oversized = [
       {
         path: "editor-worker.js",

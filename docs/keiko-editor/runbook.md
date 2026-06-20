@@ -261,13 +261,15 @@ and omission reasons. A compile-time content-free guard (`content-free-guard.ts`
 
 ### No CDN, no direct browser provider egress, CSP unchanged
 
-Monaco core and all five language workers (`editor`, `typescript`, `json`, `css`, `html`) are served
-same-origin from the locally installed `monaco-editor` (pinned `0.55.1`); no editor asset is fetched
-from a CDN. The editor issues no direct browser network calls to model/retrieval/analytics/provider
-endpoints. The server CSP (`packages/keiko-server/src/csp.ts`) is not widened for Monaco: `script-src
-'self'` with SHA-256 hashes (no `'unsafe-inline'`), `worker-src 'self'`, `connect-src 'self'`,
-`style-src 'self' 'unsafe-inline'` (pre-existing, for Tailwind), `default-src 'none'`. Same-origin ESM
-workers and Monaco's runtime style injection satisfy this with no relaxation (ADR-0042 D3.4).
+Monaco core and the governed v1 editor worker are served same-origin from the locally installed
+`monaco-editor` (pinned `0.55.1`); no editor asset is fetched from a CDN. The default v1 factory does
+not ship the TypeScript/JSON/CSS/HTML worker chunks because server-governed providers own TS/JS
+language intelligence and #1213 owns any future multi-language worker expansion. The editor issues no
+direct browser network calls to model/retrieval/analytics/provider endpoints. The server CSP
+(`packages/keiko-server/src/csp.ts`) is not widened for Monaco: `script-src 'self'` with SHA-256
+hashes (no `'unsafe-inline'`), `worker-src 'self'`, `connect-src 'self'`, `style-src 'self'
+'unsafe-inline'` (pre-existing, for Tailwind), `default-src 'none'`. Same-origin ESM workers and
+Monaco's runtime style injection satisfy this with no relaxation (ADR-0042 D3.4).
 
 ### Supply chain
 

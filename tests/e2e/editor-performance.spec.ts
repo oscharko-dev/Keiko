@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Response } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,22 +9,18 @@ import { fileURLToPath } from "node:url";
  *
  * ADR-0042 D3.6 assigns #1207 to "measure and enforce" the deterministic budgets and #1209 to "record
  * release evidence" for the budgets that require a real browser and the editor running against the
- * real app path. This `@release-evidence` spec opens the Workspace editor card against the live
- * dev-runner app (the same harness `tests/e2e/release-smoke.spec.ts` uses — keiko-server BFF + Next),
- * and records, into `docs/release/1209-perf-evidence.json`:
+ * real app path. This `@release-evidence` spec opens the Workspace editor card against the packaged
+ * UI/server path and records, into `docs/release/1209-perf-evidence.json`:
  *
  *   B4   first-card-open cold-start (open -> interactive), p50/p95 across repeats
  *   B5   per-keystroke main-thread work (longest long task during a typing burst)
  *   B6   editor interaction-to-next-paint proxy (Event Timing durations, p75/max)
  *   B11  worker/model heap growth across open/close cycles and residual after close
  *   +    the runtime worker-load capture proving the governed editor instantiates only the editor
- *        worker — the TS/JSON/CSS/HTML language workers ship but are never loaded (D4)
+ *        worker — the TS/JSON/CSS/HTML language workers are not shipped by the governed v1 factory
  *
- * Honesty note recorded with the evidence: the dev-runner serves the unminified webpack dev build, so
- * the latency figures are CONSERVATIVE UPPER BOUNDS — the production static export is tree-shaken and
- * minified with no on-demand compilation. The worker-load capture and the memory-disposal behaviour
- * are bundler-independent. This spec is not part of the required `@smoke` set; it is the reusable
- * release-evidence harness, run via `npm run test:e2e:editor-perf`.
+ * This spec is not part of the required `@smoke` set; it is the reusable release-evidence harness,
+ * run via `npm run test:e2e:editor-perf`.
  */
 
 const RELATIVE_PATH = "packages/keiko-cli/src/run.ts";
@@ -41,6 +37,8 @@ const tempProjects: string[] = [];
 interface TypingMetrics {
   readonly longTasks: number[];
   readonly events: number[];
+  readonly interactionDurations: number[];
+  observerInstalled?: boolean;
   landed?: boolean;
   activeElement?: string;
 }
@@ -155,16 +153,18 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
 }
 
 /** Install long-task + Event Timing observers in the page (best-effort; unsupported types no-op). */
-async function installPerfObservers(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const store: TypingMetrics = { longTasks: [], events: [] };
+async function installPerfObservers(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const store: TypingMetrics = { longTasks: [], events: [], interactionDurations: [] };
     (window as unknown as { __keikoPerf: TypingMetrics }).__keikoPerf = store;
+    let observerInstalled = false;
     try {
       new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
           store.longTasks.push(entry.duration);
         }
-      }).observe({ type: "longtask", buffered: true });
+      }).observe({ type: "longtask", buffered: false });
+      observerInstalled = true;
     } catch {
       /* longtask unsupported */
     }
@@ -175,56 +175,106 @@ async function installPerfObservers(page: Page): Promise<void> {
         }
       }).observe({
         type: "event",
-        buffered: true,
+        buffered: false,
         durationThreshold: 16,
       } as PerformanceObserverInit);
+      observerInstalled = true;
     } catch {
       /* event timing unsupported */
     }
+    store.observerInstalled = observerInstalled;
+    return observerInstalled;
+  });
+}
+
+async function awaitNextPaint(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }),
+  );
+}
+
+const TYPING_CHUNKS = ["export const greeting = ", "'keiko editor ", "performance evidence';"];
+
+async function insertMeasuredChunks(page: Page): Promise<void> {
+  for (const chunk of TYPING_CHUNKS) {
+    const start = Date.now();
+    await page.keyboard.insertText(chunk);
+    await awaitNextPaint(page);
+    const duration = Date.now() - start;
+    await page.evaluate((value) => {
+      (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf?.interactionDurations.push(
+        value,
+      );
+    }, duration);
+  }
+}
+
+async function replaceEditorText(
+  page: Page,
+  editorWindow: ReturnType<Page["getByRole"]>,
+): Promise<boolean> {
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.click({ timeout: 8_000 });
+  const observerInstalled = await installPerfObservers(page);
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.down(modifier);
+  await page.keyboard.press("KeyA");
+  await page.keyboard.up(modifier);
+  await insertMeasuredChunks(page);
+  await page.waitForTimeout(250);
+  return observerInstalled;
+}
+
+async function hasTypedTextLanded(editorWindow: ReturnType<Page["getByRole"]>): Promise<boolean> {
+  return editorWindow
+    .locator(".view-line")
+    .filter({ hasText: "greeting" })
+    .first()
+    .isVisible({ timeout: 5_000 });
+}
+
+async function readTypingMetrics(page: Page): Promise<TypingMetrics | undefined> {
+  return page.evaluate(() => (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf);
+}
+
+async function readActiveElement(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    return el ? `${el.tagName.toLowerCase()}.${el.className}`.slice(0, 80) : "none";
   });
 }
 
 /**
- * B5/B6: focus the Monaco input (click the editor, then focus its hidden `textarea.inputarea`), type
- * a realistic burst, and read the observed long tasks + per-interaction durations. Best-effort and
- * self-diagnosing: it records whether the burst landed and the active element, and never throws, so a
- * focus quirk in the headless dev harness cannot block the load-bearing B4/B11/worker-capture
- * evidence. When `landed` is false the B5/B6 figures are reported as not-captured, not as "fast".
+ * B5/B6: focus Monaco using the same click + keyboard path as the release smoke, replace the buffer
+ * with a realistic burst, and read observed long tasks plus interaction-to-next-paint durations.
  */
 async function measureTyping(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<TypingMetrics> {
-  const burst = "export const greeting = 'keiko editor performance evidence';";
   let landed = false;
+  let observerInstalled = false;
   try {
-    // Bounded actions so a headless focus quirk degrades quickly to "not captured" instead of
-    // hanging until the test timeout; the load-bearing B4 + worker-capture evidence is already flushed.
-    const editor = editorWindow.locator(".monaco-editor").first();
-    await expect(editor).toBeVisible({ timeout: 10_000 });
-    await editor.click({ timeout: 8_000 });
-    await editorWindow.locator("textarea.inputarea").first().focus({ timeout: 8_000 });
-    await installPerfObservers(page);
-    await page.keyboard.type(burst, { delay: 24 });
-    await page.waitForTimeout(500);
-    landed = await editorWindow
-      .locator(".view-line")
-      .filter({ hasText: "greeting" })
-      .first()
-      .isVisible({ timeout: 5_000 });
+    observerInstalled = await replaceEditorText(page, editorWindow);
+    landed = await hasTypedTextLanded(editorWindow);
   } catch {
     /* focus/typing quirk: fall through with whatever the observers captured */
   }
-  const metrics = await page.evaluate(
-    () => (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf,
-  );
-  const activeElement = await page.evaluate(() => {
-    const el = document.activeElement;
-    return el ? `${el.tagName.toLowerCase()}.${el.className}`.slice(0, 80) : "none";
-  });
+  const metrics = await readTypingMetrics(page);
+  const activeElement = await readActiveElement(page);
   return {
     longTasks: metrics?.longTasks ?? [],
     events: metrics?.events ?? [],
+    interactionDurations: metrics?.interactionDurations ?? [],
+    observerInstalled: metrics?.observerInstalled ?? observerInstalled,
     landed,
     activeElement,
   };
@@ -272,9 +322,170 @@ async function measureMemory(page: Page, cycles: number): Promise<MemoryMetrics>
   };
 }
 
+type MonacoWorkerLabel = "editor" | "ts" | "json" | "css" | "html";
+
 interface WorkerRequest {
   readonly url: string;
   readonly resourceType: string;
+  readonly workerLabel?: MonacoWorkerLabel | "unknown";
+  readonly captureReason: string;
+}
+
+function hasAll(source: string, needles: readonly string[]): boolean {
+  return needles.every((needle) => source.includes(needle));
+}
+
+function classifyMonacoWorkerChunk(source: string): MonacoWorkerLabel | null {
+  if (source.includes("@monaco-editor/react") || source.includes("MonacoEnvironment")) {
+    return null;
+  }
+  if (source.includes("ScriptElementKind")) {
+    return "ts";
+  }
+  if (source.includes("doTagComplete")) {
+    return "html";
+  }
+  if (source.includes("getMatchingSchemas")) {
+    return "json";
+  }
+  if (hasAll(source, ["DiffComputer", "computeLinks"])) {
+    return "editor";
+  }
+  if (source.includes("getSelectionRanges") && source.includes("getFoldingRanges")) {
+    return "css";
+  }
+  return null;
+}
+
+function shouldInspectJavaScriptResponse(url: string, contentType: string): boolean {
+  try {
+    const path = new URL(url).pathname;
+    return (
+      path.endsWith(".js") &&
+      (path.includes("/_next/static/chunks/") || /monaco|worker|editor/iu.test(path))
+    );
+  } catch {
+    return contentType.includes("javascript");
+  }
+}
+
+function recordWorkerRequest(workerRequests: WorkerRequest[], candidate: WorkerRequest): void {
+  const existingIndex = workerRequests.findIndex(
+    (entry) => entry.url === candidate.url && entry.workerLabel === candidate.workerLabel,
+  );
+  if (existingIndex < 0) {
+    workerRequests.push(candidate);
+  }
+}
+
+interface WorkerCapture {
+  readonly workerRequests: WorkerRequest[];
+  readonly settleWorkerCaptures: () => Promise<void>;
+}
+
+function captureWorkerResponse(
+  response: Response,
+  workerRequests: WorkerRequest[],
+): Promise<void> {
+  const url = response.url();
+  return response
+    .body()
+    .then((body) => {
+      const workerLabel = classifyMonacoWorkerChunk(body.toString("utf8"));
+      if (workerLabel === null) {
+        return;
+      }
+      recordWorkerRequest(workerRequests, {
+        url,
+        resourceType: response.request().resourceType(),
+        workerLabel,
+        captureReason: "classified-response",
+      });
+    })
+    .catch(() => {
+      /* response body unavailable */
+    });
+}
+
+function installWorkerCapture(page: Page): WorkerCapture {
+  const workerRequests: WorkerRequest[] = [];
+  const pendingWorkerCaptures: Promise<void>[] = [];
+  page.on("request", (request) => {
+    const type = request.resourceType();
+    const url = request.url();
+    if (type === "worker" || /worker/iu.test(url)) {
+      recordWorkerRequest(workerRequests, {
+        url,
+        resourceType: type,
+        workerLabel: "unknown",
+        captureReason: "request-resource-or-url",
+      });
+    }
+  });
+  page.on("response", (response) => {
+    const contentType = response.headers()["content-type"] ?? "";
+    if (shouldInspectJavaScriptResponse(response.url(), contentType)) {
+      pendingWorkerCaptures.push(captureWorkerResponse(response, workerRequests));
+    }
+  });
+  return {
+    workerRequests,
+    settleWorkerCaptures: async (): Promise<void> => {
+      await Promise.allSettled(pendingWorkerCaptures.splice(0));
+    },
+  };
+}
+
+function isTsWorkerRequest(request: WorkerRequest): boolean {
+  return request.workerLabel === "ts" || /ts\.worker|typescript.*worker/iu.test(request.url);
+}
+
+function isLanguageWorkerRequest(request: WorkerRequest): boolean {
+  return (
+    request.workerLabel === "ts" ||
+    request.workerLabel === "json" ||
+    request.workerLabel === "css" ||
+    request.workerLabel === "html" ||
+    /(?:ts|typescript|json|css|html).*worker|worker.*(?:ts|typescript|json|css|html)/iu.test(
+      request.url,
+    )
+  );
+}
+
+function buildWorkerLoadCapture(workerRequests: readonly WorkerRequest[]): Record<string, unknown> {
+  const editorWorkerLoaded = workerRequests.some(
+    (r) => r.workerLabel === "editor" || /editor.*worker|worker.*editor/iu.test(r.url),
+  );
+  return {
+    totalWorkerRequests: workerRequests.length,
+    editorWorkerLoaded,
+    tsLanguageWorkerLoaded: workerRequests.some(isTsWorkerRequest),
+    languageWorkerLoaded: workerRequests.some(isLanguageWorkerRequest),
+    requests: workerRequests.slice(0, 40),
+  };
+}
+
+function buildB5Evidence(typing: TypingMetrics): Record<string, unknown> {
+  return {
+    budgetMax: 50,
+    captured: typing.landed === true && typing.observerInstalled === true,
+    activeElement: typing.activeElement ?? "unknown",
+    longTaskCount: typing.longTasks.length,
+    maxLongTaskMs: Math.round(Math.max(0, ...typing.longTasks)),
+  };
+}
+
+function buildB6Evidence(typing: TypingMetrics): Record<string, unknown> {
+  const interactionDurations = typing.events.length > 0 ? typing.events : typing.interactionDurations;
+  return {
+    budgetP75: 200,
+    captured: typing.landed === true && interactionDurations.length > 0,
+    source: typing.events.length > 0 ? "event-timing" : "raf-insert-proxy",
+    eventCount: typing.events.length,
+    interactionCount: interactionDurations.length,
+    p75: percentile(interactionDurations, 75),
+    max: Math.round(Math.max(0, ...interactionDurations)),
+  };
 }
 
 function buildEvidence(
@@ -283,11 +494,9 @@ function buildEvidence(
   memory: MemoryMetrics,
   workerRequests: readonly WorkerRequest[],
 ): Record<string, unknown> {
-  const tsWorkerLoaded = workerRequests.some((r) => /ts\.worker|typescript.*worker/iu.test(r.url));
   return {
     measuredAtIso: new Date().toISOString(),
-    harness:
-      "dev-runner (webpack dev build) via playwright.config.ts; conservative upper bound vs production",
+    harness: "packaged CLI serving the production static UI via playwright.editor-performance.config.ts",
     b4ColdStartMs: {
       budgetP50: 1500,
       budgetP95: 2500,
@@ -295,26 +504,10 @@ function buildEvidence(
       p50: percentile(coldStartsMs, 50),
       p95: percentile(coldStartsMs, 95),
     },
-    b5KeystrokeMs: {
-      budgetMax: 50,
-      captured: typing.landed === true,
-      activeElement: typing.activeElement ?? "unknown",
-      longTaskCount: typing.longTasks.length,
-      maxLongTaskMs: Math.round(Math.max(0, ...typing.longTasks)),
-    },
-    b6InteractionMs: {
-      budgetP75: 200,
-      captured: typing.landed === true,
-      eventCount: typing.events.length,
-      p75: percentile(typing.events, 75),
-      max: Math.round(Math.max(0, ...typing.events)),
-    },
+    b5KeystrokeMs: buildB5Evidence(typing),
+    b6InteractionMs: buildB6Evidence(typing),
     b11Memory: memory,
-    workerLoadCapture: {
-      totalWorkerRequests: workerRequests.length,
-      tsLanguageWorkerLoaded: tsWorkerLoaded,
-      requests: workerRequests.slice(0, 40),
-    },
+    workerLoadCapture: buildWorkerLoadCapture(workerRequests),
   };
 }
 
@@ -324,69 +517,116 @@ test.afterEach(() => {
   }
 });
 
-test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evidence", async ({
-  page,
-}, testInfo) => {
-  // Each editor open under the dev bundler (webpack, on-demand compile) is expensive; the iteration
-  // counts are kept modest and the budget generous so the harness completes against the dev app path.
-  test.setTimeout(600_000);
-  const projectPath = createProjectFixture();
-  await seedFilesWindow(page, projectPath);
+async function writeEvidence(
+  coldStartsMs: number[],
+  typing: TypingMetrics,
+  memory: MemoryMetrics,
+  capture: WorkerCapture,
+): Promise<void> {
+  await capture.settleWorkerCaptures();
+  writeFileSync(
+    EVIDENCE_PATH,
+    `${JSON.stringify(buildEvidence(coldStartsMs, typing, memory, capture.workerRequests), null, 2)}\n`,
+    "utf8",
+  );
+}
 
-  // Worker-load capture: record every worker/script the browser fetches for the editor session.
-  const workerRequests: WorkerRequest[] = [];
-  page.on("request", (request) => {
-    const type = request.resourceType();
-    const url = request.url();
-    if (type === "worker" || /worker/iu.test(url)) {
-      workerRequests.push({ url, resourceType: type });
-    }
-  });
+async function measureMemoryBestEffort(page: Page): Promise<MemoryMetrics> {
+  try {
+    return await measureMemory(page, 2);
+  } catch {
+    return {
+      supported: false,
+      baselineBytes: null,
+      peakBytes: null,
+      residualBytes: null,
+      cycles: 0,
+    };
+  }
+}
 
-  // The evidence JSON is written progressively after each phase, so a slow-bundler timeout still
-  // leaves the load-bearing B4 + worker-load capture on disk rather than losing every measurement.
-  let typing: TypingMetrics = { longTasks: [], events: [], landed: false };
-  let memory: MemoryMetrics = {
-    supported: false,
-    baselineBytes: null,
-    peakBytes: null,
-    residualBytes: null,
-    cycles: 0,
-  };
-  const flush = (cold: number[]): void => {
-    writeFileSync(
-      EVIDENCE_PATH,
-      `${JSON.stringify(buildEvidence(cold, typing, memory, workerRequests), null, 2)}\n`,
-      "utf8",
-    );
-  };
+interface EvidenceMeasurements {
+  readonly coldStartsMs: number[];
+  readonly typing: TypingMetrics;
+  readonly memory: MemoryMetrics;
+}
 
+async function collectEvidenceMeasurements(
+  page: Page,
+  capture: WorkerCapture,
+): Promise<EvidenceMeasurements> {
   const measuredRuns = 3;
   const coldStartsMs = await measureColdStarts(page, 1, measuredRuns);
-  flush(coldStartsMs);
+  let typing: TypingMetrics = { longTasks: [], events: [], interactionDurations: [], landed: false };
+  let memory = await measureMemoryBestEffort(page);
+  await writeEvidence(coldStartsMs, typing, memory, capture);
 
   await page.goto("/");
   const editorWindow = await openEditorCard(page);
   typing = await measureTyping(page, editorWindow);
-  flush(coldStartsMs);
+  await writeEvidence(coldStartsMs, typing, memory, capture);
 
-  try {
-    memory = await measureMemory(page, 2);
-  } catch {
-    /* a headless harness quirk must not discard the already-flushed B4/B5/B6/worker evidence */
-  }
-  flush(coldStartsMs);
+  memory = await measureMemoryBestEffort(page);
+  await writeEvidence(coldStartsMs, typing, memory, capture);
+  return { coldStartsMs, typing, memory };
+}
+
+function assertEvidenceBudgets(
+  evidence: {
+    b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
+    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
+    b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    workerLoadCapture: {
+      totalWorkerRequests: number;
+      editorWorkerLoaded: boolean;
+      languageWorkerLoaded: boolean;
+    };
+  },
+  measuredRuns: number,
+  workerRequests: readonly WorkerRequest[],
+): void {
+  expect(evidence.b4ColdStartMs.p50).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP50);
+  expect(evidence.b4ColdStartMs.p95).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP95);
+  expect(evidence.b5KeystrokeMs.captured).toBe(true);
+  expect(evidence.b5KeystrokeMs.maxLongTaskMs).toBeLessThanOrEqual(evidence.b5KeystrokeMs.budgetMax);
+  expect(evidence.b6InteractionMs.captured).toBe(true);
+  expect(evidence.b6InteractionMs.p75).toBeLessThanOrEqual(evidence.b6InteractionMs.budgetP75);
+  expect(evidence.workerLoadCapture.totalWorkerRequests).toBeGreaterThan(0);
+  expect(evidence.workerLoadCapture.editorWorkerLoaded).toBe(true);
+  expect(evidence.workerLoadCapture.languageWorkerLoaded).toBe(false);
+  expect(workerRequests.some(isTsWorkerRequest)).toBe(false);
+  expect(workerRequests.some(isLanguageWorkerRequest)).toBe(false);
+  expect(evidence.b4ColdStartMs.p50 > 0).toBe(true);
+  expect(measuredRuns).toBe(3);
+}
+
+test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evidence", async ({
+  page,
+}, testInfo) => {
+  // Each editor open exercises the packaged UI and server path; the iteration count is kept modest
+  // so this remains a release-evidence smoke, not a benchmark suite.
+  test.setTimeout(600_000);
+  const projectPath = createProjectFixture();
+  await seedFilesWindow(page, projectPath);
+  const capture = installWorkerCapture(page);
+  const measurements = await collectEvidenceMeasurements(page, capture);
+  const { coldStartsMs, typing, memory } = measurements;
 
   await testInfo.attach("editor-perf-evidence", {
-    body: JSON.stringify(buildEvidence(coldStartsMs, typing, memory, workerRequests), null, 2),
+    body: JSON.stringify(buildEvidence(coldStartsMs, typing, memory, capture.workerRequests), null, 2),
     contentType: "application/json",
   });
 
-  // Hard invariants that hold regardless of the (bundler-sensitive) latency magnitudes.
-  expect(coldStartsMs.length).toBe(measuredRuns);
-  // The TypeScript language worker (the 1.37 MB chunk) is never instantiated for a governed session.
-  expect(workerRequests.some((r) => /ts\.worker|typescript.*worker/iu.test(r.url))).toBe(false);
-  // Keystrokes do no model/retrieval work on the main thread: no catastrophic long task. The ceiling
-  // is generous (vs the 50 ms target) to stay non-flaky while still catching a per-keystroke block.
-  expect(Math.max(0, ...typing.longTasks)).toBeLessThan(1000);
+  const evidence = buildEvidence(coldStartsMs, typing, memory, capture.workerRequests) as {
+    b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
+    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
+    b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    workerLoadCapture: {
+      totalWorkerRequests: number;
+      editorWorkerLoaded: boolean;
+      languageWorkerLoaded: boolean;
+    };
+  };
+
+  assertEvidenceBudgets(evidence, coldStartsMs.length, capture.workerRequests);
 });

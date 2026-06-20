@@ -93,7 +93,9 @@ of truth (ADR-0042 D4).
 
 ```ts
 import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js";
+import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
 import {
   configureMonacoLoader,
   createMonacoEnvironment,
@@ -309,7 +311,7 @@ constructor module (`src/monaco/worker-entries.ts`).
 | Concern                       | Helper                                                                                                                                                                         | Notes                                                                                                                     |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
 | No-CDN loader                 | `configureMonacoLoader(loader, monaco)`                                                                                                                                        | Calls `loader.config({ monaco })` so `@monaco-editor/react`'s default jsDelivr loader is never used.                      |
-| Worker registration           | `createMonacoEnvironment(factories)`, `installMonacoEnvironment(self, env)`, `defaultMonacoWorkerFactories`                                                                    | ESM `new Worker(new URL("monaco-editor/esm/…", import.meta.url), { type: "module" })`; same-origin, Turbopack-compatible. |
+| Worker registration           | `createMonacoEnvironment(factories)`, `installMonacoEnvironment(self, env)`, `defaultMonacoWorkerFactories`                                                                    | Governed v1 factory emits only the same-origin ESM editor worker; #1213 owns any future language-worker expansion.        |
 | Language inference            | `inferMonacoLanguageId(path)`, `MONACO_LANGUAGE_IDS`, `isMonacoLanguageId`                                                                                                     | Extension → Monaco language id for local tokenisation; plaintext fallback. Distinct from `EditorLanguageId`.              |
 | Theme registration            | `registerKeikoEditorTheme(monaco.editor, variant, tokens)`, `buildKeikoEditorMonacoTheme`, `resolveEditorThemeTokens`, `createDomEditorTokenResolverDeps`, `EDITOR_THEME_NAME` | Maps the #1212 `--ed-*` design tokens to Monaco `rules`/`colors`; dark/light/high-contrast; no colour literals.           |
 | Capability detection / errors | `detectEditorRuntimeSupport(probe)`, `probeEditorRuntime(self)`, `describeEditorRuntimeError`, `editorRuntimeLoadFailure`                                                      | Controlled, actionable error states for unsupported workers / failed load; never a silent CDN fallback.                   |
@@ -330,36 +332,8 @@ import {
 
 installMonacoEnvironment(self, createMonacoEnvironment(defaultMonacoWorkerFactories));
 configureMonacoLoader(loader, monaco);
-monaco.typescript.typescriptDefaults.setModeConfiguration({
-  completionItems: false,
-  hovers: false,
-  documentSymbols: false,
-  definitions: false,
-  references: false,
-  documentHighlights: false,
-  rename: false,
-  diagnostics: false,
-  documentRangeFormattingEdits: false,
-  signatureHelp: false,
-  onTypeFormattingEdits: false,
-  codeActions: false,
-  inlayHints: false,
-});
-monaco.typescript.javascriptDefaults.setModeConfiguration({
-  completionItems: false,
-  hovers: false,
-  documentSymbols: false,
-  definitions: false,
-  references: false,
-  documentHighlights: false,
-  rename: false,
-  diagnostics: false,
-  documentRangeFormattingEdits: false,
-  signatureHelp: false,
-  onTypeFormattingEdits: false,
-  codeActions: false,
-  inlayHints: false,
-});
+// Do not import the `monaco-editor` package root: it pulls the rich language-service contributions
+// and their worker chunks. Keiko's governed TS/JS intelligence comes from host/server providers.
 // One-shot resolve: reads the --ed-* tokens from the DOM and cleans up its probe. Re-call on theme
 // or contrast switch. (For an advanced/long-lived path, use createDomEditorTokenResolverDeps +
 // resolveEditorThemeTokens and call deps.dispose() when done.)
@@ -367,14 +341,14 @@ const tokens = resolveEditorThemeTokensFromDom(document.documentElement);
 registerKeikoEditorTheme(monaco.editor, "dark", tokens);
 ```
 
-**Worker setup, verified in build.** The five worker bundles
-(`editor`, `typescript`, `json`, `css`, `html`) resolve from the locally installed `monaco-editor`
-package (`monaco-editor/esm/vs/…/*.worker.js`); a test asserts each specifier resolves under
-`node_modules/monaco-editor` and that no runtime module references a CDN host. The end-to-end browser
-network-intercept smoke (worker URLs are same-origin under `next dev` Turbopack and the static
-`output: export` build) runs once the editor is mounted in the host and is delivered with that
-integration (#1194/#1206/#1207, per ADR-0042 D3.5), which extends the no-CDN proof to the
-worker-backed features.
+**Worker setup, verified in build.** Monaco's worker module inventory
+(`editor`, `typescript`, `json`, `css`, `html`) resolves from the locally installed `monaco-editor`
+package (`monaco-editor/esm/vs/…/*.worker.js`), and the default governed v1 factory contains exactly
+one static `new Worker(new URL(...))` entry point: `editor.worker.js`. TypeScript/JavaScript
+intelligence is supplied by Keiko's server-governed provider, JSON/CSS/HTML deterministic
+intelligence is deferred, and #1213 owns any future multi-language worker expansion. Tests assert the
+inventory resolution, the editor-only shipped default, and the no-CDN invariant; browser release
+evidence confirms worker requests stay same-origin.
 
 **Design-token integration.** The `--ed-*` / `--ed-syn-*` editor theme tokens (#1212) are surfaced
 into the keiko-ui runtime by lifting them into `packages/keiko-ui/src/app/globals.css` (CSS only,
