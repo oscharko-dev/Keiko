@@ -18,6 +18,10 @@ export default tseslint.config(
       "only-for-internal-use/**",
       "Only for Internal Use/**",
       "tests/architecture/fixtures/**",
+      // Standalone frontend test-generation fixture projects (Issue #1203): intentionally idiomatic
+      // example code with uninstalled deps (React, Testing Library, Playwright), held as data — not
+      // product code subject to the repo's strict typed rules. Excluded from build and test collection.
+      "tests/fixtures/frontend-test-generation/**",
     ],
   },
   js.configs.recommended,
