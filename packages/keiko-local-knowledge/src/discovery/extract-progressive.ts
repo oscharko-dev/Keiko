@@ -140,6 +140,7 @@ function persistWindow(
     for (const unit of window.units) {
       insertParsedUnitRow(
         db,
+        deps.store._internal.contentCipher,
         deps.capsuleId,
         `${String(deps.documentId)}#u${String(state.unitIndex)}`,
         unit,

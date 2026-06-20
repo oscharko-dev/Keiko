@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 12 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 13 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -176,6 +176,20 @@ CREATE TABLE pages (
 `.trim();
 
 const CREATE_SECTIONS = `
+CREATE TABLE sections (
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  section_path_json TEXT NOT NULL,
+  section_path_hash TEXT,
+  character_start INTEGER NOT NULL,
+  character_end INTEGER NOT NULL,
+  PRIMARY KEY (document_id, section_path_json),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_SECTIONS_V1 = `
 CREATE TABLE sections (
   capsule_id TEXT NOT NULL,
   document_id TEXT NOT NULL,
@@ -437,6 +451,9 @@ CREATE TABLE document_text_windows (
 const CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX =
   "CREATE INDEX idx_document_text_windows_span ON document_text_windows(capsule_id, document_id, character_start);";
 
+const CREATE_SECTIONS_SECTION_PATH_HASH_INDEX =
+  "CREATE UNIQUE INDEX idx_sections_document_section_path_hash ON sections(document_id, section_path_hash) WHERE section_path_hash IS NOT NULL;";
+
 // Statements must be applied in this exact order: PRAGMA first (so child-table NOT NULL
 // foreign-key constraints are enforced as the rows arrive), then parents before children.
 export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
@@ -468,6 +485,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
   "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
   "CREATE INDEX idx_sections_capsule ON sections(capsule_id);",
+  CREATE_SECTIONS_SECTION_PATH_HASH_INDEX,
   "CREATE INDEX idx_documents_capsule_source ON documents(capsule_id, source_id, status);",
   "CREATE INDEX idx_documents_capsule_status ON documents(capsule_id, status);",
   "CREATE INDEX idx_documents_content_hash ON documents(capsule_id, content_hash);",
@@ -515,7 +533,7 @@ const V1_DDL_WITHOUT_V2: readonly string[] = [
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
   CREATE_PAGES,
-  CREATE_SECTIONS,
+  CREATE_SECTIONS_V1,
   CREATE_PARSED_UNITS,
   CREATE_CHUNKS_V1,
   CREATE_VECTORS,
@@ -706,6 +724,16 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "holds the whole document text in memory and stores it once with linear growth (Epic #1160, Issue #1286).",
     up: [CREATE_DOCUMENT_TEXT_WINDOWS, CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX],
   },
+  {
+    version: 13,
+    reason:
+      "Persist a deterministic, non-reversible section path hash so encrypted randomized section " +
+      "labels retain duplicate-section uniqueness without storing labels in plaintext (Issue #1322 audit).",
+    up: [
+      "ALTER TABLE sections ADD COLUMN section_path_hash TEXT;",
+      CREATE_SECTIONS_SECTION_PATH_HASH_INDEX,
+    ],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -746,6 +774,7 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_document_texts_capsule",
   "idx_pages_capsule",
   "idx_sections_capsule",
+  "idx_sections_document_section_path_hash",
   "idx_documents_capsule_source",
   "idx_documents_capsule_status",
   "idx_documents_content_hash",

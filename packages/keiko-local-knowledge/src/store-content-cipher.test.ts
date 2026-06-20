@@ -1,6 +1,6 @@
-// Unit coverage for the store content cipher (Issue #1322; ADR-0047). Verifies round-trips, legacy
-// plaintext tolerance, plaintext-vs-sealed detection, and fail-loud behavior on a wrong key — the
-// invariants the row layer relies on.
+// Unit coverage for the store content cipher (Issue #1322; ADR-0047). Verifies round-trips,
+// strict encrypted-store reads, plaintext-vs-sealed detection, and fail-loud behavior on a wrong key
+// — the invariants the row layer relies on.
 
 import { describe, expect, it } from "vitest";
 
@@ -37,9 +37,10 @@ describe("createEncryptedContentCipher", () => {
     expect(cipher.openText(sealed)).toBe(plaintext);
   });
 
-  it("openText tolerates legacy plaintext by returning it verbatim", () => {
+  it("openText rejects legacy plaintext on a returned encrypted-store handle", () => {
     const cipher = createEncryptedContentCipher(KEY_A);
-    expect(cipher.openText("not-sealed-legacy-text")).toBe("not-sealed-legacy-text");
+    expect(() => cipher.openText("not-sealed-legacy-text")).toThrow(KnowledgeStoreError);
+    expect(() => cipher.openText("not-sealed-legacy-text")).toThrow(/not sealed/);
   });
 
   it("round-trips a vector and never alters the plaintext byte layout", () => {
@@ -51,10 +52,12 @@ describe("createEncryptedContentCipher", () => {
     expect(Array.from(opened)).toEqual(Array.from(vector));
   });
 
-  it("openVector returns legacy plaintext bytes when the stored length matches the plaintext length", () => {
+  it("openVector rejects legacy plaintext bytes on a returned encrypted-store handle", () => {
     const cipher = createEncryptedContentCipher(KEY_A);
     const plaintextVector = new Uint8Array([9, 8, 7, 6]);
-    expect(cipher.openVector(plaintextVector, plaintextVector.byteLength)).toBe(plaintextVector);
+    expect(() => cipher.openVector(plaintextVector, plaintextVector.byteLength)).toThrow(
+      KnowledgeStoreError,
+    );
   });
 
   it("throws on a wrong-key text open (no silent plaintext)", () => {

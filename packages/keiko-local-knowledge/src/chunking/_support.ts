@@ -15,6 +15,7 @@ import type {
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { insertDocumentRow, insertParsedUnitRow } from "../discovery/persist.js";
+import { sectionPathHash } from "../section-path-hash.js";
 import { sampleCapsuleInput, sampleSourceInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -67,7 +68,7 @@ export function seedParsedUnit(
   unitId: string,
   unit: ParsedUnit,
 ): void {
-  insertParsedUnitRow(store._internal.db, capsuleId, unitId, unit);
+  insertParsedUnitRow(store._internal.db, store._internal.contentCipher, capsuleId, unitId, unit);
 }
 
 // Seeds a `pages` row directly. Used by the citation-mapper test to verify the
@@ -110,12 +111,13 @@ export function seedSection(
 ): void {
   store._internal.db
     .prepare(
-      "INSERT INTO sections (capsule_id, document_id, section_path_json, character_start, character_end) VALUES (:c, :d, :sp, :s, :e)",
+      "INSERT INTO sections (capsule_id, document_id, section_path_json, section_path_hash, character_start, character_end) VALUES (:c, :d, :sp, :h, :s, :e)",
     )
     .run({
       c: capsuleId,
       d: documentId,
-      sp: JSON.stringify(options.sectionPath),
+      sp: store._internal.contentCipher.sealText(JSON.stringify(options.sectionPath)),
+      h: sectionPathHash(options.sectionPath),
       s: options.characterStart,
       e: options.characterEnd,
     });

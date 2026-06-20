@@ -59,8 +59,8 @@ export interface KnowledgeStore {
   readonly _internal: {
     readonly db: DatabaseSync;
     readonly now: () => number;
-    // The store-boundary cipher for the three reconstructive content columns (ADR-0047). The identity
-    // cipher in plaintext mode, an AES-256-GCM cipher when a key provider is supplied. The row layer
+    // The store-boundary cipher for reconstructive content columns (ADR-0047). The identity cipher
+    // in plaintext mode, an AES-256-GCM cipher when a key provider is supplied. The row layer
     // threads it through every content read/write; no other module touches crypto.
     readonly contentCipher: StoreContentCipher;
   };

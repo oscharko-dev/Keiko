@@ -27,6 +27,7 @@ import {
   type ParsedUnitRow,
 } from "./chunker-persist.js";
 import type { KnowledgeStore } from "../store.js";
+import type { StoreContentCipher } from "../store-content-cipher.js";
 import type { ChunkDocumentParams, ChunkDocumentResult, ChunkingOptions } from "./types.js";
 import { ChunkingError } from "./types.js";
 
@@ -47,11 +48,12 @@ function parseStringArrayField(
   raw: string | null,
   field: string,
   unitId: string,
+  cipher: StoreContentCipher,
 ): readonly string[] {
   if (raw === null) {
     throw new ChunkingError(`parsed_unit ${unitId} is missing required field ${field}`);
   }
-  const parsed: unknown = JSON.parse(raw);
+  const parsed: unknown = JSON.parse(cipher.openText(raw));
   if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
     throw new ChunkingError(`parsed_unit ${unitId} field ${field} did not deserialise to string[]`);
   }
@@ -69,11 +71,15 @@ function rowToPageUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
   };
 }
 
-function rowToSectionUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+function rowToSectionUnit(
+  row: ParsedUnitRow,
+  documentId: DocumentId,
+  cipher: StoreContentCipher,
+): ParsedUnit {
   return {
     kind: "section",
     documentId,
-    sectionPath: parseStringArrayField(row.section_path_json, "section_path_json", row.id),
+    sectionPath: parseStringArrayField(row.section_path_json, "section_path_json", row.id, cipher),
     characterStart: expectNumber(row.character_start, "character_start", row.id),
     characterEnd: expectNumber(row.character_end, "character_end", row.id),
   };
@@ -106,11 +112,15 @@ function rowToCsvRowUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit
   };
 }
 
-function rowToHtmlBlockUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+function rowToHtmlBlockUnit(
+  row: ParsedUnitRow,
+  documentId: DocumentId,
+  cipher: StoreContentCipher,
+): ParsedUnit {
   const heading =
     row.heading_path_json === null
       ? undefined
-      : parseStringArrayField(row.heading_path_json, "heading_path_json", row.id);
+      : parseStringArrayField(row.heading_path_json, "heading_path_json", row.id, cipher);
   return {
     kind: "html-block",
     documentId,
@@ -120,18 +130,22 @@ function rowToHtmlBlockUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedU
   };
 }
 
-export function rowToParsedUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+export function rowToParsedUnit(
+  row: ParsedUnitRow,
+  documentId: DocumentId,
+  cipher: StoreContentCipher,
+): ParsedUnit {
   switch (row.kind) {
     case "page":
       return rowToPageUnit(row, documentId);
     case "section":
-      return rowToSectionUnit(row, documentId);
+      return rowToSectionUnit(row, documentId, cipher);
     case "json-path":
       return rowToJsonPathUnit(row, documentId);
     case "csv-row":
       return rowToCsvRowUnit(row, documentId);
     case "html-block":
-      return rowToHtmlBlockUnit(row, documentId);
+      return rowToHtmlBlockUnit(row, documentId, cipher);
     case "unsupported-media":
       return {
         kind: "unsupported-media",
@@ -200,7 +214,7 @@ function persistAllChunks(
     if (remaining <= 0) {
       throw new ChunkingError(`chunkDocument exceeded maxChunks ${String(maxChunks)}`);
     }
-    const unit = rowToParsedUnit(row, ctx.documentId);
+    const unit = rowToParsedUnit(row, ctx.documentId, store._internal.contentCipher);
     const chunks = chunkParsedUnit(
       unit,
       ctx.sourceText,

@@ -25,6 +25,7 @@ import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import { getCapsule } from "../capsule-lifecycle.js";
 import type { ComposedRetrievalScope } from "../composition.js";
 import type { KnowledgeStore } from "../store.js";
+import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { RetrievalError } from "./types.js";
 
@@ -153,18 +154,9 @@ function readVectorsForCapsule(
       params[`s${String(i)}`] = String(sourceFilter[i]);
     }
   }
-  const rows = store._internal.db
+  return store._internal.db
     .prepare(`${SELECT_VECTORS_FOR_CAPSULE_SQL}${sourceClause}`)
     .all(params) as unknown as readonly VectorRow[];
-  // Open the sealed embedding at the store boundary so the similarity layer (decodeEmbedding) always
-  // sees plaintext Float32 bytes. The cleartext vector_dimensions gives the expected plaintext length;
-  // a wrong key throws here rather than producing a silently-wrong vector.
-  const cipher = store._internal.contentCipher;
-  if (!cipher.isEncrypted) return rows;
-  return rows.map((row) => ({
-    ...row,
-    embedding: cipher.openVector(row.embedding, row.vector_dimensions * 4),
-  }));
 }
 
 // ─── Citation row reader ─────────────────────────────────────────────────────
@@ -235,14 +227,15 @@ function readCitationRows(
 // Float32 decode. The row blob is a fresh-copied Uint8Array; we wrap it in a Float32Array
 // view backed by the same ArrayBuffer. The byteLength must be exactly `dims * 4` — a
 // length mismatch indicates DB corruption and we surface a `RetrievalError`.
-function decodeEmbedding(row: VectorRow): Float32Array {
-  if (row.embedding.byteLength !== row.vector_dimensions * 4) {
+function decodeEmbedding(row: VectorRow, cipher: StoreContentCipher): Float32Array {
+  const embedding = cipher.openVector(row.embedding, row.vector_dimensions * 4);
+  if (embedding.byteLength !== row.vector_dimensions * 4) {
     throw new RetrievalError(
       "STORE_READ_FAILED",
       "vector blob length does not match vector_dimensions",
     );
   }
-  const copy = new Uint8Array(row.embedding); // detach from sqlite row buffer
+  const copy = new Uint8Array(embedding); // detach from sqlite row buffer / decrypted envelope
   return new Float32Array(copy.buffer, copy.byteOffset, row.vector_dimensions);
 }
 
@@ -343,10 +336,14 @@ async function embedQueryFor(
 }
 
 // ─── Citation builder ────────────────────────────────────────────────────────
-function parseSectionPath(json: string | null): readonly string[] | undefined {
+function parseSectionPath(
+  json: string | null,
+  cipher: StoreContentCipher,
+): readonly string[] | undefined {
   if (json === null) return undefined;
+  const opened = cipher.openText(json);
   try {
-    const parsed = JSON.parse(json) as unknown;
+    const parsed = JSON.parse(opened) as unknown;
     if (!Array.isArray(parsed)) return undefined;
     const out: string[] = [];
     for (const item of parsed) {
@@ -359,8 +356,8 @@ function parseSectionPath(json: string | null): readonly string[] | undefined {
   }
 }
 
-function rowToCitation(row: CitationRow): CitationReference {
-  const sectionPath = parseSectionPath(row.section_path_json);
+function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationReference {
+  const sectionPath = parseSectionPath(row.section_path_json, cipher);
   // Build the citation without `undefined` literals to keep `exactOptionalPropertyTypes`
   // happy. The contract permits omission of each optional field but rejects the explicit
   // `undefined` value.
@@ -397,6 +394,7 @@ function scoreCapsuleVectors(
   queryVector: Float32Array,
   candidateLimit: number,
   minScore: number | undefined,
+  cipher: StoreContentCipher,
 ): readonly ScoredCandidate[] {
   const metric = capsule.embeddingModelIdentity.vectorMetric;
   const scored: ScoredCandidate[] = [];
@@ -405,7 +403,7 @@ function scoreCapsuleVectors(
     // we re-assert at decode time so an arbitrary store-bypass cannot leak a row.
     if (row.capsule_id !== String(capsule.id)) continue;
     if (row.vector_dimensions !== queryVector.length) continue;
-    const vector = decodeEmbedding(row);
+    const vector = decodeEmbedding(row, cipher);
     const score = scoreFor(metric, queryVector, vector);
     if (minScore !== undefined && score < minScore) continue;
     scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, score });
@@ -762,6 +760,7 @@ async function processCapsule(
     embedded.vector,
     oversampleTopK(options.topK, profile),
     options.minScore,
+    store._internal.contentCipher,
   );
   state.candidates.push(...candidates);
 }
@@ -912,7 +911,10 @@ function buildReferences(
       // table PK on `id`), but we still namespace the map by `capsule|chunk` so any
       // future schema change cannot let a citation row for one capsule become the
       // citation for another with the same chunkId by coincidence.
-      citationByChunk.set(`${row.capsule_id}|${row.chunk_id}`, rowToCitation(row));
+      citationByChunk.set(
+        `${row.capsule_id}|${row.chunk_id}`,
+        rowToCitation(row, store._internal.contentCipher),
+      );
     }
   }
 
