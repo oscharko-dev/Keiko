@@ -76,47 +76,63 @@ function withGroundingPlan(
 const GROUNDED = { expectedTaskClasses: ["rag-question-answering", "factual-qa"] } as const;
 
 describe("scorePromptQuality regression gates (AC2)", () => {
-  it("clarity and completeness fail when the task structure is removed", () => {
+  // Each test asserts the baseline observation PASSES the dimension, removes exactly ONE piece of the
+  // mandated apparatus, and asserts the dimension flips to FAIL — proving the gate is regression-
+  // sensitive. The first test also confirms the mutation helper actually applied the patch.
+
+  it("clarity fails when the task structure is removed", () => {
     const obs = observe("task-research");
     const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["research"] };
-    expect(outcomeOf(obs, ["clarity", "completeness"], oracle, "clarity")).toBe("pass");
+    expect(outcomeOf(obs, ["clarity"], oracle, "clarity")).toBe("pass");
     const stripped = withPrompt(obs, { taskDecomposition: [] });
+    expect(stripped.prompt.taskDecomposition).toEqual([]);
     expect(outcomeOf(stripped, ["clarity"], oracle, "clarity")).toBe("fail");
+  });
+
+  it("completeness fails when the task structure is removed", () => {
+    const obs = observe("task-research");
+    const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["research"] };
+    expect(outcomeOf(obs, ["completeness"], oracle, "completeness")).toBe("pass");
+    const stripped = withPrompt(obs, { taskDecomposition: [] });
     expect(outcomeOf(stripped, ["completeness"], oracle, "completeness")).toBe("fail");
   });
 
   it("completeness fails when the quality criteria are removed", () => {
     const obs = observe("task-research");
     const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["research"] };
+    expect(outcomeOf(obs, ["completeness"], oracle, "completeness")).toBe("pass");
     const stripped = withPrompt(obs, { qualityCriteria: [] });
     expect(outcomeOf(stripped, ["completeness"], oracle, "completeness")).toBe("fail");
   });
 
-  it("groundedness and faithfulness fail when grounding rules and directives are removed", () => {
+  it("groundedness fails when the grounding rules are removed", () => {
     const obs = observe("task-rag-qa");
     expect(outcomeOf(obs, ["groundedness"], GROUNDED, "groundedness")).toBe("pass");
-    expect(outcomeOf(obs, ["faithfulness"], GROUNDED, "faithfulness")).toBe("pass");
-    const stripped = withGroundingPlan(withPrompt(obs, { groundingRules: [] }), {
-      directives: [],
-      sourcePriority: [],
-      noAnswerConditions: [],
-    });
+    const stripped = withPrompt(obs, { groundingRules: [] });
     expect(outcomeOf(stripped, ["groundedness"], GROUNDED, "groundedness")).toBe("fail");
+  });
+
+  it("faithfulness fails when the grounding directives are removed", () => {
+    const obs = observe("task-rag-qa");
+    expect(outcomeOf(obs, ["faithfulness"], GROUNDED, "faithfulness")).toBe("pass");
+    const stripped = withGroundingPlan(obs, { directives: [] });
     expect(outcomeOf(stripped, ["faithfulness"], GROUNDED, "faithfulness")).toBe("fail");
   });
 
-  it("safety fails when the safety rules are removed (structural gate)", () => {
+  it("safety fails when the safety rules are removed (scorer structural gate)", () => {
     const obs = observe("task-code-generation");
     const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["code-generation"] };
+    expect(obs.prompt.safetyRules.length).toBeGreaterThanOrEqual(2);
     expect(outcomeOf(obs, ["safety"], oracle, "safety")).toBe("pass");
     const stripped = withPrompt(obs, { safetyRules: [] });
     expect(outcomeOf(stripped, ["safety"], oracle, "safety")).toBe("fail");
   });
 
-  it("safety fails when the safety rules are removed (re-assessed decision flips to rejected)", () => {
+  it("safety re-assessment rejects when the safety rules are removed (defence in depth)", () => {
     const fixture = promptEnhancerFixtureByName("task-code-generation");
     if (fixture === undefined) throw new Error("fixture missing");
     const obs = runEnhancement(fixture.name, fixture.request);
+    expect(obs.safety.decision).not.toBe("rejected");
     const strippedPrompt: EnhancedPrompt = { ...obs.prompt, safetyRules: [] };
     const reassessed = PromptEnhancer.assessPromptSafety({
       prompt: strippedPrompt,
@@ -127,7 +143,7 @@ describe("scorePromptQuality regression gates (AC2)", () => {
     expect(reassessed.verificationStatus).toBe("failed");
   });
 
-  it("format-adherence fails when the structured output schema is removed", () => {
+  it("format-adherence fails when the output schema loses its structured flag", () => {
     const obs = observe("task-structured-extraction");
     const oracle: PromptEnhancerOracle = {
       expectedTaskClasses: ["structured-extraction"],
@@ -136,7 +152,20 @@ describe("scorePromptQuality regression gates (AC2)", () => {
     };
     expect(outcomeOf(obs, ["format-adherence"], oracle, "format-adherence")).toBe("pass");
     const stripped = withPrompt(obs, {
-      outputSchema: { ...obs.prompt.outputSchema, structured: false, hints: [] },
+      outputSchema: { ...obs.prompt.outputSchema, structured: false },
+    });
+    expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
+  });
+
+  it("format-adherence fails when a structured schema loses its format hints", () => {
+    const obs = observe("task-structured-extraction");
+    const oracle: PromptEnhancerOracle = {
+      expectedTaskClasses: ["structured-extraction"],
+      expectedOutputStructured: true,
+    };
+    expect(outcomeOf(obs, ["format-adherence"], oracle, "format-adherence")).toBe("pass");
+    const stripped = withPrompt(obs, {
+      outputSchema: { ...obs.prompt.outputSchema, hints: [] },
     });
     expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
   });
