@@ -47,6 +47,7 @@
     "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",
     "test:e2e:local-knowledge": "playwright test --config playwright.local-knowledge-regression.config.ts",
     "test:release:smoke": "npm run test:e2e:smoke",
+    "eval:prompt-enhancer": "npm run build:packages && vitest run packages/keiko-evaluations/src/promptEnhancer",
     "dev:start": "node scripts/dev-start.mjs",
     "dev:stop": "node scripts/dev-stop.mjs",
     "prepare:bin": "node scripts/ensure-bin-mode.mjs",
