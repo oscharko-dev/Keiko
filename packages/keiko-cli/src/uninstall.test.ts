@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -432,16 +433,21 @@ function seedFullState(root: string, pid = "2147483646"): string {
     "keiko.config.json": "{}",
     "credentials/provider-credentials.vault": "sealed",
     "credentials/provider-credentials-vault.key": "key",
+    "credentials/.secret-vault.1234.deadbeefdeadbeef.tmp": "temp",
     "memory/keiko-memory.db": "db",
     "memory/keiko-memory.db-wal": "wal",
     "memory/keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z": "quarantine",
     "local-knowledge/default/capsules.db": "db",
     "local-knowledge/default/capsules.db-shm": "shm",
     "evidence/run-1.json": "{}",
-    "evidence/run-1.candidates.json": "{}",
+    "evidence/run-1.json.123e4567-e89b-12d3-a456-426614174000.tmp": "{}",
     "evidence/figma/figma-token.vault": "sealed",
     "evidence/figma/figma-vault.key": "key",
     "evidence/qi/run-1.qi.json": "{}",
+    "evidence/qi/run-1.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp": "{}",
+    "evidence/qi/run-1.candidates.json": "{}",
+    "evidence/qi/run-1.review.json": "{}",
+    "evidence/qi/run-1.figma-snapshot.management.json": "{}",
     "evidence/qi/figma-snapshots/run-1/screen.png": "img",
   };
   for (const [rel, body] of Object.entries(files)) writeFileSync(join(stateDir, rel), body, "utf8");
@@ -468,10 +474,14 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(out).toContain(join(stateDir, "keiko-ui.db"));
     expect(out).toContain(join(stateDir, "memory", "keiko-memory.db"));
     expect(out).toContain(join(stateDir, "credentials", "provider-credentials.vault"));
+    expect(out).toContain(join(stateDir, "credentials", ".secret-vault.1234.deadbeefdeadbeef.tmp"));
     expect(out).toContain(join(stateDir, "credentials", "provider-credentials-vault.key"));
     expect(out).toContain(join(stateDir, "evidence", "figma", "figma-token.vault"));
     expect(out).toContain(join(stateDir, "evidence", "figma", "figma-vault.key"));
     expect(out).toContain(join(stateDir, "evidence", "qi", "run-1.qi.json"));
+    expect(out).toContain(
+      join(stateDir, "evidence", "qi", "run-1.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
+    );
     // Nothing actually removed.
     expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(true);
     expect(existsSync(stateDir)).toBe(true);
@@ -522,6 +532,76 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(existsSync(join(stateDir, "evil-link"))).toBe(true); // left in place
     expect(existsSync(stateDir)).toBe(true);
     expect(c.out()).toContain("symlink — not followed");
+  });
+
+  it("refuses a symlinked state root without deleting the target tree", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    const target = join(root, "outside-state");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "keiko-ui.db"), "db", "utf8");
+    symlinkSync(target, join(root, ".keiko"), "dir");
+
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
+    expect(c.err()).toContain("refusing to use symlinked state directory");
+    expect(existsSync(join(target, "keiko-ui.db"))).toBe(true);
+    expect(existsSync(join(root, ".keiko"))).toBe(true);
+  });
+
+  it("refuses a non-directory state root without crashing", () => {
+    const root = makeRoot();
+    writeFileSync(join(root, ".keiko"), "not a directory", "utf8");
+
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
+    expect(c.err()).toContain("refusing to use non-directory state path");
+    expect(existsSync(join(root, ".keiko"))).toBe(true);
+  });
+
+  it("keeps customer lookalikes in known state subdirectories", () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const kept = [
+      "evidence/manual export.json",
+      "evidence/manual export.lock",
+      "evidence/qi/debug dump.json",
+      "evidence/qi/run-1.notes.json",
+      "credentials/backup.key",
+      "credentials/backup.vault",
+      "credentials/.secret-vault.abc.deadbeefdeadbeef.tmp",
+      "evidence/figma/backup.key",
+      "evidence/figma/backup.vault",
+      "evidence/manual export.json.123e4567-e89b-12d3-a456-426614174000.tmp",
+      "evidence/qi/debug dump.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp",
+    ];
+    for (const rel of kept) writeFileSync(join(stateDir, rel), "customer", "utf8");
+    mkdirSync(join(stateDir, "local-knowledge", "notes"), { recursive: true });
+
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(stateDir)).toBe(true);
+    for (const rel of kept) expect(existsSync(join(stateDir, rel))).toBe(true);
+    expect(existsSync(join(stateDir, "local-knowledge", "notes"))).toBe(true);
+    expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(false);
+    expect(existsSync(join(stateDir, "credentials", "provider-credentials.vault"))).toBe(false);
+    expect(c.out()).toContain("not a recognized Keiko artifact");
+  });
+
+  it("keeps an owned-looking hardlink and reports why the state dir remains", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const outsideDb = join(root, "outside-db");
+    writeFileSync(outsideDb, "db", "utf8");
+    rmSync(join(stateDir, "keiko-ui.db"), { force: true });
+    linkSync(outsideDb, join(stateDir, "keiko-ui.db"));
+
+    const c = makeIo();
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(outsideDb)).toBe(true);
+    expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(true);
+    expect(c.out()).toContain("hardlink — not modified or removed");
   });
 });
 

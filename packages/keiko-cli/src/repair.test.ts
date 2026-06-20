@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -652,6 +653,43 @@ describe("runRepairCli — runtime state artifacts", () => {
     for (const p of vaultFiles) expect(modeOf(p)).toBe(0o600);
   });
 
+  it("tightens exact producer temp files while leaving customer temp lookalikes untouched", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    mkdirSync(join(stateDir, "credentials"), { recursive: true });
+    const ownedTemp = [
+      join(stateDir, "evidence", "run-1.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
+      join(
+        stateDir,
+        "evidence",
+        "qi",
+        "run-1.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp",
+      ),
+      join(stateDir, "credentials", ".secret-vault.1234.deadbeefdeadbeef.tmp"),
+    ];
+    const customerTemp = [
+      join(stateDir, "evidence", "manual export.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
+      join(
+        stateDir,
+        "evidence",
+        "qi",
+        "debug dump.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp",
+      ),
+      join(stateDir, "credentials", ".secret-vault.abc.deadbeefdeadbeef.tmp"),
+    ];
+    for (const p of [...ownedTemp, ...customerTemp]) {
+      writeFileSync(p, "x", "utf8");
+      chmodSync(p, 0o644);
+    }
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    for (const p of ownedTemp) expect(modeOf(p)).toBe(0o600);
+    for (const p of customerTemp) expect(modeOf(p)).toBe(0o644);
+  });
+
   it("reports loose artifacts in --dry-run without changing them and exits 1", () => {
     if (process.platform === "win32") return;
     const root = makeRoot();
@@ -685,6 +723,65 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(userFile)).toBe(0o644); // untouched
   });
 
+  it("refuses a symlinked state root without chmodding the target tree", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const target = join(root, "outside-state");
+    const stateDir = join(root, ".keiko");
+    mkdirSync(target, { recursive: true });
+    const outsideDb = join(target, "keiko-ui.db");
+    writeFileSync(outsideDb, "x", "utf8");
+    chmodSync(target, 0o755);
+    chmodSync(outsideDb, 0o644);
+    symlinkSync(target, stateDir, "dir");
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(c.out()).toContain("[action] State directory");
+    expect(c.out()).toContain("refusing to inspect symlinked state directory");
+    expect(modeOf(target)).toBe(0o755);
+    expect(modeOf(outsideDb)).toBe(0o644);
+  });
+
+  it("refuses a non-directory state root without crashing", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    writeFileSync(join(root, ".keiko"), "not a directory", "utf8");
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(c.out()).toContain("[action] State directory");
+    expect(c.out()).toContain("refusing to inspect non-directory state path");
+  });
+
+  it("does not chmod customer lookalikes in known state subdirectories", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    mkdirSync(join(stateDir, "credentials"), { recursive: true });
+    mkdirSync(join(stateDir, "local-knowledge", "notes"), { recursive: true });
+    const knownEvidence = join(stateDir, "evidence", "run-1.json");
+    const customerEvidence = join(stateDir, "evidence", "manual export.json");
+    const customerQi = join(stateDir, "evidence", "qi", "debug dump.json");
+    const customerKey = join(stateDir, "credentials", "backup.key");
+    const customerNamespace = join(stateDir, "local-knowledge", "notes");
+    for (const p of [knownEvidence, customerEvidence, customerQi, customerKey]) {
+      writeFileSync(p, "x", "utf8");
+      chmodSync(p, 0o644);
+    }
+    chmodSync(customerNamespace, 0o755);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(modeOf(knownEvidence)).toBe(0o600);
+    expect(modeOf(customerEvidence)).toBe(0o644);
+    expect(modeOf(customerQi)).toBe(0o644);
+    expect(modeOf(customerKey)).toBe(0o644);
+    expect(modeOf(customerNamespace)).toBe(0o755);
+  });
+
   it("flags a symlink occupying a Keiko-owned path as an action item and exits 1", () => {
     if (process.platform === "win32") return;
     const root = makeRoot();
@@ -697,6 +794,23 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Runtime state artifacts");
     expect(c.out()).toContain("symlink occupies a Keiko-owned path");
+  });
+
+  it("flags a hardlink occupying a Keiko-owned path without chmodding the outside file", () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const outsideDb = join(root, "outside-db");
+    writeFileSync(outsideDb, "x", "utf8");
+    chmodSync(outsideDb, 0o644);
+    linkSync(outsideDb, join(stateDir, "keiko-ui.db"));
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(c.out()).toContain("[action] Runtime state artifacts");
+    expect(c.out()).toContain("hardlink occupies a Keiko-owned path");
+    expect(modeOf(outsideDb)).toBe(0o644);
   });
 
   it("reports owner-only artifacts as healthy", () => {
