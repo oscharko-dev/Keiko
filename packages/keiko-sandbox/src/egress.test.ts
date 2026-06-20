@@ -141,13 +141,14 @@ describe("enforced filesystem containment (ADR-0043 / #1202)", () => {
     const outsideRead = join(temp, "outside-secret.txt");
     const outsideWrite = join(temp, "outside-write.txt");
     const insideWrite = join(root, "inside-write.txt");
+    const isolatedInsideWrite = "inside-write.txt";
     mkdirSync(root);
     writeFileSync(outsideRead, "outside\n", "utf8");
     writeFileSync(join(root, ".keep"), "inside\n", "utf8");
     try {
       const fsPlan: IsolatedRunPlan = {
         command: process.execPath,
-        args: ["-e", FS_SNIPPET, outsideRead, outsideWrite, insideWrite],
+        args: ["-e", FS_SNIPPET, outsideRead, outsideWrite, isolatedInsideWrite],
         cwd: root,
         network: "none",
         filesystem: "execution-root",

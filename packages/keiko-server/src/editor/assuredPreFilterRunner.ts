@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   DEFAULT_SANDBOX_POLICY,
   isValidScopePath,
@@ -202,9 +202,11 @@ async function runSandboxed(
 }
 
 async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise<boolean> {
-  const outsideRead = `${root}.outside-read-proof`;
-  const outsideWrite = `${root}.outside-write-proof`;
-  const insideWrite = join(root, ASSURED_DIR, "proof", "inside.txt");
+  const outsideDir = join(dirname(root), `${basename(root)}-outside-proof`);
+  const outsideRead = join(outsideDir, "read.txt");
+  const outsideWrite = join(outsideDir, "write.txt");
+  const insideWrite = join(ASSURED_DIR, "proof", "inside.txt");
+  mkdirSync(outsideDir, { recursive: true });
   writeFileSync(outsideRead, "outside\n", "utf8");
   try {
     const result = await runCommand(
@@ -241,8 +243,7 @@ async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise
   } catch {
     return false;
   } finally {
-    rmSync(outsideRead, { force: true });
-    rmSync(outsideWrite, { force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
   }
 }
 

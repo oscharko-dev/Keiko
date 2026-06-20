@@ -29,7 +29,8 @@ describe("isExecutableOnPath", () => {
   const binary = "keiko-sandbox-probe-fixture";
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "keiko-sandbox-probe-"));
+    dir = mkdtempSync(join(process.cwd(), ".tmp-keiko-sandbox-probe-"));
+    chmodSync(dir, 0o755);
     const file = join(dir, binary);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);

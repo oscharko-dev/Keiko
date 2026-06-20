@@ -2,7 +2,7 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
-import { basename, dirname } from "node:path";
+import { basename, dirname, isAbsolute } from "node:path";
 import type { IsolatedRunPlan, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -24,6 +24,8 @@ export const SEATBELT_DENY_EGRESS_PROFILE: string =
 // pinned, widely cached slim image keeps the fallback deterministic. Egress is removed by
 // --network=none regardless of image contents.
 export const DEFAULT_CONTAINER_IMAGE = "node:22-slim";
+export const EXECUTION_ROOT_MOUNT = "/keiko-execution-root";
+export const EXECUTION_ROOT_TMP = `${EXECUTION_ROOT_MOUNT}/.keiko-sandbox-tmp`;
 const EXECUTION_ROOT_READONLY_BINDS: readonly string[] = Object.freeze([
   "/usr",
   "/bin",
@@ -39,9 +41,13 @@ function roBindTryArgs(paths: readonly string[]): readonly string[] {
 
 function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
   // Execution-root mode is for untrusted generated tests. It exposes the disposable root read-write,
-  // enough read-only system/toolchain paths to execute Node tooling, and private /tmp + /dev + /proc.
+  // enough read-only system/toolchain paths to execute Node tooling, and /tmp + /dev + /proc.
+  // /tmp is a symlink back into the disposable root so hardcoded temp writes stay contained.
   // It deliberately does not bind /home, /run, /var/run, or the host root as a writable filesystem.
   const commandDir = dirname(plan.command);
+  const readonlyBinds = isAbsolute(commandDir)
+    ? [...EXECUTION_ROOT_READONLY_BINDS, commandDir]
+    : EXECUTION_ROOT_READONLY_BINDS;
   return [
     "--unshare-net",
     "--die-with-parent",
@@ -50,22 +56,28 @@ function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
     "/proc",
     "--dev",
     "/dev",
-    "--tmpfs",
-    "/tmp",
     "--setenv",
     "HOME",
     "/tmp",
     "--setenv",
     "USERPROFILE",
     "/tmp",
-    ...roBindTryArgs([...EXECUTION_ROOT_READONLY_BINDS, commandDir]),
+    "--setenv",
+    "TMPDIR",
+    "/tmp",
+    ...roBindTryArgs(readonlyBinds),
     "--dir",
-    dirname(plan.cwd),
+    EXECUTION_ROOT_MOUNT,
     "--bind",
     plan.cwd,
-    plan.cwd,
+    EXECUTION_ROOT_MOUNT,
+    "--dir",
+    EXECUTION_ROOT_TMP,
+    "--symlink",
+    EXECUTION_ROOT_TMP,
+    "/tmp",
     "--chdir",
-    plan.cwd,
+    EXECUTION_ROOT_MOUNT,
     "--",
     plan.command,
     ...plan.args,

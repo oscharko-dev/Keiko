@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildWrappedCommand,
   DEFAULT_CONTAINER_IMAGE,
+  EXECUTION_ROOT_MOUNT,
+  EXECUTION_ROOT_TMP,
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
@@ -43,8 +45,16 @@ describe("buildWrappedCommand", () => {
     expect(wrapped.command).toBe("bwrap");
     expect(wrapped.args).toContain("--unshare-net");
     expect(wrapped.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--bind", "/work/root", "/work/root"]));
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--dir", "/work"]));
+    expect(wrapped.args).toEqual(
+      expect.arrayContaining(["--bind", "/work/root", EXECUTION_ROOT_MOUNT]),
+    );
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--dir", EXECUTION_ROOT_MOUNT]));
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--chdir", EXECUTION_ROOT_MOUNT]));
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--dir", EXECUTION_ROOT_TMP]));
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--symlink", EXECUTION_ROOT_TMP, "/tmp"]));
+    expect(wrapped.args).toEqual(expect.arrayContaining(["--setenv", "TMPDIR", "/tmp"]));
+    expect(wrapped.args).not.toEqual(expect.arrayContaining(["--tmpfs", "/tmp"]));
+    expect(wrapped.args).not.toContain("/work");
     expect(wrapped.args).not.toContain("/home");
     expect(wrapped.args).not.toContain("/run");
     expect(wrapped.args).not.toContain("/var/run");
