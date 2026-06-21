@@ -6803,8 +6803,6 @@ select.dlg-input {
 }
 .ui-error-notice-close:focus-visible {
   outline: none;
-  /* #1295 — was var(--focus) (undefined → no ring rendered); the DS focus
-     token is --focus-ring (alias of --accent-text). a11y fix (WCAG 2.4.7). */
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus-ring) 24%, transparent);
 }
@@ -13453,8 +13451,6 @@ select.qi-select {
 
 .figma-view-json-btn:focus-visible,
 .figma-view-json-copy-btn:focus-visible {
-  /* #1295 C4 — was var(--focus) (undefined → no ring rendered); the DS focus
-     token is --focus-ring (alias of --accent-text). a11y fix (WCAG 2.4.7). */
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
@@ -13525,8 +13521,6 @@ button.figma-view-preview {
 }
 
 .figma-view-preview-drag-surface:focus-visible {
-  /* #1295 — was var(--focus) (undefined → no ring rendered); the DS focus
-     token is --focus-ring. a11y fix (WCAG 2.4.7). */
   outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
