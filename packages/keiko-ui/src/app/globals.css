@@ -8821,13 +8821,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  animation: ai-blink 1.2s ease-in-out infinite;
-}
-.ai-thinking .dots i:nth-child(2) {
-  animation-delay: 0.18s;
-}
-.ai-thinking .dots i:nth-child(3) {
-  animation-delay: 0.36s;
+  /* WCAG 2.3.3 — animation OFF by default (static 0.7-opacity fallback for reduced-motion /
+     unsupported), enabled only inside prefers-reduced-motion: no-preference below. */
+  opacity: 0.7;
+  animation: none;
 }
 @keyframes ai-blink {
   0%,
@@ -8839,10 +8836,15 @@ html[data-keiko-gateway-setup-open="true"] .rail {
     opacity: 1;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: no-preference) {
   .ai-thinking .dots i {
-    animation: none;
-    opacity: 0.7;
+    animation: ai-blink 1.2s ease-in-out infinite;
+  }
+  .ai-thinking .dots i:nth-child(2) {
+    animation-delay: 0.18s;
+  }
+  .ai-thinking .dots i:nth-child(3) {
+    animation-delay: 0.36s;
   }
 }
 
@@ -8855,16 +8857,17 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   margin-left: 2px;
   border-radius: 1px;
   background: var(--ai-streaming-cursor);
-  animation: ai-caret 1s steps(1) infinite;
+  /* WCAG 2.3.3 — solid (non-blinking) caret by default; blink only under no-preference. */
+  animation: none;
 }
 @keyframes ai-caret {
   50% {
     opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: no-preference) {
   .ai-stream-cursor {
-    animation: none;
+    animation: ai-caret 1s steps(1) infinite;
   }
 }
 
@@ -8921,7 +8924,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border-radius: 50%;
   border: 1.5px solid currentColor;
   border-top-color: transparent;
-  animation: ai-spin 0.7s linear infinite;
+  /* WCAG 2.3.3 — frozen ring by default; spin only under no-preference. */
+  animation: none;
 }
 .ai-tool-head .st.done::before {
   content: "";
@@ -8935,9 +8939,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
     transform: rotate(360deg);
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: no-preference) {
   .ai-tool-head .st.run::before {
-    animation: none;
+    animation: ai-spin 0.7s linear infinite;
   }
 }
 .ai-tool-body {
@@ -9071,6 +9075,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .ai-stop:hover {
   background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+}
+/* WCAG 2.4.7 — keyboard focus ring for the stop/regenerate controls and the permission /
+   sensitive-action button pairs (consistent with the product's other interactive controls). */
+.ai-stop:focus-visible,
+.ai-permit-act button:focus-visible,
+.ai-danger-act button:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .ai-stop .sq {
   width: 9px;

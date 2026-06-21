@@ -61,8 +61,11 @@ animations freeze under `prefers-reduced-motion`.
   passes), `AgentRunWidget.test.tsx` (the `.ai-conf` confidence signal is axe-clean), plus the
   existing `WorkspaceShell.a11y` / `WorkflowHandoff.a11y` / `QiRunCard.a11y` suites.
 - Non-colour status/confidence encoding is verified visually in every screenshot above.
-- Reduced-motion is honoured by the `@media (prefers-reduced-motion: reduce)` blocks for
-  `.ai-thinking .dots i`, `.ai-stream-cursor`, and `.ai-tool-head .st.run::before`.
+- Reduced-motion is honoured by the product's animation-off-by-default convention (WCAG 2.3.3):
+  `.ai-thinking .dots i`, `.ai-stream-cursor`, and `.ai-tool-head .st.run::before` are `animation: none`
+  at rest and only animate inside `@media (prefers-reduced-motion: no-preference)`.
+- Keyboard focus is visible on every interactive AI control: `.ai-stop` and the permission /
+  sensitive-action button pairs carry a `:focus-visible` ring (WCAG 2.4.7).
 
 ## Deferred (issue Stop Conditions)
 

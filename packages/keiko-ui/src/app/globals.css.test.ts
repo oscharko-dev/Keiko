@@ -174,6 +174,27 @@ describe("Fix 2 — reduced-motion wrapping (WCAG 2.3.3)", () => {
   it(".chat-typing i base has animation: none", () => {
     assertBaseIsNone(".chat-typing i");
   });
+  it(".chat-typing i animation is inside no-preference block", () => {
+    assertAnimationInsideNoPreference("pulse 1.2s infinite", ".chat-typing i");
+  });
+
+  // Issue #1296 — the ported canonical .ai-* animations adopt the product's animation-off-by-default
+  // convention (enabled only inside no-preference), not the reference's reduce-override pattern.
+  it(".ai-thinking dots: base none + ai-blink inside no-preference", () => {
+    assertBaseIsNone(".ai-thinking .dots i");
+    assertAnimationInsideNoPreference("ai-blink 1.2s ease-in-out infinite", ".ai-thinking .dots i");
+  });
+  it(".ai-stream-cursor: base none + ai-caret inside no-preference", () => {
+    assertBaseIsNone(".ai-stream-cursor");
+    assertAnimationInsideNoPreference("ai-caret 1s steps(1) infinite", ".ai-stream-cursor");
+  });
+  it(".ai-tool spinner: base none + ai-spin inside no-preference", () => {
+    assertBaseIsNone(".ai-tool-head .st.run::before");
+    assertAnimationInsideNoPreference(
+      "ai-spin 0.7s linear infinite",
+      ".ai-tool-head .st.run::before",
+    );
+  });
 
   it(".cmp-loading-dot base has animation: none", () => {
     assertBaseIsNone(".cmp-loading-dot");
@@ -2391,15 +2412,27 @@ describe("Issue #1296 — AI/agent component set (Design System 0.4.0)", () => {
     expect(unconsumed, `--ai-* tokens with no consumer: ${unconsumed.join(", ")}`).toEqual([]);
   });
 
-  // ── 4. Reduced-motion: all three AI animations honour prefers-reduced-motion (WCAG 2.3.3).
-  it("defines the AI keyframes and pauses them under prefers-reduced-motion", () => {
+  // ── 4. Reduced-motion (WCAG 2.3.3): the AI animations are OFF by default and enabled only
+  //       inside a prefers-reduced-motion: no-preference block (the canonical animation-off-by-default
+  //       pattern; the no-preference wrapping itself is pinned per-selector in the "Fix 2" suite).
+  it("defines the AI keyframes and keeps the base rules animation: none", () => {
     expect(css).toContain("@keyframes ai-blink");
     expect(css).toContain("@keyframes ai-caret");
     expect(css).toContain("@keyframes ai-spin");
-    const reduce = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(reduce).toContain(".ai-thinking .dots i");
-    expect(reduce).toContain(".ai-stream-cursor");
-    expect(reduce).toContain(".ai-tool-head .st.run::before");
+    for (const sel of [
+      "\n.ai-thinking .dots i {",
+      "\n.ai-stream-cursor {",
+      "\n.ai-tool-head .st.run::before {",
+    ]) {
+      expect(cssBlock(sel), `${sel} base must be animation: none`).toContain("animation: none");
+    }
+  });
+
+  it("gives the AI stop / permission / sensitive-action controls a keyboard focus ring (WCAG 2.4.7)", () => {
+    const focus = cssBlock("\n.ai-stop:focus-visible,");
+    expect(focus).toContain("var(--focus-ring)");
+    expect(css).toContain(".ai-permit-act button:focus-visible");
+    expect(css).toContain(".ai-danger-act button:focus-visible");
   });
 
   // ── 5. Migrated bespoke surfaces consume the --ai-* tokens (positive) and drop the raw

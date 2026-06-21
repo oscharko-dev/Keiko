@@ -53,8 +53,9 @@ Accessibility expectations for any surface using these primitives:
 - **Keyboard + focus.** Interactive controls (`.ai-stop`, permission/sensitive-action actions) are
   real `<button>`s and inherit the global `:focus-visible` ring; never encode state on a non-focusable
   element.
-- **Reduced motion.** Every animation (`ai-blink`, `ai-caret`, `ai-spin`) is paused under
-  `@media (prefers-reduced-motion: reduce)`.
+- **Reduced motion.** Every animation (`ai-blink`, `ai-caret`, `ai-spin`) is `animation: none` at
+  rest and runs only inside `@media (prefers-reduced-motion: no-preference)` (WCAG 2.3.3 — motion off
+  by default).
 
 ## Product surface mapping
 
