@@ -2673,9 +2673,12 @@ describe("Issue #1297 — table / data grid + dataviz foundation (Design System 
     expect(wrapper).not.toMatch(/border:\s*1px solid var\(--line\)/u);
     const cell = cssBlock("\n.sm-table th,");
     expect(cell).toContain("var(--table-row-border)");
-    expect(cell).toContain("var(--table-num-text)");
+    // cell text uses the general-purpose --text-primary (= var(--fg)), not the numeric-column token,
+    // so the value is preserved while the semantics stay correct for non-numeric markdown cells.
+    expect(cell).toContain("var(--text-primary)");
     expect(cell).not.toMatch(/var\(--line-soft\)/u);
     expect(cell).not.toMatch(/color:\s*var\(--fg\)/u);
+    expect(cell).not.toMatch(/var\(--table-num-text\)/u);
     expect(cssBlock("\n.sm-table th {")).toContain("var(--table-header-surface)");
     const even = cssBlock("\n.sm-table tr:nth-child(even) td {");
     expect(even).toContain("var(--surface-inset)");
