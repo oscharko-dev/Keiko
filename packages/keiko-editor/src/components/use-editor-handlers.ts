@@ -35,6 +35,7 @@ import {
   DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
 } from "./completion-bridge.js";
+import { MONACO_BUILTIN_ACTION_IDS } from "./command-actions.js";
 import {
   DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
@@ -48,6 +49,7 @@ import {
 export interface EditorHandlers {
   readonly onChange: OnChange;
   readonly onMount: OnMount;
+  readonly formatDocument: () => void;
 }
 
 interface EditorRefs {
@@ -370,6 +372,11 @@ export function useEditorHandlers(props: KeikoCodeEditorProps, readOnly: boolean
   const emitSave = useSaveEmitter(props, refs.editorRef, readOnly);
   const onChange = useChangeHandler(props.onContentChange, readOnly);
   const onMount = useMountHandler(props, refs, emitSave);
+  const formatDocument = useCallback((): void => {
+    const editor = refs.editorRef.current;
+    if (editor === null || readOnly) return;
+    void editor.getAction(MONACO_BUILTIN_ACTION_IDS.format)?.run();
+  }, [readOnly, refs.editorRef]);
   useUnmountDisposal(refs);
-  return { onChange, onMount };
+  return { onChange, onMount, formatDocument };
 }

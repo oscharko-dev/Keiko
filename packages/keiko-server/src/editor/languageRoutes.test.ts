@@ -13,6 +13,21 @@ import {
   type EditorLanguageRouteOptions,
 } from "./languageRoutes.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasProvider(body: unknown, id: string, availability: string): boolean {
+  if (!isRecord(body) || !Array.isArray(body.providers)) return false;
+  return body.providers.some(
+    (provider) => isRecord(provider) && provider.id === id && provider.availability === availability,
+  );
+}
+
+function schemaVersion(body: unknown): unknown {
+  return isRecord(body) ? body.schemaVersion : undefined;
+}
+
 function rawPostContext(raw: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
@@ -85,10 +100,9 @@ describe("GET /api/editor/language/capabilities", () => {
   it("advertises the registered providers", () => {
     const result = handleEditorLanguageCapabilities();
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({
-      schemaVersion: "1",
-      providers: [{ id: "typescript" }],
-    });
+    expect(schemaVersion(result.body)).toBe("1");
+    expect(hasProvider(result.body, "typescript", "available")).toBe(true);
+    expect(hasProvider(result.body, "python-lsp", "unavailable")).toBe(true);
   });
 });
 

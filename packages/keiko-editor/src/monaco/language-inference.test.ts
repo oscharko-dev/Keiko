@@ -11,13 +11,15 @@ import {
 
 describe("MONACO_LANGUAGE_IDS", () => {
   it("covers every language id required by Issue #1193 acceptance criteria", () => {
-    // AC: TypeScript, TSX, JavaScript, JSX, JSON, CSS, HTML, Markdown, YAML, Python, Java, Go,
-    // Rust, SQL, shell, and plain-text fallback. TSX/JSX fold onto typescript/javascript ids.
+    // AC: TypeScript, TSX, JavaScript, JSX, JSON, CSS-family languages, HTML, Markdown, YAML,
+    // Python, Java, Go, Rust, SQL, shell, and plain-text fallback. TSX/JSX fold onto TS/JS ids.
     expect([...MONACO_LANGUAGE_IDS]).toEqual([
       "typescript",
       "javascript",
       "json",
       "css",
+      "scss",
+      "less",
       "html",
       "markdown",
       "yaml",

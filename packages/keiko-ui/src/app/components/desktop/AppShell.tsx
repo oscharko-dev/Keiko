@@ -164,7 +164,94 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files", "agents"];
+function normalizeComparablePath(path: string): string {
+  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+function editorRelativePath(root: string, file: string): string | null {
+  const normalizedRoot = normalizeComparablePath(root);
+  const normalizedFile = normalizeComparablePath(file);
+  if (normalizedFile.length === 0) return "";
+  if (normalizedRoot.length === 0) {
+    return /^\/+$/u.test(root.trim().replace(/\\/gu, "/"))
+      ? normalizedFile.replace(/^\/+/u, "")
+      : "";
+  }
+  const rootCmp = normalizedRoot.toLowerCase();
+  const fileCmp = normalizedFile.toLowerCase();
+  if (fileCmp === rootCmp) return "";
+  if (fileCmp.startsWith(`${rootCmp}/`)) {
+    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
+  }
+  return null;
+}
+
+function isAbsoluteEditorPath(path: string): boolean {
+  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/u.test(path);
+}
+
+function normalizeEditorCfgPath(root: string, path: string): string | null {
+  const raw = path.trim();
+  if (raw.length === 0) return "";
+  const relative = editorRelativePath(root, raw);
+  if (relative !== null) return relative;
+  return isAbsoluteEditorPath(raw) ? null : raw.replace(/\\/gu, "/").replace(/^\/+/u, "");
+}
+
+function normalizeEditorOpenFiles(
+  root: string,
+  openFiles: unknown,
+  activeFile: string,
+): readonly string[] {
+  const out: string[] = [];
+  const add = (path: string): void => {
+    const relative = normalizeEditorCfgPath(root, path);
+    if (relative === null || relative.length === 0 || out.includes(relative)) return;
+    out.push(relative);
+  };
+  if (Array.isArray(openFiles)) {
+    for (const item of openFiles) {
+      if (typeof item === "string") add(item);
+    }
+  }
+  if (activeFile.length > 0) add(activeFile);
+  return out;
+}
+
+export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
+  const root = typeof cfg.root === "string" ? cfg.root.trim() : "";
+  const file = typeof cfg.file === "string" ? cfg.file.trim() : "";
+  if (root.length === 0) return cfg;
+  const relativeFile = editorRelativePath(root, file);
+  const next: Cfg = { ...cfg, root };
+  const normalizedOpenFiles = normalizeEditorOpenFiles(
+    root,
+    cfg.openFiles,
+    relativeFile !== null ? relativeFile : file,
+  );
+  if (relativeFile === null) {
+    if (file.length > 0) next.file = file;
+    if (normalizedOpenFiles.length > 0) {
+      next.openFiles = normalizedOpenFiles;
+    } else {
+      delete next.openFiles;
+    }
+    return next;
+  }
+  if (relativeFile.length > 0) {
+    next.file = relativeFile;
+  } else {
+    delete next.file;
+  }
+  if (normalizedOpenFiles.length > 0) {
+    next.openFiles = normalizedOpenFiles;
+  } else {
+    delete next.openFiles;
+  }
+  return next;
+}
+
+const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files", "editor", "agents"];
 const TOOL_TYPES: readonly WindowType[] = [
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with rail buttons but were missing here, so the command palette could not open them
@@ -504,7 +591,8 @@ function AppShellInner(): ReactNode {
       const current = pending;
       setPending(null);
       if (current === null) return;
-      const { __connectFilesId, ...windowCfg } = cfg;
+      const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
+      const { __connectFilesId, ...windowCfg } = normalizedCfg;
       const createdId = ws.api.add(current, windowCfg);
       if (
         current === "agents" &&

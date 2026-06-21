@@ -18,9 +18,7 @@ vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({
     register: registerLanguage,
   },
 }));
-vi.mock("monaco-editor/esm/vs/basic-languages/css/css.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/go/go.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/html/html.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/java/java.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js", () => ({}));
@@ -30,6 +28,9 @@ vi.mock("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js", () =
 vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/language/css/monaco.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/language/html/monaco.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/language/json/monaco.contribution.js", () => ({}));
 
 interface MutableScope {
   Worker?: unknown;

@@ -17,6 +17,19 @@ import type { EditorSaveStatus } from "./types.js";
 const LANGUAGE_LABELS: Readonly<Record<EditorLanguageId, string>> = {
   typescript: "TypeScript",
   javascript: "JavaScript",
+  json: "JSON",
+  css: "CSS",
+  scss: "SCSS",
+  less: "Less",
+  html: "HTML",
+  markdown: "Markdown",
+  yaml: "YAML",
+  python: "Python",
+  java: "Java",
+  go: "Go",
+  rust: "Rust",
+  sql: "SQL",
+  shell: "Shell",
   plaintext: "Plain Text",
 };
 
@@ -41,6 +54,12 @@ export interface EditorStatusRun {
   readonly busy: boolean;
 }
 
+export interface EditorStatusLanguageService {
+  readonly providerId: string | null;
+  readonly available: boolean;
+  readonly unavailableReason?: string | undefined;
+}
+
 /** Host-supplied inputs for {@link deriveEditorStatusBar}. Cursor is the 0-based editor contract. */
 export interface EditorStatusBarInput {
   readonly languageId: EditorLanguageId;
@@ -52,6 +71,7 @@ export interface EditorStatusBarInput {
   readonly completionsEnabled: boolean;
   readonly largeFileMode?: "normal" | "degraded" | undefined;
   readonly diagnostics: EditorDiagnosticsSummary | null;
+  readonly languageService?: EditorStatusLanguageService | undefined;
   readonly run?: EditorStatusRun | undefined;
   readonly readOnly?: boolean | undefined;
 }
@@ -193,6 +213,36 @@ function runField(run: EditorStatusRun | undefined): EditorStatusField | null {
   };
 }
 
+function languageServiceField(
+  service: EditorStatusLanguageService | undefined,
+): EditorStatusField | null {
+  if (service === undefined) return null;
+  if (!service.available) {
+    return {
+      id: "language-service",
+      label: "LSP unavailable",
+      ariaLabel:
+        service.unavailableReason === undefined
+          ? "Language provider unavailable"
+          : `Language provider unavailable: ${service.unavailableReason}`,
+      tone: "warn",
+      live: false,
+      assertive: false,
+    };
+  }
+  return {
+    id: "language-service",
+    label: service.providerId === null ? "Language ready" : `${service.providerId} ready`,
+    ariaLabel:
+      service.providerId === null
+        ? "Language provider available"
+        : `Language provider available: ${service.providerId}`,
+    tone: "default",
+    live: false,
+    assertive: false,
+  };
+}
+
 function selectionField(selectedLineCount: number | undefined): EditorStatusField | null {
   if (selectedLineCount === undefined || selectedLineCount <= 1) {
     return null;
@@ -222,6 +272,51 @@ function largeFileField(mode: "normal" | "degraded" | undefined): EditorStatusFi
   };
 }
 
+function languageField(languageId: EditorLanguageId): EditorStatusField {
+  return {
+    id: "language",
+    label: editorLanguageLabel(languageId),
+    ariaLabel: `Language: ${editorLanguageLabel(languageId)}`,
+    tone: "default",
+    live: false,
+    assertive: false,
+  };
+}
+
+function readonlyField(readOnly: boolean | undefined): EditorStatusField | null {
+  if (readOnly !== true) return null;
+  return {
+    id: "readonly",
+    label: "Read-only",
+    ariaLabel: "Read-only document",
+    tone: "warn",
+    live: true,
+    assertive: false,
+  };
+}
+
+function completionsField(enabled: boolean): EditorStatusField {
+  return {
+    id: "completions",
+    label: enabled ? "Completions on" : "Completions off",
+    ariaLabel: enabled ? "Governed completions enabled" : "Governed completions unavailable for this file type",
+    tone: "default",
+    live: false,
+    assertive: false,
+  };
+}
+
+function pushOptional(fields: EditorStatusField[], field: EditorStatusField | null): void {
+  if (field !== null) fields.push(field);
+}
+
+function statusSummary(fields: readonly EditorStatusField[], assertive: boolean): string {
+  return fields
+    .filter((field) => field.live && field.assertive === assertive)
+    .map((field) => field.ariaLabel)
+    .join(". ");
+}
+
 /**
  * Derive the status-bar view model from host state. Field order mirrors a serious editor: the
  * document identity (language, read-only) leads, then live editing signals (problems, run, save),
@@ -231,64 +326,19 @@ function largeFileField(mode: "normal" | "degraded" | undefined): EditorStatusFi
 export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatusBarViewModel {
   const fields: EditorStatusField[] = [];
 
-  fields.push({
-    id: "language",
-    label: editorLanguageLabel(input.languageId),
-    ariaLabel: `Language: ${editorLanguageLabel(input.languageId)}`,
-    tone: "default",
-    live: false,
-    assertive: false,
-  });
-
-  if (input.readOnly === true) {
-    fields.push({
-      id: "readonly",
-      label: "Read-only",
-      ariaLabel: "Read-only document",
-      tone: "warn",
-      live: true,
-      assertive: false,
-    });
-  }
-
-  fields.push({
-    id: "completions",
-    label: input.completionsEnabled ? "Completions on" : "Completions off",
-    ariaLabel: input.completionsEnabled
-      ? "Governed completions enabled"
-      : "Governed completions unavailable for this file type",
-    tone: "default",
-    live: false,
-    assertive: false,
-  });
-
-  const largeFile = largeFileField(input.largeFileMode);
-  if (largeFile !== null) fields.push(largeFile);
-
-  const problems = diagnosticsField(input.diagnostics);
-  if (problems !== null) fields.push(problems);
-
-  const run = runField(input.run);
-  if (run !== null) fields.push(run);
-
+  fields.push(languageField(input.languageId));
+  pushOptional(fields, readonlyField(input.readOnly));
+  fields.push(completionsField(input.completionsEnabled));
+  pushOptional(fields, largeFileField(input.largeFileMode));
+  pushOptional(fields, diagnosticsField(input.diagnostics));
+  pushOptional(fields, languageServiceField(input.languageService));
+  pushOptional(fields, runField(input.run));
   fields.push(cursorField(input.cursor));
-
-  const selection = selectionField(input.selectedLineCount);
-  if (selection !== null) fields.push(selection);
-
+  pushOptional(fields, selectionField(input.selectedLineCount));
   fields.push(saveField(input));
 
   // Polite summary: meaningful, non-critical live fields. Assertive summary: critical fields only.
   // Splitting them keeps the cursor out of every announcement and lets a save error/conflict
   // interrupt without mutating a single region's role.
-  const liveSummary = fields
-    .filter((field) => field.live && !field.assertive)
-    .map((field) => field.ariaLabel)
-    .join(". ");
-  const alertSummary = fields
-    .filter((field) => field.assertive)
-    .map((field) => field.ariaLabel)
-    .join(". ");
-
-  return { fields, liveSummary, alertSummary };
+  return { fields, liveSummary: statusSummary(fields, false), alertSummary: statusSummary(fields, true) };
 }

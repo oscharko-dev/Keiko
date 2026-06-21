@@ -28,6 +28,11 @@ import {
 } from "./languageProvider.js";
 import { createTypescriptLanguageProvider } from "./typescriptLanguageProvider.js";
 import {
+  createBuiltinTextLanguageProvider,
+  createJsonLanguageProvider,
+  unavailableExternalLspDescriptors,
+} from "./builtinLanguageProviders.js";
+import {
   sanitizeCompletion,
   sanitizeDiagnostics,
   sanitizeFormatting,
@@ -35,9 +40,12 @@ import {
   sanitizeSymbols,
 } from "./languageSanitize.js";
 
-// The default registry: TypeScript/JavaScript only for the first release. Providers are stateless
-// and deterministic, so a single shared instance is safe.
-const defaultRegistry = createLanguageProviderRegistry([createTypescriptLanguageProvider()]);
+// Providers are stateless and deterministic, so a single shared instance is safe. External LSP
+// descriptors are advertised as unavailable until a workspace-contained executable is configured.
+const defaultRegistry = createLanguageProviderRegistry(
+  [createTypescriptLanguageProvider(), createJsonLanguageProvider(), createBuiltinTextLanguageProvider()],
+  unavailableExternalLspDescriptors(),
+);
 
 export function languageServiceRegistry(): LanguageProviderRegistry {
   return defaultRegistry;

@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
-import { buildAppShellCommands, headerStatus } from "./AppShell";
+import { buildAppShellCommands, headerStatus, normalizeEditorWindowCfg } from "./AppShell";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(): WorkspaceApi {
@@ -80,8 +80,10 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "new-chat",
       "new-connector",
       "new-files",
+      "new-editor",
       "new-agents",
     ]);
+    expect(newCommands.find((c) => c.id === "new-editor")).toBeDefined();
     expect(newCommands.find((c) => c.id === "new-figma")).toBeUndefined();
   });
 
@@ -370,18 +372,6 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(commands.find((c) => c.id === "new-integ")).toBeUndefined();
   });
 
-  it("does not expose the hidden Editor surface through create commands", () => {
-    const commands = buildAppShellCommands(
-      fakeApi(),
-      vi.fn(),
-      vi.fn(),
-      "dark",
-      vi.fn(),
-      fakeUndoStack(),
-    );
-    expect(commands.find((c) => c.id === "new-editor")).toBeUndefined();
-  });
-
   it("does not expose the hidden Browser surface through create commands", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
@@ -430,6 +420,62 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     );
     expect(commands.find((c) => c.id === "undo")?.shortcut).toBe("⌘Z");
     expect(commands.find((c) => c.id === "redo")?.shortcut).toBe("⇧⌘Z");
+  });
+});
+
+describe("normalizeEditorWindowCfg", () => {
+  it("treats the selected folder itself as an editor workspace without a file target", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Keiko",
+      }),
+    ).toEqual({ root: "/Users/example/Keiko" });
+  });
+
+  it("normalizes absolute file paths inside the selected folder to workspace-relative paths", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Keiko/packages/keiko-editor/package.json",
+      }),
+    ).toEqual({
+      root: "/Users/example/Keiko",
+      file: "packages/keiko-editor/package.json",
+      openFiles: ["packages/keiko-editor/package.json"],
+    });
+  });
+
+  it("normalizes persisted editor tabs and keeps relative tab order stable", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Keiko/package.json",
+        openFiles: [
+          "/Users/example/Keiko/src/app.ts",
+          "README.md",
+          "/Users/example/Keiko/src/app.ts",
+          "/Users/example/Other/outside.ts",
+        ],
+      }),
+    ).toEqual({
+      root: "/Users/example/Keiko",
+      file: "package.json",
+      openFiles: ["src/app.ts", "README.md", "package.json"],
+    });
+  });
+
+  it("supports the filesystem root as an editor workspace root", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/",
+        file: "/Users/example/Keiko/package.json",
+      }),
+    ).toEqual({
+      root: "/",
+      file: "Users/example/Keiko/package.json",
+      openFiles: ["Users/example/Keiko/package.json"],
+    });
   });
 });
 

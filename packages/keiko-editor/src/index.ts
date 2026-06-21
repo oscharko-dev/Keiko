@@ -14,6 +14,46 @@ export { KEIKO_EDITOR_PACKAGE } from "./version.js";
 export { SUPPORTED_EDITOR_LANGUAGES, isSupportedEditorLanguage } from "./languages.js";
 export type { EditorLanguageId } from "./languages.js";
 
+// ─── Runtime: IDE-style editor layout state (#1375) ─────────────────────────────
+export {
+  EDITOR_LAYOUT_SCHEMA_VERSION,
+  activeEditorPane,
+  createEditorLayoutStateV2,
+  editorLayoutOpenFiles,
+  editorLayoutPaneIds,
+  editorLayoutPanes,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "./layout.js";
+export type {
+  CreateEditorLayoutStateV2Input,
+  EditorLayoutAction,
+  EditorLayoutNode,
+  EditorLayoutPaneNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+  EditorTabDragIntent,
+} from "./layout.js";
+
+// ─── Runtime: dirty-close and hot-exit contracts (#1376) ────────────────────────
+export { createEditorDirtyCloseIntent } from "./dirty-close.js";
+export type {
+  EditorDirtyCloseDecision,
+  EditorDirtyCloseIntent,
+  EditorDirtyCloseReason,
+  EditorDirtyCloseResolution,
+} from "./dirty-close.js";
+export {
+  EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  EDITOR_HOT_EXIT_TTL_MS,
+  editorHotExitSnapshotExpired,
+  isEditorHotExitSnapshotV1,
+} from "./hot-exit.js";
+export type { EditorHotExitSnapshotV1 } from "./hot-exit.js";
+
 // ─── Types: host port ────────────────────────────────────────────────────────────
 export type { EditorBuffer, EditorHostPort } from "./host-port.js";
 
@@ -106,6 +146,13 @@ export type {
   EditorCommandContext,
   EditorHostCapability,
 } from "./commands.js";
+
+// ─── Runtime: range mapping ──────────────────────────────────────────────────────
+export {
+  applyTextEditsToText,
+  applyTextEditsToTextWithinLimit,
+} from "./apply-text-edits.js";
+export type { BoundedTextEditResult } from "./apply-text-edits.js";
 
 // ─── Runtime: range mapping ──────────────────────────────────────────────────────
 export {
@@ -444,6 +491,7 @@ export type {
 export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";
 export type {
   EditorDiagnosticsSummary,
+  EditorStatusLanguageService,
   EditorStatusTone,
   EditorStatusRun,
   EditorStatusBarInput,

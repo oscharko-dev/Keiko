@@ -122,6 +122,74 @@ export {
   parseEditorDocumentVersion,
 } from "./editor-session.js";
 
+// ─── Editor layout / dirty-close / hot-exit contracts (Issues #1375 + #1376) ────
+export type {
+  CreateEditorLayoutStateV2Input,
+  EditorLayoutAction,
+  EditorLayoutNode,
+  EditorLayoutPaneNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+  EditorTabDragIntent,
+} from "./editor-layout.js";
+export {
+  EDITOR_LAYOUT_SCHEMA_VERSION,
+  activeEditorPane,
+  createEditorLayoutStateV2,
+  editorLayoutOpenFiles,
+  editorLayoutPaneIds,
+  editorLayoutPanes,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "./editor-layout.js";
+export type {
+  EditorDirtyCloseDecision,
+  EditorDirtyCloseIntent,
+  EditorDirtyCloseReason,
+  EditorDirtyCloseResolution,
+} from "./editor-dirty-close.js";
+export { createEditorDirtyCloseIntent } from "./editor-dirty-close.js";
+export type { EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
+export {
+  EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  EDITOR_HOT_EXIT_TTL_MS,
+  editorHotExitSnapshotExpired,
+  isEditorHotExitSnapshotV1,
+} from "./editor-hot-exit.js";
+
+// ─── Editor agent API (Issue #1391) ─────────────────────────────────────────────
+export type {
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
+  EditorAgentActionStatus,
+  EditorAgentActionType,
+  EditorAgentActionsPostBody,
+  EditorAgentBridgeSnapshotRequest,
+  EditorAgentEvent,
+  EditorAgentPaneSnapshot,
+  EditorAgentParse,
+  EditorAgentParseFail,
+  EditorAgentParseOk,
+  EditorAgentSessionSnapshot,
+  EditorAgentSessionsResponse,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotResponse,
+  EditorAgentSnapshotTextMode,
+} from "./editor-agent.js";
+export {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentAction,
+  isEditorAgentActionResult,
+  isEditorAgentSessionSnapshot,
+  parseEditorAgentActionsPostBody,
+  parseEditorAgentSnapshotRequest,
+} from "./editor-agent.js";
+
 // ─── Language service (Issue #1198) ───────────────────────────────────────────────
 // Provider-pluggable, language-agnostic deterministic language-intelligence contracts
 // (completion, diagnostics, hover, document symbols). Owned by #1198, disjoint from the
@@ -145,6 +213,7 @@ export type {
   LanguageTextEdit,
   LanguageFormattingOptions,
   LanguageFormattingResult,
+  LanguageProviderAvailability,
   LanguageProviderDescriptor,
   LanguageServiceCapabilities,
   LanguageServiceLimits,

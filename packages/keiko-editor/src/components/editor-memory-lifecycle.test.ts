@@ -172,6 +172,7 @@ function buildEditor(registry: LiveRegistry, container: HTMLElement): MountEdito
   };
   return {
     addAction: () => registry.track(),
+    getAction: () => null,
     onDidChangeCursorPosition: () => registry.track(),
     onDidChangeCursorSelection: () => registry.track(),
     onDidChangeModel: () => registry.track(),

@@ -2,8 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import type { AppWindow } from "../windows/types";
 
-type UpdateCfg = (patch: Record<string, string | number | boolean | undefined>) => void;
+type UpdateCfg = (patch: AppWindow["cfg"]) => void;
 
 vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
@@ -116,16 +117,40 @@ vi.mock("./cards/EditorWidget", () => ({
     linkedFilePath,
     linkedCapsuleIds,
     linkedCapsuleSetIds,
+    openFiles,
+    layoutJson,
+    onWorkspaceChange,
   }: {
     readonly root?: string;
     readonly file?: string;
+    readonly openFiles?: readonly string[];
+    readonly layoutJson?: string;
     readonly linkedRoot?: string | null;
     readonly linkedFilePath?: string;
     readonly linkedCapsuleIds?: readonly string[];
     readonly linkedCapsuleSetIds?: readonly string[];
+    readonly onWorkspaceChange?: (patch: {
+      root?: string;
+      file?: string;
+      openFiles?: readonly string[];
+      layoutJson?: string;
+    }) => void;
   }) => (
     <div data-testid="editor-widget">
-      {`${root ?? ""}:${file ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}`}
+      <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}`}</span>
+      <button
+        type="button"
+        onClick={() =>
+          onWorkspaceChange?.({
+            root: "/next-root",
+            file: "README.md",
+            openFiles: ["README.md"],
+            layoutJson: '{"version":1}',
+          })
+        }
+      >
+        Change editor workspace
+      </button>
     </div>
   ),
 }));
@@ -209,7 +234,7 @@ vi.mock("./figma/FigmaSnapshotWindow", () => ({
     readonly snapshotRunId?: string;
     readonly selectedScreenIds?: readonly string[];
     readonly sourceWindowId?: string;
-    readonly updateCfg: (patch: Record<string, string>) => void;
+    readonly updateCfg: (patch: AppWindow["cfg"]) => void;
     readonly openScreenSource?: (input: {
       readonly snapshotRunId: string;
       readonly screenId: string;
@@ -361,7 +386,11 @@ describe("workspace widget renderer registry", () => {
       resolvedRoot: undefined,
     });
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("editor", { root: "/repo", file: "src/app.ts" });
+    expect(ctx.openWindow).toHaveBeenCalledWith("editor", {
+      root: "/repo",
+      file: "src/app.ts",
+      openFiles: ["src/app.ts"],
+    });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
     fireEvent.click(screen.getByTestId("review-widget"));
@@ -369,15 +398,25 @@ describe("workspace widget renderer registry", () => {
 
     view.rerender(
       <>
-        {WIN_TYPES.editor.render({ root: "/repo", file: "src/app.ts" }, ctx)}
+        {WIN_TYPES.editor.render(
+          { root: "/repo", file: "src/app.ts", openFiles: ["src/app.ts", "package.json"] },
+          ctx,
+        )}
         {WIN_TYPES.browser.render({ url: "https://example.test" }, ctx)}
         {WIN_TYPES.terminal.render({ cwd: "/repo", projectPath: "/repo" }, ctx)}
         {WIN_TYPES.agents.render({ workflow: "verify", access: "full", keikoMode: true }, ctx)}
       </>,
     );
     expect(screen.getByTestId("editor-widget")).toHaveTextContent(
-      "/repo:src/app.ts:/repo:src/app.ts:cap-1:set-1",
+      "/repo:src/app.ts:src/app.ts|package.json::/repo:src/app.ts:cap-1:set-1",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Change editor workspace" }));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      root: "/next-root",
+      file: "README.md",
+      openFiles: ["README.md"],
+      layoutJson: '{"version":1}',
+    });
     expect(screen.getByTestId("browser-widget")).toHaveTextContent("https://example.test");
     expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
     expect(screen.getByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");

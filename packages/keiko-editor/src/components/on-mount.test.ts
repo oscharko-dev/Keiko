@@ -80,6 +80,7 @@ interface FakeActionDescriptor {
 
 interface FakeEditor {
   addAction: (descriptor: FakeActionDescriptor) => FakeDisposable;
+  getAction: (id: string) => { run: () => void } | null;
   onDidChangeCursorPosition: (listener: (event: FakeCursorEvent) => void) => FakeDisposable;
   onDidChangeCursorSelection: (listener: (event: FakeSelectionEvent) => void) => FakeDisposable;
   focus: () => void;
@@ -169,6 +170,7 @@ function buildFakes(): Fakes {
         descriptors.push(descriptor);
         return actionDisposable;
       },
+      getAction: () => null,
       onDidChangeCursorPosition: (listener) => {
         fakes.cursorListener = listener;
         return cursorDisposable;

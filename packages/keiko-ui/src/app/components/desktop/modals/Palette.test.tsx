@@ -6,7 +6,7 @@ import { Palette } from "./Palette";
 // 10 cards in the 3-column .palette-grid — mirrors the live picker size the
 // C363 audit observed (rows: [0,1,2] [3,4,5] [6,7,8] [9]).
 const ORDER = TYPE_ORDER.slice(0, 10);
-const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "files", "agents"];
+const PICKER_ORDER: readonly WindowType[] = ["chat", "connector", "files", "editor", "agents"];
 
 function renderPalette(order: readonly WindowType[] = ORDER): {
   onAdd: ReturnType<typeof vi.fn>;
@@ -53,8 +53,8 @@ describe("Palette", () => {
     expect(TYPE_ORDER).not.toContain("integ");
   });
 
-  it("does not expose the hidden Editor surface in the default window order", () => {
-    expect(TYPE_ORDER).not.toContain("editor");
+  it("exposes the Editor surface in the default window order", () => {
+    expect(TYPE_ORDER).toContain("editor");
   });
 
   it("does not expose the hidden Browser surface in the default window order", () => {
@@ -87,12 +87,12 @@ describe("Palette", () => {
     expect(cardNames()).not.toContain("Figma Snapshot");
   });
 
-  it("lays out the four visible picker cards as a two-column grid", () => {
+  it("lays out the five visible picker cards as a three-column grid", () => {
     renderPalette(PICKER_ORDER);
     const dialog = screen.getByRole("dialog");
 
-    expect(dialog).toHaveAttribute("data-columns", "2");
-    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Files", "Agents"]);
+    expect(dialog).toHaveAttribute("data-columns", "3");
+    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Files", "Editor", "Agents"]);
   });
 
   it("uses the compact two-column arrangement for a two-card picker", () => {
@@ -153,7 +153,7 @@ describe("Palette", () => {
     expect(list[0]).toHaveFocus();
   });
 
-  it("moves focus with arrow keys in the two-column picker grid", () => {
+  it("moves focus with arrow keys in the three-column picker grid", () => {
     renderPalette(PICKER_ORDER);
     const list = cards();
     const first = list[0] as HTMLElement;
@@ -162,12 +162,12 @@ describe("Palette", () => {
     expect(list[1]).toHaveFocus();
 
     fireEvent.keyDown(list[1] as HTMLElement, { key: "ArrowDown" });
+    expect(list[4]).toHaveFocus();
+
+    fireEvent.keyDown(list[4] as HTMLElement, { key: "ArrowLeft" });
     expect(list[3]).toHaveFocus();
 
-    fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowLeft" });
-    expect(list[2]).toHaveFocus();
-
-    fireEvent.keyDown(list[2] as HTMLElement, { key: "ArrowUp" });
+    fireEvent.keyDown(list[3] as HTMLElement, { key: "ArrowUp" });
     expect(list[0]).toHaveFocus();
   });
 

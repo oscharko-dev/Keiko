@@ -15,7 +15,7 @@
  * the host's job (#1196).
  */
 import { Editor } from "@monaco-editor/react";
-import { useMemo, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, type ReactElement } from "react";
 
 import { inferMonacoLanguageId } from "../monaco/language-inference.js";
 import { buildEditorOptions } from "./editor-options.js";
@@ -126,6 +126,13 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   const handlers = useEditorHandlers(props, view.readOnly);
   const { buffer, fileModel } = props;
   const { options, monacoLanguage } = useEditorConstructionOptions(props, view.readOnly);
+  const lastFormatRequestNonce = useRef(props.formatRequestNonce ?? 0);
+  useEffect(() => {
+    const nonce = props.formatRequestNonce ?? 0;
+    if (nonce === lastFormatRequestNonce.current) return;
+    lastFormatRequestNonce.current = nonce;
+    handlers.formatDocument();
+  }, [handlers, props.formatRequestNonce]);
 
   return (
     <div

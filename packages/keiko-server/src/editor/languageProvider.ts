@@ -74,11 +74,12 @@ export interface LanguageProviderRegistry {
 
 export function createLanguageProviderRegistry(
   providers: readonly LanguageProvider[],
+  unavailableProviders: readonly LanguageProviderDescriptor[] = [],
 ): LanguageProviderRegistry {
   return {
     resolve: (languageId: string): LanguageProvider | undefined =>
       providers.find((provider) => provider.supports(languageId)),
     describe: (): readonly LanguageProviderDescriptor[] =>
-      providers.map((provider) => provider.descriptor),
+      [...providers.map((provider) => provider.descriptor), ...unavailableProviders],
   };
 }

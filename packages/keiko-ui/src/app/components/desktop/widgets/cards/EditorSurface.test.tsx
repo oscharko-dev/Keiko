@@ -20,6 +20,7 @@ const captured: {
   provideHover: unknown;
   provideSymbols: unknown;
   provideFormatting: unknown;
+  formatRequestNonce: number | undefined;
 } = {
   provideCompletions: undefined,
   completionTriggerCharacters: undefined,
@@ -29,6 +30,7 @@ const captured: {
   provideHover: undefined,
   provideSymbols: undefined,
   provideFormatting: undefined,
+  formatRequestNonce: undefined,
 };
 vi.mock("@oscharko-dev/keiko-editor", () => ({
   KeikoCodeEditor: (props: {
@@ -42,6 +44,7 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
     provideHover?: unknown;
     provideSymbols?: unknown;
     provideFormatting?: unknown;
+    formatRequestNonce?: number;
   }) => {
     captured.provideCompletions = props.provideCompletions;
     captured.completionTriggerCharacters = props.completionTriggerCharacters;
@@ -51,6 +54,7 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
     captured.provideHover = props.provideHover;
     captured.provideSymbols = props.provideSymbols;
     captured.provideFormatting = props.provideFormatting;
+    captured.formatRequestNonce = props.formatRequestNonce;
     return (
       <div
         data-testid="code-editor"
@@ -94,6 +98,7 @@ afterEach(() => {
   captured.provideHover = undefined;
   captured.provideSymbols = undefined;
   captured.provideFormatting = undefined;
+  captured.formatRequestNonce = undefined;
 });
 
 describe("EditorSurface", () => {
@@ -160,5 +165,11 @@ describe("EditorSurface", () => {
     expect(captured.provideHover).toBe(provideHover);
     expect(captured.provideSymbols).toBe(provideSymbols);
     expect(captured.provideFormatting).toBe(provideFormatting);
+  });
+
+  it("forwards format request nonces to the editor", () => {
+    ensureMonacoRuntime.mockReturnValue({ supported: true });
+    render(<EditorSurface {...buildProps({ formatRequestNonce: 3 })} />);
+    expect(captured.formatRequestNonce).toBe(3);
   });
 });

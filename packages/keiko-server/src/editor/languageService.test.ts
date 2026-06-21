@@ -47,9 +47,9 @@ describe("describeLanguageCapabilities", () => {
   it("advertises the TypeScript/JavaScript provider and its operations", () => {
     const capabilities = describeLanguageCapabilities();
     expect(capabilities.schemaVersion).toBe("1");
-    expect(capabilities.providers).toHaveLength(1);
-    const [provider] = capabilities.providers;
+    const provider = capabilities.providers.find((entry) => entry.id === "typescript");
     expect(provider?.id).toBe("typescript");
+    expect(provider?.availability).toBe("available");
     expect(provider?.languages).toEqual([
       "typescript",
       "typescriptreact",
@@ -63,6 +63,12 @@ describe("describeLanguageCapabilities", () => {
       "symbols",
       "formatting",
     ]);
+    expect(capabilities.providers.find((entry) => entry.id === "json")?.availability).toBe(
+      "available",
+    );
+    const pythonProvider = capabilities.providers.find((entry) => entry.id === "python-lsp");
+    expect(pythonProvider?.availability).toBe("unavailable");
+    expect(typeof pythonProvider?.unavailableReason).toBe("string");
   });
 });
 
@@ -559,7 +565,7 @@ describe("provider pluggability (AC7)", () => {
   function stubProvider(): LanguageProvider {
     const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
     return {
-      descriptor: { id: "stub", languages: ["fictional"], operations: ["diagnostics"] },
+      descriptor: { id: "stub", languages: ["fictional"], operations: ["diagnostics"], availability: "available" },
       supports: (languageId: string): boolean => languageId === "fictional",
       getDiagnostics: () => ({
         diagnostics: [{ range, severity: "warning", message: "stub diagnostic", source: "stub" }],

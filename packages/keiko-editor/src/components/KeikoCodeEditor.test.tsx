@@ -22,6 +22,7 @@ interface CapturedEditor {
     empty: boolean;
   }) => void;
   runSaveAction: () => void;
+  formatRuns: () => number;
   saveKeybinding: () => number | undefined;
   focus: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
@@ -111,6 +112,7 @@ vi.mock("@monaco-editor/react", () => {
   };
   interface FakeEditorShape {
     addAction: (descriptor: { keybindings?: number[]; run: () => void }) => { dispose: () => void };
+    getAction: (id: string) => { run: () => void } | null;
     onDidChangeCursorPosition: (
       listener: (e: { position: { lineNumber: number; column: number } }) => void,
     ) => { dispose: () => void };
@@ -126,6 +128,7 @@ vi.mock("@monaco-editor/react", () => {
     container: { current: HTMLDivElement | null };
     disposed: { action: boolean; cursor: boolean; selection: boolean };
     saveRun: () => void;
+    formatRunCount: number;
     saveKeybindings: readonly number[] | undefined;
     cursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | null;
     selectionListener: ((e: { selection: FakeSelection }) => void) | null;
@@ -138,6 +141,7 @@ vi.mock("@monaco-editor/react", () => {
       container: { current: null },
       disposed: { action: false, cursor: false, selection: false },
       saveRun: (): void => undefined,
+      formatRunCount: 0,
       saveKeybindings: undefined,
       cursorListener: null,
       selectionListener: null,
@@ -155,6 +159,14 @@ vi.mock("@monaco-editor/react", () => {
           },
         };
       },
+      getAction: (id): { run: () => void } | null =>
+        id === "editor.action.formatDocument"
+          ? {
+              run: (): void => {
+                s.formatRunCount += 1;
+              },
+            }
+          : null,
       onDidChangeCursorPosition: (listener): { dispose: () => void } => {
         s.cursorListener = listener;
         return {
@@ -194,6 +206,7 @@ vi.mock("@monaco-editor/react", () => {
       runSaveAction: (): void => {
         s.saveRun();
       },
+      formatRuns: (): number => s.formatRunCount,
       saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
       focus: s.focus,
       disposed: s.disposed,
@@ -349,6 +362,18 @@ describe("KeikoCodeEditor — save command", () => {
     await flushMount();
     captured.editor?.runSaveAction();
     expect(onSaveRequested).not.toHaveBeenCalled();
+  });
+
+  it("runs Monaco format document when the host format request nonce changes", async () => {
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({ formatRequestNonce: 0 })} />);
+    await flushMount();
+    expect(captured.editor?.formatRuns()).toBe(0);
+
+    rerender(<KeikoCodeEditor {...baseProps({ formatRequestNonce: 1 })} />);
+    expect(captured.editor?.formatRuns()).toBe(1);
+
+    rerender(<KeikoCodeEditor {...baseProps({ formatRequestNonce: 1 })} />);
+    expect(captured.editor?.formatRuns()).toBe(1);
   });
 
   it("binds the save action to the Ctrl/Cmd+S chord", async () => {
