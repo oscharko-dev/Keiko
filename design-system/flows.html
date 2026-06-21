@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flows · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-inputs.css" />
+    <link rel="stylesheet" href="keiko-nav.css" />
+    <style>
+      .screen { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow-card); overflow: hidden; }
+      .screen-top { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); }
+      .screen-top .d { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); }
+      .screen-top .t { margin-left: 8px; font: 11px var(--font-mono); color: var(--fg-faint); }
+      .screen-body { padding: 26px; }
+      .auth { max-width: 360px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+      .auth .logo { width: 38px; height: 38px; border-radius: 11px; background: var(--accent-dim); border: 1px solid var(--accent-line); display: grid; place-items: center; color: var(--accent-text); }
+      .auth h3 { font-size: 21px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+      .auth .sub { font-size: 13px; color: var(--fg-muted); margin-top: -8px; }
+      .auth .alt { text-align: center; font-size: 12.5px; color: var(--fg-muted); }
+      .auth .alt a { color: var(--accent-text); }
+      .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      .set-row { display: flex; align-items: center; gap: 14px; padding: 15px 2px; border-bottom: 1px solid var(--line-soft); }
+      .set-row:last-child { border-bottom: 0; }
+      .set-row .tx { flex: 1; }
+      .set-row .tt { font-size: 13.5px; color: var(--fg); font-weight: 500; }
+      .set-row .ts { font-size: 12px; color: var(--fg-muted); margin-top: 2px; line-height: 1.45; }
+      @media (max-width: 820px) { .two { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Patterns · Flows</div>
+        <h1>Whole <span class="dim">flows.</span></h1>
+        <p class="lead">Where components become product. Auth, first-run onboarding, settings and a multi-step form — each assembled only from shipped components and tokens, so the patterns stay honest and reproducible.</p>
+      </header>
+
+      <!-- AUTH -->
+      <section class="sec" id="auth">
+        <div class="sec-head"><div class="num">01 — AUTH</div><h2>Sign in</h2><p>Calm, centred, one primary action. Secondary providers are quiet; the switch to sign-up is plain text.</p></div>
+        <div class="screen">
+          <div class="screen-top"><span class="d"></span><span class="d"></span><span class="d"></span><span class="t">keiko.app/login</span></div>
+          <div class="screen-body">
+            <div class="auth">
+              <div class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L13.6 8.4 L19 10 L13.6 11.6 L12 17 L10.4 11.6 L5 10 L10.4 8.4 Z" /></svg></div>
+              <div><h3>Welcome back</h3><div class="sub">Sign in to your Keiko workspace.</div></div>
+              <div class="c-form-row"><label class="c-label">Email</label><input class="c-field" value="maya@studio.co" /></div>
+              <div class="c-form-row"><label class="c-label">Password</label><input class="c-field" type="password" value="········" /></div>
+              <button class="c-btn c-btn--primary" style="justify-content:center">Sign in</button>
+              <button class="c-btn" style="justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>Continue with SSO</button>
+              <div class="alt">New here? <a href="#">Create an account</a></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ONBOARDING -->
+      <section class="sec" id="onboarding">
+        <div class="sec-head"><div class="num">02 — ONBOARDING</div><h2>First run</h2><p>A step indicator sets expectations; one decision per screen. This is step 2 of 3.</p></div>
+        <div class="screen">
+          <div class="screen-top"><span class="d"></span><span class="d"></span><span class="d"></span><span class="t">Set up · 2 of 3</span></div>
+          <div class="screen-body">
+            <div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:22px">
+              <div class="c-steps" style="justify-content:center">
+                <div class="c-step done"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5"/></svg></span></div>
+                <div class="c-step-line"></div>
+                <div class="c-step active"><span class="dot">2</span><span class="lb">Pick a model</span></div>
+                <div class="c-step-line"></div>
+                <div class="c-step"><span class="dot">3</span></div>
+              </div>
+              <div style="text-align:center"><h3 style="font-size:20px;font-weight:600;margin:0 0 6px;letter-spacing:-0.01em">Choose a default model</h3><p style="font-size:13px;color:var(--fg-muted);margin:0">You can change this per agent later.</p></div>
+              <div class="demo-stack" style="gap:10px">
+                <label class="c-radio" style="padding:13px 15px;border:1px solid var(--accent-line);border-radius:var(--radius-sm);background:var(--accent-dim)"><input type="radio" name="m" checked /><span class="rb"></span><span><b style="color:var(--fg)">gpt-oss-120b</b> — balanced, fast, default</span></label>
+                <label class="c-radio" style="padding:13px 15px;border:1px solid var(--line-soft);border-radius:var(--radius-sm)"><input type="radio" name="m" /><span class="rb"></span><span><b style="color:var(--fg)">claude-sonnet</b> — deeper reasoning</span></label>
+              </div>
+              <div style="display:flex;gap:10px;justify-content:flex-end"><button class="c-btn">Back</button><button class="c-btn c-btn--primary">Continue</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS + FORM -->
+      <section class="sec" id="settings">
+        <div class="sec-head"><div class="num">03 — SETTINGS &amp; FORMS</div><h2>Settings &amp; a multi-field form</h2><p>Settings group toggles with explanatory subtext; forms keep labels, hints and validation consistent.</p></div>
+        <div class="two">
+          <div class="screen">
+            <div class="screen-top"><span class="d"></span><span class="d"></span><span class="d"></span><span class="t">Settings · Notifications</span></div>
+            <div class="screen-body">
+              <div class="set-row"><div class="tx"><div class="tt">Run failures</div><div class="ts">Alert when an agent run errors.</div></div><button class="c-toggle" aria-checked="true"><span></span></button></div>
+              <div class="set-row"><div class="tx"><div class="tt">Weekly digest</div><div class="ts">A Monday summary of activity.</div></div><button class="c-toggle" aria-checked="true"><span></span></button></div>
+              <div class="set-row"><div class="tx"><div class="tt">Mentions</div><div class="ts">When a teammate @-mentions you.</div></div><button class="c-toggle" aria-checked="false"><span></span></button></div>
+            </div>
+          </div>
+          <div class="screen">
+            <div class="screen-top"><span class="d"></span><span class="d"></span><span class="d"></span><span class="t">New agent</span></div>
+            <div class="screen-body">
+              <div class="c-form-grid">
+                <div class="c-form-row"><label class="c-label">Name</label><input class="c-field" value="Release Notes" /></div>
+                <div class="c-form-row"><label class="c-label">Trigger</label><div class="c-select" style="width:100%"><select style="width:100%"><option>On tag push</option><option>On schedule</option><option>Manual</option></select><span class="chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 l6 6 6-6"/></svg></span></div></div>
+                <div class="c-form-row"><label class="c-label">Webhook URL</label><input class="c-field c-field--invalid" value="nothttps://" /><div class="c-field-error"><span class="ico"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7 v6 M12 16 h.01"/></svg></span>Enter a valid https URL.</div></div>
+                <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px"><button class="c-btn">Cancel</button><button class="c-btn c-btn--primary">Create agent</button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      document.addEventListener("click", function (e) {
+        var t = e.target.closest(".c-toggle");
+        if (t) t.setAttribute("aria-checked", t.getAttribute("aria-checked") === "true" ? "false" : "true");
+      });
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

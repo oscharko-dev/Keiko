@@ -10,9 +10,7 @@
       } catch (e) { document.documentElement.dataset.theme = "dark"; }
     </script>
     <title>Keiko Icon System · Lift</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="lift-doc.css" />
@@ -23,35 +21,8 @@
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html">
-        <img src="assets/keiko-logo.svg" alt="Keiko logo" />
-        <span><span class="bt">Keiko</span><span class="bs">Design System</span></span>
-      </a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item on" href="Keiko Icon System.html" aria-current="page"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item" href="editor-theme.html"><span class="ni-dot"></span>Editor Theme</a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <div class="nav-label">Review</div>
-      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span>
-        <span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.3.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
     <main id="main">
       <div id="root"></div>
     </main>
@@ -254,6 +225,8 @@
           ["Voice & speech", ["mic", "micOff", "speak", "waveform", "speaker", "mute", "headphones", "textToSpeech", "speechToText", "translate"]],
           ["Governance & security", ["shield", "shieldCheck", "shieldAlert", "lock", "unlock", "key", "policy", "eval", "auditTrail", "permission", "user"]],
           ["AI control & feedback", ["regenerate", "stop", "play", "pause", "thumbsUp", "thumbsDown", "clock"]],
+          ["Editor · run & debug", ["run", "debug", "bug", "breakpoint", "resume", "stepOver", "stepInto", "stepOut", "restart", "rollback", "build", "coverage", "profiler"]],
+          ["Editor · tools & VCS", ["project", "structure", "hierarchy", "endpoints", "bookmark", "bookmarks", "todo", "problems", "inspect", "learn", "commit", "pullRequest", "merge", "compare"]],
           ["Status & messaging", ["error", "alert", "info", "success", "bell", "archive"]],
           ["Connectivity & data", ["plug", "puzzle", "link", "globe", "cloud", "database", "barChart", "lineChart", "pieChart", "activity"]],
           ["Utility", ["eye", "eyeOff", "copy", "trash", "edit", "download", "upload", "filter", "ellipsis", "external", "code", "sun", "moon"]],
@@ -370,20 +343,7 @@ export const maximize = (
 
       ReactDOM.createRoot(document.getElementById("root")).render(<App />);
     </script>
-    <script>
-      function dsSyncToggle() {
-        var l = document.documentElement.dataset.theme === "light";
-        document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; });
-      }
-      function dsToggleTheme() {
-        var h = document.documentElement;
-        var n = h.dataset.theme === "light" ? "dark" : "light";
-        h.dataset.theme = n;
-        try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {}
-        dsSyncToggle();
-      }
-      dsSyncToggle();
-    </script>
+    
       <script src="theme-control.js"></script>
 </body>
 </html>

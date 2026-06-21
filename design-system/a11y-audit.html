@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Measured Contrast · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-inputs.css" />
+    <style>
+      .m-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .m-tbl th { text-align: right; font: 500 10px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-faint); padding: 0 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+      .m-tbl th.l { text-align: left; }
+      .m-tbl td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; text-align: right; }
+      .m-tbl td.l { text-align: left; }
+      .m-tbl tr:last-child td { border-bottom: 0; }
+      .m-tbl .role { color: var(--fg); font-weight: 500; white-space: nowrap; }
+      .m-tbl .tok { font-family: var(--font-mono); font-size: 11px; color: var(--fg-faint); }
+      .m-num { font-family: var(--font-mono); font-size: 12.5px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+      .m-num.worst { color: var(--fg); font-weight: 600; }
+      .m-verdict { display: inline-flex; align-items: center; gap: 5px; font: 600 10px var(--font-mono); padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+      .m-verdict.aaa { color: var(--accent-text); border: 1px solid var(--accent-line); background: var(--accent-dim); }
+      .m-verdict.aa { color: var(--fg); border: 1px solid var(--line); }
+      .m-verdict.fail { color: var(--danger); border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent); background: color-mix(in oklch, var(--danger) 10%, transparent); }
+      .swix { display: inline-block; width: 22px; height: 14px; border-radius: 3px; border: 1px solid var(--line-soft); vertical-align: middle; margin-right: 9px; }
+      .m-cat { font: 600 11px var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent-text); padding: 22px 10px 8px; }
+      .selftest { display: flex; flex-wrap: wrap; gap: 10px; }
+      .st-chip { display: flex; align-items: center; gap: 9px; padding: 9px 13px; border-radius: var(--radius-sm); border: 1px solid var(--line-soft); background: var(--card); font-size: 12.5px; }
+      .st-chip .n { font-family: var(--font-mono); color: var(--fg); }
+      .st-chip .ok { color: var(--accent-text); }
+      .st-chip .bad { color: var(--danger); }
+      .sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 26px; }
+      .sum .s { padding: 20px 22px; }
+      .sum .s .k { font: 600 10.5px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-text); }
+      .sum .s .big { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin-top: 8px; }
+      .sum .s p { font-size: 12.5px; color: var(--fg-muted); margin: 4px 0 0; line-height: 1.5; }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Foundations · Proof</div>
+        <h1>Contrast, <span class="dim">measured live.</span></h1>
+        <p class="lead">Not a single ratio on this page is typed by hand. Each one is computed in your browser right now — the token is rasterised to sRGB and run through the WCAG relative-luminance formula, in all four resolved palettes at once: dark, light, dark + high-contrast, light + high-contrast. The worst of the four decides the verdict.</p>
+      </header>
+
+      <section class="sec" id="summary">
+        <div class="sec-head"><div class="num">00 — RESULT</div><h2>Verdict</h2><p>Computed on load across every component tone. A pass means the <em>worst</em> of the four modes still clears its WCAG minimum (4.5:1 for text, 3:1 for large text, UI borders and the focus ring).</p></div>
+        <div class="sum" id="summary-cards"></div>
+        <div class="note"><span class="tag" style="color:var(--accent-text)">Engine self-test</span><div>Before trusting the table, the measurement engine is validated against known pairs. These must read exactly as physics dictates, or every number below is suspect.</div></div>
+        <div class="selftest" id="selftest" style="margin-top:14px"></div>
+      </section>
+
+      <section class="sec" id="matrix">
+        <div class="sec-head"><div class="num">01 — FULL MATRIX</div><h2>Every tone, every mode</h2><p>Text, status, the new component tones and the UI graphics that must clear 3:1. Sorted into groups; the worst-mode column is what ships.</p></div>
+        <div class="card" style="padding:8px 24px;overflow-x:auto">
+          <table class="m-tbl">
+            <thead>
+              <tr><th class="l">Role</th><th>Dark</th><th>Light</th><th>Dark·HC</th><th>Light·HC</th><th>Worst</th><th>Min</th><th class="l" style="text-align:left;padding-left:16px">Verdict</th></tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="note flag" style="margin-top:18px"><span class="tag">Method</span><div>Translucent surfaces (status tints, the accent-dim tag) are composited over their base surface before measuring, exactly as the eye sees them. Large-text / UI rows require <b>3:1</b>; everything else <b>4.5:1</b>. <b>AAA</b> marks tones that also clear the stricter 7:1 / 4.5:1 bar.</div></div>
+      </section>
+    </main>
+
+    <script src="a11y-measure.js"></script>
+    <script>
+      // ---- engine self-test (known pairs) ----
+      function st(label, fg, bg, expect) {
+        var r = KeikoA11y.ratio(KeikoA11y.toRGBA(fg), KeikoA11y.toRGBA(bg));
+        var okv = Math.abs(r - expect) < 0.1;
+        return '<div class="st-chip"><span>' + label + '</span><span class="n">' + r.toFixed(2) + ':1</span><span class="' + (okv ? "ok" : "bad") + '">' + (okv ? "\u2713 = " + expect : "\u2717 \u2260 " + expect) + '</span></div>';
+      }
+      document.getElementById("selftest").innerHTML =
+        st("white on black", "#fff", "#000", 21.00) +
+        st("black on white", "#000", "#fff", 21.00) +
+        st("white on white", "#fff", "#fff", 1.00) +
+        st("#777 on white", "#777777", "#ffffff", 4.48);
+
+      // ---- the matrix ----
+      var CHECKS = [
+        { cat: "Text on card surface (≥ 4.5:1)", min: 4.5 },
+        { role: "Primary — titles, values", fg: "var(--fg)", bg: "var(--card)" },
+        { role: "Muted — body, secondary", fg: "var(--fg-muted)", bg: "var(--card)" },
+        { role: "Dim — tertiary, glyphs", fg: "var(--fg-dim)", bg: "var(--card)" },
+        { role: "Faint — captions, labels", fg: "var(--fg-faint)", bg: "var(--card)" },
+        { role: "Accent — links, emphasis", fg: "var(--accent-text)", bg: "var(--card)" },
+
+        { cat: "Status text (≥ 4.5:1)", min: 4.5 },
+        { role: "Success — on success tint", fg: "var(--ok)", bg: "color-mix(in oklch, var(--ok) 12%, transparent)" },
+        { role: "Danger — on danger tint", fg: "var(--danger)", bg: "color-mix(in oklch, var(--danger) 12%, transparent)" },
+        { role: "Warning — on warning tint", fg: "var(--warn)", bg: "color-mix(in oklch, var(--warn) 12%, transparent)" },
+        { role: "Info — on info tint", fg: "var(--info)", bg: "color-mix(in oklch, var(--info) 12%, transparent)" },
+
+        { cat: "On filled accent (≥ 4.5:1)", min: 4.5 },
+        { role: "Ink on accent button", fg: "var(--button-primary-text)", bg: "var(--button-primary-surface)", base: "var(--button-primary-surface)" },
+
+        { cat: "New component tones (≥ 4.5:1)", min: 4.5 },
+        { role: "Tag text — on accent-dim", fg: "var(--tag-text)", bg: "var(--tag-surface)" },
+        { role: "Pagination current", fg: "var(--pagination-text-current)", bg: "var(--pagination-surface-current)" },
+        { role: "Combobox selected mark", fg: "var(--combobox-option-selected-mark)", bg: "var(--combobox-option-surface-hover)", base: "var(--combobox-option-surface-hover)" },
+        { role: "AI thinking indicator", fg: "var(--ai-thinking-indicator)", bg: "var(--ai-response-surface)", base: "var(--ai-response-surface)" },
+        { role: "Input placeholder", fg: "var(--input-placeholder)", bg: "var(--input-surface)", base: "var(--input-surface)" },
+        { role: "Table header label", fg: "var(--table-header-text)", bg: "var(--table-header-surface)", base: "var(--table-header-surface)" },
+        { role: "AI citation marker", fg: "var(--accent-on-tint)", bg: "var(--ai-source-surface)" },
+        { role: "Accent button text", fg: "var(--accent-on-tint)", bg: "var(--surface-accent-subtle)" },
+        { role: "Tag remove / chip", fg: "var(--tag-text)", bg: "var(--tag-surface)" },
+
+        { cat: "UI graphics & large text (≥ 3:1)", min: 3 },
+        { role: "Focus ring", fg: "var(--accent-text)", bg: "var(--card)", large: true },
+        { role: "Slider fill", fg: "var(--slider-fill)", bg: "var(--card)", large: true },
+        { role: "Checkbox checked fill", fg: "var(--checkbox-surface-selected)", bg: "var(--card)", large: true },
+        { role: "Mark on checked fill", fg: "var(--checkbox-mark)", bg: "var(--checkbox-surface-selected)", base: "var(--checkbox-surface-selected)", large: true },
+        { role: "Sort indicator", fg: "var(--table-sort-indicator)", bg: "var(--table-header-surface)", base: "var(--table-header-surface)", large: true },
+
+        { cat: "Decorative — informational, not a WCAG requirement", min: 3, info: true },
+        { role: "Hairline divider", fg: "var(--line)", bg: "var(--card)", info: true }
+      ];
+
+      var rows = document.getElementById("rows");
+      var total = 0, passed = 0, aaa = 0, worstOverall = Infinity, worstRole = "";
+      var html = "";
+      var curMin = 4.5;
+      CHECKS.forEach(function (c) {
+        if (c.cat) { html += '<tr><td class="m-cat" colspan="8">' + c.cat + '</td></tr>'; curMin = c.min; return; }
+        var res = KeikoA11y.measure({ fg: c.fg, bg: c.bg, base: c.base, min: curMin });
+        function cell(m) { var r = res.ratios[m]; return '<td class="m-num">' + r.toFixed(2) + '</td>'; }
+        var v;
+        if (c.info) {
+          v = '<span class="m-verdict aa">INFO</span>';
+        } else {
+          total++; if (res.pass) passed++; if (res.aaa) aaa++;
+          if (res.min < worstOverall) { worstOverall = res.min; worstRole = c.role; }
+          v = !res.pass ? '<span class="m-verdict fail">FAIL</span>' : (res.aaa ? '<span class="m-verdict aaa">AAA</span>' : '<span class="m-verdict aa">AA</span>');
+        }
+        html += '<tr>' +
+          '<td class="l"><span class="swix" style="background:' + c.fg + '"></span><span class="role">' + c.role + '</span> <span class="tok">' + c.fg.replace("var(", "").replace(")", "") + '</span></td>' +
+          cell("dark") + cell("light") + cell("darkHC") + cell("lightHC") +
+          '<td class="m-num worst">' + res.min.toFixed(2) + '</td>' +
+          '<td class="m-num">' + (c.info ? "—" : curMin.toFixed(1)) + '</td>' +
+          '<td class="l" style="padding-left:16px">' + v + '</td>' +
+        '</tr>';
+      });
+      rows.innerHTML = html;
+
+      document.getElementById("summary-cards").innerHTML =
+        '<div class="card s"><div class="k">Checks passed</div><div class="big" style="color:' + (passed === total ? "var(--accent-text)" : "var(--danger)") + '">' + passed + ' / ' + total + '</div><p>Every tone, judged by its worst of four modes.</p></div>' +
+        '<div class="card s"><div class="k">Also AAA</div><div class="big">' + aaa + ' / ' + total + '</div><p>Clear the stricter 7:1 / 4.5:1 bar too.</p></div>' +
+        '<div class="card s"><div class="k">Tightest margin</div><div class="big">' + worstOverall.toFixed(2) + '<small style="font-size:15px;color:var(--fg-faint)">:1</small></div><p>' + worstRole + ' — the closest call, still above its minimum.</p></div>';
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

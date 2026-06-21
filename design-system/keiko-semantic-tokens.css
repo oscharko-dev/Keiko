@@ -65,6 +65,7 @@
   --text-heading: 17px;
   --text-title: 22px;
   --text-title-lg: 28px;
+  --text-display-sm: 36px;  /* fills the gap between title-lg and display */
   --text-display: 50px;
 
   /* ───────────────────────── SCALE · OPACITY ─────────────────────────── */
@@ -108,6 +109,29 @@
   --z-toast: 500;
   --z-tooltip: 600;
 
+  /* ───────────────────────── SCALE · BREAKPOINTS ─────────────────────
+     Named viewport thresholds. 900px is the existing layout reflow; the
+     rest frame mobile→ultrawide. (Custom properties can't drive @media
+     conditions directly — these are the canonical reference the media
+     queries mirror, so the numbers live in one place.) */
+  --bp-xs: 480px;
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 900px;
+  --bp-xl: 1200px;
+  --bp-2xl: 1536px;
+
+  /* ───────────────────────── SCALE · DENSITY ─────────────────────────
+     Comfortable is the default; [data-density="compact"] (end of file)
+     tightens control sizing for data-dense screens. Components read these,
+     so one attribute reflows the whole surface. */
+  --control-height: 34px;
+  --control-height-sm: 28px;
+  --control-height-lg: 40px;
+  --control-pad-x: 14px;
+  --row-pad-y: 9px;
+  --row-pad-x: 12px;
+
   /* ════════════════════════════════════════════════════════════════════
      SEMANTIC TOKENS  — the layer product code should consume.
      All resolve to mode-aware primitives, so they are correct in
@@ -124,6 +148,8 @@
   --surface-elevated: var(--card-2);
   --surface-inset: var(--inset);
   --surface-overlay: var(--surface);
+  --surface-accent-subtle: var(--accent-dim);  /* tinted accent fill — badges, selected rows, rail active */
+  --surface-accent-glow: var(--accent-glow);   /* focus ring fill, selection */
 
   /* text */
   --text-primary: var(--fg);
@@ -139,6 +165,7 @@
   --border-subtle: var(--line-soft);
   --border-default: var(--line);
   --border-strong: var(--line-strong);
+  --border-accent: var(--accent-line);
 
   /* action — interactive intent */
   --action-primary: var(--accent);
@@ -246,9 +273,13 @@
 
   /* Table / data */
   --table-header-text: var(--fg-faint);
+  --table-header-surface: var(--card-2);
   --table-row-border: var(--line-soft);
   --table-row-surface-hover: var(--card);
   --table-row-surface-selected: var(--accent-dim);
+  --table-foot-surface: var(--card-2);
+  --table-sort-indicator: var(--accent-text);
+  --table-num-text: var(--fg);
 
   /* Navigation */
   --nav-surface: var(--surface);
@@ -256,4 +287,91 @@
   --nav-item-text-active: var(--fg);
   --nav-item-surface-active: var(--card);
   --nav-item-indicator: var(--accent-text);
+
+  /* Checkbox / radio */
+  --checkbox-surface: var(--inset);
+  --checkbox-border: var(--line);
+  --checkbox-surface-selected: var(--accent-solid);
+  --checkbox-mark: var(--accent-solid-ink);
+  --radio-surface: var(--inset);
+  --radio-border: var(--line);
+  --radio-border-selected: var(--accent);
+  --radio-dot: var(--accent-solid);
+
+  /* Slider */
+  --slider-track: var(--inset);
+  --slider-fill: var(--accent-solid);
+  --slider-thumb: var(--accent-bright);
+  --slider-thumb-ring: var(--accent-line);
+  --slider-thumb-border: var(--bg);
+
+  /* Stepper / number */
+  --stepper-surface: var(--card);
+  --stepper-border: var(--line);
+  --stepper-button-text: var(--fg-muted);
+  --stepper-button-surface-hover: var(--card-2);
+  --stepper-input-surface: var(--inset);
+
+  /* Combobox */
+  --combobox-surface: var(--card);
+  --combobox-border: var(--line);
+  --combobox-list-surface: var(--surface);
+  --combobox-list-border: var(--line);
+  --combobox-option-surface-hover: var(--card);
+  --combobox-option-selected-mark: var(--accent-text);
+
+  /* Tag input */
+  --tag-surface: var(--accent-dim);
+  --tag-border: var(--accent-line);
+  --tag-text: var(--accent-on-tint);
+
+  /* File upload */
+  --file-dropzone-surface: var(--inset);
+  --file-dropzone-border: var(--line);
+  --file-dropzone-border-active: var(--accent-line);
+  --file-progress: var(--accent);
+  --file-item-surface: var(--card);
+
+  /* Date field */
+  --date-surface: var(--inset);
+  --date-border: var(--line);
+  --date-segment-surface-active: var(--accent-dim);
+  --date-segment-text-active: var(--accent-text);
+
+  /* Breadcrumb / pagination / context menu / steps */
+  --breadcrumb-text: var(--fg-muted);
+  --breadcrumb-text-current: var(--fg);
+  --breadcrumb-surface-hover: var(--card-2);
+  --pagination-text: var(--fg-muted);
+  --pagination-surface-hover: var(--card-2);
+  --pagination-surface-current: var(--accent-dim);
+  --pagination-text-current: var(--accent-on-tint);
+  --pagination-border-current: var(--accent-line);
+  --tab-underline-indicator: var(--accent-text);
+  --context-item-text: var(--fg-muted);
+  --context-item-surface-hover: var(--card);
+  --context-item-text-danger: var(--danger);
+  --step-dot-surface: var(--card);
+  --step-dot-border: var(--line);
+  --step-dot-surface-done: var(--accent-solid);
+  --step-dot-text-done: var(--accent-solid-ink);
+  --step-dot-border-active: var(--accent);
+  --step-line: var(--line);
+  --step-line-done: var(--accent);
+
+  /* Data-viz structure (palette lives in keiko-dataviz.css) */
+  --viz-gridline: var(--line-soft);
+  --viz-axis-text: var(--fg-faint);
+  --viz-tooltip-surface: var(--card-2);
+  --viz-tooltip-value: var(--fg);
+}
+
+/* ───────────── density · compact — tightened control sizing ───────────── */
+[data-density="compact"] {
+  --control-height: 30px;
+  --control-height-sm: 24px;
+  --control-height-lg: 34px;
+  --control-pad-x: 11px;
+  --row-pad-y: 6px;
+  --row-pad-x: 10px;
 }

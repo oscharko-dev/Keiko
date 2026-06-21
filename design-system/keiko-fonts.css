@@ -1,0 +1,33 @@
+/* ============================================================
+   keiko-fonts.css — self-hosted JetBrains Mono (the one external font).
+   Replaces the Google Fonts CDN link: offline-safe, no extra DNS/TLS hop,
+   reproducible builds. Woff2 from github.com/JetBrains/JetBrainsMono (OFL).
+   ============================================================ */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(assets/fonts/JetBrainsMono-Regular.woff2) format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(assets/fonts/JetBrainsMono-Medium.woff2) format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(assets/fonts/JetBrainsMono-SemiBold.woff2) format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(assets/fonts/JetBrainsMono-Bold.woff2) format("woff2");
+}

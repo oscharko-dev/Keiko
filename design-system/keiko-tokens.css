@@ -20,18 +20,22 @@
   --fg-dim: oklch(0.66 0.004 160);
   --fg-faint: oklch(0.64 0.004 160);
 
-  --accent: #4eba87;
+  --accent: oklch(0.72 0.124 160); /* brand "orca green" — was #4eba87, now oklch so the whole token system is single-space */
   --accent-bright: oklch(0.78 0.13 160);
   --accent-dim: color-mix(in oklch, #4eba87 18%, transparent);
   --accent-line: color-mix(in oklch, #4eba87 40%, transparent);
   --accent-glow: color-mix(in oklch, #4eba87 26%, transparent);
   /* text-tone alias — equals --accent in dark; darkened to ≥4.5:1 on white in light */
   --accent-text: var(--accent);
+  /* accessibility-tuned accent roles (measured live on a11y-audit.html) */
+  --accent-solid: var(--accent);          /* accent FILL with no text (checkbox/slider/step dot) — ≥3:1 vs surface */
+  --accent-solid-ink: var(--ink-inverse); /* the mark/glyph sitting on --accent-solid */
+  --accent-on-tint: var(--accent-text);   /* accent TEXT on an accent tint (chips, citations) — ≥4.5:1 */
   --ink-inverse: oklch(0.18 0.005 160);
 
   --warn: oklch(0.78 0.13 75);
   --danger: oklch(0.68 0.16 25);
-  --ok: #4eba87;
+  --ok: oklch(0.74 0.13 146);      /* success — its own status green (hue 146), separable from the interactive accent (160) */
   --info: oklch(0.74 0.1 240);
 
   --radius: 14px;
@@ -40,6 +44,11 @@
 
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* elevation — now defined for the DARK base too (was previously only set in
+     light/HC, leaving --shadow-card/-pop undefined in the default dark theme). */
+  --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 18px 50px -18px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
 }
 
 /* ===== LIGHT THEME — warm-neutral, same orca-green accent (from globals.css) ===== */
@@ -59,12 +68,15 @@
   --fg-dim: oklch(0.48 0.01 160);
   --fg-faint: oklch(0.52 0.01 160);
   --accent-text: oklch(0.48 0.13 160);
+  --accent-solid: oklch(0.52 0.15 160);  /* darker green: 4.96:1 vs white, room for a white mark */
+  --accent-solid-ink: oklch(1 0 0);
+  --accent-on-tint: oklch(0.43 0.13 160); /* 6.3:1 on the pale accent tint */
   --ink-inverse: oklch(0.18 0.005 160);
   --accent-bright: oklch(0.52 0.13 160);
   --danger: oklch(0.5 0.18 25);
   --warn: oklch(0.43 0.14 75);
   --info: oklch(0.45 0.15 240);
-  --ok: oklch(0.5 0.13 160);
+  --ok: oklch(0.5 0.13 146);
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
 }
@@ -104,63 +116,86 @@
    ============================================================ */
 
 /* --- dark + high-contrast --- */
+/* Single-source HC palettes — the raw values live here exactly once (inert
+   until promoted), so the OS media query and the explicit in-app attribute
+   below both read from the same place. Change a value once, both paths follow. */
+:root {
+  /* HC · DARK palette */
+  --hc-d-bg: oklch(0.11 0.004 160);
+  --hc-d-surface: oklch(0.145 0.004 160);
+  --hc-d-card: oklch(0.185 0.004 160);
+  --hc-d-card-2: oklch(0.225 0.004 160);
+  --hc-d-inset: oklch(0.09 0.004 160);
+  --hc-d-line: oklch(0.62 0.006 160);
+  --hc-d-line-soft: oklch(0.5 0.005 160);
+  --hc-d-line-strong: oklch(0.74 0.006 160);
+  --hc-d-grid-dot: oklch(0.52 0.006 160);
+  --hc-d-fg: oklch(1 0 0);
+  --hc-d-fg-muted: oklch(0.88 0.004 160);
+  --hc-d-fg-dim: oklch(0.84 0.004 160);
+  --hc-d-fg-faint: oklch(0.82 0.004 160);
+  --hc-d-accent-bright: oklch(0.88 0.15 160);
+  --hc-d-accent-text: oklch(0.86 0.16 160);
+  --hc-d-accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+  --hc-d-accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+  --hc-d-accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+  --hc-d-warn: oklch(0.88 0.14 80);
+  --hc-d-danger: oklch(0.78 0.17 25);
+  --hc-d-ok: oklch(0.82 0.15 146);
+  --hc-d-info: oklch(0.84 0.12 240);
+  --hc-d-shadow-card: 0 0 0 1px var(--hc-d-line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --hc-d-shadow-pop: 0 0 0 1px var(--hc-d-line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
+
+  /* HC · LIGHT palette */
+  --hc-l-bg: oklch(1 0 0);
+  --hc-l-surface: oklch(0.99 0.002 160);
+  --hc-l-card: oklch(1 0 0);
+  --hc-l-card-2: oklch(0.965 0.004 160);
+  --hc-l-inset: oklch(0.95 0.004 160);
+  --hc-l-line: oklch(0.45 0.008 160);
+  --hc-l-line-soft: oklch(0.6 0.006 160);
+  --hc-l-line-strong: oklch(0.35 0.01 160);
+  --hc-l-grid-dot: oklch(0.6 0.01 160);
+  --hc-l-fg: oklch(0.13 0.01 160);
+  --hc-l-fg-muted: oklch(0.3 0.012 160);
+  --hc-l-fg-dim: oklch(0.34 0.012 160);
+  --hc-l-fg-faint: oklch(0.36 0.012 160);
+  --hc-l-accent-text: oklch(0.42 0.14 160);
+  --hc-l-accent-bright: oklch(0.42 0.14 160);
+  --hc-l-accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+  --hc-l-accent-line: color-mix(in oklch, var(--hc-l-accent-text) 78%, transparent);
+  --hc-l-accent-glow: color-mix(in oklch, var(--hc-l-accent-text) 32%, transparent);
+  --hc-l-danger: oklch(0.42 0.19 25);
+  --hc-l-warn: oklch(0.38 0.14 75);
+  --hc-l-info: oklch(0.4 0.16 240);
+  --hc-l-ok: oklch(0.4 0.14 146);
+  --hc-l-shadow-card: 0 0 0 1px var(--hc-l-line-strong);
+  --hc-l-shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--hc-l-line-strong);
+}
+
 @media (prefers-contrast: more) {
   :root {
     color-scheme: dark;
-    --bg: oklch(0.11 0.004 160);
-    --surface: oklch(0.145 0.004 160);
-    --card: oklch(0.185 0.004 160);
-    --card-2: oklch(0.225 0.004 160);
-    --inset: oklch(0.09 0.004 160);
-    --line: oklch(0.62 0.006 160);
-    --line-soft: oklch(0.5 0.005 160);
-    --line-strong: oklch(0.74 0.006 160);
-    --grid-dot: oklch(0.52 0.006 160);
+    --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
+    --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
     --focus-w: 3px;
-    --fg: oklch(1 0 0);
-    --fg-muted: oklch(0.88 0.004 160);
-    --fg-dim: oklch(0.84 0.004 160);
-    --fg-faint: oklch(0.82 0.004 160);
-    --accent-bright: oklch(0.88 0.15 160);
-    --accent-text: oklch(0.86 0.16 160);
-    --accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
-    --accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
-    --accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
-    --warn: oklch(0.88 0.14 80);
-    --danger: oklch(0.78 0.17 25);
-    --ok: oklch(0.82 0.15 160);
-    --info: oklch(0.84 0.12 240);
-    --shadow-card: 0 0 0 1px var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
-    --shadow-pop: 0 0 0 1px var(--line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
+    --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
+    --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
+    --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
+    --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
+    --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
   }
   /* --- light + high-contrast --- */
   [data-theme="light"] {
     color-scheme: light;
-    --bg: oklch(1 0 0);
-    --surface: oklch(0.99 0.002 160);
-    --card: oklch(1 0 0);
-    --card-2: oklch(0.965 0.004 160);
-    --inset: oklch(0.95 0.004 160);
-    --line: oklch(0.45 0.008 160);
-    --line-soft: oklch(0.6 0.006 160);
-    --line-strong: oklch(0.35 0.01 160);
-    --grid-dot: oklch(0.6 0.01 160);
+    --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
+    --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
     --focus-w: 3px;
-    --fg: oklch(0.13 0.01 160);
-    --fg-muted: oklch(0.3 0.012 160);
-    --fg-dim: oklch(0.34 0.012 160);
-    --fg-faint: oklch(0.36 0.012 160);
-    --accent-text: oklch(0.42 0.14 160);
-    --accent-bright: oklch(0.42 0.14 160);
-    --accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
-    --accent-line: color-mix(in oklch, var(--accent-text) 78%, transparent);
-    --accent-glow: color-mix(in oklch, var(--accent-text) 32%, transparent);
-    --danger: oklch(0.42 0.19 25);
-    --warn: oklch(0.38 0.14 75);
-    --info: oklch(0.4 0.16 240);
-    --ok: oklch(0.4 0.14 160);
-    --shadow-card: 0 0 0 1px var(--line-strong);
-    --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--line-strong);
+    --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
+    --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
+    --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
+    --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
+    --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
   }
 }
 
@@ -168,59 +203,25 @@
    in-app "High" choice raises contrast even when the OS hasn't asked. */
 [data-hc="more"] {
   color-scheme: dark;
-  --bg: oklch(0.11 0.004 160);
-  --surface: oklch(0.145 0.004 160);
-  --card: oklch(0.185 0.004 160);
-  --card-2: oklch(0.225 0.004 160);
-  --inset: oklch(0.09 0.004 160);
-  --line: oklch(0.62 0.006 160);
-  --line-soft: oklch(0.5 0.005 160);
-  --line-strong: oklch(0.74 0.006 160);
-  --grid-dot: oklch(0.52 0.006 160);
+  --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
+  --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
   --focus-w: 3px;
-  --fg: oklch(1 0 0);
-  --fg-muted: oklch(0.88 0.004 160);
-  --fg-dim: oklch(0.84 0.004 160);
-  --fg-faint: oklch(0.82 0.004 160);
-  --accent-bright: oklch(0.88 0.15 160);
-  --accent-text: oklch(0.86 0.16 160);
-  --accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
-  --accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
-  --accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
-  --warn: oklch(0.88 0.14 80);
-  --danger: oklch(0.78 0.17 25);
-  --ok: oklch(0.82 0.15 160);
-  --info: oklch(0.84 0.12 240);
-  --shadow-card: 0 0 0 1px var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
-  --shadow-pop: 0 0 0 1px var(--line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
+  --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
+  --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
+  --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
+  --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
+  --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
 }
 [data-hc="more"][data-theme="light"] {
   color-scheme: light;
-  --bg: oklch(1 0 0);
-  --surface: oklch(0.99 0.002 160);
-  --card: oklch(1 0 0);
-  --card-2: oklch(0.965 0.004 160);
-  --inset: oklch(0.95 0.004 160);
-  --line: oklch(0.45 0.008 160);
-  --line-soft: oklch(0.6 0.006 160);
-  --line-strong: oklch(0.35 0.01 160);
-  --grid-dot: oklch(0.6 0.01 160);
+  --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
+  --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
   --focus-w: 3px;
-  --fg: oklch(0.13 0.01 160);
-  --fg-muted: oklch(0.3 0.012 160);
-  --fg-dim: oklch(0.34 0.012 160);
-  --fg-faint: oklch(0.36 0.012 160);
-  --accent-text: oklch(0.42 0.14 160);
-  --accent-bright: oklch(0.42 0.14 160);
-  --accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
-  --accent-line: color-mix(in oklch, var(--accent-text) 78%, transparent);
-  --accent-glow: color-mix(in oklch, var(--accent-text) 32%, transparent);
-  --danger: oklch(0.42 0.19 25);
-  --warn: oklch(0.38 0.14 75);
-  --info: oklch(0.4 0.16 240);
-  --ok: oklch(0.4 0.14 160);
-  --shadow-card: 0 0 0 1px var(--line-strong);
-  --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--line-strong);
+  --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
+  --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
+  --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
+  --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
+  --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
 }
 
 /* Windows / forced-colors High Contrast — defer to the OS palette and make
