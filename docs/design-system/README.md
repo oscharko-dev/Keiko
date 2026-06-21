@@ -101,6 +101,13 @@ foundation gate; nothing else should land before it.
 | 8     | [#1299](https://github.com/oscharko-dev/Keiko/issues/1299) | Standardise component states, documentation, governance                                                                                      | all above              |
 | 9     | [#1300](https://github.com/oscharko-dev/Keiko/issues/1300) | Visual-regression automation + designer acceptance evidence                                                                                  | all above              |
 
+## Implementation usage notes (shipped children)
+
+As child issues land, their component-level usage notes (states + accessibility expectations) live
+alongside this blueprint:
+
+- [ai-components.md](ai-components.md) — AI/agent component set ([#1296](https://github.com/oscharko-dev/Keiko/issues/1296)): tokens, states, accessibility, product-surface mapping, and the deferred authority-bearing primitives.
+
 ## Reuse and no-duplication posture (epic gate)
 
 The design-system tokens were **lifted 1:1 from the product `globals.css`** (the primitive provenance runs
