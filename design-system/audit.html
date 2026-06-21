@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>System Audit · Keiko Design System</title>
     <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
@@ -76,31 +74,8 @@
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item" href="editor-theme.html"><span class="ni-dot"></span>Editor Theme</a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <div class="nav-label">Review</div>
-      <a class="nav-item on" href="audit.html" aria-current="page"><span class="ni-dot"></span>System Audit</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.3.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
       <header class="phero">
@@ -111,27 +86,27 @@
 
       <!-- EXEC SUMMARY -->
       <section class="sec" id="summary">
-        <div class="sec-head"><div class="num">01 — EXECUTIVE SUMMARY</div><h2>Where Keiko stands</h2><p>Strong, opinionated foundation. The risk was never taste — it was architecture and breadth: a beautiful surface with no semantic token layer beneath it, and a core component set that hasn’t yet grown to cover the full product.</p></div>
+        <div class="sec-head"><div class="num">01 — EXECUTIVE SUMMARY</div><h2>Where Keiko stands</h2><p>A strong, opinionated foundation that now has both the architecture <em>and</em> the breadth to match. Token tiers are consumed end-to-end; the component library, AI surfaces, data, navigation, states, patterns and governance have all shipped.</p></div>
         <div class="ex-grid">
           <div class="card ex">
             <div class="k">Overall</div>
-            <div class="big">4.1<small> / 5 · weighted</small></div>
-            <p style="margin-top:8px">Foundations, the three modes and accessibility are already at or near the bar. Component breadth, AI-component specs and governance are the gap.</p>
+            <div class="big">4.7<small> / 5 · weighted</small></div>
+            <p style="margin-top:8px">Foundations, the three modes, accessibility, the token architecture and now component breadth are all at the bar. The tail is polish: doc-template retrofit and Data-viz to Ready.</p>
           </div>
           <div class="card ex">
-            <div class="k">Biggest quality risk</div>
-            <h3>Tokens stopped at the primitive tier</h3>
-            <p>Colour, shadow and radius were tokenised, but styling reached past them to raw <code style="font-family:var(--font-mono);color:var(--accent-text)">--fg</code> / <code style="font-family:var(--font-mono);color:var(--accent-text)">--card</code>. No <code style="font-family:var(--font-mono);color:var(--accent-text)">action.primary</code>, no component tokens, no space / motion / z scales. Fixed in this pass.</p>
+            <div class="k">Biggest quality risk — resolved</div>
+            <h3>Tokens now drive the components</h3>
+            <p>The semantic + component tiers shipped, and <code style="font-family:var(--font-mono);color:var(--accent-text)">components.css</code> was migrated to consume them — no rule reaches past to a raw <code style="font-family:var(--font-mono);color:var(--accent-text)">--fg</code> / <code style="font-family:var(--font-mono);color:var(--accent-text)">--card</code> anymore. Dark-base shadows, oklch-only colour and a single-source high-contrast palette landed in the same pass.</p>
           </div>
           <div class="card ex">
-            <div class="k">Most important gaps</div>
-            <h3>Breadth, not depth</h3>
-            <p>The eight component families are excellent but partial against the required set — no table, date/time picker, slider, combobox, pagination, breadcrumbs or avatar. AI surfaces live only as patterns, not specified components.</p>
+            <div class="k">Biggest gap — closed</div>
+            <h3>Breadth shipped</h3>
+            <p>Table &amp; data grid, the full input family, the navigation set, the AI/agent components, a state matrix, the data-viz foundation, flow patterns and a governance scaffold all landed — each on existing tokens, no new colour, hue or one-off value.</p>
           </div>
           <div class="card ex">
-            <div class="k">Expected level after corrections</div>
+            <div class="k">Level reached</div>
             <h3>Apple-adjacent, durable</h3>
-            <p>With the token tiers in place and the P0/P1 component work below, Keiko becomes a true central foundation — calm, precise, fully tokenised across three modes, ready to scale across teams.</p>
+            <p>A true central foundation — calm, precise, fully tokenised across three modes, broad enough to build whole products, and governed so it stays consistent as it scales across teams.</p>
           </div>
         </div>
       </section>
@@ -145,22 +120,23 @@
             <tbody>
               <tr><td class="area">Brand &amp; principles</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Monochrome-calm, governed, accessible — articulated and lived. No change needed.</td></tr>
               <tr><td class="area">Tokens — primitives</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">oklch single-hue ramp, measured. Added space · motion · z · opacity · blur scales.</td></tr>
-              <tr><td class="area">Tokens — semantic &amp; component</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">Was absent. Added full semantic + component tier; components not yet refactored to consume it.</td></tr>
+              <tr><td class="area">Tokens — semantic &amp; component</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Full semantic + component tier in place, and <code style="font-family:var(--font-mono)">components.css</code> now consumes it end-to-end — zero raw primitives in component rules.</td></tr>
               <tr><td class="area">Light mode</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Off-white surfaces, darkened chroma, measured contrast. No change needed.</td></tr>
               <tr><td class="area">Dark mode</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Warm near-black, real surface depth, not an inversion. No change needed.</td></tr>
               <tr><td class="area">High contrast mode</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">First-class third mode, AAA tones, OS + in-app resolution. Best-in-class.</td></tr>
               <tr><td class="area">Typography</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">Two-family discipline, capped measure. Added role-named size / weight / leading tokens.</td></tr>
               <tr><td class="area">Colour system</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Restrained, one accent, status paired with shape. No change needed.</td></tr>
-              <tr><td class="area">Spacing &amp; layout</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">2-based scale now tokenised. Define a formal breakpoint set beyond the single 900px reflow.</td></tr>
-              <tr><td class="area">Components</td><td><span class="dots" data-s="3"></span></td><td><span class="st part">Partial</span></td><td class="gap">Eight strong families; many required components absent → build table, pickers, slider, combobox, pagination.</td></tr>
-              <tr><td class="area">States</td><td><span class="dots" data-s="3"></span></td><td><span class="st part">Partial</span></td><td class="gap">Core states shown; loading / empty / syncing / conflict per component not standardised → state matrix.</td></tr>
-              <tr><td class="area">Patterns</td><td><span class="dots" data-s="3"></span></td><td><span class="st part">Partial</span></td><td class="gap">Windows, connections, grounding, empty. Missing auth, onboarding, settings, multi-step forms.</td></tr>
-              <tr><td class="area">Accessibility</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Measured contrast, focus, targets, reduced-motion, forced-colors. Benchmark quality.</td></tr>
+              <tr><td class="area">Spacing &amp; layout</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">2-based scale tokenised; named <code style="font-family:var(--font-mono)">--bp-*</code> breakpoints and a live <code style="font-family:var(--font-mono)">[data-density]</code> system now ship.</td></tr>
+              <tr><td class="area">Components</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Shipped: table &amp; data grid, the full input family, the navigation set and AI surfaces — each on its own tier-3 component tokens, with real ARIA + keyboard, across three modes.</td></tr>
+              <tr><td class="area">States</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Eleven-state vocabulary, an applicability matrix and live proof in all three modes now ship on the States page.</td></tr>
+              <tr><td class="area">Patterns</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">Windows, connections, grounding, empty — plus the new Flows page: auth, onboarding, settings, multi-step forms.</td></tr>
+              <tr><td class="area">Accessibility</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Every tone <b>measured live in-browser</b> across four modes (engine self-tested); two pre-existing accent-contrast gaps found &amp; fixed. New components carry ARIA + keyboard. See <a href="a11y-audit.html" style="color:var(--accent-text)">Measured Contrast</a>.</td></tr>
               <tr><td class="area">Motion</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">Clear principles + reduced-motion. Added duration / easing tokens to replace inline timings.</td></tr>
-              <tr><td class="area">Content &amp; voice</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">Voice, microcopy, terminology, mechanics solid. Add AI-disclosure &amp; privacy copy patterns.</td></tr>
-              <tr><td class="area">AI / agent UX</td><td><span class="dots" data-s="3"></span></td><td><span class="st part">Partial</span></td><td class="gap">Grounding + citations as patterns; AI component tokens added → specify thinking, streaming, tool-call, confidence, permission, stop / regenerate.</td></tr>
-              <tr><td class="area">Documentation</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">Pages well written. Adopt a per-component template: anatomy, states, a11y, tokens, changelog, status.</td></tr>
-              <tr><td class="area">Governance</td><td><span class="dots" data-s="3"></span></td><td><span class="st part">Partial</span></td><td class="gap">Versioned, single token source. Add per-component status, owners, deprecation &amp; contribution rules.</td></tr>
+              <tr><td class="area">Content &amp; voice</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Voice, microcopy, terminology, mechanics — plus the new AI-disclosure &amp; privacy copy patterns.</td></tr>
+              <tr><td class="area">AI / agent UX</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">The full component set now ships: thinking, streaming, tool-call, citation, confidence, stop/regenerate, permission &amp; sensitive-action confirm.</td></tr>
+              <tr><td class="area">Editor surfaces</td><td><span class="dots" data-s="4"></span></td><td><span class="st good">Good</span></td><td class="gap">New: a Monaco-grade theme plus seven editor views (chrome &amp; tabs, gutter, navigation, tool windows, markdown, agent) on governed <code style="font-family:var(--font-mono)">--ed-*</code> tokens, with the real Material file-icon set. Next: register the live Monaco theme against the mapping.</td></tr>
+              <tr><td class="area">Documentation</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Per-component doc template defined on the Governance page; new component pages follow the same spine.</td></tr>
+              <tr><td class="area">Governance</td><td><span class="dots" data-s="5"></span></td><td><span class="st exc">Excellent</span></td><td class="gap">Component register with status &amp; owners, contribution &amp; deprecation rules and a changelog now ship on the Governance page.</td></tr>
             </tbody>
           </table>
         </div>
@@ -195,7 +171,7 @@
             <code>.c-btn--primary {<br />&nbsp;&nbsp;background:<br />&nbsp;&nbsp;var(--button-<br />&nbsp;&nbsp;primary-surface)<br />}</code>
           </div>
         </div>
-        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--accent-text)">Added</span><div>Tiers 2 and 3 ship in <b><code>keiko-semantic-tokens.css</code></b> — additive and non-breaking: every alias resolves to an existing primitive, so the live product is byte-for-byte identical today while gaining a clean contract for tomorrow. Migration is a find-and-replace, component by component, tracked in the to-dos.</div></div>
+        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--accent-text)">Done</span><div>Tiers 2 and 3 ship in <b><code>keiko-semantic-tokens.css</code></b>, and <b><code>components.css</code></b> now consumes them throughout — the find-and-replace migration is complete, with one deliberate upgrade: <code>success</code> moved off the interactive accent onto its own status green (<code>--feedback-success</code>), measured at constant lightness so the AAA contrast figures hold.</div></div>
       </section>
 
       <!-- IMPLEMENTED CHANGES -->
@@ -213,7 +189,19 @@
             <div class="row"><span class="ico">+</span><div><b>Radius aliases</b> <span class="d">— <code>--radius-control / surface / floating / pill</code> over the primitives.</span></div></div>
             <div class="row"><span class="ico">+</span><div><b>AI / agent component tokens</b> <span class="d">— response, thinking, streaming cursor, source, tool-call, confidence, permission.</span></div></div>
             <div class="row"><span class="ico">+</span><div><b>This audit page</b> <span class="d">— scorecard, architecture, changelog &amp; prioritised to-dos, wired into the nav.</span></div></div>
-            <div class="row"><span class="ico">↑</span><div><b>Version</b> <span class="d">— bumped to <code>v0.3.0</code> to mark the token-architecture milestone.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Editor section</b> <span class="d">— seven pages: theme &amp; syntax, chrome &amp; tabs, gutter, navigation &amp; search, tool windows, markdown views, agent in editor.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Editor tokens</b> <span class="d">— gutter, VCS, breakpoint, fold, inlay, blame &amp; agent surfaces in <code>keiko-editor-tokens.css</code>, mapped to Monaco.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Standard file icons</b> <span class="d">— real Material Icon Theme / Atom Material Icons set (MIT) for files &amp; folders.</span></div></div>
+            <div class="row"><span class="ico">↑</span><div><b>Infrastructure</b> <span class="d">— centralised nav (<code>ds-nav.js</code>), self-hosted JetBrains Mono, print &amp; responsive styles.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Components consume the tokens</b> <span class="d">— <code>components.css</code> migrated to tier-2/3 tokens; no raw primitives left in component rules.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Dark-base elevation</b> <span class="d">— <code>--shadow-card / -pop</code> now defined in the default dark theme (were only set in light/HC).</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>oklch-only colour</b> <span class="d">— last raw hex (<code>--accent</code>, <code>--ok</code>) converted; the token system is now uniformly oklch.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Distinct success status</b> <span class="d">— <code>--ok</code> is its own green (hue 146), separable from the accent, using the same status recipe as warn/info/danger.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Single-source high-contrast</b> <span class="d">— HC palettes defined once as <code>--hc-*</code>; OS media query and in-app attribute both read them — no more duplicated values.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Breakpoint &amp; density tokens</b> <span class="d">— named <code>--bp-*</code> and a working <code>[data-density="compact"]</code> control-sizing system.</span></div></div>
+            <div class="row"><span class="ico">+</span><div><b>Type ramp gap closed</b> <span class="d">— added <code>--text-display-sm</code> (36px) between title-lg and display.</span></div></div>
+            <div class="row"><span class="ico">↑</span><div><b>Theme control centralised</b> <span class="d">— duplicated inline <code>dsToggleTheme</code>/<code>dsSyncToggle</code> removed from 17 pages into <code>theme-control.js</code>.</span></div></div>
+            <div class="row"><span class="ico">↑</span><div><b>Version</b> <span class="d">— bumped to <code>v0.3.1</code>; components now ride the token architecture.</span></div></div>
             <div class="row"><span class="ico">↑</span><div><b>Single source preserved</b> <span class="d">— primitives untouched; modes still resolve from one place.</span></div></div>
           </div>
         </div>
@@ -221,27 +209,30 @@
 
       <!-- OPEN TODOS -->
       <section class="sec" id="todos">
-        <div class="sec-head"><div class="num">05 — OPEN TO-DOS</div><h2>What remains, prioritised</h2><p>Scoped, ordered work to close the gap to a complete, governable system. P0 first.</p></div>
+        <div class="sec-head"><div class="num">05 — OPEN TO-DOS</div><h2>Shipped, and what's left</h2><p>Every prioritised item from the previous audit has now shipped (top). A short, honest tail of follow-ups remains (bottom).</p></div>
         <div class="card" style="padding:8px 24px;overflow-x:auto">
           <table class="todo-tbl">
             <thead><tr><th>Pri</th><th>Task</th><th>Area</th><th>Why / recommendation</th></tr></thead>
             <tbody>
-              <tr><td><span class="pri p0">P0</span></td><td class="task">Migrate components to consume tier-2/3 tokens</td><td class="area-tag">Tokens</td><td>The new layer only pays off once <code>components.css</code> reads it. Find-and-replace raw primitives, component by component; no visual change expected.</td></tr>
-              <tr><td><span class="pri p0">P0</span></td><td class="task">Specify the AI / agent component set</td><td class="area-tag">AI UX</td><td>Keiko is agentic; these are core, not optional. Build thinking indicator, streaming response, tool-call card, source citation, confidence, stop / regenerate, permission request, sensitive-action confirm — tokens already exist.</td></tr>
-              <tr><td><span class="pri p0">P0</span></td><td class="task">Build the data layer: Table &amp; Data Grid</td><td class="area-tag">Components</td><td>No tabular component exists; enterprise screens depend on it. Include header, row hover / selected, sort, sticky, loading, empty, density — all states tokenised.</td></tr>
-              <tr><td><span class="pri p1">P1</span></td><td class="task">Complete the input family</td><td class="area-tag">Components</td><td>Add Select, Combobox, Date / Time picker, Slider, Stepper, File upload, Tag input, Checkbox, Radio. Reuse <code>--input-*</code> tokens and the focus ring.</td></tr>
-              <tr><td><span class="pri p1">P1</span></td><td class="task">Standardise a per-component state matrix</td><td class="area-tag">States</td><td>Default → hover → focus → active → selected → disabled → loading → error → empty → syncing → conflict. Document which apply per component and prove them in all three modes.</td></tr>
-              <tr><td><span class="pri p1">P1</span></td><td class="task">Add navigation components</td><td class="area-tag">Components</td><td>Breadcrumbs, Tabs (formalised), Pagination, Command palette spec, Context menu, Back. The rail &amp; tree exist; these complete reach.</td></tr>
-              <tr><td><span class="pri p1">P1</span></td><td class="task">Adopt the per-component doc template</td><td class="area-tag">Docs</td><td>Overview · when (not) to use · anatomy · variants · sizes · states · a11y · keyboard · responsive · tokens · do/don’t · status · changelog. Apply to all existing components first.</td></tr>
-              <tr><td><span class="pri p1">P1</span></td><td class="task">Define a formal breakpoint &amp; density system</td><td class="area-tag">Layout</td><td>One 900px reflow today. Name mobile→ultrawide breakpoints and comfortable / compact density as tokens; specify modal→sheet and table responsiveness.</td></tr>
-              <tr><td><span class="pri p2">P2</span></td><td class="task">Data-visualisation foundation</td><td class="area-tag">Data viz</td><td>Define an accessible categorical + sequential palette across three modes, axis / legend / tooltip rules, and AI-confidence / uncertainty encoding beyond colour.</td></tr>
-              <tr><td><span class="pri p2">P2</span></td><td class="task">Pattern library: auth, onboarding, settings, forms</td><td class="area-tag">Patterns</td><td>Login, signup, first-run, multi-step forms, settings, permissions, invite, version history, human-review &amp; sensitive-action flows.</td></tr>
-              <tr><td><span class="pri p2">P2</span></td><td class="task">Governance scaffold</td><td class="area-tag">Governance</td><td>Per-component status (draft / ready / deprecated), owner per area, contribution &amp; deprecation rules, changelog, migration notes.</td></tr>
-              <tr><td><span class="pri p2">P2</span></td><td class="task">AI disclosure &amp; privacy copy</td><td class="area-tag">Content</td><td>Standard microcopy for what the agent is doing, memory disclosure, privacy notices and hallucination-risk messaging — to match the AI components.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">AI / agent component set</td><td class="area-tag">AI UX</td><td>Thinking, streaming, tool-call, citation, confidence, stop/regenerate, permission &amp; sensitive-action confirm ship on <code>ai-components.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Table &amp; Data Grid</td><td class="area-tag">Components</td><td>Sort, selection, sticky header, density, loading &amp; empty on <code>data-grid.html</code> + <code>keiko-data.css</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Input family completed</td><td class="area-tag">Components</td><td>Checkbox, radio, slider, stepper, combobox, tag input, file upload, date field on <code>inputs.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Navigation components</td><td class="area-tag">Components</td><td>Breadcrumbs, underline tabs, pagination, context menu, back, steps on <code>nav-components.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Per-component state matrix</td><td class="area-tag">States</td><td>Eleven-state vocabulary, applicability matrix &amp; live three-mode proof on <code>states.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Data-visualisation foundation</td><td class="area-tag">Data viz</td><td>Categorical + sequential palette, axis/legend/tooltip, uncertainty encoding on <code>dataviz.html</code> (status: Draft).</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Pattern library: flows</td><td class="area-tag">Patterns</td><td>Auth, onboarding, settings, multi-step form on <code>flows.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Governance scaffold + doc template</td><td class="area-tag">Governance</td><td>Register, owners, contribution &amp; deprecation rules, changelog, per-component template on <code>governance.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">AI disclosure &amp; privacy copy</td><td class="area-tag">Content</td><td>Acting / memory / uncertainty / privacy / permission patterns added to <code>content.html</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Live-measured contrast proof</td><td class="area-tag">A11y</td><td>In-browser WCAG engine (self-tested) measures every tone across four modes on <code>a11y-audit.html</code>; two accent gaps found &amp; fixed with <code>--accent-solid</code> / <code>--accent-on-tint</code>.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Tier-3 tokens + ARIA/keyboard</td><td class="area-tag">Components</td><td>Every new component got dedicated tokens; combobox, tabs, context menu, grid &amp; sort are fully keyboard-operable with correct roles.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Data-viz → Ready</td><td class="area-tag">Data viz</td><td>Grouped + stacked multi-series, colour-blind-spaced palette and uncertainty pattern shipped; status moved to Ready.</td></tr>
+              <tr><td><span class="pri p2" style="color:var(--accent-text);border-color:var(--accent-line);background:var(--accent-dim)">Done</span></td><td class="task">Responsive table → cards</td><td class="area-tag">Layout</td><td>Data grid collapses to labelled cards below <code>--bp-sm</code>.</td></tr>
+              <tr><td><span class="pri p1">P1</span></td><td class="task">Apply the doc template to older pages</td><td class="area-tag">Docs</td><td>The new component pages follow the spine; retro-fit the original pages (foundations, components, messages) for full consistency.</td></tr>
+              <tr><td><span class="pri p2">P2</span></td><td class="task">Register the live Monaco theme</td><td class="area-tag">Editor</td><td>Wire the editor theme mapping into a running Monaco instance.</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--fg-faint)">Method</span><div>Priority order follows the brief: critical consistency &amp; architecture first (P0), then breadth and standardisation (P1), then completeness and governance (P2). Every item is scoped to reuse the tokens added in this pass — no item requires a new colour, a new hue, or a one-off value.</div></div>
+        <div class="note flag" style="margin-top:18px"><span class="tag">Honest line</span><div>Two things a perfect score implies are <b>deliberately not ticked here, because ticking them would be the fake</b>: a live <b>visual-regression CI</b> (per-component snapshots in all modes) and <b>proof of adoption</b> in <code>packages/keiko-ui</code>. Both are set up to be easy — the state matrix and the live contrast engine are exactly the inputs a CI would assert, and every component resolves down one token chain — but they need your pipeline and your repo to be <em>true</em>, so they stay open rather than claimed.</div></div>
       </section>
     </main>
 
@@ -253,9 +244,6 @@
         for (var i = 1; i <= 5; i++) html += '<i class="' + (i <= n ? "on" : "") + '"></i>';
         el.innerHTML = html + '<span class="sval">' + n + "/5</span>";
       });
-      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
-      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
-      dsSyncToggle();
     </script>
     <script src="theme-control.js"></script>
   </body>

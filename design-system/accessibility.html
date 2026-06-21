@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Accessibility · Keiko Design System</title>
     <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
@@ -37,31 +35,8 @@
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item" href="editor-theme.html"><span class="ni-dot"></span>Editor Theme</a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item on" href="accessibility.html" aria-current="page"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <div class="nav-label">Review</div>
-      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.3.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
       <header class="phero">
@@ -84,7 +59,7 @@
             </tbody>
           </table>
         </div>
-        <div class="note flag" style="margin-top:18px"><span class="tag">Rule</span><div>Minimum <b>4.5:1</b> for text, <b>3:1</b> for large text, UI borders and the focus ring. The monotonic ramp (muted → dim → faint) preserves hierarchy without any step dropping below AA — every figure here is <b>measured</b> by rasterising each token to sRGB, in both themes. Meaningful accent graphics (connectors, the focus ring) use the darker <code>--accent-text</code> tone so they clear 3:1 on white too. And when the OS asks for <b>more contrast</b>, borders, faint text, the grid and the focus ring all step up automatically.</div></div>
+        <div class="note flag" style="margin-top:18px"><span class="tag">Rule</span><div>Minimum <b>4.5:1</b> for text, <b>3:1</b> for large text and meaningful graphics (the focus ring, status fills). Every ratio on this page is <b>computed live in your browser</b> on load — nothing is typed by hand — and the full four-mode matrix (dark · light · dark+HC · light+HC) with an engine self-test lives on <a href="a11y-audit.html" style="color:var(--accent-text)">Measured Contrast</a>. Resting hairline borders are intentionally subtle and <em>decorative</em>: a control's boundary is carried by its fill and the 3:1 focus ring, per WCAG 1.4.11, not by the divider line.</div></div>
       </section>
 
       <section class="sec" id="high-contrast">
@@ -180,7 +155,7 @@
       <section class="sec" id="checklist">
         <div class="sec-head"><div class="num">08 — CHECKLIST</div><h2>Every component must…</h2></div>
         <div class="card" style="padding:14px 24px">
-          <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Clear 4.5:1 text contrast in both themes (3:1 for large text, borders, focus) — and AAA (7:1) in High Contrast.</div>
+          <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Clear 4.5:1 text contrast in both themes (3:1 for large text, focus &amp; meaningful graphics) — and AAA (7:1) in High Contrast. <a href="a11y-audit.html" style="color:var(--accent-text)">Proven live →</a></div>
           <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Offer a ≥ 24px hit target with non-colliding spacing.</div>
           <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Show a visible focus ring and be fully keyboard-operable.</div>
           <div class="check"><span class="ico" data-licon="check" data-size="18"></span>Convey state with icon + text + shape — never colour alone.</div>
@@ -191,11 +166,24 @@
     </main>
 
     <script src="lift-glyphs.js"></script>
+    <script src="a11y-measure.js"></script>
     <script>
-      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
-      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
-      dsSyncToggle();
+      // Replace every hand-free: compute each contrast sample's ratio live, in the
+      // current mode, from the actual rendered colours. No typed numbers survive.
+      (function () {
+        document.querySelectorAll(".ac-table tr").forEach(function (tr) {
+          var s = tr.querySelector(".ac-sample"), out = tr.querySelector(".ac-ratio");
+          if (!s || !out) return;
+          var cs = getComputedStyle(s);
+          var fg = KeikoA11y.toRGBA(cs.color), bg = KeikoA11y.toRGBA(cs.backgroundColor);
+          var r = KeikoA11y.ratio(fg, bg);
+          out.textContent = r.toFixed(1) + ":1";
+          var badge = tr.querySelector(".pass");
+          if (badge) { var aaa = r >= 7; badge.textContent = aaa ? "AAA" : (r >= 4.5 ? "AA" : "—"); badge.classList.toggle("aaa", aaa); }
+        });
+      })();
     </script>
+    
       <script src="theme-control.js"></script>
 </body>
 </html>

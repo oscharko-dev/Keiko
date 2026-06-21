@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
     <title>Editor Theme · Keiko Design System</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="keiko-editor-tokens.css" />
@@ -98,31 +96,8 @@
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item on" href="editor-theme.html" aria-current="page"><span class="ni-dot"></span>Editor Theme<span class="nav-soon">new</span></a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <div class="nav-label">Review</div>
-      <a class="nav-item" href="audit.html"><span class="ni-dot"></span>System Audit</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.3.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
       <header class="phero">
@@ -197,7 +172,7 @@
               <tr><td class="tok">number</td><td><span class="sample t-num">5_000</span></td><td class="scope">--ed-syn-number</td><td><span class="ratio aaa">8.2</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">12.0</span></td></tr>
               <tr><td class="tok">constant</td><td><span class="sample t-con">true · null</span></td><td class="scope">--ed-syn-constant</td><td><span class="ratio aaa">8.2</span></td><td><span class="ratio">5.6</span></td><td><span class="ratio aaa">12.0</span></td></tr>
               <tr><td class="tok">property</td><td><span class="sample t-prop">status</span></td><td class="scope">--ed-syn-property</td><td><span class="ratio aaa">10.4</span></td><td><span class="ratio">6.1</span></td><td><span class="ratio aaa">13.7</span></td></tr>
-              <tr><td class="tok">variable</td><td><span class="sample t-var">res</span></td><td class="scope">--ed-syn-variable</td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">17.7</span></td></tr>
+              <tr><td class="tok">variable</td><td><span class="sample t-var">res</span></td><td class="scope">--ed-syn-variable</td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">12.1</span></td><td><span class="ratio aaa">21.0</span></td></tr>
               <tr><td class="tok">operator</td><td><span class="sample t-op">=&gt; | !</span></td><td class="scope">--ed-syn-operator</td><td><span class="ratio aaa">12.8</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">15.6</span></td></tr>
               <tr><td class="tok">punctuation</td><td><span class="sample t-pun">{ } ; ,</span></td><td class="scope">--ed-syn-punct</td><td><span class="ratio aaa">12.8</span></td><td><span class="ratio">5.1</span></td><td><span class="ratio aaa">15.6</span></td></tr>
               <tr><td class="tok">regexp / escape</td><td><span class="sample t-re">/\d+/g</span></td><td class="scope">--ed-syn-regexp</td><td><span class="ratio aaa">9.4</span></td><td><span class="ratio">6.2</span></td><td><span class="ratio aaa">11.6</span></td></tr>
@@ -271,16 +246,22 @@
               <tr><td><code>--ed-bg · --ed-fg</code></td><td class="mono-fg">colors →</td><td><code>editor.background · editor.foreground</code></td></tr>
               <tr><td><code>--ed-line-active</code></td><td class="mono-fg">colors →</td><td><code>editor.lineHighlightBackground</code></td></tr>
               <tr><td><code>--ed-selection</code></td><td class="mono-fg">colors →</td><td><code>editor.selectionBackground</code></td></tr>
-              <tr><td><code>--ed-diff-ins-line · -rem-line</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedLineBackground · removedLineBackground</code></td></tr>
-              <tr><td><code>--ed-diff-ins-text · -rem-text</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedTextBackground · removedTextBackground</code></td></tr>
+              <tr><td><code>--ed-diff-ins-line · -rem-line</code></td><td class="mono-fg">colors →</td><td><code>diffEditor.insertedTextBackground · removedTextBackground</code></td></tr>
               <tr><td><code>--ed-error · -warn · -info</code></td><td class="mono-fg">colors →</td><td><code>editorError · editorWarning · editorInfo .foreground</code></td></tr>
               <tr><td><code>--ed-ghost</code></td><td class="mono-fg">colors →</td><td><code>editorGhostText.foreground</code></td></tr>
               <tr><td><code>--ed-focus</code></td><td class="mono-fg">colors →</td><td><code>focusBorder · editorWidget.border · editor.findMatchBorder</code></td></tr>
               <tr><td><code>--ed-diff-chg-gutter</code></td><td class="mono-fg">colors →</td><td><code>editorGutter.modifiedBackground · editorOverviewRuler.modifiedForeground</code></td></tr>
+              <tr><td><code>--ed-vcs-added · -modified · -removed</code></td><td class="mono-fg">colors →</td><td><code>editorGutter.addedBackground · modifiedBackground · deletedBackground</code></td></tr>
+              <tr><td><code>--ed-breakpoint · -disabled</code></td><td class="mono-fg">colors →</td><td><code>debugIcon.breakpointForeground · breakpointDisabledForeground</code></td></tr>
+              <tr><td><code>--ed-fold · -placeholder</code></td><td class="mono-fg">colors →</td><td><code>editor.foldBackground · editorGutter.foldingControlForeground</code></td></tr>
+              <tr><td><code>--ed-inlay-fg · -bg</code></td><td class="mono-fg">colors →</td><td><code>editorInlayHint.foreground · editorInlayHint.background</code></td></tr>
+              <tr><td><code>--ed-inlay-value-fg</code></td><td class="mono-fg">colors →</td><td><code>editor.inlineValuesForeground</code></td></tr>
+              <tr><td><code>--ed-selection-blur</code></td><td class="mono-fg">colors →</td><td><code>editor.inactiveSelectionBackground</code></td></tr>
+              <tr><td><code>--ed-bracket-match</code></td><td class="mono-fg">colors →</td><td><code>editorBracketMatch.border</code></td></tr>
+              <tr><td><code>--ed-agent-line · -gutter</code></td><td class="mono-fg">decoration →</td><td><code>Keiko agent range — applied as an editor decoration, no Monaco colour literal</code></td></tr>
             </tbody>
           </table>
         </div>
-        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">Boundary</span><div>The table is a representative sample, not row-per-token — every remaining <code style="font-family:var(--font-mono)">--ed-*</code> has a name-obvious Monaco target (e.g. <code style="font-family:var(--font-mono)">--ed-cursor → editorCursor.foreground</code>, <code style="font-family:var(--font-mono)">--ed-syn-number → constant.numeric</code>, <code style="font-family:var(--font-mono)">--ed-suggest-* → editorSuggestWidget.*</code>). One split matters: <b style="color:var(--fg)">Monaco theme vs surrounding chrome.</b> The <code style="font-family:var(--font-mono)">colors{}</code> dictionary and <code style="font-family:var(--font-mono)">tokenColors</code> cover the code well, gutter, diff, diagnostics, ghost text and <code style="font-family:var(--font-mono)">--ed-minimap-*</code>. The <code style="font-family:var(--font-mono)">--ed-tab-*</code> and <code style="font-family:var(--font-mono)">--ed-statusbar-*</code> tokens are <b style="color:var(--fg)">not</b> Monaco editor keys — they style the React editor-card chrome around Monaco via plain <code style="font-family:var(--font-mono)">var()</code>, so #1193 wires them in the component, not in the Monaco theme.</div></div>
       </section>
 
       <!-- RATIONALE -->
@@ -314,9 +295,6 @@
           if (v === "hc") { demo.dataset.hc = "more"; } else { demo.removeAttribute("data-hc"); }
         });
       });
-      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
-      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
-      dsSyncToggle();
     </script>
       <script src="theme-control.js"></script>
 </body>

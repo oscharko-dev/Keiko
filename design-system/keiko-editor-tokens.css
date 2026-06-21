@@ -101,6 +101,43 @@
   --ed-statusbar-accent:var(--accent-text);
   --ed-minimap-bg:      var(--ed-bg);
   --ed-minimap-slider:  color-mix(in oklch, var(--fg) 10%, transparent);
+
+  /* ---- gutter columns · run/debug · breakpoints (editor-gutter.html) ---- */
+  --ed-run-glyph:           var(--accent-text);    /* runnable-line play arrow   */
+  --ed-breakpoint:          var(--danger);         /* verified line breakpoint   */
+  --ed-breakpoint-disabled: color-mix(in oklch, var(--danger) 42%, transparent);
+  --ed-breakpoint-ring:     color-mix(in oklch, var(--danger) 30%, transparent);
+  --ed-logpoint:            var(--info);            /* logpoint / tracepoint      */
+
+  /* ---- VCS change bar (left of the line numbers) ---- */
+  --ed-vcs-added:    var(--ed-diff-ins-gutter);
+  --ed-vcs-modified: var(--info);
+  --ed-vcs-removed:  var(--danger);
+  --ed-vcs-staged:   var(--accent-text);
+
+  /* ---- code folding ---- */
+  --ed-fold-arrow:        var(--fg-faint);
+  --ed-fold-bg:           color-mix(in oklch, var(--fg) 7%, transparent);
+  --ed-fold-placeholder:  var(--fg-faint);
+
+  /* ---- inlay hints · inline (debug) values ---- */
+  --ed-inlay-fg:        var(--fg-dim);
+  --ed-inlay-bg:        color-mix(in oklch, var(--fg) 8%, transparent);
+  --ed-inlay-value-fg:  var(--info);
+  --ed-inlay-value-bg:  color-mix(in oklch, var(--info) 14%, transparent);
+
+  /* ---- annotations (blame) ---- */
+  --ed-blame-fg: var(--fg-faint);
+  --ed-blame-bg: var(--surface);
+
+  /* ---- agent-in-editor surfaces — governed, accent-based (editor-agent.html) ---- */
+  --ed-agent-line:      color-mix(in oklch, var(--accent) 12%, transparent);
+  --ed-agent-gutter:    var(--accent-text);
+  --ed-agent-ghost:     var(--ed-ghost);
+  --ed-agent-accept:    var(--ed-diff-ins-gutter);
+  --ed-agent-reject:    var(--danger);
+  --ed-agent-chip-bg:   var(--accent-dim);
+  --ed-agent-chip-line: var(--accent-line);
 }
 
 /* ===== LIGHT — refined so every coloured token clears 4.5:1 on the

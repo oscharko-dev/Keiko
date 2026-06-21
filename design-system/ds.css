@@ -257,3 +257,14 @@ a { color: inherit; }
   .phero h1 { font-size: 36px; }
   .type-row { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* ── print / PDF — drop the shell, let the content flow full-width ───────── */
+@media print {
+  .ds { padding-left: 0; background: #fff; }
+  .nav, .skip-link, .theme-toggle, .theme-control { display: none !important; }
+  .main { max-width: none; margin: 0; padding: 0; }
+  .phero { padding-top: 0; }
+  .sec, .card, .note, .ev-frame, .ev-stage, .hub-card, .chrome-cell { break-inside: avoid; }
+  h1, h2, h3 { break-after: avoid; }
+  a { text-decoration: none; color: inherit; }
+}
