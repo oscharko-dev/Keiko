@@ -43,10 +43,18 @@ import type {
   EditorPatchApplyWireRequest,
   EditorPatchApplyWireResponse,
   LanguageDiagnosticsResult,
+  LanguageServiceCapabilities,
   LanguageHoverResult,
   LanguageSymbolResult,
   LanguageFormattingResult,
   LanguageFormattingOptions,
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentActionResultRequest,
+  EditorAgentSessionSnapshot,
+  EditorAgentSessionsResponse,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotResponse,
   CostClass,
   GroundingLimits,
   MessageResponse,
@@ -1081,6 +1089,10 @@ function languageDocument(input: EditorLanguageRequestInput): {
   return { path: input.path, languageId: input.languageId, text: input.text };
 }
 
+export async function fetchEditorLanguageCapabilities(): Promise<LanguageServiceCapabilities> {
+  return fetchJson("/api/editor/language/capabilities");
+}
+
 export async function requestEditorDiagnostics(
   input: EditorLanguageRequestInput,
   signal?: AbortSignal,
@@ -1159,6 +1171,50 @@ export async function requestEditorFormatting(
     },
   );
   return envelope.result;
+}
+
+export async function fetchEditorAgentSessions(): Promise<EditorAgentSessionsResponse> {
+  return fetchJson("/api/editor/agent/sessions");
+}
+
+export async function requestEditorAgentSnapshot(
+  input: EditorAgentSnapshotRequest,
+): Promise<EditorAgentSnapshotResponse> {
+  return fetchJson("/api/editor/agent/snapshot", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function postEditorAgentSessionSnapshot(
+  snapshot: EditorAgentSessionSnapshot,
+): Promise<EditorAgentSnapshotResponse> {
+  return fetchJson("/api/editor/agent/snapshot", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: snapshot.schemaVersion,
+      kind: "snapshot",
+      snapshot,
+    }),
+  });
+}
+
+export async function queueEditorAgentAction(
+  action: EditorAgentAction,
+): Promise<EditorAgentActionQueuedResponse> {
+  return fetchJson("/api/editor/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(action),
+  });
+}
+
+export async function postEditorAgentActionResult(
+  result: EditorAgentActionResultRequest,
+): Promise<EditorAgentActionQueuedResponse> {
+  return fetchJson("/api/editor/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(result),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 /**
  * Pure file-extension -> Monaco language-id inference for the Keiko Editor (Issue #1193).
  *
- * This is a SEPARATE concern from the workspace source-language contract in `../languages.ts`
- * (`EditorLanguageId` / `SUPPORTED_EDITOR_LANGUAGES`, today `typescript | javascript | plaintext`).
- * That contract describes which buffers receive governed, server-backed language *intelligence*
- * (deterministic completion/diagnostics, TS/JS-only per ADR-0042 D4, #1198) and must not be widened.
+ * This is a SEPARATE concern from the workspace source-language contract in
+ * `@oscharko-dev/keiko-contracts` (`WorkspaceLanguage`, today `typescript | javascript`). That
+ * contract describes which buffers receive governed, server-backed language *intelligence*
+ * (deterministic completion/diagnostics, TS/JS-only per ADR-0042 D4, #1198).
  *
  * In contrast, Monaco syntax highlighting / tokenisation is language-agnostic (blueprint §14): the
  * editor can colour many languages locally via Monaco's bundled grammars without any governed
@@ -22,6 +22,8 @@ export const MONACO_LANGUAGE_IDS = [
   "javascript",
   "json",
   "css",
+  "scss",
+  "less",
   "html",
   "markdown",
   "yaml",
@@ -62,6 +64,8 @@ export const MONACO_LANGUAGE_BY_EXTENSION: Readonly<Record<string, MonacoLanguag
   json: "json",
   jsonc: "json",
   css: "css",
+  scss: "scss",
+  less: "less",
   html: "html",
   htm: "html",
   md: "markdown",

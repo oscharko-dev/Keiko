@@ -120,13 +120,10 @@ describe("defaultMonacoWorkerFactories", () => {
     }
   });
 
-  it("ships only the editor worker in the default governed v1 factory, never a CDN", () => {
+  it("ships every local worker used by the default factory, never a CDN", () => {
     const source = readFileSync(resolve(here, "worker-entries.ts"), "utf8");
-    expect(source).toContain(MONACO_WORKER_MODULES.editor);
-    for (const [entry, specifier] of Object.entries(MONACO_WORKER_MODULES)) {
-      if (entry !== "editor") {
-        expect(source).not.toContain(specifier);
-      }
+    for (const specifier of Object.values(MONACO_WORKER_MODULES)) {
+      expect(source).toContain(specifier);
     }
     expect(source).not.toMatch(/jsdelivr|unpkg|cdnjs|cdn\./);
     expect(source).toContain("import.meta.url");

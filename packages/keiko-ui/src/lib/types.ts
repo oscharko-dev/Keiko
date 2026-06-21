@@ -93,7 +93,25 @@ export type {
   LanguageTextEdit,
   LanguageFormattingOptions,
   LanguageFormattingResult,
+  LanguageProviderDescriptor,
+  LanguageServiceCapabilities,
 } from "@oscharko-dev/keiko-contracts";
+
+// ─── Editor agent API wire shapes (Issue #1391) ────────────────────────────────
+export type {
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
+  EditorAgentEvent,
+  EditorAgentPaneSnapshot,
+  EditorAgentSessionSnapshot,
+  EditorAgentSessionsResponse,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotResponse,
+  EditorAgentSnapshotTextMode,
+} from "@oscharko-dev/keiko-contracts";
+export { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019

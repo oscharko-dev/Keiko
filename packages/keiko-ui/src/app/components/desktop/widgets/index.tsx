@@ -51,6 +51,15 @@ function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
+function stringArray(cfg: Record<string, unknown>, key: string): readonly string[] | undefined {
+  const raw = cfg[key];
+  if (!Array.isArray(raw)) return undefined;
+  const values = raw
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  return values.length > 0 ? values : undefined;
+}
+
 function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly string[] {
   const raw = str(cfg, key);
   if (raw === undefined || raw.trim().length === 0) return [];
@@ -294,7 +303,7 @@ registerWindowRender("files", (cfg, ctx) => {
     });
   };
   const onOpenFile = (fileRoot: string, path: string): void => {
-    ctx.openWindow("editor", { root: fileRoot, file: path });
+    ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
   };
   return root !== undefined ? (
     <FilesWidget
@@ -314,22 +323,39 @@ registerWindowRender("files", (cfg, ctx) => {
 registerWindowRender("editor", (cfg, ctx) => {
   const root = str(cfg, "root");
   const file = str(cfg, "file");
+  const openFiles = stringArray(cfg, "openFiles");
+  const layoutJson = str(cfg, "layoutJson");
   const props: {
     root?: string;
     file?: string;
+    openFiles?: readonly string[];
+    layoutJson?: string;
     windowId?: string;
     linkedRoot?: string | null;
     linkedFilePath?: string | undefined;
     linkedCapsuleIds?: readonly string[];
     linkedCapsuleSetIds?: readonly string[];
+    onWorkspaceChange?:
+      | ((patch: {
+          root?: string | undefined;
+          file?: string | undefined;
+          openFiles?: readonly string[] | undefined;
+          layoutJson?: string | undefined;
+        }) => void)
+      | undefined;
   } = {};
   if (root !== undefined) props.root = root;
   if (file !== undefined) props.file = file;
+  if (openFiles !== undefined) props.openFiles = openFiles;
+  if (layoutJson !== undefined) props.layoutJson = layoutJson;
   props.linkedRoot = ctx.linkedRoot;
   props.linkedFilePath = ctx.linkedFilePath;
   props.linkedCapsuleIds = ctx.linkedCapsuleIds;
   props.linkedCapsuleSetIds = ctx.linkedCapsuleSetIds;
   props.windowId = ctx.windowId;
+  props.onWorkspaceChange = (patch) => {
+    ctx.updateCfg(patch);
+  };
   return <EditorWidget {...props} />;
 });
 registerWindowRender("browser", (cfg) => {

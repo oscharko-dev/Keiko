@@ -3,8 +3,25 @@ import { describe, expect, it } from "vitest";
 import { SUPPORTED_EDITOR_LANGUAGES, isSupportedEditorLanguage } from "./languages.js";
 
 describe("SUPPORTED_EDITOR_LANGUAGES", () => {
-  it("lists the v1 first-class source languages plus plaintext", () => {
-    expect([...SUPPORTED_EDITOR_LANGUAGES]).toEqual(["typescript", "javascript", "plaintext"]);
+  it("lists the Monaco-renderable languages exposed by the editor host contract", () => {
+    expect([...SUPPORTED_EDITOR_LANGUAGES]).toEqual([
+      "typescript",
+      "javascript",
+      "json",
+      "css",
+      "scss",
+      "less",
+      "html",
+      "markdown",
+      "yaml",
+      "python",
+      "java",
+      "go",
+      "rust",
+      "sql",
+      "shell",
+      "plaintext",
+    ]);
   });
 });
 
@@ -16,7 +33,7 @@ describe("isSupportedEditorLanguage", () => {
   });
 
   it("rejects an unsupported language", () => {
-    expect(isSupportedEditorLanguage("python")).toBe(false);
+    expect(isSupportedEditorLanguage("ruby")).toBe(false);
   });
 
   it("rejects a non-language string", () => {

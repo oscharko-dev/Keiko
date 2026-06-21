@@ -118,8 +118,8 @@ function selectBody(
   linkedFigmaSnapshotRunIds: readonly string[],
   linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
   linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
-  updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
-  openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
+  updateCfg: (patch: AppWindow["cfg"]) => void,
+  openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
 ): BodySelection {
   const def = WIN_TYPES[type];
   if (type === "chat") {
@@ -340,8 +340,9 @@ export function WindowFrame({
     win.type === "agents" || win.type === "quality" || win.type === "editor";
   const receivesConnectorContext = win.type === "quality" || win.type === "editor";
   const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
-  const linkedFilePath =
-    receivesFocusedFileContext ? api.linkedFilesContext(win.id)?.activeFilePath : undefined;
+  const linkedFilePath = receivesFocusedFileContext
+    ? api.linkedFilesContext(win.id)?.activeFilePath
+    : undefined;
   const linkedRoots =
     win.type === "quality"
       ? api.linkedAllFilesRoots(win.id)
@@ -349,8 +350,9 @@ export function WindowFrame({
         ? [linkedRoot]
         : [];
   const linkedCapsuleIds = receivesConnectorContext ? api.linkedConnectorCapsuleIds(win.id) : [];
-  const linkedCapsuleSetIds =
-    receivesConnectorContext ? api.linkedConnectorCapsuleSetIds(win.id) : [];
+  const linkedCapsuleSetIds = receivesConnectorContext
+    ? api.linkedConnectorCapsuleSetIds(win.id)
+    : [];
   const linkedFigmaSnapshotRunIds =
     win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
   const linkedFigmaSnapshotSources =
@@ -359,14 +361,13 @@ export function WindowFrame({
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
-    (patch: Record<string, string | number | boolean | undefined>): void => {
+    (patch: AppWindow["cfg"]): void => {
       api.update(win.id, { cfg: { ...win.cfg, ...patch } });
     },
     [api, win.cfg, win.id],
   );
   const openWindow = useCallback(
-    (type: WindowType, cfg?: Record<string, string | number | boolean>): string | null =>
-      api.add(type, cfg),
+    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
     [api],
   );
   const { mode: bodyMode, node: body } = selectBody(

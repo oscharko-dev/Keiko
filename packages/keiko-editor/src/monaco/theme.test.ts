@@ -224,11 +224,15 @@ describe("buildKeikoEditorMonacoTheme", () => {
 });
 
 describe("registerKeikoEditorTheme", () => {
-  it("defines the variant theme on the injected registrar and returns its name", () => {
+  it("defines and applies the variant theme on the injected registrar and returns its name", () => {
     const defined: { name: string; base: string }[] = [];
+    const applied: string[] = [];
     const registrar = {
       defineTheme(name: string, data: { base: string }): void {
         defined.push({ name, base: data.base });
+      },
+      setTheme(name: string): void {
+        applied.push(name);
       },
     };
     const tokens: ResolvedEditorThemeTokens = fakeResolvedTokens();
@@ -243,6 +247,11 @@ describe("registerKeikoEditorTheme", () => {
       "keiko-editor-high-contrast",
     ]);
     expect(defined.map((d) => d.base)).toEqual(["vs-dark", "vs", "hc-black"]);
+    expect(applied).toEqual([
+      "keiko-editor-dark",
+      "keiko-editor-light",
+      "keiko-editor-high-contrast",
+    ]);
   });
 });
 

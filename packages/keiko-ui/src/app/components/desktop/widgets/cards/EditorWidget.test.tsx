@@ -2,16 +2,21 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  EditorAgentAction,
   EditorCompletionWireResponse,
   EditorInlineCompletionWireResponse,
   EditorTestGenerationWireResponse,
   FilesContentResponse,
+  LanguageServiceCapabilities,
 } from "../../../../../lib/types";
 import {
   ApiError,
+  fetchEditorLanguageCapabilities,
   fetchFilesContent,
+  postEditorAgentActionResult,
+  postEditorAgentSessionSnapshot,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
   requestEditorDiagnostics,
@@ -31,7 +36,10 @@ vi.mock("../../../../../lib/api", async () => {
     await vi.importActual<typeof import("../../../../../lib/api")>("../../../../../lib/api");
   return {
     ...actual,
+    fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
+    postEditorAgentActionResult: vi.fn(),
+    postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
     requestEditorCompletion: vi.fn(),
     requestEditorInlineCompletion: vi.fn(),
@@ -93,6 +101,98 @@ vi.mock("next/dynamic", () => {
 // The content-free document version the loaded fixture reports; the host captures it and sends it
 // back as the version-aware baseVersion token on save (Issue #1197).
 const BASE_VERSION = { sizeBytes: 12, modifiedAt: 1, contentHash: "a".repeat(64) };
+const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
+  schemaVersion: "1",
+  providers: [
+    {
+      id: "typescript",
+      languages: ["typescript", "javascript"],
+      operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+      availability: "available",
+    },
+  ],
+};
+
+type AgentEventListener = EventListenerOrEventListenerObject;
+
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+
+  readonly close = vi.fn();
+  readonly removeEventListener = vi.fn(
+    (type: string, listener: AgentEventListener): void => {
+      this.listeners.get(type)?.delete(listener);
+    },
+  );
+  private readonly listeners = new Map<string, Set<AgentEventListener>>();
+  readonly url: string;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: AgentEventListener): void {
+    const listeners = this.listeners.get(type) ?? new Set<AgentEventListener>();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  emitAction(action: EditorAgentAction): void {
+    this.emitRaw(JSON.stringify({ action }));
+  }
+
+  emitRaw(data: string): void {
+    const event = new MessageEvent<string>("editor-agent:action", { data });
+    for (const listener of this.listeners.get("editor-agent:action") ?? []) {
+      if (typeof listener === "function") {
+        listener(event);
+      } else {
+        listener.handleEvent(event);
+      }
+    }
+  }
+}
+
+const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
+
+function installFakeEventSource(): typeof FakeEventSource {
+  FakeEventSource.instances = [];
+  Object.defineProperty(globalThis, "EventSource", {
+    configurable: true,
+    value: FakeEventSource,
+  });
+  return FakeEventSource;
+}
+
+function restoreEventSource(): void {
+  if (ORIGINAL_EVENT_SOURCE === undefined) {
+    Reflect.deleteProperty(globalThis, "EventSource");
+    return;
+  }
+  Object.defineProperty(globalThis, "EventSource", {
+    configurable: true,
+    value: ORIGINAL_EVENT_SOURCE,
+  });
+}
+
+let agentActionSequence = 0;
+
+function agentAction(
+  sessionId: string,
+  type: EditorAgentAction["type"],
+  overrides: Partial<EditorAgentAction> = {},
+): EditorAgentAction {
+  agentActionSequence += 1;
+  return {
+    schemaVersion: "1",
+    actionId: `action-${agentActionSequence}`,
+    idempotencyKey: `idempotency-${agentActionSequence}`,
+    sessionId,
+    type,
+    ...overrides,
+  };
+}
 
 function fileResponse(over?: Partial<FilesContentResponse>): FilesContentResponse {
   return {
@@ -119,7 +219,17 @@ afterEach(() => {
   diffSurface.mounts = 0;
   diffSurface.unmounts = 0;
   delete document.documentElement.dataset.theme;
+  restoreEventSource();
+  agentActionSequence = 0;
   vi.clearAllMocks();
+});
+
+beforeEach(() => {
+  vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
+  vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
+  vi.mocked(postEditorAgentActionResult).mockResolvedValue({
+    result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
+  });
 });
 
 async function renderLoaded(
@@ -144,7 +254,7 @@ function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
 describe("EditorWidget — empty state", () => {
   it("renders an honest empty state and mounts no editor until a file is opened", () => {
     render(<EditorRuntimeWidget />);
-    expect(screen.getByRole("note")).toHaveTextContent(/choose a file from the files window/i);
+    expect(screen.getByRole("note")).toHaveTextContent(/choose a file from the project tree/i);
     expect(screen.queryByTestId("editor-surface")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
@@ -172,6 +282,18 @@ describe("EditorWidget — load", () => {
     );
     render(<EditorRuntimeWidget root="/repo" file="big.bin" />);
     expect(await screen.findByText(/this file is too large to edit here/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("editor-surface")).toBeNull();
+  });
+
+  it.each([
+    [new Error("Plain load failure."), /plain load failure/i],
+    ["non-error throw", /the file could not be loaded/i],
+  ])("normalizes non-API load failures without exposing raw transport details", async (failure, message) => {
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(failure);
+
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.queryByTestId("editor-surface")).toBeNull();
   });
 });
@@ -637,13 +759,25 @@ describe("EditorWidget — theme coupling", () => {
 describe("EditorWidget — language inference", () => {
   it.each([
     ["src/app.js", "javascript"],
-    ["notes/readme.md", "plaintext"],
+    ["notes/readme.md", "markdown"],
+    ["stryker.security.conf.json", "json"],
+    ["scripts/run.sh", "shell"],
   ])("maps %s to editor language %s", async (file, language) => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ path: file }));
     render(<EditorRuntimeWidget root="/repo" file={file} />);
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe(language);
     expect(surface.props?.buffer.language).toBe(language);
+  });
+
+  it("falls back to plaintext for unknown editor language ids", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "dist/app.unknown-bin", name: "app.unknown-bin", extension: "unknown-bin" }),
+    );
+    render(<EditorRuntimeWidget root="/repo" file="dist/app.unknown-bin" />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.fileModel.identity.language).toBe("plaintext");
+    expect(surface.props?.buffer.language).toBe("plaintext");
   });
 });
 
@@ -733,6 +867,33 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     );
   });
 
+  it("omits optional completion context when there is no query text or connected context", async () => {
+    vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    const resolver = surface.props?.provideCompletions;
+    expect(resolver).toBeDefined();
+    if (resolver === undefined) return;
+
+    await resolver(
+      {
+        request: {
+          request: { requestId: "r-blank", streamId: "s-blank", sequence: 1 },
+          document: { uri: "keiko://doc", language: "typescript", version: 1 },
+          position: { line: 99, column: 0 },
+          triggerKind: "invoked",
+          contextBudgetBytes: 4096,
+        },
+        documentText: "\n",
+      },
+      new AbortController().signal,
+    );
+    const input = vi.mocked(requestEditorCompletion).mock.calls.at(-1)?.[0];
+    expect(input).toEqual(expect.not.objectContaining({ context: expect.anything() }));
+  });
+
   it("does not forward a focused Files path from a different root", async () => {
     vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
@@ -763,13 +924,13 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     );
   });
 
-  it("registers no completion resolver for a non-source (plaintext) file", async () => {
+  it("registers no completion resolver for a non-source file", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
     render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
-    expect(surface.props?.fileModel.identity.language).toBe("plaintext");
+    expect(surface.props?.fileModel.identity.language).toBe("markdown");
     expect(surface.props?.provideCompletions).toBeUndefined();
   });
 });
@@ -862,7 +1023,7 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     });
   });
 
-  it("registers no inline resolver for a non-source (plaintext) file", async () => {
+  it("registers no inline resolver for a non-source file", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
@@ -872,13 +1033,13 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     expect(surface.props?.onInlineCompletionTelemetry).toBeUndefined();
   });
 
-  it("remounts the editor surface when switching from plaintext to source so providers install", async () => {
+  it("remounts the editor surface when switching from non-source to source so providers install", async () => {
     vi.mocked(fetchFilesContent)
       .mockResolvedValueOnce(fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }))
       .mockResolvedValueOnce(fileResponse());
     const { rerender } = render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
-    expect(surface.props?.fileModel.identity.language).toBe("plaintext");
+    expect(surface.props?.fileModel.identity.language).toBe("markdown");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
     expect(surface.mounts).toBe(1);
 
@@ -991,7 +1152,7 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     expect(formatResponse.edits[0]?.newText).toBe(" = ");
   });
 
-  it("registers no language-intelligence resolvers for a non-source (plaintext) file", async () => {
+  it("registers no language-intelligence resolvers for a non-source file", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
@@ -1025,6 +1186,91 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(statusField("completions")).toHaveTextContent("Completions on");
   });
 
+  it("renders multiple open document tabs and emits select/close intents", async () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn(() => true);
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    render(
+      <EditorRuntimeWidget
+        windowId="editor-tabs"
+        root="/repo"
+        file="src/app.ts"
+        openFiles={["src/app.ts", "package.json"]}
+        dirtyFiles={["package.json"]}
+        onSelectOpenFile={onSelect}
+        onCloseOpenFile={onClose}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    const active = screen.getByRole("tab", { name: "src/app.ts" });
+    const inactive = screen.getByRole("tab", { name: "package.json" });
+    expect(active).toHaveAttribute("aria-selected", "true");
+    expect(inactive).toHaveAttribute("aria-selected", "false");
+    expect(inactive.closest(".ed-tab")).toHaveAttribute("data-dirty", "true");
+
+    await userEvent.click(inactive);
+    expect(onSelect).toHaveBeenCalledWith("package.json");
+
+    await userEvent.click(screen.getByRole("button", { name: "Close package.json" }));
+    expect(onClose).toHaveBeenCalledWith("package.json");
+  });
+
+  it("deduplicates tab inputs and ignores empty tab entries from the host", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="editor-dedupe-tabs"
+        root="/repo"
+        file="src/app.ts"
+        openFiles={["", "src/app.ts", "src/app.ts"]}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByRole("tab", { name: "src/app.ts" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("restores an edited tab from the in-memory editor session cache", async () => {
+    vi.mocked(fetchFilesContent)
+      .mockResolvedValueOnce(
+        fileResponse({ path: "src/a.ts", name: "a.ts", content: "const a = 1;\n" }),
+      )
+      .mockResolvedValueOnce(
+        fileResponse({ path: "src/b.ts", name: "b.ts", content: "const b = 1;\n" }),
+      );
+
+    const { rerender } = render(
+      <EditorRuntimeWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+    await screen.findByTestId("editor-surface");
+    act(() => {
+      surface.props?.onContentChange({ text: "const a = 2;\n", sizeBytes: 13 }, "human");
+    });
+
+    rerender(
+      <EditorRuntimeWidget root="/repo" file="src/b.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.relativePath).toBe("src/b.ts");
+    });
+
+    rerender(
+      <EditorRuntimeWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.relativePath).toBe("src/a.ts");
+    });
+    expect(surface.props?.buffer.content.text).toBe("const a = 2;\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(fetchFilesContent).toHaveBeenCalledTimes(2);
+  });
+
   it("derives unique tab and tabpanel IDs for multiple editor windows", async () => {
     vi.mocked(fetchFilesContent)
       .mockResolvedValueOnce(fileResponse({ path: "src/a.ts", name: "a.ts" }))
@@ -1053,6 +1299,16 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
       expect(tab).toHaveAttribute("aria-controls", panel?.id);
       expect(panel).toHaveAttribute("aria-labelledby", tab.id);
     }
+  });
+
+  it("falls back to the editor DOM id segment when the supplied window id is empty", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    render(<EditorRuntimeWidget windowId="" root="/repo" file="src/app.ts" />);
+
+    await screen.findByTestId("editor-surface");
+    expect(screen.getByRole("tab", { name: "src/app.ts" }).id).toBe("ed-editor-active-tab");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "ed-editor-tabpanel");
   });
 
   it("keeps tabpanel wiring for loading, error, and empty editor states", async () => {
@@ -1153,7 +1409,18 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(surface.props?.onGenerateTests).toBeTypeOf("function");
   });
 
-  it("wires no command/diagnostics surface and shows completions-off for plaintext", async () => {
+  it("sends a format request to the editor surface from the Format button", async () => {
+    await renderLoaded();
+    expect(surface.props?.formatRequestNonce).toBe(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Format" }));
+
+    await waitFor(() => {
+      expect(surface.props?.formatRequestNonce).toBe(1);
+    });
+  });
+
+  it("wires no command/diagnostics surface and shows completions-off for non-source files", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
     );
@@ -1197,5 +1464,207 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(requestEditorSymbols).not.toHaveBeenCalled();
     expect(requestEditorFormatting).not.toHaveBeenCalled();
     expect(requestEditorTestGeneration).not.toHaveBeenCalled();
+  });
+});
+
+describe("EditorWidget — agent bridge", () => {
+  function agentResults(): readonly Parameters<typeof postEditorAgentActionResult>[0]["result"][] {
+    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
+  }
+
+  async function renderedAgentSession(): Promise<{
+    readonly source: FakeEventSource;
+    readonly sessionId: string;
+  }> {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="agent-window"
+        root="/repo"
+        file="src/app.ts"
+        openFiles={["src/app.ts", "README.md"]}
+        dirtyFiles={["README.md"]}
+        paneId="pane-1"
+        activePaneId="pane-1"
+        layoutPanes={[
+          { paneId: "pane-1", activeFile: "src/app.ts", openFiles: ["src/app.ts"] },
+          { paneId: "pane-2", activeFile: "README.md", openFiles: ["README.md"] },
+        ]}
+        onSelectOpenFile={vi.fn()}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        windowId: "agent-window",
+        workspaceRoot: "/repo",
+        activePaneId: "pane-1",
+        activeFile: "src/app.ts",
+        dirtyFiles: ["README.md"],
+        textMode: "none",
+      }),
+    );
+    expect(snapshot?.panes).toEqual([
+      { paneId: "pane-1", activeFile: "src/app.ts", openFiles: ["src/app.ts"] },
+      { paneId: "pane-2", activeFile: "README.md", openFiles: ["README.md"] },
+    ]);
+    const source = FakeSource.instances.at(-1);
+    expect(source).toBeDefined();
+    expect(source?.url).toBe("/api/editor/agent/events");
+    return { source: source as FakeEventSource, sessionId: String(snapshot?.sessionId) };
+  }
+
+  it("registers snapshots and executes queued editor-owned agent actions", async () => {
+    const onSelect = vi.fn();
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    const view = render(
+      <EditorRuntimeWidget
+        windowId="agent-window"
+        root="/repo"
+        file="src/app.ts"
+        openFiles={["src/app.ts", "README.md"]}
+        dirtyFiles={["README.md"]}
+        onSelectOpenFile={onSelect}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const sessionId = String(vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId);
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({ content: "let value = 1;\n", modifiedAt: 2 }),
+    );
+
+    act(() => {
+      source.emitAction(agentAction("other-session", "focusTab", { target: { file: "ignored.ts" } }));
+      source.emitRaw("{bad-json");
+      source.emitAction(agentAction(sessionId, "focusTab"));
+      source.emitAction(agentAction(sessionId, "openFile", { target: { file: "README.md" } }));
+      source.emitAction(agentAction(sessionId, "format"));
+      source.emitAction(agentAction(sessionId, "applyTextEdits"));
+      source.emitAction(
+        agentAction(sessionId, "applyTextEdits", {
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+              newText: "let",
+            },
+          ],
+        }),
+      );
+      source.emitAction(agentAction(sessionId, "moveTab"));
+      source.emitAction(agentAction(sessionId, "splitPane"));
+      source.emitAction(agentAction(sessionId, "setSelection"));
+      source.emitAction(agentAction(sessionId, "applyPatch"));
+      source.emitAction(agentAction(sessionId, "save"));
+    });
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith("README.md");
+    await waitFor(() => {
+      expect(surface.props?.formatRequestNonce).toBe(1);
+      expect(surface.props?.buffer.content.text).toBe("let value = 1;\n");
+    });
+    await waitFor(() => {
+      expect(agentResults().some((result) => result.message === "Save failed.")).toBe(false);
+      expect(agentResults().filter((result) => result.status === "succeeded")).toHaveLength(4);
+      expect(agentResults().filter((result) => result.status === "failed")).toHaveLength(6);
+    });
+    expect(agentResults()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "failed", message: "Missing target file." }),
+        expect.objectContaining({ status: "failed", message: "Missing text edits." }),
+        expect.objectContaining({
+          status: "failed",
+          message: "Action must be executed by the editor layout controller.",
+        }),
+        expect.objectContaining({ status: "succeeded" }),
+      ]),
+    );
+
+    view.unmount();
+    expect(source.removeEventListener).toHaveBeenCalledWith(
+      "editor-agent:action",
+      expect.any(Function),
+    );
+    expect(source.close).toHaveBeenCalled();
+  });
+
+  it("reports agent format actions as unavailable for unsupported languages", async () => {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
+    );
+    render(<EditorRuntimeWidget windowId="agent-markdown" root="/repo" file="notes.md" />);
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const sessionId = String(vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId);
+
+    act(() => {
+      (FakeSource.instances.at(-1) as FakeEventSource).emitAction(agentAction(sessionId, "format"));
+    });
+
+    await waitFor(() => {
+      expect(agentResults()).toContainEqual(
+        expect.objectContaining({
+          status: "failed",
+          message: "Formatting is unavailable for this language.",
+        }),
+      );
+    });
+  });
+
+  it("keeps agent bridge registration best-effort when the snapshot route fails", async () => {
+    installFakeEventSource();
+    vi.mocked(postEditorAgentSessionSnapshot).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    render(<EditorRuntimeWidget windowId="agent-offline" root="/repo" file="src/app.ts" />);
+
+    await screen.findByTestId("editor-surface");
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+
+  it("includes cursor, selection, diagnostics, dirty state, and layout panes in agent snapshots", async () => {
+    const { sessionId } = await renderedAgentSession();
+
+    act(() => {
+      surface.props?.onCursorChange?.({ line: 4, column: 2 });
+      surface.props?.onSelectionChange?.({
+        start: { line: 2, column: 1 },
+        end: { line: 3, column: 5 },
+      });
+      surface.props?.onDiagnosticsSummary?.({ errors: 1, warnings: 0, infos: 2 });
+      surface.props?.onContentChange({ text: "const changed = true;\n", sizeBytes: 22 }, "human");
+    });
+
+    await waitFor(() => {
+      const latest = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+      expect(latest).toEqual(
+        expect.objectContaining({
+          sessionId,
+          cursor: { line: 4, character: 2 },
+          selection: {
+            start: { line: 2, character: 1 },
+            end: { line: 3, character: 5 },
+          },
+          diagnosticsSummary: { errors: 1, warnings: 0, infos: 2 },
+          dirtyFiles: expect.arrayContaining(["README.md", "src/app.ts"]),
+        }),
+      );
+    });
   });
 });

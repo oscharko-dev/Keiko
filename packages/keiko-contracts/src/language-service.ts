@@ -208,6 +208,8 @@ export interface LanguageFormattingResult {
   readonly truncated: boolean;
 }
 
+export type LanguageProviderAvailability = "available" | "unavailable";
+
 // The pluggability surface. A provider declares its id, the `languages` it serves, and the
 // `operations` it implements. The registry resolves a request's `languageId` to a provider; adding
 // a language provider is a registration, never a contract change.
@@ -215,6 +217,8 @@ export interface LanguageProviderDescriptor {
   readonly id: string;
   readonly languages: readonly string[];
   readonly operations: readonly LanguageServiceOperation[];
+  readonly availability: LanguageProviderAvailability;
+  readonly unavailableReason?: string | undefined;
 }
 
 export interface LanguageServiceCapabilities {

@@ -28,6 +28,10 @@ describe("editorLanguageLabel", () => {
   it("maps governed language ids to display labels", () => {
     expect(editorLanguageLabel("typescript")).toBe("TypeScript");
     expect(editorLanguageLabel("javascript")).toBe("JavaScript");
+    expect(editorLanguageLabel("json")).toBe("JSON");
+    expect(editorLanguageLabel("markdown")).toBe("Markdown");
+    expect(editorLanguageLabel("python")).toBe("Python");
+    expect(editorLanguageLabel("shell")).toBe("Shell");
     expect(editorLanguageLabel("plaintext")).toBe("Plain Text");
   });
 });

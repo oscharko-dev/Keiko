@@ -200,6 +200,35 @@ describe("FilesWidget", () => {
     expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
   });
 
+  it("opens a file directly when embedded in the editor workspace", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+    const onOpenFile = vi.fn();
+
+    render(
+      <FilesWidget root="/repo space" openFilesDirectly activeFilePath="" onOpenFile={onOpenFile} />,
+    );
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
+
+    expect(fetchFilesPreview).not.toHaveBeenCalled();
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+    expect(screen.queryByText('"keiko"')).toBeNull();
+  });
+
   it("does not offer editor launch for unsupported previews", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/repo space",

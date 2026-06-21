@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 
-export type CfgValue = string | number | boolean | undefined;
+export type CfgValue = string | number | boolean | readonly string[] | undefined;
 export type Cfg = Record<string, CfgValue>;
 export type AccessMode = "ask" | "full";
 

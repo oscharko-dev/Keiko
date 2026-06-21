@@ -139,6 +139,11 @@ export interface KeikoCodeEditorProps {
    */
   readonly provideFormatting?: EditorFormattingResolver | undefined;
   /**
+   * Monotonic host request token for Monaco's built-in "Format Document" action. Incrementing this
+   * value asks the mounted editor to invoke the registered formatter for the active buffer.
+   */
+  readonly formatRequestNonce?: number | undefined;
+  /**
    * Content-free diagnostic-count observer for the status bar (Issue #1205). Called with the
    * error/warning/info tally after each analysis; the host renders the problem count. Never receives
    * diagnostic text or ranges. Absent when the host wires no diagnostics.

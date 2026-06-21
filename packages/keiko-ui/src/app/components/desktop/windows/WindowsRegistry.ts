@@ -4,6 +4,7 @@ import type {
   QualityIntelligenceImageSource,
 } from "@oscharko-dev/keiko-contracts";
 import type { IconName } from "../Icons";
+import type { AppWindow } from "./types";
 
 export type WindowType =
   | "chat"
@@ -95,16 +96,13 @@ export interface WindowRenderContext {
     | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
-  readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
+  readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
    * card). Singleton targets focus the existing instance; others spawn a new card carrying `cfg`.
    * Returns the new/focused window id, or null when the workspace viewport is not ready.
    */
-  readonly openWindow: (
-    type: WindowType,
-    cfg?: Record<string, string | number | boolean>,
-  ) => string | null;
+  readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
 }
 
 export interface WindowTypeDef {
@@ -201,24 +199,26 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   editor: {
     title: "Editor",
     icon: "editor",
-    desc: "Edit a text file",
-    w: 480,
-    h: 360,
+    desc: "Open a folder or file",
+    w: 920,
+    h: 620,
+    min: { w: 620, h: 380 },
     config: [
+      {
+        key: "root",
+        label: "Folder",
+        type: "directory",
+        def: "",
+        optional: true,
+        placeholder: "/absolute/folder/path",
+      },
       {
         key: "file",
         label: "File path",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "src/app.ts",
-      },
-      {
-        key: "root",
-        label: "Root",
-        type: "directory",
-        def: "",
-        optional: true,
+        placeholder: "optional relative file path",
       },
     ],
   },
@@ -591,6 +591,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figma",
   "figmaJson",
   "files",
+  "editor",
   "quality",
   "promptEnhancer",
   "relationships",

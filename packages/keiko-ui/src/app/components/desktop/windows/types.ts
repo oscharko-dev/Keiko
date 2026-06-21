@@ -1,6 +1,8 @@
 import type { WindowType } from "./WindowsRegistry";
 import type { SelectedScopeKind } from "@/lib/types";
 
+export type WindowCfgValue = string | number | boolean | readonly string[] | undefined;
+
 export interface AppWindow {
   readonly id: string;
   readonly type: WindowType;
@@ -9,7 +11,7 @@ export interface AppWindow {
   readonly w: number;
   readonly h: number;
   readonly z: number;
-  readonly cfg: Record<string, string | number | boolean | undefined>;
+  readonly cfg: Record<string, WindowCfgValue>;
   readonly max: boolean;
   readonly minimized?: boolean;
   readonly prev?: {

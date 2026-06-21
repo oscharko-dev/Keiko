@@ -96,6 +96,12 @@ import {
 import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
+  handleEditorAgentActions,
+  handleEditorAgentEvents,
+  handleEditorAgentSessions,
+  handleEditorAgentSnapshot,
+} from "./editor/agentRoutes.js";
+import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
   handleBrowserEvents,
@@ -325,6 +331,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/editor/patch-apply",
     handler: handleEditorPatchApply,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/sessions",
+    handler: handleEditorAgentSessions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/snapshot",
+    handler: handleEditorAgentSnapshot,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/actions",
+    handler: handleEditorAgentActions,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/events",
+    handler: handleEditorAgentEvents,
   },
   {
     method: "POST",

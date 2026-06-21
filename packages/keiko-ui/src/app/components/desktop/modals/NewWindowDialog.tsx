@@ -1088,7 +1088,7 @@ export function NewWindowDialog({
   // window only needs a projectPath and an optional cwd, both supplied via the form below.
 
   useEffect(() => {
-    if (type !== "files") return;
+    if (type !== "files" && type !== "editor") return;
     let cancelled = false;
     const currentRoot = cfg.root;
     if (typeof currentRoot === "string" && currentRoot.length > 0) return;

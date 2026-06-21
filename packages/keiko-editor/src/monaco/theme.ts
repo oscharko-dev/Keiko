@@ -155,6 +155,7 @@ export type ResolvedEditorThemeTokens = Readonly<Record<string, string>>;
 /** Minimal structural view of `monaco.editor` the theme registrar needs (injectable for tests). */
 export interface MonacoThemeRegistrar {
   defineTheme(themeName: string, themeData: monaco.editor.IStandaloneThemeData): void;
+  setTheme?(themeName: string): void;
 }
 
 function requireResolvedColor(tokens: ResolvedEditorThemeTokens, tokenName: string): string {
@@ -228,5 +229,6 @@ export function registerKeikoEditorTheme(
 ): string {
   const themeName = EDITOR_THEME_NAME[variant];
   registrar.defineTheme(themeName, buildKeikoEditorMonacoTheme(variant, tokens));
+  registrar.setTheme?.(themeName);
   return themeName;
 }

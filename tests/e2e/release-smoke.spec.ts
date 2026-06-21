@@ -16,7 +16,13 @@ interface ChatResponse {
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => {
+    // Monaco can surface a benign cancellation as an unhandled page error when an inline-completion
+    // request is superseded while the smoke test continues. Keep the guard strict for all real app
+    // errors, but do not fail the release smoke on that editor-internal cancellation noise.
+    if (error.message === "Canceled: Canceled") return;
+    errors.push(error.message);
+  });
   return () => {
     expect(errors).toEqual([]);
   };

@@ -45,6 +45,7 @@ const DESCRIPTOR: LanguageProviderDescriptor = {
   id: "typescript",
   languages: TS_LANGUAGES,
   operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+  availability: "available",
 };
 
 const SEVERITY_BY_CATEGORY: Readonly<Record<ts.DiagnosticCategory, LanguageDiagnosticSeverity>> = {

@@ -31,9 +31,12 @@ import {
   useReducer,
   useRef,
   useState,
+  type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
 import {
+  EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  applyTextEditsToText,
   buildTestGenerationPreview,
   createEditorRequestId,
   createFileModel,
@@ -44,6 +47,7 @@ import {
   editorFileModelReducer,
   EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
+  inferMonacoLanguageId,
   isDocumentDirty,
   isSupportedEditorLanguage,
   isTestGenerationBusy,
@@ -58,6 +62,7 @@ import {
   type EditorDiagnosticsSummary,
   type EditorDocumentIdentity,
   type EditorFileModel,
+  type EditorHotExitSnapshotV1,
   type EditorFormattingResolver,
   type EditorHoverResolver,
   type EditorInlineCompletionResolver,
@@ -75,6 +80,9 @@ import {
 } from "@oscharko-dev/keiko-editor";
 import {
   ApiError,
+  fetchEditorLanguageCapabilities,
+  postEditorAgentActionResult,
+  postEditorAgentSessionSnapshot,
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
@@ -96,14 +104,25 @@ import {
   mapWireToEditorSymbolsResponse,
 } from "../../../../../lib/editor-language";
 import type {
+  EditorAgentAction,
+  EditorAgentActionResultRequest,
+  EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
+  LanguageProviderDescriptor,
+  LanguageServiceCapabilities,
   EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
+import {
+  deleteEditorHotExitSnapshot,
+  readEditorHotExitSnapshot,
+  writeEditorHotExitSnapshot,
+} from "./editorHotExitStore";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
@@ -121,15 +140,55 @@ const TEST_GENERATION_CONTEXT_BUDGET_BYTES = 65_536;
 // Content-free transport-failure message; the editor stays usable after a failed run.
 const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
+const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
+  schemaVersion: "1",
+  providers: [
+    {
+      id: "typescript",
+      languages: ["typescript", "typescriptreact", "javascript", "javascriptreact"],
+      operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+      availability: "available",
+    },
+  ],
+};
 
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
+  readonly paneId?: string | undefined;
+  readonly activePaneId?: string | undefined;
+  readonly layoutPanes?: readonly EditorAgentPaneSnapshot[] | undefined;
   readonly root?: string;
   readonly file?: string;
+  readonly openFiles?: readonly string[] | undefined;
+  readonly dirtyFiles?: readonly string[] | undefined;
+  readonly onSelectOpenFile?: ((file: string) => void) | undefined;
+  readonly onCloseOpenFile?: ((file: string) => Promise<boolean> | boolean | void) | undefined;
+  readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
+  readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
+  readonly onExternalSaveComplete?:
+    | ((requestId: number, paneId: string, file: string, ok: boolean) => void)
+    | undefined;
+  readonly renderTabHandle?:
+    | ((
+        file: string,
+        active: boolean,
+        dirty: boolean,
+      ) => Pick<
+        ButtonHTMLAttributes<HTMLButtonElement>,
+        "draggable" | "onDragStart" | "onDragEnd" | "onKeyDown"
+      >)
+    | undefined;
+  readonly toolbarExtras?: ReactNode | undefined;
   readonly linkedRoot?: string | null;
   readonly linkedFilePath?: string | undefined;
   readonly linkedCapsuleIds?: readonly string[] | undefined;
   readonly linkedCapsuleSetIds?: readonly string[] | undefined;
+}
+
+export interface EditorExternalSaveRequest {
+  readonly id: number;
+  readonly paneId: string;
+  readonly file: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -142,25 +201,10 @@ function safeDomIdSegment(value: string): string {
   return safe.length > 0 ? safe : "editor";
 }
 
-/** Map a workspace path to a governed {@link EditorLanguageId}; non-source files are plaintext. */
+/** Map a workspace path to a renderable editor language; intelligence remains TS/JS-gated below. */
 function inferEditorLanguage(path: string): EditorLanguageId {
-  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  const byExt: Record<string, EditorLanguageId> = {
-    ts: "typescript",
-    tsx: "typescript",
-    mts: "typescript",
-    cts: "typescript",
-    js: "javascript",
-    jsx: "javascript",
-    mjs: "javascript",
-    cjs: "javascript",
-  };
-  const language = byExt[ext] ?? "plaintext";
+  const language = inferMonacoLanguageId(path);
   return isSupportedEditorLanguage(language) ? language : "plaintext";
-}
-
-function isSourceEditorLanguage(language: EditorLanguageId): boolean {
-  return language === "typescript" || language === "javascript";
 }
 
 function rootHash(root: string): string {
@@ -182,6 +226,50 @@ function encodePathSegments(path: string): string {
 /** A stable, host-scoped Monaco model URI for a (root, file) pair, without exposing a filesystem path. */
 function documentUri(root: string, file: string): string {
   return `keiko-editor://workspace/${rootHash(root)}/${encodePathSegments(file)}`;
+}
+
+function documentSessionKey(root: string, file: string): string {
+  return `${root}\u0000${file}`;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const cryptoLike = globalThis.crypto;
+  if (cryptoLike?.subtle !== undefined) {
+    const digest = await cryptoLike.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
+}
+
+function rangeToAgentRange(range: EditorRange | null):
+  | { readonly start: { readonly line: number; readonly character: number }; readonly end: { readonly line: number; readonly character: number } }
+  | null {
+  if (range === null) return null;
+  return {
+    start: { line: range.start.line, character: range.start.column },
+    end: { line: range.end.line, character: range.end.column },
+  };
+}
+
+interface EditorFileSessionSnapshot {
+  readonly content: string;
+  readonly fileModel: EditorFileModel | null;
+  readonly modifiedAt: number | null;
+  readonly version: EditorDocumentVersion | null;
+  readonly maxBytes: number | null;
+  readonly loadState: KeikoEditorLoadState;
+  readonly saveStatus: EditorSaveStatus;
+  readonly saveError: string | undefined;
+  readonly cursor: EditorPosition | null;
+  readonly currentSelection: EditorRange | null;
+  readonly diagnosticsSummary: EditorDiagnosticsSummary | null;
 }
 
 function editorAriaLabel(root: string, file: string): string {
@@ -238,10 +326,43 @@ function completionContextSelectors(input: {
   return Object.keys(selectors).length > 0 ? selectors : undefined;
 }
 
+function providerForLanguage(
+  capabilities: LanguageServiceCapabilities | null,
+  languageId: string | undefined,
+): LanguageProviderDescriptor | null {
+  if (capabilities === null || languageId === undefined) return null;
+  return (
+    capabilities.providers.find((provider) => provider.languages.includes(languageId)) ?? null
+  );
+}
+
+function providerOperationEnabled(
+  provider: LanguageProviderDescriptor | null,
+  operation: "diagnostics" | "completion" | "hover" | "symbols" | "formatting",
+): boolean {
+  return (
+    provider !== null &&
+    provider.availability === "available" &&
+    provider.operations.includes(operation)
+  );
+}
+
 export default function EditorRuntimeWidget({
   windowId,
+  paneId,
+  activePaneId,
+  layoutPanes,
   root,
   file,
+  openFiles,
+  dirtyFiles,
+  onSelectOpenFile,
+  onCloseOpenFile,
+  onDirtyChange,
+  externalSaveRequest,
+  onExternalSaveComplete,
+  renderTabHandle,
+  toolbarExtras,
   linkedRoot,
   linkedFilePath,
   linkedCapsuleIds,
@@ -255,6 +376,16 @@ export default function EditorRuntimeWidget({
   );
   const tabId = `${editorDomIdPrefix}-active-tab`;
   const tabpanelId = `${editorDomIdPrefix}-tabpanel`;
+  const documentTabs = useMemo(() => {
+    const deduped: string[] = [];
+    for (const path of openFiles ?? []) {
+      if (path.length > 0 && !deduped.includes(path)) deduped.push(path);
+    }
+    if (file !== undefined && file.length > 0 && !deduped.includes(file)) {
+      deduped.push(file);
+    }
+    return deduped;
+  }, [file, openFiles]);
 
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
@@ -266,6 +397,7 @@ export default function EditorRuntimeWidget({
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [formatRequestNonce, setFormatRequestNonce] = useState(0);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer(
@@ -280,6 +412,18 @@ export default function EditorRuntimeWidget({
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<EditorDiagnosticsSummary | null>(
     null,
   );
+  const [languageCapabilities, setLanguageCapabilities] = useState<LanguageServiceCapabilities | null>(
+    BOOTSTRAP_LANGUAGE_CAPABILITIES,
+  );
+  const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
+  const sessionCacheRef = useRef(new Map<string, EditorFileSessionSnapshot>());
+  const activeSessionKeyRef = useRef<string | null>(null);
+  activeSessionKeyRef.current =
+    root !== undefined && file !== undefined && root.length > 0 && file.length > 0
+      ? documentSessionKey(root, file)
+      : null;
 
   // Refs the imperative save path reads so a Cmd/Ctrl+S immediately after an edit always persists
   // the latest values, independent of React state-batching timing. The version-aware
@@ -297,7 +441,34 @@ export default function EditorRuntimeWidget({
     setCurrentSelection(null);
     setCursor(null);
     setDiagnosticsSummary(null);
+    setRecoveryNotice(null);
   }, [file, root]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void sha256Hex(content).then((hash) => {
+      if (!cancelled) setActiveContentHash(hash);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchEditorLanguageCapabilities()
+      .then((capabilities) => {
+        if (!cancelled) setLanguageCapabilities(capabilities);
+      })
+      .catch(() => {
+        // Keep the bootstrap TS/JS capability rather than breaking the editor toolbar on a transient
+        // capability-route failure. Operation calls still go through the governed BFF and degrade
+        // independently if unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -306,16 +477,107 @@ export default function EditorRuntimeWidget({
     [],
   );
 
-  const dirty = fileModel !== null && isDocumentDirty(fileModel);
+  const currentDocumentUri =
+    hasTarget && root !== undefined && file !== undefined ? documentUri(root, file) : null;
+  const fileModelMatchesTarget =
+    fileModel !== null &&
+    currentDocumentUri !== null &&
+    fileModel.identity.uri === currentDocumentUri;
+  const dirty = fileModelMatchesTarget && isDocumentDirty(fileModel);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
+  useEffect(() => {
+    if (file === undefined || file.length === 0) return;
+    onDirtyChange?.(file, dirty);
+  }, [dirty, file, onDirtyChange]);
+  useEffect(() => {
+    if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
+    if (!dirty) {
+      void deleteEditorHotExitSnapshot(root, file);
+      return;
+    }
+    const sizeBytes = new TextEncoder().encode(content).length;
+    if (maxBytes !== null && sizeBytes > maxBytes) return;
+    let cancelled = false;
+    void sha256Hex(content).then((contentHash) => {
+      if (cancelled) return;
+      const snapshot: EditorHotExitSnapshotV1 = {
+        schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
+        workspaceRoot: root,
+        relativePath: file,
+        content,
+        baseVersion: version,
+        contentHash,
+        savedContentHash: version?.contentHash ?? null,
+        updatedAt: Date.now(),
+        paneId: paneId ?? "pane-1",
+        windowId: windowId ?? "editor",
+      };
+      void writeEditorHotExitSnapshot(snapshot);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    content,
+    dirty,
+    file,
+    fileModelMatchesTarget,
+    hasTarget,
+    maxBytes,
+    paneId,
+    root,
+    version,
+    windowId,
+  ]);
+  useEffect(() => {
+    if (
+      !hasTarget ||
+      root === undefined ||
+      file === undefined ||
+      root.length === 0 ||
+      file.length === 0 ||
+      !fileModelMatchesTarget
+    ) {
+      return;
+    }
+    sessionCacheRef.current.set(documentSessionKey(root, file), {
+      content,
+      fileModel,
+      modifiedAt,
+      version,
+      maxBytes,
+      loadState,
+      saveStatus,
+      saveError,
+      cursor,
+      currentSelection,
+      diagnosticsSummary,
+    });
+  }, [
+    content,
+    currentSelection,
+    cursor,
+    diagnosticsSummary,
+    file,
+    fileModel,
+    fileModelMatchesTarget,
+    hasTarget,
+    loadState,
+    maxBytes,
+    modifiedAt,
+    root,
+    saveError,
+    saveStatus,
+    version,
+  ]);
   // Follow the live app appearance (light/dark/high-contrast). Keyed onto the surface below so a
   // theme switch remounts it, which re-runs the editor's on-mount theme registration against the
   // now-current design tokens — the editor registers only its mount-time variant.
   const themeVariant = useEditorThemeVariant();
 
   const load = useCallback(
-    (signal: { cancelled: boolean }): void => {
+    (signal: { cancelled: boolean }, options: { bypassCache?: boolean } = {}): void => {
       if (!hasTarget) {
         setContent("");
         setFileModel(null);
@@ -327,23 +589,51 @@ export default function EditorRuntimeWidget({
         setSaveError(undefined);
         return;
       }
+      const sessionKey = documentSessionKey(root, file);
+      const cached =
+        options.bypassCache === true ? undefined : sessionCacheRef.current.get(sessionKey);
+      if (cached !== undefined) {
+        setContent(cached.content);
+        setFileModel(cached.fileModel);
+        setModifiedAt(cached.modifiedAt);
+        setVersion(cached.version);
+        setMaxBytes(cached.maxBytes);
+        setLoadState(cached.loadState);
+        setSaveStatus(cached.saveStatus);
+        setSaveError(cached.saveError);
+        setCursor(cached.cursor);
+        setCurrentSelection(cached.currentSelection);
+        setDiagnosticsSummary(cached.diagnosticsSummary);
+        return;
+      }
       setLoadState({ status: "loading" });
       setSaveStatus("idle");
       setSaveError(undefined);
       void fetchFilesContent(root, file)
-        .then((response) => {
+        .then(async (response) => {
           if (signal.cancelled) return;
           const identity: EditorDocumentIdentity = {
             uri: documentUri(root, file),
             language: inferEditorLanguage(file),
             version: 0,
           };
+          const snapshot = await readEditorHotExitSnapshot(root, file);
+          if (signal.cancelled) return;
           setContent(response.content);
           setFileModel(createFileModel(identity));
           setModifiedAt(response.modifiedAt);
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
           setLoadState({ status: "ready" });
+          if (
+            snapshot !== null &&
+            snapshot.content !== response.content &&
+            snapshot.contentHash !== response.session.version.contentHash
+          ) {
+            setRecoverySnapshot(snapshot);
+          } else {
+            setRecoverySnapshot(null);
+          }
         })
         .catch((err: unknown) => {
           if (signal.cancelled) return;
@@ -363,14 +653,15 @@ export default function EditorRuntimeWidget({
 
   const reload = useCallback((): void => {
     const signal = { cancelled: false };
-    load(signal);
+    load(signal, { bypassCache: true });
   }, [load]);
 
   const persist = useCallback(
-    async (text: string): Promise<void> => {
-      if (!hasTarget || savingRef.current) return;
+    async (text: string): Promise<boolean> => {
+      if (!hasTarget || savingRef.current) return false;
+      const saveSessionKey = documentSessionKey(root, file);
       const textChangedBeforeReactCommitted = text !== contentRef.current;
-      if (!dirtyRef.current && !textChangedBeforeReactCommitted) return;
+      if (!dirtyRef.current && !textChangedBeforeReactCommitted) return true;
       if (textChangedBeforeReactCommitted) {
         contentRef.current = text;
         setContent(text);
@@ -391,6 +682,32 @@ export default function EditorRuntimeWidget({
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
         });
+        if (activeSessionKeyRef.current !== saveSessionKey) {
+          const cached = sessionCacheRef.current.get(saveSessionKey);
+          const cachedContent = cached?.content ?? text;
+          const cachedFileModel = cached?.fileModel ?? null;
+          sessionCacheRef.current.set(saveSessionKey, {
+            content: cachedContent === text ? response.content : cachedContent,
+            fileModel:
+              cachedFileModel === null
+                ? cachedFileModel
+                : editorFileModelReducer(cachedFileModel, {
+                    type: cachedContent === text ? "saved" : "edited",
+                    origin: "human",
+                  }),
+            modifiedAt: response.modifiedAt,
+            version: response.session.version,
+            maxBytes: response.maxBytes,
+            loadState: cached?.loadState ?? { status: "ready" },
+            saveStatus: cachedContent === text ? "saved" : "idle",
+            saveError: undefined,
+            cursor: cached?.cursor ?? null,
+            currentSelection: cached?.currentSelection ?? null,
+            diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+          });
+          await deleteEditorHotExitSnapshot(root, file);
+          return true;
+        }
         // The persisted file moved on disk regardless of any concurrent edits — always adopt the new
         // concurrency token so the next save validates against it.
         setModifiedAt(response.modifiedAt);
@@ -411,7 +728,27 @@ export default function EditorRuntimeWidget({
             saveStatusReducer(saveStatusReducer(status, { type: "succeeded" }), { type: "edited" }),
           );
         }
+        await deleteEditorHotExitSnapshot(root, file);
+        return true;
       } catch (err: unknown) {
+        if (activeSessionKeyRef.current !== saveSessionKey) {
+          const cached = sessionCacheRef.current.get(saveSessionKey);
+          sessionCacheRef.current.set(saveSessionKey, {
+            content: cached?.content ?? text,
+            fileModel: cached?.fileModel ?? fileModel,
+            modifiedAt: cached?.modifiedAt ?? modifiedAt,
+            version: cached?.version ?? versionRef.current,
+            maxBytes: cached?.maxBytes ?? maxBytes,
+            loadState: cached?.loadState ?? { status: "ready" },
+            saveStatus: err instanceof ApiError && err.status === 409 ? "conflict" : "error",
+            saveError:
+              err instanceof ApiError && err.status === 409 ? undefined : errorMessage(err),
+            cursor: cached?.cursor ?? null,
+            currentSelection: cached?.currentSelection ?? null,
+            diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+          });
+          return false;
+        }
         if (err instanceof ApiError && err.status === 409) {
           // The persisted file moved underneath this save (optimistic-concurrency conflict). Keep the
           // buffer dirty and surface a recoverable conflict — never silently overwrite.
@@ -420,11 +757,12 @@ export default function EditorRuntimeWidget({
           setSaveError(errorMessage(err));
           setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
         }
+        return false;
       } finally {
         savingRef.current = false;
       }
     },
-    [hasTarget, root, file],
+    [file, fileModel, hasTarget, maxBytes, modifiedAt, root],
   );
 
   const onContentChange = useCallback(
@@ -445,12 +783,53 @@ export default function EditorRuntimeWidget({
     [persist],
   );
 
+  const handledExternalSaveRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (
+      externalSaveRequest === undefined ||
+      handledExternalSaveRef.current === externalSaveRequest.id ||
+      file !== externalSaveRequest.file
+    ) {
+      return;
+    }
+    handledExternalSaveRef.current = externalSaveRequest.id;
+    void persist(contentRef.current).then((ok) => {
+      onExternalSaveComplete?.(
+        externalSaveRequest.id,
+        externalSaveRequest.paneId,
+        externalSaveRequest.file,
+        ok,
+      );
+    });
+  }, [externalSaveRequest, file, onExternalSaveComplete, persist]);
+
   const onRuntimeError = useCallback((message: string): void => {
     // A non-fatal theme-registration failure (e.g. the editor design tokens are not present on this
     // surface). The editor still renders with Monaco's base theme; surface it for diagnostics rather
     // than swallowing a system-boundary signal.
     // eslint-disable-next-line no-console -- non-fatal, observable diagnostic only.
     console.warn(`Keiko editor runtime notice: ${message}`);
+  }, []);
+
+  const restoreRecovery = useCallback((): void => {
+    if (recoverySnapshot === null || fileModel === null) return;
+    setContent(recoverySnapshot.content);
+    setFileModel(editorFileModelReducer(fileModel, { type: "edited", origin: "human" }));
+    setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+    setRecoverySnapshot(null);
+    setRecoveryNotice(null);
+  }, [fileModel, recoverySnapshot]);
+
+  const discardRecovery = useCallback((): void => {
+    if (root !== undefined && file !== undefined) {
+      void deleteEditorHotExitSnapshot(root, file);
+    }
+    setRecoverySnapshot(null);
+    setRecoveryNotice(null);
+  }, [file, root]);
+
+  const compareRecovery = useCallback((): void => {
+    setRecoveryNotice("Recovery content differs from disk. Keep local to restore it, or use disk.");
   }, []);
 
   // Issue #1199: the governed completion resolver. The Monaco bridge calls this with the live buffer
@@ -578,7 +957,10 @@ export default function EditorRuntimeWidget({
     if (
       loadState.status !== "ready" ||
       isTestGenerationBusy(testGenState) ||
-      !isSourceEditorLanguage(fileModel.identity.language)
+      !providerOperationEnabled(
+        providerForLanguage(languageCapabilities, fileModel.identity.language),
+        "completion",
+      )
     ) {
       return;
     }
@@ -654,6 +1036,7 @@ export default function EditorRuntimeWidget({
     file,
     fileModel,
     hasTarget,
+    languageCapabilities,
     linkedCapsuleIds,
     linkedCapsuleSetIds,
     linkedFilePath,
@@ -748,17 +1131,21 @@ export default function EditorRuntimeWidget({
   );
   const largeFileDegraded = largeFileMode === "degraded";
 
-  // Completion has a governed deterministic provider only for the TS/JS source languages (#1198);
-  // non-source buffers register no provider. In large-file degraded mode (#1207), all editor-
-  // intelligence providers are intentionally absent so no full-buffer BFF requests are sent.
   const completionLanguage = fileModel?.identity.language;
-  const sourceLanguage =
-    completionLanguage !== undefined && isSourceEditorLanguage(completionLanguage);
-  const completionEnabled = sourceLanguage && !largeFileDegraded;
-  const editorSurfaceKey = `${themeVariant ?? "dark"}:${completionEnabled ? "source" : "plain"}:${largeFileMode}`;
+  const languageProvider = providerForLanguage(languageCapabilities, completionLanguage);
+  const completionEnabled =
+    providerOperationEnabled(languageProvider, "completion") && !largeFileDegraded;
+  const diagnosticsEnabled =
+    providerOperationEnabled(languageProvider, "diagnostics") && !largeFileDegraded;
+  const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
+  const symbolsEnabled = providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
+  const formattingEnabled =
+    providerOperationEnabled(languageProvider, "formatting") && !largeFileDegraded;
+  const editorSurfaceKey = `${themeVariant ?? "dark"}:${languageProvider?.id ?? "none"}:${largeFileMode}`;
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
+  const canFormat = hasTarget && loadState.status === "ready" && formattingEnabled;
 
   // Issue #1202: the "Generate Tests" action is offered for governed TS/JS files; the server is the
   // authority and returns `disabled` while the wave-2 feature is switched off. The status line reflects
@@ -770,7 +1157,7 @@ export default function EditorRuntimeWidget({
 
   const buffer: EditorBuffer | null = useMemo(
     () =>
-      fileModel === null
+      fileModel === null || !fileModelMatchesTarget
         ? null
         : {
             language: fileModel.identity.language,
@@ -782,7 +1169,7 @@ export default function EditorRuntimeWidget({
               truncated: false,
             },
           },
-    [content, contentSizeBytes, file, fileModel, largeFileDegraded],
+    [content, contentSizeBytes, file, fileModel, fileModelMatchesTarget, largeFileDegraded],
   );
   const testGenerationPreview: TestGenerationPreview | null =
     isTestGenerationPreviewing(testGenState) && buffer !== null
@@ -814,7 +1201,15 @@ export default function EditorRuntimeWidget({
           dirty,
           completionsEnabled: completionEnabled,
           largeFileMode,
-          diagnostics: completionEnabled ? diagnosticsSummary : null,
+          diagnostics: diagnosticsEnabled ? diagnosticsSummary : null,
+          languageService:
+            languageProvider === null
+              ? { providerId: null, available: false, unavailableReason: "No provider configured" }
+              : {
+                  providerId: languageProvider.id,
+                  available: languageProvider.availability === "available",
+                  unavailableReason: languageProvider.unavailableReason,
+                },
           readOnly: largeFileDegraded,
           ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
         });
@@ -826,6 +1221,195 @@ export default function EditorRuntimeWidget({
     buffer !== null &&
     fileModel !== null &&
     statusBarViewModel !== null;
+
+  const effectiveDirtyFiles = useMemo(() => {
+    const set = new Set(dirtyFiles ?? []);
+    if (file !== undefined && dirty) set.add(file);
+    return set;
+  }, [dirty, dirtyFiles, file]);
+  const handleSelectTab = useCallback(
+    (path: string): void => {
+      if (path === file || saveStatus === "saving") return;
+      onSelectOpenFile?.(path);
+    },
+    [file, onSelectOpenFile, saveStatus],
+  );
+  const handleCloseTab = useCallback(
+    async (path: string): Promise<void> => {
+      if (root !== undefined) {
+        const cached = sessionCacheRef.current.get(documentSessionKey(root, path));
+        if ((path === file && saveStatus === "saving") || cached?.saveStatus === "saving") {
+          return;
+        }
+      }
+      const accepted = await onCloseOpenFile?.(path);
+      if (accepted === false || root === undefined) return;
+      sessionCacheRef.current.delete(documentSessionKey(root, path));
+    },
+    [file, onCloseOpenFile, root, saveStatus],
+  );
+
+  const agentSessionId = useMemo(
+    () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
+    [generatedId, root, windowId],
+  );
+
+  useEffect(() => {
+    if (!hasTarget || root === undefined || file === undefined || activeContentHash === null) return;
+    void postEditorAgentSessionSnapshot({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      sessionId: agentSessionId,
+      windowId: windowId ?? "editor",
+      workspaceRoot: root,
+      activePaneId: activePaneId ?? paneId ?? null,
+      panes:
+        layoutPanes ??
+        [
+          {
+            paneId: paneId ?? "pane-1",
+            activeFile: file,
+            openFiles: documentTabs,
+          },
+        ],
+      dirtyFiles: effectiveDirtyFiles.size > 0 ? [...effectiveDirtyFiles] : [],
+      activeFile: file,
+      cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
+      selection: rangeToAgentRange(currentSelection),
+      diagnosticsSummary,
+      ...(version === null ? {} : { documentVersion: version }),
+      activeFileContentHash: activeContentHash,
+      textMode: "none",
+      updatedAt: Date.now(),
+    }).catch(() => {
+      // Agent bridge registration is best-effort and must never affect editing.
+    });
+  }, [
+    activePaneId,
+    activeContentHash,
+    agentSessionId,
+    currentSelection,
+    cursor,
+    diagnosticsSummary,
+    documentTabs,
+    effectiveDirtyFiles,
+    file,
+    hasTarget,
+    layoutPanes,
+    paneId,
+    root,
+    version,
+    windowId,
+  ]);
+
+  const postAgentResult = useCallback(
+    (action: EditorAgentAction, status: "succeeded" | "failed" | "conflict", message?: string): void => {
+      const body: EditorAgentActionResultRequest = {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "result",
+        result: {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          actionId: action.actionId,
+          sessionId: action.sessionId,
+          status,
+          ...(message === undefined ? {} : { message }),
+        },
+      };
+      void postEditorAgentActionResult(body).catch(() => {
+        // Best-effort action reporting; the local UI action already happened or was rejected.
+      });
+    },
+    [],
+  );
+
+  const executeAgentAction = useCallback(
+    (action: EditorAgentAction): void => {
+      if (action.sessionId !== agentSessionId) return;
+      try {
+        switch (action.type) {
+          case "openFile":
+          case "focusTab":
+            if (action.target?.file === undefined) {
+              postAgentResult(action, "failed", "Missing target file.");
+              return;
+            }
+            onSelectOpenFile?.(action.target.file);
+            postAgentResult(action, "succeeded");
+            return;
+          case "format":
+            if (!formattingEnabled) {
+              postAgentResult(action, "failed", "Formatting is unavailable for this language.");
+              return;
+            }
+            setFormatRequestNonce((value) => value + 1);
+            postAgentResult(action, "succeeded");
+            return;
+          case "save":
+            void persist(contentRef.current).then((ok) => {
+              postAgentResult(action, ok ? "succeeded" : "failed", ok ? undefined : "Save failed.");
+            });
+            return;
+          case "applyTextEdits":
+            if (action.textEdits === undefined) {
+              postAgentResult(action, "failed", "Missing text edits.");
+              return;
+            }
+            setContent((current) =>
+              applyTextEditsToText(
+                current,
+                action.textEdits?.map((edit) => ({
+                  range: {
+                    start: { line: edit.range.start.line, column: edit.range.start.character },
+                    end: { line: edit.range.end.line, column: edit.range.end.character },
+                  },
+                  newText: edit.newText,
+                })) ?? [],
+              ),
+            );
+            setFileModel((model) =>
+              model === null
+                ? model
+                : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+            );
+            setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+            postAgentResult(action, "succeeded");
+            return;
+          case "moveTab":
+          case "splitPane":
+          case "setSelection":
+          case "applyPatch":
+            postAgentResult(action, "failed", "Action must be executed by the editor layout controller.");
+            return;
+        }
+      } catch (error) {
+        postAgentResult(action, "failed", error instanceof Error ? error.message : "Action failed.");
+      }
+    },
+    [agentSessionId, formattingEnabled, onSelectOpenFile, persist, postAgentResult],
+  );
+
+  useEffect(() => {
+    if (typeof EventSource === "undefined") return;
+    const source = new EventSource("/api/editor/agent/events");
+    const onAction = (event: MessageEvent<string>): void => {
+      try {
+        const parsed = JSON.parse(event.data) as { readonly action?: EditorAgentAction };
+        if (parsed.action !== undefined) executeAgentAction(parsed.action);
+      } catch {
+        // Ignore malformed SSE frames; the server owns validation before enqueueing.
+      }
+    };
+    source.addEventListener("editor-agent:action", onAction);
+    return () => {
+      source.removeEventListener("editor-agent:action", onAction);
+      source.close();
+    };
+  }, [executeAgentAction]);
+
+  const recoveryDiskChanged =
+    recoverySnapshot !== null &&
+    recoverySnapshot.savedContentHash !== null &&
+    version !== null &&
+    recoverySnapshot.savedContentHash !== version.contentHash;
 
   let panel: ReactNode;
   if (testGenerationPreview !== null) {
@@ -871,13 +1455,14 @@ export default function EditorRuntimeWidget({
         completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
         provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
         onInlineCompletionTelemetry={completionEnabled ? onInlineCompletionTelemetry : undefined}
-        provideDiagnostics={completionEnabled ? provideDiagnostics : undefined}
-        provideHover={completionEnabled ? provideHover : undefined}
-        provideSymbols={completionEnabled ? provideSymbols : undefined}
-        provideFormatting={completionEnabled ? provideFormatting : undefined}
+        provideDiagnostics={diagnosticsEnabled ? provideDiagnostics : undefined}
+        provideHover={hoverEnabled ? provideHover : undefined}
+        provideSymbols={symbolsEnabled ? provideSymbols : undefined}
+        provideFormatting={formattingEnabled ? provideFormatting : undefined}
+        formatRequestNonce={formatRequestNonce}
         onSelectionChange={setCurrentSelection}
         onCursorChange={setCursor}
-        onDiagnosticsSummary={completionEnabled ? setDiagnosticsSummary : undefined}
+        onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         showStatusFooter={false}
       />
@@ -891,7 +1476,7 @@ export default function EditorRuntimeWidget({
   } else {
     panel = (
       <div className="ed-empty" role="note">
-        Choose a file from the Files window and use <strong>Open in editor</strong>.
+        Choose a file from the project tree to start editing.
       </div>
     );
   }
@@ -900,25 +1485,76 @@ export default function EditorRuntimeWidget({
     <div className="editor">
       <div className="ed-tabs mono">
         <div className="ed-tablist" role="tablist" aria-label="Open documents">
-          <span
-            className="ed-tab active"
-            role="tab"
-            id={tabId}
-            aria-selected="true"
-            aria-controls={tabpanelId}
-            tabIndex={0}
-            title={file ?? "Editor"}
-          >
-            <Icons.editor size={12} />
-            <span className="ed-tab-label">{file ?? "Editor"}</span>
-            {dirty ? (
-              <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
-                ●
+          {documentTabs.length > 0 ? (
+            documentTabs.map((path) => {
+              const active = path === file;
+              const tabDomId = active
+                ? tabId
+                : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
+              const tabDirty = effectiveDirtyFiles.has(path);
+              const tabHandle = renderTabHandle?.(path, active, tabDirty);
+              return (
+                <span
+                  className={`ed-tab${active ? " active" : ""}`}
+                  data-dirty={tabDirty ? "true" : "false"}
+                  key={path}
+                >
+                  <button
+                    type="button"
+                    className="ed-tab-hit"
+                    draggable={tabHandle?.draggable}
+                    role="tab"
+                    id={tabDomId}
+                    aria-selected={active ? "true" : "false"}
+                    aria-controls={tabpanelId}
+                    tabIndex={active ? 0 : -1}
+                    title={path}
+                    onDragStart={tabHandle?.onDragStart}
+                    onDragEnd={tabHandle?.onDragEnd}
+                    onKeyDown={tabHandle?.onKeyDown}
+                    onClick={() => handleSelectTab(path)}
+                  >
+                    <Icons.editor size={12} />
+                    <span className="ed-tab-label">{path}</span>
+                    {tabDirty ? (
+                      <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
+                        ●
+                      </span>
+                    ) : null}
+                  </button>
+                  {onCloseOpenFile !== undefined ? (
+                    <button
+                      type="button"
+                      className="ed-tab-close"
+                      aria-label={`Close ${path}`}
+                      title={`Close ${path}`}
+                      onClick={() => void handleCloseTab(path)}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </span>
+              );
+            })
+          ) : (
+            <span className="ed-tab active" data-dirty="false">
+              <span
+                className="ed-tab-hit"
+                role="tab"
+                id={tabId}
+                aria-selected="true"
+                aria-controls={tabpanelId}
+                tabIndex={0}
+                title="Editor"
+              >
+                <Icons.editor size={12} />
+                <span className="ed-tab-label">Editor</span>
               </span>
-            ) : null}
-          </span>
+            </span>
+          )}
         </div>
         <span className="spacer" />
+        {toolbarExtras}
         {hasTarget && completionEnabled ? (
           <button
             type="button"
@@ -935,6 +1571,19 @@ export default function EditorRuntimeWidget({
         {testGenBusy ? (
           <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
             Cancel
+          </button>
+        ) : null}
+        {hasTarget ? (
+          <button
+            type="button"
+            className="ed-save"
+            onClick={() => {
+              if (canFormat) setFormatRequestNonce((value) => value + 1);
+            }}
+            aria-disabled={canFormat ? "false" : "true"}
+            title="Format document"
+          >
+            Format
           </button>
         ) : null}
         {hasTarget && saveStatus === "conflict" ? (
@@ -955,6 +1604,37 @@ export default function EditorRuntimeWidget({
           </button>
         ) : null}
       </div>
+      {recoverySnapshot !== null ? (
+        <div className="ed-recovery" role="status">
+          <span>
+            {recoveryDiskChanged
+              ? "Recovered editor changes are available, and the disk file changed."
+              : "Recovered unsaved editor changes are available."}
+          </span>
+          <span className="spacer" />
+          {recoveryDiskChanged ? (
+            <button type="button" className="ed-reload" onClick={compareRecovery}>
+              Compare
+            </button>
+          ) : null}
+          <button type="button" className="ed-save" onClick={restoreRecovery}>
+            {recoveryDiskChanged ? "Keep local" : "Restore unsaved changes"}
+          </button>
+          <button type="button" className="ed-reload" onClick={discardRecovery}>
+            {recoveryDiskChanged ? "Use disk" : "Discard"}
+          </button>
+          {recoveryDiskChanged ? (
+            <button
+              type="button"
+              className="ed-icon-action"
+              onClick={() => setRecoverySnapshot(null)}
+            >
+              Cancel
+            </button>
+          ) : null}
+          {recoveryNotice !== null ? <span>{recoveryNotice}</span> : null}
+        </div>
+      ) : null}
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
       </div>

@@ -164,6 +164,7 @@ export interface WireEditorFormatting {
 /** Minimal editor surface the mount wiring needs (the live `onMount` first arg). */
 export interface MountEditor {
   addAction(descriptor: monaco.editor.IActionDescriptor): monaco.IDisposable;
+  getAction(id: string): { run: () => void | Promise<void> } | null;
   onDidChangeCursorPosition(
     listener: (event: { position: monaco.Position }) => void,
   ): monaco.IDisposable;
