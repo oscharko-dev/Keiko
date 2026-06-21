@@ -172,6 +172,15 @@ Figma `widgets/figma/*.tsx`. Resolve Light Mode Table A `required` rows here (to
 inline `borderRadius`/spacing literals in `MemoryConsolidation.tsx`, `RelationshipCreateDialog.tsx`,
 `RelationshipInspectorPanel.tsx`, `RelationshipListPanel.tsx`, `RelationshipImpactCard.tsx`.
 
+> **Status: shipped.** The #1295 product-surface migration routed ~330 rules / ~466+30 declarations from raw neutral
+> Tier-1 primitives to the Tier-3 semantic tokens across the high-traffic content surfaces (chat-, chatw-,
+> grounded-, wf-, qi-\*, mc-/memoria-, rel-/rb-, lk-/lkd-/connector-, figma-, fpv-/hl- prefixes) — value-preserving
+> for Categories A/B (dark/HC/forced-colors 0-diff proven by 2324-probe equivalence harness in
+> [evidence/1295](evidence/1295/)), with deliberate Category-C light adaptations (new `--shadow-ink-rgb` making
+> Table A required shadow rows light-adaptive, centralised `--overlay-scrim` via `.mc-dialog-backdrop`). Deferred to
+> later issues: AI/agent patterns (#1296), data-grid/lists (#1297), systematic spacing/typography/density/breakpoint
+> (#1298), deeper running-Monaco editor visual-regression (#1300).
+
 ### #1296 — AI / agent component set
 
 Current improvised patterns (to formalise as components consuming `--ai-*` tokens):

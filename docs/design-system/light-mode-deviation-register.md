@@ -53,6 +53,20 @@ new `--overlay-scrim`/`--shadow-*`) so light values flow automatically. This wor
 > follow-ups noted by the migration: the duplicate `[data-theme="light"] .mc-dialog-backdrop` (lines 15242 and
 > 15791, dead duplicate) and a shared `--dialog-scrim` token _definition_ both belong to #1295.
 
+> **#1295 disposition (shipped).** The #1295 high-traffic product-surface migration resolves the Light Mode
+> `required` shadow/scrim rows via a new mode-aware primitive `--shadow-ink-rgb` (dark: 0 0 0; light: 20 30 25)
+> routed through Table A rows A1 / A2 / A4 / A5 / A6 — proven byte-identical in dark and intentionally adapted
+> to warm light ink by the 2324-probe, 0-diff computed-value harness across 7 modes in
+> [evidence/1295](evidence/1295/). Centralised the overlay-scrim group via a light redefinition of
+> `--overlay-scrim` (routed `.mc-dialog-backdrop` and deduped its duplicate); kept `.dlg-overlay`,
+> `.wf-dialog-overlay`, `.cmdk-overlay`, and `.gw-setup-backdrop` as documented deviations (their dark bases
+> differ from the token so the centralisation would alter their Light appearance — not a regression, a rationale
+> for deferral). Migrated the product-content surface classes (chat-, chatw-, grounded-, wf-, qi-\*, mc-/memoria-,
+> rel-/rb-, lk-/lkd-/connector-, figma-, fpv-/hl-) from raw neutral primitives to Tier-3 semantic tokens
+> (~330 rules / ~466+30 declarations, Category A/B value-preserving, Category C is the shadow-ink and scrim
+> adaptation). See also the deferrals: #1296 (AI/agent patterns), #1297 (data-grid/lists),
+> #1298 (systematic spacing/typography/density/breakpoint), #1300 (deeper Monaco editor visual-regression).
+
 ## Classification scheme
 
 - **blocking** — breaks mode-correctness or token governance for an interactive/overlay surface; must be fixed
