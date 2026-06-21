@@ -72,6 +72,23 @@ export default tseslint.config(
   },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
   {
+    files: ["design-system/**/*.js"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        getComputedStyle: "readonly",
+        localStorage: "readonly",
+        location: "readonly",
+        window: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/explicit-function-return-type": "off",
+      "max-lines-per-function": "off",
+      "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
+  {
     files: ["**/*.cjs"],
     languageOptions: {
       globals: {

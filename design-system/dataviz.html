@@ -138,10 +138,18 @@
       // tiny hover tooltip on bars (positional, reuses the .viz-tip look)
       var tip = document.createElement("div"); tip.className = "viz-tip"; tip.style.position = "fixed"; tip.style.pointerEvents = "none"; tip.style.zIndex = 600; tip.style.display = "none"; document.body.appendChild(tip);
       var vals = { Mon: 720, Tue: 930, Wed: 825, Thu: 1200, Fri: 1065, Sat: 570 };
+      function renderTip(label, value) {
+        var title = document.createElement("div"); title.className = "vl"; title.textContent = label;
+        var row = document.createElement("div"); row.className = "vk";
+        var swatch = document.createElement("span"); swatch.className = "sw"; swatch.style.background = "var(--viz-1)";
+        var valueEl = document.createElement("span"); valueEl.className = "vv"; valueEl.textContent = typeof value === "number" ? value.toLocaleString() : "—";
+        row.append(swatch, document.createTextNode("Runs"), valueEl);
+        tip.replaceChildren(title, row);
+      }
       document.querySelectorAll(".viz-bar-col").forEach(function (col) {
         var k = col.querySelector(".xl").textContent;
         col.addEventListener("mousemove", function (e) {
-          tip.innerHTML = '<div class="vl">' + k + '</div><div class="vk"><span class="sw" style="background:var(--viz-1)"></span>Runs<span class="vv">' + vals[k].toLocaleString() + '</span></div>';
+          renderTip(k, vals[k]);
           tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 10) + "px";
         });
         col.addEventListener("mouseleave", function () { tip.style.display = "none"; });

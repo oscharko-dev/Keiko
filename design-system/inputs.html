@@ -170,7 +170,8 @@
           e.preventDefault();
           var t = document.createElement("span"); t.className = "c-tag";
           var v = ti.value.trim().replace(/^@?/, "@");
-          t.innerHTML = v + '<button aria-label="Remove">✕</button>';
+          var remove = document.createElement("button"); remove.setAttribute("aria-label", "Remove"); remove.textContent = "✕";
+          t.append(document.createTextNode(v), remove);
           tf.insertBefore(t, ti); ti.value = "";
         } else if (e.key === "Backspace" && !ti.value) {
           var last = ti.previousElementSibling; if (last) last.remove();

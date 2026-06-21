@@ -24,17 +24,17 @@
   };
 
   function readTheme() {
-    try { var t = localStorage.getItem(THEME_KEY); if (t === "light" || t === "dark") return t; } catch (e) {}
+    try { var t = localStorage.getItem(THEME_KEY); if (t === "light" || t === "dark") return t; } catch {}
     return root.dataset.theme === "light" ? "light" : "dark";
   }
   function readContrast() {
-    try { var c = localStorage.getItem(CONTRAST_KEY); if (c === "more" || c === "auto") return c; } catch (e) {}
+    try { var c = localStorage.getItem(CONTRAST_KEY); if (c === "more" || c === "auto") return c; } catch {}
     return root.dataset.hc === "more" ? "more" : "auto";
   }
-  function store(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+  function store(key, val) { try { localStorage.setItem(key, val); } catch {} }
 
   var osHC = null;
-  try { osHC = window.matchMedia("(prefers-contrast: more)"); } catch (e) {}
+  try { osHC = window.matchMedia("(prefers-contrast: more)"); } catch {}
 
   function applyTheme(t) {
     root.dataset.theme = t;
@@ -99,7 +99,7 @@
     group.addEventListener("keydown", function (e) {
       var idx = buttons.findIndex(function (b) { return b.getAttribute("aria-checked") === "true"; });
       if (idx < 0) idx = 0;
-      var next = idx;
+      var next;
       if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % buttons.length;
       else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + buttons.length) % buttons.length;
       else if (e.key === "Home") next = 0;

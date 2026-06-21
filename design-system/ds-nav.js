@@ -59,7 +59,7 @@
   function current() {
     var path = location.pathname;
     var file = path.substring(path.lastIndexOf("/") + 1);
-    try { file = decodeURIComponent(file); } catch (e) {}
+    try { file = decodeURIComponent(file); } catch {}
     if (!file) file = "index.html";
     return file;
   }

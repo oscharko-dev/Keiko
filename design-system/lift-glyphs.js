@@ -1,5 +1,3 @@
-/* global document, window */
-/* eslint-disable @typescript-eslint/explicit-function-return-type */
 /* lift-glyphs.js — the Lift icon library as plain SVG strings, for static
    pages. Use <span class="ico" data-licon="search" data-size="20"></span>;
    the script fills it. Geometry mirrors lift-icons.jsx exactly. */
@@ -21,11 +19,6 @@
     return "M" + f(x + r) + " " + f(y) + " H" + f(x + w - r) + " A" + r + " " + r + " 0 0 1 " + f(x + w) + " " + f(y + r) +
       " V" + f(y + h - r) + " A" + r + " " + r + " 0 0 1 " + f(x + w - r) + " " + f(y + h) + " H" + f(x + r) +
       " A" + r + " " + r + " 0 0 1 " + f(x) + " " + f(y + h - r) + " V" + f(y + r) + " A" + r + " " + r + " 0 0 1 " + f(x + r) + " " + f(y) + " Z";
-  }
-  function spokes(cx, cy, r0, r1, n) {
-    var o = [];
-    for (var i = 0; i < n; i++) { var d = (i * 360) / n, a = pt(cx, cy, r0, d), b = pt(cx, cy, r1, d); o.push("M" + f(a[0]) + " " + f(a[1]) + " L" + f(b[0]) + " " + f(b[1])); }
-    return o.join(" ");
   }
   function star4(cx, cy, rO, rI) {
     var A = [-90, -45, 0, 45, 90, 135, 180, 225], o = [];
