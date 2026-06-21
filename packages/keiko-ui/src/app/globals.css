@@ -6782,8 +6782,8 @@ select.dlg-input {
 }
 .ui-error-notice-close:focus-visible {
   outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus) 24%, transparent);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus-ring) 24%, transparent);
 }
 .ui-error-notice-message,
 .ui-error-notice-remediation {
@@ -13424,7 +13424,7 @@ select.qi-select {
 
 .figma-view-json-btn:focus-visible,
 .figma-view-json-copy-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -13494,7 +13494,7 @@ button.figma-view-preview {
 }
 
 .figma-view-preview-drag-surface:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-view-preview-placeholder {

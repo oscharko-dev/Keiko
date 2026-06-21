@@ -37,8 +37,8 @@ new `--overlay-scrim`/`--shadow-*`) so light values flow automatically. This wor
 
 > **#1294 disposition (shipped).** The #1294 reusable-control / component-primitive migration is the same
 > value-preserving consumer migration applied to the reusable controls and the modal/dialog chrome (no Light-Mode
-> visual change — proven by the 994-probe, 0-diff computed-value harness across 7 modes in
-> [evidence/1294](evidence/1294/)). It routed 346 control rules / ~533 declarations from raw primitives to the
+> visual change — proven by the 1106-probe, 0-diff computed-value harness across 7 modes in
+> [evidence/1294](evidence/1294/)). It routed 363 control rules / ~550 declarations from raw primitives to the
 > Tier-3/4 semantic/component tokens (`--button-*`, `--input-*`, `--text-*`, `--surface-*`, `--border-*`,
 > `--feedback-*`, `--card-*`, `--popover-*`, `--combobox-*`, `--focus-ring`), so **zero `[data-theme="light"]`
 > rows changed** — Table A and Table B below are unchanged. The migration **kept all approved
@@ -51,8 +51,7 @@ new `--overlay-scrim`/`--shadow-*`) so light values flow automatically. This wor
 > `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`) — owned by **#1295** (shadow/scrim
 > tokenisation is a Light visual change, out of scope for this no-visual-change migration). Out-of-scope
 > follow-ups noted by the migration: the duplicate `[data-theme="light"] .mc-dialog-backdrop` (lines 15242 and
-> 15791, dead duplicate) and a shared `--dialog-scrim` token _definition_ both belong to #1295; the undefined
-> `var(--focus)` on the figma-view-json focus rings is a pre-existing bug left verbatim.
+> 15791, dead duplicate) and a shared `--dialog-scrim` token _definition_ both belong to #1295.
 
 ## Classification scheme
 

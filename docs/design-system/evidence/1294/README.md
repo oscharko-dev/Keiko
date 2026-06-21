@@ -40,7 +40,6 @@ tier-2/3/4 semantic/component tokens, instead of raw primitives.
 
 - Duplicate `[data-theme="light"] .mc-dialog-backdrop` (lines 15242 & 15791) — dead duplicate,
   separate cleanup.
-- `var(--focus)` is undefined (figma-view-json focus rings) — pre-existing bug, left verbatim.
 - A shared Light `--dialog-scrim` token **definition** would belong to #1295 (token-layer change),
   out of #1294's pure-consumer scope.
 
@@ -63,8 +62,33 @@ restoring the 0-diff result.
 
 ```bash
 npm ci && npx playwright install chromium
-BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1294/equivalence-harness.mjs
+BASE_REF=ba113ac373ebf1114af7de217b07935036adba08 node docs/design-system/evidence/1294/equivalence-harness.mjs
 # exits 0 with "DIFFERENCES (pre vs post): 0"
+```
+
+For post-merge corrective audit runs, the harness default is pinned to immutable pre-migration
+base commit `ba113ac373ebf1114af7de217b07935036adba08`; callers may still override `BASE_REF`
+explicitly for local bisects.
+
+## Reference side-by-side and focus/contrast evidence
+
+`reference-comparison.mjs` renders isolated Design System 0.4.0 reference controls beside matching
+product primitives in Dark, Light, and Light High Contrast. It writes:
+
+- `reference-side-by-side-01-dark.png`
+- `reference-side-by-side-02-light.png`
+- `reference-side-by-side-03-light-hc.png`
+- `focus-contrast-evidence.json`
+- `agent-browser-inspection.md`
+
+The JSON captures computed foreground/background/focus-ring values for the applicable state set
+(default, hover, focus, active, selected, disabled, loading, and error). The inspection note records
+the browser route, viewport, modes, and visual disposition.
+
+### Reproduce
+
+```bash
+node docs/design-system/evidence/1294/reference-comparison.mjs
 ```
 
 ## Committed regression gate
