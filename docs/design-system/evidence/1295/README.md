@@ -1,9 +1,9 @@
-# Issue #1295 — Product-surface tokens: shadow-ink, overlay-scrim, semantic swaps, hl-*/fpv-src HC (evidence)
+# Issue #1295 — Product-surface tokens: shadow-ink, overlay-scrim, semantic swaps, `hl-*`/fpv-src HC (evidence)
 
 Epic #1290. Predecessors: #1291 (blueprint), #1292 (token layer), #1293 (shell/chrome),
 #1294 (component primitives).
 This issue is the **product-surface** consumer migration: routes the chat, memory, QI, wf,
-mc, rel/rb, lk/lkd, connector, figma-view, json-token, fpv, and hl-* surface classes in
+mc, rel/rb, lk/lkd, connector, figma-view, json-token, fpv, and `hl-*` surface classes in
 the single `packages/keiko-ui/src/app/globals.css` through the 0.4.0 semantic tokens,
 and introduces two Light-mode fixes (`--shadow-ink-rgb` warm ink, `--overlay-scrim` scrim).
 
@@ -20,7 +20,7 @@ and introduces two Light-mode fixes (`--shadow-ink-rgb` warm ink, `--overlay-scr
   `oklch(0.3 0.01 160 / 0.34)` in Light. `.mc-dialog-backdrop` previously had a bespoke
   `[data-theme=light]` override with the same value — the token centralises it with no
   value change (both modes resolve identically PRE/POST).
-- **`--ed-syn-*` / `--ed-fg` routing** for hl-* and fpv-src — replaces hardcoded hex
+- **`--ed-syn-*` / `--ed-fg` routing** for `hl-*` and fpv-src — replaces hardcoded hex
   literals with semantic editor tokens. In Dark/Light modes the resolved values are
   byte-identical to the prior hex. In High-Contrast modes the `--ed-syn-*` tokens carry
   HC overrides that improve contrast (intentional improvement, not a regression).
@@ -38,9 +38,16 @@ resolved values are identical.
 **Category-A result: 2324 computed-value probes × 7 modes = 0 differences**
 (`computed-value-proof.json`, `diffCount: 0`).
 
-The hl-*/fpv-src selectors are excluded from the Category-A gate (see Category C4 below).
+The `hl-*`/fpv-src selectors are excluded from the Category-A gate (see Category C4 below).
 
 Screenshots `01-dark.png` … `07-reduced-motion.png` are the rendered POST evidence per mode.
+
+## Running editor fidelity proof
+
+`editor/` is the follow-up running-product evidence for the editor-specific #1295 closure rows. It
+uses the packaged CLI/UI path, opens a synthetic workspace in the real desktop shell, captures a
+live Monaco editor across Dark, Light, High Contrast, and Reduced Motion modes, and writes bounded
+token/Monaco computed-value proof to `editor/manifest.json`.
 
 ## Category-C: deliberate adaptations (separate from the 0-diff gate)
 
@@ -51,11 +58,11 @@ contribute to the Category-A diff count.
 
 Three representative shadow-ink rows (`.hd-tool-cta`, `.cmp-model-menu`, `.ksel-menu`):
 
-| Selector | Dark | Light |
-| -------- | ---- | ----- |
-| `.hd-tool-cta` boxShadow | PRE=POST (identical) | `rgba(0,0,0,…)` → `rgba(20,30,25,…)` |
+| Selector                    | Dark                 | Light                                |
+| --------------------------- | -------------------- | ------------------------------------ |
+| `.hd-tool-cta` boxShadow    | PRE=POST (identical) | `rgba(0,0,0,…)` → `rgba(20,30,25,…)` |
 | `.cmp-model-menu` boxShadow | PRE=POST (identical) | `rgba(0,0,0,…)` → `rgba(20,30,25,…)` |
-| `.ksel-menu` boxShadow | PRE=POST (identical) | `rgba(0,0,0,…)` → `rgba(20,30,25,…)` |
+| `.ksel-menu` boxShadow      | PRE=POST (identical) | `rgba(0,0,0,…)` → `rgba(20,30,25,…)` |
 
 Dark is byte-identical. Light now uses warm ink (`rgb(20 30 25 / α)`) instead of pure
 black — confirming the Light shadow-ink fix.
@@ -70,7 +77,7 @@ black — confirming the Light shadow-ink fix.
 The `--overlay-scrim` token resolves to the same value as the former bespoke override in
 both modes. This is a pure centralisation with zero visual change.
 
-### C4 — hl-*/fpv-src High-Contrast improvement
+### C4 — `hl-*`/fpv-src High-Contrast improvement
 
 8 selectors (`.fpv-src`, `.hl-str`, `.hl-num`, `.hl-key`, `.hl-type`, `.hl-fn`, `.hl-key2`,
 `.hl-punct`):

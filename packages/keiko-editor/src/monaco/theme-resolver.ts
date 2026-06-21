@@ -112,6 +112,20 @@ function parseOklchHue(token: string): number {
   return token === "none" ? 0 : Number.parseFloat(token);
 }
 
+function parseLabLightness(token: string): number {
+  const text = token.trim();
+  return Number.parseFloat(text);
+}
+
+function parseLabAxis(token: string): number {
+  const text = token.trim();
+  if (text === "none") {
+    return 0;
+  }
+  const value = Number.parseFloat(text);
+  return text.endsWith("%") ? value * 1.25 : value;
+}
+
 interface OklchComponents {
   readonly alpha: string | undefined;
   readonly chroma: number;
@@ -122,6 +136,13 @@ interface OklchComponents {
 interface OklchBodyParts {
   readonly alpha: string | undefined;
   readonly channels: string;
+}
+
+interface LabComponents {
+  readonly alpha: string | undefined;
+  readonly a: number;
+  readonly b: number;
+  readonly lightness: number;
 }
 
 function cssWhitespace(charCode: number): boolean {
@@ -230,11 +251,81 @@ function hexFromOklchColor(color: string): string | undefined {
   return alphaByte === "ff" ? base : `${base}${alphaByte}`;
 }
 
+function labBody(color: string): string | undefined {
+  const prefix = "lab(";
+  if (!color.startsWith(prefix)) {
+    return undefined;
+  }
+  if (!color.endsWith(")")) {
+    throw new Error(`Keiko editor theme: unparseable lab colour "${color}".`);
+  }
+  return color.slice(prefix.length, -1);
+}
+
+function parseLabChannelTokens(color: string, channels: string): [string, string, string] {
+  const parts = splitCssWhitespace(channels.trim());
+  if (parts.length !== 3) {
+    throw new Error(`Keiko editor theme: unparseable lab colour "${color}".`);
+  }
+  return parts as [string, string, string];
+}
+
+function parseLabComponents(color: string): LabComponents | undefined {
+  const body = labBody(color);
+  if (body === undefined) {
+    return undefined;
+  }
+  const { alpha, channels } = splitOklchBody(color, body);
+  const [lToken, aToken, bToken] = parseLabChannelTokens(color, channels);
+
+  const lightness = parseLabLightness(lToken);
+  const a = parseLabAxis(aToken);
+  const b = parseLabAxis(bToken);
+  if (!Number.isFinite(lightness) || !Number.isFinite(a) || !Number.isFinite(b)) {
+    throw new Error(`Keiko editor theme: unparseable lab colour "${color}".`);
+  }
+  return { alpha, a, b, lightness };
+}
+
+function labChannelToXyz(channel: number): number {
+  const epsilon = 216 / 24389;
+  const kappa = 24389 / 27;
+  const cubed = channel ** 3;
+  return cubed > epsilon ? cubed : (116 * channel - 16) / kappa;
+}
+
+function hexFromLabColor(color: string): string | undefined {
+  const components = parseLabComponents(color);
+  if (components === undefined) {
+    return undefined;
+  }
+  const { alpha, a, b, lightness } = components;
+  const fy = (lightness + 16) / 116;
+  const fx = fy + a / 500;
+  const fz = fy - b / 200;
+
+  const xD50 = 0.96422 * labChannelToXyz(fx);
+  const yD50 = labChannelToXyz(fy);
+  const zD50 = 0.82521 * labChannelToXyz(fz);
+
+  const xD65 = 0.9555766 * xD50 - 0.0230393 * yD50 + 0.0631636 * zD50;
+  const yD65 = -0.0282895 * xD50 + 1.0099416 * yD50 + 0.0210077 * zD50;
+  const zD65 = 0.0122982 * xD50 - 0.020483 * yD50 + 1.3299098 * zD50;
+
+  const red = 3.2404542 * xD65 - 1.5371385 * yD65 - 0.4985314 * zD65;
+  const green = -0.969266 * xD65 + 1.8760108 * yD65 + 0.041556 * zD65;
+  const blue = 0.0556434 * xD65 - 0.2040259 * yD65 + 1.0572252 * zD65;
+
+  const base = `#${linearSrgbToByte(red)}${linearSrgbToByte(green)}${linearSrgbToByte(blue)}`;
+  const alphaByte = toByte(alphaValue(alpha) * 255);
+  return alphaByte === "ff" ? base : `${base}${alphaByte}`;
+}
+
 /**
  * Normalise a concrete CSS colour string to Monaco hex (`#rrggbb` or `#rrggbbaa`).
  *
- * Handles `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `oklch()`, and `rgb()/rgba()` in both legacy
- * comma and modern space/slash syntax. Any unsupported form throws (actionable) so a bad token
+ * Handles `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `oklch()`, `lab()`, and `rgb()/rgba()` in both
+ * legacy comma and modern space/slash syntax. Any unsupported form throws (actionable) so a bad token
  * surfaces loudly rather than producing an un-themed editor.
  * @internal Not part of the package public API (used by the DOM normaliser + tests).
  */
@@ -251,9 +342,13 @@ export function hexFromColorString(cssColor: string): string {
   if (oklch !== undefined) {
     return oklch;
   }
+  const lab = hexFromLabColor(color);
+  if (lab !== undefined) {
+    return lab;
+  }
   throw new Error(
     `Keiko editor theme: cannot convert colour "${cssColor}" to hex. ` +
-      "Expected a hex or rgb()/rgba() value (the browser/canvas normaliser produces these).",
+      "Expected a hex, rgb()/rgba(), oklch(), or lab() value (the browser/canvas normaliser produces these).",
   );
 }
 
